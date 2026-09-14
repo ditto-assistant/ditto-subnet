@@ -47,7 +47,10 @@
 //!    only ever a verbatim substring of `final_text` (`v13::answer_slot_from_prose`);
 //!    the host never rescales (`/100`), maps a direction word, reformats a
 //!    number, or composes a slot. (`slot_not_in_prose`,
-//!    `served_text_not_model_emitted`.)
+//!    `served_text_not_model_emitted`.) The slot is OFF unless
+//!    `DITTOBENCH_ANSWER_SLOT` is set (the `--gates` rehearsal sets it): the
+//!    wire stays at bench 9, so a default-on slot would change live v12
+//!    grading (an authoritative slot has no prose fallback).
 //!  * The graded value is never written into a harness-authored span. The
 //!    system prompt carries a values-free policy (`v13::HARNESS_POLICY_PROMPT`);
 //!    retrieved memory is injected by the harness library as `/seed`-derived
@@ -1070,10 +1073,12 @@ impl Baseline {
 
         // The system prompt the model runs on: the wire prompt first, then the
         // values-free v13 answering policy (answer in the requested unit, ask
-        // by naming the missing detail, list-then-act, grounded declines).
+        // by naming the missing detail, list-then-act, grounded declines), and
+        // the `Answer:` line request only when the slot is enabled.
         // EXTENSION POINT: keep it values-free — a graded value written here is
         // a harness-authored span and the v13 causal gate zeroes it.
-        let system_prompt = v13::compose_system_prompt(&req.system_prompt);
+        let answer_slot = v13::answer_slot_enabled();
+        let system_prompt = v13::compose_system_prompt(&req.system_prompt, answer_slot);
 
         let case_model = match req
             .inference_base_url
@@ -1182,12 +1187,14 @@ impl Baseline {
         Ok(protocol::RunResponse {
             abstain: inferred_abstain(&final_text),
             // The slot is the model's own trailing `Answer:` line, copied
-            // verbatim, or absent. Bench v13 grades the prose and uses the slot
-            // as a tie-break; a slot the prose does not carry, or one the model
-            // never emitted (a `/100` rescale, a direction map, a reformatted
-            // number), is what `slot_not_in_prose` / `served_text_not_model_emitted`
-            // charge. EXTENSION POINT: keep any extractor a verbatim copy.
-            answer: v13::answer_slot_from_prose(&final_text),
+            // verbatim, or absent; absent always while `DITTOBENCH_ANSWER_SLOT`
+            // is unset (see `v13::ANSWER_SLOT_ENV`). Bench v13 grades the prose
+            // and uses the slot as a tie-break; a slot the prose does not carry,
+            // or one the model never emitted (a `/100` rescale, a direction map,
+            // a reformatted number), is what `slot_not_in_prose` /
+            // `served_text_not_model_emitted` charge. EXTENSION POINT: keep any
+            // extractor a verbatim copy.
+            answer: v13::answer_slot(&final_text, answer_slot),
             final_text,
             tool_calls,
             prompt_tokens,

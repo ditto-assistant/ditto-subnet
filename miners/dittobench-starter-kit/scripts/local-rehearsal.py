@@ -41,6 +41,10 @@ MIN_BENCH_VERSION = 8
 MAX_BENCH_VERSION = 13
 # Environment variables the harness honours only during a local rehearsal.
 COMPLETION_LOG_ENV = "DITTOBENCH_COMPLETION_LOG"
+# The kit's `answer` slot is off by default (the wire stays at bench 9, so a
+# default-on slot would change live v12 grading); `--gates` turns it on so the
+# v13 slot rules are exercised locally. Mirrors src/v13.rs ANSWER_SLOT_ENV.
+ANSWER_SLOT_ENV = "DITTOBENCH_ANSWER_SLOT"
 LONGMEM_DATASET_SHA256 = (
     "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
 )
@@ -743,16 +747,50 @@ def run_longmem(
 
 def harness_rehearsal_env(tmp: Path, *, gates: bool) -> dict[str, str]:
     """Harness environment for the rehearsal: an isolated store, plus the
-    completion log the v13 gate replay reads when `--gates` is on."""
+    completion log the v13 gate replay reads and the `answer` slot switch
+    when `--gates` is on."""
     environment = os.environ.copy()
     # A canonical validator starts every submission with a fresh store. Keep
     # local rehearsals equally isolated from seed-user and previous runs.
     environment["DITTOBENCH_DB"] = str(tmp / "rehearsal.db")
     if gates:
         environment[COMPLETION_LOG_ENV] = str(tmp / "completions.jsonl")
+        environment[ANSWER_SLOT_ENV] = "1"
     else:
         environment.pop(COMPLETION_LOG_ENV, None)
+        environment.pop(ANSWER_SLOT_ENV, None)
     return environment
+
+
+def scorer_advertised_bench_versions(api_url: str) -> list[int] | None:
+    """The bench versions the local scorer build advertises (`/v1/capabilities`
+    `supported_bench_versions`), or None when the build carries no release
+    identity and cannot answer."""
+    try:
+        capabilities = request_json(f"{api_url}/v1/capabilities")
+    except RehearsalError:
+        return None
+    versions = capabilities.get("supported_bench_versions")
+    if not isinstance(versions, list):
+        return None
+    return sorted(int(v) for v in versions)
+
+
+def require_scorer_bench_version(api_url: str, bench_version: int) -> None:
+    """Fail loudly, before submitting, when the local scorer at this checkout
+    does not advertise the requested contract. The kit ceiling
+    (`MAX_BENCH_VERSION`) may lead the scorer while a contract is still landing;
+    the scorer's `(supported: ...)` 400 on /v1/submit is the same fact stated
+    less helpfully."""
+    advertised = scorer_advertised_bench_versions(api_url)
+    if advertised is None or bench_version in advertised:
+        return
+    raise RehearsalError(
+        f"the local scorer build advertises bench versions {advertised}, not "
+        f"{bench_version}; run --bench-version {max(advertised)} or check out a "
+        "services/dittobench-api that advertises "
+        f"{bench_version} (cmd/dittobench-api supportedBenchVersions)"
+    )
 
 
 def gate_artifact_paths(tmp: Path, run_id: str) -> dict[str, Path]:
@@ -892,6 +930,7 @@ def run(args: argparse.Namespace) -> int:
                 print("waiting for the harness and scorer...", flush=True)
                 wait_for_health(harness_url, harness)
                 wait_for_health(api_url, api)
+                require_scorer_bench_version(api_url, args.bench_version)
 
                 accepted = request_json(
                     f"{api_url}/v1/submit",

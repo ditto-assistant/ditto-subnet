@@ -55,6 +55,16 @@ use crate::protocol::{RunRequest, ToolDefWire};
 /// nothing.
 pub const COMPLETION_LOG_ENV: &str = "DITTOBENCH_COMPLETION_LOG";
 
+/// Environment variable enabling the `answer` slot. OFF by default: the public
+/// wire stays at `bench_version` 9 (#1519, option A), so a kit-side slot cannot
+/// be gated on the contract version and would otherwise change LIVE v12
+/// grading — for v9+ a populated slot is authoritative with no prose fallback
+/// (`grade.go`), so a model that wrote `Answer:` in a different unit than the
+/// prose would score 0 where prose fallback scored 1. `local-rehearsal.py
+/// --gates` sets it so the v13 slot rules are exercised locally; Platform's v13
+/// activation is the point to flip the default.
+pub const ANSWER_SLOT_ENV: &str = "DITTOBENCH_ANSWER_SLOT";
+
 /// Environment variable enabling the documented semantic top-k preloading
 /// example: keep the `k` most request-relevant tools (never fewer than the
 /// safe-harbor top-k). Unset offers the full catalog on every turn.
@@ -92,14 +102,52 @@ did find and why it does not answer the question.
 changed over time, name the current value and say the earlier one was \
 superseded.";
 
-/// Appends [`HARNESS_POLICY_PROMPT`] to the wire system prompt. The wire
-/// prompt is kept first and unchanged.
-pub fn compose_system_prompt(wire_system_prompt: &str) -> String {
+/// Appended after [`HARNESS_POLICY_PROMPT`] only when the `answer` slot is
+/// enabled ([`ANSWER_SLOT_ENV`]): asks the model for the trailing `Answer:`
+/// line [`answer_slot_from_prose`] copies verbatim, so the slot path is
+/// actually exercised. Values-free like the policy itself.
+pub const ANSWER_LINE_POLICY_PROMPT: &str = "\
+- When you state a single value, option, or name as the answer, end your reply \
+with one final line of the form `Answer: <value>` that repeats that value \
+exactly as you wrote it in your prose. Omit the line when you ask a clarifying \
+question or decline.";
+
+/// Appends [`HARNESS_POLICY_PROMPT`] (and, with `answer_slot`,
+/// [`ANSWER_LINE_POLICY_PROMPT`]) to the wire system prompt. The wire prompt
+/// is kept first and unchanged.
+pub fn compose_system_prompt(wire_system_prompt: &str, answer_slot: bool) -> String {
     let wire = wire_system_prompt.trim_end();
-    if wire.is_empty() {
-        return HARNESS_POLICY_PROMPT.to_string();
+    let mut policy = HARNESS_POLICY_PROMPT.to_string();
+    if answer_slot {
+        policy.push('\n');
+        policy.push_str(ANSWER_LINE_POLICY_PROMPT);
     }
-    format!("{wire}\n\n{HARNESS_POLICY_PROMPT}")
+    if wire.is_empty() {
+        return policy;
+    }
+    format!("{wire}\n\n{policy}")
+}
+
+/// Whether the `answer` slot is enabled for this process ([`ANSWER_SLOT_ENV`]
+/// set to anything but empty, `0`, `false`, or `off`).
+pub fn answer_slot_enabled() -> bool {
+    match std::env::var(ANSWER_SLOT_ENV) {
+        Ok(value) => !matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "" | "0" | "false" | "off"
+        ),
+        Err(_) => false,
+    }
+}
+
+/// The `answer` slot the kit serves: [`answer_slot_from_prose`] when the slot
+/// is enabled, `None` otherwise (the validator then grades the prose, exactly
+/// as the pre-v13 kit was graded).
+pub fn answer_slot(final_text: &str, enabled: bool) -> Option<String> {
+    if !enabled {
+        return None;
+    }
+    answer_slot_from_prose(final_text)
 }
 
 /// Extracts the `answer` slot as a VERBATIM substring of the model's final
@@ -457,10 +505,52 @@ mod tests {
     #[test]
     fn policy_prompt_is_values_free_and_appended_after_the_wire_prompt() {
         assert!(!HARNESS_POLICY_PROMPT.chars().any(|c| c.is_ascii_digit()));
-        let composed = compose_system_prompt("You are Ditto.");
+        assert!(!ANSWER_LINE_POLICY_PROMPT
+            .chars()
+            .any(|c| c.is_ascii_digit()));
+        let composed = compose_system_prompt("You are Ditto.", false);
         assert!(composed.starts_with("You are Ditto.\n\n"));
         assert!(composed.ends_with(HARNESS_POLICY_PROMPT));
-        assert_eq!(compose_system_prompt("  "), HARNESS_POLICY_PROMPT);
+        assert!(!composed.contains(ANSWER_LINE_POLICY_PROMPT));
+        assert_eq!(compose_system_prompt("  ", false), HARNESS_POLICY_PROMPT);
+        // The Answer-line request rides only with the slot switch, so the slot
+        // path is exercised exactly when the slot can be served.
+        let with_slot = compose_system_prompt("You are Ditto.", true);
+        assert!(with_slot.contains(HARNESS_POLICY_PROMPT));
+        assert!(with_slot.ends_with(ANSWER_LINE_POLICY_PROMPT));
+    }
+
+    #[test]
+    fn answer_slot_is_off_by_default_and_verbatim_when_enabled() {
+        // Live v12 grading: a v9 RunResponse without the switch has no slot,
+        // whether or not the model wrote an `Answer:` line.
+        assert_eq!(
+            answer_slot("You paid 411067 cents.\nAnswer: 411067", false),
+            None
+        );
+        assert_eq!(answer_slot("You paid 411067 cents.", false), None);
+        assert_eq!(answer_slot("You paid 411067 cents.", true), None);
+        assert_eq!(
+            answer_slot("You paid 411067 cents.\nAnswer: 411067", true).as_deref(),
+            Some("411067")
+        );
+        // `answer_slot_enabled` reads the process environment; the parser is
+        // exercised on its accepted spellings without touching it here.
+        for (raw, want) in [
+            ("1", true),
+            ("true", true),
+            ("on", true),
+            ("0", false),
+            ("false", false),
+            ("off", false),
+            ("", false),
+        ] {
+            let enabled = !matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "" | "0" | "false" | "off"
+            );
+            assert_eq!(enabled, want, "{raw:?}");
+        }
     }
 
     #[test]
@@ -577,7 +667,10 @@ mod tests {
         let messages = vec![
             ChatMessage {
                 role: "system".into(),
-                content: vec![Content::text(compose_system_prompt(&req.system_prompt))],
+                content: vec![Content::text(compose_system_prompt(
+                    &req.system_prompt,
+                    true,
+                ))],
                 ..ChatMessage::default()
             },
             ChatMessage {

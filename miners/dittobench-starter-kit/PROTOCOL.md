@@ -230,7 +230,13 @@ answer can never be zeroed by it; each names the substitution it charges.
 **Grading (memory cases).** The positive check runs on `final_text ∪ answer`.
 The `answer` slot is a tie-break, not the graded object: a slot whose value has
 no equivalent asserted in the prose scores 0 (`slot_not_in_prose`), so a host
-extractor may only ever copy the model's own words. Quantities are graded in the
+extractor may only ever copy the model's own words. This kit populates the slot
+only when `DITTOBENCH_ANSWER_SLOT` is set (`v13::ANSWER_SLOT_ENV`; the `--gates`
+rehearsal sets it): the wire stays at bench 9, so the slot cannot be gated on
+the contract version, and under the live v9+ grading policy a populated slot is
+authoritative with no prose fallback — a default-on slot would change live v12
+scores. With the switch on, the policy prompt asks the model for a final
+`Answer: <value>` line and the slot is that line, copied verbatim. Quantities are graded in the
 unit the question asked for (a bare `411067` on a minor-unit question is
 correct; `$4,110.67` beside it is the same value). More than two distinct
 candidates for one scalar claim, or two contradictory ones, score 0; a value
@@ -251,38 +257,61 @@ not execute is a host override (`swallowed_model_call`). Published safe
 harbor: trimming is free when the retained set contains the **top-3 tools of
 the published model-free embedding** (TF-IDF over name + description, cosine to
 the request, ties on name — `v13::semantic_top_k` in this kit, `scorer.CatalogSemanticTopK`
-in the validator), or when the catalog is merely non-empty on a
-declarative/chit-chat/decline case (the negation family excepted). Offering the
-full catalog always passes.
+in the validator's relay catalog gate), or when the catalog is merely non-empty
+on a declarative/chit-chat/decline case (the negation family excepted). A
+catalog of memory tools alone is not an offer (`memory_only_catalog`); an
+expected tool the validator executed under proven model emission counts as
+offered (`offer_inferred_from_execution`). Offering the full catalog always
+passes.
 
-**Provenance gate (shadow).** The graded claim's canonical value tokens must
-appear in some model completion — message text, tool-call arguments (a
+**Provenance gate (shadow).** The graded CLAIM SPAN — the accepted
+alternative of the expected answer (the major-unit form of a money answer, the
+direction vocabulary, each list item, the value and its accept set) that is
+wholly present in the served slot or prose, under the published normaliser
+(`scoregates.NormalizeSpan`: NFKC, casefold, label and list-marker strip,
+punctuation folded except `$ . , -`) — must be contained in the union of every
+model completion's value tokens: message text, tool-call arguments (a
 `final_answer` tool), or structured-output fields. A `/100` rescale, a
 direction-word map, a composed slot, or a replaced draft fails
 (`served_text_not_model_emitted`); a formatter of the model's own number,
-JSON mode, markdown, and a splice of two completions pass.
+JSON mode, markdown, and a splice of two completions pass. A served span that
+carries no accepted alternative has no claim to check (`claim_not_applicable`):
+the gate fails open, never guesses. `scripts/rehearsal_gates.py` is a verbatim
+port tested against the Go vectors.
 
-**Causal gate (shadow).** The graded value must not appear in a harness-authored
-prompt span (system prompt, template text, assistant prefill) unless that span
-is covered by a `/seed` record or a delivered tool result
-(`answer_in_prompt`). Quoting retrieved memory into the prompt is honest RAG;
-computing the answer on the host and asking the model to repeat it is not.
+**Causal gate (shadow).** The graded claim must not have been authored by
+the harness into a prompt span (system prompt, template text, assistant
+prefill) before any completion produced it, unless that span is covered by a
+`/seed` record, a delivered tool result, or the case's own question
+(`answer_in_prompt`). Quoting retrieved memory into the prompt is honest RAG,
+and re-injecting a value the model derived earlier ("format 4110.67 as
+currency") is model-derived; computing the answer on the host and asking the
+model to repeat it is not.
 
 **Twin / pair post-pass (shadow).** Decision twins and as-of twins are
 distributionally matched pairs where the same surface demands a different
 decision; an identical decision across the pair is an evidence-independent
 default (`twin_concordant`; rule R1 zeroes the group, R2 takes the pair
 product — chosen at calibration). A metamorphic counterfactual answered like its
-base zeroes only that pair (`counterfactual_insensitive`).
+base zeroes only that pair (`counterfactual_insensitive`). The twin relation is
+grader-only (never on the wire or in the pass-off artifact); the local replay
+reads it from the scorer report's `per_case[].relation`, so decision-twin notes
+need `--report`. Metamorphic relations ride on the artifact
+(`v10_provenance.relation`).
 
 **Local replay.** `python3 scripts/local-rehearsal.py --bench-version 13
 --gates` (or `uv run ditto practice --bench-version 13 --gates`) records what
-this kit offered and emitted per case (`DITTOBENCH_COMPLETION_LOG`) and replays
+this kit offered and emitted per case (`DITTOBENCH_COMPLETION_LOG`), turns the
+`answer` slot on (`DITTOBENCH_ANSWER_SLOT=1`), and replays
 every rule above against the public (salt 0) pass-off artifact, printing
 per-case notes and a shadow gate-induced loss. `--keep-artifacts DIR` keeps the
 dataset, transcript, completion log, and result for an offline re-run with
 `scripts/rehearsal_gates.py`. The validator's relay is the authoritative
 evidence source; the local log is the same rule over the harness's own view.
+The rehearsal refuses a `--bench-version` the local scorer build does not
+advertise (`GET /v1/capabilities` `supported_bench_versions`), so the kit
+ceiling (`MAX_BENCH_VERSION`, 13) leading the scorer is a loud, early error
+rather than a `/v1/submit` 400.
 
 ### On-chain timeouts
 

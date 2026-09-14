@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -118,9 +119,11 @@ class LocalRehearsalTest(unittest.TestCase):
                 plain = LOCAL.harness_rehearsal_env(tmp, gates=False)
                 gated = LOCAL.harness_rehearsal_env(tmp, gates=True)
             self.assertNotIn(LOCAL.COMPLETION_LOG_ENV, plain)
+            self.assertNotIn(LOCAL.ANSWER_SLOT_ENV, plain)
             self.assertEqual(
                 gated[LOCAL.COMPLETION_LOG_ENV], str(tmp / "completions.jsonl")
             )
+            self.assertEqual(gated[LOCAL.ANSWER_SLOT_ENV], "1")
             self.assertEqual(gated["DITTOBENCH_DB"], str(tmp / "rehearsal.db"))
             paths = LOCAL.gate_artifact_paths(tmp, "run-1")
             self.assertEqual(paths["dataset"], tmp / "artifacts" / "run-1.json")
@@ -131,6 +134,57 @@ class LocalRehearsalTest(unittest.TestCase):
                 paths["projection"],
                 tmp / "private-projections" / "run-1.projection.json",
             )
+
+    def test_rehearsal_ceiling_never_outruns_the_datagen_supported_set(self) -> None:
+        """The kit ceiling must sit inside the generator's single supported
+        list (research/dittobench-datagen/protocol/epoch.go); a ceiling above
+        it tells miners to rehearse a contract no scorer build can generate."""
+        source = (
+            LOCAL.REPO_ROOT / "research/dittobench-datagen/protocol/epoch.go"
+        ).read_text()
+        constants = {
+            f"BenchVersionV{suffix}": int(value)
+            for suffix, value in re.findall(
+                r"\bBenchVersionV(\d+)\s*=\s*(\d+)\b", source
+            )
+        }
+        literal = re.search(r"supportedBenchVersions = \[\]int\{([^}]*)\}", source)
+        assert literal is not None, "epoch.go has no supportedBenchVersions literal"
+        supported = sorted(
+            constants[name]
+            for name in re.findall(r"BenchVersionV\d+", literal.group(1))
+        )
+        self.assertTrue(supported)
+        self.assertLessEqual(LOCAL.MAX_BENCH_VERSION, max(supported))
+        self.assertGreaterEqual(LOCAL.MIN_BENCH_VERSION, min(supported))
+        self.assertIn(LOCAL.LIVE_SCORING_BENCH_VERSION, supported)
+        self.assertLessEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, LOCAL.MAX_BENCH_VERSION)
+
+    def test_scorer_bench_version_check_is_loud_and_fails_open_without_identity(
+        self,
+    ) -> None:
+        with patch.object(
+            LOCAL,
+            "request_json",
+            return_value={"supported_bench_versions": [8, 9, 10, 11, 12]},
+        ):
+            LOCAL.require_scorer_bench_version("http://127.0.0.1:1", 12)
+            with self.assertRaisesRegex(
+                LOCAL.RehearsalError, "advertises bench versions"
+            ):
+                LOCAL.require_scorer_bench_version("http://127.0.0.1:1", 13)
+        with patch.object(
+            LOCAL,
+            "request_json",
+            return_value={"supported_bench_versions": [8, 9, 10, 11, 12, 13]},
+        ):
+            LOCAL.require_scorer_bench_version("http://127.0.0.1:1", 13)
+        # A build without release identity answers 503; the submit path's own
+        # (supported: ...) error then states the fact.
+        with patch.object(
+            LOCAL, "request_json", side_effect=LOCAL.RehearsalError("HTTP 503")
+        ):
+            LOCAL.require_scorer_bench_version("http://127.0.0.1:1", 13)
 
     def test_longmem_limit_requires_longmem_flag(self) -> None:
         with self.assertRaises(SystemExit):
@@ -325,69 +379,518 @@ def _catalog_gate(**overrides: object) -> dict[str, object]:
     return GATES.evaluate_catalog_gate(**values)  # type: ignore[arg-type]
 
 
+# Published vectors copied from services/dittobench-api/internal/scoregates/
+# text_provenance_test.go so the Python port and the Go rule cannot drift.
+NORMALIZE_SPAN_VECTORS = {
+    "$4,110.67": "$4,110.67",
+    "**Answer:** $4,110.67": "$4,110.67",
+    "ANSWER: 4110.67 dollars": "4110.67 dollars",
+    "Final answer — 4110.67": "4110.67",
+    "- $4,110.67\n- based on the ledger": "$4,110.67 based on the ledger",
+    "1. Lisbon\n2. Porto": "lisbon porto",
+    "`4110.67`": "4110.67",
+    "４１１０.６７": "4110.67",
+    "Lisbon,  since\t2019.": "lisbon, since 2019.",
+    "": "",
+}
+HONEST_RENDERINGS = (
+    "$4,110.67",
+    "4110.67",
+    "4,110.67",
+    "4110.67 dollars",
+    "**Answer:** $4110.67",
+    '{"answer": "4110.67"}',
+    'final_answer {"answer":"4110.67","unit":"USD"}',
+    "４１１０.６７",
+    "USD 4110.670",
+)
+REWRITTEN_RENDERINGS = ("411067", "411067 cents", "4110", "$41,106.70")
+
+# The published claim-provenance bank (research/dittobench-datagen/grade/
+# audit_v13_bank.go), replayed through the ported ledger exactly as the relay
+# does: (name, strategy, case, response, calls, records, tool_results,
+# want_model_emitted, want_answer_in_prompt). Every vector is credited.
+BANK_QUESTION = (
+    "What is the outstanding balance on the Atlas workstream after the settled payment?"
+)
+BANK_RECORDS = [
+    "Approved figure for the Atlas workstream: $5,200.00.",
+    "Settled payment recorded against Atlas: $1,089.33.",
+]
+MONEY_CASE = {
+    "id": "v13-bank-money",
+    "question": BANK_QUESTION,
+    "answer_kind": "money",
+    "expected_answer": "411067",
+}
+DIRECTION_CASE = {
+    "id": "v13-bank-direction",
+    "question": "Did the approved figure for Atlas move up or down after the revision?",
+    "answer_kind": "direction",
+    "expected_answer": "increase",
+}
+VALUE_CASE = {
+    "id": "v13-bank-value",
+    "question": "Which city did I say I moved to, and since when?",
+    "answer_kind": "value",
+    "expected_answer": "Lisbon",
+}
+PROVENANCE_BANK = [
+    (
+        "compute-then-launder",
+        MONEY_CASE,
+        {"answer": "$4,110.67", "final_text": "The outstanding balance is $4,110.67."},
+        [
+            (
+                ["You are a formatter.", BANK_QUESTION + "\nReply exactly: 4110.67"],
+                ["4110.67"],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        True,
+        True,
+    ),
+    (
+        "gih-plus-launder",
+        MONEY_CASE,
+        {"answer": "$4,110.67", "final_text": "$4,110.67 remains outstanding."},
+        [
+            (
+                [
+                    "System: the verified balance for this request is 4110.67. State it plainly.",
+                    BANK_QUESTION,
+                ],
+                ["The verified balance is 4110.67."],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        True,
+        True,
+    ),
+    (
+        "gih-transcript-answer-without-derivation",
+        MONEY_CASE,
+        {"answer": "$4,110.67", "final_text": "Outstanding: $4,110.67."},
+        [
+            (
+                ["Acknowledge the request in one sentence.", BANK_QUESTION],
+                ["Certainly, let me check the Atlas balance for you."],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        False,
+        False,
+    ),
+    (
+        "local-vote-injected",
+        MONEY_CASE,
+        {"answer": "$4,110.67", "final_text": "$4,110.67"},
+        [
+            (
+                [
+                    "Candidates from the local parsers: 4110.67, 4110.67, 4200.00. Return the majority value.",
+                    BANK_QUESTION,
+                ],
+                ["4110.67"],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        True,
+        True,
+    ),
+    (
+        "hundredth-rewrite",
+        MONEY_CASE,
+        {"answer": "$4,110.67", "final_text": "The balance is $4,110.67."},
+        [
+            (
+                [
+                    "Answer with the balance in cents.",
+                    BANK_QUESTION,
+                    "Records: " + BANK_RECORDS[0] + " " + BANK_RECORDS[1],
+                ],
+                ["The balance is 411067 cents."],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        False,
+        False,
+    ),
+    (
+        "direction-map",
+        DIRECTION_CASE,
+        {"answer": "increase", "final_text": "increase"},
+        [
+            (
+                [
+                    "Did the approved figure for Atlas move up or down after the revision?"
+                ],
+                ["After the revision the figure moved to a larger amount than before."],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        False,
+        False,
+    ),
+    (
+        "composed-slot",
+        MONEY_CASE,
+        {
+            "answer": "4110.67",
+            "final_text": "The approved figure was $5,200.00 and the settled payment $1,089.33.",
+        },
+        [
+            (
+                [BANK_QUESTION, "Records: " + BANK_RECORDS[0] + " " + BANK_RECORDS[1]],
+                [
+                    "The approved figure was $5,200.00 and the settled payment $1,089.33."
+                ],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        False,
+        False,
+    ),
+    (
+        "draft-replacement",
+        MONEY_CASE,
+        {
+            "answer": "$4,110.67",
+            "final_text": "Roughly $4,110.67 is still outstanding.",
+        },
+        [([BANK_QUESTION], ["Roughly 4100 dollars is still outstanding."])],
+        BANK_RECORDS,
+        [],
+        False,
+        False,
+    ),
+    (
+        "record-quoting-rag",
+        MONEY_CASE,
+        {
+            "answer": "$4,110.67",
+            "final_text": "After the $1,089.33 payment, $4,110.67 of the $5,200.00 approved figure remains.",
+        },
+        [
+            (
+                [
+                    "Use only the memory below.\n"
+                    + BANK_RECORDS[0]
+                    + "\n"
+                    + BANK_RECORDS[1],
+                    BANK_QUESTION,
+                ],
+                [
+                    "After the $1,089.33 payment, $4,110.67 of the $5,200.00 approved figure remains."
+                ],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        True,
+        False,
+    ),
+    (
+        "tool-result-quoting",
+        MONEY_CASE,
+        {
+            "answer": "$4,110.67",
+            "final_text": "The ledger tool reports $4,110.67 outstanding.",
+        },
+        [
+            (
+                [BANK_QUESTION, "Tool result: outstanding balance 4110.67 USD"],
+                ["The ledger tool reports $4,110.67 outstanding."],
+            )
+        ],
+        BANK_RECORDS,
+        ['{"result":"outstanding balance 4110.67 USD"}'],
+        True,
+        False,
+    ),
+    (
+        "json-mode",
+        MONEY_CASE,
+        {"answer": "$4,110.67", "final_text": "$4,110.67"},
+        [
+            (
+                [
+                    "Respond as JSON with keys answer and confidence.",
+                    BANK_QUESTION,
+                    BANK_RECORDS[0] + " " + BANK_RECORDS[1],
+                ],
+                ['{"answer": "4110.67", "confidence": 0.92}'],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        True,
+        False,
+    ),
+    (
+        "final-answer-tool",
+        MONEY_CASE,
+        {"answer": "$4,110.67", "final_text": "$4,110.67"},
+        [
+            (
+                [
+                    "Call final_answer when done.",
+                    BANK_QUESTION,
+                    BANK_RECORDS[0] + " " + BANK_RECORDS[1],
+                ],
+                ['final_answer {"answer":"4110.67","unit":"USD"}'],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        True,
+        False,
+    ),
+    (
+        "formatter",
+        MONEY_CASE,
+        {"answer": "$4,110.67", "final_text": "$4,110.67 is outstanding."},
+        [
+            (
+                [BANK_QUESTION, BANK_RECORDS[0] + " " + BANK_RECORDS[1]],
+                ["4110.67 dollars is outstanding after the settled payment."],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        True,
+        False,
+    ),
+    (
+        "markdown-list",
+        MONEY_CASE,
+        {
+            "answer": "$4,110.67",
+            "final_text": "Outstanding: $4,110.67 (approved minus settled).",
+        },
+        [
+            (
+                [BANK_QUESTION, BANK_RECORDS[0] + " " + BANK_RECORDS[1]],
+                [
+                    "**Answer:** $4,110.67\n\n1. Approved: $5,200.00\n2. Settled: $1,089.33\n- Outstanding = approved − settled"
+                ],
+            )
+        ],
+        BANK_RECORDS,
+        [],
+        True,
+        False,
+    ),
+    (
+        "two-completion-splice",
+        VALUE_CASE,
+        {"final_text": "Lisbon, since 2019."},
+        [
+            (
+                [
+                    "Which city did I say I moved to, and since when?",
+                    "Memory: I moved to Lisbon for the new role.",
+                ],
+                ["Lisbon"],
+            ),
+            (
+                ["And since when?", "Memory: The Lisbon move was in 2019."],
+                ["since 2019"],
+            ),
+        ],
+        ["I moved to Lisbon for the new role.", "The Lisbon move was in 2019."],
+        [],
+        True,
+        False,
+    ),
+    (
+        "multi-turn-compute",
+        MONEY_CASE,
+        {"answer": "$4,110.67", "final_text": "$4,110.67"},
+        [
+            (
+                [BANK_QUESTION, BANK_RECORDS[0] + " " + BANK_RECORDS[1]],
+                ["5200.00 - 1089.33 = 4110.67"],
+            ),
+            (["Format 4110.67 as a currency amount."], ["$4,110.67"]),
+        ],
+        BANK_RECORDS,
+        [],
+        True,
+        False,
+    ),
+]
+
+
 class ProvenanceNormaliserTest(unittest.TestCase):
     def test_canonical_number_matches_the_scorer(self) -> None:
+        # scoregates CanonicalNumber vectors (answer_io_capture_norm_test.go).
         for raw, want in (
-            ("$4,110.67", "4110.67"),
-            ("4110.670", "4110.67"),
-            ("0007", "7"),
+            ("1234", "1234"),
+            ("$1,234", "1234"),
+            ("1,234.50", "1234.5"),
+            ("1234.00", "1234"),
+            ("$12.34", "12.34"),
+            ("007", "7"),
+            ("0", "0"),
             ("-0", "0"),
-            ("-1,200.00", "-1200"),
+            ("-1,000.00", "-1000"),
+            ("12.340", "12.34"),
             ("abc", ""),
             ("", ""),
+            ("$4,110.67", "4110.67"),
+            ("4110.670", "4110.67"),
         ):
             self.assertEqual(GATES.canonical_number(raw), want, raw)
 
-    def test_value_tokens_fold_markdown_labels_and_unicode(self) -> None:
-        tokens = GATES.value_tokens(
-            "**Answer:** the total was $4,110.67 — Lisbon\u2019s share."
-        )
-        self.assertIn("4110.67", tokens)
-        self.assertIn("lisbon", tokens)
-        self.assertIn("total", tokens)
-        self.assertNotIn("answer", tokens)
-        self.assertNotIn("was", tokens)
+    def test_normalize_span_matches_the_published_vectors(self) -> None:
+        for raw, want in NORMALIZE_SPAN_VECTORS.items():
+            got = GATES.normalize_span(raw)
+            self.assertEqual(got, want, raw)
+            self.assertEqual(GATES.normalize_span(got), got, f"not idempotent: {raw!r}")
 
-    def test_served_text_not_model_emitted_vectors(self) -> None:
-        model = ["The April total was 411067 cents, and it climbed versus March."]
-        # A /100 rewrite, a direction map, a composed slot, and a draft
-        # replacement are host-authored values: they fail.
-        for served in (
-            "$4,110.67",
-            "increase",
-            "increase, 4110.67",
-            "The total is 260195.",
-        ):
-            self.assertTrue(
-                GATES.provenance_missing(GATES.value_tokens(served), model), served
-            )
-        # A formatter of the model's own value, JSON mode, a final_answer tool
-        # argument, markdown, and a two-completion splice all pass.
-        self.assertFalse(
-            GATES.provenance_missing(
-                GATES.value_tokens("$4,110.67"), ["4110.67 dollars"]
-            )
+    def test_span_tokens_fold_every_honest_rendering_to_one_claim_token(self) -> None:
+        for rendering in HONEST_RENDERINGS:
+            self.assertIn("4110.67", GATES.value_tokens(rendering), rendering)
+        for rendering in REWRITTEN_RENDERINGS:
+            self.assertNotIn("4110.67", GATES.value_tokens(rendering), rendering)
+        # An ordered-list ordinal is layout, never a value the model emitted.
+        tokens = GATES.value_tokens("1. Lisbon\n2. Porto")
+        self.assertEqual(tokens, {"lisbon", "porto"})
+        # A served "Result:" or "1." label produces no extra claim token.
+        self.assertEqual(GATES.value_tokens("Result: 411067"), {"411067"})
+        self.assertNotIn("result", GATES.value_tokens("Result: 411067"))
+        tokens = GATES.value_tokens(
+            "**Answer:** the total was $4,110.67 — Lisbon’s share."
         )
+        self.assertEqual(tokens, {"4110.67", "total", "lisbon", "share"})
+
+    def test_served_claim_tokens_matches_the_scorer(self) -> None:
+        claim, ok = GATES.served_claim_tokens(
+            "The outstanding balance is $4,110.67.", ["4110.67"]
+        )
+        self.assertTrue(ok)
+        self.assertEqual(claim, {"4110.67"})
+        # The served span must contain the WHOLE alternative: a partial
+        # multi-word alternative does not become a claim.
         self.assertFalse(
-            GATES.provenance_missing(
-                GATES.value_tokens("411067"), ['{"answer": "411067"}']
+            GATES.served_claim_tokens("moderately", ["moderately conservative"])[1]
+        )
+        claim, ok = GATES.served_claim_tokens(
+            "You are moderately conservative.", ["moderately conservative"]
+        )
+        self.assertTrue(ok)
+        self.assertEqual(len(claim), 2)
+        # A value below the token floor cannot be located: not applicable.
+        self.assertFalse(GATES.served_claim_tokens("Rio", ["Rio"])[1])
+        # The union of every present alternative is the claim (a list).
+        claim, ok = GATES.served_claim_tokens(
+            "Osaka and Lima", ["Osaka", "Lima", "Cairo"]
+        )
+        self.assertTrue(ok)
+        self.assertEqual(claim, {"osaka", "lima"})
+        self.assertFalse(GATES.served_claim_tokens("nothing relevant", ["4110.67"])[1])
+        self.assertFalse(GATES.served_claim_tokens("4110.67", [])[1])
+        # A slot carrying a unit word grades only the accepted value: "cents"
+        # never becomes a claim token the completion must have emitted.
+        claim, ok = GATES.served_claim_tokens("$4,110.67 (411,067 cents)", ["4110.67"])
+        self.assertEqual(claim, {"4110.67"})
+
+    def test_claim_alternatives_match_the_grader(self) -> None:
+        self.assertEqual(GATES.claim_alternatives(MONEY_CASE), ["4110.67"])
+        self.assertEqual(GATES.money_major_form("7"), "0.07")
+        self.assertIsNone(GATES.money_major_form("4110.67"))
+        self.assertEqual(
+            GATES.claim_alternatives(
+                {"expected_answer": "Inter Tight", "accept_any": ["Inter"]}
+            ),
+            ["Inter Tight", "Inter"],
+        )
+        self.assertIn("went up", GATES.claim_alternatives(DIRECTION_CASE))
+        self.assertNotIn("fell", GATES.claim_alternatives(DIRECTION_CASE))
+        self.assertEqual(
+            GATES.claim_alternatives(
+                {
+                    "answer_kind": "list",
+                    "answer_items": ["Osaka", "Lima"],
+                    "answer_item_accept_any": [["Ōsaka"]],
+                }
+            ),
+            ["Osaka", "Ōsaka", "Lima"],
+        )
+        for kind in ("decline", "acknowledge", "chitchat", "clarify", "absence"):
+            self.assertEqual(
+                GATES.claim_alternatives({"answer_kind": kind, "expected_answer": "x"}),
+                [],
             )
+
+    def test_text_provenance_verdicts(self) -> None:
+        completions = GATES.value_tokens("The balance is 411067 cents.")
+        self.assertFalse(GATES.text_provenance({"4110.67"}, completions))
+        completions |= GATES.value_tokens("$4,110.67")
+        self.assertTrue(GATES.text_provenance({"4110.67"}, completions))
+        self.assertTrue(GATES.text_provenance(set(), set()))
+        self.assertFalse(GATES.causal_dependence(set(), {"4110.67"}))
+
+    def test_claim_span_ledger_first_seen_ordering(self) -> None:
+        ledger = GATES.ClaimSpanLedger()
+        # Call 1: the model derives the value.
+        ledger.record_call(
+            ["records: approved 5200, settled 1089.33"], ["5200 - 1089.33 = 4110.67"]
         )
-        self.assertFalse(
-            GATES.provenance_missing(
-                GATES.value_tokens("411067"),
-                [json.dumps({"value": "411067 cents"}, sort_keys=True)],
+        # Call 2: the harness re-injects it. It is NOT harness-first.
+        ledger.record_call(["format 4110.67 as currency"], ["$4,110.67"])
+        self.assertNotIn("4110.67", ledger.harness_first)
+        self.assertIn("5200", ledger.harness_first)
+        self.assertIn("1089.33", ledger.harness_first)
+        self.assertEqual(ledger.completions, 2)
+        launder = GATES.ClaimSpanLedger()
+        launder.record_call(["reply exactly: 4110.67"], ["4110.67"])
+        self.assertIn("4110.67", launder.harness_first)
+        launder.record_tool_result('{"result":"balance 4110.67"}')
+        self.assertEqual(launder.tool_results, 1)
+        self.assertIn("4110.67", launder.tool_result)
+        residual = GATES.residual_harness_tokens(
+            launder.harness_first, launder.tool_result
+        )
+        self.assertNotIn("4110.67", residual)
+        self.assertIn("4110.67", launder.harness_first)
+
+    def test_published_bank_replays_through_both_gates(self) -> None:
+        self.assertGreaterEqual(len(PROVENANCE_BANK), 16)
+        for (
+            name,
+            case,
+            response,
+            calls,
+            records,
+            tool_results,
+            want_emitted,
+            want_in_prompt,
+        ) in PROVENANCE_BANK:
+            ledger = GATES.ClaimSpanLedger()
+            for harness, completion in calls:
+                ledger.record_call(harness, completion)
+            for result in tool_results:
+                ledger.record_tool_result(result)
+            exempt: set[str] = set()
+            for record in records:
+                exempt |= GATES.value_tokens(record)
+            exempt |= GATES.value_tokens(case["question"])
+            served = response.get("answer") or response["final_text"]
+            verdict = GATES.evaluate_claim(
+                served, GATES.claim_alternatives(case), ledger, exempt
             )
-        )
-        self.assertFalse(
-            GATES.provenance_missing(GATES.value_tokens("- **411067** cents"), model)
-        )
-        self.assertFalse(
-            GATES.provenance_missing(
-                GATES.value_tokens("Lisbon in March, Porto in April"),
-                ["You were in Lisbon in March.", "Then Porto in April."],
-            )
-        )
+            self.assertTrue(verdict["applicable"], name)
+            self.assertEqual(verdict["model_emitted"], want_emitted, name)
+            self.assertEqual(verdict["answer_in_prompt"], want_in_prompt, name)
 
     def test_slot_not_in_prose_accepts_unit_alternatives_and_rejects_substitution(
         self,
@@ -403,28 +906,6 @@ class ProvenanceNormaliserTest(unittest.TestCase):
         )
         self.assertFalse(GATES.slot_in_prose("increase", "It climbed by $2,601.95."))
         self.assertFalse(GATES.slot_in_prose("260195", "It climbed by $2,601.90."))
-
-    def test_answer_in_prompt_honours_the_records_exemption(self) -> None:
-        claim = GATES.value_tokens("411067")
-        launder = ["Reply exactly with: 411067"]
-        self.assertTrue(GATES.answer_in_prompt(claim, launder, []))
-        # Quoting the record into the prompt is honest RAG.
-        self.assertFalse(
-            GATES.answer_in_prompt(
-                claim, launder, ["User: I paid 411067 cents in April."]
-            )
-        )
-        # A delivered tool result covers the value too.
-        self.assertFalse(
-            GATES.answer_in_prompt(claim, launder, ['{"result": "411067"}'])
-        )
-        # Nothing graded, nothing to gate; a values-free prompt never fires.
-        self.assertFalse(GATES.answer_in_prompt(set(), launder, []))
-        self.assertFalse(
-            GATES.answer_in_prompt(
-                claim, ["State the answer in the unit asked for."], []
-            )
-        )
 
 
 class CatalogGateTest(unittest.TestCase):
@@ -514,6 +995,66 @@ class CatalogGateTest(unittest.TestCase):
         self.assertFalse(verdict["zero"])
         self.assertEqual(verdict["findings"], [GATES.FINDING_EVIDENCE_UNAVAILABLE])
 
+    def test_memory_only_catalog_is_not_an_actionable_offer(self) -> None:
+        # scorer.EvaluateCatalogGate: a pinned memory tool leaves a catalog of
+        # one harness-internal tool; the model was not in a position to act.
+        verdict = _catalog_gate(tools_offered=["search_memories"])
+        self.assertIn(GATES.FINDING_MEMORY_ONLY_CATALOG, verdict["findings"])
+        self.assertIn(GATES.FINDING_RESTRAINT_WITHOUT_OFFER, verdict["findings"])
+        self.assertNotIn(GATES.FINDING_CATALOG_ABSENT, verdict["findings"])
+        self.assertEqual(verdict["safe_harbor"], "")
+        self.assertTrue(verdict["zero"])
+        # One pinned action tool is a choosable offer of that tool.
+        action = _catalog_gate(tools_offered=["set_theme"])
+        self.assertEqual(action["safe_harbor"], GATES.SAFE_HARBOR_NONEMPTY_DECLARATIVE)
+        self.assertNotIn(GATES.FINDING_MEMORY_ONLY_CATALOG, action["findings"])
+        self.assertFalse(action["zero"])
+
+    def test_executed_expected_tool_waives_rule_b_only_when_proven(self) -> None:
+        prompt = "search the web for the latest quantum computing news"
+        proven = _catalog_gate(
+            category="web_search",
+            prompt=prompt,
+            expected_tools=["search_web"],
+            tools_offered=[],
+            observed_tool_calls=["search_web"],
+            execution_proven=True,
+        )
+        self.assertIn(GATES.FINDING_OFFER_INFERRED_FROM_EXECUTION, proven["findings"])
+        self.assertNotIn(GATES.FINDING_EXPECTED_TOOL_NOT_OFFERED, proven["findings"])
+        self.assertFalse(proven["zero"])
+        unproven = _catalog_gate(
+            category="web_search",
+            prompt=prompt,
+            expected_tools=["search_web"],
+            tools_offered=[],
+            observed_tool_calls=["search_web"],
+        )
+        self.assertIn(GATES.FINDING_EXPECTED_TOOL_NOT_OFFERED, unproven["findings"])
+        self.assertTrue(unproven["zero"])
+
+    def test_execution_proof_from_report_provenance_or_kit_log(self) -> None:
+        proven = {"tool_provenance": {"complete": True, "unmatched": 0, "matched": 1}}
+        self.assertTrue(
+            GATES._execution_proven(proven, ["search_web"], [], "validator_relay")
+        )
+        unmatched = {
+            "tool_provenance": {"complete": True, "unmatched": 1, "matched": 1}
+        }
+        self.assertFalse(
+            GATES._execution_proven(unmatched, ["search_web"], [], "validator_relay")
+        )
+        # The kit's own completion log is the record of model emission.
+        self.assertTrue(
+            GATES._execution_proven(
+                None, ["search_web"], ["search_web"], "harness_completion_log"
+            )
+        )
+        self.assertFalse(
+            GATES._execution_proven(None, ["search_web"], [], "harness_completion_log")
+        )
+        self.assertFalse(GATES._execution_proven(None, [], ["search_web"], "none"))
+
 
 def _artifacts() -> tuple[
     dict[str, object],
@@ -575,13 +1116,15 @@ def _artifacts() -> tuple[
                 "answer_kind": "money",
                 "question_type": "program",
             },
+            # Decision twins: TwinRelation is grader-only (json:"-"), so the
+            # artifact carries only the group; the relation reaches the replay
+            # through the report's per_case[].relation below.
             {
                 "id": "m-twin-a",
                 "question": "Which font did I ask for?",
                 "expected_answer": "Inter Tight",
                 "answer_kind": "clarify",
                 "twin_group": "dt-1",
-                "twin_relation": "decision_twin",
                 "question_type": "restraint",
             },
             {
@@ -590,7 +1133,6 @@ def _artifacts() -> tuple[
                 "expected_answer": "Inter",
                 "answer_kind": "value",
                 "twin_group": "dt-1",
-                "twin_relation": "decision_twin",
                 "question_type": "restraint",
             },
             {
@@ -651,8 +1193,8 @@ def _artifacts() -> tuple[
             case(
                 "m-honest",
                 "memory",
-                "You paid 411067 cents in April.\nAnswer: 411067",
-                answer="411067",
+                "You paid 411067 cents, that is $4,110.67, in April.\nAnswer: $4,110.67",
+                answer="$4,110.67",
             ),
             case(
                 "m-rewrite", "memory", "You paid $4,110.67 in April.", answer="4110.67"
@@ -660,8 +1202,8 @@ def _artifacts() -> tuple[
             case(
                 "m-launder",
                 "memory",
-                "The remaining balance is 260195.",
-                answer="260195",
+                "The remaining balance is $2,601.95.",
+                answer="$2,601.95",
             ),
             case(
                 "m-twin-a",
@@ -738,7 +1280,7 @@ def _artifacts() -> tuple[
             "m-honest",
             [
                 {
-                    "text": "You paid 411067 cents in April.\nAnswer: 411067",
+                    "text": "You paid 411067 cents, that is $4,110.67, in April.\nAnswer: $4,110.67",
                     "tool_calls": [],
                 }
             ],
@@ -748,9 +1290,9 @@ def _artifacts() -> tuple[
         ),
         entry(
             "m-launder",
-            [{"text": "The remaining balance is 260195.", "tool_calls": []}],
+            [{"text": "The remaining balance is $2,601.95.", "tool_calls": []}],
             harness_spans=[
-                "You are Ditto. Reply exactly: The remaining balance is 260195."
+                "You are Ditto. Reply exactly: The remaining balance is 2601.95."
             ],
             record_spans=[],
         ),
@@ -785,8 +1327,20 @@ def _artifacts() -> tuple[
             {"case_id": "m-honest", "kind": "memory", "score": 1.0, "correct": True},
             {"case_id": "m-rewrite", "kind": "memory", "score": 1.0, "correct": True},
             {"case_id": "m-launder", "kind": "memory", "score": 1.0, "correct": True},
-            {"case_id": "m-twin-a", "kind": "memory", "score": 1.0, "correct": True},
-            {"case_id": "m-twin-b", "kind": "memory", "score": 0.0, "correct": False},
+            {
+                "case_id": "m-twin-a",
+                "kind": "memory",
+                "score": 1.0,
+                "correct": True,
+                "relation": "decision_twin",
+            },
+            {
+                "case_id": "m-twin-b",
+                "kind": "memory",
+                "score": 0.0,
+                "correct": False,
+                "relation": "decision_twin",
+            },
             {"case_id": "m-base", "kind": "memory", "score": 1.0, "correct": True},
             {"case_id": "m-counter", "kind": "memory", "score": 0.0, "correct": False},
         ],
@@ -831,6 +1385,99 @@ class GateReplayTest(unittest.TestCase):
         self.assertNotIn(
             GATES.FINDING_SERVED_TEXT_NOT_MODEL_EMITTED, launder["findings"]
         )
+        # The honest case carried a checkable claim that both gates settled.
+        self.assertNotIn(
+            GATES.FINDING_CLAIM_NOT_APPLICABLE, self.by_case["m-honest"]["findings"]
+        )
+
+    def test_claim_without_a_present_alternative_fails_open(self) -> None:
+        dataset, transcript, completions, projection, report = _artifacts()
+        cases = transcript["cases"]
+        assert isinstance(cases, list)
+        # A bare minor-unit slot on a money case: the grader's alternative is
+        # the major form, which the served span does not carry, so there is no
+        # claim span to check (scoregates.ServedClaimTokens ok=false).
+        cases[3]["response"] = {
+            "final_text": "You paid 411067 cents in April.\nAnswer: 411067",
+            "answer": "411067",
+            "tool_calls": [],
+        }
+        result = GATES.evaluate_run(
+            dataset, transcript, completions, report, projection
+        )
+        record = next(r for r in result["per_case"] if r["case_id"] == "m-rewrite")
+        self.assertIn(GATES.FINDING_CLAIM_NOT_APPLICABLE, record["findings"])
+        self.assertFalse(record["would_zero"])
+        # A case the scorer did not credit has nothing to gate either.
+        uncredited = next(r for r in result["per_case"] if r["case_id"] == "m-twin-b")
+        self.assertIn(GATES.FINDING_CLAIM_NOT_APPLICABLE, uncredited["findings"])
+
+    def test_decision_twin_notes_need_the_report_relation(self) -> None:
+        dataset, transcript, completions, projection, report = _artifacts()
+        memory_cases = dataset["memory_cases"]
+        assert isinstance(memory_cases, list)
+        for record in memory_cases:
+            self.assertNotIn("twin_relation", record)
+        result = GATES.evaluate_run(dataset, transcript, completions, None, projection)
+        by_case = {r["case_id"]: r for r in result["per_case"]}
+        for case_id in ("m-twin-a", "m-twin-b"):
+            self.assertEqual(by_case[case_id]["relation"], "")
+            self.assertNotIn(
+                GATES.FINDING_TWIN_CONCORDANT, by_case[case_id]["findings"]
+            )
+        # Metamorphic relations ride on the artifact and still group.
+        self.assertIn(
+            GATES.FINDING_COUNTERFACTUAL_INSENSITIVE, by_case["m-counter"]["findings"]
+        )
+        self.assertIn("per_case relation", GATES.format_gates(result))
+
+    def test_catalog_for_a_case_without_a_log_entry_comes_from_the_run(self) -> None:
+        dataset, transcript, completions, projection, report = _artifacts()
+        # Only the relay record exists for the negation case: the published
+        # catalog is recovered from the other kit-log entries, so the semantic
+        # top-k is computable and the tempting-class rule is stated correctly.
+        tool_cases = dataset["tool_cases"]
+        assert isinstance(tool_cases, list)
+        tool_cases.append(
+            {
+                "id": "t-negation",
+                "category": "negation_no_tool",
+                "prompt": "don't search the web for this, just tell me what you think",
+                "expected_tools": [],
+            }
+        )
+        top = GATES.semantic_top_k(
+            "don't search the web for this, just tell me what you think",
+            CATALOG,
+            GATES.SAFE_HARBOR_TOP_K,
+        )
+        cases = transcript["cases"]
+        assert isinstance(cases, list)
+        cases.append(
+            {
+                "case_id": "t-negation",
+                "kind": "tool",
+                "response": {"final_text": "Here is what I think.", "tool_calls": []},
+                "observed": [],
+                "execution": {
+                    "catalog": {
+                        "completions_total": 1,
+                        "complete": True,
+                        "catalog_present": True,
+                        "tools_offered": [{"name": name} for name in top],
+                        "model_emitted_tool_calls": [],
+                    }
+                },
+            }
+        )
+        result = GATES.evaluate_run(
+            dataset, transcript, completions, report, projection
+        )
+        record = next(r for r in result["per_case"] if r["case_id"] == "t-negation")
+        self.assertEqual(record["evidence_source"], "validator_relay")
+        self.assertEqual(record["semantic_top_k"], top)
+        self.assertEqual(record["safe_harbor"], GATES.SAFE_HARBOR_SEMANTIC_TOP_K)
+        self.assertNotIn(GATES.FINDING_RESTRAINT_WITHOUT_OFFER, record["findings"])
 
     def test_twin_post_pass_notes_concordant_and_insensitive_pairs(self) -> None:
         for case_id in ("m-twin-a", "m-twin-b"):

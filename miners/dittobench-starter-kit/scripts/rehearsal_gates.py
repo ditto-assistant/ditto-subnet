@@ -13,19 +13,25 @@ locally is the rule the validator states, not a guess:
 * ``restraint_without_offer`` / ``expected_tool_not_offered`` /
   ``swallowed_model_call`` — the catalog-present gate with its
   semantic-preloading safe harbor (top-3 of the published TF-IDF embedding).
-* ``served_text_not_model_emitted`` — the claim-span provenance normaliser:
-  the graded claim's canonical value tokens must appear in some model
-  completion (message text, tool-call arguments, structured output).
+* ``served_text_not_model_emitted`` — the claim-span provenance gate: the
+  graded CLAIM SPAN (the accepted alternative wholly present in the served
+  slot or prose, under the published ``NormalizeSpan`` normaliser) must be
+  contained in the union of every model completion's value tokens (message
+  text, tool-call arguments, structured output). No alternative present means
+  ``claim_not_applicable``: the gate fails open, never guesses.
 * ``slot_not_in_prose`` — a populated ``answer`` slot whose value has no
   equivalent in ``final_text`` (numbers compare canonically and across the
   minor/major unit alternative, so ``411067`` beside ``$4,110.67`` passes).
-* ``answer_in_prompt`` — the causal gate with the records exemption: the graded
-  value tokens all appear in a harness-authored span and none of them is
-  covered by a ``/seed`` record, a retrieved-memory context message, a delivered
-  tool result, or the case's own question.
+* ``answer_in_prompt`` — the causal gate with the records exemption: every
+  claim token was authored by the harness before any completion produced it
+  and none of them is covered by a ``/seed`` record, a retrieved-memory context
+  message, a delivered tool result, or the case's own question.
 * ``twin_concordant`` / ``counterfactual_insensitive`` — the twin/pair
   post-pass: identical decision class across a decision/as-of twin group, or a
-  counterfactual member answered like its base.
+  counterfactual member answered like its base. Metamorphic relations ride on
+  the artifact (``v10_provenance.relation``); decision/as-of twin relations
+  are grader-only and reach the replay solely through the scorer report's
+  ``per_case[].relation``, so those notes need ``--report``.
 
 Every gate is SHADOW in v13.0: notes are printed and a "gate-induced loss
 (shadow)" is computed, no local score moves. The local instrument sees the
@@ -78,6 +84,8 @@ FINDING_ANSWER_IN_PROMPT = "answer_in_prompt"
 FINDING_TWIN_CONCORDANT = "twin_concordant"
 FINDING_COUNTERFACTUAL_INSENSITIVE = "counterfactual_insensitive"
 FINDING_PROVENANCE_UNAVAILABLE = "provenance_evidence_unavailable"
+FINDING_MEMORY_ONLY_CATALOG = "memory_only_catalog"
+FINDING_OFFER_INFERRED_FROM_EXECUTION = "offer_inferred_from_execution"
 
 GATE_FINDINGS = (
     FINDING_RESTRAINT_WITHOUT_OFFER,
@@ -101,13 +109,12 @@ INJECTION_TWIN_PREFIX = "injtwin-"
 
 # ─── Published semantic embedding (scorer.CatalogSemanticTopK) ───────────────
 
-_STOPWORDS = frozenset(
-    """the and for with that this from you your can please one more use are was
-    were have has had not but any all into its our out about what which when
-    where who how why just like then than too very will would should could
-    there here some them they their thing tool tools given return returns
-    default""".split()
-)
+_STOPWORD_TEXT = """the and for with that this from you your can please one more
+    use are was were have has had not but any all into its our out about what
+    which when where who how why just like then than too very will would should
+    could there here some them they their thing tool tools given return returns
+    default"""
+_STOPWORDS = frozenset(_STOPWORD_TEXT.split())
 
 
 def _stem(token: str) -> str:
@@ -165,33 +172,70 @@ def semantic_top_k(prompt: str, catalog: list[dict[str, Any]], k: int) -> list[s
     return [name for _, name in ranked[:k]]
 
 
-# ─── Provenance normaliser (public) ──────────────────────────────────────────
+# ─── Provenance normaliser (scoregates/text_provenance.go, verbatim port) ────
+#
+# Everything in this section is a line-for-line port of the PUBLISHED Go rule
+# (services/dittobench-api/internal/scoregates/text_provenance.go and
+# causal_dependence.go). The Go side stores value-token HASHES; this port keeps
+# the canonical token strings, which is the same set under HashToken. The Go
+# vectors (text_provenance_test.go, audit_v13_bank.go) are replayed against this
+# module in test_local_rehearsal.py so the two cannot drift.
 
-NUMBER_RE = re.compile(r"-?\$?\d[\d,]*(?:\.\d+)?")
+# RE2 `\d` and `\s` are ASCII-only; spell them out so Python matches Go.
+_D = r"[0-9]"
+_WS = r"[\t\n\f\r ]"
+# numberPattern: optional sign, optional '$', digits with grouping commas,
+# optional fractional part.
+NUMBER_RE = re.compile(rf"-?\$?{_D}[{_D[1:-1]},]*(?:\.{_D}+)?")
+# alnumTokenPattern over already-lowercased text.
 ALNUM_RE = re.compile(r"[a-z0-9]+")
-_ANSWER_LABEL_RE = re.compile(r"(?im)^[\s*_`#>\-]*answer\s*:\s*")
-_MIN_STRING_TOKEN_LEN = 4
-_FOLD_MAP = str.maketrans(
-    {
-        "‘": "'",
-        "’": "'",
-        "ʼ": "'",
-        "“": '"',
-        "”": '"',
-        "–": "-",
-        "—": "-",
-        "−": "-",
-        "\u00a0": " ",
-        "*": " ",
-        "_": " ",
-        "`": " ",
-        "#": " ",
-    }
+# labelPrefixPattern: a leading answer label on a line ("ANSWER:", "Final
+# answer -", "A:", "Result:"), optionally wrapped in markdown emphasis.
+_LABEL_PREFIX_RE = re.compile(
+    rf"(?im)^[{_WS[1:-1]}*_#>\-]*(?:final{_WS}+answer|answer|result|response|output|a){_WS}*[:\-–—]{_WS}*"
 )
+# listMarkerPattern: markdown bullets and ordered-list ordinals at line start.
+_LIST_MARKER_RE = re.compile(rf"(?m)^{_WS}*(?:[-*+•]|{_D}{{1,3}}[.)]){_WS}+")
+# Value-token capture bounds (scoregates.MinStringTokenLen / MaxValueTokenLen).
+MIN_STRING_TOKEN_LEN = 4
+MAX_VALUE_TOKEN_LEN = 64
+# Punctuation that carries numeric meaning inside a number; NormalizeSpan keeps
+# it and CanonicalNumber decides what it means.
+_NUMERIC_PUNCT = frozenset("$.,-")
+
+FINDING_CLAIM_NOT_APPLICABLE = "claim_not_applicable"
+
+# grade.ClaimAlternatives vocabulary (grade.go increasePhrases/decreasePhrases).
+_DIRECTION_PHRASES = {
+    "increase": (
+        "increase",
+        "increased",
+        "went up",
+        "rose",
+        "grew",
+        "raise",
+        "raised",
+        "gain",
+        "gained",
+        "higher",
+    ),
+    "decrease": (
+        "decrease",
+        "decreased",
+        "went down",
+        "fell",
+        "dropped",
+        "reduced",
+        "reduction",
+        "lower",
+        "lowered",
+        "cut",
+    ),
+}
 
 
 def canonical_number(raw: str) -> str:
-    """Port of the scorer's ``canonicalNumber``: strip ``$`` and grouping
+    """Port of ``scoregates.CanonicalNumber``: strip ``$`` and grouping
     commas, drop an insignificant fraction and trailing zeros, drop leading
     zeros, collapse ``-0``. Empty when not a number."""
     value = raw.strip()
@@ -202,7 +246,7 @@ def canonical_number(raw: str) -> str:
     int_part, _, frac_part = value.partition(".")
     frac_part = frac_part.rstrip("0")
     int_part = int_part.lstrip("0") or "0"
-    if not (int_part + frac_part).isdigit():
+    if any(ch < "0" or ch > "9" for ch in int_part + frac_part):
         return ""
     out = int_part + ("." + frac_part if frac_part else "")
     if negative and out != "0":
@@ -210,29 +254,207 @@ def canonical_number(raw: str) -> str:
     return out
 
 
-def fold_text(text: str) -> str:
-    """Request-independent normalisation: NFKC, casefold, quote/dash folding,
-    markdown emphasis stripped, ``Answer:`` labels stripped, whitespace
-    collapsed."""
-    folded = unicodedata.normalize("NFKC", text).translate(_FOLD_MAP).casefold()
-    folded = _ANSWER_LABEL_RE.sub("", folded)
-    return " ".join(folded.split())
+def normalize_span(text: str) -> str:
+    """Port of ``scoregates.NormalizeSpan``, the PUBLISHED request-independent
+    normaliser both sides of the claim-span gate apply before tokenizing:
+    Unicode NFKC, label and list-marker stripping, letters lowercased, digits
+    kept, ``$ . , -`` kept (numeric meaning), every other rune folded to one
+    separator, whitespace collapsed. Deterministic, total, idempotent."""
+    folded = unicodedata.normalize("NFKC", text)
+    folded = _LABEL_PREFIX_RE.sub("", folded)
+    folded = _LIST_MARKER_RE.sub("", folded)
+    out: list[str] = []
+    prev_space = True
+    for ch in folded:
+        if ch.isalpha() or unicodedata.category(ch) == "Nd":
+            out.append(ch.lower())
+            prev_space = False
+        elif ch in _NUMERIC_PUNCT:
+            out.append(ch)
+            prev_space = False
+        elif not prev_space:
+            out.append(" ")
+            prev_space = True
+    return "".join(out).strip()
+
+
+# The slot rule (`slot_not_in_prose`) folds text through the same normaliser.
+fold_text = normalize_span
 
 
 def value_tokens(text: str) -> set[str]:
-    """The canonical value-token set of a span: every canonical number plus
-    every alphanumeric token of at least four characters that is not purely
-    numeric (the scorer's ``valueTokenSet`` vocabulary)."""
-    folded = fold_text(text)
+    """Port of ``scoregates.SpanTokens`` (``ValueTokenHashes`` over
+    ``NormalizeSpan``): every canonical number plus every lowercase
+    alphanumeric token of at least ``MIN_STRING_TOKEN_LEN`` that is not a pure
+    digit run, each at most ``MAX_VALUE_TOKEN_LEN`` long."""
+    normalized = normalize_span(text)
     tokens: set[str] = set()
-    for match in NUMBER_RE.findall(folded):
+    for match in NUMBER_RE.findall(normalized):
         canonical = canonical_number(match)
-        if canonical:
+        if canonical and len(canonical) <= MAX_VALUE_TOKEN_LEN:
             tokens.add(canonical)
-    for token in ALNUM_RE.findall(folded):
-        if len(token) >= _MIN_STRING_TOKEN_LEN and not token.isdigit():
+    for token in ALNUM_RE.findall(normalized.lower()):
+        if (
+            MIN_STRING_TOKEN_LEN <= len(token) <= MAX_VALUE_TOKEN_LEN
+            and not token.isdigit()
+        ):
             tokens.add(token)
     return tokens
+
+
+def _grade_normalize(value: str) -> str:
+    """``grade.Normalize``: trim, lowercase, strip edge punctuation, collapse."""
+    folded = value.strip().lower().strip("\"'.,!?;:")
+    return " ".join(folded.split())
+
+
+def money_major_form(expected: str) -> str | None:
+    """``grade.MoneyMajorForm``: integer minor units -> major-unit decimal."""
+    digits = _grade_normalize(expected)
+    if not digits or any(ch < "0" or ch > "9" for ch in digits):
+        return None
+    cents = int(digits)
+    return f"{cents // 100}.{cents % 100:02d}"
+
+
+def direction_phrases(expected: str) -> list[str]:
+    """``grade.DirectionPhrases``: the grader's own acceptance table."""
+    wanted = _grade_normalize(expected)
+    for phrases in _DIRECTION_PHRASES.values():
+        if wanted in phrases:
+            return list(phrases)
+    return []
+
+
+def claim_alternatives(case: dict[str, Any]) -> list[str]:
+    """Port of ``grade.ClaimAlternatives``: the accepted canonical surface
+    forms of the expected answer, by answer kind. Kinds without a checkable
+    value (decline, acknowledge, chitchat, clarify, ...) have none."""
+    kind = str(case.get("answer_kind") or "value")
+    out: list[str] = []
+
+    def add(value: Any) -> None:
+        text = str(value).strip() if value is not None else ""
+        if text:
+            out.append(text)
+
+    if kind == "value":
+        add(case.get("expected_answer"))
+        for alt in _as_list(case.get("accept_any")):
+            add(alt)
+    elif kind == "number":
+        add(case.get("expected_answer"))
+    elif kind == "money":
+        add(money_major_form(str(case.get("expected_answer") or "")))
+    elif kind == "direction":
+        for phrase in direction_phrases(str(case.get("expected_answer") or "")):
+            add(phrase)
+    elif kind in ("list", "ordered_list"):
+        accept = _as_list(case.get("answer_item_accept_any"))
+        for index, item in enumerate(_as_list(case.get("answer_items"))):
+            add(item)
+            if index < len(accept):
+                for alt in _as_list(accept[index]):
+                    add(alt)
+    return out
+
+
+def served_claim_tokens(
+    served_text: str, alternatives: Iterable[str]
+) -> tuple[set[str], bool]:
+    """Port of ``scoregates.ServedClaimTokens``: the claim tokens are the union
+    of the token sets of every accepted alternative WHOLLY present in the
+    served span. ``ok`` is False when no alternative is present or every present
+    one has an empty token set: the gate then has no claim span and MUST fail
+    open (``claim_not_applicable``) rather than guess."""
+    served = value_tokens(served_text)
+    claim: set[str] = set()
+    for alternative in alternatives:
+        alt_tokens = value_tokens(alternative)
+        if not alt_tokens or not alt_tokens <= served:
+            continue
+        claim |= alt_tokens
+    if not claim:
+        return set(), False
+    return claim, True
+
+
+def text_provenance(claim: set[str], completions: set[str]) -> bool:
+    """``scoregates.TextProvenance``: the served claim tokens must be a subset
+    of the union of the case's completion tokens. An empty claim passes."""
+    if not claim:
+        return True
+    return claim <= completions
+
+
+def causal_dependence(claim: set[str], residual_harness_first: set[str]) -> bool:
+    """``scoregates.CausalDependence``: every claim token was authored by the
+    harness before any completion produced it. An empty claim never fires."""
+    if not claim:
+        return False
+    return claim <= residual_harness_first
+
+
+def residual_harness_tokens(harness_first: set[str], *exemptions: set[str]) -> set[str]:
+    """``scoregates.ResidualHarnessTokens``: harness-first tokens minus every
+    exemption (delivered records, tool results, the case's own question)."""
+    residual = set(harness_first)
+    for exempt in exemptions:
+        residual -= exempt
+    return residual
+
+
+class ClaimSpanLedger:
+    """Port of ``scoregates.ClaimSpanLedger``: the per-case token record both
+    gates read. Ordering matters for the causal gate: a harness-authored token
+    is harness-first only when no EARLIER completion of the same case already
+    produced it, so a value the model derived and the harness later re-injected
+    is model-derived, not laundered."""
+
+    def __init__(self) -> None:
+        self.completion: set[str] = set()
+        self.harness_first: set[str] = set()
+        self.tool_result: set[str] = set()
+        self.completions = 0
+        self.tool_results = 0
+
+    def record_call(self, harness: Iterable[str], completion: Iterable[str]) -> None:
+        for span in harness:
+            self.harness_first |= value_tokens(span) - self.completion
+        for span in completion:
+            self.completion |= value_tokens(span)
+        self.completions += 1
+
+    def record_tool_result(self, result: str) -> None:
+        self.tool_result |= value_tokens(result)
+        self.tool_results += 1
+
+
+def evaluate_claim(
+    served: str,
+    alternatives: Iterable[str],
+    ledger: ClaimSpanLedger,
+    *exemptions: set[str],
+) -> dict[str, Any]:
+    """Port of ``scoregates.EvaluateClaim``: both gates for one credited claim.
+    ``applicable`` is False when the served span carries no checkable claim."""
+    claim, ok = served_claim_tokens(served, alternatives)
+    if not ok:
+        return {
+            "applicable": False,
+            "claim_tokens": 0,
+            "model_emitted": True,
+            "answer_in_prompt": False,
+        }
+    residual = residual_harness_tokens(
+        ledger.harness_first, ledger.tool_result, *exemptions
+    )
+    return {
+        "applicable": True,
+        "claim_tokens": len(claim),
+        "model_emitted": text_provenance(claim, ledger.completion),
+        "answer_in_prompt": causal_dependence(claim, residual),
+    }
 
 
 def _decimal(canonical: str) -> Decimal | None:
@@ -256,7 +478,7 @@ def numbers_equivalent(a: str, b: str) -> bool:
 
 
 def bounded_contains(text: str, phrase: str) -> bool:
-    """Whole-token containment of a folded phrase in folded text."""
+    """Whole-token containment of a normalised phrase in normalised text."""
     text_f, phrase_f = fold_text(text), fold_text(phrase)
     if not phrase_f:
         return False
@@ -267,9 +489,10 @@ def bounded_contains(text: str, phrase: str) -> bool:
 
 
 def slot_in_prose(slot: str, final_text: str) -> bool:
-    """Whether the ``answer`` slot has an equivalent value asserted in the
-    prose: bounded containment of the folded slot, or every slot number having
-    a canonical or unit-alternative match among the prose numbers."""
+    """The grader's ``slot_not_in_prose`` rule: the ``answer`` slot must have an
+    equivalent value asserted in the prose — bounded containment of the
+    normalised slot, or every slot number having a canonical or unit-alternative
+    match among the prose numbers."""
     if not slot.strip():
         return True
     if bounded_contains(final_text, slot):
@@ -286,33 +509,6 @@ def slot_in_prose(slot: str, final_text: str) -> bool:
     )
 
 
-def provenance_missing(
-    claim_tokens: set[str], completion_texts: Iterable[str]
-) -> set[str]:
-    """The graded-claim tokens no model completion emitted (empty = pass)."""
-    emitted: set[str] = set()
-    for text in completion_texts:
-        emitted |= value_tokens(text)
-    return {token for token in claim_tokens if token not in emitted}
-
-
-def answer_in_prompt(
-    claim_tokens: set[str], harness_texts: Iterable[str], exempt_texts: Iterable[str]
-) -> bool:
-    """Causal gate: every graded-claim token appears in a harness-authored span
-    after subtracting tokens covered by records, tool results, or the question."""
-    if not claim_tokens:
-        return False
-    authored: set[str] = set()
-    for text in harness_texts:
-        authored |= value_tokens(text)
-    exempt: set[str] = set()
-    for text in exempt_texts:
-        exempt |= value_tokens(text)
-    residual = authored - exempt
-    return claim_tokens <= residual
-
-
 # ─── Catalog-present gate (scorer.EvaluateCatalogGate) ───────────────────────
 
 
@@ -326,8 +522,13 @@ def evaluate_catalog_gate(
     tools_offered: list[str],
     model_emitted_tool_calls: list[str],
     observed_tool_calls: list[str],
+    execution_proven: bool = False,
 ) -> dict[str, Any]:
-    """Pure port of the v13 catalog gate for one tool case."""
+    """Pure port of ``scorer.EvaluateCatalogGate`` for one tool case.
+    ``execution_proven`` reports whether every observed execution is proven
+    model-emitted (matched v10 provenance on the validator; the kit's own
+    completion log locally), which lets an executed expected tool waive the
+    expected-tool-not-offered rule (``offer_inferred_from_execution``)."""
     verdict: dict[str, Any] = {
         "settled": False,
         "findings": [],
@@ -339,8 +540,11 @@ def evaluate_catalog_gate(
         verdict["findings"].append(FINDING_EVIDENCE_UNAVAILABLE)
         return verdict
     verdict["settled"] = True
+    # tools_offered is the CHOOSABLE union; a catalog of memory tools alone
+    # leaves nothing to act on, so the model was never in a position to act.
     offered = set(tools_offered)
     catalog_present = bool(offered)
+    actionable = any(name not in MEMORY_TOOLS for name in offered)
     no_completion = completions_total == 0
     catalog_absent = not no_completion and not catalog_present
     top_k = semantic_top_k(prompt, catalog, SAFE_HARBOR_TOP_K)
@@ -350,6 +554,8 @@ def evaluate_catalog_gate(
         verdict["findings"].append(FINDING_NO_MODEL_COMPLETION)
     if catalog_absent:
         verdict["findings"].append(FINDING_CATALOG_ABSENT)
+    if catalog_present and not actionable:
+        verdict["findings"].append(FINDING_MEMORY_ONLY_CATALOG)
 
     if not expected_tools:
         executed: dict[str, int] = {}
@@ -366,7 +572,7 @@ def evaluate_catalog_gate(
         tempting = category in TEMPTING_CLASS_CATEGORIES
         if retained_top_k:
             verdict["safe_harbor"] = SAFE_HARBOR_SEMANTIC_TOP_K
-        elif catalog_present and not no_completion and not tempting:
+        elif actionable and not tempting:
             verdict["safe_harbor"] = SAFE_HARBOR_NONEMPTY_DECLARATIVE
         else:
             verdict["findings"].append(FINDING_RESTRAINT_WITHOUT_OFFER)
@@ -375,13 +581,24 @@ def evaluate_catalog_gate(
             verdict["findings"].append(FINDING_SAFE_HARBOR)
         return verdict
 
-    missing = sorted(
-        name
-        for name in expected_tools
-        if name not in MEMORY_TOOLS and name not in offered
-    )
+    # An expected non-memory tool never offered cannot have been the model's
+    # choice -- unless the validator executed that very tool under proven
+    # model emission, in which case the offer is inferred from the execution.
+    executed_names = set(observed_tool_calls) if execution_proven else set()
+    missing: list[str] = []
+    inferred = False
+    for name in expected_tools:
+        if name in MEMORY_TOOLS or name in offered:
+            continue
+        if name in executed_names:
+            inferred = True
+            continue
+        missing.append(name)
+    if inferred:
+        verdict["findings"].append(FINDING_OFFER_INFERRED_FROM_EXECUTION)
     if not missing:
         return verdict
+    missing.sort()
     verdict["findings"].append(FINDING_EXPECTED_TOOL_NOT_OFFERED)
     if retained_top_k:
         verdict["safe_harbor"] = SAFE_HARBOR_SEMANTIC_TOP_K
@@ -436,14 +653,13 @@ def _model_emitted(entry: dict[str, Any]) -> list[str]:
     return names
 
 
-def _expected_forms(case: dict[str, Any]) -> list[str]:
-    forms: list[str] = []
+def _known_values(case: dict[str, Any]) -> list[str]:
+    """Every accepted surface form of the case's answer plus its distractors,
+    for the decision-class fingerprint of the twin post-pass."""
+    forms = claim_alternatives(case)
     if case.get("expected_answer"):
         forms.append(str(case["expected_answer"]))
-    forms.extend(str(v) for v in _as_list(case.get("accept_any")))
-    forms.extend(str(v) for v in _as_list(case.get("answer_items")))
-    for alternatives in _as_list(case.get("answer_item_accept_any")):
-        forms.extend(str(v) for v in _as_list(alternatives))
+    forms.extend(str(v) for v in _as_list(case.get("distractor_answers")))
     return forms
 
 
@@ -460,13 +676,6 @@ def _seed_record_texts(dataset: dict[str, Any]) -> list[str]:
                 texts.append(
                     f"{subject.get('subject_text', '')}\n{subject.get('description_text', '')}"
                 )
-    for case in _as_list(dataset.get("memory_cases")):
-        if isinstance(case, dict):
-            for memory in _as_list(case.get("seed_memories")):
-                if isinstance(memory, dict):
-                    texts.append(
-                        f"{memory.get('prompt', '')}\n{memory.get('response', '')}"
-                    )
     return texts
 
 
@@ -487,14 +696,74 @@ def _decision_class(response: dict[str, Any], known_values: list[str]) -> str:
 
 
 def _relation(case: dict[str, Any], scored: dict[str, Any] | None) -> str:
+    """Metamorphic relations are serialized on the artifact
+    (``v10_provenance.relation``); decision/as-of twin relations are
+    grader-only (``TwinRelation`` is ``json:"-"``) and reach the replay only
+    through the scorer report's ``per_case[].relation``."""
     provenance = case.get("v10_provenance")
     if isinstance(provenance, dict) and provenance.get("relation"):
         return str(provenance["relation"])
-    if case.get("twin_relation"):
-        return str(case["twin_relation"])
     if scored and scored.get("relation"):
         return str(scored["relation"])
     return ""
+
+
+def _run_catalog(
+    log_by_case: dict[str, dict[str, Any]],
+    transcript_by_case: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """The published catalog the safe harbor is stated against, recovered from
+    the run when a case has no completion-log entry of its own: the union (by
+    name) of every kit-log catalog, then every relay ``tools_offered`` name."""
+    catalog: dict[str, dict[str, Any]] = {}
+    for entry in log_by_case.values():
+        for tool in _as_list(entry.get("catalog")):
+            if isinstance(tool, dict) and tool.get("name"):
+                catalog.setdefault(
+                    str(tool["name"]),
+                    {
+                        "name": str(tool["name"]),
+                        "description": str(tool.get("description") or ""),
+                    },
+                )
+    for recorded in transcript_by_case.values():
+        relay = _as_dict(_as_dict(recorded.get("execution")).get("catalog"))
+        for tool in _as_list(relay.get("tools_offered")):
+            if isinstance(tool, dict) and tool.get("name"):
+                catalog.setdefault(
+                    str(tool["name"]), {"name": str(tool["name"]), "description": ""}
+                )
+    return [catalog[name] for name in sorted(catalog)]
+
+
+def _execution_proven(
+    scored: dict[str, Any] | None,
+    observed: list[str],
+    model_emitted: list[str],
+    evidence_source: str,
+) -> bool:
+    """Whether every observed execution is proven model-emitted: matched v10
+    provenance on the report (``tool_provenance`` complete, nothing unmatched,
+    matched == observed), or, when the evidence is the kit's own completion
+    log, every executed name appearing among the model-emitted calls."""
+    if not observed:
+        return False
+    provenance = _as_dict((scored or {}).get("tool_provenance"))
+    if provenance:
+        return (
+            bool(provenance.get("complete"))
+            and int(provenance.get("unmatched") or 0) == 0
+            and int(provenance.get("matched") or 0) == len(observed)
+        )
+    if evidence_source == "harness_completion_log":
+        emitted: dict[str, int] = {}
+        for name in model_emitted:
+            emitted[name] = emitted.get(name, 0) + 1
+        executed: dict[str, int] = {}
+        for name in observed:
+            executed[name] = executed.get(name, 0) + 1
+        return all(emitted.get(name, 0) >= count for name, count in executed.items())
+    return False
 
 
 def evaluate_run(
@@ -525,6 +794,10 @@ def evaluate_run(
             scored_by_case[str(scored["case_id"])] = scored
 
     seed_texts = _seed_record_texts(dataset)
+    seed_tokens: set[str] = set()
+    for text in seed_texts:
+        seed_tokens |= value_tokens(text)
+    run_catalog = _run_catalog(log_by_case, transcript_by_case)
     per_case: list[dict[str, Any]] = []
     twin_groups: dict[str, list[dict[str, Any]]] = {}
 
@@ -552,7 +825,7 @@ def evaluate_run(
             {"name": tool.get("name", ""), "description": tool.get("description", "")}
             for tool in _as_list((entry or {}).get("catalog"))
             if isinstance(tool, dict)
-        ]
+        ] or run_catalog
         if (
             relay is not None
             and relay.get("complete")
@@ -592,6 +865,9 @@ def evaluate_run(
             tools_offered=tools_offered,
             model_emitted_tool_calls=model_emitted,
             observed_tool_calls=observed,
+            execution_proven=_execution_proven(
+                scored_by_case.get(case_id), observed, model_emitted, evidence_source
+            ),
         )
         per_case.append(
             {
@@ -617,14 +893,12 @@ def evaluate_run(
         scored = scored_by_case.get(case_id)
         slot = str(response.get("answer") or "").strip()
         final_text = str(response.get("final_text") or "")
-        expected_forms = _expected_forms(case)
-        expected_tokens: set[str] = set()
-        for form in expected_forms:
-            expected_tokens |= value_tokens(form)
-        served_tokens = value_tokens(final_text) | (
-            value_tokens(slot) if slot else set()
-        )
-        claim_tokens = value_tokens(slot) if slot else (expected_tokens & served_tokens)
+        # The graded claim span is the text the positive check credited: the
+        # slot when populated (authoritative for v9+), the prose otherwise.
+        served = slot if slot else final_text
+        alternatives = claim_alternatives(case)
+        credited = bool(scored.get("correct")) if scored is not None else True
+        claim, applicable = served_claim_tokens(served, alternatives)
         findings: list[str] = []
         notes: list[str] = []
         would_zero = False
@@ -634,35 +908,51 @@ def evaluate_run(
                 "answer slot has no equivalent value asserted in final_text (slot_not_in_prose)"
             )
             would_zero = True
-        if claim_tokens:
-            if entry is None:
-                findings.append(FINDING_PROVENANCE_UNAVAILABLE)
+        if not credited or not applicable:
+            # Nothing was credited, or the served span carries no checkable
+            # value claim (a decline, a clarifying question, a value below the
+            # token floor): the provenance and causal gates fail open.
+            findings.append(FINDING_CLAIM_NOT_APPLICABLE)
+        elif entry is None:
+            findings.append(FINDING_PROVENANCE_UNAVAILABLE)
+            notes.append(
+                "no completion log for this case; provenance and causal gates not replayed"
+            )
+        else:
+            # The kit composes its system prompt before the first completion
+            # and never re-injects a completion, so every harness span is
+            # harness-first; tool results the kit received are exempt.
+            ledger = ClaimSpanLedger()
+            ledger.record_call(
+                [str(span) for span in _as_list(entry.get("harness_spans"))], []
+            )
+            ledger.completions = 0
+            for text in _completion_texts(entry):
+                ledger.record_call([], [text])
+            for result in _as_list(entry.get("tool_results")):
+                ledger.record_tool_result(str(result))
+            exempt: set[str] = set(seed_tokens)
+            for span in _as_list(entry.get("record_spans")):
+                exempt |= value_tokens(str(span))
+            exempt |= value_tokens(str(entry.get("user_input") or ""))
+            exempt |= value_tokens(str(case.get("question") or ""))
+            verdict = evaluate_claim(served, alternatives, ledger, exempt)
+            if not verdict["model_emitted"]:
+                if ledger.completions == 0:
+                    findings.append(FINDING_NO_MODEL_COMPLETION)
+                findings.append(FINDING_SERVED_TEXT_NOT_MODEL_EMITTED)
                 notes.append(
-                    "no completion log for this case; provenance and causal gates not replayed"
+                    "graded claim span absent from every model completion "
+                    f"({verdict['claim_tokens']} claim tokens): served_text_not_model_emitted"
                 )
-            else:
-                missing = provenance_missing(claim_tokens, _completion_texts(entry))
-                if missing:
-                    findings.append(FINDING_SERVED_TEXT_NOT_MODEL_EMITTED)
-                    notes.append(
-                        "graded claim tokens absent from every model completion "
-                        f"({len(missing)} of {len(claim_tokens)}): served_text_not_model_emitted"
-                    )
-                    would_zero = True
-                exempt = list(_as_list(entry.get("record_spans"))) + list(
-                    _as_list(entry.get("tool_results"))
+                would_zero = True
+            if verdict["answer_in_prompt"]:
+                findings.append(FINDING_ANSWER_IN_PROMPT)
+                notes.append(
+                    "graded value present in a harness-authored span not covered by a "
+                    "record or tool result: answer_in_prompt"
                 )
-                exempt.append(str(entry.get("user_input") or ""))
-                exempt.extend(seed_texts)
-                if answer_in_prompt(
-                    claim_tokens, _as_list(entry.get("harness_spans")), exempt
-                ):
-                    findings.append(FINDING_ANSWER_IN_PROMPT)
-                    notes.append(
-                        "graded value present in a harness-authored span not covered by a "
-                        "record or tool result: answer_in_prompt"
-                    )
-                    would_zero = True
+                would_zero = True
         record = {
             "case_id": case_id,
             "kind": "memory",
@@ -672,11 +962,7 @@ def evaluate_run(
             "findings": findings,
             "would_zero": would_zero,
             "notes": notes,
-            "_decision_class": _decision_class(
-                response,
-                expected_forms
-                + [str(v) for v in _as_list(case.get("distractor_answers"))],
-            ),
+            "_decision_class": _decision_class(response, _known_values(case)),
             "_correct": bool(scored.get("correct")) if scored is not None else None,
         }
         per_case.append(record)
@@ -851,6 +1137,8 @@ def format_gates(result: dict[str, Any]) -> str:
             "Every v13 gate is shadow in v13.0: nothing above moved this score. A",
             "would-zero note is what the validator's relay would record on the",
             "same behavior; fix the served path, do not tune the note away.",
+            "Decision/as-of twin notes need the scorer report (per_case relation);",
+            "without --report only metamorphic base/counterfactual pairs are grouped.",
         ]
     )
     return "\n".join(lines)
