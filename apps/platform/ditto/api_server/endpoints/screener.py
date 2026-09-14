@@ -4020,7 +4020,8 @@ def _fanout_protocol_complete(report: dict, outcome: str) -> bool:
             "unresolved_candidate",
         }
         or report.get("outcome") != outcome
-        or report.get("revision") != "fanout-source-review-v4"
+        or report.get("revision")
+        not in ("fanout-source-review-v4", "fanout-source-review-v5")
         or report.get("mode") != "shadow_report_only"
         or report.get("partition") != "specialists"
         or report.get("coverage_protocol") != "five-specialists-adjudicator-v2"
@@ -4053,7 +4054,11 @@ def _fanout_protocol_complete(report: dict, outcome: str) -> bool:
     if (
         not isinstance(critic, dict)
         or critic.get("name") != "adjudicator"
-        or critic.get("revision") != "fanout-adjudicator-v2"
+        or (report.get("revision"), critic.get("revision"))
+        not in (
+            ("fanout-source-review-v4", "fanout-adjudicator-v2"),
+            ("fanout-source-review-v5", "fanout-adjudicator-v3"),
+        )
         or critic.get("error_code") is not None
         or critic.get("outcome") != outcome
         or critic.get("pass_context_count") != len(passes)

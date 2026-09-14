@@ -758,7 +758,7 @@ async def test_raw_contradictory_specialists_reach_always_run_adjudicator(
             transport=transport, **kwargs
         ),
     )
-    assert result["revision"] == "fanout-source-review-v4"
+    assert result["revision"] == "fanout-source-review-v5"
     assert result["coverage_protocol"] == "five-specialists-adjudicator-v2"
     assert result["outcome"] == "no_findings"
     assert result["candidates"] == []
@@ -777,6 +777,12 @@ async def test_raw_contradictory_specialists_reach_always_run_adjudicator(
     assert benchmark["raw_review"]["risk_level"] == []
     assert "TypeError" in benchmark["validation_errors"][0]
     assert len(stage_two_requests) == 2
+    for request in specialist_requests + stage_two_requests:
+        prompt = request["messages"][0]["content"]
+        assert ("I5 causal investigation" in prompt) is (policy_version == 13)
+        if policy_version == 13:
+            assert "finite" in prompt and "not an I5 violation" in prompt
+            assert "not proof of a violation" in prompt
     assert "inconclusive" in json.dumps(stage_two_requests[0]["messages"])
     assert all(
         "provisional specialist note" in row["messages"][0]["content"]

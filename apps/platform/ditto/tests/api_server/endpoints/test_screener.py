@@ -10852,3 +10852,37 @@ def test_shadow_final_review_must_be_canonical_and_individually_model_bound(faul
     else:
         report["passes"][0]["response_models"] = ["other-model"]
     assert not _fanout_protocol_complete(report, "no_findings")
+
+
+@pytest.mark.parametrize(
+    "outer,critic,accepted",
+    [
+        ("fanout-source-review-v4", "fanout-adjudicator-v2", True),
+        ("fanout-source-review-v5", "fanout-adjudicator-v3", True),
+        ("fanout-source-review-v4", "fanout-adjudicator-v3", False),
+        ("fanout-source-review-v5", "fanout-adjudicator-v2", False),
+        ("fanout-source-review-v6", "fanout-adjudicator-v3", False),
+    ],
+)
+def test_specialist_protocol_accepts_only_explicit_revision_pairs(
+    outer, critic, accepted
+):
+    from copy import deepcopy
+
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    report["revision"] = outer
+    report["critic"]["revision"] = critic
+    assert _fanout_protocol_complete(report, "no_findings") is accepted
+    for field, value in [
+        ("evidence_verified", False),
+        ("clearance_certified", False),
+        ("final_review", None),
+        ("candidate_assessments", [{"candidate_id": "invented"}]),
+    ]:
+        broken = deepcopy(report)
+        broken["critic"][field] = value
+        assert not _fanout_protocol_complete(broken, "no_findings")
+    report["passes"].pop()
+    assert not _fanout_protocol_complete(report, "no_findings")

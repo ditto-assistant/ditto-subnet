@@ -54,6 +54,29 @@ disagreement, missing reads, and uncertainty are retained.
 `critic_also_flagged` means at least one candidate received source-bound stage-two
 support. It remains a shadow observation, not proof and not a vote.
 
+### I5 calibration and adjudicator binding
+
+The v5 shadow guidance makes each reviewer trace a suspected semantic compiler
+from its served caller through its rule definition to the authoritative sink,
+including early-return paths. Notes distinguish the benchmark-specific
+assumption, activation, substantive effect, and counterevidence under W5/W6.
+Model participation alone cannot clear a host-imposed answer recipe; a finite
+instruction set, common formula, or directly returned model-delegated program
+result alone cannot establish a violation. This guidance applies to policy v13
+only and does not alter the authoritative policy or screener prompts.
+
+The adjudicator tool binds assessments with an object keyed by the exact
+server-assigned candidate IDs. The report retains the existing list shape for
+consumers. Runtime validation still rejects unknown or conflicting identities,
+preserves omitted candidates as unresolved, and requires source reads. It never
+guesses a binding from array position or silently changes a policy disposition.
+
+Evaluate changes with SHA-bound, source-only replays. Keep baseline verdicts and
+findings out of the model input. Require exact-mechanism recall on known-rejected
+cases, and inspect disagreements on known-allowed controls. Incomplete output is
+neither a detection nor a clearance. A small hand-selected set cannot establish
+fleet accuracy or justify switching authoritative modes.
+
 ## Pilot limits
 
 The recommended global revision uses:
@@ -200,10 +223,14 @@ path should also be disabled. Historical comparison rows remain read-only.
 Only succeeded reports with complete declared protocol coverage count as
 comparisons or disagreements. `five-specialists-adjudicator-v2` requires exactly
 one structurally complete provisional pass for each of the five named specialties,
-plus an always-present `fanout-adjudicator-v2` record containing a canonical final
+plus an always-present adjudicator record containing a canonical final
 review, source-read proof, clearance proof for low risk, and an exactly bound
-assessment for every provisional candidate. The outer report revision is
-`fanout-source-review-v4`; older reports cannot satisfy this contract. It is
+assessment for every provisional candidate. Platform accepts only the paired
+revisions `fanout-source-review-v4` / `fanout-adjudicator-v2` and
+`fanout-source-review-v5` / `fanout-adjudicator-v3`. Mixed pairs and older
+reports cannot satisfy this contract. The v5/v3 producer uses exact candidate-ID
+object keys in the tool response and normalizes them to the same canonical
+assessment list; neither pair bypasses source-read or clearance verification. It is
 source-review protocol completion, not
 an exhaustive per-file audit; the report explicitly sets
 `exhaustive_file_audit=false`. Historical incomplete rows remain visible, with their original
