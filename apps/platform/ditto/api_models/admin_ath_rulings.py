@@ -121,8 +121,11 @@ class AdminAthRulingsPreviewRequest(BaseModel):
 class AdminAthRulingsBoardProjection(BaseModel):
     """The crown arithmetic the batch was previewed (or executed) against.
 
-    Read from the same eligible ledger, official-score fold, and KOTH
-    projection the validator weight fold and the public ``rank`` consume.
+    Read from the validator-equivalent KOTH fold (eligible ledger with stderr,
+    quorum, confirmation and efficiency inputs) under the same fleet-gated tie
+    weighting and ceiling-band-clamp flags the public leaderboard's
+    ``emissions`` block applies, so the champion here is the one the board
+    shows.
     """
 
     bench_version: int
@@ -154,7 +157,9 @@ class AdminAthRulingPreviewItem(BaseModel):
     stale_guard: bool
     # True when applying this ruling moves the champion or raw leader: rejecting
     # or holding either of them, or clearing an agent whose canonical score
-    # would enter at or above the current raw leader.
+    # would re-enter as champion or raw leader. Judged against the board AFTER
+    # the earlier rulings in the batch, so a champion reject flags the
+    # runner-up that a later ruling then touches.
     would_change_crown: bool
     # The 409 detail the underlying open/resolve route would answer with (or
     # the preview-time refusal reason); None when the item is ready.
@@ -206,6 +211,10 @@ class AdminAthRulingExecuteItem(BaseModel):
     steps_applied: list[Literal["open", "clear", "reject"]] = Field(
         default_factory=list
     )
+    # False on an applied row means the ruling landed but the batch_id /
+    # evidence_references annotation on its audit rows did not; the ruling is
+    # NOT to be re-run.
+    annotated: bool = False
     message: str
 
 
