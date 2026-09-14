@@ -489,6 +489,58 @@ async def test_shadow_review_is_attempt_bound_and_does_not_change_verdict(
     assert len(platform.verdicts) == 1 and platform.verdicts[0]["passed"] is True
 
 
+async def test_router_source_screen_is_emitted_shadow_and_verdict_neutral(
+    make_config: Callable[..., ScreenerConfig],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A built submission in shadow mode emits a benign router source screen.
+
+    No held-out router arm producer exists yet, so the opt-in / yes-and default
+    is exercised: outcome ``infrastructure``, no findings, and the signed verdict
+    is untouched (still a normal PASS).
+    """
+    item = _item(uuid4())
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+    worker._review_settings_status = ReviewSettingsStatus(
+        revision=4,
+        scope="ditto-screener-prod",
+        mode="shadow",
+        checksum="cd" * 32,
+        source="platform",
+    )
+    with caplog.at_level("INFO"):
+        await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert "router source screen" in caplog.text
+    assert "outcome=infrastructure" in caplog.text
+    # Shadow track never changes the signed verdict.
+    assert len(platform.verdicts) == 1 and platform.verdicts[0]["passed"] is True
+
+
+async def test_router_source_screen_is_skipped_when_not_in_shadow_mode(
+    make_config: Callable[..., ScreenerConfig],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    item = _item(uuid4())
+    platform = _FakePlatform([])
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+    worker._review_settings_status = ReviewSettingsStatus(
+        revision=4,
+        scope="*",
+        mode="enforce",
+        checksum="cd" * 32,
+        source="platform",
+    )
+    with caplog.at_level("INFO"):
+        await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+
+    assert "router source screen" not in caplog.text
+    assert len(platform.verdicts) == 1 and platform.verdicts[0]["passed"] is True
+
+
 async def test_build_only_item_passes_build_only_to_gate_and_verdict(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

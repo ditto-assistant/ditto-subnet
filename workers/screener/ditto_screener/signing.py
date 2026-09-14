@@ -26,6 +26,7 @@ from ditto_screener.heartbeat import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenResultOutcome,
+    router_source_screen_signing_message,
     verdict_signing_message,
 )
 
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from ditto_screener.config import ScreenerConfig
+    from ditto_screening_protocol import RouterSourceScreenEvidence
 
 
 def load_screener_keypair(config: ScreenerConfig) -> Any:
@@ -118,6 +120,26 @@ def sign_verdict(
         image_id=image_id,
         image_ref=image_ref,
         image_upload_id=image_upload_id,
+    )
+    signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def sign_router_source_screen(
+    keypair: Any,
+    *,
+    screener_hotkey: str,
+    evidence: RouterSourceScreenEvidence,
+) -> str:
+    """Return the hex sr25519 signature over one router source-screen result.
+
+    Binds the screener's hotkey to the canonical, content-addressed evidence so
+    the shadow router-track ledger can attribute the screen without trusting the
+    transport. The evidence carries only digests (never task text or held-out
+    identities), and the message never contains the key.
+    """
+    message = router_source_screen_signing_message(
+        screener_hotkey=screener_hotkey, evidence=evidence
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()
