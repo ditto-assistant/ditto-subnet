@@ -36,7 +36,9 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 	"github.com/ditto-assistant/dittobench-api/internal/ratelimit"
 	"github.com/ditto-assistant/dittobench-api/internal/release"
+	"github.com/ditto-assistant/dittobench-api/internal/routerbackend"
 	"github.com/ditto-assistant/dittobench-api/internal/routerharness"
+	"github.com/ditto-assistant/dittobench-api/internal/routerledger"
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
@@ -202,6 +204,14 @@ type server struct {
 	// explicitly enabled. Its handlers remain protected by both the control
 	// plane and their own exact bearer contract.
 	codingHost *codinghost.Host
+	// routerDispatcher runs the SN118 router shadow track's opt-in inclusion gate
+	// and (when a router is advertised) scores it into a shadow ledger entry. It
+	// fires at the tail of every scored run; an absent /router/health is a benign
+	// skip that leaves memory scoring byte-identical. routerLedger accumulates the
+	// shadow entries the control-plane publish route serves. Everything here is
+	// shadow-only: weight_eligible=false, folded combined_score=0, 0 bps.
+	routerDispatcher routerbackend.Dispatcher
+	routerLedger     *routerledger.Store
 }
 
 func main() {
@@ -288,6 +298,21 @@ func main() {
 		log.Fatalf("v9 confirmation installation failed: %v", err)
 	}
 	s.confirmation = confirmationRuntime
+
+	// Router shadow track: select the scoring backend (offloaded HTTP client when a
+	// remote scorer URL is configured, else the in-process offline replay scorer)
+	// and share the SSRF-guarded getter used for harness probes so the inclusion
+	// gate cannot be pointed at internal addresses. Shadow-only; see the server
+	// struct doc. The offload URL is never logged (it may carry a token).
+	routerBackend := routerbackend.NewOffloadedBackend(
+		strings.TrimSpace(os.Getenv("DITTOBENCH_ROUTER_OFFLOAD_URL")), allowPrivate,
+	)
+	routerGetClient := netguard.Client(allowPrivate)
+	s.routerDispatcher = routerbackend.Dispatcher{
+		Backend: routerBackend,
+		Get:     routerGetClient.Get,
+	}
+	s.routerLedger = routerledger.New()
 
 	mux := s.newControlPlaneMux()
 
@@ -1356,6 +1381,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 
 	total := prof.Tools + prof.Mem
 	scope := runScope(req)
+	// runStart stamps the router shadow entry's FirstSeen at the point this scored
+	// run began (used only by the shadow ledger; no effect on memory scoring).
+	runStart := time.Now().UTC()
 
 	// 1. building — build the crate in the Docker sandbox. Skipped on the local
 	//    harness_url path (the miner is already running their harness).
@@ -2246,9 +2274,55 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 		log.Printf("run %s: transcript_sha256=%s (%d cases)", runID, tSHA, len(transcripts))
 	}
+	// Router shadow track (opt-in, additive): probe /router/health on the harness
+	// and, if a router project is advertised, score it into the shadow ledger. An
+	// absent router is a benign skip; any error is swallowed so the router track can
+	// never fail a memory run. Runs after memory scoring, while the harness is still
+	// alive. Shadow-only: weight_eligible=false, folded combined_score=0, 0 bps.
+	s.dispatchRouterShadow(ctx, harnessURL, req, runStart)
+
 	s.store.Finish(runID, report)
 	log.Printf("run %s done: bench_version=%d composite=%.3f tool_mean=%.3f memory_mean=%.3f observed=%d capped=%d",
 		runID, req.BenchVersion, report.Composite, report.ToolMean, report.MemoryMean, observedTool, cappedTool)
+}
+
+// dispatchRouterShadow runs the router track's opt-in inclusion gate against the
+// live harness URL and, when a router project is advertised, scores it into the
+// in-process shadow ledger. It is deliberately best-effort and total: a missing
+// router (ErrNotIncluded) is a benign skip and any other error is logged and
+// swallowed, so the shadow track never affects the memory run's outcome. The
+// entry is keyed by the inference agent id; miner_hotkey is left empty (the
+// shadow ledger is agent-keyed and weight_eligible=false, so it never touches
+// emissions).
+func (s *server) dispatchRouterShadow(ctx context.Context, harnessURL string, req submitRequest, runStart time.Time) {
+	if s.routerLedger == nil || harnessURL == "" {
+		return
+	}
+	sub := routerbackend.RouterSubmission{
+		AgentID:       req.InferenceAgentID,
+		RouterBaseURL: harnessURL,
+		FirstSeen:     runStart,
+	}
+	incl, entry, err := s.routerDispatcher.Run(ctx, sub)
+	switch {
+	case errors.Is(err, routerbackend.ErrNotIncluded):
+		// No router project advertised — benign, expected for memory-only miners.
+		return
+	case errors.Is(err, routerbackend.ErrOffloaded):
+		// Offloaded backend selected but out-of-band results are not wired here;
+		// nothing to record locally.
+		log.Printf("router shadow: scoring offloaded (agent=%s)", req.InferenceAgentID)
+		return
+	case err != nil:
+		log.Printf("router shadow: scoring failed, skipping (agent=%s): %v", req.InferenceAgentID, err)
+		return
+	}
+	if !incl.Included {
+		return
+	}
+	s.routerLedger.Record(entry)
+	log.Printf("router shadow: recorded entry agent=%s shadow_composite=%.3f weight_eligible=%t",
+		entry.AgentID, entry.ShadowComposite, entry.WeightEligible)
 }
 
 func loopbackHarnessSourceIP(rawURL string) (string, bool) {

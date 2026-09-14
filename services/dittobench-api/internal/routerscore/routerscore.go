@@ -161,12 +161,22 @@ type HarnessResult struct {
 }
 
 // LedgerEntry mirrors the Python RouterLedgerEntry. AgentID is the UUID string.
+//
+// CombinedScore vs ShadowComposite is the shadow invariant made explicit:
+// CombinedScore is the ONLY number the validator folds into weights, so in shadow
+// (WeightEligible=false) it is forced 0 and can never move emissions.
+// ShadowComposite carries the real, measured soft-weighted aggregate — the number
+// the dashboard shows as router_shadow_composite — with zero ranking impact. This
+// mirrors the LongMemEval shadow treatment: measured number reported, folded
+// weight stays 0. At promotion (WeightEligible=true) CombinedScore adopts the same
+// measured aggregate and both fields agree.
 type LedgerEntry struct {
 	MinerHotkey           string          `json:"miner_hotkey"`
 	AgentID               string          `json:"agent_id"`
 	RouterContractVersion int             `json:"router_contract_version"`
 	WeightEligible        bool            `json:"weight_eligible"`
 	CombinedScore         float64         `json:"combined_score"`
+	ShadowComposite       float64         `json:"shadow_composite"`
 	Harnesses             []HarnessResult `json:"harnesses"`
 	FirstSeen             time.Time       `json:"first_seen"`
 }
@@ -182,9 +192,12 @@ type Ledger struct {
 }
 
 // BuildEntry assembles a ledger entry from per-harness outcomes: it records each
-// slice, computes the soft weighted combine, and stamps the contract version. In
-// shadow the entry is never weight-eligible; the validator's track state remains
-// the authority and weightEligible here is a defensive echo.
+// slice, computes the soft weighted combine, and stamps the contract version. The
+// measured aggregate always lands in ShadowComposite; CombinedScore (the only
+// number the validator folds into weights) carries it ONLY when weightEligible is
+// true. In shadow (v1) weightEligible is always false, so CombinedScore stays 0
+// and the measured number is reported without any emission impact — the validator's
+// track state remains the authority and weightEligible here is a defensive echo.
 func BuildEntry(
 	minerHotkey, agentID string,
 	weights HarnessWeights,
@@ -202,12 +215,18 @@ func BuildEntry(
 			UpstreamTokenCostMicros: o.UpstreamTokenCostMicros,
 		})
 	}
+	composite := Combine(weights, outcomes)
+	combined := 0.0
+	if weightEligible {
+		combined = composite
+	}
 	return LedgerEntry{
 		MinerHotkey:           minerHotkey,
 		AgentID:               agentID,
 		RouterContractVersion: RouterContractVersion,
 		WeightEligible:        weightEligible,
-		CombinedScore:         Combine(weights, outcomes),
+		CombinedScore:         combined,
+		ShadowComposite:       composite,
 		Harnesses:             results,
 		FirstSeen:             firstSeen,
 	}

@@ -1,0 +1,54 @@
+{
+  "corpus_id": "router-shadow-reference-v1",
+  "description": "Deterministic offline replay corpus for the SN118 router shadow track. Each row is a recorded tap/relay upstream-usage pair for one big-four harness driven against the reference router's archetype-reroute lever (the starter kit's off-by-default 'route' lever, enabled here). No live provider is called: the scorer replays these fixed usages through the same routerscore token-dominant blend it would use live, producing a real, prefix-stable shadow composite. Purely weight_eligible=false shadow data.",
+  "harnesses": [
+    {
+      "harness": "claude_code",
+      "operational": true,
+      "floor_observed": true,
+      "baseline_prompt_allow": 1000,
+      "baseline_completion_allow": 1000,
+      "upstream_prompt_tokens": 400,
+      "upstream_completion_tokens": 350,
+      "latency_score": 0.95,
+      "retrieval_score": 0.90,
+      "upstream_token_cost_micros": 7500
+    },
+    {
+      "harness": "codex",
+      "operational": true,
+      "floor_observed": true,
+      "baseline_prompt_allow": 1000,
+      "baseline_completion_allow": 1000,
+      "upstream_prompt_tokens": 1400,
+      "upstream_completion_tokens": 1100,
+      "latency_score": 0.90,
+      "retrieval_score": 0.85,
+      "upstream_token_cost_micros": 26000
+    },
+    {
+      "harness": "opencode",
+      "operational": true,
+      "floor_observed": true,
+      "baseline_prompt_allow": 800,
+      "baseline_completion_allow": 800,
+      "upstream_prompt_tokens": 500,
+      "upstream_completion_tokens": 400,
+      "latency_score": 0.80,
+      "retrieval_score": 0.80,
+      "upstream_token_cost_micros": 9000
+    },
+    {
+      "harness": "grok",
+      "operational": true,
+      "floor_observed": true,
+      "baseline_prompt_allow": 500,
+      "baseline_completion_allow": 500,
+      "upstream_prompt_tokens": 1500,
+      "upstream_completion_tokens": 1200,
+      "latency_score": 0.70,
+      "retrieval_score": 0.70,
+      "upstream_token_cost_micros": 28000
+    }
+  ]
+}
