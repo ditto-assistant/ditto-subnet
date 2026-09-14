@@ -1527,6 +1527,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-fanout-shadow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screener Fanout Shadow
+         * @description Return exact baseline/fan-out pairs and bounded fleet-wide metrics.
+         */
+        get: operations["get_screener_fanout_shadow_api_v1_admin_screener_fanout_shadow_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-nodes/{node_id}/channel-settings": {
         parameters: {
             query?: never;
@@ -4873,6 +4893,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/fanout-shadow-reviews/{shadow_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete Fanout Shadow Review
+         * @description Persist comparison evidence without touching screening authority.
+         */
+        post: operations["complete_fanout_shadow_review_api_v1_screener_fanout_shadow_reviews__shadow_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/fanout-shadow-reviews/{shadow_id}/source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Fanout Shadow Source
+         * @description Mint one digest-bound source URL for an admitted shadow-only job.
+         */
+        get: operations["get_fanout_shadow_source_api_v1_screener_fanout_shadow_reviews__shadow_id__source_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/heartbeat": {
         parameters: {
             query?: never;
@@ -7941,6 +8001,126 @@ export interface components {
              * @default false
              */
             idempotent: boolean;
+        };
+        /** AdminFanoutShadowMetrics */
+        AdminFanoutShadowMetrics: {
+            /** Compared */
+            compared: number;
+            /** Disagreements */
+            disagreements: number;
+            /** Incomplete */
+            incomplete: number;
+            /** Incomplete Coverage */
+            incomplete_coverage: number;
+            /** Queued */
+            queued: number;
+            /** Rolling 24H Reported Cost Usd */
+            rolling_24h_reported_cost_usd: number;
+            /** Rolling 24H Reserved Cost Usd */
+            rolling_24h_reserved_cost_usd: number;
+            /** Rolling 24H Unmetered */
+            rolling_24h_unmetered: number;
+            /** Running */
+            running: number;
+            /** Skipped */
+            skipped: number;
+            /** Succeeded */
+            succeeded: number;
+            /** Total */
+            total: number;
+        };
+        /** AdminFanoutShadowResponse */
+        AdminFanoutShadowResponse: {
+            /** Count */
+            count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["AdminFanoutShadowReview"][];
+            /** Limit */
+            limit: number;
+            metrics: components["schemas"]["AdminFanoutShadowMetrics"];
+            /** Offset */
+            offset: number;
+            /** Returned */
+            returned: number;
+        };
+        /** AdminFanoutShadowReview */
+        AdminFanoutShadowReview: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Baseline */
+            baseline: {
+                [key: string]: unknown;
+            };
+            /** Completed At */
+            completed_at: string | null;
+            /** Coverage Complete */
+            coverage_complete: boolean | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Disagrees With Baseline */
+            disagrees_with_baseline: boolean | null;
+            /** Error Code */
+            error_code: string | null;
+            /** Outcome */
+            outcome: ("no_findings" | "candidate" | "unresolved_candidate" | "critic_also_flagged" | "incomplete" | "skipped") | null;
+            /** Policy Manifest Digest */
+            policy_manifest_digest: string;
+            /**
+             * Policy Manifest Profile
+             * @enum {string}
+             */
+            policy_manifest_profile: "core" | "l1" | "l1_l2";
+            /** Policy Manifest Rotation Id */
+            policy_manifest_rotation_id: string;
+            /** Policy Version */
+            policy_version: number;
+            /** Provider */
+            provider: string | null;
+            /** Report */
+            report: {
+                [key: string]: unknown;
+            } | null;
+            /** Reported Cost Usd */
+            reported_cost_usd: number | null;
+            /** Reserved At */
+            reserved_at: string | null;
+            /** Reserved Cost Usd */
+            reserved_cost_usd: number;
+            /** Settings Checksum */
+            settings_checksum: string;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Settings Scope */
+            settings_scope: string;
+            /**
+             * Shadow Id
+             * Format: uuid
+             */
+            shadow_id: string;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "running" | "succeeded" | "incomplete" | "skipped";
+            /** Unmetered */
+            unmetered: boolean;
         };
         /** AdminHotkeyBanAuditEntry */
         AdminHotkeyBanAuditEntry: {
@@ -15864,6 +16044,48 @@ export interface components {
              * @description ``True`` when a live ticket was closed for reissue.
              */
             reopened: boolean;
+        };
+        /** FanoutShadowCompleteRequest */
+        FanoutShadowCompleteRequest: {
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "no_findings" | "candidate" | "unresolved_candidate" | "critic_also_flagged" | "incomplete" | "skipped";
+            /** Report */
+            report: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "succeeded" | "incomplete";
+        };
+        /** FanoutShadowCompleteResponse */
+        FanoutShadowCompleteResponse: {
+            /** Accepted */
+            accepted: boolean;
+        };
+        /** FanoutShadowSourceResponse */
+        FanoutShadowSourceResponse: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Policy Manifest Digest */
+            policy_manifest_digest: string;
+            /**
+             * Policy Manifest Profile
+             * @enum {string}
+             */
+            policy_manifest_profile: "core" | "l1" | "l1_l2";
+            /** Policy Manifest Rotation Id */
+            policy_manifest_rotation_id: string;
+            /** Policy Version */
+            policy_version: number;
+            /** Source Url B64 */
+            source_url_b64: string;
         };
         /**
          * FeedbackTrackContributionRequest
@@ -24510,6 +24732,74 @@ export interface components {
              */
             critic_reasoning_effort: "low" | "medium" | "high";
             /**
+             * Fanout Shadow Concurrency
+             * @default 2
+             */
+            fanout_shadow_concurrency: number;
+            /**
+             * Fanout Shadow Daily Cost Usd
+             * @default 20
+             */
+            fanout_shadow_daily_cost_usd: number;
+            /**
+             * Fanout Shadow Global Concurrency
+             * @default 1
+             * @constant
+             */
+            fanout_shadow_global_concurrency: 1;
+            /**
+             * Fanout Shadow Image Source Sha
+             * @default 0000000000000000000000000000000000000000
+             */
+            fanout_shadow_image_source_sha: string;
+            /**
+             * Fanout Shadow Max Cost Usd
+             * @default 3
+             */
+            fanout_shadow_max_cost_usd: number;
+            /**
+             * Fanout Shadow Max Groups
+             * @default 4
+             */
+            fanout_shadow_max_groups: number;
+            /**
+             * Fanout Shadow Max Requests
+             * @default 40
+             */
+            fanout_shadow_max_requests: number;
+            /**
+             * Fanout Shadow Max Steps
+             * @default 4
+             */
+            fanout_shadow_max_steps: number;
+            /**
+             * Fanout Shadow Max Total Tokens
+             * @default 1500000
+             */
+            fanout_shadow_max_total_tokens: number;
+            /**
+             * Fanout Shadow Mode
+             * @default off
+             * @enum {string}
+             */
+            fanout_shadow_mode: "off" | "shadow";
+            /**
+             * Fanout Shadow Model
+             * @default z-ai/glm-5.3-flash
+             * @constant
+             */
+            fanout_shadow_model: "z-ai/glm-5.3-flash";
+            /**
+             * Fanout Shadow Reserved Targon Slots
+             * @default 1
+             */
+            fanout_shadow_reserved_targon_slots: number;
+            /**
+             * Fanout Shadow Timeout Seconds
+             * @default 900
+             */
+            fanout_shadow_timeout_seconds: number;
+            /**
              * L2 Fallback Models
              * @default [
              *       "z-ai/glm-5.2",
@@ -30220,6 +30510,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreenerCapacityView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screener_fanout_shadow_api_v1_admin_screener_fanout_shadow_get: {
+        parameters: {
+            query?: {
+                status?: ("queued" | "leased" | "running" | "succeeded" | "incomplete" | "skipped") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminFanoutShadowResponse"];
                 };
             };
             /** @description Validation Error */
@@ -36119,6 +36444,76 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_fanout_shadow_review_api_v1_screener_fanout_shadow_reviews__shadow_id__complete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                shadow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FanoutShadowCompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FanoutShadowCompleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fanout_shadow_source_api_v1_screener_fanout_shadow_reviews__shadow_id__source_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                shadow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FanoutShadowSourceResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

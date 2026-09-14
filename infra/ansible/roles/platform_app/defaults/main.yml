@@ -247,6 +247,7 @@ platform_targon_candidate_push_sa: ""
 platform_targon_candidate_pull_sa: ""
 platform_targon_bootstrap_sa: ""
 platform_targon_source_review_secret: ""
+platform_targon_fanout_shadow_secret: ""
 platform_targon_environment: prod
 platform_targon_max_inflight: 10
 platform_targon_smoke_provision_timeout_seconds: 30

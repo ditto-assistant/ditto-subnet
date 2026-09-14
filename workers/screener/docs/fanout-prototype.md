@@ -1,8 +1,9 @@
 # Parallel GLM screening prototype
 
-This offline experiment asks whether cheap independent trajectories improve
-candidate recall. It is not wired into worker claims, verdicts, signing, caches,
-Platform settings or deployment. It cannot clear, quarantine, reject or ban.
+This calibration command asks whether cheap independent trajectories improve
+candidate recall. It cannot clear, quarantine, reject or ban. The production
+shadow consumer reuses its bounded review engine under the separate authority,
+durability, cost, and rollout controls in [fanout-shadow.md](fanout-shadow.md).
 
 The default hybrid plan combines five GLM 5.3 Flash trajectories (generalist,
 answer authority, benchmark engines, tool fidelity, evasion/scope) with up to eight

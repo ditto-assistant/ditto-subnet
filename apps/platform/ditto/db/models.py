@@ -5754,6 +5754,121 @@ class ScreenerShadowReview(Base):
     )
 
 
+class ScreenerFanoutShadowReview(Base):
+    """Durable, non-authoritative two-stage review and comparison record."""
+
+    __tablename__ = "screener_fanout_shadow_reviews"
+
+    shadow_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    environment: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_manifest_profile: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_manifest_rotation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_manifest_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    outcome: Mapped[str | None] = mapped_column(Text)
+    baseline: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    disagrees_with_baseline: Mapped[bool | None] = mapped_column(Boolean)
+    coverage_complete: Mapped[bool | None] = mapped_column(Boolean)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    provider: Mapped[str | None] = mapped_column(Text)
+    provider_resource_id: Mapped[str | None] = mapped_column(Text)
+    controller_epoch: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    job_token_hash: Mapped[str | None] = mapped_column(Text)
+    job_token_expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    reserved_cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, server_default="0"
+    )
+    reported_cost_microusd: Mapped[int | None] = mapped_column(BigInteger)
+    reserved_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    unmetered: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["settings_revision"],
+            ["screener_review_settings_revisions.revision"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "attempt_id", name="screener_fanout_shadow_reviews_attempt_key"
+        ),
+        CheckConstraint(
+            "environment ~ '^[a-z][a-z0-9-]{0,31}$'",
+            name="screener_fanout_shadow_reviews_environment_check",
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            name="screener_fanout_shadow_reviews_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "policy_manifest_profile IN ('core', 'l1', 'l1_l2')",
+            name="screener_fanout_shadow_reviews_manifest_profile_check",
+        ),
+        CheckConstraint(
+            "policy_manifest_digest ~ '^[0-9a-f]{64}$'",
+            name="screener_fanout_shadow_reviews_manifest_digest_check",
+        ),
+        CheckConstraint(
+            "settings_checksum ~ '^[0-9a-f]{64}$'",
+            name="screener_fanout_shadow_reviews_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'running', 'succeeded', "
+            "'incomplete', 'skipped')",
+            name="screener_fanout_shadow_reviews_status_check",
+        ),
+        CheckConstraint(
+            "outcome IS NULL OR outcome IN ('no_findings', 'candidate', "
+            "'unresolved_candidate', 'critic_also_flagged', 'incomplete', 'skipped')",
+            name="screener_fanout_shadow_reviews_outcome_check",
+        ),
+        CheckConstraint(
+            "provider IS NULL OR provider IN ('targon', 'gcp')",
+            name="screener_fanout_shadow_reviews_provider_check",
+        ),
+        CheckConstraint(
+            "job_token_hash IS NULL OR job_token_hash ~ '^[0-9a-f]{64}$'",
+            name="screener_fanout_shadow_reviews_token_hash_check",
+        ),
+        CheckConstraint(
+            "reserved_cost_microusd >= 0 AND reported_cost_microusd >= 0",
+            name="screener_fanout_shadow_reviews_cost_check",
+        ),
+        Index(
+            "screener_fanout_shadow_reviews_queue_idx",
+            "environment",
+            "status",
+            "created_at",
+        ),
+        Index("screener_fanout_shadow_reviews_created_idx", "created_at", "shadow_id"),
+        Index("screener_fanout_shadow_reviews_reserved_idx", "reserved_at"),
+    )
+
+
 class ValidatorTicket(Base):
     """One validator's evaluation ticket for one agent (a k=3 scoring grant).
 

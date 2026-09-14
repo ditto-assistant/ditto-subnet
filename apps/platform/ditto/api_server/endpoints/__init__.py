@@ -95,6 +95,9 @@ from ditto.api_server.endpoints.admin_scoring_readiness import (
 from ditto.api_server.endpoints.admin_screener_capacity import (
     router as admin_screener_capacity_router,
 )
+from ditto.api_server.endpoints.admin_screener_fanout_shadow import (
+    router as admin_screener_fanout_shadow_router,
+)
 from ditto.api_server.endpoints.admin_screener_policy_activation import (
     router as admin_screener_policy_activation_router,
 )
@@ -208,6 +211,7 @@ __all__ = [
     "admin_retirement_router",
     "admin_scoring_readiness_router",
     "admin_screener_review_settings_router",
+    "admin_screener_fanout_shadow_router",
     "admin_screener_capacity_router",
     "admin_screener_policy_activation_router",
     "admin_submission_settings_router",

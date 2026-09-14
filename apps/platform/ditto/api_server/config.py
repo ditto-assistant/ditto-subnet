@@ -251,6 +251,7 @@ class TargonRentalConfig:
     candidate_reader_sa: str
     bootstrap_sa: str
     source_review_secret_resource: str
+    fanout_shadow_secret_resource: str = ""
     environment: str = "prod"
     interval_seconds: float = 15.0
     provision_timeout_seconds: float = 600.0
@@ -544,6 +545,9 @@ def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig
         bootstrap_sa=os.environ.get("DITTO_TARGON_BOOTSTRAP_SA", "").strip(),
         source_review_secret_resource=os.environ.get(
             "DITTO_TARGON_SOURCE_REVIEW_SECRET", ""
+        ).strip(),
+        fanout_shadow_secret_resource=os.environ.get(
+            "DITTO_TARGON_FANOUT_SHADOW_SECRET", ""
         ).strip(),
         environment=os.environ.get("DITTO_TARGON_ENVIRONMENT", "prod").strip()
         or "prod",

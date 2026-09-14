@@ -8,10 +8,103 @@ import pytest
 from ditto_screener.fanout_review import (
     FOCI,
     ExperimentalReviewer,
+    FanoutBudget,
+    FanoutBudgetExhausted,
     plan_file_groups,
     review_archive,
 )
 from ditto_screener.policy import SourceReviewObservation
+
+
+async def test_atomic_request_reservations_cannot_oversubscribe_tokens_or_cost():
+    budget = FanoutBudget(
+        max_requests=40,
+        max_total_tokens=10_000,
+        max_reported_cost_usd=0.3,
+    )
+
+    async def reserve():
+        await budget.before_request(
+            input_token_bound=1_000, completion_token_bound=2_400
+        )
+
+    results = await asyncio.gather(
+        *(reserve() for _ in range(8)), return_exceptions=True
+    )
+    assert sum(result is None for result in results) == 2
+    assert all(
+        result is None or isinstance(result, FanoutBudgetExhausted)
+        for result in results
+    )
+    usage = budget.snapshot()
+    assert usage["requests"] == 2
+    assert usage["reserved_tokens"] == 6_800
+    assert usage["reserved_cost_usd"] <= 0.3
+
+
+async def test_missing_metering_stops_later_request_admission():
+    budget = FanoutBudget(
+        max_requests=4,
+        max_total_tokens=100_000,
+        max_reported_cost_usd=3,
+    )
+    await budget.before_request(input_token_bound=1_000, completion_token_bound=2_400)
+    await budget.record_response({"usage": {"prompt_tokens": 10}})
+    with pytest.raises(FanoutBudgetExhausted, match="metering unavailable"):
+        await budget.before_request(
+            input_token_bound=1_000, completion_token_bound=2_400
+        )
+
+
+async def test_response_model_mismatch_stops_later_request_admission():
+    budget = FanoutBudget(
+        max_requests=4,
+        max_total_tokens=100_000,
+        max_reported_cost_usd=3,
+    )
+    await budget.before_request(input_token_bound=1_000, completion_token_bound=2_400)
+    await budget.record_response(
+        {
+            "model": "router-selected-different-model",
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 10,
+                "cost": 0.001,
+            },
+        }
+    )
+    with pytest.raises(FanoutBudgetExhausted, match="response model changed"):
+        await budget.before_request(
+            input_token_bound=1_000, completion_token_bound=2_400
+        )
+
+
+async def test_default_envelope_fits_specialists_file_groups_and_critic_first_turns():
+    """Five specialists, four file groups, and one critic fit the pilot bounds."""
+    budget = FanoutBudget(
+        max_requests=40,
+        max_total_tokens=750_000,
+        max_reported_cost_usd=3,
+    )
+    for _ in range(10):
+        await budget.before_request(
+            input_token_bound=64_000, completion_token_bound=2_400
+        )
+        await budget.record_response(
+            {
+                "model": "z-ai/glm-5.3-flash",
+                "usage": {
+                    "prompt_tokens": 16_000,
+                    "completion_tokens": 1_200,
+                    "cost": 0.01,
+                },
+            }
+        )
+    usage = budget.snapshot()
+    assert usage["requests"] == 10
+    assert usage["reserved_tokens"] == 664_000
+    assert usage["reserved_cost_usd"] < 3
+    assert usage["unmetered_responses"] == 0
 
 
 @pytest.mark.parametrize(
@@ -46,7 +139,7 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
                 if self.kwargs["leads"]
                 else (
                     "high"
-                    if self.kwargs["focus"] == FOCI["benchmark_engine"]
+                    if FOCI["benchmark_engine"] in self.kwargs["focus"]
                     else "low"
                 )
             )
@@ -72,6 +165,7 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
     assert peak == 2
     assert len(instances) == 6
     assert all(not r.kwargs["leads"] for r in instances[:5])
+    assert all("Exact active policy manifest" in r.kwargs["focus"] for r in instances)
     assert len(instances[-1].kwargs["leads"]) == 1
     assert result["incremental_candidate"] is True
     assert result["outcome"] == expected
@@ -87,6 +181,19 @@ async def test_digest_mismatch_prevents_calls(tmp_path):
             artifact_sha256="0" * 64,
             api_key_file="unused",
             partition="specialists",
+            reviewer_factory=lambda **_: pytest.fail("must not call"),
+        )
+
+
+async def test_manifest_digest_mismatch_prevents_calls(tmp_path):
+    archive = tmp_path / "artifact"
+    archive.write_bytes(b"test")
+    with pytest.raises(ValueError, match="policy manifest digest"):
+        await review_archive(
+            archive,
+            artifact_sha256=hashlib.sha256(b"test").hexdigest(),
+            api_key_file="unused",
+            policy_manifest_digest="0" * 64,
             reviewer_factory=lambda **_: pytest.fail("must not call"),
         )
 
@@ -170,6 +277,118 @@ async def test_real_reviewer_uses_inert_tools_policy_and_metering(tmp_path):
     assert "call_model" in json.dumps(seen[1]["messages"])
     assert reviewer.opened_paths == {"src/main.rs"}
     assert "ANY file" in seen[0]["messages"][1]["content"]
+
+
+async def test_default_budget_completes_two_turn_fanout_and_source_read(tmp_path):
+    from .test_source_review import (
+        _BENIGN_REVIEW,
+        _archive_files,
+        _tool,
+        _with_policy_v10_invariants,
+    )
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    archive = _archive_files(
+        tmp_path,
+        {"src/main.rs": b"fn main() { call_model(); }\nfn answer() { shortcut(); }"},
+    )
+    seen = []
+
+    async def handler(request):
+        payload = json.loads(request.content)
+        seen.append(payload)
+        messages = payload["messages"]
+        if not any(message.get("role") == "tool" for message in messages):
+            calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 20},
+                )
+            ]
+        else:
+            system = messages[0]["content"]
+            final = _BENIGN_REVIEW
+            if FOCI["benchmark_engine"] in system:
+                final = {
+                    "risk_level": "high",
+                    "confidence": 0.95,
+                    "categories": ["benchmark_emulation"],
+                    "evidence": [
+                        {
+                            "path": "src/main.rs",
+                            "line": 1,
+                            "category": "benchmark_emulation",
+                        },
+                        {
+                            "path": "src/main.rs",
+                            "line": 2,
+                            "category": "benchmark_emulation",
+                        },
+                    ],
+                    "summary": "Candidate benchmark-specific answer path.",
+                }
+            calls = [
+                _tool(
+                    "submit-1",
+                    "submit_review",
+                    _with_policy_v10_invariants(final),
+                )
+            ]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": calls,
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 16_000,
+                    "completion_tokens": 1_200,
+                    "cost": 0.01,
+                },
+                "model": "z-ai/glm-5.3-flash",
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+
+    def factory(**kwargs):
+        return ExperimentalReviewer(transport=transport, **kwargs)
+
+    report = await review_archive(
+        archive,
+        artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        api_key_file=str(key),
+        concurrency=2,
+        max_steps=4,
+        max_groups=4,
+        max_requests=40,
+        max_total_tokens=1_500_000,
+        max_reported_cost_usd=3,
+        reviewer_factory=factory,
+    )
+    assert len(report["passes"]) == 6
+    assert report["critic"] is not None
+    assert report["outcome"] == "unresolved_candidate"
+    assert report["usage"]["requests"] == 14
+    assert report["usage"]["reserved_tokens"] <= 1_500_000
+    assert report["usage"]["reserved_cost_usd"] <= 3
+    assert report["usage"]["unmetered_responses"] == 0
+    assert (
+        sum(
+            any(message.get("role") == "tool" for message in payload["messages"])
+            for payload in seen
+        )
+        == 7
+    )
 
 
 def test_file_plan_is_deterministic_bounded_and_reports_omissions(tmp_path):

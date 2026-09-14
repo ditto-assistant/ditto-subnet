@@ -92,6 +92,7 @@ import {
   traceDownloadUrlInputSchema,
   peekInferenceTraceInputSchema,
   applyScreenerReviewSettingsInputSchema,
+  screenerFanoutShadowInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
   rotateScreenerPolicyManifestInputSchema,
@@ -217,6 +218,7 @@ import {
   updateScreenerProviderSettings,
   updateScreenerNodeChannelSettings,
   fetchScreenerReviewControl,
+  fetchScreenerFanoutShadow,
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
   applyCopyCourtSettings,
@@ -569,6 +571,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Idempotently observe one current score snapshot. No scoring effect.',
   get_screener_review_settings:
     'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
+  get_screener_fanout_shadow:
+    'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
   get_copy_court_settings:
     'Read the copy-hold triage court posture and revision history.',
   list_copy_court_recommendations:
@@ -1936,6 +1940,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerReviewControl()),
+  )
+
+  registerTool(
+    'get_screener_fanout_shadow',
+    {
+      title: 'Get screener fan-out shadow comparisons',
+      description:
+        'Page the non-authoritative two-stage fan-out shadow lane. Each item binds one baseline attempt to the same artifact digest, policy manifest, and settings revision, then reports specialist findings, source-grounded critic results, disagreements, coverage, latency, and actual usage when supplied. queued, incomplete, and skipped rows are coverage outcomes. Reserved cost is the conservative admission charge against the rolling 24-hour cap; reported cost is separate, and unmetered=true means cost was omitted. These records never change screening or queue state. Requires backroom:read.',
+      inputSchema: screenerFanoutShadowInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchScreenerFanoutShadow(input)),
   )
 
   registerTool(

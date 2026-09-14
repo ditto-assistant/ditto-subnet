@@ -19,7 +19,10 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
-from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.screener_review_settings import (
+    ScreenerReviewSettings,
+    policy_manifest_digest,
+)
 from ditto.api_server.builder_image import is_digest_pinned_image
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.screening_provider import (
@@ -41,6 +44,7 @@ from ditto.api_server.targon_provider import TargonComputeProvider, TargonRental
 from ditto.api_server.targon_screening import admit_targon_screening_work
 from ditto.db.models import (
     ProviderOutageCircuit,
+    ScreenerFanoutShadowReview,
     ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     SubmissionImageBuild,
@@ -64,6 +68,7 @@ logger = logging.getLogger(__name__)
 _BUILD_LEASE = timedelta(minutes=50)
 _JOB_TTL = timedelta(minutes=80)
 _SOURCE_LEASE = timedelta(minutes=30)
+_FANOUT_SHADOW_LEASE = timedelta(minutes=20)
 _REAP_LIMIT = 16
 _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
@@ -150,6 +155,58 @@ def _source_review_layer_env(
     )
 
 
+def _fanout_shadow_env(
+    settings: ScreenerReviewSettings,
+) -> tuple[tuple[str, str], ...]:
+    return (
+        ("SCREENER_FANOUT_SHADOW_MODEL", settings.fanout_shadow_model),
+        ("SCREENER_FANOUT_SHADOW_CONCURRENCY", str(settings.fanout_shadow_concurrency)),
+        ("SCREENER_FANOUT_SHADOW_MAX_STEPS", str(settings.fanout_shadow_max_steps)),
+        ("SCREENER_FANOUT_SHADOW_MAX_GROUPS", str(settings.fanout_shadow_max_groups)),
+        (
+            "SCREENER_FANOUT_SHADOW_MAX_REQUESTS",
+            str(settings.fanout_shadow_max_requests),
+        ),
+        (
+            "SCREENER_FANOUT_SHADOW_MAX_TOTAL_TOKENS",
+            str(settings.fanout_shadow_max_total_tokens),
+        ),
+        (
+            "SCREENER_FANOUT_SHADOW_TIMEOUT_SECONDS",
+            str(settings.fanout_shadow_timeout_seconds),
+        ),
+        (
+            "SCREENER_FANOUT_SHADOW_MAX_COST_USD",
+            str(settings.fanout_shadow_max_cost_usd),
+        ),
+    )
+
+
+def _current_shadow_limits(
+    pinned: ScreenerReviewSettings, current: ScreenerReviewSettings
+) -> ScreenerReviewSettings:
+    """Preserve comparison identity while applying stricter current safety rails."""
+    bounded = {
+        field: min(getattr(pinned, field), getattr(current, field))
+        for field in (
+            "fanout_shadow_concurrency",
+            "fanout_shadow_max_steps",
+            "fanout_shadow_max_groups",
+            "fanout_shadow_max_requests",
+            "fanout_shadow_max_total_tokens",
+            "fanout_shadow_timeout_seconds",
+            "fanout_shadow_max_cost_usd",
+            "fanout_shadow_daily_cost_usd",
+        )
+    }
+    # The latest operator posture may reserve more shared compute for baseline.
+    bounded["fanout_shadow_reserved_targon_slots"] = max(
+        pinned.fanout_shadow_reserved_targon_slots,
+        current.fanout_shadow_reserved_targon_slots,
+    )
+    return pinned.model_copy(update=bounded)
+
+
 class TargonRentalLoop:
     def __init__(
         self,
@@ -223,6 +280,7 @@ class TargonRentalLoop:
     async def tick(self) -> bool:
         """Admit work and launch at most one job per lane. Returns if any ran."""
         handled = await self._reap_finished_rentals()
+        handled = await self._cancel_fanout_shadows_when_off() or handled
         handled = await self._park_source_reviews_for_outage() or handled
         async with self._session_maker() as session, session.begin():
             _, provider_settings = await resolve_screener_provider_settings(
@@ -243,8 +301,61 @@ class TargonRentalLoop:
         if provider_settings.source_review_provider_priority[0] == "targon":
             handled = await self._launch_source_review() or handled
         handled = await self._finalize_ready_attempts() or handled
+        handled = await self._launch_fanout_shadow_review() or handled
         handled = await self._repair_kaniko_image_ids() or handled
         return handled
+
+    async def _cancel_fanout_shadows_when_off(self) -> bool:
+        """Apply the global kill switch to queued and running shadow work."""
+        now = datetime.now(UTC)
+        pending: list[tuple[UUID, str, str | None]] = []
+        async with self._session_maker() as session, session.begin():
+            revision = await session.scalar(
+                select(ScreenerReviewSettingsRevision)
+                .where(ScreenerReviewSettingsRevision.scope == "*")
+                .order_by(ScreenerReviewSettingsRevision.revision.desc())
+                .limit(1)
+            )
+            settings = (
+                ScreenerReviewSettings.model_validate(revision.settings)
+                if revision is not None
+                else ScreenerReviewSettings()
+            )
+            if settings.fanout_shadow_mode == "shadow":
+                return False
+            rows = (
+                await session.scalars(
+                    select(ScreenerFanoutShadowReview)
+                    .where(
+                        ScreenerFanoutShadowReview.environment
+                        == self._config.environment,
+                        ScreenerFanoutShadowReview.status.in_(
+                            ("queued", "leased", "running")
+                        ),
+                    )
+                    .order_by(ScreenerFanoutShadowReview.created_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in rows:
+                was_active = row.status in _INFLIGHT_JOB
+                row.status = "incomplete" if was_active else "skipped"
+                row.outcome = "incomplete" if was_active else "skipped"
+                row.error_code = "fanout-shadow-kill-switch-off"
+                row.completed_at = now
+                row.lease_expires_at = None
+                row.job_token_hash = None
+                row.job_token_expires_at = None
+                row.updated_at = now
+                if row.provider_resource_id:
+                    pending.append(
+                        (row.shadow_id, row.provider_resource_id, row.provider)
+                    )
+        for shadow_id, uid, stored_provider in pending:
+            if await self._delete_resource(stored_provider, uid):
+                await self._clear_resource_id("fanout_shadow", shadow_id)
+        return bool(rows)
 
     async def _park_source_reviews_for_outage(self) -> bool:
         """Delete and requeue every non-probe court rental while the relay is open."""
@@ -473,6 +584,20 @@ class TargonRentalLoop:
             ~abandoned,
         )
 
+    def _live_fanout_shadow_inflight(self, now: datetime) -> ColumnElement[bool]:
+        cutoff = self._provision_cutoff(now)
+        return and_(
+            ScreenerFanoutShadowReview.status.in_(_INFLIGHT_JOB),
+            or_(
+                ScreenerFanoutShadowReview.lease_expires_at.is_(None),
+                ScreenerFanoutShadowReview.lease_expires_at >= now,
+            ),
+            or_(
+                ScreenerFanoutShadowReview.provider_resource_id.is_not(None),
+                ScreenerFanoutShadowReview.updated_at >= cutoff,
+            ),
+        )
+
     async def _targon_inflight(self) -> int:
         """Count live Targon rentals we still own.
 
@@ -504,7 +629,16 @@ class TargonRentalLoop:
                     self._live_review_inflight(now),
                 )
             )
-        return int(builds or 0) + int(reviews or 0)
+            shadows = await session.scalar(
+                select(func.count())
+                .select_from(ScreenerFanoutShadowReview)
+                .where(
+                    ScreenerFanoutShadowReview.environment == self._config.environment,
+                    ScreenerFanoutShadowReview.provider == "targon",
+                    self._live_fanout_shadow_inflight(now),
+                )
+            )
+        return int(builds or 0) + int(reviews or 0) + int(shadows or 0)
 
     async def _provider_has_capacity(self, provider: ScreeningComputeProvider) -> bool:
         if not await provider.capacity_ok():
@@ -512,6 +646,16 @@ class TargonRentalLoop:
         if provider.stored_provider != "targon":
             return True
         return await self._targon_inflight() < self._config.max_inflight
+
+    async def _provider_has_shadow_capacity(
+        self, provider: ScreeningComputeProvider, *, reserved_targon_slots: int
+    ) -> bool:
+        if not await provider.capacity_ok():
+            return False
+        if provider.stored_provider != "targon":
+            return True
+        shadow_ceiling = max(0, self._config.max_inflight - reserved_targon_slots)
+        return await self._targon_inflight() < shadow_ceiling
 
     async def _any_capacity(self) -> bool:
         for provider in self._providers:
@@ -970,6 +1114,250 @@ class TargonRentalLoop:
                 await provider.delete(uid)
                 await self._clear_resource_id("review", review_id)
         await self._fail_review_provision(review_id, error_code)
+        return True
+
+    async def _launch_fanout_shadow_review(self) -> bool:
+        """Launch at most one lower-priority, fully reserved shadow job."""
+        if (
+            not self._config.bootstrap_sa
+            or not self._config.fanout_shadow_secret_resource
+            or self._mint_token is None
+        ):
+            return False
+        now = datetime.now(UTC)
+        async with self._session_maker() as session, session.begin():
+            await session.execute(
+                select(
+                    func.pg_advisory_xact_lock(
+                        func.hashtextextended("screener-fanout-shadow-budget", 0)
+                    )
+                )
+            )
+            global_revision = await session.scalar(
+                select(ScreenerReviewSettingsRevision)
+                .where(ScreenerReviewSettingsRevision.scope == "*")
+                .order_by(ScreenerReviewSettingsRevision.revision.desc())
+                .limit(1)
+            )
+            global_settings = (
+                ScreenerReviewSettings.model_validate(global_revision.settings)
+                if global_revision is not None
+                else ScreenerReviewSettings()
+            )
+            row = await session.scalar(
+                select(ScreenerFanoutShadowReview)
+                .where(
+                    ScreenerFanoutShadowReview.environment == self._config.environment,
+                    ScreenerFanoutShadowReview.status == "queued",
+                )
+                .order_by(ScreenerFanoutShadowReview.created_at)
+                .with_for_update(skip_locked=True)
+                .limit(1)
+            )
+            if row is None:
+                return False
+            if global_settings.fanout_shadow_mode != "shadow":
+                row.status = "skipped"
+                row.outcome = "skipped"
+                row.error_code = "fanout-shadow-kill-switch-off"
+                row.completed_at = now
+                row.updated_at = now
+                return True
+            active = await session.scalar(
+                select(func.count())
+                .select_from(ScreenerFanoutShadowReview)
+                .where(ScreenerFanoutShadowReview.status.in_(_INFLIGHT_JOB))
+            )
+            if int(active or 0) >= global_settings.fanout_shadow_global_concurrency:
+                return False
+            pinned_revision = await session.get(
+                ScreenerReviewSettingsRevision, row.settings_revision
+            )
+            if (
+                pinned_revision is None
+                or pinned_revision.scope != row.settings_scope
+                or pinned_revision.checksum != row.settings_checksum
+            ):
+                row.status = "incomplete"
+                row.outcome = "incomplete"
+                row.error_code = "fanout-settings-binding-unavailable"
+                row.completed_at = now
+                row.updated_at = now
+                return True
+            settings = ScreenerReviewSettings.model_validate(pinned_revision.settings)
+            if (
+                row.policy_manifest_profile != settings.policy_manifest_profile
+                or row.policy_manifest_rotation_id
+                != settings.policy_manifest_rotation_id
+                or row.policy_manifest_digest
+                != policy_manifest_digest(
+                    settings.policy_manifest_profile,
+                    settings.policy_manifest_rotation_id,
+                )
+            ):
+                row.status = "incomplete"
+                row.outcome = "incomplete"
+                row.error_code = "fanout-policy-manifest-binding-invalid"
+                row.completed_at = now
+                row.updated_at = now
+                return True
+            settings = _current_shadow_limits(settings, global_settings)
+            reserve = round(settings.fanout_shadow_max_cost_usd * 1_000_000)
+            daily_limit = round(settings.fanout_shadow_daily_cost_usd * 1_000_000)
+            committed = await session.scalar(
+                select(
+                    func.coalesce(
+                        func.sum(ScreenerFanoutShadowReview.reserved_cost_microusd), 0
+                    )
+                ).where(
+                    ScreenerFanoutShadowReview.reserved_at >= now - timedelta(hours=24)
+                )
+            )
+            if int(committed or 0) + reserve > daily_limit:
+                row.status = "skipped"
+                row.outcome = "skipped"
+                row.error_code = "fanout-daily-budget-exhausted"
+                row.completed_at = now
+                row.updated_at = now
+                return True
+            circuit = await session.scalar(
+                select(ProviderOutageCircuit).where(
+                    ProviderOutageCircuit.provider == OPENROUTER_PROVIDER
+                )
+            )
+            if circuit is not None and circuit.state == "open":
+                row.status = "skipped"
+                row.outcome = "skipped"
+                row.error_code = "fanout-provider-circuit-open"
+                row.completed_at = now
+                row.updated_at = now
+                return True
+            image_build = await session.scalar(
+                select(TrustedImageBuild)
+                .where(
+                    TrustedImageBuild.environment == self._config.environment,
+                    TrustedImageBuild.component == "screener",
+                    TrustedImageBuild.source_sha
+                    == settings.fanout_shadow_image_source_sha,
+                    TrustedImageBuild.status == "succeeded",
+                    TrustedImageBuild.image_digest.is_not(None),
+                )
+                .order_by(TrustedImageBuild.completed_at.desc())
+                .limit(1)
+            )
+            if image_build is None or image_build.image_digest is None:
+                return False
+            token = secrets.token_urlsafe(48)
+            token_hash = hashlib.sha256(token.encode()).hexdigest()
+            row.status = "leased"
+            row.controller_epoch = self._epoch
+            row.lease_expires_at = now + _FANOUT_SHADOW_LEASE
+            row.job_token_hash = token_hash
+            row.job_token_expires_at = now + _JOB_TTL
+            row.reserved_cost_microusd = reserve
+            row.reserved_at = now
+            row.updated_at = now
+            shadow_id = row.shadow_id
+            artifact_sha256 = row.artifact_sha256
+            policy_version = row.policy_version
+            policy_manifest_profile = row.policy_manifest_profile
+            policy_manifest_rotation_id = row.policy_manifest_rotation_id
+            policy_manifest_digest_value = row.policy_manifest_digest
+            repository = image_build.destination.rsplit(":", 1)[0]
+            image_reference = f"{repository}@{image_build.image_digest}"
+        bootstrap = await self._mint_token(self._config.bootstrap_sa)
+        spec = ReviewSpec(
+            name=f"ditto-fanout-{shadow_id.hex[:18]}"[:32],
+            image=image_reference,
+            env=(
+                ("DITTO_PLATFORM_URL", self._config.public_platform_url),
+                ("DITTO_FANOUT_SHADOW_ID", str(shadow_id)),
+                ("DITTO_FANOUT_SHADOW_ARTIFACT_SHA256", artifact_sha256),
+                ("DITTO_FANOUT_SHADOW_POLICY_VERSION", str(policy_version)),
+                (
+                    "DITTO_FANOUT_SHADOW_POLICY_MANIFEST_PROFILE",
+                    policy_manifest_profile,
+                ),
+                (
+                    "DITTO_FANOUT_SHADOW_POLICY_MANIFEST_ROTATION_ID",
+                    policy_manifest_rotation_id,
+                ),
+                (
+                    "DITTO_FANOUT_SHADOW_POLICY_MANIFEST_DIGEST",
+                    policy_manifest_digest_value,
+                ),
+                ("DITTO_FANOUT_SHADOW_JOB_TOKEN", token),
+                ("DITTO_SOURCE_REVIEW_JOB", "1"),
+                (
+                    "SCREENER_NODE_CREDENTIAL_FILE",
+                    "/tmp/ditto-source-review/node.json",
+                ),
+                ("SCREENER_GCP_BOOTSTRAP_ACCESS_TOKEN", bootstrap),
+                (
+                    "SCREENER_SOURCE_REVIEW_SECRET_RESOURCE",
+                    self._config.fanout_shadow_secret_resource,
+                ),
+                *_fanout_shadow_env(settings),
+            ),
+            commands=("/app/workers/screener/.venv/bin/python", "-m"),
+            args=("ditto_screener.fanout_shadow_job",),
+        )
+        for provider in await self._lane_providers("review", None):
+            # Keep GCE as an authoritative overflow lane. The pilot may only use
+            # spare Targon capacity after its baseline reservation.
+            if provider.stored_provider != "targon":
+                continue
+            if not await self._provider_has_shadow_capacity(
+                provider,
+                reserved_targon_slots=settings.fanout_shadow_reserved_targon_slots,
+            ):
+                continue
+            uid: str | None = None
+            try:
+                uid = await provider.create_source_review(spec)
+                launch_active = False
+                async with self._session_maker() as session, session.begin():
+                    stored = await session.get(
+                        ScreenerFanoutShadowReview, shadow_id, with_for_update=True
+                    )
+                    if not (
+                        stored is None
+                        or stored.status != "leased"
+                        or stored.job_token_hash != token_hash
+                        or stored.provider_resource_id is not None
+                    ):
+                        stored.status = "running"
+                        stored.provider = provider.stored_provider
+                        stored.provider_resource_id = uid
+                        stored.started_at = datetime.now(UTC)
+                        stored.updated_at = datetime.now(UTC)
+                        launch_active = True
+                if not launch_active:
+                    await provider.delete(uid)
+                    return True
+                await provider.start(uid)
+                return True
+            except ScreeningProviderError:
+                logger.exception(
+                    "%s fanout-shadow launch failed shadow_id=%s",
+                    provider.name,
+                    shadow_id,
+                )
+            if uid is not None:
+                await provider.delete(uid)
+        async with self._session_maker() as session, session.begin():
+            stored = await session.get(
+                ScreenerFanoutShadowReview, shadow_id, with_for_update=True
+            )
+            if stored is not None and stored.status in _INFLIGHT_JOB:
+                stored.status = "incomplete"
+                stored.outcome = "incomplete"
+                stored.error_code = "fanout-provider-unavailable"
+                stored.completed_at = datetime.now(UTC)
+                stored.lease_expires_at = None
+                stored.job_token_hash = None
+                stored.job_token_expires_at = None
+                stored.updated_at = datetime.now(UTC)
         return True
 
     async def _targon_provision_exhausted(
@@ -1552,6 +1940,64 @@ class TargonRentalLoop:
                 uid = row.provider_resource_id
                 if uid:
                     pending.append(("review", row.review_id, uid, row.provider))
+            expired_shadows = (
+                await session.scalars(
+                    select(ScreenerFanoutShadowReview)
+                    .where(
+                        ScreenerFanoutShadowReview.environment
+                        == self._config.environment,
+                        ScreenerFanoutShadowReview.status.in_(_INFLIGHT_JOB),
+                        ScreenerFanoutShadowReview.lease_expires_at < now,
+                    )
+                    .order_by(ScreenerFanoutShadowReview.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in expired_shadows:
+                row.status = "incomplete"
+                row.outcome = "incomplete"
+                row.error_code = "fanout-shadow-lease-expired"
+                row.completed_at = now
+                row.lease_expires_at = None
+                row.job_token_hash = None
+                row.job_token_expires_at = None
+                row.updated_at = now
+                if row.provider_resource_id:
+                    pending.append(
+                        (
+                            "fanout_shadow",
+                            row.shadow_id,
+                            row.provider_resource_id,
+                            row.provider,
+                        )
+                    )
+            terminal_shadows = (
+                await session.scalars(
+                    select(ScreenerFanoutShadowReview)
+                    .where(
+                        ScreenerFanoutShadowReview.environment
+                        == self._config.environment,
+                        ScreenerFanoutShadowReview.status.in_(
+                            ("succeeded", "incomplete", "skipped")
+                        ),
+                        ScreenerFanoutShadowReview.provider_resource_id.is_not(None),
+                    )
+                    .order_by(ScreenerFanoutShadowReview.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in terminal_shadows:
+                if row.provider_resource_id:
+                    pending.append(
+                        (
+                            "fanout_shadow",
+                            row.shadow_id,
+                            row.provider_resource_id,
+                            row.provider,
+                        )
+                    )
         for kind, row_id, uid, stored_provider in pending:
             if await self._delete_resource(stored_provider, uid):
                 await self._clear_resource_id(kind, row_id)
@@ -1569,6 +2015,12 @@ class TargonRentalLoop:
                 else:
                     stored.runtime_provider_resource_id = None
                 stored.updated_at = datetime.now(UTC)
+                return
+            if kind == "fanout_shadow":
+                stored_shadow = await session.get(ScreenerFanoutShadowReview, row_id)
+                if stored_shadow is not None:
+                    stored_shadow.provider_resource_id = None
+                    stored_shadow.updated_at = datetime.now(UTC)
                 return
             stored_review = await session.get(SubmissionSourceReview, row_id)
             if stored_review is not None:

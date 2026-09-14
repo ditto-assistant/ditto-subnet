@@ -11,7 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
-from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.screener_review_settings import (
+    ScreenerReviewSettings,
+    policy_manifest_digest,
+)
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.screening_provider import (
     BuildSpec,
@@ -24,6 +27,7 @@ from ditto.api_server.targon_provider import TargonComputeProvider
 from ditto.api_server.targon_rental_loop import (
     _SOURCE_LEASE,
     TargonRentalLoop,
+    _current_shadow_limits,
     _private_failure_text,
     _source_review_layer_env,
 )
@@ -35,9 +39,12 @@ from ditto.api_server.targon_screening import (
 from ditto.db.models import (
     Agent,
     ProviderOutageCircuit,
+    ScreenerFanoutShadowReview,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     SubmissionImageBuild,
     SubmissionSourceReview,
+    TrustedImageBuild,
 )
 from ditto.tests.api_server.endpoints.test_screener import (
     _SCREENER_HOTKEY,
@@ -102,6 +109,40 @@ def test_source_review_layer_env_carries_the_l1_verdict_budget() -> None:
         )
     )
     assert env["SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS"] == "12000"
+
+
+def test_current_shadow_limits_only_tighten_operational_rails() -> None:
+    pinned = ScreenerReviewSettings(
+        fanout_shadow_mode="shadow",
+        fanout_shadow_image_source_sha="1" * 40,
+        fanout_shadow_max_requests=40,
+        fanout_shadow_max_cost_usd=3,
+        fanout_shadow_daily_cost_usd=20,
+        fanout_shadow_reserved_targon_slots=1,
+    )
+    current = ScreenerReviewSettings(
+        fanout_shadow_mode="shadow",
+        fanout_shadow_image_source_sha="2" * 40,
+        fanout_shadow_max_requests=12,
+        fanout_shadow_max_cost_usd=2,
+        fanout_shadow_daily_cost_usd=10,
+        fanout_shadow_reserved_targon_slots=2,
+    )
+    effective = _current_shadow_limits(pinned, current)
+    assert effective.fanout_shadow_model == pinned.fanout_shadow_model
+    assert (
+        effective.fanout_shadow_image_source_sha
+        == pinned.fanout_shadow_image_source_sha
+    )
+    assert effective.fanout_shadow_max_requests == 12
+    assert effective.fanout_shadow_max_cost_usd == 2
+    assert effective.fanout_shadow_daily_cost_usd == 10
+    assert effective.fanout_shadow_reserved_targon_slots == 2
+
+
+def test_shadow_mode_requires_an_exact_trusted_image_source() -> None:
+    with pytest.raises(ValueError, match="exact trusted image source SHA"):
+        ScreenerReviewSettings(fanout_shadow_mode="shadow")
 
 
 class _FakeTargon:
@@ -211,6 +252,202 @@ def _config(**overrides: Any) -> TargonRentalConfig:
     }
     values.update(overrides)
     return TargonRentalConfig(**values)
+
+
+async def _seed_fanout_rows(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    committed_cost_microusd: int = 0,
+) -> tuple[UUID, UUID]:
+    image_sha = "1" * 40
+    settings = ScreenerReviewSettings(
+        fanout_shadow_mode="shadow",
+        fanout_shadow_image_source_sha=image_sha,
+    )
+    checksum = "2" * 64
+    first_agent = await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="fanout-old", sha256="aa" * 32
+    )
+    next_agent = await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="fanout-new", sha256="bb" * 32
+    )
+    first_attempt, next_attempt = uuid4(), uuid4()
+    now = datetime.now(UTC)
+    manifest_digest = policy_manifest_digest(
+        settings.policy_manifest_profile, settings.policy_manifest_rotation_id
+    )
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerReviewSettingsRevision(
+                revision=1,
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=checksum,
+                reason="enable bounded fanout shadow test",
+                actor="test",
+            )
+        )
+        for attempt_id, agent_id in (
+            (first_attempt, first_agent),
+            (next_attempt, next_agent),
+        ):
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="passed",
+                    started_at=now - timedelta(minutes=5),
+                    deadline=now,
+                    finished_at=now,
+                )
+            )
+        session.add(
+            TrustedImageBuild(
+                build_id=uuid4(),
+                environment="prod",
+                component="screener",
+                source_repository="ditto-assistant/ditto-subnet",
+                source_sha=image_sha,
+                context_path=".",
+                dockerfile_path="workers/screener/Dockerfile",
+                destination="registry.example/screener:shadow",
+                status="succeeded",
+                image_digest="sha256:" + "3" * 64,
+                created_by="test",
+                reason="fanout shadow test image",
+                completed_at=now,
+            )
+        )
+        for index, (attempt_id, agent_id, artifact_sha) in enumerate(
+            (
+                (first_attempt, first_agent, "aa" * 32),
+                (next_attempt, next_agent, "bb" * 32),
+            )
+        ):
+            reserved = committed_cost_microusd if index == 0 else 0
+            session.add(
+                ScreenerFanoutShadowReview(
+                    shadow_id=uuid4(),
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    environment="prod",
+                    artifact_sha256=artifact_sha,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    policy_manifest_profile=settings.policy_manifest_profile,
+                    policy_manifest_rotation_id=settings.policy_manifest_rotation_id,
+                    policy_manifest_digest=manifest_digest,
+                    settings_revision=1,
+                    settings_scope="*",
+                    settings_checksum=checksum,
+                    status="succeeded" if index == 0 else "queued",
+                    outcome="no_findings" if index == 0 else None,
+                    baseline={"outcome": "pass"},
+                    reserved_cost_microusd=reserved,
+                    reserved_at=now if reserved else None,
+                    completed_at=now if index == 0 else None,
+                )
+            )
+    return first_attempt, next_attempt
+
+
+@pytest.mark.asyncio
+async def test_fanout_rolling_budget_uses_reservation_time_not_queue_time(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_fanout_rows(session_maker, committed_cost_microusd=19_000_000)
+    async with session_maker() as session, session.begin():
+        charged = await session.scalar(
+            select(ScreenerFanoutShadowReview).where(
+                ScreenerFanoutShadowReview.reserved_cost_microusd > 0
+            )
+        )
+        assert charged is not None
+        charged.created_at = datetime.now(UTC) - timedelta(days=2)
+
+    async def mint(_sa: str) -> str:
+        return "token-" + "x" * 120
+
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(fanout_shadow_secret_resource="projects/p/secrets/shadow"),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        mint_token=mint,
+        interval_seconds=60,
+    )
+    assert await loop._launch_fanout_shadow_review() is True
+    assert targon.created == []
+    async with session_maker() as session:
+        queued = await session.scalar(
+            select(ScreenerFanoutShadowReview).where(
+                ScreenerFanoutShadowReview.reserved_cost_microusd == 0
+            )
+        )
+        assert queued is not None
+        assert queued.status == "skipped"
+        assert queued.error_code == "fanout-daily-budget-exhausted"
+
+
+@pytest.mark.asyncio
+async def test_fanout_cannot_consume_the_reserved_baseline_targon_slot(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    first_attempt, _ = await _seed_fanout_rows(session_maker)
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        first = await session.get(ScreeningAttempt, first_attempt)
+        assert first is not None
+        session.add(
+            SubmissionSourceReview(
+                review_id=uuid4(),
+                agent_id=first.agent_id,
+                attempt_id=first_attempt,
+                environment="prod",
+                artifact_sha256="aa" * 32,
+                status="running",
+                provider="targon",
+                provider_resource_id="baseline-review",
+                lease_expires_at=now + timedelta(minutes=20),
+                updated_at=now,
+            )
+        )
+
+    async def mint(_sa: str) -> str:
+        return "token-" + "x" * 120
+
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(
+            max_inflight=2,
+            fanout_shadow_secret_resource="projects/p/secrets/shadow",
+        ),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        mint_token=mint,
+        interval_seconds=60,
+    )
+    assert await loop._launch_fanout_shadow_review() is True
+    assert targon.created == []
+    async with session_maker() as session:
+        baseline = await session.scalar(
+            select(SubmissionSourceReview).where(
+                SubmissionSourceReview.provider_resource_id == "baseline-review"
+            )
+        )
+        assert baseline is not None
+        assert baseline.status == "running"
+        queued = await session.scalar(
+            select(ScreenerFanoutShadowReview).where(
+                ScreenerFanoutShadowReview.status == "incomplete"
+            )
+        )
+        assert queued is not None
+        assert queued.error_code == "fanout-provider-unavailable"
 
 
 @pytest.mark.asyncio

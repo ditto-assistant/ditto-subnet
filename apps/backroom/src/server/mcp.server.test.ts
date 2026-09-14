@@ -150,6 +150,7 @@ describe('Backroom MCP tools', () => {
         'set_screener_node_channel_settings',
         'create_screener_bootstrap_grant',
         'get_screener_review_settings',
+        'get_screener_fanout_shadow',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
         'rotate_screener_policy_manifest',
@@ -1071,6 +1072,7 @@ describe('Backroom MCP tools', () => {
       get_leaderboard: { maxLimit: 200, maxDefault: 50 },
       get_validator_fleet: { maxLimit: 200, maxDefault: 50 },
       list_validator_assignments: { maxLimit: 200, maxDefault: 50 },
+      get_screener_fanout_shadow: { maxLimit: 100, maxDefault: 50 },
     }
 
     for (const [name, bounds] of Object.entries(paginatedTools)) {
@@ -1981,6 +1983,61 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/screener-review-settings',
+      expect.any(Object),
+    )
+    await client.close()
+    await server.close()
+  })
+
+  it('reads bounded fan-out shadow comparisons through a read-only grant', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        metrics: {
+          total: 1, queued: 0, running: 0, succeeded: 1, incomplete: 0,
+          skipped: 0, compared: 1, disagreements: 1, incomplete_coverage: 0,
+          rolling_24h_reserved_cost_usd: 3,
+          rolling_24h_reported_cost_usd: 0.12,
+          rolling_24h_unmetered: 0,
+        },
+        items: [{
+          shadow_id: '00000000-0000-4000-8000-000000000001',
+          agent_id: '00000000-0000-4000-8000-000000000002',
+          attempt_id: '00000000-0000-4000-8000-000000000003',
+          artifact_sha256: 'a'.repeat(64),
+          policy_version: 9,
+          policy_manifest_profile: 'l1',
+          policy_manifest_rotation_id: 'pilot',
+          policy_manifest_digest: 'c'.repeat(64),
+          settings_revision: 4, settings_scope: '*',
+          settings_checksum: 'b'.repeat(64), status: 'succeeded',
+          outcome: 'candidate', baseline: { outcome: 'clear' },
+          report: { coverage_complete: true, usage: { reported_cost_usd: 0.12 } },
+          disagrees_with_baseline: true, coverage_complete: true,
+          error_code: null, provider: 'targon', reserved_cost_usd: 3,
+          reported_cost_usd: 0.12, unmetered: false,
+          reserved_at: '2026-09-14T12:00:00Z',
+          created_at: '2026-09-14T12:00:00Z',
+          started_at: '2026-09-14T12:00:01Z',
+          completed_at: '2026-09-14T12:01:00Z',
+        }],
+        count: 1, returned: 1, limit: 25, offset: 0, has_more: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screener_fanout_shadow',
+      arguments: { status: 'succeeded', limit: 25 },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      metrics: { disagreements: 1, rolling_24h_reserved_cost_usd: 3 },
+      items: [{ outcome: 'candidate', disagrees_with_baseline: true }],
+      count: 1,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-fanout-shadow?status=succeeded&limit=25&offset=0',
       expect.any(Object),
     )
     await client.close()

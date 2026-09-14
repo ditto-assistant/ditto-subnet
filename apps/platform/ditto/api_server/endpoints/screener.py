@@ -95,6 +95,11 @@ from ditto.api_models.screener import (
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
 )
+from ditto.api_models.screener_fanout_shadow import (
+    FanoutShadowCompleteRequest,
+    FanoutShadowCompleteResponse,
+    FanoutShadowSourceResponse,
+)
 from ditto.api_models.screener_nodes import (
     SubmissionBuildCompleteRequest,
     SubmissionBuildCompleteResponse,
@@ -128,6 +133,7 @@ from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.api_models.screener_review_settings import (
     EffectiveScreenerReviewSettings,
     ScreenerReviewSettings,
+    policy_manifest_digest,
 )
 from ditto.api_models.system_health import (
     fleet_release_signing_token,
@@ -184,6 +190,7 @@ from ditto.db.models import (
     ScreenedImageUpload,
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
+    ScreenerFanoutShadowReview,
     ScreenerHeartbeat,
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
@@ -749,6 +756,36 @@ async def _locked_source_review_for_job(
         raise HTTPException(status_code=401, detail="source-review job token expired")
     if row.status not in {"leased", "running"}:
         raise HTTPException(status_code=409, detail="source-review job is not active")
+    return row
+
+
+async def _locked_fanout_shadow_for_job(
+    session: AsyncSession,
+    *,
+    shadow_id: UUID,
+    authorization: str | None,
+) -> ScreenerFanoutShadowReview:
+    token = _submission_build_token(authorization)
+    row = await session.scalar(
+        select(ScreenerFanoutShadowReview)
+        .where(ScreenerFanoutShadowReview.shadow_id == shadow_id)
+        .with_for_update()
+    )
+    if row is None or row.job_token_hash is None:
+        raise HTTPException(status_code=401, detail="invalid fanout shadow job token")
+    if not secrets.compare_digest(
+        hashlib.sha256(token.encode()).hexdigest(), row.job_token_hash
+    ):
+        raise HTTPException(status_code=401, detail="invalid fanout shadow job token")
+    expiry = row.job_token_expires_at
+    if expiry is None:
+        raise HTTPException(status_code=401, detail="fanout shadow job token expired")
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    if datetime.now(UTC) >= expiry:
+        raise HTTPException(status_code=401, detail="fanout shadow job token expired")
+    if row.status not in {"leased", "running"}:
+        raise HTTPException(status_code=409, detail="fanout shadow job is not active")
     return row
 
 
@@ -3789,6 +3826,181 @@ async def submit_shadow_review(
     return ShadowReviewObservationResponse(accepted=True)
 
 
+@router.get(
+    "/fanout-shadow-reviews/{shadow_id}/source",
+    response_model=FanoutShadowSourceResponse,
+)
+async def get_fanout_shadow_source(
+    shadow_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> FanoutShadowSourceResponse:
+    """Mint one digest-bound source URL for an admitted shadow-only job."""
+    async with session.begin():
+        row = await _locked_fanout_shadow_for_job(
+            session, shadow_id=shadow_id, authorization=authorization
+        )
+        agent_id = row.agent_id
+        artifact_sha256 = row.artifact_sha256
+        policy_version = row.policy_version
+        policy_manifest_profile = row.policy_manifest_profile
+        policy_manifest_rotation_id = row.policy_manifest_rotation_id
+        policy_manifest_digest_value = row.policy_manifest_digest
+    url = await storage.presigned_get_url(
+        key=_artifact_key(agent_id),
+        expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
+    )
+    return FanoutShadowSourceResponse(
+        source_url_b64=base64.b64encode(url.encode()).decode(),
+        artifact_sha256=artifact_sha256,
+        policy_version=policy_version,
+        policy_manifest_profile=cast(
+            Literal["core", "l1", "l1_l2"], policy_manifest_profile
+        ),
+        policy_manifest_rotation_id=policy_manifest_rotation_id,
+        policy_manifest_digest=policy_manifest_digest_value,
+    )
+
+
+@router.post(
+    "/fanout-shadow-reviews/{shadow_id}/complete",
+    response_model=FanoutShadowCompleteResponse,
+)
+async def complete_fanout_shadow_review(
+    shadow_id: UUID,
+    payload: FanoutShadowCompleteRequest,
+    request: Request,
+    session: SessionDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> FanoutShadowCompleteResponse:
+    """Persist comparison evidence without touching screening authority."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await _locked_fanout_shadow_for_job(
+            session, shadow_id=shadow_id, authorization=authorization
+        )
+        if payload.report.get("artifact_sha256") != row.artifact_sha256:
+            raise HTTPException(status_code=409, detail="fanout artifact mismatch")
+        if payload.report.get("policy_version") != row.policy_version:
+            raise HTTPException(status_code=409, detail="fanout policy mismatch")
+        if (
+            payload.report.get("policy_manifest_profile") != row.policy_manifest_profile
+            or payload.report.get("policy_manifest_rotation_id")
+            != row.policy_manifest_rotation_id
+            or payload.report.get("policy_manifest_digest")
+            != row.policy_manifest_digest
+        ):
+            raise HTTPException(
+                status_code=409, detail="fanout policy manifest mismatch"
+            )
+        usage = payload.report["usage"]
+        reported = usage.get("reported_cost_usd")
+        reported_microusd = (
+            round(float(reported) * 1_000_000) if reported is not None else None
+        )
+        unmetered = bool(
+            usage.get("unmetered_requests", 0) or usage.get("unmetered_responses", 0)
+        )
+        settings_revision = await session.get(
+            ScreenerReviewSettingsRevision, row.settings_revision
+        )
+        expected_model = (
+            ScreenerReviewSettings.model_validate(
+                settings_revision.settings
+            ).fanout_shadow_model
+            if settings_revision is not None
+            else None
+        )
+        passes = payload.report.get("passes")
+        response_models: list[str] = []
+        if isinstance(passes, list):
+            response_models.extend(
+                model
+                for item in passes
+                if isinstance(item, dict)
+                for model in item.get("response_models", [])
+                if isinstance(model, str)
+            )
+        critic = payload.report.get("critic")
+        if isinstance(critic, dict):
+            response_models.extend(
+                model
+                for model in critic.get("response_models", [])
+                if isinstance(model, str)
+            )
+        model_binding_invalid = bool(
+            expected_model is None
+            or payload.report.get("requested_model") != expected_model
+            or usage.get("model_mismatch")
+            or (payload.status == "succeeded" and not response_models)
+            or any(model != expected_model for model in response_models)
+        )
+        exceeded = bool(
+            reported_microusd is not None
+            and reported_microusd > row.reserved_cost_microusd
+        )
+        baseline_outcome = row.baseline.get("outcome")
+        baseline_candidate = (
+            baseline_outcome
+            in {
+                "quarantine",
+                "deterministic_reject",
+            }
+            or row.baseline.get("finding") is not None
+        )
+        fanout_candidate = payload.outcome in {
+            "candidate",
+            "unresolved_candidate",
+            "critic_also_flagged",
+        }
+        file_plan = payload.report.get("file_plan")
+        coverage_complete = bool(
+            payload.outcome != "incomplete"
+            and isinstance(file_plan, dict)
+            and not file_plan.get("truncated", True)
+            and isinstance(passes, list)
+            and passes
+            and all(
+                isinstance(item, dict) and item.get("outcome") != "incomplete"
+                for item in passes
+            )
+        )
+        row.report = payload.report
+        row.disagrees_with_baseline = baseline_candidate != fanout_candidate
+        row.coverage_complete = coverage_complete
+        invalid_result = exceeded or model_binding_invalid or unmetered
+        row.status = "incomplete" if invalid_result else payload.status
+        row.outcome = "incomplete" if invalid_result else payload.outcome
+        row.error_code = (
+            "reported-cost-exceeded-reservation"
+            if exceeded
+            else "fanout-response-model-mismatch"
+            if model_binding_invalid
+            else "fanout-response-metering-incomplete"
+            if unmetered
+            else payload.error_code
+        )
+        row.reported_cost_microusd = reported_microusd
+        row.unmetered = unmetered
+        row.completed_at = now
+        row.updated_at = now
+        row.lease_expires_at = None
+        row.job_token_hash = None
+        row.job_token_expires_at = None
+        rental_uid = row.provider_resource_id
+        provider = row.provider
+    if provider == "targon" and await _release_targon_rental(request, rental_uid):
+        async with session.begin():
+            stored = await session.get(
+                ScreenerFanoutShadowReview, shadow_id, with_for_update=True
+            )
+            if stored is not None and stored.provider_resource_id == rental_uid:
+                stored.provider_resource_id = None
+                stored.updated_at = datetime.now(UTC)
+    return FanoutShadowCompleteResponse(accepted=True)
+
+
 def _heartbeat_signing_message(payload: ScreenerHeartbeatRequest) -> bytes:
     """Canonical versioned heartbeat bytes mirrored by ``ditto-screener``."""
     if payload.protocol_version == 1:
@@ -5128,6 +5340,92 @@ def _quarantine_payload_json(
     return evidence_json, finding_json
 
 
+async def _queue_fanout_shadow_review(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    attempt: ScreeningAttempt,
+    payload: ScreenResultRequest,
+    settings: ScreenerReviewSettings,
+) -> None:
+    """Write the durable shadow outbox beside an accepted baseline verdict.
+
+    This insert does not call a provider or alter the attempt/agent transition.
+    The independently capped rental loop consumes it only after authoritative
+    lanes have had first refusal on compute capacity.
+    """
+    if (
+        settings.fanout_shadow_mode != "shadow"
+        or attempt.review_settings_revision is None
+        or attempt.review_settings_scope is None
+        or attempt.review_settings_checksum is None
+    ):
+        return
+    ineligible_reason = None
+    if attempt.build_only or payload.policy_only or payload.deferred_source_review:
+        ineligible_reason = "non-full-screening-attempt"
+    elif payload.outcome == ScreenResultOutcome.RETRYABLE_INFRA:
+        ineligible_reason = "authoritative-review-infrastructure-failure"
+    elif payload.reason_code == "exact-cross-miner-duplicate":
+        ineligible_reason = "deterministic-duplicate-precheck"
+    evidence, finding = _quarantine_payload_json(payload)
+    baseline = {
+        "outcome": payload.outcome.value if payload.outcome is not None else None,
+        "passed": payload.passed,
+        "reason_code": payload.reason_code,
+        "manifest_digest": payload.manifest_digest,
+        "finding_digest": payload.finding_digest,
+        "review_audit_digest": payload.review_audit_digest,
+        "review_notes_digest": payload.review_notes_digest,
+        "adjudication_digest": payload.adjudication_digest,
+        "evidence": evidence,
+        "finding": finding,
+        "review_audit": (
+            payload.review_audit.model_dump(mode="json")
+            if payload.review_audit is not None
+            else None
+        ),
+        "review_notes": (
+            [note.model_dump(mode="json") for note in payload.review_notes]
+            if payload.review_notes is not None
+            else None
+        ),
+        "adjudication": (
+            payload.adjudication.model_dump(mode="json")
+            if payload.adjudication is not None
+            else None
+        ),
+    }
+    now = datetime.now(UTC)
+    await session.execute(
+        pg_insert(ScreenerFanoutShadowReview)
+        .values(
+            shadow_id=uuid4(),
+            agent_id=agent.agent_id,
+            attempt_id=attempt.attempt_id,
+            environment="prod",
+            artifact_sha256=agent.sha256.lower(),
+            policy_version=attempt.policy_version,
+            policy_manifest_profile=settings.policy_manifest_profile,
+            policy_manifest_rotation_id=settings.policy_manifest_rotation_id,
+            policy_manifest_digest=policy_manifest_digest(
+                settings.policy_manifest_profile,
+                settings.policy_manifest_rotation_id,
+            ),
+            settings_revision=attempt.review_settings_revision,
+            settings_scope=attempt.review_settings_scope,
+            settings_checksum=attempt.review_settings_checksum,
+            status="skipped" if ineligible_reason else "queued",
+            outcome="skipped" if ineligible_reason else None,
+            baseline=baseline,
+            error_code=ineligible_reason,
+            completed_at=now if ineligible_reason else None,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(constraint="screener_fanout_shadow_reviews_attempt_key")
+    )
+
+
 async def _backfill_quarantine_payloads(
     session: AsyncSession,
     *,
@@ -5415,6 +5713,7 @@ async def submit_result(
     deferred_attempt_lifecycle = False
     deferred_deep_attempt = False
     restore_status = AgentStatus.SCORED
+    effective_settings = ScreenerReviewSettings()
     if payload.attempt_id is not None:
         async with session.begin():
             reported_attempt = await get_screening_attempt(
@@ -6033,6 +6332,14 @@ async def submit_result(
                 attempt,
                 payload=payload,
                 provider=getattr(request.state, "screener_provider", "gcp"),
+            )
+        if attempt is not None:
+            await _queue_fanout_shadow_review(
+                session,
+                agent=agent,
+                attempt=attempt,
+                payload=payload,
+                settings=effective_settings,
             )
         if scored_policy_release is not None:
             scored_policy_release.state = (

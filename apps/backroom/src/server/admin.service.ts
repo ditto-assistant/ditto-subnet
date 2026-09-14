@@ -195,6 +195,8 @@ import {
   unbanHotkeyInputSchema,
   screenerReviewControlSchema,
   screenerReviewRevisionSchema,
+  screenerFanoutShadowInputSchema,
+  screenerFanoutShadowResponseSchema,
   screenerPolicyManifestControlSchema,
   copyCourtControlSchema,
   applyCopyCourtSettingsInputSchema,
@@ -485,6 +487,18 @@ export async function selectActiveBenchmark(actor: string, rawInput: unknown) {
 export async function fetchScreenerReviewControl() {
   const payload = await platformAdminRequest('/api/v1/admin/screener-review-settings')
   return screenerReviewControlSchema.parse(payload)
+}
+
+export async function fetchScreenerFanoutShadow(rawInput: unknown = {}) {
+  const input = screenerFanoutShadowInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.status !== undefined) params.set('status', input.status)
+  params.set('limit', String(input.limit))
+  params.set('offset', String(input.offset))
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-fanout-shadow?${params.toString()}`,
+  )
+  return screenerFanoutShadowResponseSchema.parse(payload)
 }
 
 export async function fetchCopyCourtControl() {

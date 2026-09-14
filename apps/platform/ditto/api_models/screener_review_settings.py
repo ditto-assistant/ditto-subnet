@@ -22,6 +22,7 @@ ReviewModel = Literal[
 ReasoningEffort = Literal["low", "medium", "high"]
 SourceReviewModel = Literal["openai/gpt-5.6-luna"]
 AdjudicatorModel = Literal["z-ai/glm-5.3-flash"]
+FanoutShadowModel = Literal["z-ai/glm-5.3-flash"]
 PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
 
 _POLICY_MANIFEST_MODULES: dict[PolicyManifestProfile, list[dict[str, str]]] = {
@@ -107,6 +108,26 @@ class ScreenerReviewSettings(BaseModel):
     adjudicator_model: AdjudicatorModel = "z-ai/glm-5.3-flash"
     adjudicator_max_steps: Annotated[int, Field(ge=1, le=1_024)] = 128
     adjudicator_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 600
+    # Independent report-only source-review experiment.  ``off`` is the code
+    # and rolling-deploy default; ``shadow`` may only create observations and
+    # cannot participate in the signed screening verdict.
+    fanout_shadow_mode: Literal["off", "shadow"] = "off"
+    fanout_shadow_image_source_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")] = (
+        "0" * 40
+    )
+    fanout_shadow_model: FanoutShadowModel = "z-ai/glm-5.3-flash"
+    fanout_shadow_concurrency: Annotated[int, Field(ge=1, le=4)] = 2
+    fanout_shadow_max_steps: Annotated[int, Field(ge=1, le=8)] = 4
+    fanout_shadow_max_groups: Annotated[int, Field(ge=1, le=8)] = 4
+    fanout_shadow_max_requests: Annotated[int, Field(ge=1, le=64)] = 40
+    fanout_shadow_max_total_tokens: Annotated[int, Field(ge=10_000, le=2_000_000)] = (
+        1_500_000
+    )
+    fanout_shadow_timeout_seconds: Annotated[int, Field(ge=60, le=1_800)] = 900
+    fanout_shadow_max_cost_usd: Annotated[float, Field(gt=0, le=10)] = 3.0
+    fanout_shadow_daily_cost_usd: Annotated[float, Field(gt=0, le=100)] = 20.0
+    fanout_shadow_global_concurrency: Literal[1] = 1
+    fanout_shadow_reserved_targon_slots: Annotated[int, Field(ge=1, le=4)] = 1
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
     audit_retention_days: Annotated[int, Field(ge=1, le=365)] = 30
     policy_manifest_profile: PolicyManifestProfile = "l1"
@@ -146,6 +167,11 @@ class ScreenerReviewSettings(BaseModel):
             raise ValueError("L2 model chain must not contain duplicates")
         if self.max_completion_tokens > self.max_output_tokens:
             raise ValueError("completion budget must not exceed output budget")
+        if (
+            self.fanout_shadow_mode == "shadow"
+            and self.fanout_shadow_image_source_sha == "0" * 40
+        ):
+            raise ValueError("shadow mode requires an exact trusted image source SHA")
         return self
 
 
