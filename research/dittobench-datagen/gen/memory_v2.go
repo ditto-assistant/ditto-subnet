@@ -656,7 +656,7 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 	if nWaves < 1 {
 		nWaves = 1
 	}
-	budget := v8PrimaryCaseBudget(n)
+	budget := primaryCaseBudgetForVersion(n, benchVersion)
 	if budget == 0 {
 		// Analysis tools sometimes request non-public sizes. Keep those useful
 		// without changing the three fixed public envelopes.
@@ -757,6 +757,16 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 			suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, fc.Pairs...)
 		}
 		suite.FamilyCompilerCases = len(family)
+	}
+	if benchVersion >= protocol.BenchVersionV13 {
+		// The program, divergence, and family-compiler builders stamp the version
+		// that introduced them (v10/v11/v12). The grader dispatches its policy on
+		// MemoryCase.BenchVersion, so a v13 run must grade every case under the
+		// v13 policy: stamp the run's contract on every staged case. v12 and
+		// earlier keep the builders' own stamps, so their bytes are unchanged.
+		for i := range suite.Cases {
+			suite.Cases[i].Case.BenchVersion = benchVersion
+		}
 	}
 	suite.WritingNoiseQuestions, suite.WritingNoisePairs = applyV8MemoryWritingNoise(seed, suite.Cases, suite.Waves)
 	return suite, nil
@@ -972,6 +982,29 @@ func pruneV8Subjects(subjects []protocol.Subject, links []protocol.SubjectLink, 
 		}
 	}
 	return keptSubjects, keptLinks
+}
+
+// primaryCaseBudgetForVersion selects the primary world/program case budget
+// for a memory envelope under an explicit contract. v13 pins its own full
+// envelope (250 actual cases); every earlier version keeps the v8 table, so
+// their bytes are unchanged.
+func primaryCaseBudgetForVersion(n, benchVersion int) int {
+	if benchVersion >= protocol.BenchVersionV13 {
+		return v13PrimaryCaseBudget(n)
+	}
+	return v8PrimaryCaseBudget(n)
+}
+
+// v13PrimaryCaseBudget carves the v13 full envelope: Mem=224 carries 228
+// primary cases (world questions plus the v10/v12 program, divergence, and
+// family-compiler carve-outs), so with the fixed 13-case
+// conversational/integrity tail and nine isolation cases the run has exactly
+// 250 memory cases. Small and medium keep the v8 table.
+func v13PrimaryCaseBudget(n int) int {
+	if n == 224 {
+		return 228
+	}
+	return v8PrimaryCaseBudget(n)
 }
 
 // v8PrimaryCaseBudget pins the scored V8 envelope. Totals are slightly above

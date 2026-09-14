@@ -271,9 +271,12 @@ func ProductionReady() bool {
 // never scored); v5/v6 retain the existing Qwen calibration. Whether a ready
 // version is actually dispatched/scored is the platform's benchmark rollout
 // decision (backroom-controlled active bench); there is deliberately no
-// validator-side activation flag. V9 and V10 retain the reviewed v8
+// validator-side activation flag. V9 through V13 retain the reviewed v8
 // quality-only authority. V9 adds its own score-gate contract; V9 and later
-// share the agent-selected reasoning route contract.
+// share the agent-selected reasoning route contract. Technical readiness is
+// not advertisement: cmd/dittobench-api supportedBenchVersions() lists the
+// versions the runtime actually offers, and v13 joins it only once its
+// contract is complete.
 func ProductionReadyForVersion(benchVersion int) bool {
 	switch benchVersion {
 	case protocol.BenchVersionV5, protocol.BenchVersionV6:
@@ -281,7 +284,7 @@ func ProductionReadyForVersion(benchVersion int) bool {
 	case protocol.BenchVersionV7:
 		return ReadyForV7QualityOnly(productionV7Manifest)
 	case protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10,
-		protocol.BenchVersionV11, protocol.BenchVersionV12:
+		protocol.BenchVersionV11, protocol.BenchVersionV12, protocol.BenchVersionV13:
 		return ReadyForV8QualityOnly(productionV8Contract)
 	default:
 		return false

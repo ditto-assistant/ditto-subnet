@@ -434,6 +434,18 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 // contract advertises (miners/dittobench-starter-kit/PROTOCOL.md). Every scorer
 // revision above it is validator-owned: it changes the dataset, projection, and
 // grader, but never what a harness must advertise or branch on.
+//
+// Bench v13 (#1519, owner decision default A) stays behind wire 9. Every
+// harness-visible v13 addition -- enum schemas on tool specs, decoy tools,
+// wave-0 corrections, tools_offered -- ships as an additive OPTIONAL field on
+// the existing v9 projection, never as a new required key and never as a bump
+// of this constant. A naive bump to 13 would fail every deployed harness
+// closed: the starter kit range-checks the /run bench_version against
+// MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION (protocol.rs) and
+// 400s anything outside it before exercising a single case, turning version
+// negotiation into a trivial difficulty signal. Option B (bump to 13 with a
+// published compatibility window) remains open to the owner; it needs the
+// starter-kit release to land >= 2 weeks before activation.
 const publicWireBenchVersion = protocol.BenchVersionV9
 
 func harnessWireBenchVersion(benchVersion int) int {

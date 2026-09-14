@@ -211,7 +211,7 @@ def longmem_envelope_from_go(
     # The Go producer stamps the run's real epoch here. Carry it through rather
     # than pinning it: the ``dittobench-v9-*`` contract labels below are frozen
     # transport names that every confirmation epoch emits verbatim, so the
-    # bench_version *field* is the only thing that distinguishes v9 from v12.
+    # bench_version *field* is the only thing that distinguishes v9 from v13.
     longmem_bench_version = _integer(
         canonical["bench_version"], "LongMem bench_version"
     )

@@ -20,6 +20,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/ablation"
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 )
 
 const confirmationProfileSchemaVersion = 1
@@ -230,24 +231,25 @@ func (b confirmationAblationBudget) ablationBudget() ablation.Budget {
 func microsToScore(value uint64) float64 { return float64(value) / 1_000_000 }
 
 // confirmationBenchVersionSupported is the instrument allow-list: which frozen
-// confirmation *profiles* this scorer can install ({9, 12}). The v9 shadow
-// profile is an instrument that confirms every evidence-stack subject epoch.
+// confirmation *profiles* this scorer can install (v9, and >= v12 up to the
+// scorer's accepted set). The v9 shadow profile is an instrument that confirms
+// every evidence-stack subject epoch.
 func confirmationBenchVersionSupported(benchVersion int) bool {
 	return ablation.ConfirmationBenchVersionSupported(benchVersion)
 }
 
 // confirmationSubjectEpochSupported is the bundle/job allow-list: which
-// subject epochs the installed instrument may confirm. This must track Python
-// “supports_confirmation“ / “CONFIRMATION_BENCH_VERSIONS“ (9, 10, 11, 12).
-// Using the instrument allow-list here is what rejected live v11 jobs against
-// the shipped v9 profile in ~4s at running_confirmation.
+// subject epochs the installed instrument may confirm. It is the accept-side
+// floor of the evidence stack — every version from v9 up to the newest the
+// scorer accepts (scoregates.SupportedBenchVersion) — and must be a superset of
+// Python “supports_confirmation“ / “CONFIRMATION_BENCH_VERSIONS“ (the
+// V9EvidenceBenchVersion Literal), which decides what Platform actually issues.
+// Enumerating it (9, 10, 11, 12) here is what would have rejected the first v13
+// bundle at running_confirmation the moment that Literal grew, exactly as using
+// the instrument allow-list rejected live v11 jobs against the shipped v9
+// profile in ~4s.
 func confirmationSubjectEpochSupported(benchVersion int) bool {
-	switch benchVersion {
-	case 9, 10, 11, 12:
-		return true
-	default:
-		return false
-	}
+	return benchVersion >= ablation.BenchVersionV9 && scoregates.SupportedBenchVersion(benchVersion)
 }
 
 type confirmationRuntimeIdentity struct {

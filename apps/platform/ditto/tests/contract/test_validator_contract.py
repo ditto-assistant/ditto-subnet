@@ -28,9 +28,11 @@ import ditto_screening_protocol.confirmation as shared_confirmation
 import ditto_screening_protocol.confirmation_transport as shared_confirmation_transport
 from ditto.api_models import confirmation_bundles, validator_confirmation
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.benchmark_contract import latest_benchmark_contract
 from ditto.tests.contract._schema import (
     CONFIRMATION_MODELS,
     SHARED_MODELS,
+    compute_bench_versions,
     compute_confirmation_contract,
     compute_contract,
 )
@@ -43,6 +45,7 @@ from screening_protocol_freshness import hint as stale_install_hint  # noqa: E40
 
 _GOLDEN = Path(__file__).parent / "validator_contract.json"
 _CONFIRMATION_GOLDEN = Path(__file__).parent / "confirmation_contract.json"
+_BENCH_VERSIONS_GOLDEN = Path(__file__).parent / "bench_versions.json"
 _VALIDATOR_CONTRACT_DIR = Path(__file__).resolve().parents[5] / "ditto/tests/contract"
 
 _SHARED_BENCH_V9_MODELS = (
@@ -125,7 +128,11 @@ def test_v9_confirmation_transport_executes_only_shared_model_classes() -> None:
 
 
 def test_monorepo_validator_goldens_match_validator_byte_for_byte() -> None:
-    for filename in ("validator_contract.json", "confirmation_contract.json"):
+    for filename in (
+        "validator_contract.json",
+        "confirmation_contract.json",
+        "bench_versions.json",
+    ):
         local = (Path(__file__).parent / filename).read_bytes()
         validator = (_VALIDATOR_CONTRACT_DIR / filename).read_bytes()
         assert local == validator, (
@@ -133,6 +140,21 @@ def test_monorepo_validator_goldens_match_validator_byte_for_byte() -> None:
             "Platform and commit the same artifact to both contract directories"
             f"{stale_install_hint()}"
         )
+
+
+def test_bench_versions_golden_is_derived_from_the_shared_alias() -> None:
+    """The cross-layer version golden is the shared package, serialized.
+
+    The Platform contract registry (``benchmark_contract.py``) must ship every
+    version the golden calls supported, and the golden must be exactly what the
+    one hand-typed ``V9EvidenceBenchVersion`` alias derives to.
+    """
+    golden = json.loads(_BENCH_VERSIONS_GOLDEN.read_text())
+    assert golden == compute_bench_versions(), (
+        "bench_versions.json drifted from ditto_screening_protocol; regenerate "
+        f"it via scripts/gen_validator_contract.py{stale_install_hint()}"
+    )
+    assert latest_benchmark_contract().version == golden["max_supported_bench_version"]
 
 
 def test_validator_models_match_committed_contract() -> None:

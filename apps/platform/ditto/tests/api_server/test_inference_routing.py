@@ -82,8 +82,9 @@ def test_route_calibration_contract_is_explicit_and_future_safe() -> None:
     assert benchmark_contract(10).requires_inference_route_calibration is False
     assert benchmark_contract(11).requires_inference_route_calibration is False
     assert benchmark_contract(12).requires_inference_route_calibration is False
-    with pytest.raises(ValueError, match="unsupported benchmark version: 13"):
-        benchmark_contract(13)
+    assert benchmark_contract(13).requires_inference_route_calibration is False
+    with pytest.raises(ValueError, match="unsupported benchmark version: 14"):
+        benchmark_contract(14)
 
 
 def test_route_ranking_explores_an_eligible_unmeasured_provider() -> None:

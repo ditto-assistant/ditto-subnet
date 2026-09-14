@@ -23,6 +23,7 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.tests.contract._schema import (
     CONFIRMATION_MODELS,
     SHARED_MODELS,
+    compute_bench_versions,
     compute_confirmation_contract,
     compute_contract,
     compute_miner_contract,
@@ -37,6 +38,7 @@ from screening_protocol_freshness import hint as stale_install_hint  # noqa: E40
 _GOLDEN = Path(__file__).parent / "validator_contract.json"
 _MINER_GOLDEN = Path(__file__).parent / "miner_contract.json"
 _CONFIRMATION_GOLDEN = Path(__file__).parent / "confirmation_contract.json"
+_BENCH_VERSIONS_GOLDEN = Path(__file__).parent / "bench_versions.json"
 _PLATFORM_CONTRACT_DIR = (
     Path(__file__).resolve().parents[3] / "apps/platform/ditto/tests/contract"
 )
@@ -122,7 +124,11 @@ def test_v9_confirmation_transport_executes_only_shared_model_classes() -> None:
 
 
 def test_monorepo_validator_goldens_match_platform_byte_for_byte() -> None:
-    for filename in ("validator_contract.json", "confirmation_contract.json"):
+    for filename in (
+        "validator_contract.json",
+        "confirmation_contract.json",
+        "bench_versions.json",
+    ):
         local = (Path(__file__).parent / filename).read_bytes()
         platform = (_PLATFORM_CONTRACT_DIR / filename).read_bytes()
         assert local == platform, (
@@ -159,6 +165,20 @@ def test_v9_confirmation_models_match_platform_contract() -> None:
     assert not mismatched, (
         f"v9 confirmation wire model(s) {mismatched} drifted from the Platform "
         "contract; regenerate confirmation_contract.json from Platform"
+    )
+
+
+def test_bench_versions_golden_is_derived_from_the_shared_alias() -> None:
+    """The cross-layer version golden is the shared package, serialized.
+
+    ``test_bench_version_pins.py`` diffs every Go/Rust/TypeScript pin against
+    this file, so the file itself must be exactly what the one hand-typed
+    ``V9EvidenceBenchVersion`` alias derives to -- never an edited number.
+    """
+    golden = json.loads(_BENCH_VERSIONS_GOLDEN.read_text())
+    assert golden == compute_bench_versions(), (
+        "bench_versions.json drifted from ditto_screening_protocol; regenerate "
+        f"it from Platform via scripts/gen_validator_contract.py{stale_install_hint()}"
     )
 
 

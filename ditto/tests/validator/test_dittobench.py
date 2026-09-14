@@ -50,6 +50,11 @@ from ditto.validator.errors import (
 )
 from ditto.validator.signing import score_signing_message
 
+# The next epoch after the ceiling is the canonical *unsupported* version. It
+# moves with the shared derivation instead of being retyped each bump, which
+# is how ``12`` sat here as "the invalid version" while v12 shipped.
+_UNSHIPPED_BENCH_VERSION = max(SUPPORTED_BENCH_VERSIONS) + 1
+
 _REVISION = "ab" * 20
 _V9_CONTRACT_VECTOR = (
     Path(__file__).resolve().parents[3]
@@ -930,7 +935,7 @@ async def test_v10_submit_forwards_platform_stamped_runtime_policy() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [None, 0, 1, 6, 13])
+@pytest.mark.parametrize("bench_version", [None, 0, 1, 6, _UNSHIPPED_BENCH_VERSION])
 async def test_submit_rejects_missing_or_unsupported_benchmark_version(
     bench_version: int | None,
 ) -> None:
@@ -1404,7 +1409,9 @@ async def test_current_poll_returns_v8_version_bound_report() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 6, 13])
+@pytest.mark.parametrize(
+    "expected_bench_version", [None, 0, 1, 6, _UNSHIPPED_BENCH_VERSION]
+)
 async def test_poll_rejects_missing_or_unsupported_expected_version(
     expected_bench_version: int | None,
 ) -> None:

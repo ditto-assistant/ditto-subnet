@@ -32,8 +32,11 @@ pub const MIN_SUPPORTED_BENCH_VERSION: u32 = 8;
 /// Inclusive ceiling matching the scorer's advertised set. Bump this when
 /// DittoBench advertises a new version so a submitted image does not 400
 /// every `/run`. Accepting a version is not the same as activating it as
-/// `ACTIVE_BENCH_VERSION`.
-pub const MAX_SUPPORTED_BENCH_VERSION: u32 = 12;
+/// `ACTIVE_BENCH_VERSION`. The public wire contract stays at 9 with additive
+/// optional fields (#1519), so accepting 13 costs a deployed harness nothing;
+/// `ditto/tests/test_bench_version_pins.py` diffs this ceiling against the
+/// shared `MAX_SUPPORTED_BENCH_VERSION` every other layer derives from.
+pub const MAX_SUPPORTED_BENCH_VERSION: u32 = 13;
 
 pub fn supports_bench_version(version: u32) -> bool {
     (MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION).contains(&version)
@@ -351,8 +354,11 @@ mod tests {
         assert!(supports_bench_version(10));
         assert!(supports_bench_version(11));
         assert!(supports_bench_version(12));
-        assert!(!supports_bench_version(7));
-        assert!(!supports_bench_version(13));
+        assert!(supports_bench_version(13));
+        assert!(!supports_bench_version(MIN_SUPPORTED_BENCH_VERSION - 1));
+        // The next epoch after the ceiling is the canonical unsupported version;
+        // it moves with the constant instead of being retyped each bump.
+        assert!(!supports_bench_version(MAX_SUPPORTED_BENCH_VERSION + 1));
     }
 
     #[test]

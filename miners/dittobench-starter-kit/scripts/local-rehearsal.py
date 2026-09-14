@@ -26,11 +26,15 @@ DEFAULT_KIT_DIR = SCRIPT_DIR.parent
 REPO_ROOT = DEFAULT_KIT_DIR.parents[1]
 API_DIR = REPO_ROOT / "services" / "dittobench-api"
 LONGMEM_DIR = API_DIR / "integrations" / "longmemeval"
-# Live SN118 scoring contract. Update with Platform current_bench_version
-# activation; do not confuse with research CurrentBenchVersion (still v8).
-LIVE_SCORING_BENCH_VERSION = 11
+# Live SN118 scoring contract. Update with Platform active_version activation
+# (Backroom get_benchmark_rollout_control); do not confuse with research
+# CurrentBenchVersion (still v8). Bench 13 is executable below but is NOT live
+# until the owner activates it after the v13 qualification report.
+LIVE_SCORING_BENCH_VERSION = 12
 MIN_BENCH_VERSION = 8
-MAX_BENCH_VERSION = 12
+# Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
+# ditto/tests/test_bench_version_pins.py diffs across every layer.
+MAX_BENCH_VERSION = 13
 LONGMEM_DATASET_SHA256 = (
     "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
 )

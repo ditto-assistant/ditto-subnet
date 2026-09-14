@@ -36,6 +36,7 @@ from ditto.validator.config import (
     TOP5_MIN_CONFIRMATION_SEEDS,
 )
 from ditto.validator.crn import confirmation_seeds, crn_block_binding_active
+from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -422,19 +423,23 @@ def filter_eligible(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
 # Versions that carry a full-confirmation receipt contract, and may therefore
 # have their ordinary quorum withheld when the Platform serves an enforce marker.
 #
-# A receipt requirement is a per-version contract that a version must *opt into*:
-# it only means something once the confirmation lane actually issues bundles at
-# that version and the profile has been calibrated there. Bench v9 is the only
-# version that ever did. v10 and v11 shipped without the lane following them, so
-# they have no receipts to require, and the confirmation system is planned to
-# return at v12 — add 12 here as part of that work, alongside the Platform-side
-# issuance pins (``apps/platform/ditto/api_server/confirmation_bundles.py`` and
-# the ``bench_version == 9`` predicates around it).
+# Derived from the shared protocol package, never retyped: a version has a
+# receipt contract exactly when its scores carry the signed base-evidence stack
+# the confirmation lane projects (``CONFIRMATION_BENCH_VERSIONS``, itself derived
+# from the one ``V9EvidenceBenchVersion`` alias). This used to be a hand-written
+# ``{9}`` with a note to "add 12 later"; the lane then followed the live bench
+# (#894) while this pin did not, so an enforce marker on a v12 ledger would have
+# withheld nothing at all -- the receipt system stranded at v9 for a second time,
+# this time at the fold. Whether enforce is *served* remains the Platform's
+# decision (``set_confirmation_bundle_settings``), taken only after qualified
+# shadow bundles exist at the live version; this constant only says which
+# versions that marker can act on.
 #
-# This set may be enumerated precisely because it fails OPEN: a version absent
-# from it pays on its ordinary quorum. Do not confuse it with a payable-version
-# allowlist, which must never be enumerated — see :func:`filter_weight_confirmed`.
-RECEIPT_CONTRACT_VERSIONS = frozenset({9})
+# This set fails OPEN: a version absent from it pays on its ordinary quorum, and
+# a present one pays unless the Platform explicitly serves enforce. Do not
+# confuse it with a payable-version allowlist, which must never be enumerated —
+# see :func:`filter_weight_confirmed`.
+RECEIPT_CONTRACT_VERSIONS = frozenset(CONFIRMATION_BENCH_VERSIONS)
 
 
 def filter_weight_confirmed(

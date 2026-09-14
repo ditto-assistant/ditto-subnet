@@ -90,3 +90,29 @@ def compute_confirmation_contract() -> dict[str, Any]:
     return compute_contract(
         CONFIRMATION_MODELS, module="ditto.api_models.validator_confirmation"
     )
+
+
+def compute_bench_versions() -> dict[str, Any]:
+    """Return the cross-layer bench-version set, derived from the shared package.
+
+    ``ditto_screening_protocol.bench_v9.V9EvidenceBenchVersion`` is the one
+    hand-typed epoch enumeration in the Python stack; everything here derives
+    from it. The committed ``bench_versions.json`` golden lets the layers that
+    cannot import Python (datagen and scorer Go, the starter-kit Rust, the
+    Backroom and dashboard TypeScript) be diffed against the same numbers by
+    ``ditto/tests/test_bench_version_pins.py``, so a bump that reaches one
+    layer and not another fails CI instead of stranding the version.
+    """
+    from ditto_screening_protocol.bench_v9 import (
+        CONFIRMATION_BENCH_VERSIONS,
+        MAX_SUPPORTED_BENCH_VERSION,
+        MIN_EXECUTABLE_BENCH_VERSION,
+        SUPPORTED_BENCH_VERSIONS,
+    )
+
+    return {
+        "confirmation_bench_versions": list(CONFIRMATION_BENCH_VERSIONS),
+        "max_supported_bench_version": MAX_SUPPORTED_BENCH_VERSION,
+        "min_executable_bench_version": MIN_EXECUTABLE_BENCH_VERSION,
+        "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
+    }

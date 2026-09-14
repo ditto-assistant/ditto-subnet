@@ -52,6 +52,7 @@ export const confirmationBenchVersionSchema = z.union([
   z.literal(10),
   z.literal(11),
   z.literal(12),
+  z.literal(13),
 ])
 
 // Exact set equality against the contract, checked in BOTH directions. A plain

@@ -6326,7 +6326,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /** Case Set Sha256 */
             case_set_sha256: string;
             /** Contract Version */
@@ -15401,7 +15401,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -15446,7 +15446,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /** Checksum */
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
@@ -18106,7 +18106,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /** Case Set Digest */
             case_set_digest: string;
             /** Dataset Revision */
@@ -20592,7 +20592,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /**
              * Bundle Id
              * Format: uuid
@@ -23172,7 +23172,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**
@@ -25624,7 +25624,7 @@ export interface components {
          *       "items": [
          *         {
          *           "agent_id": "550e8400-e29b-41d4-a716-446655440000",
-         *           "bench_version": 12,
+         *           "bench_version": 13,
          *           "created_at": "2026-06-08T12:00:00Z",
          *           "miner_hotkey": "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
          *           "name": "alpha-agent",
@@ -27820,7 +27820,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -27913,7 +27913,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -28006,7 +28006,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /**
              * Bundle Id
              * Format: uuid
@@ -28319,7 +28319,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             inference_latency?: components["schemas"]["V12InferenceLatencyGate"] | null;
             model_dependence?: components["schemas"]["V12ModelDependenceGate"] | null;
             model_use: components["schemas"]["V9ModelUseGate"];

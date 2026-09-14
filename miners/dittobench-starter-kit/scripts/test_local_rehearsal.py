@@ -27,7 +27,7 @@ class LocalRehearsalTest(unittest.TestCase):
                 "run_size": "small",
             },
         )
-        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 11)
+        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 12)
 
     def test_submit_body_can_pin_an_older_contract(self) -> None:
         body = LOCAL.submit_body("small", "http://127.0.0.1:8080", None, 9)
@@ -93,10 +93,14 @@ class LocalRehearsalTest(unittest.TestCase):
         self.assertEqual(
             LOCAL.parse_args([]).bench_version, LOCAL.LIVE_SCORING_BENCH_VERSION
         )
+        self.assertEqual(
+            LOCAL.parse_args(["--bench-version", "13"]).bench_version,
+            LOCAL.MAX_BENCH_VERSION,
+        )
         with self.assertRaises(SystemExit):
-            LOCAL.parse_args(["--bench-version", "7"])
+            LOCAL.parse_args(["--bench-version", str(LOCAL.MIN_BENCH_VERSION - 1)])
         with self.assertRaises(SystemExit):
-            LOCAL.parse_args(["--bench-version", "13"])
+            LOCAL.parse_args(["--bench-version", str(LOCAL.MAX_BENCH_VERSION + 1)])
 
     def test_longmem_limit_requires_longmem_flag(self) -> None:
         with self.assertRaises(SystemExit):

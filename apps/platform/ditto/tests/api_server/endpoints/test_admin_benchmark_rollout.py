@@ -475,7 +475,7 @@ async def test_control_discovery_is_authenticated_read_only_and_dynamic(
     # Nothing is offered. A target must be both above the active version and at
     # or above the floor. V8 through v11 are discoverable but remain inert until
     # an authenticated operator starts one.
-    assert body["available_target_versions"] == [8, 9, 10, 11, 12]
+    assert body["available_target_versions"] == [8, 9, 10, 11, 12, 13]
     # Still derived from the shipped registry, which is what "dynamic" means
     # here: the floor filters what may be STARTED, not what exists.
     assert [contract["version"] for contract in body["contracts"]] == [
@@ -490,6 +490,7 @@ async def test_control_discovery_is_authenticated_read_only_and_dynamic(
         10,
         11,
         12,
+        13,
     ]
     assert all(
         contract["capable_validator_count"] == 0 for contract in body["contracts"]
@@ -523,16 +524,16 @@ async def test_control_offers_newer_contracts_without_moving_active_v8_authority
     assert body["active_version"] == 8
     assert body["desired_version"] == 8
     assert body["status"] == "activated"
-    assert body["available_target_versions"] == [9, 10, 11, 12]
+    assert body["available_target_versions"] == [9, 10, 11, 12, 13]
     assert body["contracts"][-1] == {
-        "version": 12,
+        "version": 13,
         "minimum_screening_policy_version": 9,
         "requires_screened_image": True,
         "capable_validator_count": 0,
         "start_ready": False,
         "start_blockers": [
-            "benchmark v12 rollout requires at least 1 fresh, identity-matched "
-            "v12 scorer validators"
+            "benchmark v13 rollout requires at least 1 fresh, identity-matched "
+            "v13 scorer validators"
         ],
     }
 
@@ -667,6 +668,7 @@ async def test_control_degrades_the_slow_section_instead_of_hanging(
         10,
         11,
         12,
+        13,
     ]
     # Fail closed on what could not be proven: no candidate is offered for
     # activation, and the omission is named rather than mistaken for "none".
@@ -731,12 +733,12 @@ async def test_start_requires_full_guard_payload_and_exact_confirmation(
     assert "START BENCHMARK V4" in wrong.json()["message"]
 
     unsupported = await client.post(
-        "/api/v1/admin/benchmark-rollout/13",
+        "/api/v1/admin/benchmark-rollout/14",
         headers=_HEADERS,
         json={
             "reason": "attempt an unshipped contract",
             "actor": "backroom:test",
-            "confirmation": "START BENCHMARK V13",
+            "confirmation": "START BENCHMARK V14",
             "expected_active_version": 2,
         },
     )

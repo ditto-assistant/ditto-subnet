@@ -1,0 +1,19 @@
+{
+  "confirmation_bench_versions": [
+    9,
+    10,
+    11,
+    12,
+    13
+  ],
+  "max_supported_bench_version": 13,
+  "min_executable_bench_version": 8,
+  "supported_bench_versions": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    13
+  ]
+}

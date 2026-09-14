@@ -75,6 +75,17 @@ def test_no_wire_key_is_silently_dropped() -> None:
         assert not unknown, f"CategoryStat silently drops wire keys: {sorted(unknown)}"
 
 
+def test_v13_relation_round_trips() -> None:
+    # bench_version >= 13 report-only field (Go ``CaseScore.Relation``,
+    # ``omitempty``): the fixture carries it on one memory case and the Python
+    # mirror must declare it or ``extra="ignore"`` drops it silently.
+    report = ScoreReport.model_validate(_fixture())
+    assert "relation" in type(report.per_case[0]).model_fields
+    relations = {case.relation for case in report.per_case}
+    assert "decision_twin" in relations
+    assert "" in relations
+
+
 def test_v3_audit_fields_round_trip() -> None:
     report = ScoreReport.model_validate(_fixture())
     assert set(type(report.per_case[0]).model_fields) >= V3_CASE_AUDIT_FIELDS

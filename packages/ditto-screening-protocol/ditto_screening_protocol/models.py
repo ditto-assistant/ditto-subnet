@@ -432,7 +432,7 @@ class ScreenerQueueResponse(BaseModel):
                 "items": [
                     {
                         "agent_id": "550e8400-e29b-41d4-a716-446655440000",
-                        "bench_version": 12,
+                        "bench_version": 13,
                         "miner_hotkey": (
                             "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
                         ),

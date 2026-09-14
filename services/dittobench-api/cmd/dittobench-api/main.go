@@ -2018,6 +2018,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				gradedResp = projected.Response
 			}
 			cs := gradeProjectedMemoryCase(mc, resp, projected, len(observedCalls) > 0)
+			cs = carryV13ProvenanceRelation(req.BenchVersion, sc, cs)
 			cs = applyV10ToolProvenance(
 				req.BenchVersion, scope, cs, resp, observedCalls, execution,
 			)

@@ -48,6 +48,21 @@ wire aliases, mapping entries, or graph-role labels.
 [Retention and secure persistence details](../../research/dittobench-datagen/docs/v9-harness-projection.md)
 define the private artifact lifecycle; `projection_sha256` is a commitment only.
 
+The v9 projection is also the **wire ceiling** for every later scorer revision.
+`publicWireBenchVersion` in `internal/runner/runner.go` pins the `bench_version`
+a harness sees on `/run` and `/seed` to 9: v10 through v13 change the
+validator-owned dataset, projection, and grader, never what a harness must
+advertise or branch on. Bench v13 keeps this (#1519, owner decision default A):
+every harness-visible v13 addition — enum schemas on tool specs, decoy tools,
+wave-0 corrections, `tools_offered` — ships as an additive optional field on the
+v9 projection, so a harness built against the v9 contract keeps running
+unchanged. A bump of the wire version to 13 would fail every deployed harness
+closed, because the starter kit range-checks `/run.bench_version` against
+`MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION` and 400s anything
+outside it before exercising a case. The alternative (bump to 13 behind a
+published compatibility window with the starter-kit release landing at least two
+weeks before activation) is an explicit owner decision, not a default.
+
 | Field or channel | V9 contract |
 | --- | --- |
 | Case, user, pair, session, subject, and link references | Per-run UUID-shaped aliases, rewritten even inside prompts and nested arguments. User-graph scoping prevents equal labels in different graphs from correlating. |

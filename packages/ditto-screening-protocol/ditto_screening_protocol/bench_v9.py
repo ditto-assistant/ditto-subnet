@@ -134,7 +134,7 @@ def _apply_gate_factor_micros(ordinary_micros: int, factor_bps: int) -> int:
         return ordinary_micros
     return (ordinary_micros * factor_bps + _BASIS_POINTS // 2) // _BASIS_POINTS
 
-V9EvidenceBenchVersion = Literal[9, 10, 11, 12]
+V9EvidenceBenchVersion = Literal[9, 10, 11, 12, 13]
 """Benchmark epochs whose scores carry the signed v9 base-evidence stack.
 
 Every layer that parses, re-derives, or *projects* that evidence must pin this
@@ -143,6 +143,14 @@ alias rather than restate the versions: the stack was carried forward to v10
 projection in Platform kept its own ``Literal[9]`` and 500'd on the first v10
 score a carried-forward validator reported. Extend the alias when the evidence
 contract reaches a new epoch, and every consumer moves with it.
+
+This is the ONE hand-typed version enumeration in the Python stack. The
+validator's executable set, the weight fold's receipt set, the Platform and
+Backroom ``bench_version`` enums, and the ``bench_versions.json`` contract
+golden that ``ditto/tests/test_bench_version_pins.py`` diffs against the Go,
+Rust, and TypeScript layers all derive from it (#1519). v13 (#1518) joined it
+with the typed-semantic contract; the v13 gates ship behind shadow switches and
+activation stays a separate Platform rollout step.
 """
 
 V9_EVIDENCE_BENCH_VERSIONS: tuple[int, ...] = get_args(V9EvidenceBenchVersion)
@@ -168,6 +176,37 @@ had not.
 
 MIN_CONFIRMATION_BENCH_VERSION: int = min(CONFIRMATION_BENCH_VERSIONS)
 """Floor of the contract. Schema-level guards use this; policy uses membership."""
+
+
+MAX_SUPPORTED_BENCH_VERSION: int = max(V9_EVIDENCE_BENCH_VERSIONS)
+"""Newest contract every layer of this release can execute, derived from the alias.
+
+The scorer advertises up to this version once its contract is complete, the
+validator intersects its own executable set with that advertisement, and the
+starter kit range-checks ``/run`` against the same ceiling. Every layer that
+cannot import this module (Go, Rust, TypeScript) is diffed against it by
+``ditto/tests/test_bench_version_pins.py``.
+"""
+
+MIN_EXECUTABLE_BENCH_VERSION: int = 8
+"""Oldest contract the live scorer still administers.
+
+A floor, not a mirror of the active version: v8 predates the signed evidence
+stack, so it is executable but neither confirmable nor gate-scored. Raised by
+hand only when an era is retired for good.
+"""
+
+SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = tuple(
+    range(MIN_EXECUTABLE_BENCH_VERSION, MAX_SUPPORTED_BENCH_VERSION + 1)
+)
+"""Every contract a current validator may execute, derived from the two bounds.
+
+The validator imports this rather than retyping it: bench v11 shipped with the
+scorer and Platform advertising it while the validator's own hand-written copy
+stayed at ``(8, 9, 10)``, so the fleet advertised zero v11-capable validators
+until a follow-up release. Contiguity is asserted by the contract test, so a
+retired middle version would need an explicit design change, not a gap.
+"""
 
 
 def supports_confirmation(bench_version: int | None) -> bool:

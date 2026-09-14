@@ -355,11 +355,12 @@ export interface V9AuthoritativeToolGate {
 
 /** Privacy-safe subset of the signature-bound v9 base evidence.
  *
- * The evidence stack was carried forward to v10 (#859) and v11 (#861); this
- * union must track `V9EvidenceBenchVersion` in the shared protocol package.
+ * The evidence stack was carried forward to v10 (#859), v11 (#861), v12 (#932)
+ * and v13 (#1519); this union must track `V9EvidenceBenchVersion` in the shared
+ * protocol package (`ditto/tests/test_bench_version_pins.py` diffs it).
  */
 export interface V9BaseEvidence {
-  bench_version: 9 | 10 | 11 | 12;
+  bench_version: 9 | 10 | 11 | 12 | 13;
   score_gates: {
     rollout_mode: "shadow" | "enforce";
     model_use: V9ModelUseGate;

@@ -1180,7 +1180,6 @@ class CaseScore(BaseModel):
             ),
         ),
     ] = False
-
     # Bench v10+ / v13 report-only fields. Declared for the same reason as the
     # v3 audit fields above: ``extra="ignore"`` would strip them from the
     # persisted breakdown, and the v13 gate projection reads the per-case
