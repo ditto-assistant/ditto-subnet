@@ -1,0 +1,515 @@
+{
+  "file_count": 72,
+  "files": [
+    {
+      "artifact": "dream-build.log",
+      "bytes": 618,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "f033ea633b175d729ef5cf95c4e8f23df1deb4fe668825e0a0fe8f182fd4aa4f"
+    },
+    {
+      "artifact": "dream-final.log",
+      "bytes": 764070,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "28c62effdff8265b1596968da73611a6b9934b1681c6f701408d25cd6dde3737"
+    },
+    {
+      "artifact": "dream-fixed-retry-wave1.log",
+      "bytes": 36407,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e322f6f170b8f7469c2e019f5a32a42119e1997417e33aaac442213539e471c5"
+    },
+    {
+      "artifact": "dream-fixed-retry-wave2.log",
+      "bytes": 113370,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "4b9d5297aa76739a0c527524f1701ea02ff3088439c5709431a7df46e85efe3a"
+    },
+    {
+      "artifact": "dream-full.log",
+      "bytes": 491,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a1eb924a14f5eab3c40607822695783a2c3b21d8759157f544ae56bd41d226cc"
+    },
+    {
+      "artifact": "dream-resumed-1b575560-after-disk-stop.log",
+      "bytes": 550255,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "92ad3ef8bcb3489303ffa28cd5ae2b4fa35f54dd70c0d824d051dffbd140e691"
+    },
+    {
+      "artifact": "dream-resumed-66669467.log",
+      "bytes": 402251,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "31f288886786f08e136939bce99a0d1033fba5a7c74df0b6cc7907371633798a"
+    },
+    {
+      "artifact": "dream-retry-06db6396.log",
+      "bytes": 1659,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "65bf2bb8378b8c1d689ac4cfab2bd3b3a6df21139c9772641828508e0a303849"
+    },
+    {
+      "artifact": "dream-smoke-resume.log",
+      "bytes": 270,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "86774f7f38800176f5ebe06e96ae8524d30470192b31f62c1c5742484d069b6a"
+    },
+    {
+      "artifact": "dream-smoke.json",
+      "bytes": 71,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "2b78b2a624b1493bc4a07ce218016ca9038a62cbdeef169370be3bd58222f86a"
+    },
+    {
+      "artifact": "dream-smoke.log",
+      "bytes": 61519,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "22339e5abaeee14f47526797a83b10e2458d1d68f936ced28d2431ceac63d543"
+    },
+    {
+      "artifact": "final-force-graph-1b575560.log",
+      "bytes": 170779,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "874f3b63aecb16048e832ef31b2fba91c45e84a7b0eacad03af1caf26b949a28"
+    },
+    {
+      "artifact": "final-labels-1b575560.log",
+      "bytes": 70674,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "f85f616438041daa1f089057c85c57909c5bbf5c1f094e9c0b819a0b30849171"
+    },
+    {
+      "artifact": "seed_manifest.json",
+      "bytes": 5418315,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "d71660a9eca3f3eada4c09e98ab2113067f12fc66659d96a499b95fd5ed016a8"
+    },
+    {
+      "artifact": "seed_manifest_complete.json",
+      "bytes": 7097799,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "830686cb587b29e2365ead4d1c8e892f891d38ee2ac06487c8297ee40c6d0c7a"
+    },
+    {
+      "artifact": "seed_manifest_final.json",
+      "bytes": 7186478,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "f3cdb6dead1fd18926c20d2483315f17c65b48d6f02e70477f9ee24905df1670"
+    },
+    {
+      "artifact": "seed_manifest_opaque.json",
+      "bytes": 11386181,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a232c2b7ee77f06597535416682c00187f9c44bb2a324de7ccd5dce3fa13ccef"
+    },
+    {
+      "artifact": "seed_manifest_opaque.json.receipt.json",
+      "bytes": 1794,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a6d3119c7eb1b34ef4ff3090513e3dc8402af34e499431ed953bd7aec7b12955"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave1.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave10.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave2.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave3.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave4.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave5.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave6.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave7.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave8.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "seed_manifest_receipts_wave9.json",
+      "bytes": 7186567,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a20eec7a9d772e153403b279faa919e0e24b9ea57fa2f9dc1ab2d6d0636f3095"
+    },
+    {
+      "artifact": "settle-receipts-wave1-1b575560.log",
+      "bytes": 31003,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "648a4f9a2601c35868b10efa4dc6eb121cbb3afc05226cab4b8656ea34dfeadb"
+    },
+    {
+      "artifact": "settle-receipts-wave10-1b575560.log",
+      "bytes": 8559,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "592008a6e85b87d46cbff95b6ffba3b729d6631a8c92c8054833091ad6d17c57"
+    },
+    {
+      "artifact": "settle-receipts-wave2-1b575560.log",
+      "bytes": 11615,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "42ce88b6cc30124e30c358b46834bdc91c394e30ce78945710ea21dbbea30f4e"
+    },
+    {
+      "artifact": "settle-receipts-wave3-1b575560.log",
+      "bytes": 8038,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "ee0385b7f69b3e6b137c6b2fa26feb6fccba3b82ca3088174a9102fd6bb0322f"
+    },
+    {
+      "artifact": "settle-receipts-wave4-1b575560.log",
+      "bytes": 9253,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "c6adf0ba2af8f3129f78968671e8244a96dc60a1d45010e1c9576d14409d8e73"
+    },
+    {
+      "artifact": "settle-receipts-wave5-1b575560.log",
+      "bytes": 13937,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a06773bfe0fe8a120755155b29b3f8d49f7adf8fb203a33ca15e47d09fb8c8b9"
+    },
+    {
+      "artifact": "settle-receipts-wave6-1b575560.log",
+      "bytes": 8263,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a9ad8938a461457d4fae6f862cddfc3004c4c74dfd0352cbad0ca0567979124b"
+    },
+    {
+      "artifact": "settle-receipts-wave7-1b575560.log",
+      "bytes": 9533,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "14ceb4ba08224a15fef0a1321ca084b3bc095586346c74f324b0db0c73f98774"
+    },
+    {
+      "artifact": "settle-receipts-wave8-1b575560.log",
+      "bytes": 16811,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "eae423f2e0fc90c53414db2e797d3ba559cfc1b902ca99f5514c53e660caca18"
+    },
+    {
+      "artifact": "settle-receipts-wave9-1b575560.log",
+      "bytes": 14837,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "4d49a3dbdc5ac3970df2dfadda41d375b619ba289bf46b2d25e0a779575f09a2"
+    },
+    {
+      "artifact": "settle-wave1-66669467.log",
+      "bytes": 61680,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "fdea05035f75f354bfd284c62b04ce2ba06bb1861944803c1c5f56db38947ab5"
+    },
+    {
+      "artifact": "settle-wave2-66669467.log",
+      "bytes": 16318,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "36d2da6c0030e35a68c14c342e1ccf6340eea68f92507edc97a77da12a6d6333"
+    },
+    {
+      "artifact": "evidence/dream-final.jsonl",
+      "bytes": 198151,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "db8f5539c57f3c9ecaee7becdcda1f7ccad09ba053cac49d7755e99179d6cc4b"
+    },
+    {
+      "artifact": "evidence/dream-fixed-retry-wave1.jsonl",
+      "bytes": 21139,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "0b57ae276366912e3e795862c273a85a29d99b14ec6705682105b03013670da0"
+    },
+    {
+      "artifact": "evidence/dream-fixed-retry-wave2.jsonl",
+      "bytes": 82986,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "8ed3405d0525c93406112849132d5dd0bc989cda6ef8f7f118de2d2e4b71ce45"
+    },
+    {
+      "artifact": "evidence/dream-full.jsonl",
+      "bytes": 9036,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "ee8337f8b67e67d91bccdfbad737c8be53984f5b06785e025797c5b067b30db7"
+    },
+    {
+      "artifact": "evidence/dream-resumed-1b575560-after-disk-stop.jsonl",
+      "bytes": 204509,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "0f8c6a52ee30624f434d51e0357af33315de4a858c4845701cb87ae40287d48f"
+    },
+    {
+      "artifact": "evidence/dream-resumed-66669467.jsonl",
+      "bytes": 109506,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "6e5657719b2216bcb7cb6955a58f39f95af3822498d6a14f9ab826f9c448039d"
+    },
+    {
+      "artifact": "evidence/dream-retry-06db6396.jsonl",
+      "bytes": 729,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "d93337be753486489a3ff271c2fe52cb29e50d2e034e75229b2b894a84d37179"
+    },
+    {
+      "artifact": "evidence/dream-smoke.jsonl",
+      "bytes": 607,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "2bbd2101ad25be2e12520fed69cead00af46cb77a7e03376662f9762fcb36659"
+    },
+    {
+      "artifact": "evidence/final-force-graph-1b575560.jsonl",
+      "bytes": 554441,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "33c925f14dd3062bd5647009acc6fccae6123b68b58642a29c18739797bc5c00"
+    },
+    {
+      "artifact": "evidence/final-labels-1b575560.jsonl",
+      "bytes": 553974,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "ec9b482f5844e8dc2f57f0a6dc87e3144042a7703f12d5080ce20c7fdc4329c7"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave1-1b575560.jsonl",
+      "bytes": 30694,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "99036cf923dc4a059206a065284f4c61467782d3a9271c292cb983b1cd9dee50"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave1-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave10-1b575560.jsonl",
+      "bytes": 7990,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "add2ebc89f6495e89aa16a47557a5485777111a538c8e8072a71bf952814a9bd"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave10-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave2-1b575560.jsonl",
+      "bytes": 11371,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "88afa7c8c24a5aca905890cdca16fa1f2d5f09d15d01ad8d2e24b61f7641609a"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave2-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave3-1b575560.jsonl",
+      "bytes": 7957,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "cb1635ddb545587ab8e8a38332b306a38b1d71c244c19885a6fc5641dd71f0c0"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave3-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave4-1b575560.jsonl",
+      "bytes": 9092,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "01cc1cdf4c98a3316df2a37e4ae0e54b38ea0953ddd3bc52ac5bf2286913e3e2"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave4-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave5-1b575560.jsonl",
+      "bytes": 13658,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e62d28aaa0c9a42e698a95c50bbad664ed7a20acda5d1b160a6d9d20ead274dc"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave5-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave6-1b575560.jsonl",
+      "bytes": 7992,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "9e49d9bd3222883643545ec7e528964b8b73ad3928b7acebee2ab37f1e24b7f1"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave6-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave7-1b575560.jsonl",
+      "bytes": 9134,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "a3783cb871669f1c7efa57766a50a0159f60b7602206fd7f6e7e9e00d8e227b0"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave7-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave8-1b575560.jsonl",
+      "bytes": 17128,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "ca6c7c00bf8b32c53f6fe438e83ece2e6bea20ce17969fdc283b8c741ff12dba"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave8-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave9-1b575560.jsonl",
+      "bytes": 13704,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "50231ec273a1e52a2bdf9ac4d5afb30577e3400ea3a645a432aaea0e33fd0265"
+    },
+    {
+      "artifact": "evidence/settle-receipts-wave9-1b575560.jsonl.refinements.jsonl",
+      "bytes": 0,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "evidence/settle-wave1-66669467.jsonl",
+      "bytes": 54242,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "39795f9777ae2f645bb044eb1266d8fbd031ba378c4b4ca71c067805982cc2e5"
+    },
+    {
+      "artifact": "evidence/settle-wave2-66669467.jsonl",
+      "bytes": 14198,
+      "cost_or_usage_field_occurrences": 0,
+      "generation_id_count": 0,
+      "sha256": "85e8a61547c6482236b5650b365342755f6aafd4f79c8bd23142af4031dbd421"
+    }
+  ],
+  "files_with_cost_or_usage_fields": 0,
+  "files_with_generation_ids": 0,
+  "helper_sha256": "c7094e820b06f9ce72beb68d3291fbfcb9323d761d1ef00002532b91a21e56c1",
+  "historical_preparation_cost_usd": null,
+  "limitation": "Field/identifier inventory only, not proof of billed amount or completeness of all historical logs. Missing receipts are not zero. No generation IDs/content emitted; no provider or database calls.",
+  "schema": "preparation-cost-evidence-inventory-v1"
+}

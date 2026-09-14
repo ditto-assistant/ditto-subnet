@@ -31,6 +31,52 @@ def fixture():
 
 
 class BackendAuditTests(unittest.TestCase):
+    def test_optional_hydration_gate_preserves_historical_default(self):
+        report, rows, dataset, condition = fixture()
+        historical, _ = audit_rows(report, rows, dataset, condition)
+        self.assertNotIn("native_hydration_validation", historical)
+        with self.assertRaisesRegex(AuditError, "native hydration"):
+            audit_rows(report, rows, dataset, condition, True)
+        report["meta"].update(lme_hydration_preflight="native-hydration-v1", lme_hydration_preflight_users="2")
+        for row in rows:
+            row["data"]["seed_pair_count"] = 1
+        result, _ = audit_rows(report, rows, dataset, condition, True)
+        self.assertEqual(result["native_hydration_validation"]["checked_users"], 2)
+        for bad in (None, "500", "1", 2, "02"):
+            changed = copy.deepcopy(report)
+            changed["meta"]["lme_hydration_preflight_users"] = bad
+            with self.subTest(users=bad), self.assertRaisesRegex(AuditError, "checked-user"):
+                audit_rows(changed, rows, dataset, condition, True)
+        for bad in (None, 0, -1, True, 1.0, "1"):
+            changed = copy.deepcopy(rows)
+            changed[1]["data"]["seed_pair_count"] = bad
+            with self.subTest(seeds=bad), self.assertRaisesRegex(AuditError, "seed_pair_count"):
+                audit_rows(report, changed, dataset, condition, True)
+
+    def test_corrected_graph_hydration_gate_requires_runtime_discovery(self):
+        report, rows, dataset, condition = fixture()
+        condition["graph_retrieval"] = True
+        for row in rows:
+            row["data"].update(graph_retrieval=True, seed_pair_count=3)
+        report["meta"].update(lme_hydration_preflight="native-hydration-v1", lme_hydration_preflight_users="2",
+                              lme_subject_graph_calls="3", lme_subject_graph_failures="0",
+                              lme_subject_graph_candidates="4", lme_subject_graph_total_ms="10",
+                              lme_subject_graph_failure_schema="failure-reasons-v1",
+                              lme_subject_graph_discovery_complete="true", lme_subject_graph_failure_counts_consistent="true")
+        for reason in ("context_deadline", "context_canceled", "postgres_query_canceled", "graph_unavailable", "other"):
+            report["meta"]["lme_subject_graph_failures_" + reason] = "0"
+        result, _ = audit_rows(report, rows, dataset, condition, True)
+        self.assertTrue(result["native_hydration_validation"]["graph_discovery"]["complete"])
+        for field, value in (("lme_subject_graph_calls", "0"), ("lme_subject_graph_failures", "1"),
+                             ("lme_subject_graph_discovery_complete", "false"),
+                             ("lme_subject_graph_failure_counts_consistent", "false"),
+                             ("lme_subject_graph_failures_other", "1"),
+                             ("lme_subject_graph_failure_schema", None)):
+            changed = copy.deepcopy(report)
+            changed["meta"][field] = value
+            with self.subTest(field=field), self.assertRaisesRegex(AuditError, "graph discovery"):
+                audit_rows(changed, rows, dataset, condition, True)
+
     def test_graph_marked_seeds_not_necessarily_novel_against_off(self):
         _, rows, _, _ = fixture()
         off = {r["case_id"]: r for r in rows}

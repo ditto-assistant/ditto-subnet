@@ -1,0 +1,72 @@
+{
+  "captured_at": "2026-09-14T13:57:52.803327+00:00",
+  "cost_helper_sha256": "bbe095de20f0bea06d5e347490c0a5d6b29d09f5cc3d8d5c5a9aa5a3e227bd0a",
+  "journal_sha256": [
+    "fc12e812d6df8d2333c65e9ddc7d3cb87fd072bc470bc86d4e5ba8a07c13f42a",
+    "734ca545fd77e900abf12923671298f3bf82eea2b6f578746124ef5206f61893"
+  ],
+  "private_receipt_evidence_sha256": "1a1df9fdaf366b6e066e1d3975a9e940731492ff6800d698ad69f054b9394594",
+  "recovery_sha256": [
+    "6cd67ed81e6f1536893da7fd37d80f723220b0f7cb921f5a729dfacf2cfb2965"
+  ],
+  "report_run_id": "20260914-135247-c274a3f96e8176577043de95b048f1f2f3e9272d",
+  "report_sha256": "d55d4d81af4c85ae9f41eb97f0d6446ae887ea281d8a411166f6caf51b59c541",
+  "reused_final_receipts": 1787,
+  "schema": "resumed-captured-cost-union-v1",
+  "scope": "Union of captured reader/judge calls across supplied attempts, including failed calls. No inference. Original prep, query embeddings and calls without captured IDs are not established. Not an invoice or accuracy audit.",
+  "summary": {
+    "all_attempts_coverage_proven": false,
+    "byok_generations": 1326,
+    "byok_upstream_estimate_usd": "1.75086879",
+    "captured_generation_cost_per_question_stats_usd": {
+      "mean": "0.000100376",
+      "median": "0.00009275",
+      "p95_nearest_rank": "0.0001865"
+    },
+    "embedding_cost_usd": null,
+    "full_judge_cost_usd": null,
+    "full_lifecycle_cost_per_question_usd": null,
+    "full_lifecycle_cost_usd": null,
+    "historical_preparation_cost_usd": null,
+    "limitation": "Captured generations only. Missing attempts, uncaptured judge calls, embeddings and original preparation are not zero. No full-lifecycle total is established.",
+    "missing_byok_upstream_costs": 0,
+    "missing_generations": 0,
+    "priced_generations": 1826,
+    "provisional_cost_note": "Observed stream/response snapshots without finality proof. Not additive to reconciled charges; may differ from final charges.",
+    "provisional_observed_cost_usd": "0.05018800",
+    "question_denominator": 500,
+    "recorded_cost_basis": "GET-generation-reconciled OpenRouter account charges ONLY; BYOK vendor usage excluded",
+    "recorded_cost_by_stage_usd": {
+      "judge": "0.05018800",
+      "reader": "0"
+    },
+    "recorded_cost_usd": "0.05018800",
+    "recorded_judge_cost_subtotal_usd": "0.05018800",
+    "requested_resolved_models": [
+      {
+        "exact_alias_mapping_used": true,
+        "requested": "google/gemini-3.1-flash-lite",
+        "resolved": "google/gemini-3.1-flash-lite-20260507"
+      },
+      {
+        "exact_alias_mapping_used": true,
+        "requested": "openai/gpt-5.6-luna",
+        "resolved": "openai/gpt-5.6-luna-20260709"
+      }
+    ],
+    "saved_generation_coverage_complete": true,
+    "selected_generation_estimate_scope": "OpenRouter charges plus provider-reported BYOK upstream estimates, not vendor invoice or full lifecycle. Null if any captured generation/route/upstream estimate is unknown.",
+    "selected_generation_estimated_cost_per_question_stats_usd": {
+      "mean": "0.00360211358",
+      "median": "0.002550555",
+      "p95_nearest_rank": "0.00759277"
+    },
+    "selected_generation_estimated_cost_usd": "1.80105679",
+    "selected_generation_estimated_mean_per_question_usd": "0.00360211358",
+    "stats_scope": "Captured OpenRouter account charges only; excludes BYOK vendor usage, uncaptured attempts and lifecycle costs. Stats omitted when any captured generation is unpriced.",
+    "unknown_route_generations": 0,
+    "scope_note": "All captured corrected reader/judge attempts, including five failed reader attempts; excludes separately accounted invalid hydration attempt."
+  },
+  "union_helper_sha256": "b4c1dfc3e43455b595b4bc5e13259f4d19eb8cee10ceffd05276fd7ad6d9327e",
+  "per_question_ledger": "2026-09-14-fixed-graph-per-question-costs.jsonl"
+}

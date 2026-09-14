@@ -182,7 +182,36 @@ def operational_diagnostics(report, rows):
             "metric_scope": "Recomputed from all recorded selected per-case observations, never resumed Standard/Speed aggregates. QueryCase latency starts after seed-context preparation, so it excludes serial graph seed discovery. Also excludes failed attempts, separate judge/preparation calls and seed-context re-preparation; sums are not campaign wall time or monetary spend. Compare whole invocation intervals separately."}
 
 
-def audit_rows(report, rows, dataset, condition):
+def validate_hydration_preflight(report, rows, expected_users, graph_retrieval):
+    meta = report.get("meta", {})
+    require(meta.get("lme_hydration_preflight") == "native-hydration-v1",
+            "missing required native hydration preflight")
+    users = {row["data"]["fixture_user"] for row in rows}
+    require(len(users) == expected_users and meta.get("lme_hydration_preflight_users") == str(expected_users),
+            "native hydration checked-user count differs from selected unique fixture users")
+    for row in rows:
+        seeds = row["data"].get("seed_pair_count")
+        require(type(seeds) is int and seeds > 0, "native hydration requires positive integer seed_pair_count for every case")
+    result = {"required": True, "version": "native-hydration-v1", "checked_users": len(users),
+              "every_case_has_positive_seed_count": True}
+    if graph_retrieval:
+        calls = meta.get("lme_subject_graph_calls")
+        require(isinstance(calls, str) and re.fullmatch(r"[1-9][0-9]*", calls),
+                "corrected graph discovery must have positive calls")
+        require(meta.get("lme_subject_graph_failures") == "0" and
+                meta.get("lme_subject_graph_discovery_complete") == "true" and
+                meta.get("lme_subject_graph_failure_counts_consistent") == "true" and
+                meta.get("lme_subject_graph_failure_schema") == "failure-reasons-v1",
+                "corrected graph discovery is incomplete or failure counts are inconsistent")
+        for reason in ("context_deadline", "context_canceled", "postgres_query_canceled", "graph_unavailable", "other"):
+            require(meta.get("lme_subject_graph_failures_" + reason) == "0",
+                    "corrected graph discovery failure-reason count must be zero")
+        result["graph_discovery"] = {"calls": int(calls), "failures": 0, "complete": True,
+                                     "scope": "Current invocation only; not historical resumed work."}
+    return result
+
+
+def audit_rows(report, rows, dataset, condition, require_hydration_preflight=False):
     require(isinstance(rows, list), "per_case must be an array")
     require(len(rows) == len(dataset), "incomplete or overfull evidence: row count differs from dataset")
     indexed, fixture_users, response_ids = {}, set(), set()
@@ -238,6 +267,7 @@ def audit_rows(report, rows, dataset, condition):
         tool_calls.update(called)
         indexed[qid] = row
     require(set(indexed) == set(dataset), "question-ID coverage differs from dataset")
+    hydration = validate_hydration_preflight(report, rows, len(dataset), condition["graph_retrieval"]) if require_hydration_preflight else None
     overall = aggregate(rows)
     if report:
         require(report.get("judge_model") == condition["judge_model"], "report judge identity mismatch")
@@ -252,6 +282,8 @@ def audit_rows(report, rows, dataset, condition):
                "answer_provider_turns": dict(providers), "tool_call_counts": dict(sorted(tool_calls.items())),
                "isolated_fixture_users": len(fixture_users), "unique_answer_provider_response_ids": len(response_ids)}
     summary["operational_diagnostics"] = operational_diagnostics(report, rows)
+    if hydration is not None:
+        summary["native_hydration_validation"] = hydration
     return summary, indexed
 
 
@@ -350,6 +382,8 @@ def main(argv=None):
     parser.add_argument("--judge-model", required=True)
     parser.add_argument("--reasoning-effort", default="medium")
     parser.add_argument("--graph-retrieval", action="store_true")
+    parser.add_argument("--require-hydration-preflight", action="store_true",
+                        help="Corrected condition: exact native hydration coverage, positive seeds; graph ON also requires zero discovery failures")
     parser.add_argument("--paired-run", type=Path, help="same model/judge/clock; opposite graph_retrieval flag")
     parser.add_argument("--export-hypotheses", type=Path, help="PRIVATE official question_id/hypothesis JSONL")
     args = parser.parse_args(argv)
@@ -363,7 +397,7 @@ def main(argv=None):
                  "prompt_clock": "question-date", "require_graph": True, "graph_retrieval": args.graph_retrieval}
     report, rows = load_run(args.run)
     validate_provenance(report)
-    summary, indexed = audit_rows(report, rows, dataset, condition)
+    summary, indexed = audit_rows(report, rows, dataset, condition, args.require_hydration_preflight)
     summary["dataset"] = {"sha256": DATASET_SHA256, "revision": DATASET_REVISION, "questions": 500}
     summary["evidence_sha256"] = digest(args.run)
     summary["backend_provenance"] = {key: report.get(key) for key in ("run_id", "git_sha", "prompt_sha", "tools_sha", "weights_sha", "started_at", "finished_at")}
@@ -384,7 +418,7 @@ def main(argv=None):
         other_condition = dict(condition, graph_retrieval=not args.graph_retrieval, label="paired-opposite-graph-retrieval")
         other_report, other_rows = load_run(args.paired_run)
         validate_provenance(other_report)
-        other_summary, other_indexed = audit_rows(other_report, other_rows, dataset, other_condition)
+        other_summary, other_indexed = audit_rows(other_report, other_rows, dataset, other_condition, args.require_hydration_preflight)
         pairing = validate_paired_provenance(report, other_report)
         summary["paired_comparison"] = compare(indexed, other_indexed)
         summary["paired_comparison"]["provenance_validation"] = pairing
