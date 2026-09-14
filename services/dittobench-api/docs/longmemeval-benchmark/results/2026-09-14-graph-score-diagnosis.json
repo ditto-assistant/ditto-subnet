@@ -1,0 +1,382 @@
+{
+  "by_category": {
+    "knowledge-update": {
+      "cases": 78,
+      "improvement_case_ids": [
+        "6071bd76"
+      ],
+      "improvements": 1,
+      "new_correct": 59,
+      "old_correct": 63,
+      "regression_case_ids": [
+        "07741c44",
+        "2698e78f",
+        "41698283",
+        "5831f84d",
+        "c4ea545c"
+      ],
+      "regressions": 5
+    },
+    "multi-session": {
+      "cases": 133,
+      "improvement_case_ids": [
+        "2311e44b",
+        "60159905",
+        "92a0aa75",
+        "a1cc6108",
+        "ef66a6e5"
+      ],
+      "improvements": 5,
+      "new_correct": 71,
+      "old_correct": 84,
+      "regression_case_ids": [
+        "099778bb",
+        "157a136e",
+        "2788b940",
+        "2ce6a0f2",
+        "3c1045c8",
+        "60bf93ed_abs",
+        "88432d0a_abs",
+        "91b15a6e",
+        "b5ef892d",
+        "d905b33f",
+        "e5ba910e_abs",
+        "e6041065",
+        "eeda8a6d_abs",
+        "gpt4_372c3eed",
+        "gpt4_372c3eed_abs",
+        "gpt4_ab202e7f",
+        "gpt4_d84a3211",
+        "gpt4_f2262a51"
+      ],
+      "regressions": 18
+    },
+    "single-session-assistant": {
+      "cases": 56,
+      "improvement_case_ids": [
+        "1b9b7252",
+        "3e321797",
+        "7161e7e2"
+      ],
+      "improvements": 3,
+      "new_correct": 47,
+      "old_correct": 48,
+      "regression_case_ids": [
+        "51b23612",
+        "778164c6",
+        "8464fc84",
+        "cc539528"
+      ],
+      "regressions": 4
+    },
+    "single-session-preference": {
+      "cases": 30,
+      "improvement_case_ids": [
+        "06f04340"
+      ],
+      "improvements": 1,
+      "new_correct": 19,
+      "old_correct": 21,
+      "regression_case_ids": [
+        "0edc2aef",
+        "38146c39",
+        "57f827a0"
+      ],
+      "regressions": 3
+    },
+    "single-session-user": {
+      "cases": 70,
+      "improvement_case_ids": [],
+      "improvements": 0,
+      "new_correct": 60,
+      "old_correct": 63,
+      "regression_case_ids": [
+        "15745da0_abs",
+        "d52b4f67",
+        "faba32e5"
+      ],
+      "regressions": 3
+    },
+    "temporal-reasoning": {
+      "cases": 133,
+      "improvement_case_ids": [
+        "9a707b81",
+        "af082822",
+        "b46e15ed",
+        "gpt4_0a05b494",
+        "gpt4_2487a7cb",
+        "gpt4_78cf46a3",
+        "gpt4_7bc6cf22",
+        "gpt4_9a159967"
+      ],
+      "improvements": 8,
+      "new_correct": 80,
+      "old_correct": 83,
+      "regression_case_ids": [
+        "2a1811e2",
+        "9a707b82",
+        "b29f3365",
+        "gpt4_1d80365e",
+        "gpt4_2d58bcd6",
+        "gpt4_4fc4f797",
+        "gpt4_70e84552",
+        "gpt4_88806d6e",
+        "gpt4_a1b77f9c",
+        "gpt4_b0863698",
+        "gpt4_cd90e484"
+      ],
+      "regressions": 11
+    }
+  },
+  "cases": 500,
+  "different_seed_set": {
+    "cases": 330,
+    "improvement_case_ids": [
+      "2311e44b",
+      "92a0aa75",
+      "9a707b81",
+      "a1cc6108",
+      "af082822",
+      "b46e15ed",
+      "ef66a6e5",
+      "gpt4_0a05b494",
+      "gpt4_7bc6cf22"
+    ],
+    "improvements": 9,
+    "new_correct": 220,
+    "old_correct": 236,
+    "regression_case_ids": [
+      "07741c44",
+      "0edc2aef",
+      "15745da0_abs",
+      "2788b940",
+      "2a1811e2",
+      "38146c39",
+      "3c1045c8",
+      "41698283",
+      "5831f84d",
+      "60bf93ed_abs",
+      "778164c6",
+      "88432d0a_abs",
+      "b29f3365",
+      "cc539528",
+      "d52b4f67",
+      "e5ba910e_abs",
+      "e6041065",
+      "eeda8a6d_abs",
+      "faba32e5",
+      "gpt4_70e84552",
+      "gpt4_88806d6e",
+      "gpt4_ab202e7f",
+      "gpt4_cd90e484",
+      "gpt4_d84a3211",
+      "gpt4_f2262a51"
+    ],
+    "regressions": 25
+  },
+  "helper_sha256": "e9bcf2bae3558eecc9089511b1e1b8d355bf51272feeec14d4d7309eb4b7d64d",
+  "improvement_case_ids": [
+    "06f04340",
+    "1b9b7252",
+    "2311e44b",
+    "3e321797",
+    "60159905",
+    "6071bd76",
+    "7161e7e2",
+    "92a0aa75",
+    "9a707b81",
+    "a1cc6108",
+    "af082822",
+    "b46e15ed",
+    "ef66a6e5",
+    "gpt4_0a05b494",
+    "gpt4_2487a7cb",
+    "gpt4_78cf46a3",
+    "gpt4_7bc6cf22",
+    "gpt4_9a159967"
+  ],
+  "improvements": 18,
+  "new_correct": 336,
+  "old_correct": 362,
+  "readonly_fixture_examples": {
+    "3c1045c8": {
+      "fact_marker": "29.5",
+      "matching_fact_rows": [
+        {
+          "fact_in_summary": false,
+          "in_new_seed": true,
+          "in_old_seed": true
+        }
+      ],
+      "new_tools": [],
+      "old_tools": [
+        "search_memories",
+        "search_subjects"
+      ],
+      "selected_memory_rows": 16,
+      "selected_rows_digest": "6c5943f56c55a7b2e4c1dfe1e727a062c1d43b5f8a51e8373cce1b613941933f"
+    },
+    "gpt4_372c3eed": {
+      "fact_marker": "Associate",
+      "matching_fact_rows": [
+        {
+          "fact_in_summary": false,
+          "in_new_seed": true,
+          "in_old_seed": true
+        }
+      ],
+      "new_tools": [],
+      "old_tools": [
+        "search_memories",
+        "search_subjects",
+        "search_memories_in_subjects",
+        "search_memories_in_subjects",
+        "search_memories_in_subjects"
+      ],
+      "selected_memory_rows": 12,
+      "selected_rows_digest": "ee1f5992c089ea8f4a8b97012ff980e7b4cd5191cd009933806e2edc3eaf2335"
+    },
+    "gpt4_cd90e484": {
+      "fact_marker": "three weeks",
+      "matching_fact_rows": [
+        {
+          "fact_in_summary": false,
+          "in_new_seed": true,
+          "in_old_seed": true
+        }
+      ],
+      "new_tools": [
+        "fetch_memories"
+      ],
+      "old_tools": [
+        "fetch_memories"
+      ],
+      "selected_memory_rows": 20,
+      "selected_rows_digest": "0180c1e2d90582cc8c56d5cc9c5e57f1c9bc8a71ccb764ab9268de6f84e55ff1"
+    }
+  },
+  "regression_case_ids": [
+    "07741c44",
+    "099778bb",
+    "0edc2aef",
+    "15745da0_abs",
+    "157a136e",
+    "2698e78f",
+    "2788b940",
+    "2a1811e2",
+    "2ce6a0f2",
+    "38146c39",
+    "3c1045c8",
+    "41698283",
+    "51b23612",
+    "57f827a0",
+    "5831f84d",
+    "60bf93ed_abs",
+    "778164c6",
+    "8464fc84",
+    "88432d0a_abs",
+    "91b15a6e",
+    "9a707b82",
+    "b29f3365",
+    "b5ef892d",
+    "c4ea545c",
+    "cc539528",
+    "d52b4f67",
+    "d905b33f",
+    "e5ba910e_abs",
+    "e6041065",
+    "eeda8a6d_abs",
+    "faba32e5",
+    "gpt4_1d80365e",
+    "gpt4_2d58bcd6",
+    "gpt4_372c3eed",
+    "gpt4_372c3eed_abs",
+    "gpt4_4fc4f797",
+    "gpt4_70e84552",
+    "gpt4_88806d6e",
+    "gpt4_a1b77f9c",
+    "gpt4_ab202e7f",
+    "gpt4_b0863698",
+    "gpt4_cd90e484",
+    "gpt4_d84a3211",
+    "gpt4_f2262a51"
+  ],
+  "regression_diagnostics": {
+    "identical_answer_verdict_flips": 0,
+    "new_full_session_recall": 42,
+    "new_no_tool_calls": 14,
+    "old_no_tool_calls": 7,
+    "same_ordered_seed_ids": 16
+  },
+  "regressions": 44,
+  "report_sha256": {
+    "new": "d55d4d81af4c85ae9f41eb97f0d6446ae887ea281d8a411166f6caf51b59c541",
+    "old": "859a118af975b219de3b73809efd648832291dadae590fbaf129e0f172028c18"
+  },
+  "runs": {
+    "new": {
+      "final_answer_source_cases": 500,
+      "git_sha": "c274a3f96e8176577043de95b048f1f2f3e9272d",
+      "graph_seed_cases": 500,
+      "judge_model": "google/gemini-3.1-flash-lite",
+      "mean_prompt_tokens": 27849.11,
+      "mean_session_recall": 0.9906,
+      "prompt_sha": "6dbf99542f59dcba2827696d7ddff8aaa46d2ae9eaa5bea8f335e285c8fd159a",
+      "run_id": "20260914-135247-c274a3f96e8176577043de95b048f1f2f3e9272d",
+      "tools_sha": "6933417e7b414babd8a38caeadf6230e13c015bfe250b591f46c6aff1680c1c6",
+      "weights_sha": "learned:46d34091333706c841b6e0f6b35b2bf9f5f89ac0fca692720ce9c22cc795138c"
+    },
+    "old": {
+      "final_answer_source_cases": 500,
+      "git_sha": "1b5755609b3ea95660fdba289e6a747adb8c5dae",
+      "graph_seed_cases": 6,
+      "judge_model": "google/gemini-3.1-flash-lite",
+      "mean_prompt_tokens": 26344.974,
+      "mean_session_recall": 0.9906,
+      "prompt_sha": "a00ace7f5bba60937aacf569bef66bc4726fc22752abef1873f3f59575419f3a",
+      "run_id": "20260913-055526-1b5755609b3ea95660fdba289e6a747adb8c5dae",
+      "tools_sha": "867c50f4437bc034a74ed10137b14dfed3eb2d3148db64db3d7da7d4fbe87a94",
+      "weights_sha": "learned:46d34091333706c841b6e0f6b35b2bf9f5f89ac0fca692720ce9c22cc795138c"
+    }
+  },
+  "same_seed_set": {
+    "cases": 170,
+    "improvement_case_ids": [
+      "06f04340",
+      "1b9b7252",
+      "3e321797",
+      "60159905",
+      "6071bd76",
+      "7161e7e2",
+      "gpt4_2487a7cb",
+      "gpt4_78cf46a3",
+      "gpt4_9a159967"
+    ],
+    "improvements": 9,
+    "new_correct": 116,
+    "old_correct": 126,
+    "regression_case_ids": [
+      "099778bb",
+      "157a136e",
+      "2698e78f",
+      "2ce6a0f2",
+      "51b23612",
+      "57f827a0",
+      "8464fc84",
+      "91b15a6e",
+      "9a707b82",
+      "b5ef892d",
+      "c4ea545c",
+      "d905b33f",
+      "gpt4_1d80365e",
+      "gpt4_2d58bcd6",
+      "gpt4_372c3eed",
+      "gpt4_372c3eed_abs",
+      "gpt4_4fc4f797",
+      "gpt4_a1b77f9c",
+      "gpt4_b0863698"
+    ],
+    "regressions": 19
+  },
+  "scope": "Descriptive paired records, not a controlled graph treatment effect. Session recall is not fact visibility. No regrading or new inference."
+}
