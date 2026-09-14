@@ -42,6 +42,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"golang.org/x/text/unicode/norm"
 )
@@ -63,6 +64,20 @@ func (s TokenSet) Add(token string) {
 // every token. It returns whether the per-side ceiling was exceeded.
 func (s TokenSet) AddText(text string) bool {
 	tokens, truncated := ValueTokenHashes(text)
+	for h := range tokens {
+		s[h] = struct{}{}
+	}
+	return truncated
+}
+
+// AddSpan normalizes text through the published v13 claim-span rule
+// (NormalizeSpan, then the Unicode-aware span tokenizer) and inserts every
+// token. It is the v13 counterpart of AddText: every v13 exemption set
+// (delivered records, the case question, the validator prompt, served tool
+// results) is built with it so a diacritic or non-Latin value folds the same
+// way on every side. It returns whether the per-side ceiling was exceeded.
+func (s TokenSet) AddSpan(text string) bool {
+	tokens, truncated := SpanTokens(text)
 	for h := range tokens {
 		s[h] = struct{}{}
 	}
@@ -227,16 +242,20 @@ var labelPrefixPattern = regexp.MustCompile(`(?im)^[\s*_#>\-]*(?:final\s+answer|
 var listMarkerPattern = regexp.MustCompile(`(?m)^\s*(?:[-*+•]|\d{1,3}[.)])\s+`)
 
 // NormalizeSpan is the PUBLISHED request-independent normaliser both sides of
-// the claim-span gate apply before tokenizing: Unicode NFKC (so fullwidth digits
-// and compatibility forms fold to their ASCII counterparts), full casefold,
+// the claim-span gate apply before tokenizing: Unicode NFD with every combining
+// mark (\p{Mn}) dropped, then NFKC (so diacritics fold -- "José" -> "jose",
+// "Ōsaka" -> "osaka", "Zürich" -> "zurich" -- and fullwidth digits and
+// compatibility forms fold to their ASCII counterparts), lowercase,
 // markdown/label stripping (emphasis, code fences, headings, blockquotes, list
 // markers, "ANSWER:"-style labels), punctuation folded to spaces except the
 // characters that carry numeric meaning inside a number ('$', '.', ',', '-'),
-// and whitespace collapsed. It is deterministic and total: any input yields one
-// output, and running it twice is a no-op. Miners can run it locally over their
-// own served text and completions to check the gate before uploading.
+// and whitespace collapsed. Letters of every script are kept (Cyrillic, CJK,
+// Greek), so a non-Latin value tokenizes to a claim rather than to nothing. It
+// is deterministic and total: any input yields one output, and running it twice
+// is a no-op. Miners can run it locally over their own served text and
+// completions to check the gate before uploading.
 func NormalizeSpan(s string) string {
-	s = norm.NFKC.String(s)
+	s = norm.NFKC.String(stripCombiningMarks(norm.NFD.String(s)))
 	s = labelPrefixPattern.ReplaceAllString(s, "")
 	s = listMarkerPattern.ReplaceAllString(s, "")
 	var b strings.Builder
@@ -264,39 +283,140 @@ func NormalizeSpan(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// SpanTokens applies NormalizeSpan and then ValueTokenHashes: the published
-// claim-span token rule. Both the relay capture and the served-span extraction
-// call this so the two sides agree token for token.
+// stripCombiningMarks drops every non-spacing combining mark from an
+// NFD-decomposed string, which is what folds a base letter's diacritics away.
+func stripCombiningMarks(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if unicode.Is(unicode.Mn, r) {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// spanTokenPattern matches runs of letters and digits in ANY script over the
+// already-normalized (lowercased) span text. It is the Bench v13 claim-span
+// tokenizer; the v12 answer-IO capture keeps its ASCII-only alnumTokenPattern
+// so v12 capture bytes never move.
+var spanTokenPattern = regexp.MustCompile(`[\p{L}\p{N}]+`)
+
+// SpanTokens applies NormalizeSpan and then the published v13 claim-span token
+// rule: every CanonicalNumber, plus every letter/digit run of at least
+// MinStringTokenLen RUNES (not bytes, so "Ōsaka" and "Москва" count by letter)
+// that is not a pure ASCII digit run, each stored as its HashToken. It shares
+// HashToken, CanonicalNumber, and the capture bounds with the v12 rule and
+// differs only in the tokenizer's alphabet; the v12 ValueTokenHashes is left
+// byte-for-byte because it backs the v12 answer-IO capture. Both the relay
+// capture and the served-span extraction call this so the two sides agree
+// token for token. It returns whether the per-side ceiling was exceeded.
 func SpanTokens(text string) (TokenSet, bool) {
-	return ValueTokenHashes(NormalizeSpan(text))
+	normalized := NormalizeSpan(text)
+	tokens := make(TokenSet)
+	truncated := false
+	add := func(tok string) {
+		if tok == "" || len(tok) > MaxValueTokenLen {
+			return
+		}
+		h := HashToken(tok)
+		if _, ok := tokens[h]; ok {
+			return
+		}
+		if len(tokens) >= MaxValueTokensPerSide {
+			truncated = true
+			return
+		}
+		tokens[h] = struct{}{}
+	}
+	for _, match := range numberPattern.FindAllString(normalized, -1) {
+		add(CanonicalNumber(match))
+	}
+	for _, tok := range spanTokenPattern.FindAllString(normalized, -1) {
+		if utf8.RuneCountInString(tok) < MinStringTokenLen {
+			continue
+		}
+		// Pure ASCII digit runs are already covered by the number pass in
+		// canonical form.
+		if strings.IndexFunc(tok, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+			continue
+		}
+		add(tok)
+	}
+	return tokens, truncated
 }
 
 // ServedClaimTokens extracts the graded CLAIM SPAN from the served text the
-// grader credited. alternatives are the accepted canonical surface forms of the
-// expected answer (for a money claim the major-unit form, for a list every item
-// form, for a value the expected string and its accept set). The claim tokens are
-// the union of the token sets of every alternative that is wholly present in the
-// served span: that is exactly the value the grader matched, in the form the
-// harness served it. ok=false when no alternative is present or every present
-// alternative has an empty token set (a value below MinStringTokenLen, or a
-// number word the number rule cannot see): the gate then has no claim span to
-// check and MUST fail open rather than guess.
-func ServedClaimTokens(servedText string, alternatives []string) (TokenSet, bool) {
+// grader credited. groups are the grader's accepted surface forms, one group per
+// claim unit: for a value the expected string and its accept set, for a number
+// the digits and the English number word, for a money claim the major-unit
+// form, for a direction every accepted phrase, and for a list one group per
+// item (the item and its alternatives). The claim tokens are the union of the
+// token sets of every form that is wholly present in the served span: that is
+// exactly the value the grader matched, in the form the harness served it.
+// ok=false when no form is present or every present form has an empty token
+// set (a value below MinStringTokenLen, or a number word the number rule cannot
+// see): the gate then has no claim span to check and MUST fail open rather
+// than guess.
+func ServedClaimTokens(servedText string, groups [][]string) (TokenSet, bool) {
 	served, _ := SpanTokens(servedText)
 	claim := make(TokenSet)
-	for _, alt := range alternatives {
-		altTokens, _ := SpanTokens(alt)
-		if len(altTokens) == 0 || !altTokens.Subset(served) {
-			continue
-		}
-		for h := range altTokens {
-			claim[h] = struct{}{}
+	for _, group := range groups {
+		for _, alt := range group {
+			altTokens, _ := SpanTokens(alt)
+			if len(altTokens) == 0 || !altTokens.Subset(served) {
+				continue
+			}
+			for h := range altTokens {
+				claim[h] = struct{}{}
+			}
 		}
 	}
 	if len(claim) == 0 {
 		return nil, false
 	}
 	return claim, true
+}
+
+// claimGroupsEmitted is the per-unit model-emitted verdict behind
+// TextProvenance for a grouped claim: for every claim unit with at least one
+// form present in the served span, SOME form of that unit (present or not)
+// must have a non-empty token set contained in the completion union. The
+// grader credits any accepted form, so a harness that renders the model's
+// "three" as "3", its "Lisboa" as "Lisbon", or its "went up" as "increase" is an
+// honest formatter: the model produced the value, in a form the grader itself
+// accepts. A form the grader does not accept ("411067" for a major-unit money
+// claim, "moved to a larger amount" for a direction) is never a group member,
+// so a rewrite still fails. Units with no present form are not checked: they
+// were not credited.
+func claimGroupsEmitted(servedText string, groups [][]string, completions TokenSet) bool {
+	served, _ := SpanTokens(servedText)
+	for _, group := range groups {
+		present := false
+		for _, alt := range group {
+			altTokens, _ := SpanTokens(alt)
+			if len(altTokens) != 0 && altTokens.Subset(served) {
+				present = true
+				break
+			}
+		}
+		if !present {
+			continue
+		}
+		emitted := false
+		for _, alt := range group {
+			altTokens, _ := SpanTokens(alt)
+			if len(altTokens) != 0 && altTokens.Subset(completions) {
+				emitted = true
+				break
+			}
+		}
+		if !emitted {
+			return false
+		}
+	}
+	return true
 }
 
 // Claim-span provenance finding names. They appear in per-case evidence
@@ -313,11 +433,19 @@ const (
 	// FindingClaimProvenanceUnavailable: no relay ledger exists for the case (no
 	// v13 broker session, or the session was torn down before the read). Fail open.
 	FindingClaimProvenanceUnavailable = "claim_provenance_unavailable"
-	// FindingClaimProvenanceIncomplete: at least one completion could not be
-	// attributed to exactly one case while this case was in flight, or a capture
-	// bound was hit. The union may be missing the completion that produced the
-	// value, so the gate fails open.
+	// FindingClaimProvenanceIncomplete: a capture bound was hit (a completion
+	// or request span the relay could not read or store), so the union may be
+	// missing the completion that produced the value. Charged to the relay: the
+	// gate fails open.
 	FindingClaimProvenanceIncomplete = "claim_provenance_incomplete"
+	// FindingClaimProvenanceUnattributedCall: while this case was in flight
+	// with other cases, the harness made a chat completion that named no case
+	// (no case-scoped inference_base_url, no X-Ditto-Case-Id, and several
+	// cases in flight), so the relay could not file it. Charged to the HARNESS:
+	// the v13 contract requires attributable calls under concurrency, so under
+	// enforce the affected cases fail CLOSED (zero credit) rather than open;
+	// under shadow the count is published so operators can read coverage.
+	FindingClaimProvenanceUnattributedCall = "claim_provenance_unattributed_call"
 	// FindingClaimNotApplicable: the case carries no checkable value claim (a
 	// decline, acknowledgement, chit-chat, persistence/reversal stance, a value
 	// below the token floor), or the case scored zero so nothing was credited.
@@ -377,16 +505,28 @@ const ResultClaimProvenanceFlagged Result = "claim_provenance_flagged"
 // flagged subsets (a case can be both). AttributionComplete is the trust bit: it
 // is true only when every applicable case settled (no unavailable/incomplete
 // ledger). Zeroed is how many cases the enforce posture actually zeroed.
+//
+// FlaggedCases is the UNION of the two flagged subsets (a case that trips both
+// gates counts once), so FlaggedBPS reports the share of eligible cases that
+// carry any finding rather than max(not_model_emitted, answer_in_prompt).
+// UnattributedCallCases is the subset of UnsettledCases whose ledger was left
+// incomplete by a harness completion that named no case while several were in
+// flight (FindingClaimProvenanceUnattributedCall); under enforce those cases
+// are zeroed too, so ZeroedCases is bounded by FlaggedCases plus
+// UnattributedCallCases. AttributionComplete must equal UnsettledCases == 0 in
+// both directions.
 type ClaimProvenanceInput struct {
-	AdministeredCases    int
-	EligibleCases        int
-	NotModelEmittedCases int
-	AnswerInPromptCases  int
-	UnsettledCases       int
-	ZeroedCases          int
-	Posture              ClaimProvenancePosture
-	TelemetryComplete    bool
-	AttributionComplete  bool
+	AdministeredCases     int
+	EligibleCases         int
+	NotModelEmittedCases  int
+	AnswerInPromptCases   int
+	FlaggedCases          int
+	UnattributedCallCases int
+	UnsettledCases        int
+	ZeroedCases           int
+	Posture               ClaimProvenancePosture
+	TelemetryComplete     bool
+	AttributionComplete   bool
 }
 
 // ClaimProvenanceEvidence is the signed, pure run-level evidence for the v13
@@ -397,18 +537,25 @@ type ClaimProvenanceInput struct {
 // schema uniform and lets the aggregate be signed and audited. For
 // bench_version<13 every field is the zero value and the gate is neither
 // canonicalized nor multiplied into the composite.
+//
+// The Platform-side mirror is ditto_screening_protocol.bench_v9.V13ClaimProvenanceGate;
+// its canonical_bytes MUST list these fields in this order, and the bit-paired
+// fixture testdata/v13_claim_provenance_evidence.json pins the digest both
+// sides must reproduce.
 type ClaimProvenanceEvidence struct {
-	AdministeredCases    int                    `json:"administered_cases"`
-	EligibleCases        int                    `json:"eligible_cases"`
-	NotModelEmittedCases int                    `json:"not_model_emitted_cases"`
-	AnswerInPromptCases  int                    `json:"answer_in_prompt_cases"`
-	UnsettledCases       int                    `json:"unsettled_cases"`
-	ZeroedCases          int                    `json:"zeroed_cases"`
-	AttributionComplete  bool                   `json:"attribution_complete"`
-	Posture              ClaimProvenancePosture `json:"posture"`
-	FlaggedBPS           int                    `json:"flagged_bps"`
-	Result               Result                 `json:"result"`
-	FactorBPS            int                    `json:"factor_bps"`
+	AdministeredCases     int                    `json:"administered_cases"`
+	EligibleCases         int                    `json:"eligible_cases"`
+	NotModelEmittedCases  int                    `json:"not_model_emitted_cases"`
+	AnswerInPromptCases   int                    `json:"answer_in_prompt_cases"`
+	FlaggedCases          int                    `json:"flagged_cases"`
+	UnattributedCallCases int                    `json:"unattributed_call_cases"`
+	UnsettledCases        int                    `json:"unsettled_cases"`
+	ZeroedCases           int                    `json:"zeroed_cases"`
+	AttributionComplete   bool                   `json:"attribution_complete"`
+	Posture               ClaimProvenancePosture `json:"posture"`
+	FlaggedBPS            int                    `json:"flagged_bps"`
+	Result                Result                 `json:"result"`
+	FactorBPS             int                    `json:"factor_bps"`
 }
 
 // administered reports whether the gate was actually run for this evidence. A
@@ -438,6 +585,8 @@ func buildClaimProvenance(in ClaimProvenanceInput) (ClaimProvenanceEvidence, err
 		{"claim_provenance.eligible_cases", in.EligibleCases},
 		{"claim_provenance.not_model_emitted_cases", in.NotModelEmittedCases},
 		{"claim_provenance.answer_in_prompt_cases", in.AnswerInPromptCases},
+		{"claim_provenance.flagged_cases", in.FlaggedCases},
+		{"claim_provenance.unattributed_call_cases", in.UnattributedCallCases},
 		{"claim_provenance.unsettled_cases", in.UnsettledCases},
 		{"claim_provenance.zeroed_cases", in.ZeroedCases},
 	}
@@ -452,37 +601,46 @@ func buildClaimProvenance(in ClaimProvenanceInput) (ClaimProvenanceEvidence, err
 	if in.NotModelEmittedCases > in.EligibleCases || in.AnswerInPromptCases > in.EligibleCases {
 		return ClaimProvenanceEvidence{}, invalid("claim-provenance flagged cases exceed eligible_cases")
 	}
-	if in.ZeroedCases > in.EligibleCases {
-		return ClaimProvenanceEvidence{}, invalid("claim-provenance zeroed_cases exceed eligible_cases")
+	maxFlagged := in.NotModelEmittedCases
+	if in.AnswerInPromptCases > maxFlagged {
+		maxFlagged = in.AnswerInPromptCases
+	}
+	if in.FlaggedCases < maxFlagged || in.FlaggedCases > in.NotModelEmittedCases+in.AnswerInPromptCases || in.FlaggedCases > in.EligibleCases {
+		return ClaimProvenanceEvidence{}, invalid("claim-provenance flagged_cases must be the union of the two flagged subsets")
+	}
+	if in.UnattributedCallCases > in.UnsettledCases {
+		return ClaimProvenanceEvidence{}, invalid("claim-provenance unattributed_call_cases exceed unsettled_cases")
+	}
+	if in.ZeroedCases > in.FlaggedCases+in.UnattributedCallCases {
+		return ClaimProvenanceEvidence{}, invalid("claim-provenance zeroed_cases exceed the flagged and unattributed cases")
 	}
 	if in.Posture == ClaimProvenanceShadow && in.ZeroedCases != 0 {
 		return ClaimProvenanceEvidence{}, invalid("claim-provenance shadow posture cannot zero cases")
 	}
-	if in.AttributionComplete && in.UnsettledCases != 0 {
-		return ClaimProvenanceEvidence{}, invalid("claim-provenance complete attribution cannot carry unsettled cases")
+	if in.AttributionComplete != (in.UnsettledCases == 0) {
+		return ClaimProvenanceEvidence{}, invalid("claim-provenance attribution_complete must equal unsettled_cases == 0")
 	}
 	e := ClaimProvenanceEvidence{
 		AdministeredCases: in.AdministeredCases, EligibleCases: in.EligibleCases,
 		NotModelEmittedCases: in.NotModelEmittedCases, AnswerInPromptCases: in.AnswerInPromptCases,
+		FlaggedCases: in.FlaggedCases, UnattributedCallCases: in.UnattributedCallCases,
 		UnsettledCases: in.UnsettledCases, ZeroedCases: in.ZeroedCases,
 		AttributionComplete: in.AttributionComplete, Posture: in.Posture,
 		FactorBPS: BasisPointScale,
 	}
-	flagged := in.NotModelEmittedCases
-	if in.AnswerInPromptCases > flagged {
-		flagged = in.AnswerInPromptCases
-	}
 	if in.EligibleCases > 0 {
-		e.FlaggedBPS = coverageBPS(flagged, in.EligibleCases)
+		e.FlaggedBPS = coverageBPS(in.FlaggedCases, in.EligibleCases)
 	}
 	switch {
 	case !in.AttributionComplete:
-		// Fail OPEN: a case whose completions could not be attributed may have
-		// had its value produced by the completion the relay could not file.
+		// The run-level result is informational (identity factor): an unsettled
+		// case publishes insufficient_evidence here whether it failed open (a
+		// relay capture bound) or closed (an unattributed harness call under
+		// enforce); the per-case findings say which.
 		e.Result = ResultInsufficientEvidence
 	case in.EligibleCases == 0:
 		e.Result = ResultNotApplicable
-	case flagged > 0:
+	case in.FlaggedCases > 0:
 		e.Result = ResultClaimProvenanceFlagged
 	default:
 		e.Result = ResultPassed
@@ -557,20 +715,50 @@ func NewClaimSpanLedger() *ClaimSpanLedger {
 	return &ClaimSpanLedger{Completion: make(TokenSet), HarnessFirst: make(TokenSet), ToolResult: make(TokenSet)}
 }
 
+// RequestSpan is one harness-placed span of a chat request with the role it
+// was sent under. Assistant is true for a message the harness presented AS THE
+// MODEL (an assistant-role turn: a prefill, or carried conversation history).
+type RequestSpan struct {
+	Text      string
+	Assistant bool
+}
+
 // RecordCall books one successful chat completion: harness is every
 // harness-authored request span (system/developer messages, user template,
-// assistant prefill, tool-role messages), completion is every model-emitted span
-// (message content, tool_call arguments, structured-output fields). The request
-// precedes its own completion, so harness tokens are tested against completions
-// of EARLIER calls only.
+// tool-role messages), completion is every model-emitted span (message content,
+// tool_call arguments, structured-output fields). The request precedes its own
+// completion, so harness tokens are tested against completions of EARLIER calls
+// only. It is RecordRequest with every span non-assistant and no session
+// history; the published vectors use it.
 func (l *ClaimSpanLedger) RecordCall(harness, completion []string) {
+	spans := make([]RequestSpan, 0, len(harness))
 	for _, span := range harness {
-		tokens, truncated := SpanTokens(span)
+		spans = append(spans, RequestSpan{Text: span})
+	}
+	l.RecordRequest(spans, completion, nil)
+}
+
+// RecordRequest books one successful chat completion with role-aware
+// harness-first classification. A non-assistant span's tokens are harness-first
+// unless an earlier completion of THIS case produced them. An assistant-role
+// span is text the harness attributes to the model, so its tokens are tested
+// against sessionCompletions too: every completion the model made anywhere in
+// the session (other cases, /seed-time summaries, calls outside any /run
+// window). A carried assistant turn or a model-written memory summary that
+// contains a value is therefore model-derived, not laundered; an assistant
+// prefill carrying a value NO completion ever produced is still harness-first.
+// sessionCompletions may be nil.
+func (l *ClaimSpanLedger) RecordRequest(spans []RequestSpan, completion []string, sessionCompletions TokenSet) {
+	for _, span := range spans {
+		tokens, truncated := SpanTokens(span.Text)
 		if truncated {
 			l.Truncated = true
 		}
 		for h := range tokens {
 			if _, seen := l.Completion[h]; seen {
+				continue
+			}
+			if span.Assistant && sessionCompletions.HasHash(h) {
 				continue
 			}
 			l.HarnessFirst[h] = struct{}{}
@@ -591,7 +779,7 @@ func (l *ClaimSpanLedger) RecordCall(harness, completion []string) {
 // RecordToolResult books one tool_endpoint result the validator served the
 // case; its values are exempt from the causal gate.
 func (l *ClaimSpanLedger) RecordToolResult(result string) {
-	if l.ToolResult.AddText(NormalizeSpan(result)) {
+	if l.ToolResult.AddSpan(result) {
 		l.Truncated = true
 	}
 	l.ToolResults++
@@ -609,12 +797,16 @@ type ClaimVerdict struct {
 }
 
 // EvaluateClaim runs both gates for one credited claim: served is the span the
-// grader credited, alternatives its accepted canonical forms, ledger the case's
-// relay record, and exemptions the token sets subtracted from the harness-first
-// set before the causal test (delivered records, the case's own user input, the
-// validator's system prompt; the ledger's tool results are always subtracted).
-func EvaluateClaim(served string, alternatives []string, ledger *ClaimSpanLedger, exemptions ...TokenSet) ClaimVerdict {
-	claim, ok := ServedClaimTokens(served, alternatives)
+// grader credited, groups its accepted canonical forms per claim unit (see
+// ServedClaimTokens), ledger the case's relay record, and exemptions the token
+// sets subtracted from the harness-first set before the causal test (delivered
+// records, the case's own user input, the validator's system prompt; the
+// ledger's tool results are always subtracted). The claim-span verdict accepts
+// ANY grader-accepted form of each credited unit in the completions
+// (claimGroupsEmitted); the causal verdict tests the SERVED form's tokens, the
+// value the harness actually put on the wire.
+func EvaluateClaim(served string, groups [][]string, ledger *ClaimSpanLedger, exemptions ...TokenSet) ClaimVerdict {
+	claim, ok := ServedClaimTokens(served, groups)
 	if !ok {
 		return ClaimVerdict{}
 	}
@@ -622,7 +814,7 @@ func EvaluateClaim(served string, alternatives []string, ledger *ClaimSpanLedger
 	return ClaimVerdict{
 		Applicable:     true,
 		ClaimTokens:    len(claim),
-		ModelEmitted:   TextProvenance(claim, ledger.Completion),
+		ModelEmitted:   claimGroupsEmitted(served, groups, ledger.Completion),
 		AnswerInPrompt: CausalDependence(claim, residual),
 	}
 }

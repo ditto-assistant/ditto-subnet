@@ -470,7 +470,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -998,7 +999,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -1239,7 +1241,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1332,7 +1335,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1408,7 +1412,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1429,6 +1434,99 @@
           "slice_attribution_complete",
           "dependence_bps",
           "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V13ClaimProvenanceGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "answer_in_prompt_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "const": 10000,
+            "type": "integer"
+          },
+          "flagged_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "flagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "not_model_emitted_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required",
+              "claim_provenance_flagged"
+            ],
+            "type": "string"
+          },
+          "unattributed_call_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsettled_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "zeroed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "not_model_emitted_cases",
+          "answer_in_prompt_cases",
+          "flagged_cases",
+          "unattributed_call_cases",
+          "unsettled_cases",
+          "zeroed_cases",
+          "attribution_complete",
+          "posture",
+          "flagged_bps",
           "result",
           "factor_bps"
         ],
@@ -1477,7 +1575,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1521,7 +1620,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -1652,7 +1752,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -1938,7 +2039,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -2015,9 +2117,21 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V13ClaimProvenanceGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "inference_latency": {
             "anyOf": [
@@ -2483,7 +2597,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -3231,7 +3346,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -3472,7 +3588,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3565,7 +3682,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3641,7 +3759,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3662,6 +3781,99 @@
           "slice_attribution_complete",
           "dependence_bps",
           "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V13ClaimProvenanceGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "answer_in_prompt_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "const": 10000,
+            "type": "integer"
+          },
+          "flagged_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "flagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "not_model_emitted_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required",
+              "claim_provenance_flagged"
+            ],
+            "type": "string"
+          },
+          "unattributed_call_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsettled_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "zeroed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "not_model_emitted_cases",
+          "answer_in_prompt_cases",
+          "flagged_cases",
+          "unattributed_call_cases",
+          "unsettled_cases",
+          "zeroed_cases",
+          "attribution_complete",
+          "posture",
+          "flagged_bps",
           "result",
           "factor_bps"
         ],
@@ -3710,7 +3922,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3754,7 +3967,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -3885,7 +4099,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -4171,7 +4386,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -4248,9 +4464,21 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V13ClaimProvenanceGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "inference_latency": {
             "anyOf": [

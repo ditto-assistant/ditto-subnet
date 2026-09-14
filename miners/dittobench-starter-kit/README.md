@@ -361,6 +361,17 @@ on is yours to control, the same as the retrieval config and the tools. The stoc
 baseline layers the production Ditto system prompt on top of this field; shaping
 that is one of the three levers below.
 
+From `bench_version` 13 every `/run` carries a case-scoped `inference_base_url`
+(`<gateway>/run/<case_id>`). Build the model client for that case from it --
+the stock kit does (`baseline.rs` builds a per-case `ModelProvider::Platform`
+from `req.inference_base_url`) -- or send `X-Ditto-Case-Id: <case_id>` on your
+inference calls. The validator overlaps `/run`, and a v13 completion that names
+no case while several are in flight is charged to the harness
+(`claim_provenance_unattributed_call`): shadow today, zero credit for the
+affected cases under enforce. A harness that ignores the per-run URL and holds
+one process-wide client is attributable only while it is the sole case in
+flight. Details in the scorer's `PROTOCOL.md` (`bench_version 13`).
+
 ### Test a seed-capable submission with a Ditto memory export
 
 The local submission lab validates a signed Ditto Memory Passport, converts it

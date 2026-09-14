@@ -45,15 +45,18 @@ type Verdict struct {
 // credit. Span is the text (slot or final_text) the typed positive check
 // matched; Source is SpanSourceAnswer or SpanSourceFinalText; Kind is the
 // AnswerKind the check ran under; Alternatives are the canonical surface forms
-// the check accepts for this claim (the expected value and its accept set; the
-// major-unit form for money; every item for a list), which is what a
-// provenance gate needs to locate the claim tokens inside Span without ever
-// receiving the answer key separately.
+// the check accepts for this claim, one group per claim UNIT (see
+// ClaimAlternatives): for a value the expected string and its accept set, for a
+// number the digits and the number word, for money the major-unit form, for a
+// direction every accepted phrase, and for a list one group per item. A
+// provenance gate uses them to locate the claim tokens inside Span -- and to
+// accept any grader-accepted form of a unit in the model's completions --
+// without ever receiving the answer key separately.
 type ClaimProvenance struct {
 	Span         string
 	Source       string
 	Kind         string
-	Alternatives []string
+	Alternatives [][]string
 }
 
 // Verdict.Provenance.Source values.
@@ -414,53 +417,66 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 }
 
 // ClaimAlternatives lists the canonical surface forms of a memory case's graded
-// value claim, in the form an honest response SERVES them: the expected value
-// and its accept set for a value, the canonical number for a number, the
-// major-unit decimal for money (the grader rejects raw minor units, so a
-// credited response necessarily carries the major form), the accepted
-// direction phrases for a direction, and every item (with its alternatives) for
-// a list. Kinds with no value claim -- decline, acknowledge, chit-chat,
-// persistence and reversal stances, duration tolerance bands -- return nil: a
-// provenance gate has no claim span to check for them and must not guess. This
-// is the single place the v13 claim vocabulary is derived from the grading
-// fields, so the scorer gate and the grader cannot disagree about what was
-// credited.
-func ClaimAlternatives(mc protocol.MemoryCase) []string {
+// value claim, grouped by claim UNIT, in the forms an honest response SERVES
+// them and the positive check credits: one group holding the expected value
+// and its accept set for a value; one group holding the canonical number, its
+// English number word, and the idiomatic "once"/"twice" for a number (numberHit
+// accepts all of them, so a harness that renders the model's "three" as "3" is
+// an honest formatter); one group holding the major-unit decimal for money
+// (the grader rejects raw minor units, so a credited response necessarily
+// carries the major form); one group holding the accepted direction phrases
+// for a direction; and one group per item (with its alternatives) for a list.
+// Kinds with no value claim -- decline, acknowledge, chit-chat, persistence and
+// reversal stances, duration tolerance bands -- return nil: a provenance gate
+// has no claim span to check for them and must not guess. This is the single
+// place the v13 claim vocabulary is derived from the grading fields, so the
+// scorer gate and the grader cannot disagree about what was credited.
+func ClaimAlternatives(mc protocol.MemoryCase) [][]string {
 	kind := mc.AnswerKind
 	if kind == "" {
 		kind = protocol.AnswerValue
 	}
-	var out []string
-	add := func(v string) {
-		v = strings.TrimSpace(v)
-		if v != "" {
-			out = append(out, v)
+	var out [][]string
+	group := func(forms ...string) {
+		var g []string
+		for _, v := range forms {
+			if v = strings.TrimSpace(v); v != "" {
+				g = append(g, v)
+			}
+		}
+		if len(g) > 0 {
+			out = append(out, g)
 		}
 	}
 	switch kind {
 	case protocol.AnswerValue:
-		add(mc.ExpectedAnswer)
-		for _, alt := range mc.AcceptAny {
-			add(alt)
-		}
+		group(append([]string{mc.ExpectedAnswer}, mc.AcceptAny...)...)
 	case protocol.AnswerNumber:
-		add(mc.ExpectedAnswer)
+		forms := []string{mc.ExpectedAnswer}
+		normalized := Normalize(mc.ExpectedAnswer)
+		if word, ok := numberWords[normalized]; ok {
+			forms = append(forms, word)
+		}
+		switch normalized {
+		case "1":
+			forms = append(forms, "once")
+		case "2":
+			forms = append(forms, "twice")
+		}
+		group(forms...)
 	case protocol.AnswerMoney:
 		if major, ok := MoneyMajorForm(mc.ExpectedAnswer); ok {
-			add(major)
+			group(major)
 		}
 	case protocol.AnswerDirection:
-		for _, phrase := range DirectionPhrases(mc.ExpectedAnswer) {
-			add(phrase)
-		}
+		group(DirectionPhrases(mc.ExpectedAnswer)...)
 	case protocol.AnswerList, protocol.AnswerOrderedList:
 		for i, item := range mc.AnswerItems {
-			add(item)
+			forms := []string{item}
 			if i < len(mc.AnswerItemAcceptAny) {
-				for _, alt := range mc.AnswerItemAcceptAny[i] {
-					add(alt)
-				}
+				forms = append(forms, mc.AnswerItemAcceptAny[i]...)
 			}
+			group(forms...)
 		}
 	}
 	return out

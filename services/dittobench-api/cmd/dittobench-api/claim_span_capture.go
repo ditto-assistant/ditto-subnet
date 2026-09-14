@@ -26,15 +26,23 @@ package main
 //
 // Attribution is exact or absent, in the same evidence order as the trace
 // context and the catalog capture: an exclusive case window, then a verified
-// X-Ditto-Case-Id claim naming an in-flight case, then a sole in-flight /run.
-// Under concurrent /run with several cases in flight and no claim, the
-// completion is booked nowhere and every case in flight at admission is marked
-// incomplete; the scorer fails OPEN on those cases. Everything here is a no-op
-// below bench_version 13, so v9..v12 sessions allocate nothing and stay
-// byte-identical.
+// case claim naming an in-flight case (the case-scoped inference_base_url path
+// `/run/<case_id>/...` the scorer mints for v13, or an X-Ditto-Case-Id header),
+// then a sole in-flight /run. Under concurrent /run with several cases in
+// flight and no claim, the completion is booked nowhere and every case in
+// flight at admission is marked incomplete with an unattributed-call count:
+// the v13 contract makes attributable calls the harness's obligation, so the
+// scorer charges those cases to the harness (claim_provenance_unattributed_call;
+// fail CLOSED under enforce) rather than failing open. Capture bounds and
+// unreadable bodies are the relay's own gaps and still fail open. Every case a
+// v13 /run registers gets a ledger at registration, so a case whose harness
+// made NO model call settles as no_model_completion instead of vanishing.
+// Everything here is a no-op below bench_version 13, so v9..v12 sessions
+// allocate nothing and stay byte-identical.
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
@@ -61,6 +69,58 @@ type brokerClaimSpanLedger struct {
 // evidence. Gated on the shared floor so v12 and earlier sessions allocate nothing.
 func claimSpanCaptureEnabled(session *brokerSession) bool {
 	return session.benchVersion >= protocol.BenchVersionV13
+}
+
+// claimSpanCaptureEnabledFor is the unlocked broker-level read handleTool uses
+// before allocating a response recorder: false for an unknown session and for
+// every session below bench_version 13, so v10..v12 tool responses stream
+// through untouched.
+func (b *inferenceBroker) claimSpanCaptureEnabledFor(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	b.mu.RLock()
+	session := b.sessions[sessionID]
+	b.mu.RUnlock()
+	return session != nil && claimSpanCaptureEnabled(session)
+}
+
+// claimSpanCasePathPrefix is the path segment of the case-scoped inference
+// base URL the scorer mints for v13 /run requests: `<gateway>/run/<case_id>`.
+// The harness's OpenAI-compatible client appends `/chat/completions` (or
+// `/v1/chat/completions`), so the broker sees `/run/<case_id>/chat/completions`
+// and reads <case_id> as the case claim -- the same advisory claim as
+// X-Ditto-Case-Id, verified only against the cases in flight and never an
+// admission input.
+const claimSpanCasePathPrefix = "/run/"
+
+// splitClaimSpanCasePath strips a leading `/run/<case_id>` from a broker route
+// path, returning the claimed case id (unescaped) and the remainder. ok=false
+// when the path carries no case segment; the remainder is then the input.
+func splitClaimSpanCasePath(rest string) (caseID, remainder string, ok bool) {
+	if !strings.HasPrefix(rest, claimSpanCasePathPrefix) {
+		return "", rest, false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(rest, claimSpanCasePathPrefix), "/", 2)
+	if len(parts) != 2 || parts[0] == "" {
+		return "", rest, false
+	}
+	caseID, err := url.PathUnescape(parts[0])
+	if err != nil || strings.TrimSpace(caseID) == "" {
+		return "", rest, false
+	}
+	return caseID, "/" + strings.TrimLeft(parts[1], "/"), true
+}
+
+// v13CaseInferenceBaseURL mints the case-scoped inference base URL sent in a
+// v13 /run request: the harness-facing gateway with the case named in the path.
+// Empty below bench_version 13 (the wire field stays omitted) and when the run
+// has no sandbox gateway (the direct-harness development path).
+func v13CaseInferenceBaseURL(benchVersion int, gateway, caseID string) string {
+	if benchVersion < protocol.BenchVersionV13 || gateway == "" || caseID == "" {
+		return ""
+	}
+	return strings.TrimRight(gateway, "/") + claimSpanCasePathPrefix + url.PathEscape(caseID)
 }
 
 // ensureClaimSpanLedgerLocked returns the case's ledger, creating it. Caller
@@ -140,6 +200,11 @@ func recordClaimSpanCompletionLocked(session *brokerSession, attribution claimSp
 		for _, inFlight := range attribution.inFlight {
 			ensureClaimSpanLedgerLocked(session, inFlight).unattributedOverlap++
 		}
+		// The completion still joins the session-wide set: a later
+		// assistant-role span quoting it is model-derived.
+		if completion, ok := modelCompletionSpans(responseBody); ok {
+			recordClaimSpanSessionCompletionLocked(session, completion)
+		}
 		return
 	}
 	ledger := ensureClaimSpanLedgerLocked(session, attribution.caseID)
@@ -160,7 +225,28 @@ func recordClaimSpanCompletionLocked(session *brokerSession, attribution claimSp
 		// value: the provenance verdict cannot be trusted, so fail open.
 		ledger.ledger.Truncated = true
 	}
-	ledger.ledger.RecordCall(harness, completion)
+	// Assistant-role spans are tested against every completion the model made
+	// earlier anywhere in the session, so carried model turns and model-written
+	// summaries from other cases are model-derived, not harness-first.
+	ledger.ledger.RecordRequest(harness, completion, session.claimSpanSessionCompletion)
+	recordClaimSpanSessionCompletionLocked(session, completion)
+}
+
+// recordClaimSpanSessionCompletionLocked books one completion's spans on the
+// session-wide completion set, whether or not the completion was attributed to
+// a case. The set exempts assistant-role prompt spans from the causal gate; it
+// never satisfies the claim-span gate, which reads the per-case ledger. Bounded
+// by the shared per-side ceiling. Caller holds session.mu.
+func recordClaimSpanSessionCompletionLocked(session *brokerSession, completion []string) {
+	if session.claimSpanSessionCompletion == nil {
+		session.claimSpanSessionCompletion = make(scoregates.TokenSet)
+	}
+	for _, span := range completion {
+		if len(session.claimSpanSessionCompletion) >= scoregates.MaxValueTokensPerSide {
+			return
+		}
+		session.claimSpanSessionCompletion.AddSpan(span)
+	}
 }
 
 // recordClaimSpanToolResult books one tool_endpoint result body the validator
@@ -189,21 +275,27 @@ func (b *inferenceBroker) recordClaimSpanToolResult(sessionID, caseID string, bo
 }
 
 // claimSpanEvidence is the settled per-case read the scorer consumes after /run
-// returned. Ledger is a private copy; Complete is false when a completion made
-// while the case was in flight could not be attributed to exactly one case or a
-// capture bound was hit.
+// returned. Ledger is a private copy. Complete is false when a completion made
+// while the case was in flight could not be attributed to exactly one case
+// (UnattributedCalls > 0, charged to the harness) or a capture bound was hit
+// (Truncated, charged to the relay); the scorer reads which.
 type claimSpanEvidence struct {
-	Ledger   *scoregates.ClaimSpanLedger
-	Complete bool
+	Ledger            *scoregates.ClaimSpanLedger
+	Complete          bool
+	UnattributedCalls int
+	Truncated         bool
 }
 
 // sessionClaimSpanEvidence returns the trusted claim-span ledger the broker
 // recorded for one case. ok=false when no v13 capture exists for the case (a
-// pre-v13 session, an unknown case, or a case that made no model call and
-// received no tool result), which the scorer reports as unavailable and treats
-// as unsettled. Every attributed completion is booked under the session lock
-// before its response is released to the harness, so a read after /run
-// returned sees every completion that informed the response.
+// pre-v13 session, or a case the session never registered through beginRunCase
+// and never saw a completion or tool result for), which the scorer reports as
+// unavailable and treats as unsettled. A registered case that made NO model
+// call returns an empty, complete ledger (Completions == 0): that is a settled
+// fact the scorer reports as no_model_completion. Every attributed completion
+// is booked under the session lock before its response is released to the
+// harness, so a read after /run returned sees every completion that informed
+// the response.
 func (b *inferenceBroker) sessionClaimSpanEvidence(id, caseID string) (claimSpanEvidence, bool) {
 	b.mu.RLock()
 	session := b.sessions[id]
@@ -229,8 +321,10 @@ func (b *inferenceBroker) sessionClaimSpanEvidence(id, caseID string) (claimSpan
 		Truncated:    ledger.ledger.Truncated,
 	}
 	return claimSpanEvidence{
-		Ledger:   copied,
-		Complete: ledger.unattributedOverlap == 0 && !ledger.ledger.Truncated,
+		Ledger:            copied,
+		Complete:          ledger.unattributedOverlap == 0 && !ledger.ledger.Truncated,
+		UnattributedCalls: ledger.unattributedOverlap,
+		Truncated:         ledger.ledger.Truncated,
 	}, true
 }
 
@@ -296,25 +390,33 @@ func contentSpans(raw json.RawMessage) []string {
 	return out
 }
 
-// harnessAuthoredSpans extracts every span the HARNESS placed in a chat request:
-// all messages regardless of role (the scorer subtracts the case's own question
-// and the validator's system prompt, which the harness did not author), plus the
-// Anthropic top-level system field. ok=false when the body is not a chat request
-// in either shape.
-func harnessAuthoredSpans(requestBody []byte) ([]string, bool) {
+// harnessAuthoredSpans extracts every span the HARNESS placed in a chat request
+// with its role: all messages (the scorer subtracts the case's own question and
+// the validator's system prompt, which the harness did not author), plus the
+// Anthropic top-level system field. A message under the `assistant` role is
+// marked so the ledger tests it against the session's completions (carried
+// model turns are model-derived; a fabricated prefill is not). ok=false when
+// the body is not a chat request in either shape.
+func harnessAuthoredSpans(requestBody []byte) ([]scoregates.RequestSpan, bool) {
 	var req struct {
 		System   json.RawMessage `json:"system"`
 		Messages []struct {
+			Role    string          `json:"role"`
 			Content json.RawMessage `json:"content"`
 		} `json:"messages"`
 	}
 	if json.Unmarshal(requestBody, &req) != nil || (len(req.Messages) == 0 && len(req.System) == 0) {
 		return nil, false
 	}
-	var out []string
-	out = append(out, contentSpans(req.System)...)
+	var out []scoregates.RequestSpan
+	for _, span := range contentSpans(req.System) {
+		out = append(out, scoregates.RequestSpan{Text: span})
+	}
 	for _, msg := range req.Messages {
-		out = append(out, contentSpans(msg.Content)...)
+		assistant := strings.EqualFold(strings.TrimSpace(msg.Role), "assistant")
+		for _, span := range contentSpans(msg.Content) {
+			out = append(out, scoregates.RequestSpan{Text: span, Assistant: assistant})
+		}
 	}
 	return out, true
 }

@@ -135,6 +135,23 @@ def _score(
             "result": "passed",
             "factor_bps": 10000,
         }
+    # v13 also requires the claim-provenance summary (identity factor).
+    if bench_version >= 13:
+        gate_payload["claim_provenance"] = {
+            "administered_cases": 10,
+            "eligible_cases": 10,
+            "not_model_emitted_cases": 0,
+            "answer_in_prompt_cases": 0,
+            "flagged_cases": 0,
+            "unattributed_call_cases": 0,
+            "unsettled_cases": 0,
+            "zeroed_cases": 0,
+            "attribution_complete": True,
+            "posture": "shadow",
+            "flagged_bps": 0,
+            "result": "passed",
+            "factor_bps": 10000,
+        }
     gates = V9ScoreGateEvidence.model_validate(gate_payload)
     raw["bench_version"] = bench_version
     raw["score_gates"] = gates.model_dump(mode="json")

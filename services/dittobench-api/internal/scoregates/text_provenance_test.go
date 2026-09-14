@@ -20,6 +20,10 @@ func TestNormalizeSpanVectors(t *testing.T) {
 		"`4110.67`":                          "4110.67",
 		"４１１０.６７":                            "4110.67", // fullwidth digits fold under NFKC
 		"Lisbon,  since\t2019.":              "lisbon, since 2019.",
+		"José":                               "jose",   // NFD + combining-mark strip folds the diacritic
+		"Ōsaka":                              "osaka",  // macron folds; not "saka"
+		"Zürich":                             "zurich", // umlaut folds; not "z rich"
+		"Москва":                             "москва", // non-Latin letters are kept, lowercased
 		"":                                   "",
 	}
 	for in, want := range cases {
@@ -60,35 +64,116 @@ func TestSpanTokensFoldEveryHonestRenderingToOneClaimToken(t *testing.T) {
 	}
 }
 
+// The v13 tokenizer is Unicode-aware: diacritic variants fold to ONE token,
+// non-Latin values tokenize to a claim, and the token floor counts runes. The
+// v12 ValueTokenHashes rule is untouched (it backs the v12 answer-IO capture).
+func TestSpanTokensFoldDiacriticsAndKeepNonLatin(t *testing.T) {
+	for _, pair := range [][2]string{{"José", "Jose"}, {"Ōsaka", "Osaka"}, {"Zürich", "Zurich"}, {"Ｔｏｋｙｏ", "tokyo"}} {
+		a, _ := SpanTokens(pair[0])
+		b, _ := SpanTokens(pair[1])
+		if len(a) != 1 || len(b) != 1 || !a.Subset(b) || !b.Subset(a) {
+			t.Errorf("%q and %q must fold to one identical token: %v vs %v", pair[0], pair[1], a, b)
+		}
+	}
+	cyrillic, _ := SpanTokens("Москва")
+	if len(cyrillic) != 1 || !cyrillic.Has("москва") {
+		t.Fatalf("a Cyrillic value must produce a non-empty claim token: %v", cyrillic)
+	}
+	cjk, _ := SpanTokens("東京都新宿区")
+	if len(cjk) != 1 {
+		t.Fatalf("a CJK run must produce one token: %v", cjk)
+	}
+	// The floor is a rune count: "Ōsaka" is 5 letters, not 6 bytes.
+	if short, _ := SpanTokens("Ōsa"); len(short) != 0 {
+		t.Fatalf("a 3-rune token must fall below the floor: %v", short)
+	}
+	// The v12 rule still drops non-ASCII letters (its capture bytes never move).
+	v12, _ := ValueTokenHashes("ōsaka")
+	if v12.Has("ōsaka") || !v12.Has("saka") {
+		t.Fatalf("v12 ValueTokenHashes changed: %v", v12)
+	}
+}
+
 func TestServedClaimTokens(t *testing.T) {
-	claim, ok := ServedClaimTokens("The outstanding balance is $4,110.67.", []string{"4110.67"})
+	claim, ok := ServedClaimTokens("The outstanding balance is $4,110.67.", [][]string{{"4110.67"}})
 	if !ok || len(claim) != 1 || !claim.Has("4110.67") {
 		t.Fatalf("money claim = %v ok=%v", claim, ok)
 	}
-	// The served span must contain the WHOLE alternative: a partial multi-word
-	// alternative does not become a claim.
-	if _, ok := ServedClaimTokens("moderately", []string{"moderately conservative"}); ok {
-		t.Fatal("partial alternative must not form a claim")
+	// The served span must contain the WHOLE form: a partial multi-word form
+	// does not become a claim.
+	if _, ok := ServedClaimTokens("moderately", [][]string{{"moderately conservative"}}); ok {
+		t.Fatal("partial form must not form a claim")
 	}
-	claim, ok = ServedClaimTokens("You are moderately conservative.", []string{"moderately conservative"})
+	claim, ok = ServedClaimTokens("You are moderately conservative.", [][]string{{"moderately conservative"}})
 	if !ok || len(claim) != 2 {
 		t.Fatalf("multi-token claim = %v ok=%v", claim, ok)
 	}
 	// A value below the token floor cannot be located: not applicable, fail open.
-	if _, ok := ServedClaimTokens("Rio", []string{"Rio"}); ok {
-		t.Fatal("sub-floor alternative must be not-applicable")
+	if _, ok := ServedClaimTokens("Rio", [][]string{{"Rio"}}); ok {
+		t.Fatal("sub-floor form must be not-applicable")
 	}
-	// The union of every present alternative is the claim (a list).
-	claim, ok = ServedClaimTokens("Osaka and Lima", []string{"Osaka", "Lima", "Cairo"})
+	// The union of every present form across groups is the claim (a list).
+	claim, ok = ServedClaimTokens("Osaka and Lima", [][]string{{"Osaka"}, {"Lima"}, {"Cairo"}})
 	if !ok || len(claim) != 2 || !claim.Has("osaka") || !claim.Has("lima") || claim.Has("cairo") {
 		t.Fatalf("list claim = %v ok=%v", claim, ok)
 	}
-	if _, ok := ServedClaimTokens("nothing relevant", []string{"4110.67"}); ok {
-		t.Fatal("absent alternative must be not-applicable")
+	if _, ok := ServedClaimTokens("nothing relevant", [][]string{{"4110.67"}}); ok {
+		t.Fatal("absent form must be not-applicable")
 	}
 	if _, ok := ServedClaimTokens("4110.67", nil); ok {
-		t.Fatal("no alternatives must be not-applicable")
+		t.Fatal("no forms must be not-applicable")
 	}
+}
+
+// The claim-span gate accepts ANY grader-accepted form of a credited unit in
+// the completions: a formatter that renders the model's "three" as "3", its
+// "Lisboa" as "Lisbon", or its "went up" as "increase" is honest. A form the
+// grader does not accept is never a group member, so a rewrite still fails.
+func TestEvaluateClaimAcceptsAnyGraderFormPerUnit(t *testing.T) {
+	number := ledgerFromStrings([]string{"how many?"}, []string{"Three of them."})
+	got := EvaluateClaim("3", [][]string{{"3", "three"}}, number)
+	if !got.Applicable || !got.ModelEmitted || got.AnswerInPrompt {
+		t.Fatalf("number-word formatter = %+v, want applicable, model-emitted, not answer_in_prompt", got)
+	}
+	// Without the word form in the group, the same completion is a rewrite.
+	if got := EvaluateClaim("3", [][]string{{"3"}}, number); got.ModelEmitted {
+		t.Fatal("a digit the model never emitted in an accepted form must not be model-emitted")
+	}
+	alias := ledgerFromStrings([]string{"which city?"}, []string{"You moved to Lisboa."})
+	if got := EvaluateClaim("Lisbon", [][]string{{"Lisbon", "Lisboa"}}, alias); !got.ModelEmitted {
+		t.Fatal("an accept-set alias the model emitted must be model-emitted")
+	}
+	// A list is per unit: every credited item needs some accepted form emitted.
+	list := ledgerFromStrings([]string{"which cities?"}, []string{"Ōsaka and Lima."})
+	if got := EvaluateClaim("Osaka and Lima", [][]string{{"Osaka"}, {"Lima"}}, list); !got.ModelEmitted || got.ClaimTokens != 2 {
+		t.Fatalf("diacritic-folded list = %+v", got)
+	}
+	partial := ledgerFromStrings([]string{"which cities?"}, []string{"Osaka."})
+	if got := EvaluateClaim("Osaka and Lima", [][]string{{"Osaka"}, {"Lima"}}, partial); got.ModelEmitted {
+		t.Fatal("a credited item the model never emitted must fail the claim-span gate")
+	}
+	// Direction: an accepted phrase in the completion is the model's answer;
+	// an unlisted paraphrase is a rewrite.
+	direction := ledgerFromStrings([]string{"up or down?"}, []string{"It went up after the revision."})
+	if got := EvaluateClaim("increase", [][]string{{"increase", "went up", "rose"}}, direction); !got.ModelEmitted {
+		t.Fatal("an accepted direction phrase must be model-emitted")
+	}
+	// The causal gate tests the SERVED form: "three" in the prompt does not
+	// make a served "3" answer_in_prompt, but a served "3" in the prompt does.
+	prompted := ledgerFromStrings([]string{"Give three examples."}, []string{"Three."})
+	if got := EvaluateClaim("3", [][]string{{"3", "three"}}, prompted); got.AnswerInPrompt {
+		t.Fatal("a number word in the template must not flag the served digit as answer_in_prompt")
+	}
+	planted := ledgerFromStrings([]string{"Reply exactly: 3"}, []string{"3"})
+	if got := EvaluateClaim("3", [][]string{{"3", "three"}}, planted); !got.AnswerInPrompt {
+		t.Fatal("a served digit authored into the prompt must flag answer_in_prompt")
+	}
+}
+
+func ledgerFromStrings(harness, completion []string) *ClaimSpanLedger {
+	ledger := NewClaimSpanLedger()
+	ledger.RecordCall(harness, completion)
+	return ledger
 }
 
 func TestTextProvenanceVerdicts(t *testing.T) {
@@ -113,8 +198,22 @@ func TestTextProvenanceVerdicts(t *testing.T) {
 // results as served.
 func ledgerFor(vec grade.V13ProvenanceVector) *ClaimSpanLedger {
 	ledger := NewClaimSpanLedger()
+	session := make(TokenSet)
+	for _, prior := range vec.SessionCompletions {
+		session.AddSpan(prior)
+	}
 	for _, call := range vec.Calls {
-		ledger.RecordCall(call.Harness, call.Completion)
+		spans := make([]RequestSpan, 0, len(call.Harness)+len(call.Assistant))
+		for _, span := range call.Harness {
+			spans = append(spans, RequestSpan{Text: span})
+		}
+		for _, span := range call.Assistant {
+			spans = append(spans, RequestSpan{Text: span, Assistant: true})
+		}
+		ledger.RecordRequest(spans, call.Completion, session)
+		for _, span := range call.Completion {
+			session.AddSpan(span)
+		}
 	}
 	for _, result := range vec.ToolResults {
 		ledger.RecordToolResult(result)
@@ -126,8 +225,8 @@ func ledgerFor(vec grade.V13ProvenanceVector) *ClaimSpanLedger {
 // caught (served_text_not_model_emitted or answer_in_prompt) and every honest
 // vector passes both.
 func TestClaimProvenanceBankVectors(t *testing.T) {
-	if len(grade.V13ProvenanceBank) < 16 {
-		t.Fatalf("bank has %d vectors; the published set has at least 16", len(grade.V13ProvenanceBank))
+	if len(grade.V13ProvenanceBank) < 21 {
+		t.Fatalf("bank has %d vectors; the published set has at least 21", len(grade.V13ProvenanceBank))
 	}
 	for _, vec := range grade.V13ProvenanceBank {
 		verdict := grade.Memory(vec.Case, vec.Response)
@@ -139,10 +238,10 @@ func TestClaimProvenanceBankVectors(t *testing.T) {
 		}
 		records := make(TokenSet)
 		for _, r := range vec.Records {
-			records.AddText(NormalizeSpan(r))
+			records.AddSpan(r)
 		}
 		question := make(TokenSet)
-		question.AddText(NormalizeSpan(vec.Case.Question))
+		question.AddSpan(vec.Case.Question)
 		got := EvaluateClaim(verdict.Provenance.Span, verdict.Provenance.Alternatives, ledgerFor(vec), records, question)
 		if !got.Applicable {
 			t.Fatalf("%s: claim not applicable (span %q alternatives %v)", vec.Name, verdict.Provenance.Span, verdict.Provenance.Alternatives)
@@ -192,6 +291,43 @@ func TestClaimSpanLedgerFirstSeenOrdering(t *testing.T) {
 	}
 	if launder.HarnessFirst.Has("4110.67") == false {
 		t.Fatal("ResidualHarnessTokens must not mutate its input")
+	}
+}
+
+// Assistant-role spans are tested against the session-wide completion set: a
+// carried model turn from another case is model-derived, a fabricated prefill
+// carrying a value no completion ever produced is harness-first.
+func TestClaimSpanLedgerAssistantRoleUsesSessionCompletions(t *testing.T) {
+	session := make(TokenSet)
+	session.AddSpan("Summary: Atlas has 4110.67 outstanding.")
+	carried := NewClaimSpanLedger()
+	carried.RecordRequest([]RequestSpan{
+		{Text: "What is outstanding on Atlas?"},
+		{Text: "Earlier I told you: 4110.67 outstanding.", Assistant: true},
+	}, []string{"$4,110.67"}, session)
+	if carried.HarnessFirst.Has("4110.67") {
+		t.Fatal("an assistant turn the model produced earlier in the session must not be harness-first")
+	}
+	if !carried.HarnessFirst.Has("atlas") {
+		t.Fatal("non-assistant template tokens stay harness-first")
+	}
+	// The same text under a USER role is harness-authored regardless of history.
+	user := NewClaimSpanLedger()
+	user.RecordRequest([]RequestSpan{{Text: "Earlier I told you: 4110.67 outstanding."}}, []string{"$4,110.67"}, session)
+	if !user.HarnessFirst.Has("4110.67") {
+		t.Fatal("a user-role span is harness-first even when the session saw the value")
+	}
+	// A fabricated prefill: no completion anywhere produced the value.
+	prefill := NewClaimSpanLedger()
+	prefill.RecordRequest([]RequestSpan{{Text: "The balance is 4110.67.", Assistant: true}}, []string{"4110.67"}, TokenSet{})
+	if !prefill.HarnessFirst.Has("4110.67") {
+		t.Fatal("an assistant prefill carrying a never-emitted value must be harness-first")
+	}
+	// nil history is accepted.
+	nilHistory := NewClaimSpanLedger()
+	nilHistory.RecordRequest([]RequestSpan{{Text: "prefill 4110.67", Assistant: true}}, nil, nil)
+	if !nilHistory.HarnessFirst.Has("4110.67") || nilHistory.Completions != 1 {
+		t.Fatalf("nil session history: %+v", nilHistory)
 	}
 }
 

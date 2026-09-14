@@ -24,7 +24,7 @@ applied to an existing version. It ships as a new one.
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
-| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types); public-corpora vocabulary and `/seed` label hygiene (#1825, #1827: frozen SHA-pinned public tables, opaque session ids, seeded business-hours timestamps); surface levers shipped (per-seed `persona.Grammar` banks for every tool/world/settings/integrity/question surface, permuted-clause identity records, typo projector v2, the salted artifact surface pass with a private-pass hand-off and a regeneration canary); typed-claim grader (#1523/#1522/#1831: asserted-vs-cited claims, requested-unit quantities, grounded abstention, per-policy audit bank, multilingual lexicons — see the Grader subsection); evidence-bounded slice (#1844 same-turn point-in-time corrections with `as_of_twin` pairs behind the `/seed` ingest acknowledgement, #1530 six grounded-abstention families with `decision_twin` pairs graded by `AnswerAbsence`); envelope rebalance and monetary cap (#1848/#1529: the published 250-case slot table in `gen/v13_envelope.go`, ordinary project-outstanding capped at 4, the per-seed mix audit); tool bench (#1843/#1842/#1580/#1840: per-seed catalog with coined decoys, discovery inventories, schema enums, retired setters, coined list fixtures); families and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
+| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types); public-corpora vocabulary and `/seed` label hygiene (#1825, #1827: frozen SHA-pinned public tables, opaque session ids, seeded business-hours timestamps); surface levers shipped (per-seed `persona.Grammar` banks for every tool/world/settings/integrity/question surface, permuted-clause identity records, typo projector v2, the salted artifact surface pass with a private-pass hand-off and a regeneration canary); typed-claim grader (#1523/#1522/#1831: asserted-vs-cited claims, requested-unit quantities, grounded abstention, per-policy audit bank, multilingual lexicons — see the Grader subsection); evidence-bounded slice (#1844 same-turn point-in-time corrections with `as_of_twin` pairs behind the `/seed` ingest acknowledgement, #1530 six grounded-abstention families with `decision_twin` pairs graded by `AnswerAbsence`); envelope rebalance and monetary cap (#1848/#1529: the published 250-case slot table in `gen/v13_envelope.go`, ordinary project-outstanding capped at 4, the per-seed mix audit); tool bench (#1843/#1842/#1580/#1840: per-seed catalog with coined decoys, discovery inventories, schema enums, retired setters, coined list fixtures); claim-span provenance and causal model dependence in shadow (#1833/#1849: `Verdict.Provenance`, `served_text_not_model_emitted`, `answer_in_prompt`); families and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
 
 ## V10 generator-as-spec contract
 
@@ -1279,6 +1279,35 @@ The pinned candidate measures 36.10% complete tool-outcome accuracy and 1.80%
 verbatim argument exposure on ten held-out seeds. Regenerate the catalog mirrors
 (starter kit `catalog.rs`, screener `_ORACLE_TOOL_NAMES`, OpenClaw plugin) with
 `go run ./cmd/catalogmirror`; `catalog/mirror_test.go` fails when one drifts.
+
+### Claim-span provenance and causal model dependence (#1833, #1849)
+
+v13 changes no dataset semantics and no score: the v13 grading policy is the
+v12 policy plus a report of **which served span earned the credit** and the
+canonical forms the grader accepts for that claim (`grade.Verdict.Provenance`,
+`grade.ClaimAlternatives`, grouped per claim unit -- a number's digits and its
+English word, a money claim's major-unit form, a direction's accepted phrases,
+a list's items and their alternatives). Every v2..v12 verdict is byte-identical
+(`TestV13ProvenanceBankGraderVerdicts` re-grades the whole bank under v12).
+
+The validator-side half lives in `services/dittobench-api`: the inference
+broker records, per attributed completion, the hashed value tokens of the
+model's completion spans and of the harness-authored request spans
+(`cmd/dittobench-api/claim_span_capture.go`), and the scorer checks the
+credited claim against them (`internal/scoregates/text_provenance.go`,
+`causal_dependence.go`), publishing `served_text_not_model_emitted`,
+`answer_in_prompt`, `no_model_completion`, `claim_provenance_unattributed_call`
+and the fail-open `claim_provenance_incomplete` / `claim_provenance_unavailable`
+per case, plus a signed run-level `claim_provenance` block (identity factor).
+Both ship behind one posture switch defaulting to **shadow**. The published
+vectors both sides are tested against are in `grade/audit_v13_bank.go`
+(compute-then-launder, GIH, `/100` rewrite, direction map, composed slot, draft
+replacement, assistant-prefill launder; RAG quoting, tool-result quoting,
+JSON mode, `final_answer` tool, formatter, number-word formatter, diacritic
+fold, non-Latin value, markdown/list, two-completion splice, multi-turn
+compute, cross-case assistant history). The wire contract, the attribution
+rules, and the Unicode-aware normaliser are documented in
+`services/dittobench-api/PROTOCOL.md` under "bench_version 13".
 
 ## Auditing an old score
 

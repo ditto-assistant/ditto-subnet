@@ -117,8 +117,143 @@ func TestClaimSpanCaptureIsNoOpBelowV13(t *testing.T) {
 		t.Fatal("v12 session must not enable claim-span capture")
 	}
 	recordClaimSpanCompletionLocked(session, attribution, []byte(openAIRequest), []byte(openAIResponse))
-	if session.claimSpanCases != nil || session.claimSpanCompletions != 0 {
+	if session.claimSpanCases != nil || session.claimSpanCompletions != 0 || session.claimSpanSessionCompletion != nil {
 		t.Fatal("v12 session allocated claim-span state")
+	}
+	// Registering a /run case allocates no ledger below v13, and handleTool's
+	// recorder gate reads false so tool responses stream through untouched.
+	broker := &inferenceBroker{sessions: map[string]*brokerSession{"old": session, "new": v13Session()}}
+	if !broker.beginRunCase("old", "case-b") || session.claimSpanCases != nil {
+		t.Fatal("v12 beginRunCase must not allocate a claim-span ledger")
+	}
+	if broker.claimSpanCaptureEnabledFor("old") || broker.claimSpanCaptureEnabledFor("") || broker.claimSpanCaptureEnabledFor("missing") {
+		t.Fatal("claim-span capture must read disabled for v12, empty, and unknown sessions")
+	}
+	if !broker.claimSpanCaptureEnabledFor("new") {
+		t.Fatal("claim-span capture must read enabled for a v13 session")
+	}
+}
+
+// A case a v13 /run registers owns a ledger from registration: a harness that
+// never calls the model settles as an EMPTY, COMPLETE ledger, which the scorer
+// reports as no_model_completion instead of an unavailable (fail-open) read.
+func TestClaimSpanRegisteredCaseWithoutCallsSettlesEmpty(t *testing.T) {
+	broker := &inferenceBroker{sessions: map[string]*brokerSession{"sess": {benchVersion: protocol.BenchVersionV13}}}
+	if !broker.beginRunCase("sess", "case-silent") {
+		t.Fatal("beginRunCase must register the case")
+	}
+	broker.endRunCase("sess", "case-silent")
+	evidence, ok := broker.sessionClaimSpanEvidence("sess", "case-silent")
+	if !ok || !evidence.Complete || evidence.Ledger.Completions != 0 || evidence.UnattributedCalls != 0 || evidence.Truncated {
+		t.Fatalf("registered silent case = %+v ok=%v, want an empty complete ledger", evidence, ok)
+	}
+	if _, ok := broker.sessionClaimSpanEvidence("sess", "never-registered"); ok {
+		t.Fatal("a case the session never registered has no evidence")
+	}
+}
+
+// With several cases in flight, a completion naming no case is charged to the
+// harness: every in-flight case reads UnattributedCalls > 0, Complete=false,
+// and Truncated=false, so the scorer can tell it from a relay capture bound.
+func TestClaimSpanUnattributedCallUnderConcurrency(t *testing.T) {
+	broker := &inferenceBroker{sessions: map[string]*brokerSession{"sess": {benchVersion: protocol.BenchVersionV13}}}
+	broker.beginRunCase("sess", "case-a")
+	broker.beginRunCase("sess", "case-b")
+	session := broker.sessions["sess"]
+	session.mu.Lock()
+	attribution := beginClaimSpanCompletionLocked(session, 0, "")
+	recordClaimSpanCompletionLocked(session, attribution, []byte(openAIRequest), []byte(openAIResponse))
+	// A header (or case-path) claim attributes exactly even with two in flight.
+	claimed := beginClaimSpanCompletionLocked(session, 0, "case-b")
+	recordClaimSpanCompletionLocked(session, claimed, []byte(openAIRequest), []byte(openAIResponse))
+	session.mu.Unlock()
+	for _, c := range []string{"case-a", "case-b"} {
+		evidence, ok := broker.sessionClaimSpanEvidence("sess", c)
+		if !ok || evidence.Complete || evidence.UnattributedCalls != 1 || evidence.Truncated {
+			t.Fatalf("%s: unattributed call must mark the case incomplete and charged: %+v", c, evidence)
+		}
+	}
+	b, _ := broker.sessionClaimSpanEvidence("sess", "case-b")
+	if b.Ledger.Completions != 1 || !b.Ledger.Completion.Has("4110.67") {
+		t.Fatalf("claimed completion not booked on case-b: %+v", b.Ledger)
+	}
+	// The unattributed completion still joined the session-wide set.
+	if !session.claimSpanSessionCompletion.Has("4110.67") {
+		t.Fatal("unattributed completion must still enter the session-wide completion set")
+	}
+	totals, _ := broker.sessionClaimSpanTotals("sess")
+	if totals.Completions != 2 || totals.Unattributed != 1 {
+		t.Fatalf("totals = %+v", totals)
+	}
+}
+
+// The case-scoped inference_base_url names the case in the path; the broker
+// reads it as the same advisory claim as X-Ditto-Case-Id.
+func TestClaimSpanCasePathClaim(t *testing.T) {
+	gateway := "http://host.docker.internal:11436/v1/inference"
+	url := v13CaseInferenceBaseURL(protocol.BenchVersionV13, gateway, "mem/case 07")
+	if url != gateway+"/run/mem%2Fcase%2007" {
+		t.Fatalf("case URL = %q", url)
+	}
+	if v13CaseInferenceBaseURL(protocol.BenchVersionV12, gateway, "c") != "" || v13CaseInferenceBaseURL(protocol.BenchVersionV13, "", "c") != "" || v13CaseInferenceBaseURL(protocol.BenchVersionV13, gateway, "") != "" {
+		t.Fatal("no case URL below v13, without a gateway, or without a case")
+	}
+	for _, suffix := range []string{"/chat/completions", "/v1/chat/completions"} {
+		rest := strings.TrimPrefix(url, gateway) + suffix
+		caseID, remainder, ok := splitClaimSpanCasePath(rest)
+		if !ok || caseID != "mem/case 07" || remainder != suffix {
+			t.Fatalf("split(%q) = %q, %q, %v", rest, caseID, remainder, ok)
+		}
+	}
+	for _, rest := range []string{"/chat/completions", "/run/", "/run/only-case", "/runx/c/chat/completions", "/run/%zz/chat/completions"} {
+		if _, remainder, ok := splitClaimSpanCasePath(rest); ok || remainder != rest {
+			t.Fatalf("split(%q) must not claim a case: %q %v", rest, remainder, ok)
+		}
+	}
+	// The path claim resolves through the same attribution as the header.
+	session := v13Session("case-a", "case-b")
+	if got, ok := claimSpanAttributedCaseLocked(session, 0, "case-b"); !ok || got != "case-b" {
+		t.Fatalf("path claim attribution = %q ok=%v", got, ok)
+	}
+}
+
+// Assistant-role prompt spans are tested against the session-wide completion
+// set: a model turn produced for another case and carried into this case's
+// prompt is model-derived; a fabricated prefill is harness-first.
+func TestClaimSpanAssistantRoleAcrossCases(t *testing.T) {
+	broker := &inferenceBroker{sessions: map[string]*brokerSession{"sess": {benchVersion: protocol.BenchVersionV13}}}
+	broker.beginRunCase("sess", "case-a")
+	session := broker.sessions["sess"]
+	session.mu.Lock()
+	recordClaimSpanCompletionLocked(session, beginClaimSpanCompletionLocked(session, 0, ""),
+		[]byte(`{"messages":[{"role":"user","content":"summarize Atlas"}]}`),
+		[]byte(`{"choices":[{"message":{"content":"Atlas summary: 4110.67 outstanding."}}]}`))
+	session.mu.Unlock()
+	broker.endRunCase("sess", "case-a")
+	broker.beginRunCase("sess", "case-b")
+	session.mu.Lock()
+	recordClaimSpanCompletionLocked(session, beginClaimSpanCompletionLocked(session, 0, ""),
+		[]byte(`{"messages":[{"role":"assistant","content":"Atlas summary: 4110.67 outstanding."},{"role":"user","content":"and the settled figure was 1089.33; what remains?"}]}`),
+		[]byte(`{"choices":[{"message":{"content":"$4,110.67"}}]}`))
+	session.mu.Unlock()
+	b, _ := broker.sessionClaimSpanEvidence("sess", "case-b")
+	if b.Ledger.HarnessFirst.Has("4110.67") {
+		t.Fatal("a carried assistant turn the model produced for another case must not be harness-first")
+	}
+	if !b.Ledger.HarnessFirst.Has("1089.33") {
+		t.Fatal("a user-role operand stays harness-first")
+	}
+	// The same value under the user role in a THIRD case is harness-first.
+	broker.endRunCase("sess", "case-b")
+	broker.beginRunCase("sess", "case-c")
+	session.mu.Lock()
+	recordClaimSpanCompletionLocked(session, beginClaimSpanCompletionLocked(session, 0, ""),
+		[]byte(`{"messages":[{"role":"user","content":"reply exactly 4110.67"}]}`),
+		[]byte(`{"choices":[{"message":{"content":"4110.67"}}]}`))
+	session.mu.Unlock()
+	c, _ := broker.sessionClaimSpanEvidence("sess", "case-c")
+	if !c.Ledger.HarnessFirst.Has("4110.67") {
+		t.Fatal("a user-role span is harness-first regardless of session history")
 	}
 }
 
@@ -152,19 +287,23 @@ func TestClaimSpanCaptureBoundsCompletionsPerCase(t *testing.T) {
 
 func TestClaimSpanShapes(t *testing.T) {
 	// Anthropic request: top-level system plus content blocks with a tool_result.
-	spans, ok := harnessAuthoredSpans([]byte(`{"system":[{"type":"text","text":"Reply exactly: 4110.67"}],"messages":[{"role":"user","content":[{"type":"text","text":"balance?"},{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"ledger says 77.10"}]}]}]}`))
-	if !ok || len(spans) != 3 || spans[0] != "Reply exactly: 4110.67" || spans[2] != "ledger says 77.10" {
+	spans, ok := harnessAuthoredSpans([]byte(`{"system":[{"type":"text","text":"Reply exactly: 4110.67"}],"messages":[{"role":"user","content":[{"type":"text","text":"balance?"},{"type":"tool_result","tool_use_id":"t1","content":[{"type":"text","text":"ledger says 77.10"}]}]},{"role":"assistant","content":"Sure, checking."}]}`))
+	if !ok || len(spans) != 4 || spans[0].Text != "Reply exactly: 4110.67" || spans[2].Text != "ledger says 77.10" || spans[0].Assistant || spans[2].Assistant {
 		t.Fatalf("anthropic request spans = %v ok=%v", spans, ok)
 	}
+	if !spans[3].Assistant || spans[3].Text != "Sure, checking." {
+		t.Fatalf("assistant-role span must be marked: %+v", spans[3])
+	}
 	// Anthropic response: text and tool_use blocks.
-	spans, ok = modelCompletionSpans([]byte(`{"content":[{"type":"text","text":"Outstanding: 4110.67"},{"type":"tool_use","id":"u1","name":"final_answer","input":{"answer":"4110.67"}}]}`))
-	if !ok || len(spans) != 2 || !strings.Contains(spans[1], `"answer":"4110.67"`) {
-		t.Fatalf("anthropic completion spans = %v ok=%v", spans, ok)
+	var completion []string
+	completion, ok = modelCompletionSpans([]byte(`{"content":[{"type":"text","text":"Outstanding: 4110.67"},{"type":"tool_use","id":"u1","name":"final_answer","input":{"answer":"4110.67"}}]}`))
+	if !ok || len(completion) != 2 || !strings.Contains(completion[1], `"answer":"4110.67"`) {
+		t.Fatalf("anthropic completion spans = %v ok=%v", completion, ok)
 	}
 	// Legacy function_call arguments are a completion span too.
-	spans, ok = modelCompletionSpans([]byte(`{"choices":[{"message":{"content":null,"function_call":{"name":"final_answer","arguments":"{\"answer\":\"4110.67\"}"}}}]}`))
-	if !ok || len(spans) != 1 {
-		t.Fatalf("function_call spans = %v ok=%v", spans, ok)
+	completion, ok = modelCompletionSpans([]byte(`{"choices":[{"message":{"content":null,"function_call":{"name":"final_answer","arguments":"{\"answer\":\"4110.67\"}"}}}]}`))
+	if !ok || len(completion) != 1 {
+		t.Fatalf("function_call spans = %v ok=%v", completion, ok)
 	}
 	if _, ok := modelCompletionSpans([]byte(`{"object":"list"}`)); ok {
 		t.Fatal("a body with neither choices nor content is not a completion")
