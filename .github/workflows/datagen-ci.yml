@@ -39,6 +39,8 @@ jobs:
         run: go vet ./...
       - name: Test
         run: go test ./...
+      - name: Grader audit release gate
+        run: go run ./cmd/graderaudit -release-gate
       - name: Determinism
         run: |
           go build -o "$RUNNER_TEMP/generate" ./cmd/generate

@@ -46,9 +46,12 @@ var spanish = Lexicon{
 		"noviembre": 11, "diciembre": 12,
 		"ene": 1, "feb": 2, "abr": 4, "jun": 6, "jul": 7, "ago": 8, "sept": 9, "oct": 10, "nov": 11, "dic": 12,
 	},
-	MinorUnit:  []string{"centavos", "centavo", "céntimos", "céntimo", "centimos", "centimo"},
-	MajorUnit:  []string{"dólares", "dolares", "euros", "libras", "pesos", "reales"},
-	Rejection:  []string{"no", "nunca", "jamás", "en lugar de", "en vez de", "ya no", "tampoco", "ni", "sino", "no es", "no era", "no fue"},
+	MinorUnit: []string{"centavos", "centavo", "céntimos", "céntimo", "centimos", "centimo"},
+	MajorUnit: []string{"dólares", "dolares", "euros", "libras", "pesos", "reales"},
+	// "sino" is a contrast connective only: it always INTRODUCES the asserted
+	// alternative ("No es Oslo, sino Lisboa"), so listing it as a rejection
+	// would cite the correct value instead of asserting it.
+	Rejection:  []string{"no", "nunca", "jamás", "en lugar de", "en vez de", "ya no", "tampoco", "ni", "no es", "no era", "no fue"},
 	Contrast:   []string{"pero", "sino", "aunque", "sin embargo", "mientras que"},
 	PastStrong: []string{"antes", "anteriormente", "antiguamente", "solía", "solías", "al principio", "inicialmente", "originalmente", "en el pasado", "primero pensé", "al inicio"},
 	PastWeak:   []string{"era", "fue", "estaba", "tenía", "tenías", "había"},

@@ -1,6 +1,7 @@
 package grade
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -21,6 +22,12 @@ type mention struct {
 	// weakPast is stamped by the claim engine from the segment the mention sits
 	// in; extractors leave it false.
 	weakPast bool
+	// bare marks an unmarked integer read as a quantity by convention (a money
+	// amount with no currency mark, decimal part, or unit word). The claim
+	// engine treats an uncued bare mention as exposition when the same sentence
+	// carries an explicitly marked value of the kind ("You saved $3,800 across
+	// 4 trips" asserts one amount).
+	bare bool
 }
 
 // ---------------------------------------------------------------- money
@@ -34,10 +41,31 @@ type amountMention struct {
 	pos, end int
 }
 
-var currencySymbols = map[string]string{
-	"$": "$", "€": "EUR", "£": "GBP", "¥": "¥", "₹": "INR", "₩": "KRW", "₽": "RUB", "₺": "TRY", "r$": "BRL",
-	"us$": "USD", "u$s": "USD", "ca$": "CAD", "c$": "CAD", "a$": "AUD", "au$": "AUD", "nz$": "NZD",
-	"mx$": "MXN", "s$": "SGD", "hk$": "HKD", "chf": "CHF",
+// currencySymbol maps one folded currency mark to its ISO code ("$" and "¥"
+// stay ambiguous symbols).
+type currencySymbol struct {
+	sym, code string
+}
+
+// currencySymbols is scanned in this fixed order: longest mark first, then
+// bytewise, so a prefix-sharing pair ("r$" over "$") resolves the same way for
+// every reproducer. It is a slice, not a map, because map iteration order is
+// unspecified and the fold must be reproducible byte-for-byte.
+var currencySymbols = sortedCurrencySymbols([]currencySymbol{
+	{"$", "$"}, {"€", "EUR"}, {"£", "GBP"}, {"¥", "¥"}, {"₹", "INR"}, {"₩", "KRW"}, {"₽", "RUB"}, {"₺", "TRY"}, {"r$", "BRL"},
+	{"us$", "USD"}, {"u$s", "USD"}, {"ca$", "CAD"}, {"c$", "CAD"}, {"a$", "AUD"}, {"au$", "AUD"}, {"nz$", "NZD"},
+	{"mx$", "MXN"}, {"s$", "SGD"}, {"hk$", "HKD"}, {"chf", "CHF"},
+})
+
+func sortedCurrencySymbols(in []currencySymbol) []currencySymbol {
+	out := append([]currencySymbol(nil), in...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if len(out[i].sym) != len(out[j].sym) {
+			return len(out[i].sym) > len(out[j].sym)
+		}
+		return out[i].sym < out[j].sym
+	})
+	return out
 }
 
 var currencyCodes = map[string]bool{
@@ -122,12 +150,12 @@ func (a amountMention) alternateMinor(unit string) int {
 // (symbol or code, before or after) and for major/minor unit words after it.
 func amountContext(text string, pos, end int, lex claimLexicon) (currency string, majorWord, minorWord bool) {
 	before := strings.TrimRight(text[:pos], " ")
-	for sym, code := range currencySymbols {
-		if strings.HasSuffix(before, sym) {
-			// Longest symbol wins ("r$" over "$").
-			if currency == "" || len(sym) > len(symbolFor(currency)) {
-				currency = code
-			}
+	// currencySymbols is longest-first, so the first suffix match is the
+	// longest mark ("r$" over "$").
+	for _, cs := range currencySymbols {
+		if strings.HasSuffix(before, cs.sym) {
+			currency = cs.code
+			break
 		}
 	}
 	if currency == "" {
@@ -136,9 +164,12 @@ func amountContext(text string, pos, end int, lex claimLexicon) (currency string
 		}
 	}
 	after := strings.TrimLeft(text[end:], " ")
-	for sym, code := range currencySymbols {
-		if strings.HasPrefix(after, sym) && currency == "" {
-			currency = code
+	if currency == "" {
+		for _, cs := range currencySymbols {
+			if strings.HasPrefix(after, cs.sym) {
+				currency = cs.code
+				break
+			}
 		}
 	}
 	afterWords := leadingWords(after, 3)
@@ -175,15 +206,6 @@ func amountContext(text string, pos, end int, lex claimLexicon) (currency string
 	return currency, majorWord, minorWord
 }
 
-func symbolFor(code string) string {
-	for sym, c := range currencySymbols {
-		if c == code {
-			return sym
-		}
-	}
-	return ""
-}
-
 func lastWord(s string) string {
 	s = strings.TrimRight(s, " ")
 	if i := strings.LastIndex(s, " "); i >= 0 {
@@ -212,8 +234,11 @@ type numericToken struct {
 // numericTokensV13 scans folded text for numeric tokens. A token may carry
 // interior "," "." "'" separators and space-grouped thousands ("4 110,67"),
 // which are merged when every following group is exactly three digits. Tokens
-// glued to a clock colon, an ISO-date hyphen, or a word character on either
-// side ("order-42", "v13", "3rd") are identifiers, not quantities.
+// glued to a clock colon (a digit on the far side: "10:30"), an ISO-date
+// hyphen, a slash, or a word character on either side ("order-42", "v13",
+// "3rd") are identifiers, not quantities. A colon that merely FOLLOWS a number
+// ("$1,200: $3,800") or precedes one after a word ("total:3800") is a claim
+// cue, not glue.
 func numericTokensV13(text string) []numericToken {
 	var out []numericToken
 	i := 0
@@ -278,13 +303,13 @@ func numericTokensV13(text string) []numericToken {
 		glued := false
 		if start > 0 {
 			rp, _ := utf8.DecodeLastRuneInString(text[:start])
-			if isWordRuneV13(rp) || rp == '-' || rp == ':' || rp == '/' {
+			if isWordRuneV13(rp) || rp == '-' || rp == '/' || (rp == ':' && unicode.IsDigit(peekLastRune(text, start-1))) {
 				glued = true
 			}
 		}
 		if j < len(text) {
-			rn, _ := utf8.DecodeRuneInString(text[j:])
-			if isWordRuneV13(rn) || rn == ':' || rn == '-' || rn == '/' {
+			rn, sn := utf8.DecodeRuneInString(text[j:])
+			if isWordRuneV13(rn) || rn == '-' || rn == '/' || (rn == ':' && unicode.IsDigit(peekRune(text, j+sn))) {
 				// "3rd", "10:30", "2026-03-04", "4/3/2026": not a quantity.
 				glued = true
 			}
@@ -298,19 +323,6 @@ func numericTokensV13(text string) []numericToken {
 		}
 	}
 	return out
-}
-
-func groupedSoFar(s string) bool {
-	parts := strings.Split(s, " ")
-	if len(parts) < 2 {
-		return false
-	}
-	for _, p := range parts[1:] {
-		if len(p) != 3 {
-			return false
-		}
-	}
-	return true
 }
 
 func peekRune(s string, i int) rune {
@@ -355,6 +367,12 @@ func parseAmountTokenV13(tok string) (whole, frac int, hasFrac bool, ok bool) {
 	}
 	return 0, 0, false, false
 }
+
+// yearLikeV13 reports whether a whole number reads as a calendar year. Such a
+// token beside a count or an amount ("You took 3 trips in 2026") is a temporal
+// qualifier, not a competing value; the claim specs drop it from the mention
+// set unless the case's own expected or distractor value is year-like.
+func yearLikeV13(n int) bool { return n >= 1900 && n <= 2100 }
 
 // ---------------------------------------------------------------- number
 

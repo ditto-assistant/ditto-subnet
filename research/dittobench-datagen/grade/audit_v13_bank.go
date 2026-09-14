@@ -90,6 +90,7 @@ var money411067 = protocol.MemoryCase{AnswerKind: protocol.AnswerMoney, Expected
 var money411067Major = protocol.MemoryCase{AnswerKind: protocol.AnswerMoney, ExpectedAnswer: "411067", Question: "What is the balance now?", DistractorAnswers: []string{"420000", "411000"}}
 var cityLisbon = protocol.MemoryCase{AnswerKind: protocol.AnswerValue, ExpectedAnswer: "Lisbon", DistractorAnswers: []string{"Oslo"}}
 var absenceApril = protocol.MemoryCase{AnswerKind: protocol.AnswerAbsence, Question: "What was my April budget?", GroundingTokens: []string{"March", "BUD-2231"}, DistractorAnswers: []string{"50000", "$500.00"}}
+var numberTrips3 = protocol.MemoryCase{AnswerKind: protocol.AnswerNumber, ExpectedAnswer: "3", Question: "How many trips did I take in 2026?", DistractorAnswers: []string{"4"}}
 var directionDecrease = protocol.MemoryCase{AnswerKind: protocol.AnswerDirection, ExpectedAnswer: "decrease", DistractorAnswers: []string{"increase"}}
 var dateMarch4 = protocol.MemoryCase{AnswerKind: protocol.AnswerDate, ExpectedAnswer: "2026-03-04", DistractorAnswers: []string{"2026-03-05", "2026-04-04"}}
 
@@ -178,6 +179,13 @@ var auditPositivesV13 = []AuditPositive{
 	{Name: "money-was-x-now-y", Case: money411067Major, Response: protocol.RunResponse{FinalText: "It was $4,200.00, now it's $4,110.67."}},
 	{Name: "money-past-tense-answer", Case: money411067Major, Response: protocol.RunResponse{FinalText: "The balance was $4,110.67."}},
 	{Name: "money-cited-and-rejected-distractor", Case: money411067Major, Response: protocol.RunResponse{FinalText: "$4,110.67 — not $4,200.00, that was before the correction."}},
+	{Name: "shown-arithmetic-colon", Case: money411067Major, Response: protocol.RunResponse{FinalText: "$5,000.00 minus $889.33: $4,110.67"}},
+	{Name: "money-year-qualifier", Case: money411067Major, Response: protocol.RunResponse{FinalText: "In 2026 you saved $4,110.67."}},
+	{Name: "money-beside-bare-count", Case: money411067Major, Response: protocol.RunResponse{FinalText: "You saved $4,110.67 across 4 trips."}},
+	{Name: "number-count-with-year", Case: numberTrips3, Response: protocol.RunResponse{FinalText: "You took 3 trips in 2026."}},
+	{Name: "number-verb-object-count", Case: numberTrips3, Response: protocol.RunResponse{FinalText: "You booked 3 trips and 4 cruises."}},
+	{Name: "number-year-first", Case: numberTrips3, Response: protocol.RunResponse{FinalText: "In 2026 you had 3 trips."}},
+	{Name: "spanish-sino-corrective", Case: withLanguage(cityLisbon, "es"), Response: protocol.RunResponse{FinalText: "No es Oslo, sino Lisbon."}},
 	{Name: "records-disagree", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerList, AnswerItems: []string{"380000", "420000"}, AnswerItemKinds: []string{protocol.AnswerMoney, protocol.AnswerMoney}}, Response: protocol.RunResponse{FinalText: "Your records disagree: one note says $3,800.00 and another says $4,200.00."}},
 	{Name: "net-change-pair", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerList, AnswerItems: []string{"decrease", "120000"}, AnswerItemKinds: []string{protocol.AnswerDirection, protocol.AnswerMoney}, DistractorAnswers: []string{"increase", "150000"}}, Response: protocol.RunResponse{FinalText: "Overall the three changes lowered the balance by $1,200.00."}},
 	{Name: "direction-question-vocabulary", Case: directionDecrease, Response: protocol.RunResponse{FinalText: "They lowered it — you ended up losing money."}},

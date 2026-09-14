@@ -37,7 +37,12 @@ import (
 //   - a clause that enumerates values ("3800 or 4200", "either A or B",
 //     "maybe X") asserts every value it lists — a hedge is a claim of each;
 //   - a sentence with several values and neither a cue nor an enumeration is
-//     exposition and asserts nothing; a lone value in a sentence is asserted.
+//     exposition and asserts nothing; a lone value in a sentence is asserted;
+//   - two refinements keep natural concise answers out of the exposition rule:
+//     a calendar-year token beside a count or amount ("3 trips in 2026") is a
+//     qualifier the typed specs drop (yearLikeV13), and an uncued bare integer
+//     beside an explicitly marked amount ("$3,800 across 4 trips") is
+//     exposition while the marked amount is the claim.
 //
 // The engine works on the folded text of final_text (foldV13) and treats the
 // structured answer slot, when populated, as an unconditional assertion.
@@ -114,6 +119,11 @@ var (
 		"owns", "there are", "there is", "count", "counted", "get", "about", "roughly",
 		"approximately", "around", "exactly", "some", "be", "says", "said", "shows", "showed",
 		"lists", "listed", "reads", "records", "recorded", "notes", "noted", "at",
+		// Verb-object counts: "took 3 trips", "booked 3 flights", "made 2 payments".
+		"took", "take", "takes", "taken", "booked", "book", "books", "made", "make", "makes",
+		"had", "did", "done", "completed", "logged", "attended", "visited", "went on",
+		"bought", "ordered", "sent", "received", "scheduled", "planned", "hold", "holds",
+		"held", "keep", "keeps", "kept", "added", "created", "opened", "flew", "ran",
 	}
 	claimCueAfterEN = []string{
 		"left", "remaining", "remains", "in total", "total", "overall", "net", "altogether",
@@ -285,6 +295,10 @@ type segment struct {
 	// afterContrast marks a clause opened by a contrast connective ("but",
 	// "however"): it is a fresh assertion, not an appositive of the clause before.
 	afterContrast bool
+	// afterColon marks a clause the previous clause handed off with a ":"
+	// ("$5,000 minus $1,200: $3,800"): its first value is result-cued by that
+	// colon even though the boundary split it from the cue.
+	afterColon bool
 }
 
 // eligible reports whether values in the segment can be asserted candidates.
@@ -370,9 +384,10 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 	var cur []string
 	rejected := false
 	afterContrast := false
+	afterColon := false
 	flush := func() {
 		if len(cur) > 0 {
-			seg := segment{text: strings.Join(cur, " "), rejected: rejected, afterContrast: afterContrast}
+			seg := segment{text: strings.Join(cur, " "), rejected: rejected, afterContrast: afterContrast, afterColon: afterColon}
 			seg.past = anyBounded(seg.text, lex.pastStrong)
 			seg.weakPast = !seg.past && anyBounded(seg.text, lex.pastWeak)
 			seg.current = anyBounded(seg.text, lex.current)
@@ -382,6 +397,7 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 		}
 		cur = cur[:0]
 		afterContrast = false
+		afterColon = false
 	}
 	for i := 0; i < len(words); {
 		if n := matchPhraseAt(words, i, lex.protected); n > 0 {
@@ -410,8 +426,10 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 		i++
 		if strings.HasSuffix(w, ",") || strings.HasSuffix(w, ")") || strings.HasSuffix(w, ":") ||
 			w == "—" || w == "–" || w == "-" {
+			colon := strings.HasSuffix(w, ":")
 			flush()
 			rejected = false
+			afterColon = colon
 		}
 		if i < len(words) && (strings.HasPrefix(words[i], "(") || words[i] == "—" || words[i] == "–") {
 			flush()
@@ -611,30 +629,61 @@ func appendKey(keys []string, key string) []string {
 // and a multi-value exposition asserts nothing.
 func sentenceCandidates(segs []segment, perSeg [][]mention, lex claimLexicon, cueRule bool, maxClaims int) []mention {
 	var all, strong, weak []mention
-	enumerating := false
+	if !cueRule {
+		for i, seg := range segs {
+			ms := perSeg[i]
+			for k := range ms {
+				ms[k].weakPast = seg.weakPast && !seg.current
+			}
+			all = append(all, ms...)
+		}
+		return all
+	}
+	type positioned struct {
+		m        mention
+		strength int
+	}
+	var items []positioned
+	enumerating, explicit := false, false
 	for i, seg := range segs {
 		ms := perSeg[i]
 		for k := range ms {
 			ms[k].weakPast = seg.weakPast && !seg.current
 		}
-		all = append(all, ms...)
-		if !cueRule {
-			continue
-		}
 		if seg.hedge || isEnumeration(seg.text, ms, lex) {
 			enumerating = true
 		}
-		for _, m := range ms {
-			switch cueStrength(seg.text, m, ms, lex) {
-			case 2:
-				strong = append(strong, m)
-			case 1:
-				weak = append(weak, m)
+		first := -1
+		for k, m := range ms {
+			if first < 0 || m.pos < ms[first].pos {
+				first = k
 			}
 		}
+		for k, m := range ms {
+			strength := cueStrength(seg.text, m, ms, lex)
+			if strength == 0 && seg.afterColon && k == first {
+				// The colon that closed the previous clause cues this value.
+				strength = 2
+			}
+			if !m.bare {
+				explicit = true
+			}
+			items = append(items, positioned{m: m, strength: strength})
+		}
 	}
-	if !cueRule {
-		return all
+	for _, it := range items {
+		// An uncued bare integer beside an explicitly marked value is
+		// exposition ("$3,800 across 4 trips"), unless the clause enumerates.
+		if explicit && it.m.bare && it.strength == 0 && !enumerating {
+			continue
+		}
+		all = append(all, it.m)
+		switch it.strength {
+		case 2:
+			strong = append(strong, it.m)
+		case 1:
+			weak = append(weak, it.m)
+		}
 	}
 	switch {
 	case len(strong) > 0:
@@ -762,8 +811,16 @@ func knownValueExtractor(expected []string, distractors []string) extractor {
 		var out []mention
 		for _, k := range forms {
 			if isPureNumber(k.form) {
-				if containsNumberTokenV13(text, k.form) {
-					out = append(out, mention{key: k.key, pos: strings.Index(text, k.form), end: strings.Index(text, k.form) + len(k.form)})
+				// One mention per number-bounded occurrence, so "26" inside
+				// "2026" is never positioned as a mention and a repeated number
+				// is seen as many times as it occurs.
+				for from := 0; ; {
+					j := indexNumberTokenV13(text, k.form, from)
+					if j < 0 {
+						break
+					}
+					out = append(out, mention{key: k.key, pos: j, end: j + len(k.form)})
+					from = j + 1
 				}
 				continue
 			}
