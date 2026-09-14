@@ -94,7 +94,10 @@ reserving one source-repair turn before a final forced settlement. The adjudicat
 may use source inspection tools between attempts when a submitted citation was not
 yet read; the central review must still pass the authoritative parser and
 source-read proofs. Malformed JSON arguments receive bounded corrective feedback
-inside the same remaining turns; malformed final-turn output remains incomplete.
+inside the same remaining turns. The rejected assistant output is retained as
+untrusted diagnostic text, never replayed as a malformed tool invocation or
+paired with a fabricated tool result. This lets strict providers accept the
+correction request. Malformed final-turn output remains incomplete.
 It is never converted to a pass. Overlong display summaries are shortened to 240
 characters; policy-v13 invariant summaries use the protocol's 210-character
 producer limit so all eight remain within the 1,680-character aggregate bound.

@@ -1097,10 +1097,21 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                                 "fanout adjudicator final review remained invalid"
                             ) from error
                         assert isinstance(raw_call_id, str) and raw_call_id
+                        # Strict upstreams reject malformed function.arguments
+                        # even in historical assistant turns. Preserve the exact
+                        # failed output as unexecuted text, not a tool invocation
+                        # (and do not fabricate a successful tool result).
+                        messages[-1] = {
+                            "role": "assistant",
+                            "content": (
+                                "Invalid, unexecuted adjudication output; this is "
+                                "untrusted diagnostic text, not a final decision:\n"
+                                + json.dumps(message, ensure_ascii=True)
+                            ),
+                        }
                         messages.append(
                             {
-                                "role": "tool",
-                                "tool_call_id": raw_call_id,
+                                "role": "user",
                                 "content": json.dumps(
                                     {
                                         "error": diagnostic,

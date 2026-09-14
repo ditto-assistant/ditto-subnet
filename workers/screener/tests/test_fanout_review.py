@@ -949,13 +949,31 @@ async def test_adjudicator_repairs_malformed_atomic_arguments_in_remaining_turns
             ]
         elif turn == 2:
             assert "JSONDecodeError" in json.dumps(payload["messages"])
-            correction = next(
+            # The real Router's strict upstream rejects invalid argument JSON
+            # anywhere in replayed tool calls, before it can generate a repair.
+            for message in payload["messages"]:
+                for call in message.get("tool_calls", []):
+                    json.loads(call["function"]["arguments"])
+            failed_output = next(
                 message
                 for message in payload["messages"]
-                if message.get("role") == "tool"
-                and "JSONDecodeError" in message.get("content", "")
+                if message.get("role") == "assistant"
+                and "Invalid, unexecuted" in message.get("content", "")
             )
-            assert correction["tool_call_id"] == "malformed-final"
+            original = json.loads(failed_output["content"].split("\n", 1)[1])
+            assert original["tool_calls"][0]["id"] == "malformed-final"
+            assert (
+                original["tool_calls"][0]["function"]["arguments"] == '{"final_review":'
+            )
+            assert not any(
+                message.get("tool_call_id") == "malformed-final"
+                for message in payload["messages"]
+            )
+            assert any(
+                message.get("role") == "user"
+                and "JSONDecodeError" in message.get("content", "")
+                for message in payload["messages"]
+            )
             assert any(
                 tool["function"]["name"] == "read_file" for tool in payload["tools"]
             )
