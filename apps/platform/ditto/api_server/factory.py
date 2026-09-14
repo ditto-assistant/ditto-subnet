@@ -311,6 +311,23 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 else None
             )
 
+            # Shadow router-track ledger relay: reads the ledger the offloaded
+            # dittobench-api scorer publishes so validators can fold it via
+            # GET /scoring/router-ledger. None (unconfigured) → the endpoint
+            # serves an empty ledger, the safe shadow default (zero emission).
+            from ditto.api_server.router_ledger_relay import (
+                create_router_ledger_reader_from_env,
+            )
+
+            router_ledger_reader = (
+                create_router_ledger_reader_from_env()
+                if _process_role() == PLATFORM_ROLE
+                else None
+            )
+            if router_ledger_reader is not None:
+                stack.push_async_callback(router_ledger_reader.aclose)
+            app.state.router_ledger_reader = router_ledger_reader
+
             from ditto.api_server.hippius import (
                 create_hippius_client,
                 parse_traces_hippius_config_from_env,

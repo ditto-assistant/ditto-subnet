@@ -59,6 +59,19 @@ CONFIRMATION_MODELS = [
     "V9ConfirmationFailResponse",
 ]
 
+# The shadow router-track ledger the offloaded scorer publishes, Platform
+# relays, and the validator folds. It is a net-new hand-maintained copy on both
+# sides (root/validator + apps/platform), so it needs the same drift guard the
+# validator and miner models learned the hard way. ``shadow_composite`` is the
+# real measured number the dashboard shows while ``combined_score`` stays 0 and
+# ``weight_eligible`` stays False; a one-sided rename/retype of either would
+# silently break the shadow fold or the dashboard, so pin the structure here.
+ROUTER_MODELS = [
+    "RouterHarnessResult",
+    "RouterLedgerEntry",
+    "RouterLedgerResponse",
+]
+
 # Cosmetic JSON-Schema keys that carry prose/illustration, not structure.
 _STRIP_KEYS = {"title", "description", "examples", "example"}
 
@@ -90,3 +103,8 @@ def compute_confirmation_contract() -> dict[str, Any]:
     return compute_contract(
         CONFIRMATION_MODELS, module="ditto.api_models.validator_confirmation"
     )
+
+
+def compute_router_contract() -> dict[str, Any]:
+    """Return the normalized structure of the shadow router-ledger wire models."""
+    return compute_contract(ROUTER_MODELS, module="ditto.api_models.router_ledger")
