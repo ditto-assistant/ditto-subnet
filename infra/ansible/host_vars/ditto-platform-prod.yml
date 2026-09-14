@@ -78,7 +78,9 @@ platform_targon_candidate_pull_sa: ditto-screening-candidate-pull@ditto-app-dev.
 platform_targon_bootstrap_sa: ditto-screener-bootstrap@ditto-app-dev.iam.gserviceaccount.com
 platform_targon_source_review_secret: projects/ditto-app-dev/secrets/validator-openrouter-key
 # Set only after provisioning a dedicated Router key with a $20/day key cap.
-platform_targon_fanout_shadow_secret: ""
+# Dedicated $20/day Router key for the report-only pilot; expires 2026-10-14.
+# The separate audited screener setting remains off until the release image is trusted.
+platform_targon_fanout_shadow_secret: projects/ditto-app-dev/secrets/screener-fanout-shadow-router-key
 platform_cloudrun_project: ditto-app-dev
 platform_cloudrun_region: us-central1
 platform_cloudrun_untrusted_sa: ditto-screening-untrusted@ditto-app-dev.iam.gserviceaccount.com

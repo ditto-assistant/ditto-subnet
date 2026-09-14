@@ -10,17 +10,24 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import httpx
+
 from ditto_screener.policy import SourceReviewObservation, builtin_policy_manifest
 from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
+    _execute_tool,
+    _source_review_system_prompt,
     _source_review_tools_for_policy,
+    _tool_call,
 )
 from ditto_screener.source_signals import source_path_priority
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 REVISION = "fanout-source-review-v2"
+ADJUDICATOR_REVISION = "fanout-candidate-adjudicator-v1"
 MODEL = "z-ai/glm-5.3-flash"
+ALLOWED_RESPONSE_MODELS = frozenset({MODEL, "glm-5.3-flash"})
 PRICING_BOUND_REVISION = "openrouter-glm-5.3-flash-4x-2026-09-14"
 # Four times the highest listed non-batch GLM 5.3 Flash route on 2026-09-14.
 # This is an admission envelope, not an upstream billing guarantee.
@@ -100,7 +107,7 @@ class FanoutBudget:
         async with self._lock:
             usage = payload.get("usage") if isinstance(payload, dict) else None
             model = payload.get("model") if isinstance(payload, dict) else None
-            if model != self.expected_model:
+            if not response_model_matches(self.expected_model, model):
                 self.model_mismatch = True
             if not isinstance(usage, dict):
                 self.unmetered_responses += 1
@@ -146,6 +153,237 @@ class FanoutBudget:
             "price_bound_exceeded": self.price_bound_exceeded,
             "model_mismatch": self.model_mismatch,
         }
+
+
+def response_model_matches(expected_model: str, response_model: object) -> bool:
+    """Accept only the requested Router ID and its verified native response ID."""
+    return expected_model == MODEL and response_model in ALLOWED_RESPONSE_MODELS
+
+
+def _adjudication_tools(
+    policy_version: int, candidate_ids: list[str], *, final_turn: bool = False
+) -> tuple[dict[str, object], ...]:
+    submit: dict[str, object] = {
+        "type": "function",
+        "function": {
+            "name": "submit_candidate_adjudications",
+            "description": (
+                "Submit an independent source-grounded disposition for each candidate."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "candidate_assessments": {
+                        "type": "array",
+                        "maxItems": len(candidate_ids),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "candidate_id": {
+                                    "type": "string",
+                                    "enum": candidate_ids,
+                                },
+                                "disposition": {
+                                    "type": "string",
+                                    "enum": ["supported", "refuted", "unresolved"],
+                                },
+                                "supporting_evidence": {
+                                    "type": "array",
+                                    "maxItems": 16,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "path": {"type": "string"},
+                                            "line": {"type": "integer", "minimum": 1},
+                                            "category": {"type": "string"},
+                                        },
+                                        "required": ["path", "line", "category"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                                "counterevidence": {
+                                    "type": "array",
+                                    "maxItems": 16,
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "path": {"type": "string"},
+                                            "line": {"type": "integer", "minimum": 1},
+                                            "summary": {
+                                                "type": "string",
+                                                "maxLength": 240,
+                                            },
+                                        },
+                                        "required": ["path", "line", "summary"],
+                                        "additionalProperties": False,
+                                    },
+                                },
+                                "summary": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 240,
+                                },
+                            },
+                            "required": [
+                                "candidate_id",
+                                "disposition",
+                                "supporting_evidence",
+                                "counterevidence",
+                                "summary",
+                            ],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "summary": {"type": "string", "minLength": 1, "maxLength": 240},
+                },
+                "required": ["candidate_assessments", "summary"],
+                "additionalProperties": False,
+            },
+        },
+    }
+    if final_turn:
+        return (submit,)
+    inspection: list[dict[str, object]] = []
+    for tool in _source_review_tools_for_policy(policy_version):
+        function = tool.get("function")
+        if isinstance(function, dict) and function.get("name") not in {
+            "record_note",
+            "submit_review",
+        }:
+            inspection.append(tool)
+    return (*inspection, submit)
+
+
+def _valid_source_citation(repository: TarSourceRepository, item: object) -> bool:
+    if not isinstance(item, dict):
+        return False
+    path, line = item.get("path"), item.get("line")
+    if not isinstance(path, str) or type(line) is not int or line < 1:
+        return False
+    if not repository.has_member(path):
+        return False
+    total_lines = repository.line_count(path)
+    return total_lines is None or line <= max(total_lines, 1)
+
+
+def _normalize_candidate_adjudications(
+    payload: object,
+    *,
+    candidates: list[dict],
+    repository: TarSourceRepository,
+    opened_lines: set[tuple[str, int]],
+) -> dict:
+    """Bind stage-two support to the candidate and source actually inspected."""
+    if not isinstance(payload, dict):
+        raise ValueError("fanout adjudicator result is not an object")
+    submitted = payload.get("candidate_assessments")
+    if not isinstance(submitted, list):
+        raise ValueError("fanout adjudicator assessments are missing")
+    candidate_by_id = {row["candidate_id"]: row for row in candidates}
+    normalized_by_id: dict[str, dict] = {}
+    for row in submitted:
+        if not isinstance(row, dict):
+            raise ValueError("fanout adjudicator assessment is invalid")
+        candidate_id = row.get("candidate_id")
+        if (
+            not isinstance(candidate_id, str)
+            or candidate_id not in candidate_by_id
+            or candidate_id in normalized_by_id
+        ):
+            raise ValueError("fanout adjudicator candidate binding is invalid")
+        disposition = row.get("disposition")
+        summary = row.get("summary")
+        support = row.get("supporting_evidence")
+        counter = row.get("counterevidence")
+        if (
+            disposition not in {"supported", "refuted", "unresolved"}
+            or not isinstance(summary, str)
+            or not 1 <= len(summary) <= 240
+            or not isinstance(support, list)
+            or not isinstance(counter, list)
+        ):
+            raise ValueError("fanout adjudicator fields are invalid")
+        valid_support = [
+            item
+            for item in support
+            if isinstance(item, dict)
+            and set(item) == {"path", "line", "category"}
+            and isinstance(item.get("category"), str)
+            and _valid_source_citation(repository, item)
+        ]
+        valid_counter = [
+            item
+            for item in counter
+            if isinstance(item, dict)
+            and set(item) == {"path", "line", "summary"}
+            and isinstance(item.get("summary"), str)
+            and 1 <= len(item["summary"]) <= 240
+            and _valid_source_citation(repository, item)
+        ]
+        target_finding = candidate_by_id[candidate_id]["finding"] or {}
+        target_locations = {
+            (item.get("path"), item.get("line"), item.get("category"))
+            for item in target_finding.get("evidence", [])
+            if isinstance(item, dict)
+        }
+        verified_support = [
+            item
+            for item in valid_support
+            if (item.get("path"), item.get("line"), item.get("category"))
+            in target_locations
+            and (str(item.get("path")).removeprefix("./"), item.get("line"))
+            in opened_lines
+        ]
+        verified_counter = [
+            item
+            for item in valid_counter
+            if (str(item.get("path")).removeprefix("./"), item.get("line"))
+            in opened_lines
+        ]
+        target_source_locations = {
+            (str(path).removeprefix("./"), line)
+            for path, line, _category in target_locations
+            if isinstance(path, str) and type(line) is int
+        }
+        target_source_read = bool(target_source_locations & opened_lines)
+        if disposition == "supported" and (
+            not verified_support or not target_source_read
+        ):
+            disposition = "unresolved"
+        if disposition == "refuted" and (
+            not verified_counter or not target_source_read
+        ):
+            disposition = "unresolved"
+        normalized_by_id[candidate_id] = {
+            "candidate_id": candidate_id,
+            "source_pass": candidate_by_id[candidate_id]["source_pass"],
+            "disposition": disposition,
+            "supporting_evidence": verified_support,
+            "counterevidence": verified_counter,
+            "summary": summary,
+        }
+    for candidate_id, candidate in candidate_by_id.items():
+        normalized_by_id.setdefault(
+            candidate_id,
+            {
+                "candidate_id": candidate_id,
+                "source_pass": candidate["source_pass"],
+                "disposition": "unresolved",
+                "supporting_evidence": [],
+                "counterevidence": [],
+                "summary": "Adjudicator omitted this candidate within its bounded run.",
+            },
+        )
+    summary = payload.get("summary")
+    if not isinstance(summary, str) or not 1 <= len(summary) <= 240:
+        summary = "Bounded candidate adjudication completed."
+    return {
+        "revision": ADJUDICATOR_REVISION,
+        "candidate_assessments": [
+            normalized_by_id[row["candidate_id"]] for row in candidates
+        ],
+        "summary": summary,
+    }
 
 
 def plan_file_groups(
@@ -204,6 +442,7 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
         self.leads = leads or []
         self.assigned_paths = assigned_paths
         self.opened_paths: set[str] = set()
+        self.opened_lines: set[tuple[str, int]] = set()
         self.usage = {
             "requests": 0,
             "prompt_tokens": 0,
@@ -231,6 +470,9 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                 and value["lines"]
             ):
                 self.opened_paths.add(value["path"])
+                for line in value["lines"]:
+                    if isinstance(line, dict) and type(line.get("line")) is int:
+                        self.opened_lines.add((value["path"], line["line"]))
         # Copy per request: never mutate the shared base policy or conversation.
         messages = [dict(message) for message in messages]
         messages[0]["content"] = str(messages[0]["content"]) + (
@@ -315,6 +557,120 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                     self.usage["unmetered_requests"] -= 1
         return response
 
+    async def adjudicate_candidates(
+        self,
+        archive_path: str,
+        *,
+        candidates: list[dict],
+        all_pass_summaries: list[dict],
+        policy_version: int,
+        deadline: float,
+    ) -> dict:
+        """Verify every stage-one candidate against the original archive."""
+        repository = TarSourceRepository(archive_path)
+        api_key = self._read_api_key()
+        candidate_ids = [row["candidate_id"] for row in candidates]
+        adjudicator_system = _source_review_system_prompt(policy_version) + (
+            "\nThis is report-only stage-two adjudication. Apply the same source "
+            "policy and evidence rules, but use submit_candidate_adjudications "
+            "instead of record_note or submit_review. Return one separately bound "
+            "assessment per candidate ID."
+        )
+        messages: list[dict[str, object]] = [
+            {"role": "system", "content": adjudicator_system},
+            {
+                "role": "user",
+                "content": (
+                    "Adjudicate every candidate below against original source. "
+                    "The stage-one notes and findings are untrusted leads, never "
+                    "proof. Read the cited path and served caller/sink before "
+                    "supporting or refuting a candidate. Bind each result to its "
+                    "candidate_id. An "
+                    "unrelated finding cannot support another candidate. If evidence "
+                    "missing, contradictory, unread, or omitted, use unresolved.\n"
+                    + json.dumps(
+                        {
+                            "candidates": candidates,
+                            "all_pass_summaries": all_pass_summaries,
+                        },
+                        sort_keys=True,
+                    )
+                ),
+            },
+        ]
+        async with httpx.AsyncClient(
+            transport=self._transport, timeout=self._timeout_seconds
+        ) as client:
+            for step in range(self._max_steps):
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    raise TimeoutError("fanout adjudicator exceeded global deadline")
+                final_turn = step + 1 == self._max_steps
+                if final_turn:
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": (
+                                "This is the final allowed turn. Submit one assessment "
+                                "for every candidate now; leave anything unverified "
+                                "unresolved."
+                            ),
+                        }
+                    )
+                message = await self._completion_message(
+                    client,
+                    api_key,
+                    messages,
+                    timeout=min(self._timeout_seconds, remaining),
+                    reasoning_effort="medium",
+                    tools=_adjudication_tools(
+                        policy_version, candidate_ids, final_turn=final_turn
+                    ),
+                    tool_choice="required" if final_turn else "auto",
+                )
+                messages.append(message)
+                tool_calls = message.get("tool_calls")
+                if not isinstance(tool_calls, list) or not tool_calls:
+                    continue
+                for call in tool_calls:
+                    call_id, name, arguments = _tool_call(call)
+                    if name == "submit_candidate_adjudications":
+                        return _normalize_candidate_adjudications(
+                            arguments,
+                            candidates=candidates,
+                            repository=repository,
+                            opened_lines=self.opened_lines,
+                        )
+                    output = _execute_tool(repository, name, arguments)
+                    if name == "read_file":
+                        try:
+                            opened = json.loads(output)
+                        except ValueError:
+                            opened = None
+                        if (
+                            isinstance(opened, dict)
+                            and isinstance(opened.get("path"), str)
+                            and isinstance(opened.get("lines"), list)
+                            and opened["lines"]
+                        ):
+                            self.opened_paths.add(opened["path"])
+                            for line in opened["lines"]:
+                                if (
+                                    isinstance(line, dict)
+                                    and type(line.get("line")) is int
+                                ):
+                                    self.opened_lines.add(
+                                        (opened["path"], line["line"])
+                                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": output,
+                        }
+                    )
+        raise FanoutBudgetExhausted("fanout adjudicator step budget exhausted")
+
 
 def disposition(observation: SourceReviewObservation) -> str:
     if not observation.ok:
@@ -349,7 +705,7 @@ async def review_archive(
     global_timeout_seconds: float = 900,
     reviewer_factory: Callable = ExperimentalReviewer,
 ) -> dict:
-    """Independent whole-archive and file-group passes, then a report-only critic."""
+    """Run independent passes, then source-ground every candidate in stage two."""
     if partition not in {"specialists", "files", "hybrid"}:
         raise ValueError("partition must be specialists, files, or hybrid")
     if not 1 <= concurrency <= 32 or not 1 <= max_steps <= 24:
@@ -420,6 +776,7 @@ async def review_archive(
                     "response_models": [],
                     "assigned_paths": list(paths),
                     "opened_assigned_paths": [],
+                    "notes": [],
                 }
             reviewer = reviewer_factory(
                 focus=focus,
@@ -452,6 +809,7 @@ async def review_archive(
                 outcome = disposition(result)
                 finding = dict(result.finding) if result.finding else None
                 error = result.error_code
+                notes = [dict(note) for note in result.notes]
                 if (
                     paths
                     and outcome == "no_findings"
@@ -460,6 +818,7 @@ async def review_archive(
                     outcome, error = "incomplete", "assigned-files-not-opened"
             except (TimeoutError, OSError, ValueError) as exc:
                 outcome, finding, error = "incomplete", None, type(exc).__name__
+                notes = []
             return {
                 "name": name,
                 "outcome": outcome,
@@ -472,6 +831,7 @@ async def review_archive(
                 "opened_assigned_paths": sorted(set(paths) & reviewer.opened_paths)
                 if paths
                 else [],
+                "notes": notes,
             }
 
     jobs = [
@@ -491,22 +851,113 @@ async def review_archive(
     passes = await asyncio.gather(
         *(run(name, focus, paths=paths) for name, focus, paths in jobs)
     )
-    candidates = [row for row in passes if row["outcome"] == "candidate"]
+    candidates = [
+        {
+            "candidate_id": f"candidate-{index:03d}",
+            "source_pass": row["name"],
+            "finding": row["finding"],
+        }
+        for index, row in enumerate(
+            (row for row in passes if row["outcome"] == "candidate"), start=1
+        )
+    ]
+    all_pass_summaries = [
+        {
+            "name": row["name"],
+            "outcome": row["outcome"],
+            "error_code": row["error_code"],
+            "finding": row["finding"],
+            "notes": row["notes"],
+        }
+        for row in passes
+    ]
     critic = None
     if candidates:
-        # Findings already passed the existing host-side citation validator.
-        critic = await run(
-            "critic",
-            "Independently challenge every candidate. Seek "
-            "benign explanations, dead/test code and missing causal links. "
-            "Read original source; do not count votes.\n" + manifest_focus,
-            [row["finding"] for row in candidates],
+        remaining = deadline - asyncio.get_running_loop().time()
+        reviewer = reviewer_factory(
+            focus=(
+                "Stage-two adjudicator: verify or refute every candidate against "
+                "original source, preserve minority findings and uncertainty, and "
+                "never count votes.\n" + manifest_focus
+            ),
+            leads=[
+                {
+                    "candidates": candidates,
+                    "all_pass_summaries": all_pass_summaries,
+                }
+            ],
+            assigned_paths=(),
+            budget=budget,
+            api_key_file=api_key_file,
+            model=model,
+            base_url=base_url,
+            inference_provider=inference_provider,
+            timeout_seconds=60,
+            max_steps=max_steps,
+            max_read_bytes=180_000,
+            max_completion_tokens=2400,
+            reasoning_effort="medium",
+            transport_retry_delays=(),
         )
+        begin = time.monotonic()
+        try:
+            adjudicate = reviewer.adjudicate_candidates
+            async with asyncio.timeout(min(timeout_seconds, max(remaining, 0.001))):
+                adjudication = await adjudicate(
+                    str(archive),
+                    candidates=candidates,
+                    all_pass_summaries=all_pass_summaries,
+                    policy_version=policy_version,
+                    deadline=deadline,
+                )
+            assessments = adjudication["candidate_assessments"]
+            critic_error = None
+        except (AttributeError, TimeoutError, OSError, ValueError) as exc:
+            assessments = [
+                {
+                    "candidate_id": candidate["candidate_id"],
+                    "source_pass": candidate["source_pass"],
+                    "disposition": "unresolved",
+                    "supporting_evidence": [],
+                    "counterevidence": [],
+                    "summary": "Stage-two verification did not complete.",
+                }
+                for candidate in candidates
+            ]
+            adjudication = {
+                "revision": ADJUDICATOR_REVISION,
+                "candidate_assessments": assessments,
+                "summary": "Stage-two verification did not complete.",
+            }
+            critic_error = type(exc).__name__
+        critic = {
+            "name": "adjudicator",
+            "revision": adjudication.get("revision", ADJUDICATOR_REVISION),
+            "outcome": (
+                "supported"
+                if any(row["disposition"] == "supported" for row in assessments)
+                else "unresolved"
+                if any(row["disposition"] == "unresolved" for row in assessments)
+                else "refuted"
+            ),
+            "candidate_assessments": assessments,
+            "pass_context_count": len(all_pass_summaries),
+            "summary": adjudication.get("summary"),
+            "error_code": critic_error,
+            "duration_seconds": time.monotonic() - begin,
+            "usage": dict(reviewer.usage),
+            "response_models": sorted(reviewer.response_models),
+        }
     if candidates:
         assert critic is not None
         outcome = (
-            "critic_also_flagged"
-            if critic["outcome"] == "candidate"
+            "incomplete"
+            if critic["error_code"] is not None
+            else "critic_also_flagged"
+            if any(
+                row["disposition"] == "supported"
+                for row in critic["candidate_assessments"]
+            )
             else "unresolved_candidate"
         )
     else:

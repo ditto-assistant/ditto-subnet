@@ -6,14 +6,17 @@ import httpx
 import pytest
 
 from ditto_screener.fanout_review import (
+    ALLOWED_RESPONSE_MODELS,
     FOCI,
     ExperimentalReviewer,
     FanoutBudget,
     FanoutBudgetExhausted,
+    _normalize_candidate_adjudications,
     plan_file_groups,
     review_archive,
 )
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.source_review import TarSourceRepository
 
 
 async def test_atomic_request_reservations_cannot_oversubscribe_tokens_or_cost():
@@ -77,6 +80,28 @@ async def test_response_model_mismatch_stops_later_request_admission():
         await budget.before_request(
             input_token_bound=1_000, completion_token_bound=2_400
         )
+
+
+@pytest.mark.parametrize("response_model", sorted(ALLOWED_RESPONSE_MODELS))
+async def test_verified_router_response_model_ids_are_accepted(response_model):
+    budget = FanoutBudget(
+        max_requests=4,
+        max_total_tokens=100_000,
+        max_reported_cost_usd=3,
+    )
+    await budget.before_request(input_token_bound=1_000, completion_token_bound=2_400)
+    await budget.record_response(
+        {
+            "model": response_model,
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 10,
+                "cost": 0.001,
+            },
+        }
+    )
+    await budget.before_request(input_token_bound=1_000, completion_token_bound=2_400)
+    assert budget.snapshot()["model_mismatch"] is False
 
 
 async def test_default_envelope_fits_specialists_file_groups_and_critic_first_turns():
@@ -152,6 +177,31 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
                 clearance_certified=True,
             )
 
+        async def adjudicate_candidates(
+            self, _archive_path, *, candidates, all_pass_summaries, **_kwargs
+        ):
+            assert len(all_pass_summaries) == 5
+            assert {row["outcome"] for row in all_pass_summaries} == {
+                "candidate",
+                "no_findings",
+            }
+            disposition = "supported" if critic_risk == "high" else "unresolved"
+            return {
+                "revision": "fanout-candidate-adjudicator-v1",
+                "candidate_assessments": [
+                    {
+                        "candidate_id": row["candidate_id"],
+                        "source_pass": row["source_pass"],
+                        "disposition": disposition,
+                        "supporting_evidence": [],
+                        "counterevidence": [],
+                        "summary": "Bounded test assessment.",
+                    }
+                    for row in candidates
+                ],
+                "summary": "Bounded test adjudication.",
+            }
+
     archive = tmp_path / "artifact"
     archive.write_bytes(b"test")
     result = await review_archive(
@@ -170,6 +220,85 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
     assert result["incremental_candidate"] is True
     assert result["outcome"] == expected
     assert result["usage"]["requests"] == 6
+
+
+def test_adjudicator_cannot_confirm_one_candidate_with_an_unrelated_finding(tmp_path):
+    from .test_source_review import _archive_files
+
+    archive = _archive_files(
+        tmp_path,
+        {"src/main.rs": b"trigger();\nauthority();\nunrelated();\n"},
+    )
+    repository = TarSourceRepository(str(archive))
+    candidates = [
+        {
+            "candidate_id": "candidate-001",
+            "source_pass": "answer_authority",
+            "finding": {
+                "evidence": [
+                    {
+                        "path": "src/main.rs",
+                        "line": 1,
+                        "category": "benchmark_emulation",
+                    }
+                ]
+            },
+        },
+        {
+            "candidate_id": "candidate-002",
+            "source_pass": "tool_fidelity",
+            "finding": {
+                "evidence": [
+                    {
+                        "path": "src/main.rs",
+                        "line": 2,
+                        "category": "fabricated_tool_trajectory",
+                    }
+                ]
+            },
+        },
+    ]
+    payload = {
+        "summary": "One candidate verified; one unrelated location found.",
+        "candidate_assessments": [
+            {
+                "candidate_id": "candidate-001",
+                "disposition": "supported",
+                "supporting_evidence": [
+                    {
+                        "path": "src/main.rs",
+                        "line": 1,
+                        "category": "benchmark_emulation",
+                    }
+                ],
+                "counterevidence": [],
+                "summary": "The candidate citation was verified.",
+            },
+            {
+                "candidate_id": "candidate-002",
+                "disposition": "supported",
+                "supporting_evidence": [
+                    {
+                        "path": "src/main.rs",
+                        "line": 3,
+                        "category": "fabricated_tool_trajectory",
+                    }
+                ],
+                "counterevidence": [],
+                "summary": "Only an unrelated location was found.",
+            },
+        ],
+    }
+    result = _normalize_candidate_adjudications(
+        payload,
+        candidates=candidates,
+        repository=repository,
+        opened_lines={("src/main.rs", 1), ("src/main.rs", 3)},
+    )
+    assert [row["disposition"] for row in result["candidate_assessments"]] == [
+        "supported",
+        "unresolved",
+    ]
 
 
 async def test_digest_mismatch_prevents_calls(tmp_path):
@@ -308,6 +437,28 @@ async def test_default_budget_completes_two_turn_fanout_and_source_read(tmp_path
                     {"path": "src/main.rs", "start_line": 1, "end_line": 20},
                 )
             ]
+        elif any(
+            tool["function"]["name"] == "submit_candidate_adjudications"
+            for tool in payload["tools"]
+        ):
+            calls = [
+                _tool(
+                    "adjudicate-1",
+                    "submit_candidate_adjudications",
+                    {
+                        "candidate_assessments": [
+                            {
+                                "candidate_id": "candidate-001",
+                                "disposition": "unresolved",
+                                "supporting_evidence": [],
+                                "counterevidence": [],
+                                "summary": "The bounded check remains unresolved.",
+                            }
+                        ],
+                        "summary": "The bounded check remains unresolved.",
+                    },
+                )
+            ]
         else:
             system = messages[0]["content"]
             final = _BENIGN_REVIEW
@@ -354,7 +505,7 @@ async def test_default_budget_completes_two_turn_fanout_and_source_read(tmp_path
                     "completion_tokens": 1_200,
                     "cost": 0.01,
                 },
-                "model": "z-ai/glm-5.3-flash",
+                "model": "glm-5.3-flash",
             },
         )
 

@@ -159,6 +159,8 @@ def _fanout_shadow_env(
     settings: ScreenerReviewSettings,
 ) -> tuple[tuple[str, str], ...]:
     return (
+        ("SCREENER_REVIEW_INFERENCE_PROVIDER", "ditto"),
+        ("SCREENER_SOURCE_REVIEW_BASE_URL", "https://router.heyditto.ai/v1"),
         ("SCREENER_FANOUT_SHADOW_MODEL", settings.fanout_shadow_model),
         ("SCREENER_FANOUT_SHADOW_CONCURRENCY", str(settings.fanout_shadow_concurrency)),
         ("SCREENER_FANOUT_SHADOW_MAX_STEPS", str(settings.fanout_shadow_max_steps)),

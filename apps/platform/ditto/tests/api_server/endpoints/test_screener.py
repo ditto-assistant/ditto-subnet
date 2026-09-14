@@ -52,6 +52,7 @@ from ditto.api_server.dependencies import (
 )
 from ditto.api_server.endpoints.public import screening_dispute_signing_message
 from ditto.api_server.endpoints.screener import (
+    _fanout_response_model_matches,
     _heartbeat_signing_message,
     _public_screening_reason,
     _review_settings_checksum,
@@ -130,6 +131,21 @@ SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _SCREENER_HOTKEY = _KEYPAIR.ss58_address
+
+
+@pytest.mark.parametrize(
+    "response_model", ["z-ai/glm-5.3-flash", "glm-5.3-flash"]
+)
+def test_fanout_response_model_accepts_only_verified_router_ids(response_model):
+    assert _fanout_response_model_matches("z-ai/glm-5.3-flash", response_model)
+
+
+@pytest.mark.parametrize(
+    "response_model",
+    ["openai/gpt-5.6-luna", "provider/glm-5.3-flash", "glm-5.3-flash-preview"],
+)
+def test_fanout_response_model_rejects_unverified_ids(response_model):
+    assert not _fanout_response_model_matches("z-ai/glm-5.3-flash", response_model)
 _MINER_HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _SHA256 = "ab" * 32
 # A fixed block the mocked chain returns for on-chain seed derivation.

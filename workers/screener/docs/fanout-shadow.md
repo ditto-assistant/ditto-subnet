@@ -25,16 +25,21 @@ Each row binds:
 - a trusted screener image built from the source SHA named by the operator.
 
 The worker recomputes the built-in manifest digest inside that exact image before
-making an inference request. Every specialist and the fresh critic receives the
-manifest identity and active module list in its policy prompt. The report calls
+making an inference request. Every specialist and the fresh stage-two adjudicator
+receives the manifest identity and active module list in its policy prompt. The report calls
 its coverage `source_review`: it does not claim to re-execute other manifest
 modules such as the behavioral oracle.
 
 Five independent specialists and up to four deterministic file groups run with
-separate transcripts. A fresh critic receives candidate locations and must read
-the original source. Minority findings, critic disagreement, missing reads, and
-uncertainty are retained. `critic_also_flagged` is another candidate observation,
-not proof and not a vote.
+separate transcripts. A fresh adjudicator receives every pass outcome and note,
+including incomplete and no-finding passes, then must verify each candidate ID
+against the original source. Its structured record labels each candidate
+`supported`, `refuted`, or `unresolved` with source citations and counterevidence.
+Omitted candidates stay unresolved. Support requires re-reading at least one exact
+candidate citation; an unrelated finding cannot confirm another candidate.
+Minority findings, disagreement, missing reads, and uncertainty are retained.
+`critic_also_flagged` means at least one candidate received source-bound stage-two
+support. It remains a shadow observation, not proof and not a vote.
 
 ## Pilot limits
 
@@ -58,10 +63,22 @@ bound plus the full 2,400-token completion before each request. Concurrent passe
 share one atomic ledger. The price envelope is $0.60/M input and $2.00/M output,
 four times the highest listed non-batch route seen on 2026-09-14 for the exact
 GLM model. See the [OpenRouter model page](https://openrouter.ai/z-ai/glm-5.3-flash)
-and [Z.ai provider page](https://openrouter.ai/provider/z-ai). A response whose
-model id changes, or whose token or cost fields are missing, stops further
-admission and makes the report incomplete. A reported price above the envelope
-does the same.
+and [Z.ai provider page](https://openrouter.ai/provider/z-ai). The production
+lane is pinned to `https://router.heyditto.ai/v1` in passthrough mode. A live
+2026-09-14 metering probe requested `z-ai/glm-5.3-flash` and returned the verified
+native ID `glm-5.3-flash` with prompt tokens, completion tokens, total tokens, and
+cost. Only those two exact request/response IDs are accepted. Any other model ID,
+or missing token or cost field, stops further admission and makes the report
+incomplete. A reported price above the envelope does the same.
+
+Platform retains the full $3 reservation after every admitted job, including an
+incomplete or unmetered job. The $20 rolling reservation ledger therefore admits
+at most six shadow starts in any rolling 24 hours during this pilot, even when
+reported or billed cost is lower. Further new submissions receive an explicit
+`fanout-daily-budget-exhausted` skipped row while authoritative screening
+continues. This makes pilot coverage bounded rather than promising an unbounded
+second review for every submission; the reservation can be tuned after billed
+spend and completion data are observed.
 
 These are conservative application admission controls, not an upstream billing
 guarantee. Before activation, create a dedicated Ditto Router key for this lane,
@@ -71,23 +88,34 @@ constrain the authoritative source-review key. The dedicated key is the second
 billing guard and its key-usage endpoint is the source for billed spend; Platform
 continues to show reserved and response-reported cost separately.
 
+The production secret resource is
+`projects/ditto-app-dev/secrets/screener-fanout-shadow-router-key`. Its dedicated
+Router key has a $20 daily cap and expires on 2026-10-14. The application role
+default stays empty, and the global shadow setting stays off until activation.
+
 ## Activation
 
-The code defaults off and the production Ansible secret resource defaults empty.
-Both gates must be deliberately changed after the merged release exists:
+The code and global setting default off. The production host points at the
+dedicated secret prepared for this pilot, but no job can launch while the global
+setting is off. Activation happens only after the merged release exists:
 
 1. Confirm release deployment completed and a succeeded trusted screener image
    exists with `source_sha` equal to the merged release commit.
-2. Provision the dedicated Router key with the $20 daily cap, place it in its own
-   GCP secret, grant only the existing screener bootstrap identity access, set
-   `platform_targon_fanout_shadow_secret`, and converge Platform.
-3. Read the complete global screener-review revision through Backroom. Apply a
+2. Verify the prepared dedicated Router key still has its $20 daily cap and
+   2026-10-14 expiry, the GCP secret resolves, and only the existing screener
+   bootstrap identity has access. Converge Platform so the host variable is live.
+3. Upgrade the native screener release first. Confirm all four native workers
+   heartbeat on the release that understands the fan-out settings fields and
+   accepts the current effective settings checksum. A pre-fan-out worker ignores
+   the new fields and cannot reproduce the checksum of an enabled successor
+   revision, so do not enable shadow mode while any old worker remains.
+4. Read the complete global screener-review revision through Backroom. Apply a
    complete successor revision that preserves authoritative fields, sets
    `fanout_shadow_mode=shadow`, names the trusted image source SHA, and uses the
    pilot limits above.
-4. Submit a new ordinary screening case. Do not rescreen or mutate a held case to
+5. Submit a new ordinary screening case. Do not rescreen or mutate a held case to
    manufacture coverage.
-5. Read `get_screener_fanout_shadow`. Confirm the row has the same artifact and
+6. Read `get_screener_fanout_shadow`. Confirm the row has the same artifact and
    manifest identity as its baseline, only the shadow rental is present after
    authoritative completion, and reserved/reported/key-billed spend reconcile.
 

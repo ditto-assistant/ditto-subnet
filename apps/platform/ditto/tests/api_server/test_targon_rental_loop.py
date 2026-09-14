@@ -28,6 +28,7 @@ from ditto.api_server.targon_rental_loop import (
     _SOURCE_LEASE,
     TargonRentalLoop,
     _current_shadow_limits,
+    _fanout_shadow_env,
     _private_failure_text,
     _source_review_layer_env,
 )
@@ -109,6 +110,14 @@ def test_source_review_layer_env_carries_the_l1_verdict_budget() -> None:
         )
     )
     assert env["SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS"] == "12000"
+
+
+def test_fanout_shadow_env_pins_dedicated_router_destination() -> None:
+    env = dict(_fanout_shadow_env(ScreenerReviewSettings()))
+    assert env["SCREENER_REVIEW_INFERENCE_PROVIDER"] == "ditto"
+    assert env["SCREENER_SOURCE_REVIEW_BASE_URL"] == (
+        "https://router.heyditto.ai/v1"
+    )
 
 
 def test_current_shadow_limits_only_tighten_operational_rails() -> None:
@@ -304,6 +313,7 @@ async def _seed_fanout_rows(
                     finished_at=now,
                 )
             )
+        await session.flush()
         session.add(
             TrustedImageBuild(
                 build_id=uuid4(),
@@ -390,6 +400,36 @@ async def test_fanout_rolling_budget_uses_reservation_time_not_queue_time(
         assert queued is not None
         assert queued.status == "skipped"
         assert queued.error_code == "fanout-daily-budget-exhausted"
+
+
+@pytest.mark.asyncio
+async def test_fanout_launch_uses_dedicated_secret_and_router(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_fanout_rows(session_maker)
+
+    async def mint(_sa: str) -> str:
+        return "token-" + "x" * 120
+
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(fanout_shadow_secret_resource="projects/p/secrets/shadow"),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        mint_token=mint,
+        interval_seconds=60,
+    )
+    assert await loop._launch_fanout_shadow_review() is True
+    assert len(targon.created) == 1
+    env = {row["name"]: row["value"] for row in targon.created[0]["envs"]}
+    assert env["SCREENER_SOURCE_REVIEW_SECRET_RESOURCE"] == (
+        "projects/p/secrets/shadow"
+    )
+    assert env["SCREENER_REVIEW_INFERENCE_PROVIDER"] == "ditto"
+    assert env["SCREENER_SOURCE_REVIEW_BASE_URL"] == (
+        "https://router.heyditto.ai/v1"
+    )
 
 
 @pytest.mark.asyncio

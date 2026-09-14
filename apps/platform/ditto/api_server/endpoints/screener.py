@@ -3934,7 +3934,10 @@ async def complete_fanout_shadow_review(
             or payload.report.get("requested_model") != expected_model
             or usage.get("model_mismatch")
             or (payload.status == "succeeded" and not response_models)
-            or any(model != expected_model for model in response_models)
+            or any(
+                not _fanout_response_model_matches(expected_model, model)
+                for model in response_models
+            )
         )
         exceeded = bool(
             reported_microusd is not None
@@ -3968,8 +3971,8 @@ async def complete_fanout_shadow_review(
         )
         row.report = payload.report
         row.disagrees_with_baseline = baseline_candidate != fanout_candidate
-        row.coverage_complete = coverage_complete
         invalid_result = exceeded or model_binding_invalid or unmetered
+        row.coverage_complete = coverage_complete and not invalid_result
         row.status = "incomplete" if invalid_result else payload.status
         row.outcome = "incomplete" if invalid_result else payload.outcome
         row.error_code = (
@@ -3999,6 +4002,16 @@ async def complete_fanout_shadow_review(
                 stored.provider_resource_id = None
                 stored.updated_at = datetime.now(UTC)
     return FanoutShadowCompleteResponse(accepted=True)
+
+
+def _fanout_response_model_matches(
+    expected_model: str | None, response_model: object
+) -> bool:
+    """Accept only the verified request/native IDs for the bounded pilot model."""
+    return expected_model == "z-ai/glm-5.3-flash" and response_model in {
+        "z-ai/glm-5.3-flash",
+        "glm-5.3-flash",
+    }
 
 
 def _heartbeat_signing_message(payload: ScreenerHeartbeatRequest) -> bytes:

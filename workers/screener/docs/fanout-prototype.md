@@ -40,11 +40,14 @@ unopened assigned file or truncated plan prevents an overall `no_findings`.
 all lines or semantics were reviewed. Empty/opaque/unreadable files conservatively
 remain incomplete unless a candidate is found. Large files are not line-sharded.
 
-The union of medium/high findings goes to a fresh GLM critic with original-source
-access. A minority candidate is retained even if everyone else reports no findings.
-`critic_also_flagged` means the critic independently returned a candidate, not that
-it proved each analyst allegation or agreed on the exact mechanism.
-`unresolved_candidate` retains disagreement and critic failure for human inspection.
+Every pass outcome and note goes to a fresh GLM adjudicator with original-source
+access. It returns a separate supported/refuted/unresolved record for every
+candidate ID. Support requires re-reading an exact candidate citation, so an
+unrelated finding cannot confirm another candidate. A minority candidate is
+retained even if everyone else reports no findings. `critic_also_flagged` means
+at least one candidate received source-bound stage-two support; it remains an
+experimental observation. `unresolved_candidate` retains refutation,
+disagreement, omission, and adjudicator failure for human inspection.
 `no_findings` requires completed, certified low-risk observations from every pass;
 it is an experiment outcome, never a production clearance. Partial results remain
 `incomplete`. Exhausted-ledger pass shortcuts do not become no-findings results.

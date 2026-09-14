@@ -13,12 +13,13 @@ import httpx
 from ditto_screener.enrollment import _materialize_source_review_secret
 from ditto_screener.fanout_review import MODEL, review_archive
 from ditto_screener.policy import builtin_policy_manifest
-from ditto_screener.review_provider import default_review_base_url
 from ditto_screener.source_review_job import (
     _download_verified,
     _required,
     _stage_source_review_secret,
 )
+
+_SHADOW_ROUTER_URL = "https://router.heyditto.ai/v1"
 
 
 def _bounded_int(name: str, default: int, low: int, high: int) -> int:
@@ -33,6 +34,16 @@ def _bounded_float(name: str, default: float, low: float, high: float) -> float:
     if not low < value <= high:
         raise ValueError(f"{name} is outside its bounded range")
     return value
+
+
+def _shadow_inference_route() -> tuple[str, str]:
+    provider = _required("SCREENER_REVIEW_INFERENCE_PROVIDER")
+    if provider != "ditto":
+        raise ValueError("fanout shadow requires the dedicated Ditto Router")
+    base_url = _required("SCREENER_SOURCE_REVIEW_BASE_URL").rstrip("/")
+    if base_url != _SHADOW_ROUTER_URL:
+        raise ValueError("fanout shadow Router URL changed")
+    return provider, base_url
 
 
 async def _amain() -> int:
@@ -84,13 +95,7 @@ async def _amain() -> int:
                 str(source["source_url_b64"]), validate=True
             ).decode()
             archive_path = await _download_verified(client, source_url, expected_sha256)
-            provider = os.environ.get(
-                "SCREENER_REVIEW_INFERENCE_PROVIDER", "openrouter"
-            )
-            if provider not in {"ditto", "openrouter"}:
-                raise ValueError(
-                    "fanout shadow pricing envelope only supports Ditto or OpenRouter"
-                )
+            provider, base_url = _shadow_inference_route()
             model = os.environ.get("SCREENER_FANOUT_SHADOW_MODEL", MODEL)
             if model != MODEL:
                 raise ValueError("fanout shadow pricing envelope model changed")
@@ -99,10 +104,7 @@ async def _amain() -> int:
                 artifact_sha256=expected_sha256,
                 api_key_file=key_file,
                 model=model,
-                base_url=(
-                    os.environ.get("SCREENER_SOURCE_REVIEW_BASE_URL")
-                    or default_review_base_url(provider)
-                ),
+                base_url=base_url,
                 inference_provider=provider,
                 partition="hybrid",
                 concurrency=_bounded_int("SCREENER_FANOUT_SHADOW_CONCURRENCY", 2, 1, 4),
