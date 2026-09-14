@@ -103,8 +103,8 @@ To submit, you need:
 - Python 3.12+ and [`uv`](https://docs.astral.sh/uv/)
 - a funded Bittensor coldkey
 - a hotkey registered on Finney netuid 118
-- enough TAO for the platform-controlled evaluation fee (currently 0.04 TAO,
-  or 40,000,000 rao)
+- enough TAO for the platform-controlled evaluation fee (0.1 TAO, or
+  100,000,000 rao, as of 2026-09-14; `ditto upload` shows the live amount)
 
 If the hotkey is not registered yet, you do not have to leave the CLI to fix
 it. `ditto upload` runs its pre-check before any TAO moves, and when the only
@@ -762,7 +762,8 @@ own last output. A `stale` flag means the tail is from a prior lease —
 reissue keeps the last failure on the row while starting a new attempt.
 
 **How much does evaluation cost?** The Backroom-controlled fee is denominated in
-TAO and is currently **0.04 TAO (40,000,000 rao)**. The CLI fetches and shows
+TAO and was **0.1 TAO (100,000,000 rao)** as of 2026-09-14. Operators can change
+it in Backroom, so treat that as an example. The CLI fetches and shows
 the authoritative TAO amount before confirmation. TAO/USD pricing is used only
 for internal revenue reporting and cannot change whether a payment is accepted.
 

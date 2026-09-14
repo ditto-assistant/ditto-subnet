@@ -738,7 +738,7 @@ live cost before it recycles anything; to do it separately, run
 on-chain upload happens through `ditto upload` (the miner CLI from the
 `ditto-subnet` repository root), with
 your registered hotkey. The Backroom-controlled fee is denominated in TAO and
-is currently `0.04 TAO` (`40,000,000 rao`). The CLI shows the exact TAO amount
+was `0.1 TAO` (`100,000,000 rao`) as of 2026-09-14. The CLI shows the exact TAO amount
 before you confirm. TAO/USD conversion is reporting-only and does not affect
 the fee, admission, or payment validation.
 
