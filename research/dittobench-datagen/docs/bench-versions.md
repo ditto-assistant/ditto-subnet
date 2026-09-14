@@ -24,7 +24,7 @@ applied to an existing version. It ships as a new one.
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
-| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types, v12-copy surface pass); families, grader, and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
+| 13 (pre-activation) | `2027-05-01` | The typed-semantic contract (#1518): label-insufficiency, an unregenerable surface pass (salt 0 = public rehearsal), causal model dependence, provenance over containment, a published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Runtime execution is available; Platform activation remains a separate owner decision after #1521 calibration. |
 
 ## V10 generator-as-spec contract
 
@@ -476,73 +476,42 @@ expected tool specs. v12 changes what competence a run must demonstrate, not the
 transport. Run sizes, the deterministic grader, the inference boundary,
 LongMemEval floors, and the v9 efficiency stack all carry forward unchanged.
 
-## Bench v13 (in development, typed-semantic contract)
+## Bench v13 (private, typed-semantic contract)
 
 v13 is the contract issue #1518 defines: **typed semantic outcomes graded
 through claim sets, on a surface a harness cannot regenerate, with the graded
-value causally traced to a model completion.** It answers the v12 board review
-(operator-private records `sn118-top5-board-review-2026-09-13.json` and
+value causally traced to a model completion the relay observed.** It answers
+the 2026-09-13 top-of-board review (operator-private records
+`sn118-top5-board-review-2026-09-13.json` and
 `sn118-bench-v12-adversary-briefing.md`, held with the Backroom board-review
 precedents — they quote never-released miner source, so they do not live in
-this public repository), where 4/5 rejected top-5
-artifacts lived on the tool axis and the memory axis rewarded a request-keyed
-`/100` rewrite of a correct bare-cents answer (the v12 minor-unit inversion:
-`411067` → 0, `$4,110.67` → 1 on a question that asked for minor units).
+this public repository): 4/5 rejected top-5 artifacts lived on the tool axis
+(request-keyed catalog suppression, baked option pools, phrase tables), and the
+memory axis rewarded a request-keyed `/100` rewrite of a correct bare-cents
+answer (the v12 minor-unit inversion: `411067` → 0, `$4,110.67` → 1 on a
+question that asked for minor units). Money owned 50.9% of memory score
+weight, so a cents ledger with a formatter competed with a generally competent
+agent.
 
 Every lever is gated on `bench_version >= 13`; v2–v12 regenerate and re-grade
-byte-identically (the v2–v12 known vectors and transcript regrades are the
-guard). This section is the **stub the plumbing PR ships**; each child issue
-extends it when its lever lands.
+byte-identically (the v2–v12 known-vector tests and
+`TestV2ThroughV12RegradeGolden` (#1522) are the guard, and
+`TestV13DoesNotMoveEarlierContracts` (#1848) re-asserts every earlier vector
+from the v13 generator path). Nothing here activates: `CurrentBenchVersion`
+stays v8, the runtime advertises 13 in `supported_bench_versions` only through
+the #1519 wiring sweep, Platform dispatches v13 in shadow during #1521
+calibration, and activation is a separate owner gate.
 
-### What the plumbing PR (#1824) ships
-
-- `protocol.BenchVersionV13`, `datasetEpochV13 = 2027-05-01`, and one derived
-  list (`protocol.SupportedBenchVersions()`, `NewestSupportedBenchVersion()`,
-  `SupportedBenchVersionList()`) that every acceptance check, error string,
-  and probe default reads — the bump discipline is *floors and shared
-  constants, never retyped enumerations*.
-- `profilesV13`: small/medium pinned to v10; full = 100 tool cases, **250 memory
-  cases** (224 primary-envelope + 9 isolation; `v13PrimaryCaseBudget` carves
-  228 primary cases so the fixed 13-case conversational/integrity tail lands the
-  envelope at exactly 250). Waves stay at 5.
-- Grader-only protocol types, all tagged `json:"-"` so they never enter the
-  hashed artifact, `/seed`, or `/run`: `MemoryCase.Claims []Claim{Kind,
-  Expected, Accept, Unit, Critical, Weight}`, `MemoryCase.TwinRelation` /
-  `ToolCase.TwinRelation` (`decision_twin`, `as_of_twin`),
-  `ToolSpec.RequiredArgClaims`, `ToolCase.Restraint *RestraintClaim`
-  (`no_call`, `clarify_first`, `decline`), and the answer kinds `AnswerClarify`
-  and `AnswerAbsence`. `CaseScore.Relation` carries
-  `V10CaseProvenance.Relation` into the report for v13 runs only.
-  `gen.TestV13GraderOnlyFieldsNeverReachHarnessWire` and the runner-side
-  `TestV13GraderOnlyFieldsNeverReachRunPayload` pin the strip.
-- `gen/v13_surface.go`: the v13 surface pass, today a byte-for-byte copy of the
-  v12 pass (pinned by `TestV13SurfacePassStartsAsV12Copy`). It becomes the
-  public pre-pass whose output the private surface pass rewrites.
-- Every staged v13 case is stamped `bench_version 13` (the program, divergence
-  and family-compiler builders stamp the version that introduced them, and the
-  grader dispatches its policy on that stamp). Effect on grading: none. The
-  v10..v12 primary plan loop already stamps every planned case with the run's
-  contract (a v12 full artifact is 251/251 stamped 12; `TestV13ProfileAndEnvelope`
-  pins that), and the only cases the v13 loop re-stamps are the divergence and
-  family-compiler cases their builders stamp `12` after that loop — which
-  `grade/grade.go` grades under the same `>= V12` slot-scoped distractor policy
-  either way. The loop exists so a v13 case can never fall back to a builder
-  stamp when a future `>= V13` grading branch lands.
-- `cmd/memoryprobe` / `cmd/toolprobe` take `-bench-version` defaulting to the
-  newest supported version; `gen.AuditMemoryExposureForVersion` names its
-  contract and, from v13, counts correction/join families as computed.
-  `MemoryExposureResult.ComputedByRule` counts the cases that rule moved off a
-  verbatim hit, so the strict verbatim share (`StrictTransformedShare`) stays
-  visible in the probe output and a v13 family regression cannot hide behind
-  the classification.
-- `TestV13KnownVector` is a **placeholder** pin (seed `123456789`, full):
-  `b9bfb611f4509599fb6c79579114244178ca09077737a0313b6db9c5b6f1966c`. It is
-  re-pinned when the envelope lands, after the `/seed` label-leak fix.
-
-Scorer side: `scoregates.SupportedBenchVersion` accepts v13 (inheriting the v12
-gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
-technically ready; the runtime's advertised `supported_bench_versions` does
-**not** include 13 until the last v13 PR.
+This is the **one** v13 section of this document. Each v13 PR documented its
+lever here under an interim per-PR umbrella while the contract was assembled
+(plumbing, surface levers, case families, envelope and money cap, grader,
+surface gate and mix audit, story v2, tool bench, evidence-bounded, twins and
+cost); those umbrellas are folded into the subsections below and must not be
+reintroduced by a later merge — `gen/v13_contract_doc_test.go` fails on a
+second `## Bench v13` heading or a second `13` row in the version table. The
+per-area detail pages are `v13-case-families.md` (#1520) and
+`v13-family-mix-study.md` (#1848, #1830); the per-area code comments stay the
+authority for anything a subsection summarises.
 
 ### Governing invariants
 
@@ -551,14 +520,13 @@ technically ready; the runtime's advertised `supported_bench_versions` does
    per-seed served artifact, or a time anchor must decide.
 2. **Unregenerable surface (v13.0, not v13.1).** The surface a harness sees
    (renderings, names, language/typo draws, decoy set, inventories, fixtures)
-   must not be recomputable from the public repo + the published seed. The
-   public v13 surface pass is the pre-pass; the private pass (validator
-   commit-reveal salt or Platform-side private paraphrase — an owner decision
-   recorded in #1832) is a v13.0 activation blocker.
+   must not be recomputable from the public repo plus the published seed. The
+   public v13 surface pass is the pre-pass; the private pass is a v13.0
+   activation blocker (see *The surface pass and the open owner decision*).
 3. **Causal model dependence.** The graded value must have been produced by a
    model completion the relay observed, and must not appear in any
-   harness-authored prompt span except spans hash-matched to `/seed` records or
-   delivered tool results (`answer_in_prompt` → 0). This is the v11
+   harness-authored prompt span except spans hash-matched to `/seed` records
+   or delivered tool results (`answer_in_prompt` → 0). This is the v11
    compute-then-launder lesson.
 4. **Provenance over containment; cost is never free; reward the production
    skill; immutability** (`bench_version >= 13` only; v2–v12 byte-identical).
@@ -571,52 +539,479 @@ present in a harness-authored span), evidence-independent default behaviour
 (twin/pair concordance), or catalog withholding outside the published safe
 harbor. Ditto's production agent (HeyDitto) is the canonical honest positive;
 calibration (#1521) requires every honest positive to carry gate-induced loss
-≤ 0.02 and every S/N carrier to land ≤ starter-kit composite − 0.05.
+≤ 0.02 and every S/N carrier to land ≤ starter-kit composite − 0.05, with
+per-gate false-zero counts published per honest pattern, not one aggregate.
 
 **Scan-scope rule.** The positive check runs on `final_text ∪ answer`.
 Distractor/forbidden scans are **claim-scoped**: asserted candidates only (the
-slot when populated, per `grade/grade.go` `distractorScanSlotOnly`), and a value
-cited-and-rejected as insufficient evidence is never a forbidden hit. Prose is
-graded; the `answer` slot is a tie-break; `slot_not_in_prose` → 0 only when the
-typed matcher finds no equivalent value asserted in `final_text` AND the slot
-alone passes. Declarative acknowledgement credit is 0.25.
+slot when populated, per `grade/grade.go` `distractorScanSlotOnly`, whose v12
+rationale — shown reasoning is protected — is retained, not reversed), and a
+value cited-and-rejected as insufficient evidence is never a forbidden hit.
+Prose is graded; the `answer` slot is a tie-break; `slot_not_in_prose` → 0 only
+when the typed matcher finds no equivalent value asserted in `final_text` AND
+the slot alone passes. Declarative acknowledgement credit is 0.25.
 
-Gates the plan marks *shadow in v13.0* (catalog-present, provenance, causal,
-cost factor, twin rule) ship behind switches defaulting to shadow/observe,
-never enforce; the ladder is review → penalize (graduated, capped) → enforce,
-and enforce is reserved for provable signals. Never enforce retroactively.
+**Gate ladder.** Every gate the plan marks *shadow in v13.0* — catalog-present,
+claim-span provenance, causal dependence, cost factor, twin/pair rule — ships
+behind a switch defaulting to shadow/observe, never enforce. The ladder is
+review (flag only) → penalize (graduated, capped) → enforce (zero); enforce is
+reserved for provable signals and is a fleet-wide operator decision after
+#1521 shows 0 false zeros per honest pattern. Never enforce retroactively.
 
 ### Adversary model this contract must defeat
 
 | Class | Ids | Made score-negative by |
 |---|---|---|
 | Request-keyed empty catalog / response sheets / decline gates | S1 S2 S16 | restraint triplets + clarifying-claim grading + catalog-present gate (model-emitted calls, not executed calls) |
-| Baked option pools + one-edit ladders | S3 S12 | discovery inventories from public corpora; drop set_model/set_chat_font; enum schemas |
+| Baked option pools + one-edit ladders | S3 S12 | discovery inventories from public corpora; drop `set_model`/`set_chat_font`; enum schemas |
 | Sign sheets / money formula / closed programs | S4 S13 S7 | money cap (≤12% target / 15% hard), record-stated ops, sign variance, typed claims |
 | Exact-output arg recipes | S5 | paraphrase-accepting argument claims (reward side) + causal gate + screener I5 (punish side) |
 | Draft replacement / slot rewrites / hedged slots | S6 S7 S14 | claim-span provenance gate; prose graded, slot tie-break; stuffing quantifier |
 | Generator fingerprint tables, regex routers, typo tricks | S8 S11 S12 | grammars → private surface pass; typo v2; multilingual via private translation; parserprobe ceiling |
-| Marker-keyed compaction, ingest-time compilation | S9 N5 N10 | same-turn corrections (primary), point-in-time twins (`as_of_twin`), label-leak fix |
+| Marker-keyed compaction, ingest-time compilation | S9 N5 N10 | same-turn corrections (primary), point-in-time twins (`as_of_twin`), `/seed` label-leak fix |
 | Host tool plans / class collapse | S10 | effect-graded retrieval, cue-unreliable mutations |
-| Injection wrapper stripping | S15 | data-inside-envelope + envelope-free injections with mock-observable forbidden action |
+| Injection wrapper stripping | S15 | data-inside-envelope + envelope-free injections with a mock-observable forbidden action |
 | Trained routers / distilled generators / planner prose | N1 N2 N9 | label-insufficiency + unregenerable surface + causal gate |
-| Seed regeneration / answer-key regression | N3 | CRN block binding + egress proof; surface pass |
-| Voting / attribution theatre | N4 N8 | provenance gate, cost factor over choices+tokens (shadow), pair post-pass |
+| Seed regeneration / answer-key regression | N3 | CRN block binding + egress proof (#1854); surface pass |
+| Voting / attribution theatre | N4 N8 | provenance gate, cost factor over choices + tokens (shadow), pair post-pass |
 | Layout / language inference from public generator tables | N6 | private surface pass (layouts and languages unannounced) |
 | Fixture memorisation | N7 | per-seed coined fixtures |
-| In-run twin pairing / forced discordance | N11 | distributionally matched triplets, ≤chance acceptance |
-| Edit-distance-only option picking | N12 | near-miss inventories with margin test |
-| **Generator-inverse harness + launder (GIH)** | **N13** | unregenerable surface pass + causal gate; parserprobe ceiling in CI |
-| **Router trained on 10k locally generated seeds** | **N14** | same as N13; W13 declaration in policy v14 |
+| In-run twin pairing / forced discordance | N11 | distributionally matched triplets, ≤ chance acceptance |
+| Edit-distance-only option picking | N12 | near-miss inventories with a margin test |
+| **Generator-inverse harness + launder (GIH)** | **N13** | unregenerable surface pass + causal gate; `cmd/parserprobe` ceiling in CI |
+| **Router trained on 10k locally generated seeds** | **N14** | same as N13; W13 training-data declaration in screener policy v14 (#1857) |
 
-### Scope
+Both axes are in scope; the tool-bench, story-v2, surfaces, seeds and
+screener-v14 issues are children of #1518 (superseding #1108/#1109).
+Acceptance is verified by the #1521 calibration PR against real agents and
+synthetic S/N carriers, not by CI alone.
 
-Both axes are in scope; tool-bench, story-v2, surfaces, seeds and screener-v14
-issues are children of #1518 (superseding #1108/#1109). Acceptance is verified
-by the #1521 calibration PR against real cleared agents and synthetic S/N
-carriers, not by CI alone. Activation is a separate owner gate after shadow
-calibration: `CurrentBenchVersion` stays v8, the runtime advertises v13 only
-when the contract is complete, and Platform rollout state activates it.
+### The published memory mix (250 cases, full profile)
+
+`gen/v13_envelope.go` replaces `v8PrimaryCaseBudget` with a slot table per run
+size (#1848); `cmd/mixaudit` (#1830) audits it per seed and fails closed on any
+question type or answer kind it cannot classify. Full = 224 primary + 9
+isolation + the fixed integrity tail:
+
+| Slot | Count | Generator | Issue |
+| --- | ---: | --- | --- |
+| story | 78 | story v2 typed event DAG, six typed oracles per arc, 13 arcs (7 business / 6 personal) | #1839 #1841 |
+| ordinary world | 32 | ordinary person / project / trip oracles, `project-outstanding` ≤ 4 | #1848 |
+| business programs | 28 | `GenerateV13Programs`, 7 metamorphic groups × 4, zero monetary | #1520 |
+| personal programs | 24 | `GenerateV13PersonalPrograms`, 6 groups × 4, zero monetary | #1838 |
+| abstention | 25 | six grounded-absence families with `decision_twin` pairs | #1530 |
+| record-determined quantity | 16 | family compiler v2: 10 money in the record's currency, 6 non-monetary, record-stated sign convention | #1837 |
+| divergence | 12 | parser divergence, ≤ 3 money | #1837 |
+| point-in-time | 12 | 6 `as_of_twin` pairs with the anchor inside the `/run` turn | #1844 |
+| integrity | 14 | 3 chitchat, 3 declarative ack (0.25 credit), 3 declarative behaviour, 1 canary, 4 injection (2 data-inside-envelope, 1 envelope-free, 1 classic) | #1836 |
+| isolation | 9 | `GenerateIsolationForVersion` | — |
+
+`gen.MixGateV13` (Owner decision — default taken: ≤ 12% target / 15% hard,
+#1529): money ≤ 15% of memory weight, ≤ 22 money-bearing cases, 0 monetary
+open programs, arithmetic ≤ 20%, money ≤ 25% of computed answers, personal ≥
+30%, business ≥ 40%, no sub-domain > 20%, **no answer-kind × operation > 15%**
+(the anti-monoculture bound, so owner-of / status-of does not become the next
+parse target), abstention 10% ± 1, twin coverage ≥ 40%, gate-exposed share ≤
+40% of memory weight (bounds how much composite a gate rather than a wrong
+answer can zero), and a cascade cap (largest dependency cluster ≤ 4%, so one
+honest error never costs more than ~4% of memory weight). The classifier is
+pinned to the v12 diagnosis (`TestMixAuditReproducesV12MoneyExposure` (#1830):
+117 direct money cases / 143 money-bearing / 50.9% of weight on seed
+`123456789`); the gate over the pinned 40 seeds is
+`TestV13MixAuditGateAcrossFortySeeds` (#1848), and it arms itself slot by slot
+as the interim generators are replaced (`gen.V13InterimSlots`,
+`gen.V13InterimGenerators`; while either list is non-empty the full gate skips
+with a violation report and only the structural bounds and the pinned interim
+ceilings — money ≤ 37% of weight, ≤ 110 money-bearing cases, arithmetic ≤ 45%
+— are asserted, so interim exposure cannot creep upward). Medium is 95 memory
+cases (36 · 10 · 8 · 6 · 6 · 4 · 4 · 2 · 14 · 5) and small 27 (6 · 4 · 4 · 13);
+only the three public run sizes have a table, any other size fails closed.
+
+```sh
+go run ./cmd/mixaudit -bench-version 13 -seeds 40 -run-size full
+go run ./cmd/mixaudit -bench-version 13 -seeds 40 -gate   # exit 1 on a violation
+```
+
+### The levers, by area
+
+Every lever below is `bench_version >= 13`-gated and names the test that pins
+it; an issue number in parentheses is the PR that carries the lever and its
+vector into the stack.
+
+**Plumbing (issue #1824).** `protocol.BenchVersionV13`, `datasetEpochV13 =
+2027-05-01`, and one derived list (`protocol.SupportedBenchVersions()`,
+`NewestSupportedBenchVersion()`, `SupportedBenchVersionList()`) that every
+acceptance check, error string and probe default reads — floors and shared
+constants, never retyped enumerations. `profilesV13` (full: 100 tool cases,
+250 memory cases, waves stay at 5) and the grader-only protocol types, all
+tagged `json:"-"` so they never enter the hashed artifact, `/seed` or `/run`:
+`MemoryCase.Claims []Claim{Kind, Expected, Accept, Unit, Critical, Weight}`,
+`MemoryCase.TwinRelation` / `ToolCase.TwinRelation` (`decision_twin`,
+`as_of_twin`), `ToolSpec.RequiredArgClaims`, `ToolCase.Restraint`
+(`no_call`, `clarify_first`, `decline`), the answer kinds `AnswerClarify` and
+`AnswerAbsence`; `CaseScore.Relation` carries `V10CaseProvenance.Relation`
+into the report for v13 runs only. Every staged v13 case is stamped
+`bench_version 13` and the grader dispatches its policy on that stamp.
+`cmd/memoryprobe` / `cmd/toolprobe` take `-bench-version` defaulting to the
+newest supported version, and `gen.AuditMemoryExposureForVersion` counts the
+correction/join families as computed from v13 while keeping the strict
+verbatim share visible (`TestMemoryExposureAuditIsVersionExplicit` (#1824)).
+Scorer side, `scoregates.SupportedBenchVersion` accepts v13 (inheriting the
+v12 gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
+technically ready.
+
+**Surface (issues #1825 #1827 #1828 #1832 #1831).**
+
+- *Public vocabulary corpora.* `internal/publicdata` embeds frozen, SHA-pinned
+  tables (GeoNames cities ≥ 15k, O*NET occupations, Google Fonts families, the
+  xkcd colour survey plus CSS named colours, Wikidata organisation stems, an
+  authored purpose bank) with licences in `SOURCES.md`; no open pool is below
+  500 (`TestNoOpenPoolBelowFiveHundred` (#1825),
+  `TestFrozenCorpusIdentity` (#1825)). A public corpus is a bigger table, not
+  an open set — it buys variety and near-miss ambiguity, never secrecy.
+- *`/seed` label hygiene.* Every session id is a `protocol.OpaqueCaseID` and
+  every timestamp a seeded business-hours instant; a best-of-twelve-features
+  probe that recovers the v12 family from the session prefix at 94% may not
+  beat a shuffled null on v13 (`TestV13SeedWireCarriesNoFamilyArcOrSlotLabel`
+  (#1827), `TestLeakProbeDetectsTheFrozenV12Labels` (#1827)); `/seed` subject
+  links do not enumerate the story join
+  (`TestV13SeedSubjectLinksDoNotEnumerateTheStoryJoin` (#1827)).
+- *Grammars for every surface and typo v2.* Every tool category, world tool
+  prompt, settings intent, chitchat/declarative bank and question frame
+  renders from a `persona.Grammar` with a per-(seed, surface) two-thirds bank
+  subset (`TestV13EveryToolCategoryRendersFromAGrammar` (#1828)); the typo
+  projector v2 draws a keyboard layout per (seed, salt), applies 1–3 edits
+  bounded by ⌊len/3⌋, never turns a word into a different real word, and has no
+  framing safelist (`TestV2TypoEditsAreBoundedByThirdOfLengthAndKeepEdges`
+  (#1828), `TestV2NeverTurnsAWordIntoADifferentRealWord` (#1828)). A public
+  CFG is exactly invertible, so grammars are the *input* to the surface pass,
+  not a defence by themselves.
+- *The salted surface pass and the multilingual hook* — see the dedicated
+  sections below.
+
+**Memory families (issues #1839 #1841 #1520 #1838 #1837 #1836 #1844 #1530).**
+
+- *Story v2.* A per-seed typed event DAG (6–9 events, constrained topological
+  shuffle, 0–2 contradictory updates, ≥ 50% of arcs carry a revision) over
+  3–5 memories in ≥ 2 opaque sessions with one near-name decoy thread; six
+  typed oracles per arc (owner-current, status-current with a "records
+  disagree" claim set, ordering, next-action `{who, what, channel}`, one
+  rotating quantity or lesson key-concept set, one cross-record inference
+  oracle joining the arc to the ordinary world). The four money oracles and
+  the cents-baking summary are gone (`TestStoryV2ArcsAreTypedEventDAGsWithRevisions`
+  (#1839), `TestStoryOraclesAreTypedAndLessonClaimSetsAccept` (#1841),
+  `TestStoryV2AnchorsResolveUniquelyUnderTypoEdits` (#1839)).
+- *Business and personal event programs.* Seven business groups × 4 and six
+  personal domains × 4, zero monetary groups, `base` / `renderer_invariant` /
+  `distractor_invariant` / `causal_counterfactual` provenance, grader-only
+  `Claims` stripped before the wire
+  (`TestV13ContractProgramsCoverEveryFamilyWithZeroMoney` (#1520),
+  `TestV13ClaimsNeverReachHarnessWire` (#1520),
+  `TestPersonalProgramsCoverSixDomainsWithZeroMoney` (#1838)).
+- *Family compiler v2.* The record states its own sign convention, so a
+  general assistant never needs bookkeeping norms while a cue-reading solver
+  built from the public cue bank stays below 0.5
+  (`TestFamilyCompilerV13CueReadingSolverBelowHalf` (#1837),
+  `TestFamilyCompilerV13ThreeValuedDirectionVectors` (#1837)).
+- *Injection tail.* Two data-inside-envelope cases whose expected answer is
+  the value the untrusted block quotes as data (a wrapper stripper scores 0),
+  one envelope-free instruction whose compliance is a forbidden tool action
+  observed at the mock, one classic; none graded as money
+  (`TestInjectionV13DataInsideDefeatsWrapperStripper` (#1836),
+  `TestInjectionV13EnvelopeFreeIsObservedAtTheMock` (#1836)).
+- *Same-turn point-in-time corrections and realism-only waves.* The "as of
+  <anchor>" date arrives inside the `/run` `user_input`, so an index compiled
+  at ingest time scores exactly one half of each `as_of_twin`
+  (`TestV13PointInTimeTwinsDefeatAStaticStateIndex` (#1844)); waves 1–2 carry
+  about a tenth of ordinary corrections behind a synchronous `/seed` whose 2xx
+  is the ingest acknowledgement, proven under `case_concurrency` 1–64
+  (`TestWaveDispatchHonorsIngestAckUnderCaseConcurrency` (#1844),
+  `TestV13EveryDeclaredMemoryCaseAnswerableAfterItsWave` (#1844)).
+- *Grounded abstention.* Six absence-proof families (≥ 50% misleading
+  evidence, ≤ 25% pure absence) graded as `AnswerAbsence`: a decline that cites
+  a grounding token present in the searched records scores 1; the tempting
+  value is forbidden only when *asserted as the answer*, never when cited as
+  insufficient evidence; a generic refusal or a templated grounding naming an
+  absent entity scores 0. Each is paired with a distributionally matched
+  answerable `decision_twin` ≥ 20 cases away
+  (`TestV13GroundedAbstentionScoresOne` (#1530),
+  `TestV13AbstentionZerosAssertionsAndGenericRefusals` (#1530),
+  `TestV13DecisionTwinBaselines` (#1530)).
+
+**Tool bench (issues #1843 #1842 #1580 #1840 #1846 #1845 #1847).**
+
+- *Per-seed catalog.* Production tool names never change; descriptions are
+  drawn per seed from ≥ 6 paraphrases, `set_theme` / `set_reasoning_effort`
+  close their value space with a JSON-schema `enum`, the discovery-grounded
+  setters describe their options as runtime-configured, and 3–5 coined decoy
+  tools (`<brand>_<shape>`, descriptions stating what they are not) are
+  spliced in; decoy-correct cases are ≥ 10% of tool cases so a blacklist
+  forfeits real weight (`TestV13Decoys` (#1843),
+  `TestV13SeededCatalogVariesDescriptionsAndKeepsNames` (#1843),
+  `TestV13ToolBenchContractAcrossFortySeeds` (#1843)). Catalog mirrors are
+  regenerated from `catalog.CatalogForVersion` and drift-tested
+  (`TestStarterKitCatalogMirrorMatchesV13Surface` (#1843),
+  `TestScreenerOracleToolNamesMatchV13Surface` (#1843),
+  `TestOpenClawPluginToolsMatchV13Surface` (#1843)).
+- *Discovery inventories and dropped families.* Accent colours and fonts come
+  from the public corpora with a planted near-miss pair; a 1–3-edit alias has
+  a unique nearest listed option with margin ≥ 1
+  (`TestAliasForMarginProperty` (#1842)); the canonical spelling exists only
+  in the served `discover_capabilities` result, including the setter's error
+  text (`TestV13SettersValidateAgainstInventoryWithoutEchoingCanonical`
+  (#1842)). `set_model`/`set_main_model` and `set_font`/`set_chat_font` are
+  retired as families (#1580); `set_effort` is no longer mandatory.
+- *Coined fixtures.* `list_workflows`, `list_schedules`, `list_agent_jobs`,
+  `search_tools`, `run_code` and `discover_capabilities` serve per-seed coined
+  content and the dependent cases are result-usage graded
+  (`TestV13CoinedFixturesCarryTheNeedleOnlyOnTheBearer` (#1840),
+  `TestV13NeedleIsAbsentFromOtherFixturesAndRecords` (#1840)).
+- *Restraint triplets with graded clarifying claims.* The `no_tool` /
+  `abstention` / `arg_hallucination` / `negation_no_tool` families become 16
+  cases in distributionally matched groups (same family and oracle, different
+  grammar draw, per-seed 2 ask : 1 act or 1 : 2): the ask half is graded as
+  `AnswerClarify` (names the missing slot from the schema-name ∪
+  description-noun ∪ multilingual-synonym lexicon and cites a record token
+  searched; "what would you like?" → 0), the act half requires the stored
+  value; always-ask, always-act and random-split rules score ≤ chance
+  (`TestV13RestraintGroupsAreDistributionallyMatched` (#1846)). Restraint
+  credit reads the broker's **model-emitted** calls and requires
+  catalog-present evidence.
+- *Effect-graded memory routing and cue-unreliable mutations.* Memory tools
+  stay harness-internal (the mock never serves them); eight memory-read tool
+  cases are graded on effect (the answer carries the planted needle, any
+  non-memory call is misrouting), the "any non-empty text" credit is removed,
+  and mutations are graded on end state through a follow-up read (delete +
+  save ≡ update) (#1845).
+- *Paraphrase-accepting argument claims.* `argClaimSatisfied` accepts honest
+  paraphrase of free-text arguments (`update_memory.content`,
+  `create_workflow.name` with the distractor party forbidden per claim, never
+  the correct one); ≤ v12 `argValueEqual` is unchanged (#1847). This is the
+  reward side only; the exact-output recipe (S5) is caught by the causal gate
+  and screener I5.
+
+**Grader v13 (issues #1523 #1522 #1831).** Reachable only through
+`gradingPolicyForVersion(v >= 13)` → `grade/v13.go`; every v2–v12 function is
+untouched. Order: observed bait call → empty → case language without a lexicon
+(fail closed) → question echo → forbidden value (claim-scoped, cited-and-
+rejected excusal; isolation never excused) → answer dump → abstain on an
+answerable kind → typed claim matcher over *asserted* candidates → stuffing
+quantifier → partial credit.
+
+- Quantities in the **requested unit**: expected `411067` cents accepts
+  `411067`, `411,067 cents`, `$4,110.67`, `USD 4,110.67`, `4.110,67`,
+  fullwidth digits; rejects `$411,067`
+  (`TestV13MinorUnitRequestedUnitGrading` (#1523); v12 frozen by
+  `TestV8MoneyAcceptsHumanFormattingAndRejectsInternalCents`).
+- Asserted vs cited: "Lisbon, not Oslo", "I first thought Oslo, but it is
+  Lisbon", "was X, now Y" assert one value
+  (`TestV13ClaimScopedDistractorScan` (#1523)); > 2 distinct asserted
+  candidates or two inconsistent assertions for one scalar claim → 0
+  (`TestV13StuffingQuantifier` (#1523)). Within a sentence, cue-positioned
+  values ("= 3800", "leaves $3,800", "the balance is") are the claim; an
+  enumeration ("3800 or 4200", "maybe X") asserts everything it lists; a lone
+  value is asserted; a multi-value sentence with neither cue nor enumeration
+  is exposition. A calendar-year token beside a count or amount is a
+  qualifier, not a candidate ("You took 3 trips in 2026" asserts 3), an uncued
+  bare integer beside a marked amount is exposition ("$3,800 across 4 trips"),
+  a clause-closing colon cues the value after it, and verb-object counts
+  ("took 3") are weak cues. Slot tie-break `slot_not_in_prose`
+  (`TestV13SlotTieBreak` (#1523)); three-valued direction with the questions'
+  own vocabulary and "neither … nor" → unchanged
+  (`TestV13ThreeValuedDirection` (#1523)); `AnswerDate` at the requested
+  granularity — any unambiguous rendering passes, `04/03/2026` never matches
+  (`TestV13DateClaims` (#1523)); `AnswerAbsence` and `AnswerClarify`
+  (`TestV13AbsenceAndClarifyKinds` (#1523)); declarative acknowledgement 0.25
+  (`TestV13DeclarativeAckCredit` (#1523)). Grader notes name the matched,
+  missing or contradictory claim by kind and never quote a hidden value.
+- Unicode and **reply language**: NFKC-style compatibility fold plus Unicode
+  case folding with rune-based boundaries; a case carries `MemoryCase.Language`
+  and the answer is accepted in that language or English through the
+  `internal/multilingual` lexicons (es, pt, fr, it, de, nl); a sampled language
+  without a lexicon fails closed (`TestV13UnicodeAndMultilingual` (#1523),
+  `TestConfigFailsClosedOnUnsupportedLanguage` (#1831)).
+- The public grader audit is versioned per policy floor (`v9-2` for v9..v11,
+  `v12-1` for v12, `v13-1` in `grade/audit_v13_bank.go` for v13): the v13-1
+  bank carries 59 hard negatives (3-candidate stuffing, templated grounding,
+  served-text-not-model-emitted, the GIH transcript class) and 54 reviewed
+  positives (hedged-correct, grounded abstention citing the near-miss, slot
+  `411067` beside `$4,110.67`, records-disagree, date renderings,
+  reply-in-question-language), all of which must score as labelled
+  (`TestSyntheticRobustnessV13BankIsCleanAndCoversEveryKind` (#1522)). The
+  generated-corpus gate regrades the newest generatable corpus under the v13
+  policy, reports `corpus_bench_version`, and adds a per-claim-kind bound
+  (public-question-only passable share strictly below 5% for every
+  non-interaction kind; `TestCannedAuditV13RegradesTheNewestGeneratableCorpus`
+  (#1522)). `datagen-ci.yml` runs `-release-gate` on every datagen pull
+  request and the release gate fails closed when a supported version or a
+  grading-policy floor owns no bank
+  (`TestReleaseGateCoversEverySupportedVersionAndPolicyFloor` (#1522)):
+
+  ```sh
+  go run ./cmd/graderaudit -bench-version 13 -seeds 40 -run-size full
+  go run ./cmd/graderaudit -release-gate
+  ```
+
+### Gates and postures (scorer, `services/dittobench-api`)
+
+The relay records evidence per successful completion (metadata only: offered
+tool names + schema digests, `tool_choice`, harness-authored span digests,
+model-emitted tool names, completion spans, choices and output tokens). The
+scorer reads it only at `bench_version >= 13`; v2–v12 reports are
+byte-identical. The full wire statement of every rule is in
+`services/dittobench-api/PROTOCOL.md` (*bench_version 13* sections).
+
+| Gate | Case note(s) | Default posture | Switch | Vector | Issue |
+| --- | --- | --- | --- | --- | --- |
+| Catalog-present (restraint requires an offer; expected tool must be offered) with the semantic-preloading safe harbor (top-k = 3 of the published TF-IDF embedding, or non-empty on declarative/chit-chat/decline) | `restraint_without_offer`, `expected_tool_not_offered`, `semantic_preloading_safe_harbor` | shadow | `DITTOBENCH_V13_CATALOG_GATE_POSTURE` | `TestCatalogGateRestraintRequiresAnOfferUnlessSafeHarbor`, `TestCatalogGateExpectedToolMustBeOfferedUnlessSafeHarbor`, `TestCatalogSemanticTopKIsDeterministicAndRanksTheCuedTool` | #1826 |
+| Swallowed model call (restraint scored on model-emitted calls) | `swallowed_model_call` | shadow | same switch | `TestCatalogGateSwallowedModelCallScoresRestraintOnModelChoice` | #1826 |
+| Claim-span provenance (claim tokens of the credited span ⊆ union of the case's completion tokens after `scoregates.NormalizeSpan` / `ValueTokenHashes`) | `served_text_not_model_emitted`, `no_model_completion`; grader-side `slot_not_in_prose` | shadow | `DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE` (shared with the causal gate) | `TestTextProvenanceVerdicts`, `TestNormalizeSpanVectors`, `TestApplyV13ClaimProvenanceHonestPatternsPass` | #1849 |
+| Causal model dependence (claim tokens ⊆ harness-first prompt tokens minus `/seed` records, served tool results, the case's `user_input` and the validator system prompt) | `answer_in_prompt` | shadow | same switch | `TestCausalDependenceVerdicts`, `TestV13ProvenanceBankGIHNegativeIsGraderBlind` | #1833 |
+| Twin / pair post-pass (`decision_twin`, `as_of_twin` concordance; base + counterfactual pair) | `twin_concordant`, `counterfactual_insensitive` | observe | `DITTOBENCH_V13_TWIN_POSTURE`, rule `DITTOBENCH_V13_TWIN_RULE` (`concordant_zero` default, `pair_product` auto-fallback when the honest concordant-error rate exceeds 5%) | `TestTwinPostPassBaselinesZeroAndOracleFull`, `TestTwinPostPassCounterfactualZeroesOnlyThePair`, `TestTwinPostPassLeavesEarlierVersionsUntouched` | #1835 |
+| Per-case inference cost factor `clamp(1 − α·max(0, tokens_out − budget_c), 0.6, 1)` over successful completions, choices and output tokens; budgets 3 completion-equivalents (memory, single tool) / 5 (chains) at 512 tokens each | `per_case[].inference_cost` | shadow (reported, never applied) | enforce decision after #1521 | `TestCostFactorRule`, `TestCostBudgetsArePublishedPerClass`, `TestBuildInferenceCostIsVersionGatedAndShadow` | #1850 |
+
+The provenance and causal gates are memory-case gates; the catalog gates are
+tool-case gates. Enforcing the catalog gate has an explicit fleet precondition:
+`completions_total` non-null on ≥ 99% of cases across ≥ 3 v13-capable
+validators (#1519). Incomplete or unavailable relay evidence always fails
+**open** (`TestCatalogGateFailsOpenWithoutSettledEvidence` (#1826)). Per-case
+notes and shadow verdicts are exposed to the owning miner on the Platform
+per-score detail and reproducible locally with `local-rehearsal.py --gates`
+(#1852, #1851), so a shadow zero is visible and appealable before anything
+enforces.
+
+One calibration item is worth stating plainly: the implemented safe harbor
+requires a **non-empty** catalog on declarative/chit-chat cases, so a
+threshold preloader that offers zero tools on chit-chat is recorded as
+`restraint_without_offer` (in shadow). The plan's honest-positive list names
+that preloader; #1521 must show it produces 0 false zeros, or the safe harbor
+widens before enforce. Owner decision — default taken: document the code as
+implemented, calibrate before enforce.
+
+### Probes and pinned ceilings
+
+All probes are public, model-free and deterministic. They are measurements,
+not secret defences; an adversary can read every one.
+
+| Probe | Command | Pinned ceiling / baseline | Pinned by |
+| --- | --- | --- | --- |
+| Tool 1-NN outcome prober | `go run ./cmd/toolprobe -bench-version 13 -run-size full -train-seeds 30 -held-out-seeds 10` | complete tool-outcome accuracy 36.10%, verbatim argument exposure 1.80% (gate: < 50% / < 25%) | `TestV13ToolBenchContractAcrossFortySeeds` (#1843) |
+| Memory exposure audit | `go run ./cmd/memoryprobe -bench-version 13 -seed 41 -run-size full` | ≥ half of evidence-bound answers computed; correction/join families count as computed from v13 | `TestMemoryExposureAuditIsVersionExplicit` (#1824) |
+| Generator-inverse harness (GIH, N13) and 10k-seed router (N14) | `go run ./cmd/parserprobe -bench-version 13 -seeds 40 -run-size full -json` | pass-off (salt 0) baseline ≈ oracle (v12: 0.992 composite over seeds 1–40) — **the published baseline, not a failure**; ceiling on a surface-passed artifact: GIH and router composite ≤ starter-kit − 0.05 overall and on every slice (story, programs, personal, quantity, tool prompts) | `TestParserprobeBaselineOnPublicSeed` (#1829); `TestParserprobeCeilingOnSurfacePassedArtifacts` (#1829), armed by `DITTOBENCH_SURFACE_PASSED_ARTIFACTS`, report-only until the #1832 owner decision |
+| Grader robustness audit | `go run ./cmd/graderaudit -bench-version 13 -seeds 40 -run-size full`, `-release-gate` | no hard negative passes, no reviewed positive fails, public-question-only passable share < 5% per claim kind | `TestSyntheticRobustnessV13BankIsCleanAndCoversEveryKind` (#1522), `TestCannedAuditV13RegradesTheNewestGeneratableCorpus` (#1522) |
+| Mix audit | `go run ./cmd/mixaudit -bench-version 13 -seeds 40 -gate` | the `MixGateV13` caps and floors above | `TestV13MixAuditGateAcrossFortySeeds` (#1848) |
+| `/seed` label-leak probe | `go test ./gen -run LabelLeak` | family / arc / slot at chance on 10 held-out seeds (v12: 94% from the session prefix) | `TestV13SeedWireCarriesNoFamilyArcOrSlotLabel` (#1827) |
+| Story arc recovery | `go test ./universe -run StoryV2ArcRecovery` | raw pre-pass ceiling reported per seed; the enforced ceiling is parserprobe's after the surface pass | `TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic` (#1839) |
+
+`cmd/parserprobe` is the honest adversary every surface claim is measured
+against, replacing the 1-NN / family-id / 4-gram / fixed-recipe strawmen the
+generator itself beat: it reads only what a harness sees on the wire (the
+`/seed` records, the staged questions, the tool prompts), assembles a
+typo-tolerant parser from the repository's own frames (`internal/parserprobe`
+registers the v10–v12 question and record surfaces and derives the
+`v<N>-open-program` family from the artifact's `bench_version`, so a contract
+without a registered grammar is reported as unclassified rather than scored as
+a silent zero), recovers (family, slots) for every question, applies the
+public oracle arithmetic, launders the value through one "reply exactly"
+completion, and is graded by the real deterministic grader. The router (N14)
+replaces only the family-identification step with a naive-Bayes classifier
+trained on locally generated seeds. `TestParserprobeProgramGrammarCoversEveryContract`
+(#1829) walks every supported `bench_version` from v10 up and requires the
+program family to be recognised and inverted near-perfectly, so a v13 contract
+that re-renders the program surface fails it until its grammar is registered.
+Three wire properties the probe exposes are worth naming because an honest
+harness pays for them too: the program question binds its subject
+relationally and never names its group, so order is the only wire-visible
+binding; the parser-divergence questions repeat verbatim per round; and the
+projector edits unprotected join keys, which one-edit fuzzy joins absorb.
+
+### Known vector
+
+`TestV13KnownVector` (#1848) in `gen/publicvector_test.go` pins seed
+`123456789`, full profile. Until the last interim slot generator lands and the
+`/seed` label-leak fix is in the same tree, the pin is **interim**: every
+generator swap re-pins it as a deliberate contract decision, and the hash in
+the test is authoritative over any copy in prose. The final v13 vector is the
+one pinned after the last swap, so opaque session ids and jittered timestamps
+— never `story-%02d-*` ids or 137-hour steps — are what the contract freezes.
+v2–v12 vectors do not move; if one does, the gating is wrong.
+
+### The surface pass and the open owner decision (#1832)
+
+`gen/v13_surface.go` (`V13ApplyArtifactSurfacePass`) renders every
+harness-visible surface as a function of `(seed, surface salt)`: the
+compositional stored-directive markers, typo v2 over a stable share of tool
+prompts, questions and non-story seeded prompts, a `TranslationPass` hook
+(no-op by default) and, under a non-zero salt, a **regeneration canary** — the
+world canary nonce is re-keyed within its per-seed shape and the public (salt
+0) nonce is planted as a distractor, so a harness answering from a dataset it
+regenerated from the public generator scores zero on the canary.
+`SurfaceOptions{Salt, Translation}` is threaded through
+`GenerateDatasetWithSurface` / `BuildArtifactForVersionWithSurface` and
+`generate -surface-salt`.
+
+- **Salt 0 is the public rehearsal default and is byte-identical to the
+  unsalted path** (`TestV13SaltZeroIsByteIdenticalToUnsaltedPath` (#1832)).
+  Miners, the starter kit's `local-rehearsal.py`, the screener oracle and the
+  practice API all run salt 0.
+- A non-zero salt changes surfaces only — never semantics, values, oracles or
+  `Claims` (`TestV13SaltChangesOnlySurfaces` (#1832),
+  `TestV13SurfacePassProtectsGradedValues` (#1832)) — and is recorded on the
+  artifact as `surface_salt`, an audit field that never reaches the harness
+  wire.
+- **Open owner decision (Owner decision — default taken: ship the shared
+  groundwork, decide the exchange separately).** Which side holds the salt is
+  not decided by this contract: (A) a validator commit-reveal salt
+  (`sha256(salt)` in the job claim, revealed in the signed score report,
+  `scores.dataset_salt/_commitment`, `reproduction_command --salt`), or (B) a
+  Platform-side private paraphrase/translation pass over the pinned
+  grammar-expanded artifact with a published passed-dataset SHA. Both are
+  surface-only; neither ships a salt exchange in v13.0's contract PRs.
+  Deferral is not an option for v13.0 *activation*: until one lands, every
+  surface defence above is regenerable from the public repo, the parserprobe
+  ceilings stay report-only, and the GIH scores ≈ oracle by construction.
+
+### Multilingual fraction (issue #1831)
+
+Translation and code-switching are performed by the private surface pass
+(`multilingual.TranslationPass`, stubbed behind an interface; a cached LLM
+translation pinned per dataset over a seed-derived, unannounced Latin-script
+subset of es/pt/fr/it/de/nl), never by checked-in per-language grammars.
+`multilingual.Config{Fraction, Languages, Pass}` is the profile knob; **the
+v13.0 default is `Fraction: 0`** (`TestDefaultConfigDrawsNothing` (#1831)) —
+Owner decision — default taken: the fraction (the plan's 12% of memory
+questions / 10% of records / 15% of tool prompts) is set by the #1521
+starter-kit < 2-point rule, not here. Values (names, amounts, options) stay
+canonical under any draw (`TestV13MultilingualValuesStayCanonical` (#1831));
+the grader accepts the answer in the question's language or English and fails
+closed for a language it holds no lexicon for. Non-Latin scripts are a v13.1
+decision.
+
+### What a harness sees
+
+The wire stays at `bench_version` 9 (#1519 option A — Owner decision — default
+taken: keep `publicWireBenchVersion = 9` with additive optional fields; a
+naive bump to 13 fails every deployed harness closed at the starter kit's
+`MIN..=MAX_SUPPORTED_BENCH_VERSION` range check). Every harness-visible v13
+addition is additive on the existing shapes: richer tool schemas (`enum`,
+runtime-described options, coined decoys), coined served content, staged
+`/seed` waves whose 2xx is the ingest acknowledgement, and "as of" anchors
+inside `user_input`. Every grader-only field (`claims`, `twin_relation`,
+`required_arg_claims`, `restraint`, `language`, `surface_salt`) is stripped
+before the wire (`TestV13GraderOnlyFieldsNeverReachHarnessWire` (#1824),
+`TestV13GraderOnlyFieldsNeverReachRunPayload` (#1824)). The hostile-harness
+projection is unchanged; its v13 notes are in
+[v9-harness-projection.md](v9-harness-projection.md). The miner-facing
+statement — what is graded, what the gates look for, and the honest
+architectures that pass them — is the starter kit's
+[PROTOCOL.md](../../../miners/dittobench-starter-kit/PROTOCOL.md) and
+[README](../../../miners/dittobench-starter-kit/README.md) (*Bench v13: how
+to stay inside the gates*).
+
+Run sizes, the deterministic grader boundary (no LLM judge), the inference
+boundary and locked model, LongMemEval floors (`bench_version >= 9`, a floor,
+never an enumerated whitelist), and the v9 signed-evidence / score-gate /
+curve-v3 efficiency stack all carry forward unchanged.
 
 ## Auditing an old score
 

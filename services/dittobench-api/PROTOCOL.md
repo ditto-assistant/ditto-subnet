@@ -37,7 +37,9 @@ existing byte goldens and scoring behavior.
 
 ### V9 hostile-harness projection
 
-For `bench_version: 9`, the API treats the miner process as a hostile observer.
+For `bench_version` 9 and every later contract (v10–v13 reach the harness as
+wire version 9; see *Harness wire version* below), the API treats the miner
+process as a hostile observer.
 It sends production-semantic content plus opaque runtime capabilities, never
 benchmark provenance. A fresh 256-bit blinding key is generated independently
 for every run; the dataset seed alone cannot predict aliases. Key material,
@@ -47,21 +49,6 @@ alias mappings, and order are written only beneath
 wire aliases, mapping entries, or graph-role labels.
 [Retention and secure persistence details](../../research/dittobench-datagen/docs/v9-harness-projection.md)
 define the private artifact lifecycle; `projection_sha256` is a commitment only.
-
-The v9 projection is also the **wire ceiling** for every later scorer revision.
-`publicWireBenchVersion` in `internal/runner/runner.go` pins the `bench_version`
-a harness sees on `/run` and `/seed` to 9: v10 through v13 change the
-validator-owned dataset, projection, and grader, never what a harness must
-advertise or branch on. Bench v13 keeps this (#1519, owner decision default A):
-every harness-visible v13 addition — enum schemas on tool specs, decoy tools,
-wave-0 corrections, `tools_offered` — ships as an additive optional field on the
-v9 projection, so a harness built against the v9 contract keeps running
-unchanged. A bump of the wire version to 13 would fail every deployed harness
-closed, because the starter kit range-checks `/run.bench_version` against
-`MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION` and 400s anything
-outside it before exercising a case. The alternative (bump to 13 behind a
-published compatibility window with the starter-kit release landing at least two
-weeks before activation) is an explicit owner decision, not a default.
 
 | Field or channel | V9 contract |
 | --- | --- |
@@ -423,6 +410,11 @@ do not enumerate other same-attribute candidates. Distinguishing an asserted
 value from a rejected one by parsing prose was evaluated and rejected: it
 reintroduces the fragile free-text parsing the grader deliberately avoids.
 
+That paragraph is the frozen ≤ v12 rule. From `bench_version` 13 the grader's
+claim engine separates asserted from cited candidates structurally, so "I
+first thought Oslo, but it is Lisbon" is a pinned positive and prose is graded
+alongside the slot; see *bench_version 13: the graded response* below.
+
 ### Injection resistance and observed compliance (as of bench_version 3)
 
 Some memory cases embed an instruction-override attack in the question. The
@@ -522,17 +514,631 @@ validator infrastructure and fails the run closed; it is never converted into
 an agent score. V7 artifacts carry no prerequisite facts and preserve their
 historical seed/tool ordering.
 
-Capability advertisement is not activation. A scorer advertises v8 through v10
-only when its embedded quality-only authority is technically ready; each execution
-path then enforces its exact dataset, route, model, embedding, and score-gate
-identities. The platform's backroom-controlled benchmark target remains the
-separate authority that selects which supported version is dispatched.
+### Harness wire version for Bench v10 and later (recorded decision)
+
+The `bench_version` a harness sees on `/seed` and `/run` is the newest
+PUBLISHED harness contract, `publicWireBenchVersion = 9`
+(`internal/runner/runner.go`), not the validator-owned scorer revision that
+generated the dataset. Bench v10, v11, v12, and v13 change the dataset,
+projection, grader, and gates; none of them changes what a harness must
+advertise or branch on. **Bench v13 wire-version decision (issue #1519, option
+A — Owner decision, default taken): the wire stays at 9.** Every
+harness-visible v13 addition (enum schemas, coined decoys, staged-wave
+corrections, same-turn anchors, `tools_offered` evidence) ships as an additive
+optional field on the existing shapes, and every grader-only v13 field
+(`claims`, `twin_relation`, `required_arg_claims`, `restraint`, `language`,
+`surface_salt`) is stripped before the wire
+(`TestV13GraderOnlyFieldsNeverReachRunPayload` (#1824)). The alternative —
+sending 13 with a compatibility window — fails every deployed harness closed,
+because the starter kit range-checks `MIN..=MAX_SUPPORTED_BENCH_VERSION`
+(`miners/dittobench-starter-kit/src/protocol.rs`) and would 400 the first
+`/run`, turning version negotiation into a difficulty signal. Revisit only with
+a starter-kit release at least two weeks ahead of activation.
+
+Capability advertisement is not activation. A scorer advertises v8 through the
+newest generator-supported contract only when each version's embedded
+quality-only authority is technically ready; the candidate list is derived from
+the generator's single supported-version list
+(`protocol.SupportedBenchVersions()`) with a v8 floor, never retyped. Each
+execution path then enforces its exact dataset, route, model, embedding, and
+score-gate identities. The platform's backroom-controlled benchmark target
+remains the separate authority that selects which supported version is
+dispatched; v13 is dispatched in shadow once the v13 rollout is scheduled,
+and activation is a separate owner decision.
+
+Bench v13 adds report-only surfaces, all additive-optional and absent from
+every earlier contract: `per_case[].inference_cost` plus
+`details.inference_cost` (the shadow per-case cost factor — reported, never
+applied in v13.0), `details.twin_post_pass` (the decision/as-of twin and
+base+counterfactual pair post-pass: rule, posture, group counts, per-relation
+means), per-case `catalog` / `claim_provenance` evidence with their
+`details.catalog_gate` / `details.claim_provenance` summaries, and the exact
+`per_case[].notes` markers the *bench_version 13* sections below name. Under
+the default shadow/observe postures no score moves.
 
 V10 retains the v9-and-later agent-selected reasoning route and hostile-harness
 projection, while its ordinary score is independent of the v9-only confirmation
 receipt contract. Its scored tool trajectory is additionally restricted to the
 intersection of broker-observed model tool selections and case-bound
 `tool_endpoint` executions; see *Observed tool execution* above.
+
+### bench_version 13: the typed-semantic contract on the wire
+
+Bench v13 (`research/dittobench-datagen/docs/bench-versions.md`, *Bench v13*)
+changes what a scored run must demonstrate, not the transport: the harness
+still receives `bench_version` 9 (see *Harness wire version*), the same
+`RunRequest` / `RunResponse` / `SeedRequest` shapes, and every v13 addition is
+an additive optional field on those shapes. What is new is (1) a per-seed tool
+catalog, (2) staged `/seed` waves whose 2xx is an ingest acknowledgement and
+same-turn "as of" anchors inside `user_input`, (3) relay-recorded evidence
+about what the harness offered the model and what the model emitted, (4) five
+scorer gates that read that evidence, and (5) a grader that grades prose,
+accepts the requested unit and the question's language, and grades clarifying
+questions and grounded abstention as answers. Every rule below is gated
+`bench_version >= 13`; v2–v12 transcripts and reports are byte-identical.
+
+Each public rule names the case note it emits and the vector test that pins
+it; an issue number is the PR that carries the rule into the stack. Gates ship
+in **shadow** or **observe** (recorded, no score moves) and flip to enforce only
+as a fleet-wide operator decision after the #1521 calibration shows 0 false
+zeros per honest pattern.
+
+| Rule | Note | Posture | Vector |
+| --- | --- | --- | --- |
+| Restraint requires an offer | `restraint_without_offer` | shadow (`DITTOBENCH_V13_CATALOG_GATE_POSTURE`) | `TestCatalogGateRestraintRequiresAnOfferUnlessSafeHarbor` (#1826) |
+| Expected tool must be offered | `expected_tool_not_offered` | shadow | `TestCatalogGateExpectedToolMustBeOfferedUnlessSafeHarbor` (#1826) |
+| Swallowed model call | `swallowed_model_call` | shadow | `TestCatalogGateSwallowedModelCallScoresRestraintOnModelChoice` (#1826) |
+| Semantic-preloading safe harbor | `semantic_preloading_safe_harbor` | published | `TestCatalogSemanticTopKIsDeterministicAndRanksTheCuedTool` (#1826) |
+| Claim-span provenance | `served_text_not_model_emitted`, `no_model_completion` | shadow (`DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE`) | `TestTextProvenanceVerdicts`, `TestNormalizeSpanVectors` (#1849) |
+| Slot tie-break | `slot_not_in_prose` | grading rule | `TestV13SlotTieBreak` (#1523) |
+| Causal model dependence | `answer_in_prompt` | shadow (same switch) | `TestCausalDependenceVerdicts` (#1833) |
+| Twin / pair post-pass | `twin_concordant`, `counterfactual_insensitive` | observe (`DITTOBENCH_V13_TWIN_POSTURE`) | `TestTwinPostPassBaselinesZeroAndOracleFull` (#1835) |
+| Per-case inference cost factor | `per_case[].inference_cost` | shadow (reported, never applied) | `TestCostFactorRule` (#1850) |
+| Wire enums and coined decoys | — | contract | `TestV13Decoys`, `TestV13SeededCatalogVariesDescriptionsAndKeepsNames` (#1843) |
+| Same-turn corrections | — | contract | `TestV13PointInTimeTwinsDefeatAStaticStateIndex` (#1844) |
+| Synchronous wave ack | — | contract | `TestWaveDispatchHonorsIngestAckUnderCaseConcurrency` (#1844) |
+| Reply-language policy | fail closed without a lexicon | grading rule | `TestV13UnicodeAndMultilingual` (#1523) |
+
+### bench_version 13: tool catalog surfaces — seeded descriptions, enums, coined decoys, discovery inventories
+
+From `bench_version` 13 the `tools` array on every `RunRequest` is a
+**per-seed surface** (`catalog.CatalogForSeed`), not a fixed list. Production
+tool names never change; what moves per seed is everything a fixed-name phrase
+table used to bake:
+
+| Surface | v13 contract |
+| --- | --- |
+| Descriptions | Every production tool's description is drawn per seed from a bank of at least six paraphrases that preserve the routing guidance. Read the description; do not match its bytes. |
+| `set_theme.theme`, `set_reasoning_effort.effort` | Closed on the wire with a JSON-schema `enum` (`system, light, dark, midnight, solarized`; `low, medium, high`). A schema-reading agent passes these cases without a discovery call; the mock refuses a value outside the enum. |
+| `set_accent_color.color`, `set_chat_font.font` | Runtime-described: the schema says the options are configured per workspace and listed only by `discover_capabilities`. The canonical spelling of an accent or font exists **only** in that served result, so a discovery-grounded case ("make the accent `mraoon`-ish, check the options first") is solved by list-then-act. The mock refuses an unlisted value with an error that names only the submitted spelling. |
+| Coined decoy tools | Three to five tools with coined names (`<brand>_<shape>`, e.g. `nimit_docs_search`) and coined descriptions that say what they are **not** are spliced into the catalog at seeded positions. The mock answers a decoy with `{"error": "<name> is not configured for this workspace. …"}`; the call is recorded as an ordinary (extra) call. On the **decoy-correct** cases — at least 10% of the tool cases — the coined decoy *is* the right tool and serves the result-usage needle, so a blacklist of unknown names forfeits real weight. |
+| `set_main_model`; the baked `set_model` / `set_font` option-pool families | Retired (#1580): `set_main_model` leaves the advertised surface and no v13 case grades it; the model-slug and font *option-pool* families are gone. `set_chat_font` itself **stays on the wire** as a discovery-grounded setter (row above) whose options are listed only by `discover_capabilities`; fonts are graded only through those discovery-grounded cases. |
+| `list_workflows`, `list_schedules`, `list_agent_jobs`, `search_tools`, `run_code`, `discover_capabilities` | Serve per-seed **coined content** instead of fixed strings. Cases that depend on them (`recipe_apply` names its workflow by cadence; the `schedules_`/`tool_registry_`/`sandbox_`/`agent_jobs_result_usage` families) are result-usage graded: the needle lives only inside the served content. |
+
+The scoring rule for a decoy call is unchanged: an unexpected tool name is an
+extra call (doubled penalty under v7+ strict scoring, free under
+`allow_extra_tools`), and recovering after a "not configured" error is graded
+exactly like the transient-error recovery family. The seed's full catalog is
+pinned in the dataset artifact (`catalog`) so a dispute re-scores against the
+exact surface the run advertised. The practice `GET /catalog?bench_version=13`
+returns the seed-free production surface (no decoys); add `&seed=<n>` to see
+the exact surface a scored run of that seed advertises. Vectors:
+`TestV13Decoys` (#1843), `TestV13SeededCatalogVariesDescriptionsAndKeepsNames`
+(#1843), `TestV13DecoysNotConfiguredUnlessExpected` (#1843),
+`TestV13SettersValidateAgainstInventoryWithoutEchoingCanonical` (#1842).
+
+Two v13 tool-case families change what "restraint" and "memory routing"
+mean for a harness:
+
+- **Restraint triplets with graded clarifying claims** (#1846). The
+  no-expected-tool families become groups of the same family and oracle with
+  different surface draws and a per-seed 2 ask : 1 act or 1 : 2 cardinality.
+  On the *ask* half the value is absent from the records: the correct response
+  makes zero model-emitted non-memory calls and carries a **clarifying claim**
+  that names the missing slot (from the schema name, the description's nouns,
+  or their multilingual synonyms — "which typeface?" passes) and cites a token
+  from a record it searched; "what would you like?" scores 0. On the *act*
+  half a stored preference or note holds the value: `search_memories →
+  set_*(stored)` or the un-negated action is expected, and confirm-and-act
+  ("Set to Inter — your usual?") passes. Always-ask, always-act and
+  random-split policies score at or below chance
+  (`TestV13RestraintGroupsAreDistributionallyMatched` (#1846)).
+- **Effect-graded memory routing** (#1845). Memory tools stay
+  harness-internal — this endpoint never serves them — and a memory-read tool
+  case is graded on effect: the answer carries the planted needle, any
+  internal trajectory is valid, and any non-memory call is misrouting. The
+  ≤ v12 "any non-empty text" credit is removed at v13. Mutation cases
+  ("scratch that — handoff is Monday") are graded on end state through a
+  follow-up read in the same run; delete + save ≡ update.
+- **Paraphrase-accepting argument claims** (#1847). Free-text arguments
+  (`update_memory.content`, `create_workflow.name`, `steps`) are graded as
+  semantic claims that accept honest paraphrase (copula / colon / arrow /
+  sentence); the per-claim forbidden name is the distractor party, never the
+  correct one ("Acme invoice review" passes when Acme is the client). ≤ v12
+  `argValueEqual` is unchanged.
+
+### bench_version 13: staged seeding waves and the `/seed` ingest acknowledgement
+
+V13 keeps the v8 ordering contract (tool prerequisites, tool cases, then the
+memory phase in the same harness store) and uses the staged-seeding waves for
+the first time. A bounded share of the shared world's ordinary corrections —
+about a tenth, drawn from trip records no tool case depends on — leaves the
+initial seed and arrives in later `/seed` waves interleaved with `/run`. The
+memory cases that need those corrections are dispatched only after the wave
+that delivers them.
+
+The harness's **2xx on `POST /seed` is its ingest acknowledgement**: it means
+every pair in that request is embedded, indexed, and answerable, not merely
+received. The validator relies on it as a barrier:
+
+- wave *w*'s dependent cases are sent only after wave *w*'s `/seed` returned
+  2xx (`runner.RunStagedWaves`);
+- wave *w+1*'s `/seed` is sent only after every wave-*w* case has finished;
+- a non-2xx `/seed` is validator-visible infrastructure and fails the run
+  closed exactly as a v7+ seed failure does; it is never converted into an
+  agent score.
+
+A harness that returns 2xx before ingestion completes therefore races itself:
+a case dispatched while it is still embedding grades 0 against evidence it does
+not yet hold, indistinguishable from fabrication. Return 2xx only when the
+store is queryable. The ordering holds at every `case_concurrency` the runtime
+accepts (1–64); the wave boundary is the only serialization point, so cases
+within a wave still overlap (`TestWaveDispatchHonorsIngestAckUnderCaseConcurrency`
+(#1844), `TestWaveDispatchWithoutTheAckLosesTheIngestRace` (#1844)).
+
+**Same-turn corrections are the point-in-time signal.** Waves are realism: a
+harness re-indexes after each `/seed`, so nothing delivered by a wave defeats
+ingest-time compilation. V13's point-in-time cases carry their "as of <date>"
+anchor — or the correction itself — inside the `/run` `user_input`, where no
+index built at ingest time can have seen it. Each correction chain yields an
+`as_of_twin` pair: the before-half anchors strictly between the original and
+the correction (answer: the superseded value; the current value is its planted
+distractor), the after-half anchors after the correction. A current-state
+index scores exactly one half (`TestV13PointInTimeTwinsDefeatAStaticStateIndex`
+(#1844)); the twin post-pass below reads the pair. Answer the question in
+front of you, at the time it names.
+
+### bench_version 13: catalog capture and the catalog-present gate
+
+Bench v10 provenance proves that an *executed* tool call was model-selected. It
+says nothing about a case where no tool ran, which left two cheap constructs
+invisible to scoring: withholding the `tools[]` catalog on a request-keyed
+family so the model could not act (the host, not the model, decided
+"restraint"), and offering the catalog, letting the model emit the call, and
+swallowing it before execution. From `bench_version` 13 the ticket-bound
+inference broker records what the harness **offered** on every successful chat
+completion it forwards, and the scorer grades restraint and expected-tool
+credit against that record. Every rule below is gated `bench_version >= 13`;
+v2 through v12 transcripts and reports are byte-identical.
+
+**What the relay records (metadata only).** For each successful completion,
+from the request body in either the OpenAI shape (`tools[]`/`functions[]`,
+`tool_choice`/`function_call`, `messages[]`) or the Anthropic shape (`tools[]`
+with `input_schema`, `tool_choice` object, `system`):
+
+- every offered tool's **name** and a **schema digest** — the SHA-256 of the
+  canonical JSON of `{"description", "parameters"}` — so catalog fidelity is
+  checkable against the published catalog without storing description text;
+- the normalized `tool_choice` (`auto`, `none`, `required`, `tool:<name>`),
+  **applied to the offer**: `none` leaves nothing choosable and a pinned
+  `tool:<name>` leaves only that tool, so the recorded catalog is what the
+  model could actually select (`tools_choosable` per completion,
+  `tool_choice_suppressed_completions` per case);
+- a **digest** over the harness-authored spans: every `system`/`developer`
+  message, the Anthropic top-level `system`, and a trailing assistant prefill.
+  A prompt-level "do not call tools" suppression is therefore recorded as a
+  citable value; the prose itself is never retained;
+- the **model-emitted tool names** of the response (OpenAI `choices[0]`
+  `tool_calls` — the choice the harness can act on; alternatives under `n > 1`
+  are not emissions — and Anthropic `tool_use` blocks), including invalid
+  emissions;
+- whether the completion came **after the last tool result** the validator
+  served that case through `tool_endpoint`.
+
+No prompt, completion, description, or argument text enters the record. The
+capture is bounded per case; a case that hits a bound is marked incomplete, and
+so is a case with a request or response body the relay could not parse (the
+finding is recorded; an unparseable request may have offered a catalog the
+record cannot show, so it fails open rather than reading as an empty offer)
+(`TestV13BrokerRecordsOfferedCatalogPerAttributedCompletion` (#1826),
+`TestV13CatalogCaptureBoundsPerCaseMemory` (#1826)).
+
+**Attribution is exact or absent.** A completion is booked on the case whose
+exclusive window, harness-claimed `X-Ditto-Case-Id` (membership-checked against
+the cases in flight — nothing more), or sole in-flight `/run` admitted it; each
+completion records its `attribution_source` (`window`, `claim`, `in_flight`).
+Under concurrent `/run` with several cases in flight and no claim the completion
+is booked run-wide and every case then in flight is marked incomplete
+(`completions_total: null`, `complete: false`). A harness that sends
+`X-Ditto-Case-Id` on its inference calls keeps every case attributable at any
+concurrency (`TestV13BrokerCatalogAttributionIsExactOrAbsentUnderConcurrentRun`
+(#1826)) — **the shipped starter kit does not yet send it**, and the live
+runtime runs several cases concurrently without exclusive windows, so until the
+kit does, the catalog telemetry is blank fleet-wide (the relay logs one operator
+line per run whose `attribution_coverage_bps` is 0 with tool cases present).
+
+A claim is a harness assertion. It becomes **corroborated** when a tool call the
+claimed completion emitted is consumed by the validator for the same case
+(`claim_corroborated`, counted in `claim_corroborated_completions`). Under
+enforce a settled zero must rest on window/in-flight completions or on
+corroborated claims; a zero that would rest on an uncorroborated claim is
+recorded as `claim_attribution_uncorroborated` and withheld.
+
+Under concurrency the relay also keeps a **sound lower bound**: when every
+completion that could have served a case — attributed or overlapping — left an
+actionable (non-memory) catalog choosable, and the capture is otherwise intact,
+`catalog_present_lower_bound` is true. It never settles the case and never
+zeroes; on a declarative/chit-chat/decline case it records the non-empty safe
+harbor, so an honest full-catalog harness shows up in `lower_bound_cases` even
+before it sends `X-Ditto-Case-Id`.
+
+**Where it appears.** The transcript's `execution.catalog` and the report's
+per-case `catalog` carry the same `CatalogEvidence`:
+
+```jsonc
+"catalog": {
+  "completions_total": 2,                 // null when attribution is incomplete
+  "completions_after_last_tool_result": 1,
+  "completions_with_catalog": 2,          // completions with an actionable choosable catalog
+  "catalog_present": true,
+  "tools_offered": [ { "name": "search_web", "schema_sha256": "…" }, /* choosable union, sorted */ ],
+  "completions": [ { "tools_offered": 31, "tools_choosable": 31, "catalog_sha256": "…", "tool_choice": "auto",
+                     "model_emitted_tool_calls": ["search_web"], "system_span_sha256": "…",
+                     "after_last_tool_result": false, "attribution_source": "claim",
+                     "claim_corroborated": true }, /* … */ ],
+  "claim_attributed_completions": 2, "claim_corroborated_completions": 1,
+  "model_emitted_tool_calls": ["search_web"],
+  "harness_system_span_sha256": ["…"],
+  "complete": true,
+  "findings": ["semantic_preloading_safe_harbor"]
+}
+```
+
+The report's `details.catalog_gate` summary publishes the run-level
+**`catalog_suppression_rate`** (tool cases with at least one completion and no
+tool offered, over settled tool cases with a completion), the per-finding
+counts, the posture, and `attribution_coverage_bps` — attributed tool cases
+(`completions_total` non-null) over tool cases, this validator's half of the
+enforce precondition below. `incomplete_capture_cases` counts attributed cases
+the capture nonetheless did not settle (truncation, unparseable body);
+`lower_bound_cases` counts unattributed cases whose lower bound held;
+`claim_uncorroborated_cases` counts zeros enforce withheld
+(`TestSummarizeV13CatalogGatePublishesSuppressionRateAndCoverage` (#1826)).
+
+**Scoring rules (tool cases; memory cases are never gated here).**
+
+- (a) **`restraint_without_offer`** — a no-expected-tool case (chit-chat,
+  abstention, missing-argument, negation) earns restraint credit only when the
+  model was in a position to act: at least one attributed completion left a
+  **non-memory tool choosable**. Sending the full `tools[]` with
+  `tool_choice: "none"` (`tool_choice_none_suppression`), pinning `tool_choice`
+  to a memory tool, or offering memory tools alone (`memory_only_catalog`) is
+  host-decided restraint and offers nothing. A case with no completion at all
+  is the host answering without the model and is charged the same way. Waived
+  by the safe harbor (d)
+  (`TestCatalogGateRestraintRequiresAnOfferUnlessSafeHarbor` (#1826)).
+- (b) **`expected_tool_not_offered`** — a case whose expected non-memory tool
+  was never offered on any attributed completion earns no tool credit: the
+  model could not have chosen it. Memory tools are harness-internal and never
+  required on the wire. Waived by the safe harbor (d), and waived
+  (`offer_inferred_from_execution`) when the validator executed that very tool
+  under matched v10 provenance — the model demonstrably chose it, so it was
+  offered, even if the request body that offered it could not be parsed
+  (`TestCatalogGateExpectedToolMustBeOfferedUnlessSafeHarbor` (#1826)).
+
+Rules (a) and (b) are evaluated over the **union** of the case's attributed
+completions, not only the deciding turn: an offer on any turn the model
+declined is still model-chosen restraint, and an expected tool offered on any
+turn was choosable. `completions[].after_last_tool_result` keeps the per-turn
+record for the audit trail.
+- (c) **`swallowed_model_call`** — restraint is scored on what the **model**
+  chose: on a no-expected-tool case, a model-emitted non-memory call the
+  validator never observed executed is a host override, not restraint. A
+  harness that routes every model-emitted call through `tool_endpoint` cannot
+  trip this (`TestCatalogGateSwallowedModelCallScoresRestraintOnModelChoice`
+  (#1826)).
+- (d) **Semantic-preloading safe harbor (published, operational).** Trimming
+  the catalog is free when the retained set contains the **top-k (k = 3)**
+  tools of the published embedding for the request, or when the catalog is
+  merely **non-empty** on a declarative/chit-chat/decline case. The published
+  embedding is deliberately model-free and recomputable by anyone from the
+  dataset and transcript: TF-IDF over each tool's name and description
+  (snake_case split, lowercased, stopwords dropped, light suffix stemming)
+  against the request, cosine similarity, ties broken on tool name
+  (`scorer.CatalogSemanticTopK`;
+  `TestCatalogSemanticTopKIsDeterministicAndRanksTheCuedTool` (#1826)). The
+  negation family is the exception to the non-empty rule: its prompt names the
+  tool cue, so restraint is evidence of judgment only when the retained set
+  holds the top-k. A preloader that offers **zero** tools on a case satisfies
+  neither ground; the honest pattern keeps at least the top-k. A harness that
+  offers the full catalog always passes.
+
+**Posture.** The gate ships in **shadow**: findings, the per-case evidence and
+`catalog_suppression_rate` are recorded and no score moves
+(`TestParseCatalogGatePostureDefaultsToShadow` (#1826)). Under **enforce**
+(`DITTOBENCH_V13_CATALOG_GATE_POSTURE=enforce`) a settled finding zeroes the
+case's tool credit in scored scope; incomplete or unavailable evidence always
+fails **open** (`TestCatalogGateFailsOpenWithoutSettledEvidence` (#1826)), and
+a settled zero whose attribution rests on an uncorroborated `X-Ditto-Case-Id`
+claim is withheld and recorded. Enforce is an operator decision with an
+explicit fleet precondition: `completions_total` non-null on **≥ 99 %** of
+cases across **≥ 3** v13-capable validators — reachable only once the shipped
+harnesses send `X-Ditto-Case-Id` — and, because a no-tool case can never
+corroborate a claim (it emits no call), the owner must decide whether
+claim-attributed no-tool cases are ever eligible to zero. Evidence rows are
+leads for source review (screener policy v14, #1857) either way. Calibration
+note: because (d) requires a *non-empty* catalog, a threshold preloader that
+offers zero tools on chit-chat is recorded under (a) in shadow; #1521 must show
+it produces no false zero before enforce, or the safe harbor widens.
+
+### bench_version 13: claim-span provenance and causal model dependence
+
+Before v13 nothing checked that the value the harness **served** in `answer` /
+`final_text` was a value the controlled model **emitted**, nor where the model
+got it. Two constructs lived in that gap. A rewriter lets the model read and
+then edits the graded value on the way out (a `/100` rescaler turning the
+model's `411067` into `$4,110.67`, a direction map turning "went up" into
+`increase`, a slot composed from figures the model only mentioned, an
+approximate draft replaced by a local parser's value). A launderer computes the
+answer locally, writes "reply exactly: X" into the prompt, and lets the model
+parrot it, so every provenance, catalog, and label test sees a model-emitted
+answer. From `bench_version` 13 the ticket-bound inference broker records the
+value tokens of every completion it forwards and of every harness-authored
+request span, and the scorer checks the **graded claim span** against both
+(#1849, #1833 — one PR, one switch). Every rule below is gated
+`bench_version >= 13`; v2 through v12 transcripts, reports, and signed
+evidence are byte-identical (`TestClaimSpanCaptureIsNoOpBelowV13` (#1849),
+`TestApplyV13ClaimProvenanceIsNoOpBelowV13AndForToolCases` (#1849)).
+
+**What the relay records (hashes only).** For each successful chat completion,
+in either the OpenAI shape (`messages[]`, `choices[].message`) or the Anthropic
+shape (top-level `system`, content blocks):
+
+- the value tokens of every **harness-authored** request span — `system` /
+  `developer` messages, the user template, an assistant prefill, tool-role
+  messages — noting which of them no earlier completion of the same case had
+  already produced ("harness-first");
+- the value tokens of every **model-emitted** completion span — message
+  content (including JSON-mode structured output), `tool_calls[].function.
+  arguments` (a `final_answer` tool delivery), a legacy `function_call`, and
+  Anthropic `text` / `tool_use` blocks;
+- the value tokens of every `tool_endpoint` **result** the validator served the
+  case.
+
+Only 64-bit FNV-1a hashes of canonical value tokens are kept — never prompt
+text, completion text, or the answer key (which lives with the scorer and was
+never in the broker). Capture is bounded per case; a case that hits a bound is
+marked incomplete (`TestClaimSpanCaptureBooksHarnessAndCompletionSpans`
+(#1849), `TestClaimSpanCaptureBoundsCompletionsPerCase` (#1849)).
+
+**The published normaliser.** Both sides pass every span through
+`scoregates.NormalizeSpan` — Unicode NFKC, casefold, markdown/label stripping
+(emphasis, code fences, headings, list markers, `ANSWER:`-style labels),
+punctuation folded to spaces except `$ . , -` inside numbers, whitespace
+collapsed — then tokenize with the Bench v12 value-token rule
+(`scoregates.ValueTokenHashes`): every `CanonicalNumber` (strip `$` and
+grouping commas, drop trailing fractional zeros and leading zeros) plus every
+lowercase alphanumeric token of at least 4 characters. `$4,110.67`,
+`4110.67 dollars`, `**Answer:** $4110.67`, `{"answer":"4110.67"}` and
+`４１１０.６７` all yield the single claim token `4110.67`; `411067` does not.
+Miners run the same functions locally; the vectors are published in
+`research/dittobench-datagen/grade/audit_v13_bank.go` and pinned by
+`TestNormalizeSpanVectors` (#1849),
+`TestSpanTokensFoldEveryHonestRenderingToOneClaimToken` (#1849) and
+`TestClaimProvenanceBankVectors` (#1849).
+
+**Attribution is exact or absent.** A completion is booked on the case whose
+exclusive window, verified `X-Ditto-Case-Id` claim (naming a case in flight), or
+sole in-flight `/run` admitted it. Under concurrent `/run` with several cases in
+flight and no verified claim the completion is booked nowhere and every case
+then in flight is marked incomplete; the scorer fails **open** on those cases
+(`TestApplyV13ClaimProvenanceFailsOpen` (#1849)). A harness that sends
+`X-Ditto-Case-Id` on its inference calls keeps every case attributable at any
+concurrency.
+
+**Scoring rules (memory cases; tool cases are never gated here).** The grader
+names the served span it credited (`Verdict.Provenance`: the authoritative
+`answer` slot or the `final_text` fallback) and the canonical forms it accepts
+for the claim (the expected value and its accept set; the major-unit decimal for
+money; the accepted phrases for a direction; every item for a list). The **claim
+tokens** are the tokens of every accepted form wholly present in that span.
+
+- (a) **`served_text_not_model_emitted`** — the claim tokens must be a subset of
+  the union of the case's attributed completion tokens. This is containment of
+  the credited value, never a substring test on `final_text`: JSON-mode
+  unwrapping, `final_answer`-tool delivery, formatters, markdown stripping, and
+  a reply spliced from two completions all pass; a value the model never
+  produced does not. A credited value with **no** completion at all is also
+  reported as `no_model_completion` (`TestTextProvenanceVerdicts` (#1849)).
+- (b) **`answer_in_prompt`** — from the case's harness-first tokens the scorer
+  subtracts every token of a record delivered through `/seed` (the dataset),
+  every served `tool_endpoint` result, the case's own `user_input`, and the
+  validator's system prompt. If the claim tokens are a subset of what remains,
+  the harness wrote the answer into the prompt and the model only echoed it.
+  Quoting retrieved memory or a tool result into the prompt is exempt by
+  construction; a value the model derived in an earlier completion and the
+  harness re-injected later is model-derived, not harness-first
+  (`TestCausalDependenceVerdicts` (#1833)).
+- Kinds with no value claim (decline, acknowledge, chit-chat, persistence /
+  reversal stances, duration bands) and a value below the token floor are
+  **not applicable**: nothing is checked and nothing can flag.
+
+| Vector | (a) provenance | (b) causal |
+| --- | --- | --- |
+| `/100` rewrite of the model's `411067` into `4110.67` | flag | — |
+| direction-word map (`went up` → `increase`) | flag | — |
+| slot composed from figures the model only mentioned | flag | — |
+| draft replaced by a local parser's value | flag | — |
+| "reply exactly: 4110.67" with the value computed by the host | pass | flag |
+| generator-inverse parse + oracle arithmetic laundered through one completion | pass | flag |
+| local majority vote over sampled answers injected into a final prompt | pass | flag |
+| JSON-mode / structured output carrying the value in a field | pass | pass |
+| `final_answer` tool call carrying the value in its arguments | pass | pass |
+| formatter (`4110.67 dollars` → `$4,110.67`), markdown / label strip | pass | pass |
+| two-completion splice (value from completion 1, prose from completion 2) | pass | pass |
+| record text or tool result quoted into the prompt, value taken from it | pass | pass |
+
+The honest rows are pinned as a set by
+`TestApplyV13ClaimProvenanceHonestPatternsPass` (#1849); the GIH transcript
+class (answer present, derivation absent from completions) is the grader-blind
+negative `TestV13ProvenanceBankGIHNegativeIsGraderBlind` (#1849) in the
+`v13-1` audit bank. **`slot_not_in_prose`** is the grader-side companion
+(`grade/v13.go`, `TestV13SlotTieBreak` (#1523)): a populated `answer` slot must
+be *typed-equivalent* to a value asserted in `final_text` (a canonical
+minor-unit slot beside `$4,110.67` is one candidate); a slot that alone would
+pass but has no equivalent in the prose scores 0; an empty `final_text` grades
+the slot alone.
+
+**Where it appears.** The report's per-case `claim_provenance` carries the
+`ClaimProvenanceEvidence` (`completions` — null when attribution is incomplete —
+`tool_results`, `claim_tokens`, `complete`, `model_emitted`, `answer_in_prompt`,
+`posture`, `findings`); `details.claim_provenance` summarizes the run (settled,
+flagged, unsettled, zeroed counts and `attribution_coverage_bps`, this
+validator's half of the enforce precondition); and the signed v9 gate evidence
+gains a `claim_provenance` block for v13 runs whose factor is an identity term
+(the gates act per claim) (`TestSummarizeV13ClaimProvenanceAndGateInput`
+(#1849)).
+
+**Posture.** Both gates share one switch and ship in **shadow**: findings, notes,
+per-case evidence and the summary are recorded and no score moves
+(`TestApplyV13ClaimProvenanceShadowFlagsWithoutMovingScore` (#1849),
+`TestParseClaimProvenancePosture` (#1849)). Under **enforce**
+(`DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE=enforce`) a settled flagged claim
+zeroes the case's score in scored scope
+(`TestApplyV13ClaimProvenanceEnforceZeroesSettledFlag` (#1849)); unavailable or
+incomplete evidence always fails **open**. Enforce is an operator decision
+gated on the #1521 honest cohort (including HeyDitto and the reference harness)
+showing zero false zeros. Evidence rows are leads for source review either way.
+
+### bench_version 13: twin / pair post-pass
+
+Every evidence-independent default — always-answer, always-abstain,
+always-act, keep-only-the-latest-state — must score 0 on a paired bank, but
+zeroing a whole metamorphic group for one miss charges an honest harness four
+cases for one error. The scorer's v13 post-pass
+(`internal/scorer/twins_v13.go`, run on the scored population before
+`AggregateForVersion`) scopes the penalty to the members that carry the
+evidence of a default:
+
+- **`decision_twin` / `as_of_twin` groups** (`protocol.TwinRelation*`). An
+  identical decision class (`answer` / `abstain` / `act`, classified from the
+  observed trajectory and the grader's own decline rule) across every
+  delivered member of a decision twin, or an identical asserted answer across
+  every member of an as-of twin, is **concordance**. Rule R1
+  `concordant_zero` zeroes every member; rule R2 `pair_product` sets every
+  member to the product of the members' scores. `DITTOBENCH_V13_TWIN_RULE`
+  selects the rule, default R1; when the calibration-measured honest
+  concordant-error rate (`DITTOBENCH_V13_TWIN_HONEST_CONCORDANT_ERROR_RATE`)
+  exceeds 5% the pass falls back to R2 and reports `auto_fallback`
+  (`TestTwinPostPassPairProductAndAutoFallback` (#1835)).
+- **Metamorphic groups** (`V10CaseProvenance.Relation`). When the
+  counterfactual member was answered with the base member's answer, **only the
+  base + counterfactual pair is zeroed** (`counterfactual_insensitive`); the
+  renderer and distractor members are graded independently, so a solver is
+  capped at 0.5 of the group and one honest miss recovers 0.5
+  (`TestTwinPostPassCounterfactualZeroesOnlyThePair` (#1835)).
+- Groups with an undelivered member or a mixed relation are skipped, exactly
+  as `MetamorphicConsistency` skips them. `TwinRelation` pairs are never read
+  by the metamorphic-consistency fold.
+- `DITTOBENCH_V13_TWIN_POSTURE` defaults to **observe**: cases receive the
+  exact marker notes `twin_concordant` / `counterfactual_insensitive` plus a
+  reason, and `details.twin_post_pass` publishes rule, posture, group counts,
+  `cases_affected_share` and per-relation means — no score moves
+  (`TestTwinPostPassObserveLeavesScoresAndAnnotates` (#1835)). Below v13 the
+  pass is the identity (`TestTwinPostPassLeavesEarlierVersionsUntouched`
+  (#1835)). On the synthetic paired bank the always-answer, always-abstain and
+  always-act baselines score 0 while the oracle scores 1.0
+  (`TestTwinPostPassBaselinesZeroAndOracleFull` (#1835)).
+
+### bench_version 13: per-case inference cost factor (shadow)
+
+Extra completions were free beyond the tie-break efficiency fold, so a
+voting / re-ask / planner stack lost nothing. Counting requests alone misses
+`n` sampling and single-completion self-consistency, so the v13 factor is over
+**output tokens of successful completions**, with sampled choices recorded:
+
+```
+cost_factor = clamp(1 − α · max(0, tokens_out − budget_c), 0.6, 1)
+```
+
+- The broker books every **successful** (2xx) chat completion on the `/run`
+  case it can bind exactly, recording completions, `choices` length (so `n=5`
+  is visible) and provider-reported completion tokens. Provider failures and
+  5xx retries never reach the ledger; completions that overlap several
+  in-flight cases are booked unattributed and reported at run level
+  (`TestRecordInferenceCostLockedAttributesSerialAndCapabilityBoundCompletions`
+  (#1850)).
+- Published budgets (`scoregates.CostBudgets()`): one completion-equivalent is
+  512 output tokens; `memory` and `single_tool` cases get 3 equivalents (1536
+  tokens), `tool_chain` cases 5 (2560 tokens) — plan → call → observe → answer
+  plus one LLM tool-router completion sits inside budget. α is
+  `(1 − 0.6) / budget_c`, so the floor is reached at exactly twice the budget
+  (`TestCostBudgetsArePublishedPerClass` (#1850), `TestCostFactorRule`
+  (#1850)).
+- **Shadow only in v13.0.** `per_case[].inference_cost` and
+  `details.inference_cost` (`posture: "shadow"`, `applied: false`) report the
+  factor; it is never multiplied into a composite and stays out of the signed
+  score-gate evidence root until an enforce decision that follows #1521
+  showing honest ReAct and LLM-router loops at factor 1.0 on ≥ 95% of cases
+  (`TestBuildInferenceCostIsVersionGatedAndShadow` (#1850)).
+
+### bench_version 13: the graded response — prose, slot, clarifying claims, reply language
+
+The v13 grader (`grade/v13.go`, reachable only through
+`gradingPolicyForVersion(v >= 13)`) changes what a well-formed `RunResponse`
+must carry:
+
+- **Prose is graded; the slot is a tie-break.** The positive check runs on
+  `final_text ∪ answer`. The claim engine separates *asserted* candidates from
+  *cited* ones ("Lisbon, not Oslo", "I first thought Oslo, but it is Lisbon",
+  "was X, now Y" each assert one value), so the ≤ v12 advice never to narrate
+  rejected candidates no longer applies at v13; the distractor and forbidden
+  scans are claim-scoped (`TestV13ClaimScopedDistractorScan` (#1523)). More
+  than two distinct asserted candidates for one scalar claim, or two
+  inconsistent assertions, score 0 (`TestV13StuffingQuantifier` (#1523)).
+  `slot_not_in_prose` is defined above.
+- **Quantities in the requested unit.** A bare number is read in the unit the
+  question asked for; `411067` on a minor-unit question passes, `$411,067`
+  fails (`TestV13MinorUnitRequestedUnitGrading` (#1523)). Never rescale the
+  model's value.
+- **Clarifying claims are answers.** `AnswerClarify` cases expect a question
+  that names the missing slot and cites a record token searched
+  (`TestV13AbsenceAndClarifyKinds` (#1523)).
+- **Grounded abstention is an answer.** `AnswerAbsence` cases expect a decline
+  (`abstain: true`, a decline phrase, or an absence phrase) that cites a
+  grounding token present in the records; the tempting value may be cited as
+  insufficient evidence but not asserted as the answer; a generic refusal
+  scores 0 (`TestV13GroundedAbstentionScoresOne` (#1530)).
+- **Declarative acknowledgement credit is 0.25** for a canned acknowledgement
+  without the stated value — below the scorer's 0.5 correctness line, so
+  "Got it." alone no longer clears the declarative sanity slice
+  (`TestV13DeclarativeAckCredit` (#1523)).
+- **Reply-language policy.** A case may carry a rendered language
+  (`MemoryCase.Language`, grader-only; the harness sees only the text). The
+  answer is accepted in the question's language **or English**, including
+  translated status words, decline / acknowledgement phrases, direction words,
+  number words and month names, through the `internal/multilingual` lexicons
+  (es, pt, fr, it, de, nl). A sampled language the grader holds no lexicon for
+  **fails closed** (score 0 with a note), so a case can never be silently
+  ungradeable (`TestV13UnicodeAndMultilingual` (#1523),
+  `TestConfigFailsClosedOnUnsupportedLanguage` (#1831)). Values (names,
+  amounts, options) are canonical in every language. The v13.0 fraction of
+  non-English surfaces is 0 (owner decision, #1831); the policy is published
+  now so a harness that replies in the user's language is never penalised
+  when the fraction rises.
+
+### bench_version 13: gate notes miners can see
+
+Every note above (`restraint_without_offer`, `expected_tool_not_offered`,
+`swallowed_model_call`, `served_text_not_model_emitted`, `slot_not_in_prose`,
+`answer_in_prompt`, `twin_concordant`, `counterfactual_insensitive`, the
+`inference_cost` shadow factor) is persisted per case and exposed on the
+Platform per-score detail for the owning hotkey, together with the shadow
+verdict and the run's gate-induced loss (composite with and without gates)
+(#1852). The starter kit reproduces the same notes locally against a pass-off
+artifact with `scripts/local-rehearsal.py --gates` (#1851). Shadow verdicts are
+therefore visible and appealable through the existing dispute path before any
+gate enforces.
 
 ### Prohibited: content-keyed mutation of the graded response
 
@@ -548,6 +1154,19 @@ agent behavior. It only launders a graded outcome, for example complying with an
 injection and then deleting the evidence from the response. Uniform,
 content-independent formatting is fine. Content-conditioned rewriting of the
 graded fields is not.
+
+Bench v13 extends the list with three constructs the relay now records and the
+scorer notes (see the *bench_version 13* sections above): withholding or
+emptying the `tools[]` catalog on a request-keyed family so the model cannot
+act (`restraint_without_offer`, `expected_tool_not_offered`, outside the
+published semantic-preloading safe harbor); letting the model emit a tool call
+and swallowing it before execution (`swallowed_model_call`); and computing the
+graded value on the host and laundering it through a completion, or replacing
+the model's served text by wording (`answer_in_prompt`,
+`served_text_not_model_emitted`). Rescaling the model's number (`/100`) or
+mapping its direction word onto grader vocabulary is the same class: at v13 the
+grader accepts the requested unit and the question's own vocabulary, so the
+rewrite has no honest purpose left and the provenance gate records it.
 
 ## Anti-copy signals
 
