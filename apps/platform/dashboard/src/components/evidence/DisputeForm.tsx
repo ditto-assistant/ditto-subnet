@@ -1,9 +1,13 @@
-// The one-shot screening dispute (monolith renderScreeningDispute
+// The one-shot dispute (monolith renderScreeningDispute
 // 7461–7503, disputeSigningMessage 7505–7512, shellQuote/
 // disputeSigningCommand 7514–7522, bindScreeningDispute 7524–7587): a
-// rejected submission may file exactly one private dispute, signed locally
+// rejected submission may file exactly one private dispute of its screening
+// decision, and -- since bench v13 (#1852) -- a scored, live, evaluating or
+// held submission may spend that one dispute on the gate notes it cites, so a
+// shadow would-be zero is appealable before any gate enforces. Signed locally
 // with btcli. Wallet details stay in this browser and are not submitted —
-// only the message and the 128-hex hotkey signature go to the API.
+// only the message, the 128-hex hotkey signature and the cited note ids go to
+// the API.
 import { Match, Show, Switch, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 
@@ -63,11 +67,23 @@ export function parseGateNoteIds(raw: string): string[] | null {
   return [...new Set(tokens)];
 }
 
+/** Statuses whose owner may spend the one dispute on cited bench v13+ gate
+ * notes: every status an accepted score can exist under. */
+export const GATE_NOTE_DISPUTE_STATUSES: ReadonlySet<string> = new Set([
+  "scored",
+  "live",
+  "evaluating",
+  "ath_pending_review",
+]);
+
 /** The resolved-dispute card (renderScreeningDispute's dispute branch). */
 function DisputeOutcome(props: { dispute: Dispute }): JSX.Element {
+  const gateNotes = () => props.dispute.kind === "gate_notes";
   const heading = () =>
     props.dispute.status === "pending"
-      ? "Dispute awaiting review"
+      ? gateNotes()
+        ? "Gate-note dispute awaiting review"
+        : "Dispute awaiting review"
       : props.dispute.resolution === "release"
         ? "Dispute accepted"
         : "Dispute upheld";
@@ -75,10 +91,16 @@ function DisputeOutcome(props: { dispute: Dispute }): JSX.Element {
     props.dispute.status === "pending"
       ? "Your one dispute was submitted " +
         relTime(props.dispute.submitted_at) +
-        ". An operator will review your private message and the source artifact."
+        (gateNotes()
+          ? ". An operator will review your private message against the cited gate notes."
+          : ". An operator will review your private message and the source artifact.")
       : props.dispute.resolution === "release"
-        ? "An operator accepted the dispute and released this submission from quarantine."
-        : "An operator reviewed the dispute and upheld the screening rejection. This appeal is final.";
+        ? gateNotes()
+          ? "An operator accepted the dispute: the cited gate notes are recorded as contested. Your score and status are unchanged."
+          : "An operator accepted the dispute and released this submission from quarantine."
+        : gateNotes()
+          ? "An operator reviewed the dispute and upheld the cited gate notes. This appeal is final; your score and status are unchanged."
+          : "An operator reviewed the dispute and upheld the screening rejection. This appeal is final.";
   return (
     <section class="pipeline-section screening-dispute" aria-labelledby="pipeline-dispute-title">
       <div class="pipeline-section-heading">
@@ -93,9 +115,18 @@ export function ScreeningDispute(props: {
   agentId: string;
   status: string | undefined;
   dispute: Dispute | null | undefined;
+  /** True when an accepted score of this submission carries bench v13+ gate
+   * evidence, which is what makes a gate-note dispute possible. */
+  gateNotes?: boolean;
   /** Called after a successful POST so the drawer refetches the pipeline. */
   onSubmitted?: () => void;
 }): JSX.Element {
+  // A rejected submission disputes its screening decision; a scored one with
+  // v13 gate evidence disputes the notes it cites (ids required).
+  const gateNotesMode = () =>
+    props.status !== "rejected" &&
+    props.gateNotes === true &&
+    GATE_NOTE_DISPUTE_STATUSES.has(props.status ?? "");
   const [message, setMessage] = createSignal("");
   const [wallet, setWallet] = createSignal("");
   const [hotkey, setHotkey] = createSignal("");
@@ -117,7 +148,10 @@ export function ScreeningDispute(props: {
     return value.length >= 20 && value.length <= 1000;
   };
   const signatureValid = () => SIGNATURE_PATTERN.test(signature().trim());
-  const gateNoteIdsValid = () => parseGateNoteIds(gateNoteIds()) !== null;
+  const gateNoteIdsValid = () => {
+    const ids = parseGateNoteIds(gateNoteIds());
+    return ids !== null && (!gateNotesMode() || ids.length > 0);
+  };
   const submitDisabled = () =>
     submitting() || !messageValid() || !signatureValid() || !gateNoteIdsValid();
 
@@ -151,7 +185,7 @@ export function ScreeningDispute(props: {
     setSubmitting(true);
     setStatus({ text: "Submitting dispute…", error: false });
     const noteIds = parseGateNoteIds(gateNoteIds());
-    if (noteIds === null) return;
+    if (noteIds === null || (gateNotesMode() && noteIds.length === 0)) return;
     postJSON("/public/agent/" + encodeURIComponent(props.agentId) + "/dispute", {
       message: appeal,
       signature: signature().trim(),
@@ -173,18 +207,26 @@ export function ScreeningDispute(props: {
   return (
     <Switch>
       <Match when={props.dispute}>{(dispute) => <DisputeOutcome dispute={dispute()} />}</Match>
-      <Match when={props.status === "rejected"}>
+      <Match when={props.status === "rejected" || gateNotesMode()}>
         <section
           class="pipeline-section screening-dispute"
           aria-labelledby="pipeline-dispute-title"
+          data-dispute-mode={gateNotesMode() ? "gate_notes" : "screening"}
         >
           <div class="pipeline-section-heading">
-            <h4 id="pipeline-dispute-title">Dispute screening decision</h4>
+            <h4 id="pipeline-dispute-title">
+              {gateNotesMode() ? "Dispute bench v13 gate notes" : "Dispute screening decision"}
+            </h4>
           </div>
           <p class="screening-dispute-copy">
-            You may submit one private dispute for this submission. Explain specifically why the
-            screening decision is wrong. An operator will review your note and source artifact. Once
-            submitted, this dispute cannot be edited or replaced.
+            {gateNotesMode()
+              ? "You may submit one private dispute for this submission. Cite the gate note ids from " +
+                "Account → Gate notes and explain specifically why each verdict is wrong. An operator " +
+                "will review your note against the cited evidence; the outcome is recorded and never " +
+                "changes your score or status. Once submitted, this dispute cannot be edited or replaced."
+              : "You may submit one private dispute for this submission. Explain specifically why the " +
+                "screening decision is wrong. An operator will review your note and source artifact. Once " +
+                "submitted, this dispute cannot be edited or replaced."}
           </p>
           <form class="screening-dispute-form" id="screening-dispute-form" onSubmit={onSubmit}>
             <label for="screening-dispute-message">
@@ -267,11 +309,13 @@ export function ScreeningDispute(props: {
               </span>
             </label>
             <label for="screening-dispute-gate-notes">
-              Gate note ids <span class="muted">(optional)</span>
+              Gate note ids{" "}
+              <span class="muted">{gateNotesMode() ? "(required)" : "(optional)"}</span>
               <input
                 id="screening-dispute-gate-notes"
                 autocomplete="off"
                 spellcheck={false}
+                required={gateNotesMode()}
                 placeholder="16-hex note ids from Account → Gate notes, comma separated"
                 onInput={(ev) => {
                   setGateNoteIds(ev.currentTarget.value);
@@ -282,7 +326,7 @@ export function ScreeningDispute(props: {
                   Cite the bench v13+ gate verdicts you contest. Ids are checked against this
                   submission's own scores; the ids are not part of the signed message.
                 </span>
-                <Show when={gateNoteIds().trim() && !gateNoteIdsValid()}>
+                <Show when={gateNoteIds().trim() && parseGateNoteIds(gateNoteIds()) === null}>
                   <span class="error">Each id is 16 hexadecimal characters.</span>
                 </Show>
               </span>

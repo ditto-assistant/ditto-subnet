@@ -135,3 +135,93 @@ def test_every_benchmark_version_rejects_composite_above_one() -> None:
     raw.update({"bench_version": 5, "composite": float("inf")})
     with pytest.raises(ValidationError):
         ScoreReport.model_validate(raw)
+
+
+# ---------------------------------------------------------------------------
+# bench_version 13: the v10 tool-provenance record and the v13 gate records.
+# ``fixtures/score_report_v13.json`` is a ``protocol.ScoreReport`` marshalled
+# by the Go engine on the v13 scorer branches (catalog gate, claim provenance,
+# twins/cost) and unioned field-by-field -- so every key here is what the
+# scorer really emits, not a Python-side guess. Before this fixture existed,
+# ``tool_provenance`` / ``catalog`` / ``claim_provenance`` / ``inference_cost``
+# / ``relation`` were silently stripped at ingest (pydantic ``extra="ignore"``),
+# which is exactly the drift this test guards.
+
+FIXTURE_V13 = Path(__file__).parent / "fixtures" / "score_report_v13.json"
+
+V13_CASE_WIRE_FIELDS = {
+    "audit_half",
+    "undelivered",
+    "validator_fault",
+    "allow_extra_tools",
+    "relation",
+    "tool_provenance",
+    "catalog",
+    "claim_provenance",
+    "inference_cost",
+}
+
+
+def _fixture_v13() -> dict:
+    return json.loads(FIXTURE_V13.read_text())
+
+
+def test_v13_no_wire_key_is_silently_dropped() -> None:
+    raw = _fixture_v13()
+    report = ScoreReport.model_validate(raw)
+    assert not (set(raw) - set(ScoreReport.model_fields))
+    case_fields = set(type(report.per_case[0]).model_fields)
+    assert case_fields >= V13_CASE_WIRE_FIELDS
+    for case in raw["per_case"]:
+        unknown = set(case) - case_fields
+        assert not unknown, f"CaseScore silently drops wire keys: {sorted(unknown)}"
+
+
+def test_v13_gate_records_round_trip_by_value() -> None:
+    raw = _fixture_v13()
+    report = ScoreReport.model_validate(raw)
+    dumped = report.model_dump(mode="json")
+    for i, case in enumerate(raw["per_case"]):
+        for key, value in case.items():
+            if value is None:
+                continue
+            assert dumped["per_case"][i][key] == value, f"per_case[{i}].{key} mutated"
+    # The opaque details blob -- including the four v13 gate summaries -- is
+    # preserved verbatim.
+    assert dumped["details"] == raw["details"]
+    for key in ("catalog_gate", "claim_provenance", "twin_post_pass", "inference_cost"):
+        assert key in dumped["details"]
+
+    tool = report.per_case[0]
+    assert tool.catalog is not None
+    assert tool.catalog.findings == [
+        "catalog_absent",
+        "restraint_without_offer",
+        "swallowed_model_call",
+    ]
+    assert tool.catalog.completions_total == 2 and tool.catalog.catalog_present is False
+    assert tool.tool_provenance is not None
+    assert tool.tool_provenance.model_selected_not_executed == 1
+    assert tool.inference_cost is not None
+    # ``class`` is a Python keyword: aliased in, serialised back under its
+    # wire name.
+    assert tool.inference_cost.case_class == "single_tool"
+    assert tool.inference_cost.factor_bps == 8667
+    assert dumped["per_case"][0]["inference_cost"]["class"] == "single_tool"
+
+    memory = report.per_case[1]
+    assert memory.relation == "base" and memory.audit_half == "base"
+    assert memory.claim_provenance is not None
+    assert memory.claim_provenance.answer_in_prompt is True
+    assert memory.claim_provenance.findings == ["answer_in_prompt"]
+    assert "counterfactual_insensitive" in memory.notes
+
+    undelivered = report.per_case[5]
+    assert undelivered.undelivered is True and undelivered.validator_fault is True
+    assert report.per_case[3].allow_extra_tools is True
+    # A pre-v13 case carries none of it: the fields default to their omitted
+    # form, so the v3 fixture still validates and dumps as before.
+    legacy = ScoreReport.model_validate(_fixture()).per_case[0]
+    assert legacy.catalog is None and legacy.claim_provenance is None
+    assert legacy.inference_cost is None and legacy.tool_provenance is None
+    assert legacy.relation == ""

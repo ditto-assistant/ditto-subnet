@@ -290,13 +290,14 @@ describe('Backroom MCP tools', () => {
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(125_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
-    // in get_backroom_tool_help, not here. 24_000 admits the screener
+    // in get_backroom_tool_help, not here. 24_200 admits the screener
     // policy-activation pair, four short shadow qualification catalog lines,
-    // the coding-evaluation ledger read, the bootstrap-grant line, and three
-    // short catalog-release lines; operational tutorials stay in
-    // get_backroom_tool_help.
+    // the coding-evaluation ledger read, the bootstrap-grant line, three
+    // short catalog-release lines, and the one-line bench v13 gate-evidence
+    // and dispute-kind notes on the score and dispute tools; operational
+    // tutorials stay in get_backroom_tool_help.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      24_000,
+      24_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

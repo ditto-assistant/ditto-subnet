@@ -1456,10 +1456,24 @@ function ScreeningDisputeQueue({
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-lg font-semibold tracking-[-0.02em]">{selected.agent_name}</h2>
                     <SubmissionBadge version={selected.agent_version} />
-                    <span className="rounded-full bg-[var(--amber-dim)] px-2 py-0.5 text-[10px] font-medium text-[var(--amber)]">Disputed</span>
+                    <span className="rounded-full bg-[var(--amber-dim)] px-2 py-0.5 text-[10px] font-medium text-[var(--amber)]">
+                      {selected.kind === 'gate_notes' ? 'Gate notes disputed' : 'Disputed'}
+                    </span>
                   </div>
                   <p className="mt-2 break-all font-mono text-[10px] text-[var(--muted)]">{selected.agent_id}</p>
                   <p className="mt-2 text-xs text-[var(--muted-strong)]">Submitted {formatDate(selected.created_at)}</p>
+                  {selected.kind === 'gate_notes' ? (
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted-strong)]">
+                      Appeals bench v13+ gate notes on a scored submission, not a quarantine. Read the cited
+                      notes back through the owner projection before deciding; either resolution only
+                      records your verdict and never changes the agent&apos;s status or scores.
+                    </p>
+                  ) : null}
+                  {selected.gate_note_ids && selected.gate_note_ids.length > 0 ? (
+                    <p className="mt-2 break-all font-mono text-[10px] text-[var(--muted)]">
+                      Cited gate notes: {selected.gate_note_ids.join(', ')}
+                    </p>
+                  ) : null}
                 </div>
                 <button
                   type="button"
@@ -1503,8 +1517,24 @@ function ScreeningDisputeQueue({
                       <label key={value} className={`cursor-pointer rounded-lg border p-3 transition-colors ${resolution === value ? 'border-[var(--line-strong)] bg-white/[0.05]' : 'border-[var(--line)] hover:bg-white/[0.025]'}`}>
                         <input type="radio" name="dispute-resolution" value={value} checked={resolution === value} onChange={() => setResolution(value)} className="sr-only" />
                         {value === 'release' ? <ShieldCheck className="h-4 w-4 text-[var(--acid)]" /> : <XCircle className="h-4 w-4 text-[var(--red)]" />}
-                        <span className="mt-2 block text-xs font-medium">{value === 'release' ? 'Accept and release' : 'Uphold rejection'}</span>
-                        <span className="mt-1 block text-[10px] leading-4 text-[var(--muted)]">{value === 'release' ? 'Return the submission to validator evaluation.' : 'Keep the submission rejected after final review.'}</span>
+                        <span className="mt-2 block text-xs font-medium">
+                          {selected.kind === 'gate_notes'
+                            ? value === 'release'
+                              ? 'Accept the appeal'
+                              : 'Uphold the gate notes'
+                            : value === 'release'
+                              ? 'Accept and release'
+                              : 'Uphold rejection'}
+                        </span>
+                        <span className="mt-1 block text-[10px] leading-4 text-[var(--muted)]">
+                          {selected.kind === 'gate_notes'
+                            ? value === 'release'
+                              ? 'Record that the cited notes are contested; scores and status are untouched.'
+                              : 'Record that the cited notes stand; scores and status are untouched.'
+                            : value === 'release'
+                              ? 'Return the submission to validator evaluation.'
+                              : 'Keep the submission rejected after final review.'}
+                        </span>
                       </label>
                     ))}
                   </div>

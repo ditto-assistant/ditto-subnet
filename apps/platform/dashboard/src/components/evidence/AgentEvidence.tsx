@@ -1177,6 +1177,9 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
                   agentId={agentId()}
                   status={detail().status}
                   dispute={detail().dispute}
+                  gateNotes={(detail().provisional_scores ?? []).some((score) =>
+                    Boolean(score.gate_evidence),
+                  )}
                   onSubmitted={retryPipeline}
                 />
                 <section class="pipeline-section" aria-labelledby="pipeline-screening-history">
