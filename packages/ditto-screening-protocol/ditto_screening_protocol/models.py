@@ -18,14 +18,20 @@ from pydantic import (
 
 SCREENING_POLICY_VERSION = 13
 STRICT_TWO_OUTCOME_POLICY_VERSION = 13
-# V13 review/evidence code is distributed for compatibility and pre-activation tests,
-# but the global activation remains capped at v12 until the published V1/V2/V3
-# retry/deadline finalizer and every mandatory verification route are released.
-SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 12
+# The highest policy version the scheduling API will present as
+# activation-ready. It moves separately from ``SCREENING_POLICY_VERSION`` so a
+# build that merely distributes new review/evidence code for compatibility and
+# pre-activation tests never advertises an incomplete policy lifecycle as
+# schedulable. V13 was held at a v12 ceiling from #1801 (2026-09-12) until its
+# strict two-outcome contract shipped, both production screeners reported
+# builtin policy 13 on release 0.264.0, and fleet adoption was verified on
+# 2026-09-14; the ceiling then moved to 13 so the operator can schedule the
+# v13 activation window.
+SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 13
 # The oldest policy version a mixed-fleet platform may require during a
-# scheduled activation window. v10 stays the floor while v13 is distributed
-# but not activated; raise it only after every older-policy cohort has reached
-# a terminal, recorded transition.
+# scheduled activation window. v10 stays the floor while the v13 activation is
+# scheduled but not yet governing; raise it only after every older-policy
+# cohort has reached a terminal, recorded transition.
 SCREENING_FLOOR_POLICY_VERSION = 10
 TYPED_OUTCOME_POLICY_VERSION = 9
 

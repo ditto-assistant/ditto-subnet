@@ -1070,7 +1070,10 @@ An operator override is an administrative action, not a third review outcome.
   retry evidence, and no misconduct allegation.
 - Raise the separately enforced screening-policy activation ceiling from v12
   only after the deadline finalizer and every other prerequisite above are
-  released and verified.
+  released and verified. Record: the ceiling moved to v13 on 2026-09-14, after
+  #1801 shipped the strict two-outcome contract and both production screeners
+  reported builtin policy 13 on release 0.264.0. Raising the ceiling makes v13
+  schedulable; it does not activate it, and it does not move the v10 floor.
 - Rollback preserves evidence/revocations and does not restore fail-open
   approval.
 
