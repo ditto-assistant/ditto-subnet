@@ -901,6 +901,269 @@ async def test_adjudicator_reserves_read_repair_after_forced_final(tmp_path):
     assert reviewer.opened_lines == {("src/main.rs", 1), ("src/main.rs", 2)}
 
 
+async def test_adjudicator_repairs_malformed_atomic_arguments_in_remaining_turns(
+    tmp_path,
+):
+    from .test_source_review import (
+        _BENIGN_REVIEW,
+        _archive_files,
+        _tool,
+        _with_policy_v10_invariants,
+    )
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn leaked() { send(); }\n"})
+    final_review = _with_policy_v10_invariants(
+        {
+            **_BENIGN_REVIEW,
+            "risk_level": "high",
+            "categories": ["cross_user_access"],
+            "evidence": [
+                {
+                    "path": "src/main.rs",
+                    "line": 1,
+                    "category": "cross_user_access",
+                }
+            ],
+            "summary": "The served path exposes cross-user source content.",
+        }
+    )
+    requests = []
+
+    async def handler(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        turn = len(requests)
+        if turn == 1:
+            calls = [
+                {
+                    "id": "malformed-final",
+                    "type": "function",
+                    "function": {
+                        "name": "submit_fanout_adjudication",
+                        "arguments": '{"final_review":',
+                    },
+                }
+            ]
+        elif turn == 2:
+            assert "JSONDecodeError" in json.dumps(payload["messages"])
+            correction = next(
+                message
+                for message in payload["messages"]
+                if message.get("role") == "tool"
+                and "JSONDecodeError" in message.get("content", "")
+            )
+            assert correction["tool_call_id"] == "malformed-final"
+            assert any(
+                tool["function"]["name"] == "read_file" for tool in payload["tools"]
+            )
+            calls = [
+                _tool(
+                    "read-source",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 1},
+                )
+            ]
+        else:
+            calls = [
+                _tool(
+                    "corrected-final",
+                    "submit_fanout_adjudication",
+                    {
+                        "final_review": final_review,
+                        "candidate_assessments": [],
+                        "summary": "Fresh stage two found a source-bound issue.",
+                    },
+                )
+            ]
+        return httpx.Response(
+            200,
+            json={
+                "model": "glm-5.3-flash",
+                "choices": [{"message": {"role": "assistant", "tool_calls": calls}}],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 100,
+                    "cost": 0.001,
+                },
+            },
+        )
+
+    reviewer = ExperimentalReviewer(
+        focus="Adjudicator",
+        api_key_file=str(key),
+        model="z-ai/glm-5.3-flash",
+        base_url="https://router.example/v1",
+        max_steps=3,
+        max_read_bytes=180_000,
+        max_completion_tokens=8000,
+        timeout_seconds=60,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await reviewer.adjudicate_review(
+        str(archive),
+        artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        candidates=[],
+        all_pass_summaries=[],
+        policy_version=13,
+        deadline=asyncio.get_running_loop().time() + 60,
+    )
+    assert result["outcome"] == "candidate"
+    assert len(requests) == 3
+    assert reviewer.validation_errors == [
+        "fanout adjudicator arguments are invalid (JSONDecodeError)"
+    ]
+
+
+async def test_malformed_atomic_arguments_on_final_turn_fail_closed(tmp_path):
+    from .test_source_review import _archive_files
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn main() {}\n"})
+
+    async def handler(_request):
+        return httpx.Response(
+            200,
+            json={
+                "model": "glm-5.3-flash",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "malformed-final",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "submit_fanout_adjudication",
+                                        "arguments": "{",
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 100,
+                    "cost": 0.001,
+                },
+            },
+        )
+
+    reviewer = ExperimentalReviewer(
+        focus="Adjudicator",
+        api_key_file=str(key),
+        model="z-ai/glm-5.3-flash",
+        base_url="https://router.example/v1",
+        max_steps=1,
+        max_read_bytes=180_000,
+        max_completion_tokens=8000,
+        timeout_seconds=60,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(
+        ValueError, match="fanout adjudicator final review remained invalid"
+    ):
+        await reviewer.adjudicate_review(
+            str(archive),
+            artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+            candidates=[],
+            all_pass_summaries=[],
+            policy_version=13,
+            deadline=asyncio.get_running_loop().time() + 60,
+        )
+    assert reviewer.validation_errors == [
+        "fanout adjudicator arguments are invalid (JSONDecodeError)"
+    ]
+
+
+@pytest.mark.parametrize(
+    "calls,error",
+    [
+        (
+            [
+                {
+                    "id": "",
+                    "type": "function",
+                    "function": {
+                        "name": "submit_fanout_adjudication",
+                        "arguments": "{",
+                    },
+                }
+            ],
+            "fanout adjudicator final tool call envelope is invalid",
+        ),
+        (
+            [
+                {
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": "submit_fanout_adjudication",
+                        "arguments": "{",
+                    },
+                }
+                for call_id in ("first", "second")
+            ],
+            "shadow final tool call must be exclusive",
+        ),
+    ],
+)
+async def test_invalid_or_multiple_atomic_tool_envelopes_fail_closed(
+    tmp_path, calls, error
+):
+    from .test_source_review import _archive_files
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn main() {}\n"})
+    requests = 0
+
+    async def handler(_request):
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            200,
+            json={
+                "model": "glm-5.3-flash",
+                "choices": [{"message": {"role": "assistant", "tool_calls": calls}}],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 100,
+                    "cost": 0.001,
+                },
+            },
+        )
+
+    reviewer = ExperimentalReviewer(
+        focus="Adjudicator",
+        api_key_file=str(key),
+        model="z-ai/glm-5.3-flash",
+        base_url="https://router.example/v1",
+        max_steps=3,
+        max_read_bytes=180_000,
+        max_completion_tokens=8000,
+        timeout_seconds=60,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(ValueError, match=error):
+        await reviewer.adjudicate_review(
+            str(archive),
+            artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+            candidates=[],
+            all_pass_summaries=[],
+            policy_version=13,
+            deadline=asyncio.get_running_loop().time() + 60,
+        )
+    assert requests == 1
+
+
 async def test_default_budget_completes_two_turn_fanout_and_source_read(tmp_path):
     from .test_source_review import (
         _BENIGN_REVIEW,

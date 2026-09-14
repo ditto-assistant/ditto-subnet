@@ -684,7 +684,8 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
         raw_calls = message.get("tool_calls")
         if isinstance(raw_calls, list) and len(raw_calls) > 1:
             for call in raw_calls:
-                _call_id, name, _arguments = _tool_call(call)
+                function = call.get("function") if isinstance(call, dict) else None
+                name = function.get("name") if isinstance(function, dict) else None
                 if name in {
                     "submit_review",
                     "submit_candidate_adjudications",
@@ -700,7 +701,19 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
         for call in calls:
             if not isinstance(call, dict):
                 continue
-            call_id, name, arguments = _tool_call(call)
+            try:
+                call_id, name, arguments = _tool_call(call)
+            except ValueError:
+                function = call.get("function")
+                raw_name = function.get("name") if isinstance(function, dict) else None
+                if (
+                    raw_name == "submit_fanout_adjudication"
+                    and self._adjudication_context is not None
+                ):
+                    # The bounded stage-two loop owns correction of its atomic
+                    # submission, including malformed JSON arguments.
+                    continue
+                raise
             if name == "submit_review" and self.provisional:
                 continue
             context = self._adjudication_context
@@ -1041,7 +1054,59 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                 if not isinstance(tool_calls, list) or not tool_calls:
                     continue
                 for call in tool_calls:
-                    call_id, name, arguments = _tool_call(call)
+                    function = call.get("function") if isinstance(call, dict) else None
+                    raw_call_id = call.get("id") if isinstance(call, dict) else None
+                    raw_name = (
+                        function.get("name") if isinstance(function, dict) else None
+                    )
+                    raw_arguments = (
+                        function.get("arguments")
+                        if isinstance(function, dict)
+                        else None
+                    )
+                    if raw_name == "submit_fanout_adjudication" and (
+                        call.get("type") != "function"
+                        or not isinstance(raw_call_id, str)
+                        or not raw_call_id
+                        or not isinstance(raw_arguments, str)
+                    ):
+                        raise ValueError(
+                            "fanout adjudicator final tool call envelope is invalid"
+                        )
+                    try:
+                        call_id, name, arguments = _tool_call(call)
+                    except ValueError as error:
+                        if raw_name != "submit_fanout_adjudication":
+                            raise
+                        invalid_submissions += 1
+                        diagnostic = (
+                            "fanout adjudicator arguments are invalid "
+                            f"({type(error).__name__})"
+                        )
+                        self.validation_errors.append(diagnostic)
+                        if invalid_submissions > 2 or final_turn:
+                            raise ValueError(
+                                "fanout adjudicator final review remained invalid"
+                            ) from error
+                        assert isinstance(raw_call_id, str) and raw_call_id
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": raw_call_id,
+                                "content": json.dumps(
+                                    {
+                                        "error": diagnostic,
+                                        "correctable": True,
+                                        "instruction": (
+                                            "Submit one complete valid JSON object "
+                                            "for the atomic adjudication within the "
+                                            "remaining turns."
+                                        ),
+                                    }
+                                ),
+                            }
+                        )
+                        break
                     if name == "submit_fanout_adjudication":
                         try:
                             return _normalize_final_adjudication(

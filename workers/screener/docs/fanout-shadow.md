@@ -93,7 +93,8 @@ the same request/token budget. The tenth turn forces the first atomic submission
 reserving one source-repair turn before a final forced settlement. The adjudicator
 may use source inspection tools between attempts when a submitted citation was not
 yet read; the central review must still pass the authoritative parser and
-source-read proofs.
+source-read proofs. Malformed JSON arguments receive bounded corrective feedback
+inside the same remaining turns; malformed final-turn output remains incomplete.
 It is never converted to a pass. Overlong display summaries are shortened to 240
 characters while originals remain in `full_summaries` (up to 8,000 characters,
 with explicit truncation metadata) and the adjudicator context. Risk, categories,
