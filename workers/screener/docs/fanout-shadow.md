@@ -31,17 +31,26 @@ its coverage `source_review`: it does not claim to re-execute other manifest
 modules such as the behavioral oracle.
 
 Five independent specialists run with separate transcripts and full-archive
-read-only tool access. The production pilot uses `partition=specialists`; bounded
+read-only tool access. Their structured reviews and notes are provisional leads,
+not five competing verdicts. A specialist's internally contradictory or
+inconclusive invariant assessment remains intact in `raw_review` with its
+validation diagnostics; it is not corrected into a clean result. The production
+pilot uses `partition=specialists`; bounded
 file/hybrid partitions remain available for offline calibration. A capped hybrid
 plan omitted files from normal submissions and spent its request allowance before
 adjudication. The specialist protocol leaves room for corrections and adjudication
-within the same 40-request limit. A fresh adjudicator receives every pass outcome and note,
-including incomplete and no-finding passes, then must verify each candidate ID
-against the original source. Its structured record labels each candidate
+within the same 40-request limit. A fresh adjudicator always runs and receives
+every raw specialist review and note, including contradictory, incomplete, and
+no-candidate passes. It independently rereads source and produces the only
+canonical final policy review. Even an empty provisional candidate list therefore
+gets a full stage-two decision. The same atomic structured record labels each candidate
 `supported`, `refuted`, or `unresolved` with source citations and counterevidence.
 Omitted candidates stay unresolved. Support requires re-reading at least one exact
 candidate citation; an unrelated finding cannot confirm another candidate.
-Minority findings, disagreement, missing reads, and uncertainty are retained.
+Every citation used by the final review must also have been returned by a
+stage-two `read_file` call. A low-risk final review additionally requires at least
+two successful stage-two inspections, including runtime source. Minority findings,
+disagreement, missing reads, and uncertainty are retained.
 `critic_also_flagged` means at least one candidate received source-bound stage-two
 support. It remains a shadow observation, not proof and not a vote.
 
@@ -55,6 +64,8 @@ The recommended global revision uses:
 | Model | `z-ai/glm-5.3-flash` |
 | Jobs globally | 1 |
 | In-job concurrency | 2 |
+| Steps per specialist | 4 |
+| Steps for adjudicator | 8 |
 | Requests per artifact | 40 |
 | Pre-admitted token bound | 1,500,000 |
 | Wall time per artifact | 900 seconds |
@@ -68,13 +79,17 @@ share one atomic ledger. A fully metered response settles its own token reservat
 to actual token and reported dollar usage; in-flight and unknown-cost requests
 retain their full bounds. Each response must fit its own pre-admitted envelope.
 Platform retains the full $3 artifact reservation even after local settlement. The shadow uses
-low reasoning effort and required tool calls to leave room for a structured result. An invalid structured
-verdict gets at most two schema corrections within the same request/token budget; it is
-never converted to a pass. Overlong display summaries are shortened to 240
+low reasoning effort and required tool calls to leave room for a structured result.
+Provisional specialist semantics are never schema-corrected. An invalid atomic
+stage-two result gets at most two corrections within its eight-step allowance and
+the same request/token budget. The adjudicator may use source inspection tools
+between attempts when a submitted citation was not yet read; the central review
+must still pass the authoritative parser and source-read proofs.
+It is never converted to a pass. Overlong display summaries are shortened to 240
 characters while originals remain in `full_summaries` (up to 8,000 characters,
 with explicit truncation metadata) and the adjudicator context. Risk, categories,
-evidence and invariant decisions are never normalized. Validation errors and
-field sizes are retained in the pass report.
+evidence and invariant decisions are never normalized in the provisional record.
+Validation errors and field sizes are retained in the pass report.
 The price envelope is $0.60/M input and $2.00/M output,
 four times the highest listed non-batch route seen on 2026-09-14 for the exact
 GLM model. See the [OpenRouter model page](https://openrouter.ai/z-ai/glm-5.3-flash)
@@ -168,9 +183,13 @@ path should also be disabled. Historical comparison rows remain read-only.
 ## Interpreting comparisons
 
 Only succeeded reports with complete declared protocol coverage count as
-comparisons or disagreements. `five-specialists-v1` requires exactly one complete
-pass for each of the five named specialties, plus a completed, candidate-bound
-adjudication when candidates exist. It is source-review protocol completion, not
+comparisons or disagreements. `five-specialists-adjudicator-v2` requires exactly
+one structurally complete provisional pass for each of the five named specialties,
+plus an always-present `fanout-adjudicator-v2` record containing a canonical final
+review, source-read proof, clearance proof for low risk, and an exactly bound
+assessment for every provisional candidate. The outer report revision is
+`fanout-source-review-v4`; older reports cannot satisfy this contract. It is
+source-review protocol completion, not
 an exhaustive per-file audit; the report explicitly sets
 `exhaustive_file_audit=false`. Historical incomplete rows remain visible, with their original
 errors and cost, but do not count as policy disagreement. A missing response is

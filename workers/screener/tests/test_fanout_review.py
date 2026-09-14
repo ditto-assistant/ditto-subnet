@@ -12,10 +12,12 @@ from ditto_screener.fanout_review import (
     FanoutBudget,
     FanoutBudgetExhausted,
     _normalize_candidate_adjudications,
+    _normalize_final_adjudication,
+    _provisional_candidate_basis,
+    _provisional_finding,
     plan_file_groups,
     review_archive,
 )
-from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.source_review import TarSourceRepository
 
 
@@ -150,6 +152,8 @@ async def test_default_envelope_fits_specialists_file_groups_and_critic_first_tu
 async def test_single_specialist_survives_majority_and_transcripts_are_independent(
     tmp_path, critic_risk, expected
 ):
+    from .test_source_review import _archive
+
     active = peak = 0
     instances = []
 
@@ -162,43 +166,46 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
                 "unmetered_requests": 0,
             }
             self.response_models = {"test-model"}
+            self.opened_paths = set()
             instances.append(self)
 
-        async def review(self, *_args, **_kwargs):
+        async def review_provisional(self, *_args, **_kwargs):
             nonlocal active, peak
             active += 1
             peak = max(peak, active)
             await asyncio.sleep(0.01)
             active -= 1
             risk = (
-                critic_risk
-                if self.kwargs["leads"]
-                else (
-                    "high"
-                    if FOCI["benchmark_engine"] in self.kwargs["focus"]
-                    else "low"
-                )
+                "high"
+                if FOCI["benchmark_engine"] in self.kwargs["focus"]
+                else "low"
             )
-            return SourceReviewObservation(
-                ok=True,
-                risk_level=risk,
-                finding_digest=None,
-                categories=(),
-                finding={"evidence": []},
-                clearance_certified=True,
-            )
+            return {
+                "raw_review": {
+                    "risk_level": risk,
+                    "categories": ["benchmark_emulation"]
+                    if risk == "high"
+                    else ["none"],
+                    "evidence": [],
+                    "invariants": [],
+                    "summary": "Provisional specialist note.",
+                },
+                "notes": [],
+                "inspection_complete": True,
+            }
 
-        async def adjudicate_candidates(
+        async def adjudicate_review(
             self, _archive_path, *, candidates, all_pass_summaries, **_kwargs
         ):
             assert len(all_pass_summaries) == 5
-            assert {row["outcome"] for row in all_pass_summaries} == {
-                "candidate",
-                "no_findings",
-            }
+            assert {row["outcome"] for row in all_pass_summaries} == {"provisional"}
             disposition = "supported" if critic_risk == "high" else "unresolved"
             return {
-                "revision": "fanout-candidate-adjudicator-v1",
+                "revision": "fanout-adjudicator-v2",
+                "outcome": expected,
+                "final_review": {"risk_level": critic_risk},
+                "clearance_certified": critic_risk == "low",
+                "evidence_verified": True,
                 "candidate_assessments": [
                     {
                         "candidate_id": row["candidate_id"],
@@ -213,11 +220,10 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
                 "summary": "Bounded test adjudication.",
             }
 
-    archive = tmp_path / "artifact"
-    archive.write_bytes(b"test")
+    archive = _archive(tmp_path, "fn main() { call_model(); }")
     result = await review_archive(
         archive,
-        artifact_sha256=hashlib.sha256(b"test").hexdigest(),
+        artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
         api_key_file="unused",
         partition="specialists",
         concurrency=2,
@@ -312,6 +318,208 @@ def test_adjudicator_cannot_confirm_one_candidate_with_an_unrelated_finding(tmp_
     ]
 
 
+def test_concern_note_source_is_retained_in_provisional_candidate(tmp_path):
+    from .test_source_review import _archive_files
+
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn leaked() { send(); }\n"})
+    repository = TarSourceRepository(str(archive))
+    raw = {
+        "risk_level": [],
+        "categories": ["none"],
+        "evidence": [],
+        "invariants": [],
+        "summary": "The focused review remained provisional.",
+    }
+    notes = [
+        {
+            "kind": "concern",
+            "category": "cross_user_access",
+            "path": "src/main.rs",
+            "line": 1,
+            "summary": "Possible cross-user sink.",
+        }
+    ]
+    assert _provisional_candidate_basis(raw, notes) == ["concern_note"]
+    finding = _provisional_finding(raw, notes, repository)
+    assert finding["evidence"] == [
+        {"path": "src/main.rs", "line": 1, "category": "cross_user_access"}
+    ]
+    assert finding["evidence_provenance"][0]["origins"] == ["concern_note"]
+    malformed = {
+        **raw,
+        "evidence": [{"path": [], "line": {}, "category": []}],
+        "invariants": [
+            {
+                "invariant": "i1_model_invocation",
+                "disposition": "breach",
+                "evidence_indices": [0],
+            }
+        ],
+    }
+    assert _provisional_candidate_basis(malformed, []) == ["failed_invariant"]
+    assert _provisional_finding(malformed, [], repository)["evidence"] == []
+
+
+@pytest.mark.parametrize("policy_version", [12, 13])
+def test_final_adjudicator_is_canonical_and_source_read_bound(
+    tmp_path, policy_version
+):
+    from ditto_screening_protocol.models import source_review_invariants_for_policy
+
+    from .test_source_review import (
+        _archive_files,
+        _with_policy_v10_invariants,
+    )
+
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn leaked() { send(); }\n"})
+    repository = TarSourceRepository(str(archive))
+    final_review = _with_policy_v10_invariants(
+        {
+            "risk_level": "high",
+            "confidence": 0.95,
+            "categories": ["cross_user_access"],
+            "evidence": [
+                {
+                    "path": "src/main.rs",
+                    "line": 1,
+                    "category": "cross_user_access",
+                }
+            ],
+            "summary": "The served path exposes cross-user source content.",
+        }
+    )
+    policy_invariants = {
+        invariant.value
+        for invariant in source_review_invariants_for_policy(policy_version)
+    }
+    final_review["invariants"] = [
+        item
+        for item in final_review["invariants"]
+        if item["invariant"] in policy_invariants
+    ]
+    payload = {
+        "final_review": final_review,
+        "candidate_assessments": [],
+        "summary": "Fresh stage two found a source-bound issue.",
+    }
+    with pytest.raises(ValueError, match="did not read"):
+        _normalize_final_adjudication(
+            payload,
+            artifact_sha256="a" * 64,
+            policy_version=policy_version,
+            candidates=[],
+            repository=repository,
+            opened_lines=set(),
+            clearance_certified=False,
+        )
+    result = _normalize_final_adjudication(
+        payload,
+        artifact_sha256="a" * 64,
+        policy_version=policy_version,
+        candidates=[],
+        repository=repository,
+        opened_lines={("src/main.rs", 1)},
+        clearance_certified=False,
+    )
+    assert result["outcome"] == "candidate"
+    assert result["final_review"]["risk_level"] == "high"
+    assert result["evidence_verified"] is True
+
+
+def test_low_final_review_needs_stage_two_clearance_and_cannot_hide_support(
+    tmp_path,
+):
+    from .test_source_review import (
+        _BENIGN_REVIEW,
+        _archive_files,
+        _with_policy_v10_invariants,
+    )
+
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn leaked() { send(); }\n"})
+    repository = TarSourceRepository(str(archive))
+    candidate = {
+        "candidate_id": "candidate-001",
+        "source_pass": "answer_authority",
+        "finding": {
+            "evidence": [
+                {
+                    "path": "src/main.rs",
+                    "line": 1,
+                    "category": "cross_user_access",
+                }
+            ]
+        },
+    }
+    payload = {
+        "final_review": _with_policy_v10_invariants(_BENIGN_REVIEW),
+        "candidate_assessments": [],
+        "summary": "Stage two completed.",
+    }
+    malformed = {
+        **payload,
+        "final_review": {**payload["final_review"], "risk_level": []},
+    }
+    with pytest.raises(ValueError, match="final review fields are invalid"):
+        _normalize_final_adjudication(
+            malformed,
+            artifact_sha256="a" * 64,
+            policy_version=13,
+            candidates=[],
+            repository=repository,
+            opened_lines=set(),
+            clearance_certified=False,
+        )
+    with pytest.raises(ValueError, match="clearance coverage"):
+        _normalize_final_adjudication(
+            payload,
+            artifact_sha256="a" * 64,
+            policy_version=13,
+            candidates=[],
+            repository=repository,
+            opened_lines=set(),
+            clearance_certified=False,
+        )
+    payload["candidate_assessments"] = [
+        {
+            "candidate_id": "candidate-001",
+            "disposition": "supported",
+            "supporting_evidence": candidate["finding"]["evidence"],
+            "counterevidence": [],
+            "summary": "The candidate source was verified.",
+        }
+    ]
+    with pytest.raises(ValueError, match="conflicts with low"):
+        _normalize_final_adjudication(
+            payload,
+            artifact_sha256="a" * 64,
+            policy_version=13,
+            candidates=[candidate],
+            repository=repository,
+            opened_lines={("src/main.rs", 1)},
+            clearance_certified=True,
+        )
+    payload["final_review"] = _with_policy_v10_invariants(
+        {
+            "risk_level": "high",
+            "confidence": 0.95,
+            "categories": ["cross_user_access"],
+            "evidence": candidate["finding"]["evidence"],
+            "summary": "The candidate source establishes cross-user access.",
+        }
+    )
+    result = _normalize_final_adjudication(
+        payload,
+        artifact_sha256="a" * 64,
+        policy_version=13,
+        candidates=[candidate],
+        repository=repository,
+        opened_lines={("src/main.rs", 1)},
+        clearance_certified=False,
+    )
+    assert result["outcome"] == "critic_also_flagged"
+    assert result["candidate_assessments"][0]["disposition"] == "supported"
+
+
 async def test_digest_mismatch_prevents_calls(tmp_path):
     archive = tmp_path / "artifact"
     archive.write_bytes(b"test")
@@ -339,30 +547,65 @@ async def test_manifest_digest_mismatch_prevents_calls(tmp_path):
 
 
 @pytest.mark.parametrize("hang", [False, True])
-async def test_failures_never_clear_and_skip_critic(tmp_path, hang):
+async def test_failures_never_clear_and_adjudicator_failure_is_reported(tmp_path, hang):
+    from .test_source_review import _archive
+
     class Reviewer:
         def __init__(self, **_kwargs):
             self.usage = {"requests": 1, "unmetered_requests": 1}
             self.response_models = set()
+            self.opened_paths = set()
 
-        async def review(self, *_args, **_kwargs):
+        async def review_provisional(self, *_args, **_kwargs):
             if hang:
                 await asyncio.sleep(60)
             raise TimeoutError()
 
-    archive = tmp_path / "artifact"
-    archive.write_bytes(b"test")
+        async def adjudicate_review(self, *_args, **_kwargs):
+            raise TimeoutError()
+
+    archive = _archive(tmp_path, "fn main() { call_model(); }")
     result = await review_archive(
         archive,
-        artifact_sha256=hashlib.sha256(b"test").hexdigest(),
+        artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
         api_key_file="unused",
         partition="specialists",
         reviewer_factory=Reviewer,
         timeout_seconds=0.01,
     )
     assert result["outcome"] == "incomplete"
-    assert result["critic"] is None
-    assert result["usage"]["unmetered_requests"] == 5
+    assert result["critic"]["error_code"] == "TimeoutError"
+    assert result["critic"]["final_review"] is None
+    assert result["usage"]["unmetered_requests"] == 6
+
+
+async def test_http_transport_failure_becomes_incomplete_report(tmp_path):
+    from .test_source_review import _archive_files
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn main() { call_model(); }"})
+
+    async def fail(request):
+        raise httpx.ConnectError("router unavailable", request=request)
+
+    transport = httpx.MockTransport(fail)
+    result = await review_archive(
+        archive,
+        artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        api_key_file=str(key),
+        partition="specialists",
+        concurrency=2,
+        max_steps=2,
+        reviewer_factory=lambda **kwargs: ExperimentalReviewer(
+            transport=transport, **kwargs
+        ),
+    )
+    assert result["outcome"] == "incomplete"
+    assert any(row["error_code"] == "ConnectError" for row in result["passes"])
+    assert result["critic"]["error_code"] == "FanoutBudgetExhausted"
+    assert result["usage"]["unmetered_responses"] >= 1
 
 
 async def test_real_reviewer_uses_inert_tools_policy_and_metering(tmp_path):
@@ -419,6 +662,243 @@ async def test_real_reviewer_uses_inert_tools_policy_and_metering(tmp_path):
     assert "ANY file" in seen[0]["messages"][1]["content"]
 
 
+@pytest.mark.parametrize("policy_version", [12, 13])
+async def test_raw_contradictory_specialists_reach_always_run_adjudicator(
+    tmp_path, policy_version
+):
+    from ditto_screening_protocol.models import source_review_invariants_for_policy
+
+    from .test_source_review import (
+        _BENIGN_REVIEW,
+        _archive_files,
+        _tool,
+        _with_policy_v10_invariants,
+    )
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn main() { call_model(); }"})
+    stage_two_requests = []
+    specialist_requests = []
+    policy_invariants = {
+        invariant.value
+        for invariant in source_review_invariants_for_policy(policy_version)
+    }
+
+    def policy_review(review):
+        value = _with_policy_v10_invariants(review)
+        value["invariants"] = [
+            item
+            for item in value["invariants"]
+            if item["invariant"] in policy_invariants
+        ]
+        return value
+
+    async def handler(request):
+        payload = json.loads(request.content)
+        messages = payload["messages"]
+        stage_two = any(
+            tool["function"]["name"] == "submit_fanout_adjudication"
+            for tool in payload["tools"]
+        )
+        if stage_two:
+            stage_two_requests.append(payload)
+        else:
+            specialist_requests.append(payload)
+        if not any(message.get("role") == "tool" for message in messages):
+            calls = [
+                _tool(
+                    f"read-{index}",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 1},
+                )
+                for index in (1, 2)
+            ]
+        elif stage_two:
+            calls = [
+                _tool(
+                    "final",
+                    "submit_fanout_adjudication",
+                    {
+                        "final_review": policy_review(_BENIGN_REVIEW),
+                        "candidate_assessments": [],
+                        "summary": "Stage two independently cleared the source.",
+                    },
+                )
+            ]
+        else:
+            raw = policy_review(_BENIGN_REVIEW)
+            raw["invariants"][0] = {
+                **raw["invariants"][0],
+                "disposition": "inconclusive",
+            }
+            if FOCI["benchmark_engine"] in messages[0]["content"]:
+                raw["risk_level"] = []
+            calls = [_tool("provisional", "submit_review", raw)]
+        return httpx.Response(
+            200,
+            json={
+                "model": "glm-5.3-flash",
+                "choices": [{"message": {"role": "assistant", "tool_calls": calls}}],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 100,
+                    "cost": 0.001,
+                },
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    result = await review_archive(
+        archive,
+        artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        api_key_file=str(key),
+        partition="specialists",
+        concurrency=2,
+        max_steps=3,
+        policy_version=policy_version,
+        reviewer_factory=lambda **kwargs: ExperimentalReviewer(
+            transport=transport, **kwargs
+        ),
+    )
+    assert result["revision"] == "fanout-source-review-v4"
+    assert result["coverage_protocol"] == "five-specialists-adjudicator-v2"
+    assert result["outcome"] == "no_findings"
+    assert result["candidates"] == []
+    assert result["critic"]["final_review"]["risk_level"] == "low"
+    assert result["critic"]["clearance_certified"] is True
+    assert result["critic"]["pass_context_count"] == 5
+    assert all(row["outcome"] == "provisional" for row in result["passes"])
+    assert all(row["validation_errors"] for row in result["passes"])
+    assert all(
+        row["raw_review"]["invariants"][0]["disposition"] == "inconclusive"
+        for row in result["passes"]
+    )
+    benchmark = next(
+        row for row in result["passes"] if row["name"] == "benchmark_engine"
+    )
+    assert benchmark["raw_review"]["risk_level"] == []
+    assert "TypeError" in benchmark["validation_errors"][0]
+    assert len(stage_two_requests) == 2
+    assert "inconclusive" in json.dumps(stage_two_requests[0]["messages"])
+    assert all(
+        "provisional specialist note" in row["messages"][0]["content"]
+        for row in specialist_requests
+    )
+
+
+async def test_adjudicator_can_read_missing_citation_after_invalid_final(tmp_path):
+    from .test_source_review import (
+        _BENIGN_REVIEW,
+        _archive_files,
+        _tool,
+        _with_policy_v10_invariants,
+    )
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    archive = _archive_files(
+        tmp_path,
+        {"src/main.rs": b"fn main() { call_model(); }\nfn leaked() { send(); }\n"},
+    )
+    final_review = _with_policy_v10_invariants(
+        {
+            **_BENIGN_REVIEW,
+            "risk_level": "high",
+            "categories": ["cross_user_access"],
+            "evidence": [
+                {
+                    "path": "src/main.rs",
+                    "line": 2,
+                    "category": "cross_user_access",
+                }
+            ],
+            "summary": "The served path exposes cross-user source content.",
+        }
+    )
+    requests = []
+
+    async def handler(request):
+        payload = json.loads(request.content)
+        requests.append(payload)
+        turn = len(requests)
+        if turn == 1:
+            calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 1},
+                )
+            ]
+        elif turn == 3:
+            assert "did not read" in json.dumps(payload["messages"])
+            assert any(
+                tool["function"]["name"] == "read_file" for tool in payload["tools"]
+            )
+            calls = [
+                _tool(
+                    "read-2",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 2, "end_line": 2},
+                )
+            ]
+        else:
+            calls = [
+                _tool(
+                    f"final-{turn}",
+                    "submit_fanout_adjudication",
+                    {
+                        "final_review": final_review,
+                        "candidate_assessments": [],
+                        "summary": "Fresh stage two found a source-bound issue.",
+                    },
+                )
+            ]
+        return httpx.Response(
+            200,
+            json={
+                "model": "glm-5.3-flash",
+                "choices": [{"message": {"role": "assistant", "tool_calls": calls}}],
+                "usage": {
+                    "prompt_tokens": 1000,
+                    "completion_tokens": 100,
+                    "cost": 0.001,
+                },
+            },
+        )
+
+    reviewer = ExperimentalReviewer(
+        focus="Adjudicator",
+        api_key_file=str(key),
+        model="z-ai/glm-5.3-flash",
+        base_url="https://router.example/v1",
+        max_steps=4,
+        max_read_bytes=180_000,
+        max_completion_tokens=8000,
+        timeout_seconds=60,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await reviewer.adjudicate_review(
+        str(archive),
+        artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        candidates=[],
+        all_pass_summaries=[],
+        policy_version=13,
+        deadline=asyncio.get_running_loop().time() + 60,
+    )
+    assert result["outcome"] == "candidate"
+    assert len(requests) == 4
+    assert len(reviewer.validation_errors) == 1
+    assert reviewer.validation_errors[0].startswith(
+        "fanout adjudicator cited source it did not read"
+    )
+    assert '"line": 2' in reviewer.validation_errors[0]
+    assert '"path": "src/main.rs"' in reviewer.validation_errors[0]
+    assert reviewer.opened_lines == {("src/main.rs", 1), ("src/main.rs", 2)}
+
+
 async def test_default_budget_completes_two_turn_fanout_and_source_read(tmp_path):
     from .test_source_review import (
         _BENIGN_REVIEW,
@@ -446,17 +926,23 @@ async def test_default_budget_completes_two_turn_fanout_and_source_read(tmp_path
                     "read-1",
                     "read_file",
                     {"path": "src/main.rs", "start_line": 1, "end_line": 20},
-                )
+                ),
+                _tool(
+                    "read-2",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 20},
+                ),
             ]
         elif any(
-            tool["function"]["name"] == "submit_candidate_adjudications"
+            tool["function"]["name"] == "submit_fanout_adjudication"
             for tool in payload["tools"]
         ):
             calls = [
                 _tool(
                     "adjudicate-1",
-                    "submit_candidate_adjudications",
+                    "submit_fanout_adjudication",
                     {
+                        "final_review": _with_policy_v10_invariants(_BENIGN_REVIEW),
                         "candidate_assessments": [
                             {
                                 "candidate_id": "candidate-001",
@@ -600,14 +1086,29 @@ async def test_file_scheduling_and_actual_read_coverage(
             self.response_models = set()
             self.opened_paths = set(kwargs["assigned_paths"]) if opened else set()
 
-        async def review(self, *_args, **_kwargs):
-            return SourceReviewObservation(
-                ok=True,
-                risk_level="low",
-                finding_digest=None,
-                categories=(),
-                clearance_certified=True,
-            )
+        async def review_provisional(self, *_args, **_kwargs):
+            return {
+                "raw_review": {
+                    "risk_level": "low",
+                    "categories": ["none"],
+                    "evidence": [],
+                    "invariants": [],
+                    "summary": "Provisional specialist note.",
+                },
+                "notes": [],
+                "inspection_complete": True,
+            }
+
+        async def adjudicate_review(self, *_args, **_kwargs):
+            return {
+                "revision": "fanout-adjudicator-v2",
+                "outcome": "no_findings",
+                "final_review": {"risk_level": "low"},
+                "clearance_certified": True,
+                "evidence_verified": True,
+                "candidate_assessments": [],
+                "summary": "Bounded test adjudication.",
+            }
 
     archive = _archive(tmp_path, "fn main() {}")
     result = await review_archive(
@@ -622,7 +1123,7 @@ async def test_file_scheduling_and_actual_read_coverage(
     assert result["outcome"] == expected
     assert len(result["passes"]) == 1 + min(max_groups, 3)
     assert result["passes"][0]["name"] == "generalist"
-    assert result["critic"] is None
+    assert result["critic"] is not None
 
 
 async def test_transport_failure_is_unmetered_not_a_different_model():

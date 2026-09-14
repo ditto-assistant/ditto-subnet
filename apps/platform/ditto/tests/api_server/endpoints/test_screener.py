@@ -89,6 +89,7 @@ from ditto.db.models import (
     ScreenedImageUpload,
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
+    ScreenerFanoutShadowReview,
     ScreenerHeartbeat,
     ScreenerNode,
     ScreenerNodeChannelSettingsRevision,
@@ -10512,21 +10513,68 @@ class TestQuarantineBaselineDiff:
         assert response.status_code == 422
 
 
-def test_specialist_protocol_requires_unique_passes_and_adjudication():
-    from copy import deepcopy
+def _final_shadow_policy_review(risk="low"):
+    from ditto_screening_protocol.models import source_review_invariants_for_policy
 
-    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+    return SourceReviewFinding.model_validate(
+        {
+            "artifact_sha256": "a" * 64,
+            "prompt_revision": "source-review-v24-policy-v12",
+            "risk_level": risk,
+            "confidence": 0.9,
+            "categories": ["none"] if risk == "low" else ["benchmark_emulation"],
+            "evidence": []
+            if risk == "low"
+            else [
+                {"path": "main.py", "line": i, "category": "benchmark_emulation"}
+                for i in [1, 2]
+            ],
+            "summary": "Independent source review completed.",
+            "invariant_assessment": {
+                "decisions": [
+                    {
+                        "invariant": invariant.value,
+                        "disposition": "breach"
+                        if risk != "low" and invariant.value == "i5_production_engine"
+                        else "pass",
+                        "pass_clause": None
+                        if risk != "low" and invariant.value == "i5_production_engine"
+                        else "unreachable_nonruntime_code",
+                        "evidence_indices": [0, 1]
+                        if risk != "low" and invariant.value == "i5_production_engine"
+                        else [],
+                        "summary": "Source locations independently examined.",
+                    }
+                    for invariant in source_review_invariants_for_policy(12)
+                ]
+            },
+        }
+    ).model_dump(mode="json")
 
-    report = {
+
+def _complete_specialist_adjudication_report():
+    return {
         "partition": "specialists",
-        "revision": "fanout-source-review-v3",
+        "artifact_sha256": "a" * 64,
+        "policy_version": 12,
+        "requested_model": "z-ai/glm-5.3-flash",
+        "revision": "fanout-source-review-v4",
         "mode": "shadow_report_only",
         "outcome": "no_findings",
         "coverage_scope": "source_review",
-        "coverage_protocol": "five-specialists-v1",
+        "coverage_protocol": "five-specialists-adjudicator-v2",
+        "exhaustive_file_audit": False,
         "file_plan": None,
         "passes": [
-            {"name": name, "outcome": "no_findings", "finding": {"risk_level": "low"}}
+            {
+                "name": name,
+                "outcome": "provisional",
+                # Specialists need not agree, or make globally consistent claims.
+                "raw_review": {"risk_level": "low", "uncertainty": "unresolved"},
+                "response_models": ["glm-5.3-flash"],
+                "notes": [],
+                "error_code": None,
+            }
             for name in [
                 "generalist",
                 "answer_authority",
@@ -10535,37 +10583,272 @@ def test_specialist_protocol_requires_unique_passes_and_adjudication():
                 "evasion_scope",
             ]
         ],
-        "critic": None,
+        "candidates": [],
+        "critic": {
+            "name": "adjudicator",
+            "revision": "fanout-adjudicator-v2",
+            "outcome": "no_findings",
+            "final_review": _final_shadow_policy_review(),
+            "response_models": ["glm-5.3-flash"],
+            "clearance_certified": True,
+            "evidence_verified": True,
+            "candidate_assessments": [],
+            "pass_context_count": 5,
+            "error_code": None,
+        },
     }
+
+
+def test_specialist_protocol_requires_fresh_adjudication_even_without_candidates():
+    from copy import deepcopy
+
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
     assert _fanout_protocol_complete(report, "no_findings")
-    assert not _fanout_protocol_complete(report, "critic_also_flagged")
-    missing = deepcopy(report)
-    missing["passes"].pop()
-    assert not _fanout_protocol_complete(missing, "no_findings")
-    duplicate = deepcopy(report)
-    duplicate["passes"][-1] = duplicate["passes"][0]
-    assert not _fanout_protocol_complete(duplicate, "no_findings")
-    candidate = deepcopy(report)
-    candidate["outcome"] = "critic_also_flagged"
-    candidate["passes"][0]["outcome"] = "candidate"
-    candidate["passes"][0]["finding"] = {"risk_level": "high"}
-    assert not _fanout_protocol_complete(candidate, "critic_also_flagged")
-    candidate["critic"] = {
-        "error_code": None,
-        "candidate_assessments": [
-            {
-                "candidate_id": "candidate-001",
-                "source_pass": "generalist",
-                "disposition": "supported",
-            },
-        ],
+    no_adjudicator = deepcopy(report)
+    no_adjudicator["critic"] = None
+    assert not _fanout_protocol_complete(no_adjudicator, "no_findings")
+    old = deepcopy(report)
+    old["revision"] = "fanout-source-review-v3"
+    assert not _fanout_protocol_complete(old, "no_findings")
+    assert not _fanout_protocol_complete(report, "candidate")
+    for field, invalid in [
+        ("clearance_certified", False),
+        ("evidence_verified", False),
+        ("error_code", "TimeoutError"),
+        ("final_review", None),
+        ("pass_context_count", 4),
+        ("outcome", "candidate"),
+        ("candidate_assessments", [{"candidate_id": "invented"}]),
+    ]:
+        broken = deepcopy(report)
+        broken["critic"][field] = invalid
+        assert not _fanout_protocol_complete(broken, "no_findings"), field
+
+
+def test_specialist_protocol_requires_every_provisional_handoff():
+    from copy import deepcopy
+
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    for field, value in [
+        ("outcome", "incomplete"),
+        ("raw_review", None),
+        ("error_code", "unmetered-response"),
+        ("notes", None),
+        ("name", "generalist"),
+    ]:
+        broken = deepcopy(report)
+        broken["passes"][-1][field] = value
+        assert not _fanout_protocol_complete(broken, "no_findings"), field
+    report["passes"].pop()
+    assert not _fanout_protocol_complete(report, "no_findings")
+
+
+def test_specialist_protocol_binds_minority_candidate_to_final_decision():
+    from copy import deepcopy
+
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    report["candidates"] = [
+        {
+            "candidate_id": "candidate-001",
+            "source_pass": "benchmark_engine",
+            "basis": ["failed_invariant"],
+            "finding": {"risk_level": "high"},
+        }
+    ]
+    report["critic"]["candidate_assessments"] = [
+        {
+            "candidate_id": "candidate-001",
+            "source_pass": "benchmark_engine",
+            "disposition": "supported",
+        }
+    ]
+    # Four quiet specialists and a low final verdict cannot erase a supported lead.
+    assert not _fanout_protocol_complete(report, "no_findings")
+    report["critic"]["final_review"] = _final_shadow_policy_review("high")
+    report["outcome"] = report["critic"]["outcome"] = "critic_also_flagged"
+    assert _fanout_protocol_complete(report, "critic_also_flagged")
+    for field, value in [
+        ("candidate_id", "candidate-999"),
+        ("source_pass", "generalist"),
+        ("disposition", "majority-clear"),
+    ]:
+        broken = deepcopy(report)
+        broken["critic"]["candidate_assessments"][0][field] = value
+        assert not _fanout_protocol_complete(broken, "critic_also_flagged"), field
+    # A central discovery is valid without a preexisting specialist candidate.
+    report["candidates"] = []
+    report["critic"]["candidate_assessments"] = []
+    report["outcome"] = report["critic"]["outcome"] = "candidate"
+    assert _fanout_protocol_complete(report, "candidate")
+
+
+def test_specialist_protocol_distinguishes_refutation_from_uncertainty():
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    report["candidates"] = [
+        {
+            "candidate_id": "candidate-001",
+            "source_pass": "answer_authority",
+            "basis": ["concern_note"],
+            "finding": {"summary": "uncertain lead"},
+        }
+    ]
+    assessment = {
+        "candidate_id": "candidate-001",
+        "source_pass": "answer_authority",
+        "disposition": "unresolved",
     }
-    assert _fanout_protocol_complete(candidate, "critic_also_flagged")
-    assert not _fanout_protocol_complete(candidate, "no_findings")
-    candidate["critic"]["candidate_assessments"][0]["source_pass"] = "wrong-specialist"
-    assert not _fanout_protocol_complete(candidate, "critic_also_flagged")
-    candidate["critic"]["candidate_assessments"][0]["source_pass"] = "generalist"
-    candidate["critic"]["candidate_assessments"][0]["candidate_id"] = "candidate-999"
-    assert not _fanout_protocol_complete(candidate, "critic_also_flagged")
-    candidate["passes"][1]["outcome"] = "incomplete"
-    assert not _fanout_protocol_complete(candidate, "incomplete")
+    report["critic"]["candidate_assessments"] = [assessment]
+    assert not _fanout_protocol_complete(report, "no_findings")
+    report["outcome"] = report["critic"]["outcome"] = "unresolved_candidate"
+    assert _fanout_protocol_complete(report, "unresolved_candidate")
+    assessment["disposition"] = "refuted"
+    report["outcome"] = report["critic"]["outcome"] = "no_findings"
+    assert _fanout_protocol_complete(report, "no_findings")
+    report["critic"]["candidate_assessments"].append(dict(assessment))
+    assert not _fanout_protocol_complete(report, "no_findings")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_adjudicator", [True, False])
+async def test_fanout_completion_requires_adjudicator_without_mutating_authority(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    has_adjudicator: bool,
+) -> None:
+    _install_db(app, session_maker)
+    now = datetime.now(UTC)
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    attempt_id, shadow_id = uuid4(), uuid4()
+    token = "source-only-shadow-test-token"
+    report = _complete_specialist_adjudication_report()
+    report.update(
+        {
+            "artifact_sha256": "a" * 64,
+            "policy_version": 12,
+            "policy_manifest_profile": "l1_l2",
+            "policy_manifest_rotation_id": "test-rotation",
+            "policy_manifest_digest": "b" * 64,
+            "requested_model": "z-ai/glm-5.3-flash",
+            "usage": {"reported_cost_usd": 0.04},
+        }
+    )
+    for item in report["passes"]:
+        item["response_models"] = ["glm-5.3-flash"]
+    if not has_adjudicator:
+        report["critic"] = None
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerReviewSettingsRevision(
+                revision=1,
+                parent_revision=0,
+                scope="*",
+                settings=ScreenerReviewSettings().model_dump(mode="json"),
+                checksum="c" * 64,
+                reason="shadow adjudication regression",
+                actor="test",
+            )
+        )
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=12,
+                status="passed",
+                started_at=now - timedelta(minutes=1),
+                deadline=now,
+                finished_at=now,
+            )
+        )
+        await session.flush()
+        session.add(
+            ScreenerFanoutShadowReview(
+                shadow_id=shadow_id,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                environment="prod",
+                artifact_sha256="a" * 64,
+                policy_version=12,
+                policy_manifest_profile="l1_l2",
+                policy_manifest_rotation_id="test-rotation",
+                policy_manifest_digest="b" * 64,
+                settings_revision=1,
+                settings_scope="*",
+                settings_checksum="c" * 64,
+                status="running",
+                baseline={"outcome": "quarantine"},
+                provider="gcp",
+                reserved_cost_microusd=3_000_000,
+                job_token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                job_token_expires_at=now + timedelta(minutes=10),
+                lease_expires_at=now + timedelta(minutes=10),
+            )
+        )
+    response = await client.post(
+        f"/api/v1/screener/fanout-shadow-reviews/{shadow_id}/complete",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "succeeded", "outcome": "no_findings", "report": report},
+    )
+    assert response.status_code == 200, response.text
+    async with session_maker() as session:
+        row = await session.get(ScreenerFanoutShadowReview, shadow_id)
+        assert row is not None
+        assert row.status == ("succeeded" if has_adjudicator else "incomplete")
+        assert row.coverage_complete is has_adjudicator
+        assert row.disagrees_with_baseline is (True if has_adjudicator else None)
+        assert row.error_code == (
+            None if has_adjudicator else "fanout-review-protocol-incomplete"
+        )
+        assert row.report == report
+        assert row.job_token_hash is None
+        assert row.reserved_cost_microusd == 3_000_000
+        assert row.reported_cost_microusd == 40_000
+        agent = await session.get(Agent, agent_id)
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert agent is not None and agent.status == AgentStatus.UPLOADED
+        assert attempt is not None and attempt.status == "passed"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "minimal",
+        "artifact",
+        "policy",
+        "missing_invariant",
+        "contradiction",
+        "critic_model",
+        "specialist_model",
+    ],
+)
+def test_shadow_final_review_must_be_canonical_and_individually_model_bound(fault):
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    finding = report["critic"]["final_review"]
+    if fault == "minimal":
+        report["critic"]["final_review"] = {"risk_level": "low"}
+    elif fault == "artifact":
+        finding["artifact_sha256"] = "b" * 64
+    elif fault == "policy":
+        finding["prompt_revision"] = "source-review-v24-policy-v13"
+    elif fault == "missing_invariant":
+        finding["invariant_assessment"]["decisions"].pop()
+    elif fault == "contradiction":
+        decision = finding["invariant_assessment"]["decisions"][0]
+        decision["disposition"] = "inconclusive"
+        decision["pass_clause"] = None
+    elif fault == "critic_model":
+        report["critic"]["response_models"] = []
+    else:
+        report["passes"][0]["response_models"] = ["other-model"]
+    assert not _fanout_protocol_complete(report, "no_findings")

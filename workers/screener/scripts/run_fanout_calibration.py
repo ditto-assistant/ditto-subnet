@@ -80,8 +80,8 @@ async def main() -> None:
             for row in results:
                 positive = {
                     "baseline": row["baseline_outcome"] == "candidate",
-                    "fanout": any(p["outcome"] == "candidate" for p in row["passes"]),
-                    "critic": row["outcome"] == "critic_also_flagged",
+                    "fanout": bool(row["candidates"]),
+                    "critic": row["outcome"] in {"candidate", "critic_also_flagged"},
                 }[strategy]
                 rows.append(
                     {
