@@ -194,10 +194,13 @@ func (d *v13Draws) drawPersonalGroup(group int, domain V13PersonalDomain) v13Per
 		perm := v13Perm(seed, salt, len(bank))
 		return bank[perm[0]], bank[perm[1]]
 	}
+	// Every personal date is a plan (an appointment, a milestone, a renewal),
+	// so it is drawn from the month after the default record month onward and
+	// the household note always precedes the day it schedules.
 	days := v13Perm(seed, fmt.Sprintf("p-days-%d", group), 28)
-	months := v13Perm(seed, fmt.Sprintf("p-months-%d", group), 12)
+	months := v13Perm(seed, fmt.Sprintf("p-months-%d", group), 12-v13DefaultRecordMonth)
 	for i := range g.Dates {
-		g.Dates[i] = v13Date{Month: 1 + months[i], Day: 1 + days[i]}
+		g.Dates[i] = v13Date{Month: v13DefaultRecordMonth + 1 + months[i], Day: 1 + days[i]}
 	}
 	hours := v13Perm(seed, fmt.Sprintf("p-hours-%d", group), 15)
 	minutes := []int{0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55}
