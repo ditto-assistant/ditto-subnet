@@ -18,18 +18,20 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def index(report, mode, case_ids):
+def index(report, mode, case_ids, category_counts=None):
+    expected = sum(category_counts.values()) if category_counts is not None else 60
     meta = report["meta"]
     for key in ("lme_complete", "lme_subject_graph", "lme_require_graph", "lme_prepared_snapshot_unchanged"):
         require(meta[key] == "true", f"failed report gate: {key}")
     require(meta["lme_seed_context_mode"] == mode, "wrong arm")
-    require(meta["lme_hydration_preflight_users"] == "60", "hydration coverage differs")
+    require(meta["lme_hydration_preflight_users"] == str(expected), "hydration coverage differs")
     require(meta["lme_reasoning_effort"] == "medium" and meta["lme_prompt_clock"] == "question-date", "reader condition differs")
     require(meta["lme_prepared_snapshot_sha256"] == meta["lme_prepared_snapshot_after_sha256"], "fixture changed")
     rows = {row["case_id"]: row for row in report["per_case"]}
-    require(len(rows) == len(report["per_case"]) == len(case_ids) == 60 and set(rows) == set(case_ids), "cohort mismatch")
-    require(sorted(Counter(row["category"] for row in rows.values()).values()) == [10] * 6, "category imbalance")
-    validate_hydration_preflight(report, list(rows.values()), 60, True)
+    require(len(rows) == len(report["per_case"]) == len(case_ids) == expected and set(rows) == set(case_ids), "cohort mismatch")
+    counts = Counter(row["category"] for row in rows.values())
+    require(counts == category_counts if category_counts is not None else sorted(counts.values()) == [10] * 6, "category imbalance")
+    validate_hydration_preflight(report, list(rows.values()), expected, True)
     for row in rows.values():
         require(type(row["lme_correct"]) is bool, "missing verdict")
         require(row["model"] == "openai/gpt-5.6-luna", "reader differs")
@@ -50,8 +52,8 @@ def metrics(a, b, ids):
             "slices_correct": sum(b[i]["lme_correct"] for i in ids), "wins": wins, "losses": losses}
 
 
-def analyze(control, treatment, case_ids):
-    a, b = index(control, "summary", case_ids), index(treatment, "source-slices-v1", case_ids)
+def analyze(control, treatment, case_ids, category_counts=None):
+    a, b = index(control, "summary", case_ids, category_counts), index(treatment, "source-slices-v1", case_ids, category_counts)
     for key in ("git_sha", "prompt_sha", "tools_sha", "weights_sha", "judge_model"):
         require(control[key] == treatment[key], f"cross-arm identity differs: {key}")
     require(control["judge_model"] == "google/gemini-3.1-flash-lite", "judge differs")
@@ -84,7 +86,7 @@ def analyze(control, treatment, case_ids):
                                    mean_prompt_tokens=statistics.mean(r["data"]["prompt_tokens"] for r in rows.values()),
                                    mean_session_recall=statistics.mean(r["data"]["session_recall"] for r in rows.values()),
                                    no_tool_cases=sum(not r["data"].get("tools_called") for r in rows.values()))
-        result["arms"][name]["hydration_and_graph"] = validate_hydration_preflight(report, list(rows.values()), 60, True)
+        result["arms"][name]["hydration_and_graph"] = validate_hydration_preflight(report, list(rows.values()), len(case_ids), True)
     result["scope"] = "Exploratory balanced 60-case paired pilot; not a full-500 score, held-out result or graph ablation. No regrading. Costs and graph SQL logs audited separately."
     return result
 

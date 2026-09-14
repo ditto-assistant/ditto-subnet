@@ -1,0 +1,48 @@
+{
+  "final_hydration_and_graph": {
+    "checked_users": 500,
+    "every_case_has_positive_seed_count": true,
+    "graph_discovery": {
+      "calls": 2513,
+      "complete": true,
+      "failures": 0,
+      "scope": "Current invocation only; not historical resumed work."
+    },
+    "required": true,
+    "version": "native-hydration-v1"
+  },
+  "final_sha256": "82ce19af9f516761a9f2002bbffb25c93b6176a5325edd5a768887ce8e91e4c1",
+  "first_invocation_native_meta": {
+    "lme_subject_graph_audit_scope": "this_invocation_only; excludes resumed checkpoint work",
+    "lme_subject_graph_calls": "3689",
+    "lme_subject_graph_candidates": "30790",
+    "lme_subject_graph_discovery_complete": "true",
+    "lme_subject_graph_failure_counts_consistent": "true",
+    "lme_subject_graph_failure_schema": "failure-reasons-v1",
+    "lme_subject_graph_failures": "0",
+    "lme_subject_graph_failures_context_canceled": "0",
+    "lme_subject_graph_failures_context_deadline": "0",
+    "lme_subject_graph_failures_graph_unavailable": "0",
+    "lme_subject_graph_failures_other": "0",
+    "lme_subject_graph_failures_postgres_query_canceled": "0",
+    "lme_subject_graph_total_ms": "38763",
+    "lme_subject_graph_version": "one-hop-v1"
+  },
+  "helper_sha256": "0e5e7de9f4eb889a25e2318cb1394ed02a290a8428a48bb6e7fce8593d39f5c8",
+  "judge_failed_case_regenerated": {
+    "case_id": "gpt4_7ca326fa",
+    "final_answer": "I can place **Emma first** and **Alex later**, but I don\u2019t have enough information about **Rachel\u2019s graduation date** to determine the complete order.",
+    "final_correct": false,
+    "original_answer": "I don\u2019t have enough information to rank them confidently. I know Emma graduated high school before Alex\u2019s engineering graduation, but I don\u2019t know when Rachel graduated. When did Rachel graduate?"
+  },
+  "newly_judged_case_ids": [
+    "2ebe6c92",
+    "gpt4_68e94287",
+    "gpt4_7ca326fa",
+    "gpt4_e414231e"
+  ],
+  "original_sha256": "e7ca1c7ed86448742407def1329a2616dbea65d3f424bf9a2a311dd5ae443d06",
+  "preserved_judged_rows": 496,
+  "preserved_wrong_answers": 150,
+  "scope": "Original496 judged rows preserved byte-semantically; exact4 unjudged cases recovered once. Original graph counters and final counters are invocation-specific, not duplicates to subtract from cost."
+}
