@@ -64,6 +64,14 @@
 - name: Preserve the existing entrypoint and immutable runtime inputs
   ansible.builtin.set_fact:
     primary_argv: "{{ (primary_entrypoint.stdout | regex_search('argv\\[\\]=(.*?) ; ignore_errors', '\\1')) | first | regex_replace(' --local-sandbox-slots [0-9]+', '') | regex_replace(' --local-source-review-slots [0-9]+', '') | regex_replace(' --resource-slice [a-z0-9-]+\\.slice', '') }}"
+- name: Verify CI guest is powered off before expanding screening memory
+  ansible.builtin.command: virsh --connect qemu:///system domstate ditto-screener-ci-1
+  register: screener_ci_state
+  changed_when: false
+- name: Refuse overlapping screening and CI memory allocations
+  ansible.builtin.assert:
+    that: screener_ci_state.stdout | trim == 'shut off'
+    fail_msg: Drain and power off the CI guest before allocating 52 GiB to screening.
 - name: Install bounded primary resource slice
   ansible.builtin.template:
     src: dittoscreener.slice.j2
@@ -91,18 +99,18 @@
     path: /etc/systemd/system/user-1005.slice.d
     state: directory
     mode: '0755'
-- name: Bound rootless runtime alongside the 16 GiB primary lane slice
+- name: Bound rootless runtime alongside the 24 GiB primary lane slice
   ansible.builtin.copy:
     dest: /etc/systemd/system/user-1005.slice.d/partition.conf
     mode: '0644'
     content: |
       [Slice]
       CPUAccounting=yes
-      CPUQuota=800%
+      CPUQuota=1600%
       CPUWeight=200
       MemoryAccounting=yes
-      MemoryHigh=13G
-      MemoryMax=14G
+      MemoryHigh=26G
+      MemoryMax=28G
       TasksMax=infinity
 - name: Bound local VM/review admission without changing Platform settings
   ansible.builtin.copy:
@@ -115,14 +123,14 @@
       SendSIGKILL=no
       KillMode=mixed
       ExecStart=
-      ExecStart={{ primary_argv }} --local-sandbox-slots 1 --local-source-review-slots 1 --resource-slice dittoscreener.slice
-- name: Persist one worker for normal release updater restarts
+      ExecStart={{ primary_argv }} --local-sandbox-slots 2 --local-source-review-slots 1 --resource-slice dittoscreener.slice
+- name: Persist two workers for normal release updater restarts
   ansible.builtin.copy:
     dest: /etc/systemd/system/ditto-screener-fleet-auto-update.service.d/partition.conf
     mode: '0644'
     content: |
       [Service]
-      Environment=SCREENER_FLEET_WORKER_PROCESSES=1
+      Environment=SCREENER_FLEET_WORKER_PROCESSES=2
 - name: Reload primary partition metadata without restarting jobs
   ansible.builtin.systemd:
     daemon_reload: true

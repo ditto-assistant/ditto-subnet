@@ -5,8 +5,8 @@ the primary screening runtime. The primary host budget is split between:
 
 | Slice | Work | CPU ceiling | Memory ceiling |
 | --- | --- | --- | --- |
-| `dittoscreener.slice` | One build/smoke VM, one source review, worker and lane agent | 8 CPUs | 16 GiB |
-| `user-1005.slice` | Rootless Docker owned by `ditto-builder` | 8 CPUs | 14 GiB |
+| `dittoscreener.slice` | Two build/smoke VMs, one source review, two workers and lane agent | 24 CPUs | 24 GiB |
+| `user-1005.slice` | Rootless Docker owned by `ditto-builder` | 16 CPUs | 28 GiB |
 
 Keep `user@1005.service` under its native
 `/user.slice/user-1005.slice/user@1005.service` hierarchy. Moving that user manager
@@ -27,3 +27,8 @@ Use Backroom's exact-attempt `retry_failed_screening_now` for affected parked
 submissions after verifying artifact, score count and latest attempt. Preserve
 policy, scores and failure history; infrastructure recovery does not authorize
 an enforcement verdict.
+
+The CI guest is drained and powered off while this screening allocation is active.
+Do not boot its 28 GiB allocation beside these 52 GiB screening ceilings. Worker
+units 1 and 2 are enabled; the updater preserves two processes. Units 3 and 4
+stay disabled. CPU ceilings share the host scheduler; they are not reservations.

@@ -23,6 +23,7 @@ name=${0##*/}
 echo "$name $*" >> "$TEST_LOG"
 if [[ "$name" == "$FAIL_COMMAND" && "$*" != *"docker info"* ]]; then exit 42; fi
 if [[ "$FAIL_COMMAND" == container && "$*" == *"docker run"* ]]; then exit 43; fi
+if [[ "$name" == virsh && "$*" == *domstate* ]]; then echo "shut off"; fi
 if [[ "$name" == systemctl && "$1" == show ]]; then
   if [[ "$2" == user@1005.service ]]; then
     echo /user.slice/user-1005.slice/user@1005.service
@@ -52,14 +53,11 @@ exit 0
         assert "systemctl start dittoscreener.slice" not in commands
     elif failure == "none":
         assert result.returncode == 0, result.stderr
-        assert "systemctl disable ditto-screener-worker@2.service" in commands
+        assert "systemctl disable ditto-screener-worker@3.service" in commands
     start = "systemctl start ditto-screener-fleet-agent.service "
     if failure in ("container", "runuser"):
         assert result.returncode != 0
         assert start not in commands
-    else:
-        assert start + "ditto-screener-worker@1.service\n" in commands
-    assert (
-        start + "ditto-screener-worker@1.service ditto-screener-worker@2"
-        not in commands
-    )
+    elif failure != "virsh":
+        assert start + "ditto-screener-worker@1.service ditto-screener-worker@2.service\n" in commands
+    assert "systemctl disable ditto-screener-worker@2.service" not in commands

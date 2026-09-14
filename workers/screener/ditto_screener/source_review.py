@@ -3802,7 +3802,6 @@ class OpenRouterSourceReviewAgent:
                 # Disabling this turned one provider outage into a terminal L1
                 # timeout even though a compliant provider was available.
                 "allow_fallbacks": True,
-                "sort": "throughput",
                 "zdr": True,
                 "data_collection": "deny",
                 "require_parameters": True,
@@ -3847,6 +3846,25 @@ def _source_review_failure_code(error: BaseException) -> str:
 
 
 def _assistant_message(payload: object) -> dict[str, object]:
+    # Metadata only: never log private source, prompts, model text or arguments.
+    if isinstance(payload, dict):
+        choices = payload.get("choices")
+        choice = (
+            choices[0]
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+            else {}
+        )
+        message = choice.get("message") or {}
+        if isinstance(message, dict) and not message.get("tool_calls"):
+            usage = payload.get("usage") or {}
+            logger.warning(
+                "model response without tools model=%s finish=%s content_chars=%s prompt_tokens=%s completion_tokens=%s",
+                payload.get("model"),
+                choice.get("finish_reason"),
+                len(str(message.get("content") or "")),
+                usage.get("prompt_tokens") if isinstance(usage, dict) else None,
+                usage.get("completion_tokens") if isinstance(usage, dict) else None,
+            )
     if not isinstance(payload, dict):
         raise ValueError("source reviewer response is not an object")
     choices = payload.get("choices")
