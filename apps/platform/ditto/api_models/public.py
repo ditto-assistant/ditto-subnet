@@ -3297,6 +3297,18 @@ class PublicAdmissionRetry(BaseModel):
 class PublicScreeningDispute(BaseModel):
     """Public-safe appeal state; the miner's private message is never exposed."""
 
+    kind: Annotated[
+        Literal["screening", "gate_notes"],
+        Field(
+            default="screening",
+            description=(
+                "``screening``: appeals a rejected quarantine decision (release "
+                "returns the submission to evaluation). ``gate_notes``: appeals "
+                "cited bench v13+ gate notes on a scored submission; either "
+                "resolution only records the operator's verdict."
+            ),
+        ),
+    ] = "screening"
     status: Literal["pending", "resolved"]
     submitted_at: datetime
     resolved_at: datetime | None = None
@@ -3304,7 +3316,9 @@ class PublicScreeningDispute(BaseModel):
 
 
 class CreateScreeningDisputeRequest(BaseModel):
-    """One signed appeal of a rejected screening decision."""
+    """One signed appeal: of a rejected screening decision, or -- for a scored,
+    live, evaluating or held submission -- of the bench v13+ gate notes cited
+    in ``gate_note_ids``. A submission gets exactly one either way."""
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 

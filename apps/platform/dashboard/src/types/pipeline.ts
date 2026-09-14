@@ -242,6 +242,10 @@ export interface ConfirmationScore {
 }
 
 export interface Dispute {
+  /** "screening" appeals a rejected quarantine; "gate_notes" appeals cited
+   * bench v13+ gate notes on a scored submission (either resolution only
+   * records the verdict). Absent on pre-v13 records: screening. */
+  kind?: "screening" | "gate_notes";
   /** "pending" or resolved. */
   status?: string;
   /** "release" means accepted; anything else reads as upheld. */

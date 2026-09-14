@@ -3544,13 +3544,33 @@ describe('production score reads', () => {
     return {
       bench_version: 13,
       posture: 'shadow',
-      composite_with_gates: 0.61,
-      composite_without_gates: 0.87,
-      gate_induced_loss: 0.26,
-      catalog_suppression_rate: 0.02,
-      flagged_case_count: 3,
+      catalog_gate: {
+        posture: 'shadow',
+        tool_cases: 2,
+        attributed_cases: 2,
+        catalog_absent_cases: 1,
+        catalog_suppression_rate: 0.5,
+        restraint_without_offer: 1,
+        swallowed_model_call: 1,
+        attribution_coverage_bps: 10000,
+      },
+      claim_provenance: null,
+      twin_post_pass: {
+        posture: 'observe',
+        rule_requested: 'concordant_zero',
+        rule: 'concordant_zero',
+        twin_groups: 1,
+        twin_groups_concordant: 1,
+        counterfactual_pairs: 1,
+        counterfactual_insensitive: 1,
+        cases_affected: 3,
+        cases_affected_share: 0.6,
+      },
+      inference_cost: null,
+      catalog_suppression_rate: 0.5,
+      flagged_case_count: 4,
+      flagged_case_share: 0.75,
       gate_counts: { answer_in_prompt: 1, restraint_without_offer: 2 },
-      relation_outcome_counts: { concordant_zero: 1 },
       ...overrides,
     }
   }
@@ -3561,7 +3581,7 @@ describe('production score reads', () => {
     scores: [
       ...agentScores.scores,
       scoreRow({ validator_hotkey: '5ValA', composite: 0.87, bench_version: 13, seed: 999, run_id: 'run-a13', generated_at: '2026-09-13T00:00:00Z', gate_evidence: gateEvidence() }),
-      scoreRow({ validator_hotkey: '5ValB', composite: 0.88, bench_version: 13, seed: 999, run_id: 'run-b13', generated_at: '2026-09-13T01:00:00Z', gate_evidence: gateEvidence({ gate_induced_loss: 0.1, composite_with_gates: 0.78 }) }),
+      scoreRow({ validator_hotkey: '5ValB', composite: 0.88, bench_version: 13, seed: 999, run_id: 'run-b13', generated_at: '2026-09-13T01:00:00Z', gate_evidence: gateEvidence({ flagged_case_count: 1, flagged_case_share: 0.25 }) }),
       // A v13 row from a scorer that emitted no gate telemetry.
       scoreRow({ validator_hotkey: '5ValC', composite: 0.86, bench_version: 13, seed: 999, run_id: 'run-c13', generated_at: '2026-09-13T02:00:00Z', gate_evidence: null }),
     ],
@@ -3956,7 +3976,9 @@ describe('production score reads', () => {
     expect(gated).toHaveLength(3)
     expect(gated[0]?.gate_evidence).toMatchObject({
       posture: 'shadow',
-      gate_induced_loss: 0.26,
+      flagged_case_share: 0.75,
+      catalog_gate: { catalog_suppression_rate: 0.5, posture: 'shadow' },
+      twin_post_pass: { posture: 'observe', rule: 'concordant_zero' },
       gate_counts: { answer_in_prompt: 1, restraint_without_offer: 2 },
     })
     expect(gated[2]?.gate_evidence).toBeNull()
@@ -3968,10 +3990,10 @@ describe('production score reads', () => {
     const history = await fetchAgentScoreHistory({ agentId: topAgentId })
     const v13 = history.versions.find((version) => version.bench_version === 13)
     expect(v13).toMatchObject({ score_count: 3, gate_posture: 'shadow' })
-    expect(v13?.median_gate_induced_loss).toBeCloseTo(0.18, 10)
+    expect(v13?.median_flagged_case_share).toBeCloseTo(0.5, 10)
     expect(history.versions.find((version) => version.bench_version === 7)).toMatchObject({
       gate_posture: null,
-      median_gate_induced_loss: null,
+      median_flagged_case_share: null,
     })
   })
 
@@ -3980,7 +4002,7 @@ describe('production score reads', () => {
       ...gatedAgentScores,
       scores: gatedAgentScores.scores.map((score) =>
         score.run_id === 'run-b13'
-          ? { ...score, gate_evidence: gateEvidence({ posture: 'enforce' }) }
+          ? { ...score, gate_evidence: gateEvidence({ posture: 'enforce', flagged_case_share: 0.25 }) }
           : score,
       ),
     }
@@ -3990,7 +4012,7 @@ describe('production score reads', () => {
     const history = await fetchAgentScoreHistory({ agentId: topAgentId })
     expect(history.versions.find((version) => version.bench_version === 13)).toMatchObject({
       gate_posture: null,
-      median_gate_induced_loss: 0.26,
+      median_flagged_case_share: 0.5,
     })
   })
 

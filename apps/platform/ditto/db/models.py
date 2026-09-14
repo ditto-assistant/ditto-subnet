@@ -938,13 +938,26 @@ class ScreeningQuarantineResolution(Base):
 
 
 class ScreeningDispute(Base):
-    """One miner-authenticated appeal of a rejected screening decision."""
+    """One miner-authenticated appeal: of a rejected screening decision
+    (``kind = 'screening'``) or of cited bench v13+ gate notes on a scored
+    submission (``kind = 'gate_notes'``). One per submission either way."""
 
     __tablename__ = "screening_disputes"
 
     dispute_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
     agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
-    quarantine_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    quarantine_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """The rejected quarantine a ``screening`` dispute appeals; ``NULL`` for a
+    ``gate_notes`` dispute, which appeals accepted-score evidence instead."""
+
+    kind: Mapped[str] = mapped_column(Text, nullable=False, server_default="screening")
+    """``screening`` | ``gate_notes``. Decides what a resolution does: releasing
+    a ``screening`` dispute returns the submission to evaluation; resolving a
+    ``gate_notes`` dispute only records the operator's verdict on the cited
+    notes and never changes the agent's status or scores."""
+
     miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
@@ -988,6 +1001,20 @@ class ScreeningDispute(Base):
         CheckConstraint(
             "resolution IS NULL OR resolution IN ('release', 'uphold')",
             name="screening_disputes_resolution_check",
+        ),
+        CheckConstraint(
+            "kind IN ('screening', 'gate_notes')",
+            name="screening_disputes_kind_check",
+        ),
+        # A screening dispute always names the rejected quarantine it appeals;
+        # a gate-notes dispute always names the notes it contests.
+        CheckConstraint(
+            "kind <> 'screening' OR quarantine_id IS NOT NULL",
+            name="screening_disputes_screening_quarantine_check",
+        ),
+        CheckConstraint(
+            "kind <> 'gate_notes' OR gate_note_ids IS NOT NULL",
+            name="screening_disputes_gate_notes_cited_check",
         ),
         Index("screening_disputes_status_created_idx", "status", "created_at"),
     )

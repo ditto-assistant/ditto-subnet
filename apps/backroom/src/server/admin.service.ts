@@ -3016,8 +3016,8 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
     // across validators is reported as null rather than picking a winner.
     const gated = rows.flatMap((row) => (row.gate_evidence ? [row.gate_evidence] : []))
     const postures = new Set(gated.map((evidence) => evidence.posture ?? null))
-    const losses = gated.flatMap((evidence) =>
-      typeof evidence.gate_induced_loss === 'number' ? [evidence.gate_induced_loss] : [],
+    const shares = gated.flatMap((evidence) =>
+      typeof evidence.flagged_case_share === 'number' ? [evidence.flagged_case_share] : [],
     )
     const version = {
       bench_version: benchVersion,
@@ -3034,7 +3034,7 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
       composite_delta_vs_previous:
         previousMedian === null ? null : medianComposite - previousMedian,
       gate_posture: postures.size === 1 ? ([...postures][0] ?? null) : null,
-      median_gate_induced_loss: losses.length ? median(losses) : null,
+      median_flagged_case_share: shares.length ? median(shares) : null,
     }
     previousMedian = medianComposite
     return version

@@ -18,6 +18,7 @@ from ditto_screening_protocol import SourceReviewNote
 
 QuarantineResolution = Literal["release", "rescreen", "reject"]
 DisputeResolution = Literal["release", "uphold"]
+DisputeKind = Literal["screening", "gate_notes"]
 
 
 class AdminQuarantineResolutionEvent(BaseModel):
@@ -89,7 +90,12 @@ class AdminQuarantineResolveResponse(BaseModel):
 class AdminScreeningDisputeItem(BaseModel):
     dispute_id: UUID
     agent_id: UUID
-    quarantine_id: UUID
+    kind: DisputeKind = "screening"
+    """``screening`` appeals a rejected quarantine (release re-evaluates the
+    submission); ``gate_notes`` appeals cited bench v13+ gate notes on a scored
+    submission (either resolution only records the verdict)."""
+    quarantine_id: UUID | None
+    """The appealed quarantine; ``None`` for a ``gate_notes`` dispute."""
     miner_hotkey: str
     agent_name: str
     agent_version: int | None

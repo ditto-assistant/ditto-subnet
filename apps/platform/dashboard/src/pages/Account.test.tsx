@@ -311,13 +311,10 @@ describe("gate notes (#1852)", () => {
                 composite: 0.87,
                 generated_at: "2026-09-13T12:00:00Z",
                 posture: "shadow",
-                composite_with_gates: 0.61,
-                composite_without_gates: 0.87,
-                gate_induced_loss: 0.26,
-                catalog_suppression_rate: 0.02,
+                catalog_suppression_rate: 0.5,
                 flagged_case_count: 1,
-                gate_counts: { answer_in_prompt: 1 },
-                relation_outcome_counts: { concordant_zero: 1 },
+                flagged_case_share: 0.2,
+                gate_counts: { answer_in_prompt: 1, counterfactual_insensitive: 1 },
                 cases: [
                   {
                     case_index: 1,
@@ -325,13 +322,18 @@ describe("gate notes (#1852)", () => {
                     category: "temporal_reasoning",
                     kind: "memory",
                     score: 1,
-                    score_with_gates: 0,
-                    score_without_gates: 1,
-                    notes: [{ note_id: "0123456789abcdef", gate: "answer_in_prompt" }],
-                    relation: "decision_twin",
-                    relation_outcome: "concordant_zero",
-                    cost_factor: 1,
-                    tools_offered: 0,
+                    notes: [
+                      { note_id: "0123456789abcdef", gate: "answer_in_prompt", zeroing: true },
+                      {
+                        note_id: "fedcba9876543210",
+                        gate: "counterfactual_insensitive",
+                        zeroing: true,
+                      },
+                    ],
+                    relation: "base",
+                    cost_factor: 0.87,
+                    tools_offered: null,
+                    catalog_present: null,
                   },
                 ],
               },
@@ -363,11 +365,16 @@ describe("gate notes (#1852)", () => {
       expect(document.body.textContent).toContain("0123456789abcdef");
     });
     const text = document.body.textContent ?? "";
-    expect(text).toContain("gate-induced loss 0.260 (0.870 → 0.610)");
-    expect(text).toContain("Answer present in harness prompt");
-    expect(text).toContain("case 1 (memory-9f3a-0002)");
-    expect(text).toContain("decision_twin: Twin pair concordant (zeroed)");
-    expect(text).toContain("cost factor 1.00 · 0 tools offered");
+    expect(text).toContain("shadow · composite 0.870 · 1 flagged case (20.0%)");
+    expect(text).toContain("Answer present in harness prompt (would zero) 0123456789abcdef");
+    expect(text).toContain(
+      "Counterfactual answered with the base answer (would zero) fedcba9876543210",
+    );
+    expect(text).toContain("case 1 (memory-9f3a-0002) · memory / temporal_reasoning · scored 1.00");
+    expect(text).toContain("relation base");
+    expect(text).toContain("cost factor 0.87");
+    // Nothing the owner view does not carry is invented.
+    expect(text).not.toContain("gate-induced loss");
     // The owner read went out with the session bearer token.
     const gateCall = fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/gate-notes"));
     expect(gateCall).toBeTruthy();

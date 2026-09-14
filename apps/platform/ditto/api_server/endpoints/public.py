@@ -224,7 +224,11 @@ from ditto.api_server.endpoints.scoring import (
 from ditto.api_server.endpoints.screener import GeneratorDep
 from ditto.api_server.endpoints.upload import _verify_signature
 from ditto.api_server.endpoints.validator import SessionDep, StorageDep
-from ditto.api_server.gate_evidence import gate_note_ids_for, public_gate_evidence
+from ditto.api_server.gate_evidence import (
+    GATE_NOTE_DISPUTE_STATUSES,
+    gate_note_ids_for,
+    public_gate_evidence,
+)
 from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
@@ -894,6 +898,7 @@ def screening_dispute_signing_message(agent_id: UUID, message: str) -> bytes:
 
 def _public_dispute(dispute: ScreeningDispute) -> PublicScreeningDispute:
     return PublicScreeningDispute(
+        kind=dispute.kind,  # type: ignore[arg-type]
         status=dispute.status,  # type: ignore[arg-type]
         submitted_at=dispute.created_at,
         resolved_at=dispute.resolved_at,
@@ -6477,7 +6482,15 @@ async def create_screening_dispute(
     agent_id: UUID,
     payload: CreateScreeningDisputeRequest,
 ) -> CreateScreeningDisputeResponse:
-    """Record the submitting hotkey's single appeal of a quarantine rejection."""
+    """Record the submitting hotkey's single appeal.
+
+    Two kinds share the one-per-submission slot. A rejected submission with a
+    rejected quarantine files a ``screening`` dispute (optionally citing gate
+    notes). A scored, live, evaluating or held submission that cites bench
+    v13+ ``gate_note_ids`` files a ``gate_notes`` dispute against those exact
+    notes -- the appeal path the shadow verdict exists for, so a would-be zero
+    can be contested before any gate enforces. Anything else is a 409.
+    """
 
     response.headers["Cache-Control"] = "no-store"
     dispute: ScreeningDispute | None = None
@@ -6514,16 +6527,26 @@ async def create_screening_dispute(
                 .order_by(ScreeningQuarantine.resolved_at.desc())
                 .with_for_update()
             )
-            if agent.status != AgentStatus.REJECTED or quarantine is None:
+            if agent.status == AgentStatus.REJECTED and quarantine is not None:
+                kind = "screening"
+            elif payload.gate_note_ids and agent.status in GATE_NOTE_DISPUTE_STATUSES:
+                kind = "gate_notes"
+                quarantine = None
+            else:
                 raise HTTPException(
                     status_code=409,
-                    detail="only a rejected quarantine decision can be disputed",
+                    detail=(
+                        "only a rejected quarantine decision, or cited bench v13+ "
+                        "gate notes on a scored submission, can be disputed"
+                    ),
                 )
             gate_note_ids: list[str] | None = None
             if payload.gate_note_ids:
                 # A cited gate note must re-derive from THIS submission's own
                 # accepted scores: the id is a function of the score identity
                 # and the note, so a foreign or invented id cannot be linked.
+                # Checked before anything is written, so the one dispute is
+                # not spent on a malformed appeal.
                 own_scores = list(
                     (
                         await session.scalars(
@@ -6542,7 +6565,10 @@ async def create_screening_dispute(
             dispute = ScreeningDispute(
                 dispute_id=uuid4(),
                 agent_id=agent.agent_id,
-                quarantine_id=quarantine.quarantine_id,
+                kind=kind,
+                quarantine_id=(
+                    quarantine.quarantine_id if quarantine is not None else None
+                ),
                 miner_hotkey=agent.miner_hotkey,
                 message=payload.message,
                 status="pending",

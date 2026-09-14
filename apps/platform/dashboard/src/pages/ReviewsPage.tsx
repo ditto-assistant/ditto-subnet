@@ -14,7 +14,7 @@ import {
   sessionAuthHeader,
   setMinerSession,
 } from "../stores/sessionStore";
-import { gateNoteLabel, postureState } from "../components/evidence/GateEvidence";
+import { gateNoteLabel, percentage, postureState } from "../components/evidence/GateEvidence";
 import type { GatePosture, NameHandle } from "../types/leaderboard";
 
 const SCOPES: Array<{ id: string; label: string; hint: string }> = [
@@ -137,6 +137,8 @@ interface MinerScreeningFeedback {
 interface MinerGateNote {
   note_id: string;
   gate: string;
+  /** Whether the finding zeroes the case when its gate runs in enforce. */
+  zeroing?: boolean;
 }
 
 interface MinerGateNoteCase {
@@ -145,13 +147,11 @@ interface MinerGateNoteCase {
   category?: string | null;
   kind?: string | null;
   score?: number | null;
-  score_with_gates?: number | null;
-  score_without_gates?: number | null;
   notes: MinerGateNote[];
   relation?: string | null;
-  relation_outcome?: string | null;
   cost_factor?: number | null;
   tools_offered?: number | null;
+  catalog_present?: boolean | null;
 }
 
 interface MinerGateNotesRun {
@@ -160,11 +160,10 @@ interface MinerGateNotesRun {
   bench_version: number;
   composite: number;
   posture?: GatePosture | null;
-  composite_with_gates?: number | null;
-  composite_without_gates?: number | null;
-  gate_induced_loss?: number | null;
   catalog_suppression_rate?: number | null;
   flagged_case_count?: number;
+  flagged_case_share?: number | null;
+  gate_counts?: Record<string, number>;
   cases: MinerGateNoteCase[];
 }
 
@@ -1034,17 +1033,14 @@ function AccountPanel(): JSX.Element {
                                       v{run.bench_version} · {run.validator_hotkey.slice(0, 8)}… ·{" "}
                                       {postureState(run.posture)[0].toLowerCase()} · composite{" "}
                                       {run.composite.toFixed(3)}
-                                      <Show when={typeof run.gate_induced_loss === "number"}>
-                                        <span class="muted">
-                                          {" "}
-                                          · gate-induced loss{" "}
-                                          {(run.gate_induced_loss as number).toFixed(3)}
-                                          {typeof run.composite_without_gates === "number" &&
-                                          typeof run.composite_with_gates === "number"
-                                            ? ` (${(run.composite_without_gates as number).toFixed(3)} → ${(run.composite_with_gates as number).toFixed(3)})`
-                                            : ""}
-                                        </span>
-                                      </Show>
+                                      <span class="muted">
+                                        {" "}
+                                        · {run.flagged_case_count ?? 0} flagged{" "}
+                                        {(run.flagged_case_count ?? 0) === 1 ? "case" : "cases"}
+                                        {typeof run.flagged_case_share === "number"
+                                          ? ` (${percentage(run.flagged_case_share)})`
+                                          : ""}
+                                      </span>
                                     </p>
                                     <Show
                                       when={run.cases.length}
@@ -1059,26 +1055,18 @@ function AccountPanel(): JSX.Element {
                                                   case {c.case_index ?? "?"}
                                                   {c.case_id ? ` (${c.case_id})` : ""} ·{" "}
                                                   {[c.kind, c.category].filter(Boolean).join(" / ")}
+                                                  {typeof c.score === "number"
+                                                    ? ` · scored ${c.score.toFixed(2)}`
+                                                    : ""}
                                                 </span>
-                                                <Show
-                                                  when={typeof c.score_without_gates === "number"}
-                                                >
-                                                  <span class="muted">
-                                                    {" "}
-                                                    · {(c.score_without_gates as number).toFixed(
-                                                      2,
-                                                    )}{" "}
-                                                    →{" "}
-                                                    {typeof c.score_with_gates === "number"
-                                                      ? (c.score_with_gates as number).toFixed(2)
-                                                      : "?"}
-                                                  </span>
-                                                </Show>
                                               </p>
                                               <For each={c.notes}>
                                                 {(note) => (
                                                   <p>
-                                                    {gateNoteLabel(note.gate)}{" "}
+                                                    {gateNoteLabel(note.gate)}
+                                                    {note.zeroing ? (
+                                                      <span class="muted"> (would zero)</span>
+                                                    ) : null}{" "}
                                                     <code
                                                       class="account-gate-note-id"
                                                       title="Cite this id in a dispute"
@@ -1088,11 +1076,8 @@ function AccountPanel(): JSX.Element {
                                                   </p>
                                                 )}
                                               </For>
-                                              <Show when={c.relation_outcome}>
-                                                <p class="muted">
-                                                  {c.relation ? `${c.relation}: ` : ""}
-                                                  {gateNoteLabel(c.relation_outcome as string)}
-                                                </p>
+                                              <Show when={c.relation}>
+                                                <p class="muted">relation {c.relation}</p>
                                               </Show>
                                               <Show
                                                 when={
@@ -1101,16 +1086,19 @@ function AccountPanel(): JSX.Element {
                                                 }
                                               >
                                                 <p class="muted">
-                                                  {typeof c.cost_factor === "number"
-                                                    ? `cost factor ${(c.cost_factor as number).toFixed(2)}`
-                                                    : ""}
-                                                  {typeof c.cost_factor === "number" &&
-                                                  typeof c.tools_offered === "number"
-                                                    ? " · "
-                                                    : ""}
-                                                  {typeof c.tools_offered === "number"
-                                                    ? `${c.tools_offered} tools offered`
-                                                    : ""}
+                                                  {[
+                                                    typeof c.cost_factor === "number"
+                                                      ? `cost factor ${c.cost_factor.toFixed(2)}`
+                                                      : "",
+                                                    typeof c.tools_offered === "number"
+                                                      ? `${c.tools_offered} tools offered`
+                                                      : "",
+                                                    c.catalog_present === false
+                                                      ? "no catalog offered"
+                                                      : "",
+                                                  ]
+                                                    .filter(Boolean)
+                                                    .join(" · ")}
                                                 </p>
                                               </Show>
                                             </li>
