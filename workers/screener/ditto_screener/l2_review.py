@@ -87,6 +87,8 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
+    if policy_version == 13:
+        return "l2-terra-source-review-v38-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -972,6 +974,13 @@ not establish it. For I7, reject unjustified removal of an applicable,
 authorized and available capability, including errors caused by quoted titles,
 compound requests, negation scope, setting-and-remember requests, or duplicate
 handling that removes unrelated pending tools.
+
+For opaque components, combine submission evidence with platform-supplied
+exact path-and-digest provenance. An official starter-kit match satisfies only
+the fields and role named by that record, but the artifact need not duplicate
+its README or metadata sidecar. Do not use a null compact score field as proof
+that artifact-bound screening evidence is absent. Reverify any changed loader,
+configuration, candidate boundary, input, output, or downstream authority.
 
 A genuine authoritative model planner may author a pinned plan; an advisory
 planner must remain rejectable. A user/model-authored program may directly
