@@ -92,7 +92,9 @@ _MAX_COMPLETION_TOKENS = 6_000
 # healthy completion responsive and reserve one equal slice for a new
 # connection; an unresponsive provider must settle from retained notes, not
 # spend 150 seconds of a miner's lease.
-_MAX_COMPLETION_REQUEST_SECONDS = 90.0
+# Reasoning plus a verdict can exceed 90s with a 16k completion budget.
+# The outer request/lease deadline still bounds both attempts together.
+_MAX_COMPLETION_REQUEST_SECONDS = 180.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 # Bounded by the repository tools themselves; this only caps how many of
 # the served locations are remembered for citation checking.
