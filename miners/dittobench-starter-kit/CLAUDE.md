@@ -8,3 +8,7 @@ Load `/mine` before editing, scoring, or uploading this harness.
 before upload. It still uses local `.env` inference.
 
 Read `.agents/skills/mine/SKILL.md`.
+
+Before upload, replay the public Bench v13 gates (shadow):
+`uv run ditto practice --bench-version 13 --gates`. A would-zero note is a
+served-path defect; fix it, never tune it away.

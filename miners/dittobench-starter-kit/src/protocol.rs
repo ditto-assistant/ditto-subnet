@@ -33,9 +33,11 @@ pub const MIN_SUPPORTED_BENCH_VERSION: u32 = 8;
 /// DittoBench advertises a new version so a submitted image does not 400
 /// every `/run`. Accepting a version is not the same as activating it as
 /// `ACTIVE_BENCH_VERSION`. The public wire contract stays at 9 with additive
-/// optional fields (#1519), so accepting 13 costs a deployed harness nothing;
-/// `ditto/tests/test_bench_version_pins.py` diffs this ceiling against the
-/// shared `MAX_SUPPORTED_BENCH_VERSION` every other layer derives from.
+/// optional fields (#1519, option A), so accepting 13 costs a deployed harness
+/// nothing: a scored v13 run still sends `bench_version: 9`, and 13 is accepted
+/// for local rehearsal and any validator that sends the contract version
+/// directly. `ditto/tests/test_bench_version_pins.py` diffs this ceiling against
+/// the shared `MAX_SUPPORTED_BENCH_VERSION` every other layer derives from.
 pub const MAX_SUPPORTED_BENCH_VERSION: u32 = 13;
 
 pub fn supports_bench_version(version: u32) -> bool {
@@ -359,6 +361,44 @@ mod tests {
         // The next epoch after the ceiling is the canonical unsupported version;
         // it moves with the constant instead of being retyped each bump.
         assert!(!supports_bench_version(MAX_SUPPORTED_BENCH_VERSION + 1));
+    }
+
+    #[test]
+    fn v13_run_request_is_additive_on_the_v9_wire() {
+        // Bench v13 keeps publicWireBenchVersion at 9: a v13 run arrives with
+        // bench_version 9 plus richer, still-optional fields (enum schemas on
+        // the wire, a per-seed catalog). A v9-era decoder must accept all of
+        // it unchanged, and a direct 13 must be in range too.
+        let json = r#"{
+            "case_id": "f0e310c2-8c21-42e1-9e85-17d34ca9d51a",
+            "system_prompt": "be helpful",
+            "user_input": "switch me to the midnight look",
+            "tools": [{
+                "name": "set_theme",
+                "description": "Set the app color theme.",
+                "parameters": {"type": "object", "properties": {"theme": {"type": "string",
+                    "enum": ["system", "light", "dark", "midnight", "solarized"]}}, "required": ["theme"]}
+            }, {
+                "name": "nimit_docs_search",
+                "description": "Search Nimit workspace docs. Not a live web search.",
+                "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+            }],
+            "bench_version": 9,
+            "tool_endpoint": "http://host.docker.internal:11436/v1/tools/opaque/tool",
+            "inference_base_url": "http://host.docker.internal:11436/v1/inference/cases/opaque"
+        }"#;
+        let req: RunRequest = serde_json::from_str(json).expect("deserialize v13-on-v9 request");
+        assert!(supports_bench_version(req.bench_version));
+        assert_eq!(req.tools.len(), 2);
+        assert_eq!(
+            req.tools[0].parameters["properties"]["theme"]["enum"][3],
+            "midnight"
+        );
+        let direct: RunRequest =
+            serde_json::from_str(&json.replace("\"bench_version\": 9", "\"bench_version\": 13"))
+                .expect("deserialize direct v13 request");
+        assert_eq!(direct.bench_version, 13);
+        assert!(supports_bench_version(direct.bench_version));
     }
 
     #[test]

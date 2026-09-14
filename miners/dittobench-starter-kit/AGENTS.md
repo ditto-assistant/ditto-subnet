@@ -16,3 +16,7 @@ Those default to live bench 11 with a validator-visible `tool_endpoint`.
 Hosted rehearsal and `evaluate` 1.0 scores do not predict leaderboard
 `tool_mean`. Do not skip `full`. Before `full`, packaging, or upload, `/mine`
 walks the served path against the operator review bar.
+
+Before upload, replay the public Bench v13 gates (shadow):
+`uv run ditto practice --bench-version 13 --gates`. A would-zero note is a
+served-path defect; fix it, never tune it away.
