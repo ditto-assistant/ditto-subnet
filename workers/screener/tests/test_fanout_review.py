@@ -218,8 +218,7 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
 
     archive = _archive(
         tmp_path,
-        "fn main() { call_model(); }\n"
-        "fn lookup(question) { table.get(question); }",
+        "fn main() { call_model(); }\nfn lookup(question) { table.get(question); }",
     )
     result = await review_archive(
         archive,
