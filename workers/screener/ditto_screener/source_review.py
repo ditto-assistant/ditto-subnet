@@ -3858,7 +3858,8 @@ def _assistant_message(payload: object) -> dict[str, object]:
         if isinstance(message, dict) and not message.get("tool_calls"):
             usage = payload.get("usage") or {}
             logger.warning(
-                "model response without tools model=%s finish=%s content_chars=%s prompt_tokens=%s completion_tokens=%s",
+                "model response without tools model=%s finish=%s "
+                "content_chars=%s prompt_tokens=%s completion_tokens=%s",
                 payload.get("model"),
                 choice.get("finish_reason"),
                 len(str(message.get("content") or "")),
