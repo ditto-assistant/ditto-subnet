@@ -30,6 +30,20 @@ import (
 // unaffected), so the v13 evidence bytes the Platform validates do not change
 // shape for a rule that cannot yet move a score. Provider failures and 5xx
 // retries are excluded by construction: the broker books only 2xx completions.
+//
+// tokens_out is ANSWER output: provider-reported completion_tokens minus the
+// provider-reported reasoning tokens (usage.completion_tokens_details.
+// reasoning_tokens, which OpenRouter folds into completion_tokens on the v9+
+// agent-selected reasoning route). A single honest ReAct step at medium/high
+// reasoning is routinely 1-3k completion tokens, so booking the raw count would
+// read every honest harness at the floor in shadow. The reasoning tokens are
+// recorded alongside, not charged, in v13.0.
+//
+// BUDGET IS A SHADOW CONSTANT. Because the factor is kept out of the signed
+// evidence root, CostCompletionEquivalentTokens and the per-class budgets may
+// be re-published from #1521 calibration data before any enforce decision
+// without a contract bump; the enforce precondition (factor 1.0 on >= 95% of
+// ATTRIBUTED cases for honest harnesses) is what fixes them.
 
 // CostCaseClass names the budget class of a case.
 type CostCaseClass string
@@ -56,19 +70,46 @@ const (
 	CostBudgetCompletionsToolChain  = 5
 )
 
-// Attribution values for InferenceCostEvidence.Attribution.
+// Attribution values for InferenceCostEvidence.Attribution, strongest first.
 const (
 	// CostAttributionCaseCapability: the harness routed the completions through
-	// its case-scoped inference capability, so the binding is exact.
+	// its case-scoped inference capability, so the binding is exact and
+	// broker-verified.
 	CostAttributionCaseCapability = "case_capability"
+	// CostAttributionVerifiedClaim: the harness named the case on the
+	// completion (X-Ditto-Case-Id) and the broker verified the claim against
+	// its own in-flight /run cases -- the same verified "claim" path the trace
+	// context uses. Self-declared, so a calibration must read it separately
+	// from the broker-bound attributions: a harness can mis-claim within the
+	// in-flight set, never outside it. An unverified claim (a case not in
+	// flight) is never booked.
+	CostAttributionVerifiedClaim = "verified_claim"
 	// CostAttributionSerialRunCase: exactly one /run case was in flight on the
 	// session when the completion was booked, so the binding is exact.
 	CostAttributionSerialRunCase = "serial_run_case"
 	// CostAttributionUnavailable: the completions overlapped several in-flight
-	// cases (concurrent /run) or no broker session existed; nothing is guessed
-	// onto the case and the run summary carries the unattributed totals.
+	// cases (concurrent /run without a verified claim) or no broker session
+	// existed; nothing is guessed onto the case and the run summary carries
+	// the unattributed totals.
 	CostAttributionUnavailable = "unattributed"
 )
+
+// CostAttributionRank orders attributions strongest-first for a bucket that
+// keeps the strongest binding it has seen: capability (broker-exact) over a
+// verified claim (harness-declared, broker-checked) over a serial window, and
+// never regressing to unattributed. Unknown values rank below every known one.
+func CostAttributionRank(attribution string) int {
+	switch attribution {
+	case CostAttributionCaseCapability:
+		return 3
+	case CostAttributionVerifiedClaim:
+		return 2
+	case CostAttributionSerialRunCase:
+		return 1
+	default:
+		return 0
+	}
+}
 
 // CostCaseClassFor derives the budget class from a case kind and its expected
 // tool execution count.
@@ -135,6 +176,7 @@ type InferenceCostRecord struct {
 	Completions      int
 	ChoicesTotal     int
 	OutputTokens     uint64
+	ReasoningTokens  uint64
 	UsageUnavailable int
 	Attribution      string
 }
@@ -161,6 +203,7 @@ func BuildInferenceCost(benchVersion int, class CostCaseClass, record *Inference
 	evidence.Completions = record.Completions
 	evidence.ChoicesTotal = record.ChoicesTotal
 	evidence.OutputTokens = record.OutputTokens
+	evidence.ReasoningTokens = record.ReasoningTokens
 	evidence.UsageUnavailable = record.UsageUnavailable
 	evidence.FactorBPS, evidence.ExcessTokens = CostFactorBPS(class, record.OutputTokens)
 	return evidence
@@ -185,6 +228,7 @@ func SummarizeInferenceCost(benchVersion int, perCase []protocol.CaseScore, unat
 		MeanFactorBPS:              BasisPointScale,
 	}
 	factorSum := 0
+	byAttribution := map[string]int{}
 	for _, cs := range perCase {
 		if cs.InferenceCost == nil {
 			continue
@@ -194,6 +238,11 @@ func SummarizeInferenceCost(benchVersion int, perCase []protocol.CaseScore, unat
 		if cs.InferenceCost.FactorBPS < BasisPointScale {
 			summary.CasesBelowFullFactor++
 		}
+		attribution := cs.InferenceCost.Attribution
+		if attribution == "" {
+			attribution = CostAttributionUnavailable
+		}
+		byAttribution[attribution]++
 		if !cs.InferenceCost.Attributed {
 			continue
 		}
@@ -201,9 +250,12 @@ func SummarizeInferenceCost(benchVersion int, perCase []protocol.CaseScore, unat
 		summary.Completions += cs.InferenceCost.Completions
 		summary.ChoicesTotal += cs.InferenceCost.ChoicesTotal
 		summary.OutputTokens += cs.InferenceCost.OutputTokens
+		summary.ReasoningTokens += cs.InferenceCost.ReasoningTokens
 	}
 	if summary.Cases > 0 {
 		summary.MeanFactorBPS = factorSum / summary.Cases
+		summary.AttributedShare = float64(summary.AttributedCases) / float64(summary.Cases)
+		summary.CasesByAttribution = byAttribution
 	}
 	return summary
 }

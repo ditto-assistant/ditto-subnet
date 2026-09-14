@@ -47,7 +47,8 @@ A — owner decision, default taken): the wire stays at 9.** Every
 harness-visible v13 addition (enum schemas, coined decoys, wave-0 corrections,
 `tools_offered`) ships as an additive optional field on the existing shapes, and
 every grader-only v13 field (`claims`, `twin_relation`, `required_arg_claims`,
-`restraint`) is stripped before the wire. The alternative — sending 13 with a
+`restraint`, and the tool case's `twin_group` pair identity) is stripped before
+the wire. The alternative — sending 13 with a
 compatibility window — fails every deployed harness closed, because the starter
 kit range-checks `MIN..=MAX_SUPPORTED_BENCH_VERSION`
 (`miners/dittobench-starter-kit/src/protocol.rs`) and would 400 the first
@@ -590,10 +591,12 @@ shadow during calibration, and activation is a separate owner decision.
 Bench v13 adds two report-only surfaces, both additive-optional and absent
 from every earlier contract: `per_case[].inference_cost` plus
 `details.inference_cost` (the shadow per-case cost factor over successful
-completions, sampled choices, and output tokens against published per-class
-budgets — reported, never applied in v13.0) and `details.twin_post_pass` (the
-decision/as-of twin and base+counterfactual pair post-pass: rule, posture,
-concordant-group counts, per-relation means). `per_case[].notes` may carry the
+completions, sampled choices, and answer output tokens — reasoning tokens
+recorded separately — against published per-class budgets, with the
+attributed share and per-attribution case counts; reported, never applied in
+v13.0) and `details.twin_post_pass` (the decision/as-of twin and
+base+counterfactual pair post-pass: rule, posture, concordant-group counts,
+per-relation means; present on every v13 run). `per_case[].notes` may carry the
 exact markers `twin_concordant` and `counterfactual_insensitive`. Under the
 default observe posture no score moves. See
 `research/dittobench-datagen/docs/bench-versions.md`, "Bench v13".

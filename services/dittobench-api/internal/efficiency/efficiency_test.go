@@ -335,6 +335,28 @@ func TestEmbeddedV7ManifestIsQualityOnlyProductionReady(t *testing.T) {
 	}
 }
 
+// TestV8ReadinessIsAFloorOverTheGeneratorList pins ProductionReadyForVersion
+// to the generator's single supported-version list: every supported version
+// from v8 upward inherits the reviewed quality-only authority, and the first
+// version the generator does not support is refused. A retyped case list here
+// is the pin that stranded v11 (Platform counted zero capable validators).
+func TestV8ReadinessIsAFloorOverTheGeneratorList(t *testing.T) {
+	for _, version := range protocol.SupportedBenchVersions() {
+		if version < protocol.BenchVersionV8 {
+			continue
+		}
+		if !ProductionReadyForVersion(version) {
+			t.Fatalf("supported v%d is not technically ready", version)
+		}
+	}
+	if ProductionReadyForVersion(protocol.NewestSupportedBenchVersion() + 1) {
+		t.Fatal("an unsupported future version reads as ready")
+	}
+	if ProductionReadyForVersion(0) || ProductionReadyForVersion(-1) {
+		t.Fatal("a nonsense version reads as ready")
+	}
+}
+
 func TestV9AndV10TechnicalReadinessDoesNotActivateCurrentVersion(t *testing.T) {
 	for _, version := range []int{protocol.BenchVersionV9, protocol.BenchVersionV10} {
 		if !ProductionReadyForVersion(version) {

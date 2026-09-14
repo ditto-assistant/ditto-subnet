@@ -38,7 +38,9 @@ import (
 // is returned untouched (same slice, same bytes) and no summary is produced.
 // The posture switch defaults to observe, which annotates cases and publishes
 // the summary without moving a score; enforce is an explicit operator choice
-// after calibration (Owner decision -- default taken).
+// after calibration (Owner decision -- default taken). For a v13 run the
+// summary is always produced, even when the run drew no paired case (every
+// count 0), so the effective posture and rule are visible on every report.
 
 // Relation values the generator writes into V10CaseProvenance.Relation. They are
 // string literals in research/dittobench-datagen/universe; TestTwinRelation
@@ -87,8 +89,16 @@ const (
 const TwinHonestConcordantErrorFallback = 0.05
 
 // Environment switches. Defaults are the safe end (observe, concordant-zero,
-// unmeasured honest rate); enabling enforcement is a platform-wide, documented
-// contract change applied uniformly across validators, never a per-run secret.
+// unmeasured honest rate). These are per-validator process settings and
+// NOTHING here enforces fleet uniformity: one validator flipped to enforce
+// would emit v13 composites that disagree with the fleet, and the pass runs
+// after ScoredPopulation, outside the signed score-gate evidence, so Platform
+// cannot detect the divergence from the evidence root alone. That is
+// acceptable only while the default is observe. Before any enforce decision
+// the posture must be sourced from a Platform-published contract (rollout
+// policy or a score-gate evidence field) rather than the environment; the
+// effective posture is recorded in details.twin_post_pass.posture so Platform
+// can reject a report whose posture disagrees with the published one.
 const (
 	TwinPostureEnv                   = "DITTOBENCH_V13_TWIN_POSTURE"
 	TwinRuleEnv                      = "DITTOBENCH_V13_TWIN_RULE"
@@ -164,22 +174,39 @@ func (c TwinPostPassConfig) EffectiveRule() (TwinRule, bool) {
 }
 
 // TwinEvidence is what the caller knows about one case that the CaseScore does
-// not carry: its group identity, its relation(s), and the harness's asserted
+// not carry: its group identities, its relation(s), and the harness's asserted
 // answer and decision class. It is built from the validator-internal staged
 // case and the graded response, so nothing here crosses the harness wire.
+//
+// The two groupings are independent and carried in separate fields: a v13
+// case can be a metamorphic program member (paired through
+// V10CaseProvenance.MetamorphicGroup) AND a decision/as-of twin (paired
+// through its own TwinGroup) at once, and the two groups are different
+// identities. Folding them into one key filed such a case under its program
+// group for the twin lookup, orphaning its real twin and mis-collecting its
+// program siblings as twin members.
 type TwinEvidence struct {
-	// Group identifies the twin/metamorphic group (V10CaseProvenance.
-	// MetamorphicGroup for program groups, the case TwinGroup or tool Category
-	// for decision/as-of twins).
-	Group string
+	// MetamorphicGroup is V10CaseProvenance.MetamorphicGroup for a program
+	// group member, "" otherwise. Paired with Relation.
+	MetamorphicGroup string
 	// Relation is V10CaseProvenance.Relation (Relation* constants) or "".
 	Relation string
+	// TwinGroup is the decision/as-of twin identity: MemoryCase.TwinGroup for a
+	// memory twin, the grader-only ToolCase.TwinGroup for a tool twin, ""
+	// otherwise. Paired with TwinRelation.
+	TwinGroup string
 	// TwinRelation is protocol.TwinRelationDecision / TwinRelationAsOf or "".
 	TwinRelation string
 	// Answer is the normalized asserted answer (AssertedAnswer).
 	Answer string
 	// Decision is the decision class (ClassifyDecision).
 	Decision string
+}
+
+// Paired reports whether the evidence names at least one group the post-pass
+// can use; the zero value is unpaired and callers keep it out of the map.
+func (ev TwinEvidence) Paired() bool {
+	return (ev.MetamorphicGroup != "" && ev.Relation != "") || (ev.TwinGroup != "" && ev.TwinRelation != "")
 }
 
 // AssertedAnswer is the harness's asserted answer, normalized for equality:
@@ -238,18 +265,21 @@ func ApplyV13TwinPostPass(perCase []protocol.CaseScore, evidence map[string]Twin
 	copy(out, perCase)
 	enforce := cfg.Posture == TwinPostureEnforce
 
+	// The two groupings are keyed independently: a case that is both a
+	// program member and a decision/as-of twin lands in both maps under its
+	// own identity for each.
 	metamorphic := map[string][]twinMember{}
 	twins := map[string][]twinMember{}
 	for i, cs := range out {
 		ev, ok := evidence[cs.CaseID]
-		if !ok || ev.Group == "" {
+		if !ok || !ev.Paired() {
 			continue
 		}
-		if ev.Relation != "" {
-			metamorphic[ev.Group] = append(metamorphic[ev.Group], twinMember{index: i, evidence: ev})
+		if ev.MetamorphicGroup != "" && ev.Relation != "" {
+			metamorphic[ev.MetamorphicGroup] = append(metamorphic[ev.MetamorphicGroup], twinMember{index: i, evidence: ev})
 		}
-		if ev.TwinRelation != "" {
-			twins[ev.Group] = append(twins[ev.Group], twinMember{index: i, evidence: ev})
+		if ev.TwinGroup != "" && ev.TwinRelation != "" {
+			twins[ev.TwinGroup] = append(twins[ev.TwinGroup], twinMember{index: i, evidence: ev})
 		}
 	}
 
@@ -389,13 +419,16 @@ func sortedGroups(groups map[string][]twinMember) []string {
 
 // relationMeans is the per-relation mean score over the post-pass population.
 // A case contributes to its metamorphic relation and, separately, to its twin
-// relation when it carries both.
+// relation when it carries both. Undelivered cases (transport failure or
+// timeout) are skipped, exactly as MetamorphicConsistency skips them: their 0
+// is a delivery fact, not a relation-conditioned answer, and folding it in
+// would bias the published means the #1521 calibration reads.
 func relationMeans(perCase []protocol.CaseScore, evidence map[string]TwinEvidence) []protocol.RelationStat {
 	sum := map[string]float64{}
 	count := map[string]int{}
 	for _, cs := range perCase {
 		ev, ok := evidence[cs.CaseID]
-		if !ok {
+		if !ok || cs.Undelivered {
 			continue
 		}
 		for _, relation := range []string{ev.Relation, ev.TwinRelation} {

@@ -84,7 +84,14 @@ func runBank(s strategy) ([]protocol.CaseScore, map[string]TwinEvidence) {
 			CaseID: c.id, Kind: c.kind, Category: "bank", Score: score, Correct: score >= 0.5,
 			Relation: c.relation, Called: []string{}, Expected: []string{},
 		})
-		evidence[c.id] = TwinEvidence{Group: c.group, Relation: c.relation, TwinRelation: c.twinRelation, Answer: answer, Decision: decision}
+		ev := TwinEvidence{Relation: c.relation, TwinRelation: c.twinRelation, Answer: answer, Decision: decision}
+		if c.relation != "" {
+			ev.MetamorphicGroup = c.group
+		}
+		if c.twinRelation != "" {
+			ev.TwinGroup = c.group
+		}
+		evidence[c.id] = ev
 	}
 	return perCase, evidence
 }
@@ -162,7 +169,7 @@ func TestTwinPostPassCounterfactualZeroesOnlyThePair(t *testing.T) {
 	for i := range perCase {
 		if perCase[i].CaseID == "m-counterfactual" {
 			perCase[i].Score, perCase[i].Correct = 0, false
-			evidence[perCase[i].CaseID] = TwinEvidence{Group: "g1", Relation: RelationCausalCounterfactual, Answer: "1200", Decision: DecisionAnswer}
+			evidence[perCase[i].CaseID] = TwinEvidence{MetamorphicGroup: "g1", Relation: RelationCausalCounterfactual, Answer: "1200", Decision: DecisionAnswer}
 		}
 	}
 	out, summary := ApplyV13TwinPostPass(perCase, evidence, enforceConfig(TwinRuleConcordantZero), protocol.BenchVersionV13)
@@ -250,8 +257,8 @@ func TestTwinPostPassPairProductAndAutoFallback(t *testing.T) {
 		{CaseID: "b", Kind: protocol.KindMemory, Score: 0.5, Correct: true},
 	}
 	evidence := map[string]TwinEvidence{
-		"a": {Group: "x", TwinRelation: protocol.TwinRelationAsOf, Answer: "same", Decision: DecisionAnswer},
-		"b": {Group: "x", TwinRelation: protocol.TwinRelationAsOf, Answer: "same", Decision: DecisionAnswer},
+		"a": {TwinGroup: "x", TwinRelation: protocol.TwinRelationAsOf, Answer: "same", Decision: DecisionAnswer},
+		"b": {TwinGroup: "x", TwinRelation: protocol.TwinRelationAsOf, Answer: "same", Decision: DecisionAnswer},
 	}
 	cfg := TwinPostPassConfig{Posture: TwinPostureEnforce, Rule: TwinRuleConcordantZero, HonestConcordantErrorRate: 0.06}
 	rule, fallback := cfg.EffectiveRule()
@@ -288,14 +295,14 @@ func TestTwinPostPassSkipsUndeliveredAndMixedGroups(t *testing.T) {
 		{CaseID: "solo", Kind: protocol.KindMemory, Score: 1, Correct: true},
 	}
 	evidence := map[string]TwinEvidence{
-		"a":    {Group: "x", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAbstain},
-		"b":    {Group: "x", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAbstain},
-		"base": {Group: "g", Relation: RelationBase, Answer: "7"},
-		"cf":   {Group: "g", Relation: RelationCausalCounterfactual, Answer: "7"},
+		"a":    {TwinGroup: "x", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAbstain},
+		"b":    {TwinGroup: "x", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAbstain},
+		"base": {MetamorphicGroup: "g", Relation: RelationBase, Answer: "7"},
+		"cf":   {MetamorphicGroup: "g", Relation: RelationCausalCounterfactual, Answer: "7"},
 		// A group whose members disagree on the relation is not a twin group.
-		"m1":   {Group: "mixed", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAnswer},
-		"m2":   {Group: "mixed", TwinRelation: protocol.TwinRelationAsOf, Answer: "v"},
-		"solo": {Group: "single", TwinRelation: protocol.TwinRelationAsOf, Answer: "v"},
+		"m1":   {TwinGroup: "mixed", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAnswer},
+		"m2":   {TwinGroup: "mixed", TwinRelation: protocol.TwinRelationAsOf, Answer: "v"},
+		"solo": {TwinGroup: "single", TwinRelation: protocol.TwinRelationAsOf, Answer: "v"},
 	}
 	out, summary := ApplyV13TwinPostPass(perCase, evidence, enforceConfig(TwinRuleConcordantZero), protocol.BenchVersionV13)
 	for i := range out {
@@ -314,12 +321,89 @@ func TestTwinPostPassToolCaseScoresStayConsistent(t *testing.T) {
 		{CaseID: "t2", Kind: protocol.KindTool, Category: "restraint", Score: 0, ToolScore: 0},
 	}
 	evidence := map[string]TwinEvidence{
-		"t1": {Group: "restraint", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAct},
-		"t2": {Group: "restraint", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAct},
+		"t1": {TwinGroup: "pair-1", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAct},
+		"t2": {TwinGroup: "pair-1", TwinRelation: protocol.TwinRelationDecision, Decision: DecisionAct},
 	}
 	out, _ := ApplyV13TwinPostPass(perCase, evidence, enforceConfig(TwinRuleConcordantZero), protocol.BenchVersionV13)
 	if out[0].Score != 0 || out[0].ToolScore != 0 || out[0].ResultUsage != 0 || out[0].Correct {
 		t.Fatalf("tool case derived fields drifted from Score: %+v", out[0])
+	}
+}
+
+// A case that is a program member AND a decision/as-of twin carries two
+// different group identities. Keyed on one field, the twin lookup filed it
+// under its program group: its real twin was orphaned (len < 2, skipped) and
+// its program siblings were mis-collected as twin members. Both groupings must
+// resolve independently.
+func TestTwinPostPassKeysMetamorphicAndTwinGroupsIndependently(t *testing.T) {
+	perCase := []protocol.CaseScore{
+		{CaseID: "base", Kind: protocol.KindMemory, Score: 1, Correct: true},
+		{CaseID: "cf", Kind: protocol.KindMemory, Score: 0},
+		{CaseID: "renderer", Kind: protocol.KindMemory, Score: 1, Correct: true},
+		{CaseID: "twin", Kind: protocol.KindMemory, Score: 1, Correct: true},
+	}
+	evidence := map[string]TwinEvidence{
+		// The base member is ALSO one half of an as-of twin whose other half
+		// ("twin") is not a program member.
+		"base":     {MetamorphicGroup: "mg", Relation: RelationBase, TwinGroup: "tg", TwinRelation: protocol.TwinRelationAsOf, Answer: "7", Decision: DecisionAnswer},
+		"cf":       {MetamorphicGroup: "mg", Relation: RelationCausalCounterfactual, Answer: "7", Decision: DecisionAnswer},
+		"renderer": {MetamorphicGroup: "mg", Relation: RelationRendererInvariant, Answer: "7", Decision: DecisionAnswer},
+		"twin":     {TwinGroup: "tg", TwinRelation: protocol.TwinRelationAsOf, Answer: "7", Decision: DecisionAnswer},
+	}
+	out, summary := ApplyV13TwinPostPass(perCase, evidence, enforceConfig(TwinRuleConcordantZero), protocol.BenchVersionV13)
+	byID := map[string]protocol.CaseScore{}
+	for _, cs := range out {
+		byID[cs.CaseID] = cs
+	}
+	// The metamorphic pair resolved under "mg" ...
+	if summary.CounterfactualPairs != 1 || summary.CounterfactualInsensitive != 1 {
+		t.Fatalf("metamorphic pair not found: %+v", summary)
+	}
+	// ... and the as-of twin resolved under "tg" with exactly its two members,
+	// not the program siblings.
+	if summary.TwinGroups != 1 || summary.TwinGroupsConcordant != 1 {
+		t.Fatalf("twin group not found or mis-collected: %+v", summary)
+	}
+	if !hasNote(byID["base"], TwinNoteConcordant) || !hasNote(byID["twin"], TwinNoteConcordant) {
+		t.Fatalf("twin members lack the concordant marker: %+v", byID)
+	}
+	if hasNote(byID["renderer"], TwinNoteConcordant) || hasNote(byID["cf"], TwinNoteConcordant) {
+		t.Fatalf("program siblings were collected as twin members: %+v", byID)
+	}
+	if byID["renderer"].Score != 1 {
+		t.Fatalf("renderer member was charged: %+v", byID["renderer"])
+	}
+	if !evidence["base"].Paired() || (TwinEvidence{}).Paired() || (TwinEvidence{TwinGroup: "x"}).Paired() || (TwinEvidence{MetamorphicGroup: "x"}).Paired() {
+		t.Fatal("Paired() drifted: a group needs its relation and the zero value is unpaired")
+	}
+}
+
+// Undelivered cases score 0 for a transport reason, not a relation-conditioned
+// one; folding them into the per-relation means biases the calibration
+// reading. They are skipped, exactly as MetamorphicConsistency skips them.
+func TestTwinPostPassRelationMeansSkipUndelivered(t *testing.T) {
+	perCase := []protocol.CaseScore{
+		{CaseID: "a", Kind: protocol.KindMemory, Score: 1},
+		{CaseID: "b", Kind: protocol.KindMemory, Score: 0, Undelivered: true},
+		{CaseID: "c", Kind: protocol.KindMemory, Score: 0.5},
+	}
+	evidence := map[string]TwinEvidence{
+		"a": {MetamorphicGroup: "g", Relation: RelationBase, Answer: "1"},
+		"b": {MetamorphicGroup: "g", Relation: RelationCausalCounterfactual, Answer: ""},
+		"c": {MetamorphicGroup: "g2", Relation: RelationBase, Answer: "2"},
+	}
+	_, summary := ApplyV13TwinPostPass(perCase, evidence, DefaultTwinPostPassConfig(), protocol.BenchVersionV13)
+	if len(summary.PerRelation) != 1 {
+		t.Fatalf("undelivered relation leaked into the means: %+v", summary.PerRelation)
+	}
+	if got := summary.PerRelation[0]; got.Relation != RelationBase || got.Count != 2 || got.Mean != 0.75 {
+		t.Fatalf("base mean = %+v", got)
+	}
+	// A v13 run with no paired case still publishes the summary (posture and
+	// rule visible), with every count at zero.
+	_, empty := ApplyV13TwinPostPass([]protocol.CaseScore{{CaseID: "solo", Score: 1}}, nil, DefaultTwinPostPassConfig(), protocol.BenchVersionV13)
+	if empty == nil || empty.Posture != string(TwinPostureObserve) || empty.TwinGroups != 0 || empty.CounterfactualPairs != 0 || empty.PerRelation != nil {
+		t.Fatalf("unpaired v13 summary = %+v", empty)
 	}
 }
 
