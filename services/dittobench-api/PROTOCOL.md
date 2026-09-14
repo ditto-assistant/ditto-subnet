@@ -534,6 +534,74 @@ injection and then deleting the evidence from the response. Uniform,
 content-independent formatting is fine. Content-conditioned rewriting of the
 graded fields is not.
 
+## Bench v13 tool grading (`bench_version` 13)
+
+Bench v13 keeps the harness wire unchanged — the same `RunRequest`, the same
+served `tool_endpoint`, and **memory tools are still NOT served** (answer them
+from your own seeded store) — and changes how tool cases are graded. Every rule
+below applies only to `bench_version >= 13`; v2..v12 grade exactly as before.
+
+- **Memory-read cases are graded on effect.** The validator plants a fact in
+  the seeded world through the ordinary `/seed` boundary and the case scores 1.0
+  only when `answer` or `final_text` carries that value and no non-memory tool
+  was called. Any internal retrieval trajectory is fine; a substantive answer
+  that does not carry the value scores 0 (the pre-v13 routing-only credit is
+  removed). At most eight such cases appear in a full run.
+- **Restraint cases are graded on the text, not merely on silence.** Sixteen
+  cases per full run form distributionally matched groups: the same request
+  surface is an *ask* when the seeded records do not hold the needed value and
+  an *act* when they do (a stored reasoning-effort default, a pending calendar
+  event with a date, a recorded update recipient, an appearance preference that
+  already matches). On an ask case a correct turn calls no non-memory tool AND
+  asks a clarifying question that **names the slot** (the schema argument, the
+  tool description's nouns, or a common translation — "which typeface?") AND
+  **cites a token from the records you searched** (an option the user mentioned
+  trying, the event title, the update's name). A generic "what would you like?"
+  scores 0; so does calling the tempting tool with a guessed value. On a
+  negated-search or unknowable case a correct turn is a substantive no-tool
+  answer; on a same-as-stored preference case it is an acknowledgement that
+  cites the stored value. Confirm-and-act ("Set it to high — your usual?")
+  passes the ask half. Members of one group run at least 20 cases apart. An
+  always-ask, always-act, or coin-flip policy earns at most chance on the slice
+  under the group rule (see below).
+- **Free-text arguments are graded as semantic claims.** Where a case carries a
+  claim for an argument, an honest paraphrase passes: `update_memory.content`
+  needs the changed slot and its new value in any copula/colon/arrow/sentence
+  form ("handoff moved to Monday"); `create_workflow.name` needs the project's
+  identity (formal name or alias) and fails only if it names the *other*
+  project's client; `gmail_send.to` needs the canonical address in any
+  `Name <addr>` form; `steps` is a set of required items; `set_*` values compare
+  after case/spacing/punctuation canonicalization. Candidate-stuffing is still
+  rejected. Exact `required_args` grading is unchanged for v2..v12.
+- **End-state-equivalent outcomes earn equal credit.** A correction to a note may
+  be an in-place `update_memory` or a `delete_memory` of the note followed by a
+  `save_memory` of the corrected fact. A follow-up read later in the run asks
+  for the corrected value (or for the contact record a deletion had to
+  preserve), so the end state is what is graded. The follow-up is sent only
+  after the mutation's `/run` has returned, whatever the case concurrency. Answer
+  with the current state: a reply that also asserts the stale value ("it was
+  Friday, now maybe Monday"; the superseded address beside the current one)
+  scores 0, because it reports the store rather than the end state.
+- **Forbidden tools zero a case.** Some state-dependent cases forbid a tool: an
+  event already on the calendar must be located (`calendar_search_events`), and
+  a `calendar_create_event` on that case scores 0 even alongside the right call.
+  A `delete_memory` that touches a person's canonical identity/work/email pair
+  scores 0 even if the disposable note was also deleted.
+- **Shadow gates (annotate only until enforced).** Two v13 rules ship in shadow
+  and only add notes to the per-case report until the operator posture is
+  `enforce`: the symmetric-provenance rule and the restraint **group rule** (if
+  any member of a group is wrong, every member scores 0 — concordant-zero). The
+  provenance rule names two findings. `swallowed_model_call` — a model-emitted
+  tool call the harness never executed on a restraint case — is not new at v13:
+  the v10 model-tool provenance gate above already zeroes any scored tool case
+  that shows one, so on a scored run the v13 note only names what v10 already
+  did. `restraint_without_offer` — a deciding turn that never offered the
+  tempting tool — is the new v13 finding; it is recorded only once the relay
+  captures the offered catalog, and until then it is unknown, never a finding.
+  The published safe harbor for semantic preloading is unchanged: trimming a
+  catalog is free when the deciding model could still choose, skip, or add the
+  expected tool.
+
 ## Anti-copy signals
 
 On-chain, the platform runs a duplicate-detection gate that compares each

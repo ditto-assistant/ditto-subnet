@@ -19,7 +19,7 @@ import (
 // v13GraderOnlyRunKeys are the JSON keys the v13 grader-only protocol fields
 // (MemoryCase.Claims / TwinRelation, ToolCase.TwinRelation / Restraint,
 // ToolSpec.RequiredArgClaims) would take if they ever serialized.
-var v13GraderOnlyRunKeys = []string{"claims", "twin_relation", "required_arg_claims", "restraint", "expected_answer", "answer_kind", "distractor_answers"}
+var v13GraderOnlyRunKeys = []string{"claims", "twin_relation", "required_arg_claims", "restraint", "expected_answer", "answer_kind", "distractor_answers", "effect_answer", "effect_forbidden", "alternative_expected_tools", "forbidden_tools", "run_after_case_id", "grounding"}
 
 // TestV13GraderOnlyFieldsNeverReachRunPayload is the runner-side half of
 // gen.TestV13GraderOnlyFieldsNeverReachHarnessWire (issue #1824): the memory

@@ -535,14 +535,136 @@ extends it when its lever lands.
   verbatim hit, so the strict verbatim share (`StrictTransformedShare`) stays
   visible in the probe output and a v13 family regression cannot hide behind
   the classification.
-- `TestV13KnownVector` is a **placeholder** pin (seed `123456789`, full):
-  `b9bfb611f4509599fb6c79579114244178ca09077737a0313b6db9c5b6f1966c`. It is
-  re-pinned when the envelope lands, after the `/seed` label-leak fix.
+- `TestV13KnownVector` pins seed `123456789`, full:
+  `ef438df9b92ac7c9a19d92ed97dba1d01efdcc2f42936d5f505e23cc71a4f202` (the
+  tool-bench semantics below re-pinned it from the plumbing placeholder; the
+  README known-vector table and this paragraph are checked against the test
+  constant by `TestV13KnownVectorIsPublishedConsistently`). It moves again
+  with the `/seed` label-leak fix and every later v13 lever.
 
 Scorer side: `scoregates.SupportedBenchVersion` accepts v13 (inheriting the v12
 gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
 technically ready; the runtime's advertised `supported_bench_versions` does
 **not** include 13 until the last v13 PR.
+
+### Tool bench semantics (#1845, #1846, #1847)
+
+The v13 tool half changes what competence a run must demonstrate, not the
+transport: `MemoryCase` / `ToolCase` / `DatasetArtifact` keep their wire shapes,
+memory tools remain harness-internal and unserved (PROTOCOL.md "Observed tool
+execution"), and every lever below is gated on `bench_version >= 13` in
+`datagen.applyV13ToolSemantics`, so v2..v12 tool bytes are byte-identical
+(`datagen.TestV12ToolCasesUnchangedByV13` pins the v12 tool dataset next to the
+gen known vectors).
+
+- **Restraint groups replace the request-keyed no-tool families (#1846).**
+  `no_tool`, `abstention`, `arg_hallucination`, and `negation_no_tool` are gone
+  from the v13 category set. A full run carries **16 restraint cases** in
+  `decision_twin` groups — four triplets and two pairs, family drawn with
+  replacement from six families (reasoning-effort default, pending calendar
+  event, update recipient, negated web search, unknowable-vs-answerable, and
+  same-as-stored-vs-differs appearance preference), so each family is present in
+  roughly two thirds of runs. A medium run (48 tool cases) carries **8** in two
+  triplets and a pair, carved from prerequisite-free coverage singletons (the
+  one-per-family floor is a full-run invariant; medium is a rehearsal size), and
+  small carries none (`TestV13RestraintCountMatchesRunSize`,
+  `TestV13MediumRestraintGroups`). Members share a family and oracle and draw
+  different grammar surfaces; a triplet's ask:act cardinality is a per-seed
+  2:1 or 1:2 draw. The **seeded record**, never the request surface, decides
+  which member is the ask half: a stored default/event/recipient makes the same
+  surface an act (`set_reasoning_effort{stored}`, `calendar_create_event{title}`,
+  `gmail_send{to}`), its absence makes it a clarifying question. Ask members
+  carry a `RestraintClaim` whose `Accept` is the slot lexicon (schema argument
+  name ∪ description nouns ∪ multilingual synonyms) and whose `Grounding` lists
+  **record-only** tokens: the two effort *styles* the user keeps switching
+  between ("quick answers" / "deep dives", never the enum levels), the pending
+  event's title, the nicknames of the people who asked for the update — never a
+  token that also appears in the member's own prompt or in the slot lexicon, so a
+  clarifying template keyed on the request or the tool name has nothing to cite
+  (`TestV13GroundingIsRecordOnly`). The same-as-stored preference family grounds
+  its acknowledgement on the stored value by contract; its read is discriminated
+  by the act sibling, which carries a differing value. The act members carry
+  `RequiredArgClaims`. In the harness projection the members of one group are
+  at least `V13TwinMinGap` (20) positions apart and never adjacent, so in-run
+  pairing (N11) is not cheaper than reading. The world-action envelope drops to
+  40 target / 34 minimum for v13 (`V13FullWorldActionTarget`) to make room;
+  restraint cases are evidence-bound, so the composed half of the run does not
+  shrink. `TestV13RestraintGroupsAreDistributionallyMatched` and
+  `TestV13RestraintPolicyBaselinesScoreAtMostChance` pin the shape; the scorer's
+  `TestV13RestraintBaselinesScoreAtMostChanceEndToEnd` grades generated groups
+  through the real v13 grader and shows always-ask, always-act, and random-split
+  earning ≤ chance under the group rule while the record-reading oracle earns 1.0.
+- **Effect-graded memory reads (#1845).** Memory-routing tool cases are capped
+  at **8 per run**; each plants a coined fact (unit number, locker code, booking
+  reference, …) in its prerequisite record and carries a grader-only
+  `EffectAnswer`. The answer must contain the value; any non-memory call is
+  misrouting; the pre-v13 "any non-empty text" routing credit is removed. The
+  surplus memory-routing draws become restraint slots.
+- **Cue-unreliable mutations with end-state follow-ups (#1845).**
+  `world_memory_update` prompts carry delete/save cues ("scratch that", "bin the
+  old date", "forget Friday", "remember that … moved") for a correction whose
+  right tool is `update_memory`; `world_memory_delete` prompts carry update/save
+  cues for a disposable-note deletion. A verb→tool cue table predicts under half
+  of them (`TestV13MutationGrammarIsCueUnreliable`). The update's `content` is a
+  `fact_update` claim (copula/colon/arrow/sentence forms; ~40% carry a second
+  changed fact), `delete_memory` then `save_memory` is an
+  `AlternativeExpectedTools` outcome with identical credit, and the delete's
+  `pair_id` claim **forbids** the person's canonical identity/work/email pairs. Up
+  to two of the eight memory reads become **follow-up reads**
+  (`v13_mutation_follow_up_read`) that ask for the corrected handoff day or the
+  preserved contact address; each carries the stale pre-mutation value
+  (`EffectForbidden`: the original Friday, the superseded address) and scores 0
+  when the answer asserts it beside the corrected one, so a store dump is not
+  end-state discrimination. The projection places each at least
+  `V13FollowUpMinGap` (40) positions after its mutation (`RunAfterCaseID`), and
+  the runner's bounded tool loop **waits** on that dependency
+  (`runAfterGate`): under any `case_concurrency` the follow-up `/run` is not
+  sent until the mutation's `/run` has returned. Scope note against #1847's
+  text: updates carry one or two changed facts (no removals), and the
+  business-workflow distractor is the other project's client rather than a
+  permuted identity record — an owner-visible follow-up, not a v13.0 lever.
+- **State-dependent routing extended (#1845).** The v10 route draw widens from
+  three to five outcomes on the v13 stream only: calendar move-vs-create (an
+  existing event on record → `calendar_search_events{query}` with
+  `calendar_create_event` **forbidden**; none → `calendar_create_event{title}`) and
+  email reply-vs-new (a recorded request → reply to the requester; none → the
+  planned recipient). The family's routing weight is unchanged in
+  expectation — the route slots are the `world_agent_job_dispatch` cases the v9
+  world pass carves per seed, which it re-draws under the 40-case v13 envelope,
+  so per-seed counts differ while the 20-seed aggregate stays within a few
+  percent of v12 (`TestV13StateDependentRoutingCoversCalendarAndEmail` bounds it
+  at ±15%).
+- **Argument claims (#1847).** `world_business_workflow` emits an `entity` claim
+  for `create_workflow.name` that accepts the project's formal name or alias and
+  forbids only the **distractor** client (never the correct one), plus a `set`
+  claim for `steps`; `world_memory_update` emits the `fact_update` claim above;
+  `gmail_send.to` is an `email` claim (canonical address in any `Name <addr>`
+  form); `set_*` values are `enum` claims. Claims never enter the hashed
+  artifact, `/seed`, or `/run` (`gen.TestV13GraderOnlyFieldsNeverReachHarnessWire`)
+  and ride the harness projection's alias map so a pair-id claim names the wire
+  id. The v13 grader (`services/dittobench-api/internal/scorer/v13.go`) scores a
+  claim in place of exact containment, keeps `argStuffed`, caps claims per spec
+  at four, and leaves `argValueEqual` untouched for v2..v12
+  (`TestArgValueEqualUnchangedForV12`). This is the reward side only: an
+  alias-aware recipe that satisfies the public claim grammar is caught by the
+  causal gate and screener I5, not here.
+- **Shadow postures.** The symmetric-provenance rule and the `decision_twin`
+  concordant-zero group rule ship behind `DITTOBENCH_V13_RESTRAINT_PROVENANCE` /
+  `DITTOBENCH_V13_RESTRAINT_GROUP_RULE` (off | shadow | enforce; unset, empty,
+  or unrecognized is **shadow**, `TestV13PostureDefaultsToShadow`). Under shadow
+  the rules annotate; they never move a score *themselves*. Be precise about
+  what that buys on the scored path: `swallowed_model_call` (a model-emitted
+  call the harness never executed) is **already zeroed by the v10 provenance
+  gate** (`applyV10ToolProvenance`, `ModelSelectedNotExecuted > 0`), which runs
+  first on every tool case at v10+, so the v13 note on a scored run reads
+  "already zeroed by v10 provenance" and the posture only decides the outcome
+  of an unscored practice run. The genuinely new finding is
+  `restraint_without_offer` (a deciding turn that never offered the tempting
+  tool); its offered-catalog evidence is wired by the relay catalog-capture
+  change and is unknown (never a finding) until it lands. The group rule's
+  "≤ chance" property is enforce-only: under shadow an always-ask policy keeps
+  the ask half it can ground and an always-act policy keeps the act half
+  (`TestV13ShadowPostureCeilingsPerCase`).
 
 ### Governing invariants
 

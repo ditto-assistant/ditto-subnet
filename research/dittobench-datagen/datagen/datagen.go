@@ -1277,7 +1277,7 @@ var difficultyCategoriesV7 = []category{
 // deterministic. MaxToolCalls describes the expected envelope; it is not a hard
 // cap and creative agents may legitimately exceed it.
 func applyV8WorldActions(seed int64, cases []protocol.ToolCase) {
-	applyWorldActions(seed, cases, false)
+	applyWorldActions(seed, protocol.BenchVersionV8, cases, false)
 }
 
 const (
@@ -1303,8 +1303,8 @@ const (
 // stale-context and memory-fetch programs, at least half of the run remains
 // evidence-bound or composed. The explicit legacy replacements below remain
 // authoritative retirements of obsolete product behavior.
-func applyV9WorldActions(seed int64, cases []protocol.ToolCase) {
-	applyWorldActions(seed, cases, true)
+func applyV9WorldActions(seed int64, benchVersion int, cases []protocol.ToolCase) {
+	applyWorldActions(seed, benchVersion, cases, true)
 }
 
 // applyV10StateDependentActions removes the last easy prompt-to-tool shortcut
@@ -1378,9 +1378,28 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 			})
 		}
 
+		// v13 extends the route space to calendar move-vs-create and email
+		// reply-vs-new (issue #1845). The draw widens from three to five outcomes
+		// on the v13 stream only, so v10..v12 route bytes are untouched and the
+		// family's slot count (routing weight) is unchanged.
+		routeCount := 3
+		if benchVersion >= protocol.BenchVersionV13 {
+			routeCount = 5
+		}
 		var planningResponse, behavior string
 		var expected []protocol.ToolSpec
-		switch routes.Intn(3) {
+		var forbidden []string
+		category := "v10_state_dependent_routing"
+		var extraProtected []string
+		route := routes.Intn(routeCount)
+		if route >= 3 {
+			var record protocol.MemoryPair
+			record, prompt, expected, forbidden, behavior, category, extraProtected = v13StateDependentRoute(seed, i, world, project, route)
+			planningPrompt, planningResponse, pairID = record.Prompt, record.Response, record.PairID
+		}
+		switch route {
+		case 3, 4:
+			// rendered above
 		case 0:
 			planningResponse = routePrefix + "dispatch one one-off Ditto Code job. Do not create or run a reusable workflow."
 			expected = []protocol.ToolSpec{{Name: "execute_agent_job"}}
@@ -1397,12 +1416,14 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 
 		originalPrerequisites := cases[i].PrerequisitePairs
 		originalProtected := cases[i].WritingProtected
-		tc := fuzzyWorldTool(cases[i].ID, "v10_state_dependent_routing", prompt, expected, behavior)
+		tc := fuzzyWorldTool(cases[i].ID, category, prompt, expected, behavior)
+		tc.ForbiddenTools = forbidden
 		tc.PrerequisitePairs = append(append([]protocol.MemoryPair(nil), originalPrerequisites...), protocol.MemoryPair{
 			PairID: pairID, SessionID: fmt.Sprintf("v10-tool-route-%02d", projectIndex), Timestamp: "2026-01-15T10:00:00Z",
 			Prompt: planningPrompt, Response: planningResponse,
 		})
 		tc.WritingProtected = append(append([]string(nil), originalProtected...), project.Alias, project.Client, project.Name)
+		tc.WritingProtected = append(tc.WritingProtected, extraProtected...)
 		cases[i] = tc
 	}
 }
@@ -1425,10 +1446,13 @@ func v9ComposedFamily(category string) bool {
 	return v9WorldFamily(category) || category == "stale_context_web" || category == "memory_fetch"
 }
 
-func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFloor bool) {
+func applyWorldActions(seed int64, benchVersion int, cases []protocol.ToolCase, preserveSemanticFloor bool) {
 	if len(cases) == 0 {
 		return
 	}
+	// v9..v12 keep the published 48/43 envelope; v13 lowers it explicitly to
+	// make room for the sixteen restraint-group cases (v13WorldEnvelope).
+	worldTarget, worldMinimum := v13WorldEnvelope(benchVersion)
 	remainingByCategory := make(map[string]int, len(cases))
 	if preserveSemanticFloor {
 		for _, tc := range cases {
@@ -1456,7 +1480,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 		// Retired families become world actions in the authoritative tail pass.
 		// Skip them in the generic converter and reserve only the additional
 		// non-retired conversions needed for the final world-action target.
-		target = V9FullWorldActionTarget - retired
+		target = worldTarget - retired
 		if target < 0 {
 			target = 0
 		}
@@ -1539,7 +1563,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 				retired++
 			}
 		}
-		minimumConversions := V9FullWorldActionMinimum - retired
+		minimumConversions := worldMinimum - retired
 		// An unusually large weighted draw of stale-context or memory-fetch cases
 		// can exhaust the ordinary duplicates before the pure-world floor. Convert
 		// only as many duplicate prerequisite cases as needed for that floor; at
@@ -1784,6 +1808,19 @@ func categoriesForVersion(benchVersion int) []category {
 	out = append(out, codeModeCategories...)
 	if benchVersion >= protocol.BenchVersionV7 {
 		out = append(out, difficultyCategoriesV7...)
+	}
+	if benchVersion >= protocol.BenchVersionV13 {
+		// v13 retires the request-keyed no-tool families: restraint credit is
+		// earned inside distributionally matched groups built by
+		// applyV13RestraintGroups, never by a phrase table that withholds the
+		// catalog (issue #1846).
+		kept := make([]category, 0, len(out))
+		for _, c := range out {
+			if !v13LegacyNoToolFamily(c.name) {
+				kept = append(kept, c)
+			}
+		}
+		out = kept
 	}
 	if benchVersion >= protocol.BenchVersionV8 {
 		// ChatV2 consolidated recipes, automations, and multi-agent creation into
@@ -2065,12 +2102,15 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		fillers = append(fillers, usedFiller)
 	}
 	if benchVersion >= protocol.BenchVersionV9 {
-		applyV9WorldActions(seed, cases)
+		applyV9WorldActions(seed, benchVersion, cases)
 	} else if benchVersion >= protocol.BenchVersionV8 {
 		applyV8WorldActions(seed, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV10 {
 		applyV10StateDependentActions(seed, benchVersion, cases)
+	}
+	if benchVersion >= protocol.BenchVersionV13 && !v13SkipToolSemantics {
+		applyV13ToolSemantics(seed, benchVersion, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV8 {
 		applyV8WritingNoise(seed, cases)

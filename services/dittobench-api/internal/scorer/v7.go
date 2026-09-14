@@ -356,6 +356,12 @@ func sameNameMultiset(a, b []protocol.ObservedToolCall) bool {
 // extra-call penalty). Pre-v7 versions are byte-identical to
 // ScoreToolCaseObservedScope.
 func ScoreToolCaseObservedForVersion(c protocol.ToolCase, resp protocol.RunResponse, ok bool, observed []protocol.ObservedToolCall, scope Scope, benchVersion int) protocol.CaseScore {
+	if benchVersion >= protocol.BenchVersionV13 {
+		// v13: claim-aware arguments, alternative outcomes, effect-graded memory
+		// reads, text-graded restraint, forbidden tools (v13.go). The v7..v12
+		// path below is unchanged.
+		return scoreToolCaseV13(c, resp, ok, observed)
+	}
 	strict := benchVersion >= protocol.BenchVersionV7
 	if !strict {
 		return ScoreToolCaseObservedScope(c, resp, ok, observed, scope)

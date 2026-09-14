@@ -446,10 +446,15 @@ func TestV12KnownVector(t *testing.T) {
 // and leaves every v2..v12 vector above untouched — a moved earlier vector
 // means a lever is not gated on bench_version >= 13. It is re-pinned when the
 // v13 envelope lands, after the /seed label-leak fix.
+// v13KnownVectorWant is the pinned v13 full vector for seed 123456789; the
+// README table and docs/bench-versions.md must publish the same value
+// (TestV13KnownVectorIsPublishedConsistently).
+const v13KnownVectorWant = "ef438df9b92ac7c9a19d92ed97dba1d01efdcc2f42936d5f505e23cc71a4f202"
+
 func TestV13KnownVector(t *testing.T) {
 	const (
 		seed = int64(123456789)
-		want = "b9bfb611f4509599fb6c79579114244178ca09077737a0313b6db9c5b6f1966c"
+		want = v13KnownVectorWant
 	)
 	prof, ok := ProfileForVersion("full", protocol.BenchVersionV13)
 	if !ok {

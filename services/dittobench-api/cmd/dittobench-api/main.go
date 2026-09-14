@@ -405,6 +405,20 @@ type capabilitiesResponse struct {
 	SoftwareVersionOrigin release.Origin `json:"software_version_origin,omitempty"`
 }
 
+// advertisedMinBenchVersion / advertisedMaxBenchVersion bound the capability
+// set this build ADVERTISES to validators, as a window over
+// protocol.SupportedBenchVersions() rather than a retyped list. The generator
+// and scorer already accept v13 (protocol.SupportedBenchVersion,
+// scoregates.SupportedBenchVersion, efficiency.ProductionReadyForVersion), so
+// advertising it is exactly one pin: the v13 wiring-sweep PR (#1519) moves
+// advertisedMaxBenchVersion to V13 together with the validator
+// SUPPORTED_BENCH_VERSIONS, the release.yml identity gate, and the starter-kit
+// MAX_SUPPORTED_BENCH_VERSION, so the version never strands at one layer.
+const (
+	advertisedMinBenchVersion = protocol.BenchVersionV8
+	advertisedMaxBenchVersion = protocol.BenchVersionV12
+)
+
 // supportedBenchVersions is the capability set this build can administer. It is
 // shared with the version command so an operator can ask an unstarted container
 // exactly what a validator would negotiate with it.
@@ -412,9 +426,12 @@ func supportedBenchVersions() []int {
 	if !efficiency.ValidV8Readiness(efficiency.V8Readiness()) {
 		return nil
 	}
-	versions := make([]int, 0, 5)
-	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12} {
-		if protocol.SupportedBenchVersion(version) && efficiency.ProductionReadyForVersion(version) {
+	versions := make([]int, 0, advertisedMaxBenchVersion-advertisedMinBenchVersion+1)
+	for _, version := range protocol.SupportedBenchVersions() {
+		if version < advertisedMinBenchVersion || version > advertisedMaxBenchVersion {
+			continue
+		}
+		if efficiency.ProductionReadyForVersion(version) {
 			versions = append(versions, version)
 		}
 	}
@@ -1852,13 +1869,25 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			projectionFailureOnce.Do(func() { projectionFailure = err })
 		}
 	}
+	// v13 follow-up reads (ToolCase.RunAfterCaseID) must reach the harness only
+	// after the mutation they verify has returned; the gate is a no-op for every
+	// case without a dependency, so v2..v12 runs are unaffected.
+	runAfter := newRunAfterGate(toolCases)
+	if runAfter.pending() > 0 {
+		log.Printf("run %s: %d tool case(s) gated on an earlier mutation (v13 run-after)", runID, runAfter.pending())
+	}
 	runBounded(ctx, len(toolCases), effectiveCaseConcurrency, func(i int) {
+		defer runAfter.release(i)
+		if !runAfter.wait(ctx, i) {
+			return
+		}
 		c := toolCases[i]
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
 		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
 		observed := toolSrv.Observed(c.ID)
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
+		cs = applyV13RestraintProvenance(req.BenchVersion, c, cs, execution)
 		fixture := toolFixtureByInternalID[c.ID]
 		if harnessProjection != nil {
 			internalID, reverseErr := harnessProjection.InternalCaseID(c.ID)
@@ -1926,6 +1955,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		s.store.Fail(runID, "v9 tool capability reverse mapping failed")
 		return
 	}
+	// v13 restraint groups are scored together after every member has landed;
+	// the rule ships in shadow (annotation only) unless the operator posture
+	// says enforce.
+	toolResults = scorer.ApplyV13RestraintGroupRule(req.BenchVersion, toolResults, v13RestraintGroupPosture())
 	for i, cs := range toolResults {
 		perCase = append(perCase, cs)
 		if toolWasObserved[i] {
