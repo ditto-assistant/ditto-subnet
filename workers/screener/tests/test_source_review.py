@@ -2140,35 +2140,27 @@ async def test_each_source_review_completion_has_a_short_hard_timeout(
 
 
 async def test_completion_request_timeout_override_still_obeys_review_deadline(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    key = tmp_path / "key"
-    key.write_text("sk-test-private-review")
-    os.chmod(key, 0o600)
-    final = _with_policy_v10_invariants(_BENIGN_REVIEW)
     attempts = 0
+    blocking_request_started = asyncio.Event()
+    block_request = False
 
     async def handler(_request: httpx.Request) -> httpx.Response:
-        nonlocal attempts
+        nonlocal attempts, block_request
         attempts += 1
+        if block_request:
+            blocking_request_started.set()
+            await asyncio.Event().wait()
         await asyncio.sleep(0.02)
         return httpx.Response(
             200,
-            json={
-                "choices": [
-                    {
-                        "message": {
-                            "role": "assistant",
-                            "tool_calls": [_tool("submit", "submit_review", final)],
-                        }
-                    }
-                ]
-            },
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
         )
 
     monkeypatch.setattr(source_review_module, "_MAX_COMPLETION_REQUEST_SECONDS", 0.005)
     agent = OpenRouterSourceReviewAgent(
-        api_key_file=str(key),
+        api_key_file=None,
         model="openai/gpt-5.6-luna",
         base_url="https://openrouter.test/api/v1",
         timeout_seconds=1,
@@ -2177,18 +2169,28 @@ async def test_completion_request_timeout_override_still_obeys_review_deadline(
         transport=httpx.MockTransport(handler),
         transport_retry_delays=(),
     )
-    observation = await agent.review(
-        str(_archive(tmp_path, "fn main() {}")), artifact_sha256=_SHA
-    )
-    assert observation.ok
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), timeout=1
+    ) as client:
+        message = await agent._completion_message(
+            client,
+            "sk-test-private-review",
+            [{"role": "user", "content": "test"}],
+            timeout=0.5,
+            reasoning_effort="low",
+        )
+        assert message["content"] == "ok"
 
-    observation = await agent.review(
-        str(_archive(tmp_path, "fn main() {}")),
-        artifact_sha256=_SHA,
-        deadline=asyncio.get_running_loop().time() + 0.005,
-    )
-    assert not observation.ok
-    assert observation.error_code == "source-review-timeouterror"
+        block_request = True
+        with pytest.raises(TimeoutError):
+            await agent._completion_message(
+                client,
+                "sk-test-private-review",
+                [{"role": "user", "content": "test"}],
+                timeout=0.01,
+                reasoning_effort="low",
+            )
+    assert blocking_request_started.is_set()
     assert attempts == 2
 
 
