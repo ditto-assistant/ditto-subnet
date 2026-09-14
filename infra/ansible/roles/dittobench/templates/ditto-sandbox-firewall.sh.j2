@@ -7,7 +7,7 @@
 # allow for the sandbox subnet (see the dittobench role's egress.yml), since the
 # sandbox is off the default docker0 bridge the 172.17.0.0/16 Ollama allow
 # covers. Idempotent — safe to re-run.
-# See dittobench-api docs/sandbox-egress-hardening.md.
+# See services/dittobench-api/docs/sandbox-egress.md.
 set -euo pipefail
 
 SUBNET="{{ dittobench_sandbox_subnet }}"

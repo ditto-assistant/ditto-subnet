@@ -166,3 +166,43 @@ func TestTunnel_EndToEnd(t *testing.T) {
 		t.Fatalf("denied CONNECT got %d, want 403", resp2.StatusCode)
 	}
 }
+
+// TestServeHTTP_MetadataLoopbackAndLookalikesDenied is the proxy half of the
+// egress proof in docs/sandbox-egress.md: with the relay upstream allowlisted, a
+// harness cannot CONNECT to cloud metadata, loopback, a sibling subnet, or a
+// domain that merely embeds the allowlisted name.
+func TestServeHTTP_MetadataLoopbackAndLookalikesDenied(t *testing.T) {
+	p := newProxy(config{allow: parseList("openrouter.ai"), ports: parsePorts("443")})
+	for _, target := range []string{
+		"169.254.169.254:443", // cloud metadata
+		"127.0.0.1:443",       // loopback
+		"172.17.0.1:443",      // docker0 gateway (host services)
+		"10.0.0.7:443",        // RFC1918 sibling
+		"openrouter.ai.evil.com:443",
+		"notopenrouter.ai:443",
+		"api.example.com:443",
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodConnect, "//"+target, nil)
+		req.Host = target
+		p.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("CONNECT %s got %d, want 403", target, rec.Code)
+		}
+	}
+}
+
+// TestServeHTTP_EmptyAllowlistDeniesTheRelayUpstreamToo pins the posture the
+// validator_platform_inference_enforced flag renders: once inference is only
+// reachable through the ticket broker, EGRESS_PROXY_ALLOW is empty and even the
+// former provider host is refused at CONNECT time. Public egress is then empty.
+func TestServeHTTP_EmptyAllowlistDeniesTheRelayUpstreamToo(t *testing.T) {
+	p := newProxy(config{allow: parseList(""), ports: parsePorts("443")})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodConnect, "//openrouter.ai:443", nil)
+	req.Host = "openrouter.ai:443"
+	p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("empty allowlist CONNECT got %d, want 403", rec.Code)
+	}
+}

@@ -2767,6 +2767,33 @@
         ],
         "type": "object"
       },
+      "ConfirmationSeedAnchorPin": {
+        "properties": {
+          "anchor_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "anchor_block_hash": {
+            "pattern": "^(0x)?[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "champion_agent_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "champion_agent_id",
+          "bench_version",
+          "anchor_block",
+          "anchor_block_hash"
+        ],
+        "type": "object"
+      },
       "ConfirmationUsageTotals": {
         "properties": {
           "input_tokens": {
@@ -4339,6 +4366,12 @@
         "maximum": 1.0,
         "minimum": 0.0,
         "type": "number"
+      },
+      "confirmation_seed_anchors": {
+        "items": {
+          "$ref": "#/$defs/ConfirmationSeedAnchorPin"
+        },
+        "type": "array"
       },
       "continual_retest_cohort_size": {
         "default": 5,

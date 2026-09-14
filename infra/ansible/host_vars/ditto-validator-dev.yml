@@ -29,7 +29,7 @@ validator_run_size: full
 # C-ISO: confine untrusted miner containers to the allowlisting egress proxy +
 # DOCKER-USER firewall (dittobench role). Enabled on dev to exercise the
 # enforcement before finney. See infra docs/validator-deploy.md and
-# dittobench-api docs/sandbox-egress-hardening.md.
+# services/dittobench-api/docs/sandbox-egress.md.
 dittobench_sandbox_egress_enabled: true
 
 # The validator's PUBLIC SS58 hotkey (safe to commit; the signing mnemonic is a

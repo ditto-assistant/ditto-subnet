@@ -1,8 +1,8 @@
 ---
 # C-ISO enforcement: isolate the untrusted-miner sandbox to an allowlisting
 # egress proxy + a DOCKER-USER firewall. Included from main.yml when
-# dittobench_sandbox_egress_enabled. See dittobench-api
-# docs/sandbox-egress-hardening.md. Idempotent + safe to re-run.
+# dittobench_sandbox_egress_enabled. See
+# services/dittobench-api/docs/sandbox-egress.md. Idempotent + safe to re-run.
 
 - name: Ensure iptables is present (DOCKER-USER firewall)
   ansible.builtin.apt:

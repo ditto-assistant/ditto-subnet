@@ -38,11 +38,13 @@ from ditto.api_models.burn_settings import BurnSettings
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator import (
+    ConfirmationSeedAnchorPin,
     LedgerScoreProof,
     V9BaseEvidence,
     V9ConfirmationReceipt,
 )
 from ditto.api_server.config import EfficiencyBonusConfig
+from ditto.api_server.confirmation_seed_anchor import list_reign_seed_anchors
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     tie_weighting_is_active,
@@ -157,6 +159,10 @@ class _LedgerSnapshot:
     continual_retest_cohort_size: int = 5
     requesting_validator_hotkey: str | None = None
     context: _LedgerContext | None = None
+    confirmation_seed_anchors: tuple[ConfirmationSeedAnchorPin, ...] = ()
+    """Pinned finalized-block anchors of the active version's seed families.
+
+    Durable chain facts, so the stale path replays them unchanged."""
 
 
 @dataclass(frozen=True)
@@ -454,6 +460,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         ),
         continual_retest_cohort_size=snapshot.continual_retest_cohort_size,
         burn_share=snapshot.burn_share,
+        confirmation_seed_anchors=list(snapshot.confirmation_seed_anchors),
     )
 
 
@@ -671,6 +678,20 @@ async def scores(
             agent_ids=[r.agent_id for r in rows],
             bench_version=canonical_version,
         )
+        # Bench v13+: the pinned finalized-block anchors every validator needs
+        # to re-derive the champion-anchored confirmation family fleet-wide.
+        confirmation_seed_anchors = tuple(
+            ConfirmationSeedAnchorPin(
+                champion_agent_id=anchor.champion_agent_id,
+                bench_version=anchor.bench_version,
+                anchor_block=anchor.anchor_block,
+                anchor_block_hash=anchor.block_hash or "",
+            )
+            for anchor in await list_reign_seed_anchors(
+                session, bench_version=canonical_version
+            )
+            if anchor.block_hash is not None
+        )
         _, active_confirmation_by_seed, _ = completed_wave_data(
             rows,
             stderrs={},
@@ -833,6 +854,7 @@ async def scores(
             continual_retest_cohort_size=continual_settings.retest_cohort_size,
             requesting_validator_hotkey=x_validator_hotkey,
             context=ledger_context,
+            confirmation_seed_anchors=confirmation_seed_anchors,
         ),
     )
     logger.info(
@@ -859,6 +881,7 @@ async def scores(
         # split the fold applies. Resolved here so every validator reads one
         # decided scalar instead of evaluating a schedule against its own clock.
         burn_share=burn_settings.burn_share,
+        confirmation_seed_anchors=list(confirmation_seed_anchors),
     )
     _finish_ledger_materialization(request, materialization)
     return ledger_response
@@ -937,4 +960,6 @@ def _serve_last_known(
         age_seconds=max(0, age),
         # Replayed, not re-resolved: see _LedgerSnapshot.burn_share.
         burn_share=snapshot.burn_share,
+        # Chain facts pinned once per reign; replaying them cannot go stale.
+        confirmation_seed_anchors=list(snapshot.confirmation_seed_anchors),
     )
