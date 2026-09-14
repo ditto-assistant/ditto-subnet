@@ -54,6 +54,12 @@ type Claim struct {
 	Critical bool `json:"critical,omitempty"`
 	// Weight is the claim's share of the case credit; zero means equal share.
 	Weight float64 `json:"weight,omitempty"`
+	// Forbidden lists surface forms whose presence fails the claim regardless
+	// of Expected/Accept. For an entity claim this is the DISTRACTOR party
+	// (the wrong client in a permuted identity record), never the correct
+	// entity: "Acme invoice review" passes when Acme is the client (issue
+	// #1847). Bounded-phrase matched after normalization.
+	Forbidden []string `json:"forbidden,omitempty"`
 }
 
 // RestraintClaim (bench_version 13, grader-only) states what a correct harness
@@ -70,8 +76,18 @@ type RestraintClaim struct {
 	// ForbiddenTools are the capabilities whose observed call fails the claim.
 	ForbiddenTools []string `json:"forbidden_tools,omitempty"`
 	// Accept lists phrasings that satisfy the claim (a clarifying question that
-	// names the ambiguity, a decline that cites the missing evidence).
+	// names the ambiguity, a decline that cites the missing evidence). For
+	// RestraintClarifyFirst this is the SLOT lexicon: the schema argument name,
+	// the nouns of the tool description, and multilingual synonyms ("which
+	// typeface?" names the font slot). A generic "what would you like?" names
+	// no slot and scores 0.
 	Accept []string `json:"accept,omitempty"`
+	// Grounding (RestraintClarifyFirst) lists tokens that exist in the records
+	// the harness should have searched (an option the user mentioned trying, an
+	// event title, a person's nickname). A clarifying question must cite at
+	// least one so it proves a read of the seeded state rather than a templated
+	// "which theme?" keyed on the request alone (issue #1846).
+	Grounding []string `json:"grounding,omitempty"`
 }
 
 // RestraintKind values for RestraintClaim.Kind.
@@ -139,6 +155,44 @@ type ToolCase struct {
 	// Restraint (bench_version 13, grader-only) is set on a case whose correct
 	// outcome is restraint rather than a call. Never serialized.
 	Restraint *RestraintClaim `json:"-"`
+	// TwinGroup (bench_version 13, grader-only) is the restraint-group identity
+	// shared by the distributionally matched members of one decision_twin
+	// group (issue #1846). The group rule scores the members together; the
+	// members are never adjacent and never surface-identical. Never serialized.
+	TwinGroup string `json:"-"`
+	// ForbiddenTools (bench_version 13, grader-only) are catalog tools whose
+	// observed call zeroes the case even when every expected capability was
+	// also observed. It is how a state-dependent route punishes the "do both"
+	// hedge: a calendar move case forbids calendar_create_event, so a harness
+	// that always searches AND creates fails the move half (issue #1845).
+	// Never serialized.
+	ForbiddenTools []string `json:"-"`
+	// EffectAnswer (bench_version 13, grader-only) marks a memory-read tool
+	// case graded on EFFECT: the value is planted in the seeded world through
+	// PrerequisitePairs, memory tools stay harness-internal and unserved, and
+	// the case scores 1.0 only when the final answer carries this value and no
+	// non-memory tool was called. It replaces the pre-v13 "any non-empty text"
+	// routing credit (issue #1845). Never serialized.
+	EffectAnswer string `json:"-"`
+	// EffectForbidden (bench_version 13, grader-only) lists stale values a
+	// follow-up read must NOT assert beside EffectAnswer: the pre-mutation
+	// state ("Friday" before the handoff moved, the superseded address a
+	// deleted receipt reconciled away). An answer carrying one is reporting
+	// the whole store, not the end state, and scores 0 even when it also
+	// carries the corrected value. Never serialized.
+	EffectForbidden []string `json:"-"`
+	// AlternativeExpectedTools (bench_version 13, grader-only) lists capability
+	// sets that are each an equally correct outcome for the case. The grader
+	// scores every alternative and keeps the best, so an end-state-equivalent
+	// trajectory (delete the note, then save the corrected fact) earns the same
+	// credit as the canonical one (update the note in place). Never serialized.
+	AlternativeExpectedTools [][]ToolSpec `json:"-"`
+	// RunAfterCaseID (bench_version 13, grader-only) names a case this one
+	// must run AFTER: a follow-up read that verifies a mutation's end state
+	// ("delete + save is equivalent to update") is only meaningful once the
+	// mutation has been asked. The harness projection places the follow-up
+	// well after its mutation in the run order. Never serialized.
+	RunAfterCaseID string `json:"-"`
 }
 
 // AnswerKind values: how a memory case is graded deterministically. Grading is
