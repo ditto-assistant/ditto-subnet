@@ -635,19 +635,27 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                 "submit_fanout_adjudication",
             }:
                 continue
-            fields: list[tuple[str, dict]] = [("summary", arguments)]
+            fields: list[tuple[str, dict, int]] = [("summary", arguments, 240)]
             combined = name == "submit_fanout_adjudication"
             review = arguments.get("final_review") if combined else arguments
             if isinstance(review, dict):
                 if combined:
-                    fields.append(("final_review.summary", review))
+                    fields.append(("final_review.summary", review, 240))
                 invariants = review.get("invariants")
                 if isinstance(invariants, list):
+                    # Policy v13 has eight decisions and caps their summaries at
+                    # 1,680 characters in aggregate. Bounding each to the
+                    # published 210-character producer limit satisfies that
+                    # aggregate without changing any semantic decision field.
+                    invariant_summary_chars = (
+                        210 if self._review_policy_version >= 13 else 240
+                    )
                     fields.extend(
                         (
                             f"{'final_review.' if combined else ''}"
                             f"invariants[{i}].summary",
                             item,
+                            invariant_summary_chars,
                         )
                         for i, item in enumerate(invariants)
                         if isinstance(item, dict)
@@ -655,13 +663,13 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
             assessments = arguments.get("candidate_assessments")
             if isinstance(assessments, list):
                 fields.extend(
-                    (f"candidate_assessments[{i}].summary", item)
+                    (f"candidate_assessments[{i}].summary", item, 240)
                     for i, item in enumerate(assessments)
                     if isinstance(item, dict)
                 )
-            for field, item in fields:
+            for field, item, max_chars in fields:
                 summary = item.get("summary")
-                if isinstance(summary, str) and len(summary) > 240:
+                if isinstance(summary, str) and len(summary) > max_chars:
                     self.full_summaries.append(
                         {
                             "field": field,
@@ -670,7 +678,7 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                             "truncated": len(summary) > 8000,
                         }
                     )
-                    item["summary"] = summary[:237] + "..."
+                    item["summary"] = summary[: max_chars - 3] + "..."
             call["function"]["arguments"] = json.dumps(arguments)
         return message
 

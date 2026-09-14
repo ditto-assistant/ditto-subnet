@@ -1520,6 +1520,102 @@ async def test_shadow_schema_correction_is_bounded_and_cannot_coerce_pass(
     assert [t["function"]["name"] for t in seen[-1]["tools"]] == ["submit_review"]
 
 
+def test_policy_v13_bounds_all_invariant_summaries_without_changing_decisions(
+    tmp_path,
+):
+    from ditto_screening_protocol import SourceReviewInvariantAssessment
+
+    from .test_source_review import (
+        _BENIGN_REVIEW,
+        _tool,
+        _with_policy_v10_invariants,
+    )
+
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    key.chmod(0o600)
+    final_review = _with_policy_v10_invariants(dict(_BENIGN_REVIEW))
+    decisions = final_review["invariants"]
+    assert isinstance(decisions, list) and len(decisions) == 8
+    decisions[0] = {
+        **decisions[0],
+        "disposition": "breach",
+        "pass_clause": None,
+        "evidence_indices": [0],
+    }
+    decisions[1] = {
+        **decisions[1],
+        "disposition": "inconclusive",
+        "pass_clause": None,
+        "evidence_indices": [],
+    }
+    for index, decision in enumerate(decisions):
+        decision["summary"] = str(index) + "x" * 239
+    semantic_fields = [
+        {
+            key: decision[key]
+            for key in ("invariant", "disposition", "pass_clause", "evidence_indices")
+        }
+        for decision in decisions
+    ]
+    message = {
+        "role": "assistant",
+        "tool_calls": [
+            _tool(
+                "final",
+                "submit_fanout_adjudication",
+                {
+                    "final_review": final_review,
+                    "candidate_assessments": [],
+                    "summary": "Central adjudication completed.",
+                },
+            )
+        ],
+    }
+    reviewer = ExperimentalReviewer(
+        focus="Adjudicator",
+        api_key_file=str(key),
+        model="z-ai/glm-5.3-flash",
+        base_url="https://router.example/v1",
+        max_steps=1,
+        max_read_bytes=180_000,
+        max_completion_tokens=8000,
+        timeout_seconds=60,
+    )
+    reviewer._review_policy_version = 13
+
+    bounded = reviewer._bound_summary_fields(message)
+    arguments = json.loads(bounded["tool_calls"][0]["function"]["arguments"])
+    bounded_decisions = arguments["final_review"]["invariants"]
+
+    assert [
+        {
+            key: decision[key]
+            for key in ("invariant", "disposition", "pass_clause", "evidence_indices")
+        }
+        for decision in bounded_decisions
+    ] == semantic_fields
+    assert bounded_decisions[0]["disposition"] == "breach"
+    assert bounded_decisions[0]["evidence_indices"] == [0]
+    assert bounded_decisions[1]["disposition"] == "inconclusive"
+    assert bounded_decisions[1]["pass_clause"] is None
+    assert all(len(decision["summary"]) == 210 for decision in bounded_decisions)
+    assert sum(len(decision["summary"]) for decision in bounded_decisions) == 1_680
+    SourceReviewInvariantAssessment.model_validate(
+        {"schema_version": 2, "decisions": bounded_decisions}
+    )
+    assert len(reviewer.full_summaries) == 8
+    assert [row["field"] for row in reviewer.full_summaries] == [
+        f"final_review.invariants[{index}].summary" for index in range(8)
+    ]
+    assert all(row["original_chars"] == 240 for row in reviewer.full_summaries)
+    assert all(
+        row["text"] == str(index) + "x" * 239
+        for index, row in enumerate(reviewer.full_summaries)
+    )
+    assert all(row["truncated"] is False for row in reviewer.full_summaries)
+
+
 @pytest.mark.parametrize("model", [{}, [], 42])
 async def test_malformed_model_identifier_stops_admission_without_crashing(model):
     budget = FanoutBudget(

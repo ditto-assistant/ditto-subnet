@@ -96,9 +96,11 @@ yet read; the central review must still pass the authoritative parser and
 source-read proofs. Malformed JSON arguments receive bounded corrective feedback
 inside the same remaining turns; malformed final-turn output remains incomplete.
 It is never converted to a pass. Overlong display summaries are shortened to 240
-characters while originals remain in `full_summaries` (up to 8,000 characters,
-with explicit truncation metadata) and the adjudicator context. Risk, categories,
-evidence and invariant decisions are never normalized in the provisional record.
+characters; policy-v13 invariant summaries use the protocol's 210-character
+producer limit so all eight remain within the 1,680-character aggregate bound.
+Originals remain in `full_summaries` (up to 8,000 characters, with explicit
+truncation metadata) and the adjudicator context. Risk, categories, evidence and
+invariant decisions are never normalized in the provisional record.
 Validation errors and field sizes are retained in the pass report.
 The price envelope is $0.60/M input and $2.00/M output,
 four times the highest listed non-batch route seen on 2026-09-14 for the exact
