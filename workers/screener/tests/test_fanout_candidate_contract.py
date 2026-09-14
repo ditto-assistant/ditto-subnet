@@ -330,3 +330,42 @@ def test_keyed_invariant_summaries_are_bounded_without_semantic_changes():
         for key, row in bounded.items()
     )
     assert len(reviewer.full_summaries) == 8
+
+
+@pytest.mark.parametrize(
+    "field,value,diagnostic",
+    [
+        (
+            "disposition",
+            "private unknown disposition",
+            "expected=supported|refuted|unresolved",
+        ),
+        ("summary", None, "summary:type=NoneType"),
+        ("summary", "", "summary:length=0 expected=1..240"),
+        ("summary", "x" * 241, "summary:length=241 expected=1..240"),
+        ("supporting_evidence", {}, "supporting_evidence:type=dict"),
+        ("counterevidence", "private counter text", "counterevidence:type=str"),
+    ],
+)
+def test_candidate_field_diagnostics_are_precise_and_private(
+    tmp_path, field, value, diagnostic
+):
+    assessment = {**_assessment(), field: value}
+    repo = TarSourceRepository(
+        str(_archive_files(tmp_path, {"src/main.rs": b"one\ntwo\n"}))
+    )
+    with pytest.raises(ValueError) as error:
+        _normalize_candidate_adjudications(
+            {
+                "candidate_assessments": {
+                    "candidate-001": assessment,
+                    "candidate-002": _assessment(),
+                }
+            },
+            candidates=_candidates(),
+            repository=repo,
+            opened_lines=set(),
+        )
+    assert diagnostic in str(error.value)
+    assert "candidate-001" in str(error.value)
+    assert "private" not in str(error.value)

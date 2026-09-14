@@ -241,7 +241,7 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
     assert all("Exact active policy manifest" in r.kwargs["focus"] for r in instances)
     assert all(r.kwargs["timeout_seconds"] == 120 for r in instances)
     assert all(r.kwargs["max_completion_request_seconds"] == 120 for r in instances)
-    assert instances[-1].kwargs["leads"] == []
+    assert instances[-1].kwargs["leads"] == result["semantic_discovery"]["leads"]
     assert result["incremental_candidate"] is True
     assert result["outcome"] == expected
     assert result["usage"]["requests"] == 6
@@ -836,7 +836,7 @@ async def test_adjudicator_reserves_read_repair_after_forced_final(tmp_path):
         payload = json.loads(request.content)
         requests.append(payload)
         turn = len(requests)
-        if turn <= 9:
+        if turn <= 6 or turn in {10, 11}:
             calls = [
                 _tool(
                     f"read-{turn}",
@@ -844,7 +844,7 @@ async def test_adjudicator_reserves_read_repair_after_forced_final(tmp_path):
                     {"path": "src/main.rs", "start_line": 1, "end_line": 1},
                 )
             ]
-        elif turn == 11:
+        elif turn == 8:
             assert "did not read" in json.dumps(payload["messages"])
             assert any(
                 tool["function"]["name"] == "read_file" for tool in payload["tools"]
@@ -863,7 +863,14 @@ async def test_adjudicator_reserves_read_repair_after_forced_final(tmp_path):
                     "submit_fanout_adjudication",
                     {
                         "final_review": final_review,
-                        "candidate_assessments": [],
+                        "candidate_assessments": {
+                            "candidate-001": {
+                                "disposition": "supported",
+                                "supporting_evidence": final_review["evidence"],
+                                "counterevidence": [],
+                                "summary": None if turn == 9 else "Source verified.",
+                            }
+                        },
                         "summary": "Fresh stage two found a source-bound issue.",
                     },
                 )
@@ -895,20 +902,27 @@ async def test_adjudicator_reserves_read_repair_after_forced_final(tmp_path):
     result = await reviewer.adjudicate_review(
         str(archive),
         artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
-        candidates=[],
+        candidates=[
+            {
+                "candidate_id": "candidate-001",
+                "source_pass": "generalist",
+                "finding": {"evidence": final_review["evidence"]},
+            }
+        ],
         all_pass_summaries=[],
         policy_version=13,
         deadline=asyncio.get_running_loop().time() + 60,
     )
-    assert result["outcome"] == "candidate"
+    assert result["outcome"] == "critic_also_flagged"
     assert len(requests) == 12
-    assert [tool["function"]["name"] for tool in requests[9]["tools"]] == [
+    assert [tool["function"]["name"] for tool in requests[6]["tools"]] == [
         "submit_fanout_adjudication"
     ]
     assert [tool["function"]["name"] for tool in requests[11]["tools"]] == [
         "submit_fanout_adjudication"
     ]
-    assert len(reviewer.validation_errors) == 1
+    assert len(reviewer.validation_errors) == 2
+    assert "summary:type=NoneType" in reviewer.validation_errors[1]
     assert reviewer.validation_errors[0].startswith(
         "fanout adjudicator cited source it did not read"
     )

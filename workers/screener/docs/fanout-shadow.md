@@ -80,9 +80,16 @@ file before selecting across rule families and files; nearby duplicates collapse
 Comments and strings do not supply code matches. The report records file, byte,
 window and hint omissions and always labels this scan non-exhaustive. Other
 specialists retain their independent discovery, and the adjudicator receives
-their source-grounded notes. Hints never satisfy citation or clearance checks.
+their source-grounded notes plus the location packet for independent inspection.
+Hints never satisfy citation or clearance checks.
 Legitimate caches, model-authored programs and syntax validators can match; the
 reviewer must establish source causality and the applicable policy independently.
+
+With the 12-turn adjudicator cap, request the first structured result on turn
+seven, leaving five turns for source reads and field repairs before the final
+forced submission. Diagnostics identify invalid candidate fields without echoing
+arbitrary payload text. This redistributes the same turn allowance; it does not
+increase request, token, cost or deadline limits or coerce an incomplete verdict.
 
 Evaluate changes with SHA-bound, source-only replays. Keep baseline verdicts and
 findings out of the model input. Require exact-mechanism recall on known-rejected

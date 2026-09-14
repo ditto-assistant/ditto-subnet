@@ -421,15 +421,25 @@ def _normalize_candidate_adjudications(
         summary = row.get("summary")
         support = row.get("supporting_evidence")
         counter = row.get("counterevidence")
-        if (
-            not isinstance(disposition, str)
-            or disposition not in {"supported", "refuted", "unresolved"}
-            or not isinstance(summary, str)
-            or not 1 <= len(summary) <= 240
-            or not isinstance(support, list)
-            or not isinstance(counter, list)
-        ):
-            raise ValueError("fanout adjudicator fields are invalid")
+        invalid_fields = []
+        if not isinstance(disposition, str):
+            invalid_fields.append(f"disposition:type={type(disposition).__name__}")
+        elif disposition not in {"supported", "refuted", "unresolved"}:
+            invalid_fields.append("disposition:expected=supported|refuted|unresolved")
+        if not isinstance(summary, str):
+            invalid_fields.append(f"summary:type={type(summary).__name__}")
+        elif not 1 <= len(summary) <= 240:
+            invalid_fields.append(f"summary:length={len(summary)} expected=1..240")
+        if not isinstance(support, list):
+            invalid_fields.append(f"supporting_evidence:type={type(support).__name__}")
+        if not isinstance(counter, list):
+            invalid_fields.append(f"counterevidence:type={type(counter).__name__}")
+        if invalid_fields:
+            raise ValueError(
+                f"fanout adjudicator fields invalid for {candidate_id}: "
+                + "; ".join(invalid_fields)
+            )
+        assert isinstance(support, list) and isinstance(counter, list)
         valid_support = [
             item
             for item in support
@@ -1151,7 +1161,8 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                 if remaining <= 0:
                     raise TimeoutError("fanout adjudicator exceeded global deadline")
                 final_turn = step + 1 == self._max_steps
-                first_settlement_turn = step + 3 == self._max_steps
+                repair_turns = 5 if self._max_steps >= 10 else 2
+                first_settlement_turn = step + repair_turns + 1 == self._max_steps
                 force_submission = first_settlement_turn or final_turn
                 if force_submission:
                     messages.append(
@@ -1164,8 +1175,8 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                                 + (
                                     " This is the final allowed turn."
                                     if final_turn
-                                    else " Two repair turns remain if source-read "
-                                    "validation identifies missing evidence."
+                                    else f" {repair_turns} repair turns remain for "
+                                    "source reads and structured-field corrections."
                                 )
                             ),
                         }
@@ -1693,7 +1704,7 @@ async def review_archive(
             "preserve minority findings and uncertainty, and never count votes.\n"
             + manifest_focus
         ),
-        leads=[],
+        leads=discovery["leads"] if discovery is not None else [],
         assigned_paths=(),
         budget=budget,
         api_key_file=api_key_file,
