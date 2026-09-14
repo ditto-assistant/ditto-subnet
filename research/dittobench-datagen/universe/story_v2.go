@@ -444,8 +444,14 @@ func (b *storyV2Builder) buildArc(index int, kind StoryKind, theme StoryEventKin
 			v2.SequenceMemories[1] = e.Memory
 			if quantityKind != "money" && !hasEvent(events, EventCorrection) {
 				op := []string{"add", "subtract"}[r.Intn(2)]
-				if unit == "percent" || deltaQty >= baseQty {
+				if unit == "percent" {
 					op = "subtract"
+				}
+				if deltaQty >= baseQty {
+					// A subtraction must leave a positive count (a 2-night stay
+					// cannot lose 2 nights): the swap adds instead. Every graded
+					// StoryQuantity.Value is >= 1 by construction.
+					op = "add"
 				}
 				value := baseQty + deltaQty
 				phrase := fmt.Sprintf("their version adds %d %s to the %d %s %s had quoted", deltaQty, unit, baseQty, unit, provider1)

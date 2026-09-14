@@ -953,7 +953,9 @@ vectors). The hidden multi-memory join is kept and the shape varies:
   sentence is stored. The 137-cent quantum and the `%+d` / `->` tells are gone.
   The catalog is public, so parse-resistance is delivered by the private v13
   surface pass and measured by `cmd/parserprobe`; the raw pre-pass ceiling is
-  reported by `TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic`.
+  pinned by `TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic`
+  (`storyProbeRawCeiling`, seeds 1–8 / 104 arcs: owner 40, status 17,
+  sequence 104, next-who 89, quantity 20) and may only fall.
 - **Six typed oracles per arc, 78 story cases per full seed
   (`universe/questions_v13.go`).** owner-current (name, nickname accepted),
   status-current (per-seed surface term ∪ canonical synonyms; on two arcs per
@@ -966,7 +968,12 @@ vectors). The hidden multi-memory join is kept and the shape varies:
   set are dropped) — and one cross-record inference oracle joining the arc to
   the ordinary world (`latest-by-time` over handoff records → `owner-of` → the
   owner's current work address through the person's identity/work/correction
-  records). The four v8 money oracles and the cents-baking summary are gone;
+  records). Every distractor set seats three distinct values at every scale:
+  people are drawn from a seed-keyed permutation of the world, and the
+  six-person small world falls back to the arc's superseded owners (the
+  stale-state distractor) when the anchor and ownership chain leave fewer than
+  three. Every record-stated quantity resolves to a value >= 1. The four v8
+  money oracles and the cents-baking summary are gone;
   `StoryArc`'s `*Cents` fields stay zero at v13 and the typed state lives in
   `StoryArc.V2`. Every plan carries typed `Claims` for the v13 grader.
 

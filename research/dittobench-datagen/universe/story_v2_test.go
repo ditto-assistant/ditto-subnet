@@ -3,6 +3,7 @@ package universe
 import (
 	"fmt"
 	"math/rand"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
@@ -402,8 +403,11 @@ func TestStoryOraclesAreTypedAndLessonClaimSetsAccept(t *testing.T) {
 			perArc[plan.oracleIndex][plan.oracleKind]++
 			arc := w.StoryArcs[plan.oracleIndex]
 			v2 := arc.V2
-			if plan.Case.BenchVersion == 0 {
-				plan.Case.BenchVersion = protocol.BenchVersionV13
+			// The >= 12 grading policy (question-echo rejection, slot-scoped
+			// distractor scan) is what production grades under; the plan must
+			// already carry it rather than the frozen v8 default of memoryCase.
+			if plan.Case.BenchVersion != protocol.BenchVersionV13 {
+				t.Fatalf("seed %d %s carries bench_version %d, want %d", seed, plan.oracleKind, plan.Case.BenchVersion, protocol.BenchVersionV13)
 			}
 			correct := []string{}
 			switch plan.oracleKind {
@@ -536,6 +540,95 @@ func TestStoryV2DoesNotDisturbTheV8Script(t *testing.T) {
 		}
 		if v8.StoryArcs[0].V2 != nil || !strings.HasPrefix(v8.Stories[0].SessionID, "story-") {
 			t.Fatalf("seed %d v8 world carries story v2 state", seed)
+		}
+	}
+}
+
+// TestStoryV13PlansValidateAtEveryScale is the small-world proof the envelope
+// test never gave: the six-person scale-1 world (the "small" run size and every
+// n < 40 analysis profile) and the 14-person scale-2 world must seat three
+// distinct distractors on every story oracle and pass World.QuestionPlans at
+// the case count gen's v8WorldProfile requests (11 and 77). Before the
+// seed-keyed people permutation, 59/60 scale-1 seeds failed validation and one
+// panicked inside generation.
+func TestStoryV13PlansValidateAtEveryScale(t *testing.T) {
+	for _, tc := range []struct{ scale, cases int }{{1, 11}, {2, 77}} {
+		for seed := int64(1); seed <= 30; seed++ {
+			w := GenerateForVersion(seed, tc.scale, protocol.BenchVersionV13)
+			plans := v13StoryPlans(t, w)
+			if want := 6 * len(w.StoryArcs); len(plans) != want {
+				t.Fatalf("scale %d seed %d story plans=%d, want %d", tc.scale, seed, len(plans), want)
+			}
+			for _, plan := range plans {
+				seen := map[string]bool{}
+				for _, d := range plan.Case.DistractorAnswers {
+					if d == "" || d == plan.Case.ExpectedAnswer || seen[d] {
+						t.Fatalf("scale %d seed %d %s has a degenerate distractor set %v", tc.scale, seed, plan.oracleKind, plan.Case.DistractorAnswers)
+					}
+					seen[d] = true
+				}
+				if len(seen) != 3 {
+					t.Fatalf("scale %d seed %d %s has %d distractors", tc.scale, seed, plan.oracleKind, len(seen))
+				}
+			}
+			if _, err := w.QuestionPlans(tc.cases); err != nil {
+				t.Fatalf("scale %d seed %d QuestionPlans(%d): %v", tc.scale, seed, tc.cases, err)
+			}
+		}
+	}
+}
+
+// TestStoryV2QuantitiesArePositiveAndRecomputable: a record-stated quantity
+// always resolves to a value >= 1 (an expected "0" is a bounded-token grading
+// hazard and a nonsensical question), and the baked Value always equals the
+// oracle's recomputation from the stated operands, at every scale.
+func TestStoryV2QuantitiesArePositiveAndRecomputable(t *testing.T) {
+	quantities := 0
+	for _, scale := range []int{1, 2, 3} {
+		for seed := int64(1); seed <= 200; seed++ {
+			w := GenerateForVersion(seed, scale, protocol.BenchVersionV13)
+			for i, arc := range w.StoryArcs {
+				q := arc.V2.Quantity
+				if q == nil {
+					continue
+				}
+				quantities++
+				if q.Value < 1 {
+					t.Fatalf("scale %d seed %d arc %d %s quantity is %d (%+v)", scale, seed, i, q.Kind, q.Value, *q)
+				}
+				if got := storyQuantityValue(*q); got != q.Value {
+					t.Fatalf("scale %d seed %d arc %d quantity bakes %d but recomputes %d (%+v)", scale, seed, i, q.Value, got, *q)
+				}
+			}
+		}
+	}
+	if quantities == 0 {
+		t.Fatal("no story quantities were drawn")
+	}
+}
+
+// TestStoryClaimMirrorsPlannedProtocolClaim pins the universe-local Claim to
+// the grader-only protocol.Claim shape the v13 plumbing (#1824) lands:
+// {Kind, Expected, Accept, Unit, Critical, Weight} with these json tags. When
+// that type is in protocol/, replace the local type with it (or an alias) and
+// drop this test; until then a silent drift between the two fails here.
+func TestStoryClaimMirrorsPlannedProtocolClaim(t *testing.T) {
+	want := []struct{ name, kind, tag string }{
+		{"Kind", "string", `json:"kind"`},
+		{"Expected", "string", `json:"expected"`},
+		{"Accept", "[]string", `json:"accept,omitempty"`},
+		{"Unit", "string", `json:"unit,omitempty"`},
+		{"Critical", "bool", `json:"critical"`},
+		{"Weight", "float64", `json:"weight"`},
+	}
+	typ := reflect.TypeOf(Claim{})
+	if typ.NumField() != len(want) {
+		t.Fatalf("Claim has %d fields, want %d", typ.NumField(), len(want))
+	}
+	for i, field := range want {
+		got := typ.Field(i)
+		if got.Name != field.name || got.Type.String() != field.kind || string(got.Tag) != field.tag {
+			t.Fatalf("Claim field %d is %s %s `%s`, want %s %s `%s`", i, got.Name, got.Type, got.Tag, field.name, field.kind, field.tag)
 		}
 	}
 }

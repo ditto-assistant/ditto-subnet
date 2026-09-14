@@ -92,3 +92,27 @@ func TestV13WorldPairsHaveOpaqueStorySessions(t *testing.T) {
 		}
 	}
 }
+
+// TestV13SmallWorldMemorySuiteGenerates: the small run size (n=6 -> scale-1
+// six-person world, 11 primary cases) and every n < 40 analysis profile must
+// generate at v13. World.QuestionPlans validates EVERY story candidate before
+// selecting, so a story plan that cannot seat three distractors fails the
+// whole suite even though small's v10/v12 carve-outs leave it no story slot
+// (v12 small carries none either). Before the seed-keyed distractor
+// permutation every scale-1 seed failed here; the v12 envelope for the same
+// seed is regenerated alongside to prove the small case count did not move.
+func TestV13SmallWorldMemorySuiteGenerates(t *testing.T) {
+	for seed := int64(1); seed <= 8; seed++ {
+		v13, err := generateV8WorldMemorySuite(seed, 6, 1, protocol.BenchVersionV13)
+		if err != nil {
+			t.Fatalf("seed %d v13 small world suite: %v", seed, err)
+		}
+		v12, err := generateV8WorldMemorySuite(seed, 6, 1, protocol.BenchVersionV12)
+		if err != nil {
+			t.Fatalf("seed %d v12 small world suite: %v", seed, err)
+		}
+		if len(v13.Cases) != len(v12.Cases) {
+			t.Fatalf("seed %d v13 small suite has %d cases, v12 has %d", seed, len(v13.Cases), len(v12.Cases))
+		}
+	}
+}

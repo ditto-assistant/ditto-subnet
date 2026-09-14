@@ -118,6 +118,14 @@ func storyGIHProbe(w World) storyProbeReport {
 	return report
 }
 
+// storyProbeRawCeiling is the PUBLISHED raw pre-pass ceiling: the GIH scan's
+// recovery over seeds 1..8 (104 arcs) of the prose as this PR renders it. It is
+// the regression target the private surface pass (#1832) and cmd/parserprobe
+// (#1829) must come in under; a change that lets the scan recover MORE than
+// this fails here, because it means a public frame started handing the graded
+// state over more cheaply.
+var storyProbeRawCeiling = storyProbeReport{Arcs: 104, Owner: 40, Status: 17, Sequence: 104, NextWho: 89, Quantity: 20}
+
 func TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic(t *testing.T) {
 	total := storyProbeReport{}
 	for seed := int64(1); seed <= 8; seed++ {
@@ -145,5 +153,12 @@ func TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic(t *testing.T) {
 	// oracle does not (a generator defect, not adversary strength).
 	if total.Owner > total.Arcs || total.Status > total.Arcs || total.Sequence > total.Arcs {
 		t.Fatalf("probe exceeded the oracle: %+v", total)
+	}
+	if total.Arcs != storyProbeRawCeiling.Arcs {
+		t.Fatalf("probe covered %d arcs, the published ceiling is over %d", total.Arcs, storyProbeRawCeiling.Arcs)
+	}
+	if total.Owner > storyProbeRawCeiling.Owner || total.Status > storyProbeRawCeiling.Status || total.Sequence > storyProbeRawCeiling.Sequence ||
+		total.NextWho > storyProbeRawCeiling.NextWho || total.Quantity > storyProbeRawCeiling.Quantity {
+		t.Fatalf("raw arc-recovery ceiling rose above the published %s: got %s", storyProbeRawCeiling, total)
 	}
 }
