@@ -229,6 +229,23 @@ class EffectiveReviewSettings(BaseModel):
         if hashlib.sha256(payload).hexdigest() == self.checksum:
             return self
 
+        # Platform deliberately hashes an inactive fan-out block in the legacy
+        # shape. Old native workers ignore these new response fields, so this
+        # keeps an off revision valid throughout the rolling Platform/worker
+        # deploy. Enabling shadow mode restores full-field checksum binding and
+        # therefore requires the upgraded worker release.
+        if self.settings.fanout_shadow_mode == "off":
+            inactive = dict(current)
+            for name in _POST_CHECKSUM_FIELDS[
+                _POST_CHECKSUM_FIELDS.index("fanout_shadow_mode") :
+            ]:
+                inactive.pop(name, None)
+            candidate = json.dumps(
+                inactive, sort_keys=True, separators=(",", ":")
+            ).encode()
+            if hashlib.sha256(candidate).hexdigest() == self.checksum:
+                return self
+
         # A revision minted before a control existed cannot carry that key in
         # the canonical JSON its immutable checksum was taken over, so replay
         # the payload as it stood when each field was introduced, newest first.

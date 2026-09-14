@@ -37,7 +37,10 @@ from ditto.api_models.screener import (
     SourceReviewEvidenceItem,
     SourceReviewFinding,
 )
-from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.screener_review_settings import (
+    FANOUT_SHADOW_SETTINGS_FIELDS,
+    ScreenerReviewSettings,
+)
 from ditto.api_models.system_health import (
     SystemMetrics,
     system_metrics_signing_token,
@@ -133,9 +136,7 @@ _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _SCREENER_HOTKEY = _KEYPAIR.ss58_address
 
 
-@pytest.mark.parametrize(
-    "response_model", ["z-ai/glm-5.3-flash", "glm-5.3-flash"]
-)
+@pytest.mark.parametrize("response_model", ["z-ai/glm-5.3-flash", "glm-5.3-flash"])
 def test_fanout_response_model_accepts_only_verified_router_ids(response_model):
     assert _fanout_response_model_matches("z-ai/glm-5.3-flash", response_model)
 
@@ -146,6 +147,33 @@ def test_fanout_response_model_accepts_only_verified_router_ids(response_model):
 )
 def test_fanout_response_model_rejects_unverified_ids(response_model):
     assert not _fanout_response_model_matches("z-ai/glm-5.3-flash", response_model)
+
+
+def test_inactive_fanout_checksum_keeps_the_pre_fanout_wire_shape() -> None:
+    settings = ScreenerReviewSettings(
+        fanout_shadow_image_source_sha="1" * 40,
+        fanout_shadow_max_requests=12,
+        fanout_shadow_daily_cost_usd=5,
+    )
+    legacy = settings.model_dump(mode="json")
+    for field in FANOUT_SHADOW_SETTINGS_FIELDS:
+        legacy.pop(field)
+    expected = hashlib.sha256(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert _review_settings_checksum(settings) == expected
+
+
+def test_enabled_fanout_checksum_binds_every_fanout_field() -> None:
+    first = ScreenerReviewSettings(
+        fanout_shadow_mode="shadow",
+        fanout_shadow_image_source_sha="1" * 40,
+        fanout_shadow_max_requests=12,
+    )
+    changed = first.model_copy(update={"fanout_shadow_max_requests": 13})
+    assert _review_settings_checksum(first) != _review_settings_checksum(changed)
+
+
 _MINER_HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _SHA256 = "ab" * 32
 # A fixed block the mocked chain returns for on-chain seed derivation.

@@ -23,6 +23,21 @@ ReasoningEffort = Literal["low", "medium", "high"]
 SourceReviewModel = Literal["openai/gpt-5.6-luna"]
 AdjudicatorModel = Literal["z-ai/glm-5.3-flash"]
 FanoutShadowModel = Literal["z-ai/glm-5.3-flash"]
+FANOUT_SHADOW_SETTINGS_FIELDS = (
+    "fanout_shadow_mode",
+    "fanout_shadow_image_source_sha",
+    "fanout_shadow_model",
+    "fanout_shadow_concurrency",
+    "fanout_shadow_max_steps",
+    "fanout_shadow_max_groups",
+    "fanout_shadow_max_requests",
+    "fanout_shadow_max_total_tokens",
+    "fanout_shadow_timeout_seconds",
+    "fanout_shadow_max_cost_usd",
+    "fanout_shadow_daily_cost_usd",
+    "fanout_shadow_global_concurrency",
+    "fanout_shadow_reserved_targon_slots",
+)
 PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
 
 _POLICY_MANIFEST_MODULES: dict[PolicyManifestProfile, list[dict[str, str]]] = {
@@ -173,6 +188,16 @@ class ScreenerReviewSettings(BaseModel):
         ):
             raise ValueError("shadow mode requires an exact trusted image source SHA")
         return self
+
+
+def review_settings_checksum(settings: ScreenerReviewSettings) -> str:
+    """Hash inactive fan-out settings in the legacy shape for rolling upgrades."""
+    value = settings.model_dump(mode="json")
+    if settings.fanout_shadow_mode == "off":
+        for field in FANOUT_SHADOW_SETTINGS_FIELDS:
+            value.pop(field)
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class ScreenerReviewSettingsRevision(BaseModel):

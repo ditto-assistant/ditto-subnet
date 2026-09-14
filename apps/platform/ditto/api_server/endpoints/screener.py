@@ -134,6 +134,7 @@ from ditto.api_models.screener_review_settings import (
     EffectiveScreenerReviewSettings,
     ScreenerReviewSettings,
     policy_manifest_digest,
+    review_settings_checksum,
 )
 from ditto.api_models.system_health import (
     fleet_release_signing_token,
@@ -3633,10 +3634,7 @@ async def list_controller_nodes(
 
 
 def _review_settings_checksum(settings: ScreenerReviewSettings) -> str:
-    payload = json.dumps(
-        settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    ).encode()
-    return hashlib.sha256(payload).hexdigest()
+    return review_settings_checksum(settings)
 
 
 async def _resolve_effective_review_settings(

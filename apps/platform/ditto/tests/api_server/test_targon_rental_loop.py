@@ -115,9 +115,7 @@ def test_source_review_layer_env_carries_the_l1_verdict_budget() -> None:
 def test_fanout_shadow_env_pins_dedicated_router_destination() -> None:
     env = dict(_fanout_shadow_env(ScreenerReviewSettings()))
     assert env["SCREENER_REVIEW_INFERENCE_PROVIDER"] == "ditto"
-    assert env["SCREENER_SOURCE_REVIEW_BASE_URL"] == (
-        "https://router.heyditto.ai/v1"
-    )
+    assert env["SCREENER_SOURCE_REVIEW_BASE_URL"] == ("https://router.heyditto.ai/v1")
 
 
 def test_current_shadow_limits_only_tighten_operational_rails() -> None:
@@ -427,9 +425,7 @@ async def test_fanout_launch_uses_dedicated_secret_and_router(
         "projects/p/secrets/shadow"
     )
     assert env["SCREENER_REVIEW_INFERENCE_PROVIDER"] == "ditto"
-    assert env["SCREENER_SOURCE_REVIEW_BASE_URL"] == (
-        "https://router.heyditto.ai/v1"
-    )
+    assert env["SCREENER_SOURCE_REVIEW_BASE_URL"] == ("https://router.heyditto.ai/v1")
 
 
 @pytest.mark.asyncio

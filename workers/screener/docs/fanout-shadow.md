@@ -97,7 +97,12 @@ default stays empty, and the global shadow setting stays off until activation.
 
 The code and global setting default off. The production host points at the
 dedicated secret prepared for this pilot, but no job can launch while the global
-setting is off. Activation happens only after the merged release exists:
+setting is off. While it is off, Platform hashes the inactive fan-out block in
+the pre-fan-out wire shape. Existing workers ignore the new response fields and
+continue accepting their effective settings checksum during the rolling Platform
+and native-worker deployment. An enabled revision binds every fan-out field and
+therefore requires the upgraded worker. Activation happens only after the merged
+release exists:
 
 1. Confirm release deployment completed and a succeeded trusted screener image
    exists with `source_sha` equal to the merged release commit.
