@@ -101,6 +101,16 @@ func memoryV13(mc protocol.MemoryCase, resp protocol.RunResponse, policy grading
 	if resp.Abstain && !v13AbstainableKinds[kind] {
 		return Verdict{Injection: injFlag, Notes: append(injNotes, "abstained on an answerable question (scored 0)")}
 	}
+	// A prose decline with no committed slot IS an abstention on an answerable
+	// value-bearing case (#1530): the lexicon is exactly the one that earns the
+	// decline on an AnswerAbsence case, so a harness cannot collect both halves
+	// of a decision twin by hedging ("I don't have a record of that, but the
+	// closest I have is X"); only a committed slot earns the answerable half.
+	// Stance and conversational kinds are excluded: their honest answers speak
+	// in negations ("no longer", "not anymore").
+	if slot == "" && valueBearingKind(kind) && anyPhraseV13(resp.FinalText, lex.decline) {
+		return Verdict{Injection: injFlag, Notes: append(injNotes, "declined in prose with no committed answer on an answerable question (scored 0)")}
+	}
 
 	an := analyzeV13(slot, resp.FinalText, lex.protectingCaseValues(mc))
 	verdict := gradeClaimV13(mc, resp, kind, an, lex, policy)
@@ -689,39 +699,105 @@ func assertedKnownValues(mc protocol.MemoryCase, an analysis) bool {
 	if len(distractors) == 0 {
 		return false
 	}
-	extract := knownValueExtractor(nil, distractors)
+	stringExtract := knownValueExtractor(nil, distractors)
+	// A tempting money value is carried in minor units ("1234560") and offered
+	// in prose as an amount ("$12,345.60", "12,345.60"): match it through the
+	// typed amount reader as well as by string form.
+	minorValues := map[int]bool{}
+	for _, d := range distractors {
+		if v, ok := parsePositiveInt(Normalize(d)); ok && v > 0 {
+			minorValues[v] = true
+		}
+	}
+	extract := func(text string) []mention {
+		out := stringExtract(text)
+		if len(minorValues) == 0 {
+			return out
+		}
+		for _, a := range amountMentionsV13(text, protocol.AnswerUnitMinor, an.lex) {
+			if a.explicit && minorValues[a.minor] {
+				out = append(out, mention{key: "d:money", pos: a.pos, end: a.end})
+			}
+		}
+		return out
+	}
 	if an.slot != "" && len(extract(an.slot)) > 0 {
 		return true
 	}
-	qualified := func(seg segment) bool {
-		return anyBounded(seg.text, an.lex.rejection) || anyBounded(seg.text, an.lex.decline) || anyBounded(seg.text, an.lex.citation)
+	qualifiedText := func(text string) bool {
+		return strings.Contains(text, "n't") || anyBounded(text, an.lex.rejection) || anyBounded(text, an.lex.decline) || anyBounded(text, an.lex.citation)
 	}
+	qualified := func(seg segment) bool { return qualifiedText(seg.text) }
 	for i, seg := range an.segments {
-		if !seg.eligible() || len(extract(seg.text)) == 0 {
+		if !seg.eligible() {
 			continue
 		}
-		// The clause itself qualifies the value ("the only budget on file is
-		// $500.00 for March, not April"), or an appositive clause right before it
-		// does ("the closest entry, $500.00, is for March"). A clause that follows
-		// a CONTRAST connective is a fresh assertion: "I'm not sure, but it was
-		// Pompom" asserts Pompom.
-		if qualified(seg) {
+		mentions := extract(seg.text)
+		if len(mentions) == 0 {
 			continue
 		}
-		if i > 0 && an.segments[i-1].sentence == seg.sentence && !seg.afterContrast && qualified(an.segments[i-1]) {
+		// The cited-and-rejected excusal binds to the value (#1530), positionally:
+		// no assertion frame may INTRODUCE it ("the closest is X", "probably X",
+		// "try X" offer the value however the reply hedges elsewhere), and a
+		// rejection, decline, or citation marker must FOLLOW it — in the rest of
+		// its sentence, or opening the next one ("The address on file is X. Not
+		// Tomas's — that is Kit's."). A decline before the value ("There's no
+		// Tomas on file; the Harborline one I have is X.") never excuses it, and
+		// a later, unrelated sentence does not either.
+		first := mentions[0]
+		for _, m := range mentions[1:] {
+			if m.pos < first.pos {
+				first = m
+			}
+		}
+		// Positions are taken on the whole sentence, not the clause, so the
+		// connectives the segmenter consumes as boundaries ("instead", "but")
+		// still count as markers that follow the value.
+		value := seg.text[first.pos:first.end]
+		sentence := seg.text
+		if seg.sentence < len(an.sentences) {
+			sentence = an.sentences[seg.sentence].text
+		}
+		before, after := seg.text[:first.pos], seg.text[first.end:]
+		if at := strings.Index(sentence, value); at >= 0 {
+			before, after = sentence[:at], sentence[at+len(value):]
+		}
+		if anyBounded(before, v13AssertionFrames) {
+			return true
+		}
+		if qualifiedText(after) || anyBounded(after, v13AttributionMarkers) {
 			continue
 		}
-		// The value may be cited in its own sentence and rejected in the NEXT
-		// one ("The address on file is X. That belongs to Kit, not to Tomas, so
-		// I can't confirm ..."): a rejection or decline that opens the following
-		// sentence binds to the citation (#1530). A later, unrelated sentence
-		// does not excuse it.
 		if nextSentenceQualifies(an, i, qualified) {
 			continue
 		}
 		return true
 	}
 	return false
+}
+
+// v13AttributionMarkers, following a cited value, hand it to another owner,
+// period, or state ("$500.00 is for March", "X belongs to Kit", "reaches Kit
+// instead", "Kit's superseded address"): the citation is evidence, not an
+// answer.
+var v13AttributionMarkers = []string{
+	"belongs to", "belonged to", "is for", "was for", "are for", "were for", "reaches",
+	"someone else", "another", "other", "colleague", "superseded", "outdated",
+	"stale", "previous", "earlier", "former", "old", "instead", "rather than",
+	"removed", "deleted", "withdrawn", "no longer", "unrelated", "different",
+	"nothing", "none", "not what you asked", "does not answer", "doesn't answer",
+}
+
+// v13AssertionFrames introduce a value as the reply's offer; a tempting value
+// they precede is asserted even when a rejection follows elsewhere.
+var v13AssertionFrames = []string{
+	"probably", "likely", "most likely", "best guess", "my guess", "i guess",
+	"i'd guess", "i would guess", "might be", "could be", "may be", "should be",
+	"perhaps", "maybe", "presumably", "i assume", "i think", "i believe",
+	"i suspect", "if i had to", "closest is", "nearest is", "closest i have", "nearest i have",
+	"closest match is", "closest thing is", "closest one is", "try", "go with",
+	"you can use", "you could use", "you should use", "i'd use", "i would use",
+	"would be",
 }
 
 // nextSentenceQualifies reports whether the sentence after segment i carries a

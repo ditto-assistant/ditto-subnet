@@ -163,7 +163,17 @@ func TestV13AbstentionOracleAndBaselinesThroughTheArtifact(t *testing.T) {
 				if v := grade.Memory(mc.MemoryCase, oracle); v.Score != 1 {
 					t.Fatalf("seed %d: grounded oracle scored %v on %s (%s): %v", seed, v.Score, mc.ID, mc.QuestionType, v.Notes)
 				}
-				cited := protocol.RunResponse{FinalText: fmt.Sprintf("The closest thing on file is %s, but that is not what you asked about, so I can't confirm it; the records only mention %s.", renderV13Tempting(mc.MemoryCase), token)}
+				cited := protocol.RunResponse{FinalText: fmt.Sprintf("The only matching record on file is %s, but that is not what you asked about, so I can't confirm it; the records only mention %s, nothing more.", renderV13Tempting(mc.MemoryCase), token)}
+				if v := grade.Memory(mc.MemoryCase, cited); v.Score != 1 {
+					t.Fatalf("seed %d: cited-and-rejected decline scored %v on %s (%s): %v", seed, v.Score, mc.ID, mc.QuestionType, v.Notes)
+				}
+				// The never-decide hedge: decline phrase first, tempting value offered
+				// last, slot empty. It must fail this half (and its twin below).
+				hedge := protocol.RunResponse{FinalText: fmt.Sprintf("I don't have a record that establishes that, but the closest I have is %s; the records mention %s.", renderV13Tempting(mc.MemoryCase), token)}
+				if v := grade.Memory(mc.MemoryCase, hedge); v.Score != 0 {
+					t.Fatalf("seed %d: hedge scored %v on %s (%s): %v", seed, v.Score, mc.ID, mc.QuestionType, v.Notes)
+				}
+				cited = protocol.RunResponse{FinalText: fmt.Sprintf("What I do have is %s, which is not what you asked about, so I can't confirm it; the records only mention %s, nothing more.", renderV13Tempting(mc.MemoryCase), token)}
 				if v := grade.Memory(mc.MemoryCase, cited); v.Score != 1 {
 					t.Fatalf("seed %d: cited-and-rejected decline scored %v on %s (%s): %v", seed, v.Score, mc.ID, mc.QuestionType, v.Notes)
 				}
@@ -183,6 +193,10 @@ func TestV13AbstentionOracleAndBaselinesThroughTheArtifact(t *testing.T) {
 				alwaysAbstain := protocol.RunResponse{Abstain: true, FinalText: "I don't have a record that establishes that."}
 				if v := grade.Memory(mc.MemoryCase, alwaysAbstain); v.Score != 0 {
 					t.Fatalf("seed %d: always-abstain scored %v on twin %s: %v", seed, v.Score, mc.ID, v.Notes)
+				}
+				hedge := protocol.RunResponse{FinalText: "I don't have a record that establishes that, but the closest I have is " + renderV13Answer(mc.MemoryCase) + "."}
+				if v := grade.Memory(mc.MemoryCase, hedge); v.Score != 0 {
+					t.Fatalf("seed %d: hedge (prose decline, empty slot, true value) scored %v on twin %s: %v", seed, v.Score, mc.ID, v.Notes)
 				}
 			}
 		}

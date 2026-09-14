@@ -17,7 +17,8 @@ import (
 // absence-proof families onto the shared world and universe.QuestionPlan
 // (universe/v13_absence.go):
 //
-//  1. pure absence        - the attribute is never recorded;
+//  1. pure absence        - the asked person exists in no record at all (a
+//     coined name asked at a real contact's employer and event);
 //  2. near miss           - a sibling at the same employer has the address, the
 //     asked colleague is mentioned only in an unrelated context;
 //  3. stale / removed     - only a withdrawn handle supports the tempting value;
@@ -28,13 +29,16 @@ import (
 //
 // Every unanswerable case grades as AnswerAbsence (grade/v13.go): a decline
 // that cites a GroundingTokens value actually present in the records searched
-// scores 1; the tempting value scores 0 only when ASSERTED as the answer, never
-// when cited as insufficient evidence; a generic refusal scores 0. Every
+// (never a tempting value) scores 1; the tempting value scores 0 when ASSERTED
+// as the answer — offered, or not rejected right after it is cited — and keeps
+// credit when cited as insufficient evidence; a generic refusal scores 0. Every
 // unanswerable case is paired with a distributionally matched answerable twin
 // (same family and oracle, different surface draw) under TwinRelationDecision,
-// so wording cannot reveal whether to answer or abstain. The pair is placed at
-// least twenty cases apart and never adjacent (placeV13TwinPairs). Gated on
-// bench_version >= 13, so v12 and earlier regenerate byte-identically.
+// so wording cannot reveal whether to answer or abstain, and on the twin a
+// prose decline with an empty answer slot is an abstention, so the never-decide
+// hedge fails both halves. The pair is placed at least twenty cases apart and
+// never adjacent (placeV13TwinPairs). Gated on bench_version >= 13, so v12 and
+// earlier regenerate byte-identically.
 
 // QTAbsence prefixes the unanswerable question types ("absence-pure", ...);
 // QTAbsenceTwin prefixes their answerable twins ("absence-twin-pure-absence",
@@ -52,26 +56,28 @@ func v13AbstentionCaseCount(n int) int {
 	return universe.V13AbsenceCaseCount(scale)
 }
 
-// v13IsoCasesForMem recovers the profile's isolation quota from its memory-case
-// count, so the cross-user family only asks about a person the isolation graph
-// actually seeds.
-func v13IsoCasesForMem(n int) int {
-	for _, prof := range profilesV13 {
-		if prof.Mem == n {
-			return prof.IsoCases
-		}
-	}
-	// A memory budget outside the published v13 profiles (a study regenerating
-	// an earlier envelope at v13, or a test suite pinned to the v12 count)
-	// inherits the isolation quota of the v13 profile at its world scale, so
-	// the cross-user family always has the anchors the isolation graph seeds.
-	switch scale, _ := v8WorldProfile(n); {
+// v13IsoCasesForScale is the multi-graph isolation quota the cross-user family
+// assumes for a world scale: the same numbers profilesV13 pins for medium
+// (scale 2) and full (scale 3), derived from the scale so an analysis run at a
+// non-public memory count (vstudy/gstudy) builds the same family. The
+// isolation projection is deterministic per anchor, so a projected person is
+// the same whether or not the run's own isolation suite seeds that many.
+func v13IsoCasesForScale(scale int) int {
+	switch {
 	case scale >= 3:
-		return profilesV13["full"].IsoCases
+		return 9
 	case scale == 2:
-		return profilesV13["medium"].IsoCases
+		return 5
+	default:
+		return 0
 	}
-	return 0
+}
+
+// v13IsoCasesForMem is v13IsoCasesForScale over the world scale a memory-case
+// count selects.
+func v13IsoCasesForMem(n int) int {
+	scale, _ := v8WorldProfile(n)
+	return v13IsoCasesForScale(scale)
 }
 
 // v13CrossUserFacts derives the other-graph contacts the cross-user family asks

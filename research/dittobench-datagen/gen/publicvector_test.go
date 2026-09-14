@@ -450,7 +450,7 @@ func TestV12KnownVector(t *testing.T) {
 func TestV13KnownVector(t *testing.T) {
 	const (
 		seed = int64(123456789)
-		want = "bc1d10e25c40c411be83454125473879a663f35c26537ff65962259f6f23ecbd"
+		want = "9a05ca87cf03977b5d6e9ab2efc577146cdaeee35530a7d1f9274ce9d91c9b3c"
 	)
 	prof, ok := ProfileForVersion("full", protocol.BenchVersionV13)
 	if !ok {

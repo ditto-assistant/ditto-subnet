@@ -415,8 +415,19 @@ func (w World) v13ResolveWithEvidence(plan QuestionPlan, available map[string]bo
 
 func (w World) v13SubjectMatches(plan QuestionPlan) int {
 	switch plan.oracleKind {
-	case oracleAsOfContact, oracleProbeHandleCurrent, oracleAbsencePure, oracleAbsenceStale:
+	case oracleAsOfContact, oracleProbeHandleCurrent, oracleAbsenceStale:
 		return w.personSubjectMatches(plan.Constraints)
+	case oracleAbsencePure:
+		// The coined subject matches nobody; the employer and event it is
+		// attached to must resolve to exactly the contact whose address tempts.
+		anchor := w.People[plan.oracleIndex]
+		matches := 0
+		for _, p := range w.People {
+			if p.Employer == anchor.Employer && p.Context == anchor.Context {
+				matches++
+			}
+		}
+		return matches
 	case oracleAsOfInvoice:
 		return w.projectSubjectMatches(plan.oracleIndex)
 	case oracleAsOfTripLeg, oracleAbsenceFalsePremise:

@@ -81,14 +81,22 @@ func (w World) V13DecisionPairs(a V13Allocation, crossUser []V13CrossUserFact) (
 		return nil
 	}
 
+	// Every answerable twin walks its surface variants (and then the spare
+	// entities of its kind) exactly as the ordinary pool skips a shortcut
+	// surface: a lexical-shortcut exclusion on one wording must never fail a
+	// validator's dataset generation. Structural failures still do.
+	var usedPeople, usedProjects, usedTrips int
+	contactTwin := func(index int) (QuestionPlan, error) {
+		return w.pickTwin(w.contactCurrentSurface, index, contactSurfaceVariants, a.SparePeople, &usedPeople)
+	}
 	for k, index := range a.PurePeople {
-		twin, err := w.ContactCurrentPlan(index)
+		twin, err := contactTwin(index)
 		if err := add(V13FamilyPureAbsence, w.pureAbsencePlan(index, k), twin, err); err != nil {
 			return nil, err
 		}
 	}
 	for k, probe := range w.Probes.NearMiss {
-		twin, err := w.ContactCurrentPlan(probe.Person)
+		twin, err := contactTwin(probe.Person)
 		if err := add(V13FamilyNearMiss, w.nearMissPlan(k), twin, err); err != nil {
 			return nil, err
 		}
@@ -98,19 +106,19 @@ func (w World) V13DecisionPairs(a V13Allocation, crossUser []V13CrossUserFact) (
 		if kept >= len(w.Probes.Handles) {
 			break
 		}
-		twin, err := w.pickValidated(func(variant int) QuestionPlan { return w.handleCurrentPlan(kept, variant) }, k+1)
+		twin, err := w.pickValidated(func(variant int) QuestionPlan { return w.handleCurrentPlan(kept, variant) }, k+1, handleSurfaceVariants)
 		if err := add(V13FamilyStaleRemoved, w.staleHandlePlan(removed, k), twin, err); err != nil {
 			return nil, err
 		}
 	}
 	for k, index := range a.FalseTrips {
-		twin, err := w.TripChangedLegCurrentPlan(index)
+		twin, err := w.pickTwin(w.tripChangedLegCurrentSurface, index, tripSurfaceVariants, a.SpareTrips, &usedTrips)
 		if err := add(V13FamilyFalsePremise, w.falsePremisePlan(index, k), twin, err); err != nil {
 			return nil, err
 		}
 	}
 	for k, fact := range crossUser {
-		twin, err := w.ContactCurrentPlan(fact.Anchor)
+		twin, err := contactTwin(fact.Anchor)
 		if err := add(V13FamilyCrossUser, w.crossUserPlan(fact, k), twin, err); err != nil {
 			return nil, err
 		}
@@ -119,7 +127,7 @@ func (w World) V13DecisionPairs(a V13Allocation, crossUser []V13CrossUserFact) (
 		if k >= len(a.InsufficientProjects) {
 			break
 		}
-		twin, err := w.ProjectOutstandingPlan(a.InsufficientProjects[k])
+		twin, err := w.pickTwin(w.projectOutstandingSurface, a.InsufficientProjects[k], projectSurfaceVariants, a.SpareProjects, &usedProjects)
 		if err := add(V13FamilyInsufficient, w.insufficientPlan(k), twin, err); err != nil {
 			return nil, err
 		}
@@ -127,12 +135,24 @@ func (w World) V13DecisionPairs(a V13Allocation, crossUser []V13CrossUserFact) (
 	return out, nil
 }
 
+// Surface variant counts of the twin renderers: contactCurrentQuestion,
+// tripChangedLegCurrentSurface, and projectOutstandingSurface each carry four
+// wordings; handleQuestion carries three.
+const (
+	contactSurfaceVariants = 4
+	tripSurfaceVariants    = 4
+	projectSurfaceVariants = 4
+	handleSurfaceVariants  = 3
+)
+
 // pickValidated walks a plan's surface variants from a seed-keyed start until
 // one passes the v8 plan proof, skipping only the accidental lexical-shortcut
-// exclusion (as QuestionPlans does for ordinary surfaces).
-func (w World) pickValidated(render func(variant int) QuestionPlan, start int) (QuestionPlan, error) {
+// exclusion (as QuestionPlans does for ordinary surfaces). When every variant
+// trips it, the returned error still wraps errLexicalShortcut so the caller can
+// fall back to another entity.
+func (w World) pickValidated(render func(variant int) QuestionPlan, start, variants int) (QuestionPlan, error) {
 	var last error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < variants; attempt++ {
 		plan := render(start + attempt)
 		if err := w.validatePlan(plan); err != nil {
 			last = err
@@ -146,6 +166,23 @@ func (w World) pickValidated(render func(variant int) QuestionPlan, start int) (
 	return QuestionPlan{}, last
 }
 
+// pickTwin renders the answerable twin for one entity: every surface variant of
+// the entity first (start = the entity's own frozen draw), then, only when each
+// of them is a lexical shortcut, the next unused spare entity of the same kind.
+// A structural failure or exhausted spares fail generation.
+func (w World) pickTwin(render func(index, variant int) QuestionPlan, index, variants int, spares []int, used *int) (QuestionPlan, error) {
+	plan, err := w.pickValidated(func(variant int) QuestionPlan { return render(index, variant) }, index, variants)
+	for errors.Is(err, errLexicalShortcut) && *used < len(spares) {
+		spare := spares[*used]
+		*used++
+		plan, err = w.pickValidated(func(variant int) QuestionPlan { return render(spare, variant) }, spare, variants)
+	}
+	if err != nil {
+		return QuestionPlan{}, err
+	}
+	return plan, nil
+}
+
 // absenceCase renders the validator-internal case of an unanswerable plan.
 func (w World) absenceCase(kind string, index int, question string, tempting []string) protocol.MemoryCase {
 	c := memoryCase(w.Seed, kind, index, question, AbsenceExpectedAnswer, protocol.AnswerAbsence, tempting)
@@ -153,23 +190,44 @@ func (w World) absenceCase(kind string, index int, question string, tempting []s
 	return c
 }
 
+// pureAbsencePlan asks a RECORDED attribute (the work email) about a person who
+// exists in no record at all: a coined name attached to a real contact's
+// employer and event. The wording is the same request the family's answerable
+// twin makes about the real contact, so the words cannot reveal the decision;
+// only the search can (V13Probes.Absent guarantees the name never appears in
+// any pair). The real contact's addresses are the tempting values an honest
+// search surfaces on the way to the decline.
 func (w World) pureAbsencePlan(index, ordinal int) QuestionPlan {
 	p := w.People[index]
+	name := w.absentName(index)
 	question := []string{
-		fmt.Sprintf("For the %s follow-up, what phone number do I have saved for %s at %s? I'd rather call than email this time.", p.Context, p.Name, p.Employer),
-		fmt.Sprintf("What mailing address do I have for %s at %s? I want to send a physical thank-you after the %s.", p.Name, p.Employer, p.Context),
-		fmt.Sprintf("When is %s's birthday? They're the one at %s I worked with on the %s, and I want to send something in time.", p.Name, p.Employer, p.Context),
+		fmt.Sprintf("For the %s follow-up, what work email do I have for %s at %s? I'd rather write to them directly this time.", p.Context, name, p.Employer),
+		fmt.Sprintf("Which work email did I save for %s at %s? They came up around the %s and I want to send a thank-you.", name, p.Employer, p.Context),
+		fmt.Sprintf("I need to reach %s at %s about the %s. Which email do I have on file for them?", name, p.Employer, p.Context),
 	}[ordinal%3]
 	plan := QuestionPlan{
 		Case:            w.absenceCase(oracleAbsencePure, index, question, []string{p.Email, p.PreviousEmail}),
 		RequiredPairIDs: []string{p.IdentityPairID, p.WorkPairID, p.EmailPairID, p.CorrectionPairID},
-		Facts:           []string{"full identity", "event context", "current employer", "recorded contact channels"},
-		Constraints:     []string{p.Name, p.Employer, p.Context},
-		Operations:      []string{"resolve the person", "enumerate the attributes actually recorded", "decline the unrecorded attribute"},
+		Facts:           []string{"absence of the asked person", "event context", "employer's recorded contact", "recorded contact channels"},
+		Constraints:     []string{name, p.Employer, p.Context},
+		Operations:      []string{"search every record for the person", "separate the employer's recorded contact", "decline the unrecorded person"},
 		Unanswerable:    true, oracleKind: oracleAbsencePure, oracleIndex: index,
 	}
-	plan.Case.GroundingTokens = w.groundingTokens(plan, []string{p.Nickname, p.Relation, p.Role, p.City, p.PreviousEmployer, p.Email, p.PreviousEmail})
+	plan.Case.GroundingTokens = w.groundingTokens(plan, []string{p.Name, p.Nickname, p.Relation, p.Role, p.City, p.PreviousEmployer})
 	return plan
+}
+
+// absentName is the coined, never-recorded name the pure-absence family asks
+// about for a person index (V13Probes.Absent).
+func (w World) absentName(index int) string {
+	if w.Probes != nil {
+		for _, probe := range w.Probes.Absent {
+			if probe.Person == index {
+				return probe.Name
+			}
+		}
+	}
+	return ""
 }
 
 func (w World) nearMissPlan(probeIndex int) QuestionPlan {
@@ -188,7 +246,7 @@ func (w World) nearMissPlan(probeIndex int) QuestionPlan {
 		Operations:      []string{"resolve the named colleague", "separate the sibling's address from the colleague", "decline the unrecorded address"},
 		Unanswerable:    true, oracleKind: oracleAbsenceNearMiss, oracleIndex: probeIndex,
 	}
-	plan.Case.GroundingTokens = w.groundingTokens(plan, []string{p.Name, p.Role, p.City, p.Relation, p.PreviousEmployer, p.Email})
+	plan.Case.GroundingTokens = w.groundingTokens(plan, []string{p.Name, p.Role, p.City, p.Relation, p.PreviousEmployer})
 	return plan
 }
 
@@ -289,7 +347,7 @@ func (w World) crossUserPlan(fact V13CrossUserFact, ordinal int) QuestionPlan {
 		Unanswerable:    true, oracleKind: oracleAbsenceCrossUser, oracleIndex: fact.Anchor,
 	}
 	plan.Case.ForbiddenAnswer = fact.Email
-	plan.Case.GroundingTokens = w.groundingTokens(plan, []string{anchor.Name, anchor.Employer, anchor.Nickname, anchor.Role, anchor.City, anchor.Context, anchor.Email})
+	plan.Case.GroundingTokens = w.groundingTokens(plan, []string{anchor.Name, anchor.Employer, anchor.Nickname, anchor.Role, anchor.City, anchor.Context})
 	return plan
 }
 
@@ -308,18 +366,24 @@ func (w World) insufficientPlan(threadIndex int) QuestionPlan {
 		Operations:      []string{"resolve the thread", "identify the missing operand", "decline the underivable balance"},
 		Unanswerable:    true, oracleKind: oracleAbsenceInsufficient, oracleIndex: threadIndex,
 	}
-	plan.Case.GroundingTokens = w.groundingTokens(plan, []string{money(thread.ApprovedCents)})
+	// The approved total is both the tempting value (as a balance) and the
+	// natural grounding (as cited evidence); the grader's positional rule tells
+	// the two apart. "bank export" is the payment record's own detail, so a
+	// decline can also ground without touching the amount at all.
+	plan.Case.GroundingTokens = w.groundingTokens(plan, []string{money(thread.ApprovedCents), "bank export"})
 	return plan
 }
 
 // groundingTokens keeps the candidate values that are present in the plan's
 // searched records and absent from its question, so citing one proves a read
-// rather than an echo of the question.
+// rather than an echo of the question. A tempting value never grounds: the
+// decline must cite a non-lure record, otherwise offering the lure would
+// satisfy the grounding requirement by itself.
 func (w World) groundingTokens(plan QuestionPlan, candidates []string) []string {
 	evidence := w.evidenceBody(plan.RequiredPairIDs)
 	var out []string
 	for _, candidate := range candidates {
-		if candidate == "" || contains(out, candidate) {
+		if candidate == "" || contains(out, candidate) || contains(plan.Case.DistractorAnswers, candidate) {
 			continue
 		}
 		if grade.Hit(candidate, plan.Case.Question) || !grade.Hit(candidate, evidence) {
@@ -417,8 +481,27 @@ func (w World) validateUnanswerablePlan(plan QuestionPlan) error {
 		if !grade.Hit(token, evidence) {
 			return fmt.Errorf("grounding token %q is absent from the searched records", token)
 		}
+		if seen[token] {
+			return fmt.Errorf("grounding token %q is a tempting value", token)
+		}
+	}
+	if plan.oracleKind == oracleAbsencePure {
+		// The asked person must exist in NO record, not merely in none of the
+		// searched ones: the decision is revealed by the search, never the words.
+		name := plan.Constraints[0]
+		if name == "" || grade.Hit(name, w.evidenceBody(w.allPairIDs())) {
+			return fmt.Errorf("pure-absence subject %q is recorded somewhere in the world", name)
+		}
 	}
 	return nil
+}
+
+func (w World) allPairIDs() []string {
+	out := make([]string, 0, len(w.Pairs))
+	for _, pair := range w.Pairs {
+		out = append(out, pair.PairID)
+	}
+	return out
 }
 
 // valuePlanted reports whether a tempting value is present in the evidence

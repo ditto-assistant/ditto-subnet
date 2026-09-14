@@ -28,7 +28,17 @@ type V13Probes struct {
 	NearMiss []V13NearMissProbe
 	Handles  []V13HandleProbe
 	Threads  []V13ThreadProbe
+	Absent   []V13AbsentProbe
 	Pairs    []protocol.MemoryPair
+}
+
+// V13AbsentProbe is the pure-absence family's subject: a coined name that
+// appears in NO record, asked about at a real person's employer and event so
+// the request reads exactly like the family's answerable twin. It plants no
+// pair; its only invariant is the absence validateUnanswerablePlan proves.
+type V13AbsentProbe struct {
+	Person int
+	Name   string
 }
 
 // V13NearMissProbe mentions a coined colleague of a real person in an unrelated
@@ -166,6 +176,28 @@ type V13Allocation struct {
 	AsOfProjects         []int
 	AsOfTrips            []int
 	StagedTrips          []int
+	// Spare* are reserved fallback entities for the answerable decision twins.
+	// A twin first walks every surface variant of its own entity; only when each
+	// variant trips the accidental lexical-shortcut exclusion does it move to the
+	// next unused spare of the same kind (V13DecisionPairs). Spares are excluded
+	// from the ordinary pool like the family entities, so a twin drawn from one
+	// never duplicates an ordinary program's fact.
+	SparePeople   []int
+	SpareProjects []int
+	SpareTrips    []int
+}
+
+// V13SpareCounts is the number of fallback entities reserved per kind for a
+// world scale (see V13Allocation.SparePeople).
+func V13SpareCounts(scale int) (people, projects, trips int) {
+	switch {
+	case scale >= 3:
+		return 2, 1, 1
+	case scale == 2:
+		return 1, 1, 1
+	default:
+		return 0, 0, 0
+	}
 }
 
 // V13Allocation computes the entity assignment for this world. isoCases is the
@@ -194,6 +226,8 @@ func (w World) V13Allocation(isoCases int) V13Allocation {
 	}
 	asOfPeople, asOfProjects, asOfTrips := V13AsOfPairCounts(scale)
 	a.AsOfPeople = take(asOfPeople)
+	sparePeople, spareProjects, spareTrips := V13SpareCounts(scale)
+	a.SparePeople = take(sparePeople)
 	for i := 0; len(a.CrossPeople) < counts[V13FamilyCrossUser] && i < isoCases && i < next; i += 2 {
 		a.CrossPeople = append(a.CrossPeople, i)
 	}
@@ -209,6 +243,7 @@ func (w World) V13Allocation(isoCases int) V13Allocation {
 	}
 	a.InsufficientProjects = takeProjects(counts[V13FamilyInsufficient])
 	a.AsOfProjects = takeProjects(asOfProjects)
+	a.SpareProjects = takeProjects(spareProjects)
 
 	nextTrip := 0
 	takeTrips := func(n int) []int {
@@ -222,6 +257,7 @@ func (w World) V13Allocation(isoCases int) V13Allocation {
 	a.StagedTrips = takeTrips(V13StagedTripCount(scale))
 	a.FalseTrips = takeTrips(counts[V13FamilyFalsePremise])
 	a.AsOfTrips = takeTrips(asOfTrips)
+	a.SpareTrips = takeTrips(spareTrips)
 	return a
 }
 
@@ -230,7 +266,7 @@ func (w World) V13Allocation(isoCases int) V13Allocation {
 // world pool never duplicates a twin's fact under a second case id.
 func (a V13Allocation) ExcludeKeys() map[string]bool {
 	out := map[string]bool{}
-	for _, list := range [][]int{a.PurePeople, a.NearPeople, a.CrossPeople, a.AsOfPeople} {
+	for _, list := range [][]int{a.PurePeople, a.NearPeople, a.CrossPeople, a.AsOfPeople, a.SparePeople} {
 		for _, i := range list {
 			out[excludeKey(oracleContactCurrent, i)] = true
 			out[excludeKey(oracleContactPrevious, i)] = true
@@ -245,10 +281,16 @@ func (a V13Allocation) ExcludeKeys() map[string]bool {
 	for _, i := range a.InsufficientProjects {
 		out[excludeKey(oracleProjectOutstanding, i)] = true
 	}
+	for _, i := range a.SpareProjects {
+		out[excludeKey(oracleProjectOutstanding, i)] = true
+	}
 	for _, i := range a.AsOfProjects {
 		out[excludeKey(oracleProjectOutstanding, i)] = true
 	}
 	for _, i := range a.FalseTrips {
+		out[excludeKey(oracleTripChangedLegCurrent, i)] = true
+	}
+	for _, i := range a.SpareTrips {
 		out[excludeKey(oracleTripChangedLegCurrent, i)] = true
 	}
 	for _, i := range a.AsOfTrips {
@@ -401,9 +443,12 @@ func buildV13Probes(seed int64, w *World) V13Probes {
 		}
 	}
 
+	for _, personIndex := range a.PurePeople {
+		probes.Absent = append(probes.Absent, V13AbsentProbe{Person: personIndex, Name: coinName(len(probes.Absent))})
+	}
 	for k, personIndex := range a.NearPeople {
 		p := w.People[personIndex]
-		name := coinName(k)
+		name := coinName(len(probes.Absent) + k)
 		id := protocol.OpaqueCaseID(seed, "v13-probe-near-miss", k)
 		mention := []string{
 			fmt.Sprintf("%s introduced me to %s, who also works at %s — we mostly talked about the %s.", p.Nickname, name, p.Employer, p.Context),

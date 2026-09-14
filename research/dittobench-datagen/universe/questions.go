@@ -280,42 +280,46 @@ func (w World) questionCandidates() []QuestionPlan {
 }
 
 func (w World) contactCurrentQuestion(p Person, index int) string {
-	return w.contactCurrentQuestionVariant(p, index, 0)
+	return w.contactCurrentQuestionVariant(p, index, index)
 }
 
-// contactCurrentQuestionVariant renders the contact-current question under an
-// alternative v13 grammar draw (variant 0 is the ordinary rendering; below
-// v13 the variant is ignored because the v8 frame is keyed by index).
+// contactCurrentQuestionVariant renders the contact-current question under
+// surface variant `variant` (variant == index is the frozen ordinary draw; the
+// v13 decision twins walk the others, see projectOutstandingSurface).
 func (w World) contactCurrentQuestionVariant(p Person, index, variant int) string {
 	if w.v13Surface() {
-		return w.v13QuestionVariant(oracleContactCurrent, index, variant, map[string]string{"name": p.Name, "employer": p.Employer, "context": p.Context})
+		return w.v13QuestionVariant(oracleContactCurrent, index, v13SurfaceDraw(index, variant), map[string]string{"name": p.Name, "employer": p.Employer, "context": p.Context})
 	}
 	return []string{
 		fmt.Sprintf("For the %s follow-up, what email should I actually use now for %s at %s? I want to avoid sending the note to an inbox nobody checks anymore, so please double-check before I hit send.", p.Context, p.Name, p.Employer),
 		fmt.Sprintf("I need to reach %s at %s about the %s. Which email is current? I remember we had to replace an older one, and I would rather verify than have this disappear.", p.Name, p.Employer, p.Context),
 		fmt.Sprintf("Which up-to-date email belongs to %s at %s, the person from the %s? I am pulling together the final details before I send anything and want to make sure it reaches them.", p.Name, p.Employer, p.Context),
 		fmt.Sprintf("What is the corrected email for %s at %s? This is for the %s follow-up, and I do not want the message disappearing into their old workplace. Please check the latest one.", p.Name, p.Employer, p.Context),
-	}[index%4]
+	}[variant%4]
 }
 
 // projectOutstandingPlan renders the ordinary outstanding-balance program for
 // one project. Shared by the v8 candidate list and the v13 decision twins so
 // both draw the same surface family.
 func (w World) projectOutstandingPlan(i int) QuestionPlan {
-	return w.projectOutstandingPlanVariant(i, 0)
+	return w.projectOutstandingSurface(i, i)
 }
 
-func (w World) projectOutstandingPlanVariant(i, variant int) QuestionPlan {
+// projectOutstandingSurface renders the outstanding-balance program for project
+// i under surface variant `variant`. The ordinary pool always passes variant ==
+// i (the frozen v8 draw); the v13 decision twins walk the other variants when
+// the frozen one trips the lexical-shortcut exclusion.
+func (w World) projectOutstandingSurface(i, variant int) QuestionPlan {
 	p := w.Projects[i]
 	outstanding := []string{
 		fmt.Sprintf("For %q, the %s work for %s, what is still owed to %s once the approved correction and the payment already sent are reconciled?", p.Alias, p.Purpose, p.Client, p.Vendor),
 		fmt.Sprintf("AP needs the remaining balance for %s's invoice on %q for %s. Use the corrected total, not the draft, and account for our payment.", p.Vendor, p.Alias, p.Client),
 		fmt.Sprintf("What remains on the corrected %s bill tied to %q, the %s project for %s, after what we already paid?", p.Vendor, p.Alias, p.Purpose, p.Client),
 		fmt.Sprintf("Reconcile %q for %s: after replacing the original %s invoice figure with the approved one and subtracting the partial payment, what balance remains?", p.Alias, p.Client, p.Vendor),
-	}[i%4]
+	}[variant%4]
 	if w.v13Surface() {
 		projectSlots := map[string]string{"aliasq": fmt.Sprintf("%q", p.Alias), "purpose": p.Purpose, "client": p.Client, "vendor": p.Vendor}
-		outstanding = w.v13QuestionVariant(oracleProjectOutstanding, i, variant, projectSlots)
+		outstanding = w.v13QuestionVariant(oracleProjectOutstanding, i, v13SurfaceDraw(i, variant), projectSlots)
 	}
 	return QuestionPlan{
 		Case:            memoryCase(w.Seed, oracleProjectOutstanding, i, outstanding, fmt.Sprintf("%d", p.OutstandingCents), protocol.AnswerMoney, w.moneyDistractors(i, p.OutstandingCents)),
@@ -329,10 +333,12 @@ func (w World) projectOutstandingPlanVariant(i, variant int) QuestionPlan {
 // tripChangedLegCurrentPlan renders the ordinary changed-leg program for one
 // trip. Shared by the v8 candidate list and the v13 decision twins.
 func (w World) tripChangedLegCurrentPlan(i int) QuestionPlan {
-	return w.tripChangedLegCurrentPlanVariant(i, 0)
+	return w.tripChangedLegCurrentSurface(i, i)
 }
 
-func (w World) tripChangedLegCurrentPlanVariant(i, variant int) QuestionPlan {
+// tripChangedLegCurrentSurface renders the changed-leg program for trip i under
+// surface variant `variant` (see projectOutstandingSurface).
+func (w World) tripChangedLegCurrentSurface(i, variant int) QuestionPlan {
 	trip := w.Trips[i]
 	changed := changedLeg(trip)
 	changedCountry := strings.TrimPrefix(trip.Countries[changed], "the ")
@@ -343,16 +349,26 @@ func (w World) tripChangedLegCurrentPlanVariant(i, variant int) QuestionPlan {
 		fmt.Sprintf("How long is the updated stay in %s for %s, the %s trip from %s?", trip.Countries[changed], trip.Alias, trip.Purpose, trip.When),
 		fmt.Sprintf("For %s, our %s trip, how many days is the changed %s stay now?", trip.Alias, trip.Purpose, changedCountry),
 		fmt.Sprintf("After changing the %s part of %s, our trip from %s, how many days are we spending there?", changedCountry, trip.Alias, trip.When),
-	}[i%4]
+	}[variant%4]
 	if w.v13Surface() {
 		tripSlots := map[string]string{
 			"alias": trip.Alias, "purpose": trip.Purpose, "when": trip.When,
 			"c0": trip.Countries[0], "c1": trip.Countries[1], "c2": trip.Countries[2],
 			"changed": changedCountry, "country": trip.Countries[changed],
 		}
-		leg = w.v13QuestionVariant(oracleTripChangedLegCurrent, i, variant, tripSlots)
+		leg = w.v13QuestionVariant(oracleTripChangedLegCurrent, i, v13SurfaceDraw(i, variant), tripSlots)
 	}
 	return tripPlan(w, oracleTripChangedLegCurrent, i, leg, trip.LegDays[changed], commonEvidence, constraints)
+}
+
+// v13SurfaceDraw maps a surface variant onto the v13 grammar draw: the frozen
+// variant (variant == i, the ordinary pool's) is the canonical draw 0 and every
+// other variant an alternative, non-zero draw (see v13QuestionVariant).
+func v13SurfaceDraw(i, variant int) int {
+	if variant == i {
+		return 0
+	}
+	return variant + 1
 }
 
 // ProjectOutstandingPlan exposes one validated outstanding-balance program for
@@ -361,7 +377,7 @@ func (w World) ProjectOutstandingPlan(index int) (QuestionPlan, error) {
 	if index < 0 || index >= len(w.Projects) {
 		return QuestionPlan{}, fmt.Errorf("project index %d out of range", index)
 	}
-	return w.pickValidated(func(variant int) QuestionPlan { return w.projectOutstandingPlanVariant(index, variant) }, 0)
+	return w.pickValidated(func(variant int) QuestionPlan { return w.projectOutstandingSurface(index, variant) }, index, projectSurfaceVariants)
 }
 
 // TripChangedLegCurrentPlan exposes one validated changed-leg program for v13
@@ -370,7 +386,7 @@ func (w World) TripChangedLegCurrentPlan(index int) (QuestionPlan, error) {
 	if index < 0 || index >= len(w.Trips) {
 		return QuestionPlan{}, fmt.Errorf("trip index %d out of range", index)
 	}
-	return w.pickValidated(func(variant int) QuestionPlan { return w.tripChangedLegCurrentPlanVariant(index, variant) }, 0)
+	return w.pickValidated(func(variant int) QuestionPlan { return w.tripChangedLegCurrentSurface(index, variant) }, index, tripSurfaceVariants)
 }
 
 // ContactCurrentPlan exposes one fully validated person-contact program for
@@ -381,10 +397,14 @@ func (w World) ContactCurrentPlan(index int) (QuestionPlan, error) {
 	if index < 0 || index >= len(w.People) {
 		return QuestionPlan{}, fmt.Errorf("contact index %d out of range", index)
 	}
+	return w.pickValidated(func(variant int) QuestionPlan { return w.contactCurrentSurface(index, variant) }, index, contactSurfaceVariants)
+}
+
+// contactCurrentSurface renders the current-contact program for person index
+// under surface variant `variant` (see projectOutstandingSurface).
+func (w World) contactCurrentSurface(index, variant int) QuestionPlan {
 	p := w.People[index]
-	return w.pickValidated(func(variant int) QuestionPlan {
-		return w.personPlan(oracleContactCurrent, index, w.contactCurrentQuestionVariant(p, index, variant), p.Email, p.PreviousEmail)
-	}, 0)
+	return w.personPlan(oracleContactCurrent, index, w.contactCurrentQuestionVariant(p, index, variant), p.Email, p.PreviousEmail)
 }
 
 func (w World) personPlan(kind string, index int, question, answer, extraDistractor string) QuestionPlan {

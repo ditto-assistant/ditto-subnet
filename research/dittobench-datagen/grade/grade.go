@@ -860,6 +860,17 @@ var durationUnits = map[string]int{
 // declinePhrases mark a grounded decline. The RunResponse.Abstain flag is the
 // primary signal; this lexicon is the fallback for harnesses that only emit
 // prose.
+// valueBearingKind reports whether a kind's honest answer is a value the slot
+// can commit to (the v13 prose-decline rule applies only to these).
+func valueBearingKind(kind string) bool {
+	switch kind {
+	case protocol.AnswerValue, protocol.AnswerNumber, protocol.AnswerMoney, protocol.AnswerDirection,
+		protocol.AnswerList, protocol.AnswerOrderedList, protocol.AnswerDuration:
+		return true
+	}
+	return false
+}
+
 var declinePhrases = []string{
 	"don't have", "do not have", "no record", "don't know", "do not know",
 	"haven't mentioned", "never mentioned", "haven't told", "never told",

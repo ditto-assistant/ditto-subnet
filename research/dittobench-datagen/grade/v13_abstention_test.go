@@ -17,7 +17,7 @@ func absenceCase() protocol.MemoryCase {
 		ExpectedAnswer:    "(absence sentinel)",
 		AnswerKind:        protocol.AnswerAbsence,
 		DistractorAnswers: []string{"kit.marlow@harborline.com", "k.marlow@oldfirm.com"},
-		GroundingTokens:   []string{"Kit Marlow", "studio manager", "Providence", "kit.marlow@harborline.com"},
+		GroundingTokens:   []string{"Kit Marlow", "studio manager", "Providence"},
 	}
 }
 
@@ -128,6 +128,87 @@ func TestV13DecisionTwinBaselines(t *testing.T) {
 	}
 	if v := Memory(absence, alwaysAbstain); v.Score != 1 {
 		t.Fatalf("always-abstain (grounded) on the absence case scored %v: %v", v.Score, v.Notes)
+	}
+}
+
+// hedgeTemplates are the never-decide responses a harness could emit on BOTH
+// halves of a decision twin: a decline phrase, then the tempting value (on the
+// absence half) or the true value (on the twin) offered in prose with an empty
+// slot. Each must score 0 on both halves; only a committed slot earns the twin.
+func hedgeTemplates(value string) []string {
+	return []string{
+		"I don't have a record that establishes that, but the closest I have is " + value + ".",
+		"Nothing on file confirms it; my best guess is " + value + ".",
+		"I can't confirm this, though " + value + " is probably right.",
+		"I don't have that. Try " + value + ".",
+		"Not recorded — you should probably use " + value + ".",
+	}
+}
+
+// TestV13HedgeTemplatesFailBothHalves is the decision-twin invariant of
+// #1530: a response that asserts a specific value while also abstaining scores
+// 0 on the absence half (the value is offered, not cited-and-rejected) AND 0 on
+// the answerable half (a prose decline with no committed slot is an
+// abstention). A committed answer earns the twin; a grounded decline that
+// merely cites the value earns the absence half.
+func TestV13HedgeTemplatesFailBothHalves(t *testing.T) {
+	absence := absenceCase()
+	twin := protocol.MemoryCase{
+		BenchVersion:      protocol.BenchVersionV13,
+		QuestionType:      "absence-twin-near-miss",
+		Question:          "Which up-to-date email belongs to Kit Marlow at Harborline, the person from the winter gallery opening?",
+		ExpectedAnswer:    "kit.marlow@harborline.com",
+		AnswerKind:        protocol.AnswerValue,
+		DistractorAnswers: []string{"k.marlow@oldfirm.com", "dana@elsewhere.com", "ren@other.org"},
+	}
+	for _, hedge := range hedgeTemplates("kit.marlow@harborline.com") {
+		if v := Memory(absence, protocol.RunResponse{FinalText: hedge}); v.Score != 0 {
+			t.Fatalf("absence half: hedge %q scored %v: %v", hedge, v.Score, v.Notes)
+		}
+		if v := Memory(twin, protocol.RunResponse{FinalText: hedge}); v.Score != 0 {
+			t.Fatalf("twin half: hedge %q scored %v: %v", hedge, v.Score, v.Notes)
+		}
+		committed := protocol.RunResponse{Answer: "kit.marlow@harborline.com", FinalText: hedge}
+		if v := Memory(twin, committed); v.Score != 1 {
+			t.Fatalf("twin half: committed slot with hedged prose scored %v: %v", v.Score, v.Notes)
+		}
+	}
+	// The value in the prose of a hedge that names no decline phrase is an
+	// ordinary prose answer on the twin and an assertion on the absence half.
+	plain := protocol.RunResponse{FinalText: "Kit Marlow's current address is kit.marlow@harborline.com."}
+	if v := Memory(twin, plain); v.Score != 1 {
+		t.Fatalf("twin half: plain prose answer scored %v: %v", v.Score, v.Notes)
+	}
+	if v := Memory(absence, plain); v.Score != 0 {
+		t.Fatalf("absence half: plain prose assertion scored %v: %v", v.Score, v.Notes)
+	}
+}
+
+// TestV13RejectionMustFollowTheCitation pins the positional half of the
+// excusal: a rejection marker before the value (the hedge shape) excuses
+// nothing; the same marker after the value, or opening the next sentence,
+// does. Weak contrast words no longer count as rejection.
+func TestV13RejectionMustFollowTheCitation(t *testing.T) {
+	mc := absenceCase()
+	for name, resp := range map[string]protocol.RunResponse{
+		"decline before, value last":              {FinalText: "There's no Tomas Reyes address on file; the Harborline one I have is kit.marlow@harborline.com. Kit Marlow is the studio manager there."},
+		"contrast word only":                      {FinalText: "The Harborline address is kit.marlow@harborline.com, but Kit Marlow is the studio manager in Providence."},
+		"previous sentence rejects, value stands": {FinalText: "I never recorded Tomas Reyes. Kit Marlow's colleague uses kit.marlow@harborline.com."},
+		"unverified offer":                        {FinalText: "I don't have Tomas Reyes on file; the closest is kit.marlow@harborline.com, which I can't verify. Kit Marlow is the studio manager."},
+	} {
+		if v := Memory(mc, resp); v.Score != 0 {
+			t.Fatalf("%s: scored %v, want 0: %v", name, v.Score, v.Notes)
+		}
+	}
+	for name, resp := range map[string]protocol.RunResponse{
+		"attribution after the value":   {FinalText: "The only Harborline address I hold is kit.marlow@harborline.com, and it belongs to Kit Marlow, the studio manager, not to Tomas Reyes; there is nothing on file for Tomas."},
+		"negation opening the next":     {FinalText: "The Harborline address on file is kit.marlow@harborline.com. Not Tomas's — that is Kit Marlow's, and there is nothing on file for a colleague of theirs."},
+		"stale attribution after value": {FinalText: "I have k.marlow@oldfirm.com, which is Kit Marlow's superseded address, and nothing on file for Tomas Reyes."},
+		"value then instead":            {FinalText: "Tomas Reyes is not on file — kit.marlow@harborline.com reaches Kit Marlow instead, the studio manager in Providence."},
+	} {
+		if v := Memory(mc, resp); v.Score != 1 {
+			t.Fatalf("%s: scored %v, want 1: %v", name, v.Score, v.Notes)
+		}
 	}
 }
 

@@ -12,6 +12,17 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
+// TestV13IsolationQuotaMatchesTheProfiles pins the scale-derived isolation
+// quota the cross-user family assumes to the quota the public profiles seed.
+func TestV13IsolationQuotaMatchesTheProfiles(t *testing.T) {
+	for _, runSize := range []string{"small", "medium", "full"} {
+		prof, _ := ProfileForVersion(runSize, protocol.BenchVersionV13)
+		if got := v13IsoCasesForMem(prof.Mem); got != prof.IsoCases {
+			t.Fatalf("%s: scale-derived isolation quota %d, profile seeds %d", runSize, got, prof.IsoCases)
+		}
+	}
+}
+
 // TestV13ReferenceRunKeepsTheFixedEnvelope proves the v13 families are carved
 // out of the existing budget: the public case counts are unchanged from v12 and
 // generation is deterministic.

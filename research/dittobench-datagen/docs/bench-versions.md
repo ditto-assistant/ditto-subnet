@@ -1067,29 +1067,47 @@ unchanged too: every new case is carved out of the world-question budget
   genuinely not answerable one wave earlier.
 - **Grounded abstention (`gen/abstention_v13.go`, `universe/v13_absence.go`,
   `grade/v13.go`).** Six absence-proof families on the shared world — pure
-  absence, near miss (a coined colleague of a real person, never given an
-  address), stale/removed (a withdrawn messaging handle), false premise (a leg
-  in a country the trip never visited), cross-user only (a person who exists
-  only in the other user's graph), and insufficient composition (an approved
-  total with an unstated partial payment). Misleading-evidence families carry at
-  least half of the slice and pure absence at most a quarter. Each unanswerable
-  case is proved by `validatePlan` with the polarity reversed: the oracle
-  resolves to nothing over the searched records, every tempting value is
-  genuinely planted there, and the case carries `GroundingTokens` (entities,
-  record ids, or amounts present in the records and absent from the question).
-  Grading is the new `AnswerAbsence` kind: a decline (`abstain`, a decline
-  phrase, or an absence phrase) that cites at least one grounding token scores
-  1; the tempting value scores 0 only when **asserted as the answer** — in the
-  answer slot, or in a prose sentence with no rejection marker nearby — never
-  when cited as insufficient evidence ("the approved total was $500, but the
-  payment amount was never recorded"); a generic refusal or a templated
-  grounding naming an entity not in the records scores 0. Every unanswerable
-  case is paired with a distributionally matched answerable `decision_twin`
-  (same family and oracle, a different surface draw), placed at least twenty
-  cases apart and never adjacent, so wording cannot reveal whether to answer or
-  abstain: an always-answer policy fails the absence half and an always-abstain
-  policy fails the twin. The relation is inert until the scorer post-pass reads
-  it; per-case grading is unchanged.
+  absence (a coined name that appears in **no** record, asked for its work
+  email at a real contact's employer and event, so the request reads exactly
+  like the twin's), near miss (a coined colleague of a real person, mentioned
+  once, never given an address), stale/removed (a withdrawn messaging handle),
+  false premise (a leg in a country the trip never visited), cross-user only (a
+  person who exists only in the other user's graph), and insufficient
+  composition (an approved total with an unstated partial payment).
+  Misleading-evidence families carry at least half of the slice and pure
+  absence at most a quarter. Each unanswerable case is proved by `validatePlan`
+  with the polarity reversed: the oracle resolves to nothing over the searched
+  records, every tempting value is genuinely planted there, the pure-absence
+  subject is absent from every pair in the world, and the case carries
+  `GroundingTokens` (entities, record ids, or amounts present in the records,
+  absent from the question, and **never a tempting value** — the decline must
+  cite a non-lure record). Grading is the new `AnswerAbsence` kind: a decline
+  (`abstain`, a decline phrase, or an absence phrase) that cites at least one
+  grounding token scores 1; the tempting value scores 0 when **asserted as the
+  answer** — in the answer slot, or in a prose sentence that offers it (an
+  assertion frame before the value: "the closest I have is X", "probably X",
+  "try X") or does not reject it afterwards (no negation/attribution marker —
+  "not", "n't", "never", "belongs to", "instead", "superseded", … — after the
+  value in its sentence or opening the next one). Citing it as insufficient
+  evidence ("the approved total was $500, but the payment amount was never
+  recorded"; "X is Kit's, not Tomas's") keeps full credit. The rejection must
+  bind to the value: a decline elsewhere in the response never excuses an
+  offered value, so "I don't have a record of that, but the closest I have is
+  X" scores 0. A generic refusal or a templated grounding naming an entity not
+  in the records scores 0. Every unanswerable case is paired with a
+  distributionally matched answerable `decision_twin` (same family and oracle,
+  a different surface draw — the twin walks its surface variants, then a
+  reserved spare entity of the same kind, when a draw trips the accidental
+  lexical-shortcut exclusion, so an arbitrary validator seed never fails
+  generation), placed at least twenty cases apart and never adjacent, so
+  wording cannot reveal whether to answer or abstain. On the answerable half a
+  prose decline or absence phrase with an **empty answer slot** is graded as an
+  abstention for every value-bearing kind (the lexicon is exactly the one that
+  earns the decline on the absence half), so the never-decide hedge fails both
+  halves: an always-answer policy fails the absence half, an always-abstain
+  policy fails the twin, and a best guess behind a decline phrase fails both.
+  Only a committed slot earns the twin. The relation itself is inert until the
+  scorer post-pass reads it; per-case grading is as described.
 
 `TwinRelation`/`TwinPairID` are deliberately distinct from `TwinGroup`: the
 metamorphic-consistency fold reads `TwinGroup` and must never see a relation
