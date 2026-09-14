@@ -584,6 +584,68 @@ const (
 // execution was selected by the controlled model and then observed by the
 // validator. It is populated only by Bench v10+ scorers; historical report
 // bytes omit it.
+// ClaimProvenanceEvidence (bench_version 13) is the per-case record of the
+// claim-span provenance gate and the causal answer_in_prompt gate
+// (dittobench-api internal/scoregates text_provenance.go /
+// causal_dependence.go). The relay records, per attributed chat completion,
+// the hashed value tokens of the model's completion spans (message content,
+// tool_call arguments, structured-output fields) and of the harness-authored
+// request spans; the scorer checks the served, credited claim span against
+// them. Only counts and verdicts are published: the token hashes never leave
+// the scorer, so the record can neither reproduce a completion nor leak the
+// answer key.
+type ClaimProvenanceEvidence struct {
+	// Completions is how many chat completions the relay attributed to exactly
+	// this case. nil when attribution is incomplete (a completion overlapped
+	// several in-flight cases with no verified claim) or no ledger exists.
+	Completions *int `json:"completions,omitempty"`
+	// ToolResults is how many tool_endpoint results the validator served the
+	// case; their values are exempt from the causal gate.
+	ToolResults int `json:"tool_results"`
+	// ClaimTokens is how many canonical value tokens the credited claim span
+	// carried. Zero means no checkable claim (not applicable).
+	ClaimTokens int `json:"claim_tokens"`
+	// Complete is true when every completion made while the case was in flight
+	// was attributed to exactly one case and no capture bound was hit. The gate
+	// fails OPEN when false.
+	Complete bool `json:"complete"`
+	// ModelEmitted is the claim-span verdict: true when every claim token is in
+	// the union of the case's completion spans. nil when unsettled or not
+	// applicable.
+	ModelEmitted *bool `json:"model_emitted,omitempty"`
+	// AnswerInPrompt is the causal verdict: true when every claim token was
+	// harness-authored into a prompt before any completion produced it and is
+	// covered by no delivered record or tool result. nil when unsettled or not
+	// applicable.
+	AnswerInPrompt *bool `json:"answer_in_prompt,omitempty"`
+	// Posture is the gate posture the run scored under ("shadow" or "enforce").
+	Posture string `json:"posture"`
+	// Findings names the settled outcomes in a fixed order (see the
+	// scoregates.Finding* constants): served_text_not_model_emitted,
+	// answer_in_prompt, no_model_completion, claim_not_applicable,
+	// claim_provenance_incomplete, claim_provenance_unavailable,
+	// claim_provenance_zeroed.
+	Findings []string `json:"findings,omitempty"`
+}
+
+// ClaimProvenanceSummary (bench_version 13) aggregates the per-case
+// ClaimProvenanceEvidence for one run. AttributionCoverageBPS is this
+// validator's half of the enforce precondition: the share of memory cases whose
+// completions were all attributable.
+type ClaimProvenanceSummary struct {
+	Posture                string `json:"posture"`
+	MemoryCases            int    `json:"memory_cases"`
+	AttributedCases        int    `json:"attributed_cases"`
+	ApplicableCases        int    `json:"applicable_cases"`
+	SettledCases           int    `json:"settled_cases"`
+	NotModelEmittedCases   int    `json:"not_model_emitted_cases"`
+	AnswerInPromptCases    int    `json:"answer_in_prompt_cases"`
+	NoModelCompletionCases int    `json:"no_model_completion_cases"`
+	UnsettledCases         int    `json:"unsettled_cases"`
+	ZeroedCases            int    `json:"zeroed_cases"`
+	AttributionCoverageBPS int    `json:"attribution_coverage_bps"`
+}
+
 type ToolProvenanceEvidence struct {
 	ModelEmitted             int      `json:"model_emitted"`
 	EndpointAttempts         int      `json:"endpoint_attempts"`
@@ -679,7 +741,14 @@ type CaseScore struct {
 	// ToolProvenance is the trusted broker-to-endpoint intersection for this
 	// case. It is nil before Bench v10, preserving every frozen contract.
 	ToolProvenance *ToolProvenanceEvidence `json:"tool_provenance,omitempty"`
-	Notes          []string                `json:"notes,omitempty"`
+	// ClaimProvenance is the Bench v13 claim-span provenance and causal
+	// answer_in_prompt evidence for a memory case: whether the value the harness
+	// served was emitted by a relay-observed model completion, and whether the
+	// harness itself authored that value into the prompt. Hash-derived verdicts
+	// only -- no prompt, completion, or answer text. nil before Bench v13,
+	// preserving every frozen contract.
+	ClaimProvenance *ClaimProvenanceEvidence `json:"claim_provenance,omitempty"`
+	Notes           []string                 `json:"notes,omitempty"`
 	// Injection is true when the deterministic grader saw injection compliance:
 	// either the embedded injection payload in the harness output, or an observed
 	// call to the case's action bait tool (MemoryCase.BaitTool) in the trajectory,
@@ -919,6 +988,10 @@ type RunDetails struct {
 	// ToolProvenance is the v10+ aggregate of broker-emitted and
 	// validator-executed tool calls. Historical reports omit it.
 	ToolProvenance *ToolProvenanceSummary `json:"tool_provenance,omitempty"`
+	// ClaimProvenance is the Bench v13 aggregate of the per-case claim-span
+	// provenance and causal answer_in_prompt gates (posture, settled and flagged
+	// counts, attribution coverage). nil before Bench v13.
+	ClaimProvenance *ClaimProvenanceSummary `json:"claim_provenance,omitempty"`
 	// IsolationCases is how many multi-graph isolation cases ran: a second
 	// persona seeded under a different user_id with a conflicting value, so a
 	// cross-graph memory leak scores wrong. Advisory telemetry.

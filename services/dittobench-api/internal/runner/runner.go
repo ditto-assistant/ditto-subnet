@@ -376,6 +376,11 @@ func RunCase(ctx context.Context, harnessURL, caseID, prompt string, tools []pro
 // RunCaseWithTelemetry is RunCase plus validator-observed attempt, timing, and
 // terminal-outcome evidence. Callers that publish a transcript should prefer
 // this form; the legacy RunCase wrapper remains for compatibility.
+// DefaultSystemPrompt is the validator-authored system prompt every /run
+// carries. It is exported so the Bench v13 causal gate can exempt its tokens:
+// the harness did not author it.
+const DefaultSystemPrompt = "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request."
+
 func RunCaseWithTelemetry(ctx context.Context, harnessURL, caseID, prompt string, tools []protocol.ToolDefinition, opts CaseOptions) (protocol.RunResponse, CaseExecution, error) {
 	return runOneWithTelemetry(ctx, harnessURL, protocol.ToolCase{ID: caseID, Prompt: prompt}, tools, opts)
 }
@@ -401,7 +406,7 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 	wireBenchVersion := harnessWireBenchVersion(opts.BenchVersion)
 	reqBody := protocol.RunRequest{
 		CaseID:       c.ID,
-		SystemPrompt: "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request.",
+		SystemPrompt: DefaultSystemPrompt,
 		UserInput:    c.Prompt,
 		Tools:        tools,
 		BenchVersion: wireBenchVersion,

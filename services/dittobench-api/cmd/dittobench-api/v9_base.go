@@ -116,6 +116,15 @@ func applyV9BaseEvidence(
 	if err != nil {
 		return protocol.ScoreReport{}, fmt.Errorf("build v9 score-gate evidence: %w", err)
 	}
+	// Bench v13 layers the claim-span provenance + causal gate summary onto the
+	// signed evidence (identity factor; the gates act per case). Attached after
+	// Build so v9..v12 evidence bytes are untouched.
+	if req.BenchVersion >= protocol.BenchVersionV13 {
+		gates, err = scoregates.AttachClaimProvenance(gates, v13ClaimProvenanceGateInput(v13ClaimProvenancePosture, perCase))
+		if err != nil {
+			return protocol.ScoreReport{}, fmt.Errorf("attach v13 claim-provenance evidence: %w", err)
+		}
+	}
 	details, digest, effective, err := v9base.Build(v9base.Inputs{
 		RunID: report.RunID, BenchVersion: req.BenchVersion, ArtifactSHA256: artifactSHA256,
 		DatasetSHA256: report.Details.DatasetSHA256, TranscriptSHA256: transcriptSHA256,

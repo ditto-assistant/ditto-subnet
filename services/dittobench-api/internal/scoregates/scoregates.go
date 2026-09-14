@@ -211,6 +211,13 @@ type Evidence struct {
 	// for a v12 Evidence built without the gate, and in both cases it is excluded
 	// from the canonical bytes and never affects the combined factor.
 	AnswerStuffing AnswerStuffingEvidence `json:"answer_stuffing,omitzero"`
+	// ClaimProvenance is the v13 claim-span provenance + causal answer_in_prompt
+	// gate summary (see text_provenance.go / causal_dependence.go). It is
+	// attached after Build via AttachClaimProvenance for bench_version>=13; it is
+	// the zero value ("not administered") for v9..v12 and for a v13 Evidence built
+	// without the gate, and in both cases it is excluded from the canonical bytes
+	// and never affects the combined factor.
+	ClaimProvenance ClaimProvenanceEvidence `json:"claim_provenance,omitzero"`
 }
 
 type Score struct {
@@ -529,6 +536,30 @@ func (e Evidence) Validate() error {
 	} else if e.AnswerStuffing != (AnswerStuffingEvidence{}) {
 		return invalid("answer-stuffing gate is defined only for bench v%d and later", BenchVersionV12)
 	}
+	// The v13 claim-provenance gate is likewise attached after Build
+	// (AttachClaimProvenance); reconstruct it from its own echoed inputs and fold
+	// it into want before the equality check. A zero-value ("not administered")
+	// evidence is left untouched, so a v13 Evidence built without the gate still
+	// matches want exactly.
+	if e.BenchVersion >= BenchVersionV13 && e.ClaimProvenance.administered() {
+		provenance, provErr := buildClaimProvenance(ClaimProvenanceInput{
+			AdministeredCases:    e.ClaimProvenance.AdministeredCases,
+			EligibleCases:        e.ClaimProvenance.EligibleCases,
+			NotModelEmittedCases: e.ClaimProvenance.NotModelEmittedCases,
+			AnswerInPromptCases:  e.ClaimProvenance.AnswerInPromptCases,
+			UnsettledCases:       e.ClaimProvenance.UnsettledCases,
+			ZeroedCases:          e.ClaimProvenance.ZeroedCases,
+			Posture:              e.ClaimProvenance.Posture,
+			TelemetryComplete:    true,
+			AttributionComplete:  e.ClaimProvenance.AttributionComplete,
+		})
+		if provErr != nil {
+			return provErr
+		}
+		want.ClaimProvenance = provenance
+	} else if e.ClaimProvenance != (ClaimProvenanceEvidence{}) {
+		return invalid("claim-provenance gate is defined only for bench v%d and later", BenchVersionV13)
+	}
 	if e != want {
 		return invalid("derived evidence does not match trusted inputs")
 	}
@@ -563,6 +594,13 @@ func (e Evidence) CombinedFactorBPS() (int, error) {
 		if e.AnswerStuffing.administered() {
 			combined = combined * e.AnswerStuffing.FactorBPS / BasisPointScale
 		}
+	}
+	// The v13 claim-provenance gate multiplies in when administered
+	// (bench_version>=13). Its factor is an identity term today -- the gate acts
+	// per claim, zeroing a flagged case's own score under enforce -- so folding it
+	// here keeps the schema uniform without double-charging the run.
+	if e.BenchVersion >= BenchVersionV13 && e.ClaimProvenance.administered() {
+		combined = combined * e.ClaimProvenance.FactorBPS / BasisPointScale
 	}
 	return combined, nil
 }
@@ -639,6 +677,14 @@ func (e Evidence) CanonicalBytes() ([]byte, error) {
 		fmt.Fprintf(&b, "answer_stuffing.attribution_complete=%t\nanswer_stuffing.review_required=%t\nanswer_stuffing.posture=%s\nanswer_stuffing.stuffed_bps=%d\nanswer_stuffing.threshold_bps=%d\nanswer_stuffing.min_cases=%d\n", e.AnswerStuffing.AttributionComplete, e.AnswerStuffing.ReviewRequired, e.AnswerStuffing.Posture, e.AnswerStuffing.StuffedBPS, e.AnswerStuffing.ThresholdBPS, e.AnswerStuffing.MinCases)
 		fmt.Fprintf(&b, "answer_stuffing.loose_eligible_cases=%d\nanswer_stuffing.loose_stuffed_cases=%d\nanswer_stuffing.loose_stuffed_bps=%d\nanswer_stuffing.review_share_threshold_bps=%d\n", e.AnswerStuffing.LooseEligibleCases, e.AnswerStuffing.LooseStuffedCases, e.AnswerStuffing.LooseStuffedBPS, e.AnswerStuffing.ReviewShareThresholdBPS)
 		fmt.Fprintf(&b, "answer_stuffing.result=%s\nanswer_stuffing.factor_bps=%d\n", e.AnswerStuffing.Result, e.AnswerStuffing.FactorBPS)
+	}
+	// The v13 claim-provenance gate is appended only for bench_version>=13 AND
+	// only when administered, so v9..v12 canonical bytes -- and a v13 Evidence
+	// built without the gate -- stay byte-identical.
+	if e.BenchVersion >= BenchVersionV13 && e.ClaimProvenance.administered() {
+		fmt.Fprintf(&b, "claim_provenance.administered_cases=%d\nclaim_provenance.eligible_cases=%d\nclaim_provenance.not_model_emitted_cases=%d\nclaim_provenance.answer_in_prompt_cases=%d\n", e.ClaimProvenance.AdministeredCases, e.ClaimProvenance.EligibleCases, e.ClaimProvenance.NotModelEmittedCases, e.ClaimProvenance.AnswerInPromptCases)
+		fmt.Fprintf(&b, "claim_provenance.unsettled_cases=%d\nclaim_provenance.zeroed_cases=%d\nclaim_provenance.attribution_complete=%t\nclaim_provenance.posture=%s\nclaim_provenance.flagged_bps=%d\n", e.ClaimProvenance.UnsettledCases, e.ClaimProvenance.ZeroedCases, e.ClaimProvenance.AttributionComplete, e.ClaimProvenance.Posture, e.ClaimProvenance.FlaggedBPS)
+		fmt.Fprintf(&b, "claim_provenance.result=%s\nclaim_provenance.factor_bps=%d\n", e.ClaimProvenance.Result, e.ClaimProvenance.FactorBPS)
 	}
 	return b.Bytes(), nil
 }

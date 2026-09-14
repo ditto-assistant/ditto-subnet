@@ -2050,6 +2050,14 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			return
 		}
 	}
+	// Bench v13 causal gate exemption: every record the harness was (or will be)
+	// delivered through /seed, so a value quoted from retrieved memory is never
+	// answer_in_prompt. Built once over the projected waves; nil below v13.
+	recordTokens := v13RecordTokens(req.BenchVersion, append(append([]protocol.SeedRequest(nil), memSuite.Waves...), iso.SecondaryWave), toolCases)
+	var claimProvenanceReader v13ClaimProvenanceReader
+	if s.broker != nil {
+		claimProvenanceReader = s.broker
+	}
 	errMemoryProjection := errors.New("v9 memory capability reverse mapping failed")
 	waveErr := runner.RunStagedWaves(ctx, memSuite.Waves, casesByWave, func(ctx context.Context, w int, wave protocol.SeedRequest) error {
 		s.store.SetStage(runID, store.StatusSeeding, len(perCase), total)
@@ -2092,6 +2100,13 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			cs = carryV13ProvenanceRelation(req.BenchVersion, sc, cs)
 			cs = applyV10ToolProvenance(
 				req.BenchVersion, scope, cs, resp, observedCalls, execution,
+			)
+			// Bench v13 claim gates: the credited claim span must be model-emitted
+			// and not harness-authored into the prompt (relay-recorded). Shadow by
+			// default; no-op below v13.
+			cs = applyV13ClaimProvenance(
+				req.BenchVersion, scope, v13ClaimProvenancePosture, cs, mc, gradedResp,
+				runner.DefaultSystemPrompt, recordTokens, claimProvenanceReader, inferenceSessionID,
 			)
 			if runErr != nil {
 				// The case still scores 0 on its own accuracy (an empty response
@@ -2238,6 +2253,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		ObservedToolCases: observedTool,
 		CappedToolCases:   cappedTool,
 		ToolProvenance:    summarizeV10ToolProvenance(perCase, toolProvenanceTotals),
+		ClaimProvenance:   summarizeV13ClaimProvenance(req.BenchVersion, v13ClaimProvenancePosture, perCase),
 		IsolationCases:    len(iso.Cases),
 		LifecycleCases:    memSuite.LifecycleCases,
 		ToolEfficiency:    scorer.ToolEfficiencyFactorForVersion(perCase, req.BenchVersion),

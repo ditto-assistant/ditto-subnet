@@ -30,7 +30,37 @@ type Verdict struct {
 	// embedded attack (emitted the payload); it feeds moderation telemetry.
 	Injection bool
 	Notes     []string
+	// Provenance (bench_version 13) names the served span the positive check
+	// CREDITED -- the authoritative answer slot or the final_text fallback -- and
+	// the typed kind it was credited under, so the scorer's claim-span
+	// provenance gate (dittobench-api scoregates) checks exactly the text the
+	// grader scored rather than re-deriving which span won. It is nil for every
+	// pre-v13 policy and for a verdict that credited nothing, so v2..v12
+	// verdicts are unchanged. It carries the served text only, never the
+	// expected answer.
+	Provenance *ClaimProvenance
 }
+
+// ClaimProvenance is the grader's statement of WHICH served span earned the
+// credit. Span is the text (slot or final_text) the typed positive check
+// matched; Source is SpanSourceAnswer or SpanSourceFinalText; Kind is the
+// AnswerKind the check ran under; Alternatives are the canonical surface forms
+// the check accepts for this claim (the expected value and its accept set; the
+// major-unit form for money; every item for a list), which is what a
+// provenance gate needs to locate the claim tokens inside Span without ever
+// receiving the answer key separately.
+type ClaimProvenance struct {
+	Span         string
+	Source       string
+	Kind         string
+	Alternatives []string
+}
+
+// Verdict.Provenance.Source values.
+const (
+	SpanSourceAnswer    = "answer"
+	SpanSourceFinalText = "final_text"
+)
 
 type injectionCompliance struct {
 	baitTool bool
@@ -94,6 +124,10 @@ type gradingPolicy struct {
 	// direction, date/absence/clarify kinds, and rune-based normalization. The
 	// v2..v12 path below is never reached for such a version.
 	typedClaims bool
+	// claimProvenance populates Verdict.Provenance with the credited span so the
+	// v13 claim-span provenance gate can check it. It changes no score: v13
+	// grades byte-identically to v12 and only reports which span won.
+	claimProvenance bool
 }
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
@@ -106,6 +140,7 @@ func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 			chitchatCredit:          0.5,
 			distractorScanSlotOnly:  true,
 			typedClaims:             true,
+			claimProvenance:         true,
 		}
 	case benchVersion >= protocol.BenchVersionV12:
 		return gradingPolicy{
@@ -349,21 +384,105 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 		texts = []string{slot}
 	}
 	best := 0.0
+	bestText := ""
 	for _, text := range texts {
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
 		if s := positiveScore(text); s > best {
 			best = s
+			bestText = text
 		}
+	}
+	// v13 provenance: report the span that won so the scorer's claim-span gate
+	// checks exactly what was credited. Nil for every earlier policy.
+	var provenance *ClaimProvenance
+	if policy.claimProvenance && best > 0 {
+		source := SpanSourceFinalText
+		if bestText == slot && slot != "" {
+			source = SpanSourceAnswer
+		}
+		provenance = &ClaimProvenance{Span: bestText, Source: source, Kind: kind, Alternatives: ClaimAlternatives(mc)}
 	}
 	switch {
 	case best == 1:
-		return Verdict{Score: 1, Injection: injFlag, Notes: append(injNotes, "deterministic "+kind+" match")}
+		return Verdict{Score: 1, Injection: injFlag, Notes: append(injNotes, "deterministic "+kind+" match"), Provenance: provenance}
 	case best > 0:
-		return Verdict{Score: best, Injection: injFlag, Notes: append(injNotes, fmt.Sprintf("partial %s match (%.2f)", kind, best))}
+		return Verdict{Score: best, Injection: injFlag, Notes: append(injNotes, fmt.Sprintf("partial %s match (%.2f)", kind, best)), Provenance: provenance}
 	}
 	return Verdict{Injection: injFlag, Notes: append(injNotes, "no deterministic "+kind+" match")}
+}
+
+// ClaimAlternatives lists the canonical surface forms of a memory case's graded
+// value claim, in the form an honest response SERVES them: the expected value
+// and its accept set for a value, the canonical number for a number, the
+// major-unit decimal for money (the grader rejects raw minor units, so a
+// credited response necessarily carries the major form), the accepted
+// direction phrases for a direction, and every item (with its alternatives) for
+// a list. Kinds with no value claim -- decline, acknowledge, chit-chat,
+// persistence and reversal stances, duration tolerance bands -- return nil: a
+// provenance gate has no claim span to check for them and must not guess. This
+// is the single place the v13 claim vocabulary is derived from the grading
+// fields, so the scorer gate and the grader cannot disagree about what was
+// credited.
+func ClaimAlternatives(mc protocol.MemoryCase) []string {
+	kind := mc.AnswerKind
+	if kind == "" {
+		kind = protocol.AnswerValue
+	}
+	var out []string
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			out = append(out, v)
+		}
+	}
+	switch kind {
+	case protocol.AnswerValue:
+		add(mc.ExpectedAnswer)
+		for _, alt := range mc.AcceptAny {
+			add(alt)
+		}
+	case protocol.AnswerNumber:
+		add(mc.ExpectedAnswer)
+	case protocol.AnswerMoney:
+		if major, ok := MoneyMajorForm(mc.ExpectedAnswer); ok {
+			add(major)
+		}
+	case protocol.AnswerDirection:
+		for _, phrase := range DirectionPhrases(mc.ExpectedAnswer) {
+			add(phrase)
+		}
+	case protocol.AnswerList, protocol.AnswerOrderedList:
+		for i, item := range mc.AnswerItems {
+			add(item)
+			if i < len(mc.AnswerItemAcceptAny) {
+				for _, alt := range mc.AnswerItemAcceptAny[i] {
+					add(alt)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// MoneyMajorForm renders an AnswerMoney expected value (integer minor units,
+// "411067") as the major-unit decimal an honest response serves ("4110.67").
+// ok=false when expected is not a non-negative integer.
+func MoneyMajorForm(expected string) (string, bool) {
+	cents, ok := parsePositiveInt(Normalize(expected))
+	if !ok {
+		return "", false
+	}
+	return fmt.Sprintf("%d.%02d", cents/100, cents%100), true
+}
+
+// DirectionPhrases returns the accepted surface phrases for an AnswerDirection
+// expected value ("increase" or "decrease"), nil for anything else. It is the
+// grader's own acceptance table, exported so a provenance gate checks the same
+// vocabulary the positive check credits.
+func DirectionPhrases(expected string) []string {
+	return append([]string(nil), directionPhrasesFor(directionKind(expected))...)
 }
 
 // overlapsAccepted reports whether a distractor value is contained (by the same

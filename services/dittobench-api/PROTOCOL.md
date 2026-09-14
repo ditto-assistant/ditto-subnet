@@ -556,6 +556,107 @@ receipt contract. Its scored tool trajectory is additionally restricted to the
 intersection of broker-observed model tool selections and case-bound
 `tool_endpoint` executions; see *Observed tool execution* above.
 
+### bench_version 13: claim-span provenance and causal model dependence
+
+Before v13 nothing checked that the value the harness **served** in `answer` /
+`final_text` was a value the controlled model **emitted**, nor where the model
+got it. Two constructs lived in that gap. A rewriter lets the model read and
+then edits the graded value on the way out (a `/100` rescaler turning the
+model's `411067` into `$4,110.67`, a direction map turning "went up" into
+`increase`, a slot composed from figures the model only mentioned, an
+approximate draft replaced by a local parser's value). A launderer computes the
+answer locally, writes "reply exactly: X" into the prompt, and lets the model
+parrot it, so every provenance, catalog, and label test sees a model-emitted
+answer. From `bench_version` 13 the ticket-bound inference broker records the
+value tokens of every completion it forwards and of every harness-authored
+request span, and the scorer checks the **graded claim span** against both.
+Every rule below is gated `bench_version >= 13`; v2 through v12 transcripts,
+reports, and signed evidence are byte-identical.
+
+**What the relay records (hashes only).** For each successful chat completion,
+in either the OpenAI shape (`messages[]`, `choices[].message`) or the Anthropic
+shape (top-level `system`, content blocks):
+
+- the value tokens of every **harness-authored** request span — `system` /
+  `developer` messages, the user template, an assistant prefill, tool-role
+  messages — noting which of them no earlier completion of the same case had
+  already produced ("harness-first");
+- the value tokens of every **model-emitted** completion span — message
+  content (including JSON-mode structured output), `tool_calls[].function.
+  arguments` (a `final_answer` tool delivery), a legacy `function_call`, and
+  Anthropic `text` / `tool_use` blocks;
+- the value tokens of every `tool_endpoint` **result** the validator served the
+  case.
+
+Only 64-bit FNV-1a hashes of canonical value tokens are kept — never prompt
+text, completion text, or the answer key (which lives with the scorer and was
+never in the broker). Capture is bounded per case; a case that hits a bound is
+marked incomplete.
+
+**The published normaliser.** Both sides pass every span through
+`scoregates.NormalizeSpan` — Unicode NFKC, casefold, markdown/label stripping
+(emphasis, code fences, headings, list markers, `ANSWER:`-style labels),
+punctuation folded to spaces except `$ . , -` inside numbers, whitespace
+collapsed — then tokenize with the Bench v12 value-token rule
+(`scoregates.ValueTokenHashes`): every `CanonicalNumber` (strip `$` and
+grouping commas, drop trailing fractional zeros and leading zeros) plus every
+lowercase alphanumeric token of at least 4 characters. `$4,110.67`,
+`4110.67 dollars`, `**Answer:** $4110.67`, `{"answer":"4110.67"}` and
+`４１１０.６７` all yield the single claim token `4110.67`; `411067` does not.
+Miners run the same functions locally; the vectors are published in
+`research/dittobench-datagen/grade/audit_v13_bank.go`.
+
+**Attribution is exact or absent.** A completion is booked on the case whose
+exclusive window, verified `X-Ditto-Case-Id` claim (naming a case in flight), or
+sole in-flight `/run` admitted it. Under concurrent `/run` with several cases in
+flight and no verified claim the completion is booked nowhere and every case
+then in flight is marked incomplete; the scorer fails **open** on those cases. A
+harness that sends `X-Ditto-Case-Id` on its inference calls keeps every case
+attributable at any concurrency.
+
+**Scoring rules (memory cases; tool cases are never gated here).** The grader
+names the served span it credited (`Verdict.Provenance`: the authoritative
+`answer` slot or the `final_text` fallback) and the canonical forms it accepts
+for the claim (the expected value and its accept set; the major-unit decimal for
+money; the accepted phrases for a direction; every item for a list). The **claim
+tokens** are the tokens of every accepted form wholly present in that span.
+
+- (a) **`served_text_not_model_emitted`** — the claim tokens must be a subset of
+  the union of the case's attributed completion tokens. This is containment of
+  the credited value, never a substring test on `final_text`: JSON-mode
+  unwrapping, `final_answer`-tool delivery, formatters, markdown stripping, and
+  a reply spliced from two completions all pass; a value the model never
+  produced does not. A credited value with **no** completion at all is also
+  reported as `no_model_completion`.
+- (b) **`answer_in_prompt`** — from the case's harness-first tokens the scorer
+  subtracts every token of a record delivered through `/seed` (the dataset),
+  every served `tool_endpoint` result, the case's own `user_input`, and the
+  validator's system prompt. If the claim tokens are a subset of what remains,
+  the harness wrote the answer into the prompt and the model only echoed it.
+  Quoting retrieved memory or a tool result into the prompt is exempt by
+  construction; a value the model derived in an earlier completion and the
+  harness re-injected later is model-derived, not harness-first.
+- Kinds with no value claim (decline, acknowledge, chit-chat, persistence /
+  reversal stances, duration bands) and a value below the token floor are
+  **not applicable**: nothing is checked and nothing can flag.
+
+**Where it appears.** The report's per-case `claim_provenance` carries the
+`ClaimProvenanceEvidence` (`completions` — null when attribution is incomplete —
+`tool_results`, `claim_tokens`, `complete`, `model_emitted`, `answer_in_prompt`,
+`posture`, `findings`); `details.claim_provenance` summarizes the run (settled,
+flagged, unsettled, zeroed counts and `attribution_coverage_bps`, this
+validator's half of the enforce precondition); and the signed v9 gate evidence
+gains a `claim_provenance` block for v13 runs whose factor is an identity term
+(the gates act per claim).
+
+**Posture.** Both gates share one switch and ship in **shadow**: findings, notes,
+per-case evidence and the summary are recorded and no score moves. Under
+**enforce** (`DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE=enforce`) a settled flagged
+claim zeroes the case's score in scored scope; unavailable or incomplete
+evidence always fails **open**. Enforce is an operator decision gated on the
+honest cohort (including the reference harness) showing zero false zeros.
+Evidence rows are leads for source review either way.
+
 ### Prohibited: content-keyed mutation of the graded response
 
 `final_text`, `answer`, `abstain`, and the reported `tool_calls` are the graded
