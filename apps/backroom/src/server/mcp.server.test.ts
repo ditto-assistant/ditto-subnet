@@ -1968,6 +1968,17 @@ describe('Backroom MCP tools', () => {
         known_instances: ['ditto-screener-prod'],
         applied_instances: [],
         shadow_observations: [],
+        policy_manifests: [{
+          revision: 106,
+          scope: 'subnet-screener-1',
+          policy_version: 13,
+          profile: 'l1_l2',
+          rotation_id: 'policy-v11-global-topdown',
+          digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+          reason: 'Preserve the existing policy manifest contract.',
+          actor: 'operator@example.com',
+          created_at: '2026-09-14T02:51:58.121154Z',
+        }],
       }),
     )
     vi.stubGlobal('fetch', fetchMock)
@@ -1980,6 +1991,11 @@ describe('Backroom MCP tools', () => {
     expect(readJsonResult(response)).toMatchObject({
       known_instances: ['ditto-screener-prod'],
       applied_instances: [],
+      policy_manifests: [{
+        revision: 106,
+        profile: 'l1_l2',
+        rotation_id: 'policy-v11-global-topdown',
+      }],
     })
     expect(fetchMock).toHaveBeenCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/screener-review-settings',

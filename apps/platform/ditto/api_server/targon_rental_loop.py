@@ -1303,11 +1303,19 @@ class TargonRentalLoop:
             ),
             commands=("/app/workers/screener/.venv/bin/python", "-m"),
             args=("ditto_screener.fanout_shadow_job",),
+            timeout_seconds=settings.fanout_shadow_timeout_seconds + 300,
         )
         for provider in await self._lane_providers("review", None):
-            # Keep GCE as an authoritative overflow lane. The pilot may only use
-            # spare Targon capacity after its baseline reservation.
-            if provider.stored_provider != "targon":
+            # This loop owns only disposable source-review providers. Permit
+            # spare Targon or the configured Cloud Run Jobs adapter; never
+            # infer that an arbitrary provider stored as GCP is Cloud Run.
+            is_targon = (
+                provider.name == "targon" and provider.stored_provider == "targon"
+            )
+            is_cloudrun = (
+                provider.name == "cloudrun" and provider.stored_provider == "gcp"
+            )
+            if not (is_targon or is_cloudrun):
                 continue
             if not await self._provider_has_shadow_capacity(
                 provider,

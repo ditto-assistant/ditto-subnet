@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -15,7 +15,9 @@ from ditto.api_models.screener_review_settings import (
     ScreenerReviewSettings,
     policy_manifest_digest,
 )
-from ditto.api_server.config import TargonRentalConfig
+from ditto.api_server.cloudrun_client import AsyncCloudRunClient
+from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
+from ditto.api_server.config import CloudRunScreeningConfig, TargonRentalConfig
 from ditto.api_server.screening_provider import (
     BuildSpec,
     ProvisionObservation,
@@ -41,6 +43,7 @@ from ditto.db.models import (
     Agent,
     ProviderOutageCircuit,
     ScreenerFanoutShadowReview,
+    ScreenerProviderSettingsRevision,
     ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     SubmissionImageBuild,
@@ -196,6 +199,18 @@ class _FakeTargon:
 
     async def delete(self, uid: str) -> None:
         self.deleted.append(uid)
+
+
+class _FakeCloudRunClient:
+    def __init__(self) -> None:
+        self.created: list[tuple[str, dict[str, Any]]] = []
+        self.started: list[str] = []
+
+    async def create_job(self, name: str, **kwargs: Any) -> None:
+        self.created.append((name, kwargs))
+
+    async def run_job(self, name: str) -> None:
+        self.started.append(name)
 
 
 def test_inflight_failure_code_maps_kaniko_exit() -> None:
@@ -426,6 +441,75 @@ async def test_fanout_launch_uses_dedicated_secret_and_router(
     )
     assert env["SCREENER_REVIEW_INFERENCE_PROVIDER"] == "ditto"
     assert env["SCREENER_SOURCE_REVIEW_BASE_URL"] == ("https://router.heyditto.ai/v1")
+
+
+@pytest.mark.asyncio
+async def test_fanout_launches_on_configured_cloudrun_when_targon_is_absent(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_fanout_rows(session_maker)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerProviderSettingsRevision(
+                environment="prod",
+                parent_revision=0,
+                settings=ScreenerProviderSettings(
+                    build_provider_priority=("hetzner", "gcp"),
+                    runtime_provider_priority=("hetzner", "gcp"),
+                    source_review_provider_priority=("hetzner", "gcp"),
+                ).model_dump(mode="json"),
+                reason="Reproduce the configured production provider priority",
+                actor="test",
+            )
+        )
+
+    async def mint(_sa: str) -> str:
+        return "token-" + "x" * 120
+
+    client = _FakeCloudRunClient()
+    config = _config(fanout_shadow_secret_resource="projects/p/secrets/shadow")
+    cloudrun = CloudRunComputeProvider(
+        cast(AsyncCloudRunClient, client),
+        CloudRunScreeningConfig(
+            project="ditto-app-dev",
+            region="us-central1",
+            untrusted_sa_email="untrusted@example.test",
+            platform_invoker_sa_email="invoker@example.test",
+        ),
+        config,
+    )
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=config,
+        providers=[cloudrun],
+        screener_hotkey=_SCREENER_HOTKEY,
+        mint_token=mint,
+        interval_seconds=60,
+    )
+
+    assert await loop._launch_fanout_shadow_review() is True
+    assert len(client.created) == 1
+    name, job = client.created[0]
+    assert client.started == [name]
+    assert job["cpu"] == "2"
+    assert job["memory"] == "4Gi"
+    assert job["timeout_seconds"] == 1_200
+    assert job["commands"] == ("/app/workers/screener/.venv/bin/python", "-m")
+    assert job["args"] == ("ditto_screener.fanout_shadow_job",)
+    env = dict(job["env"])
+    assert env["SCREENER_SOURCE_REVIEW_SECRET_RESOURCE"] == (
+        "projects/p/secrets/shadow"
+    )
+    async with session_maker() as session:
+        row = await session.scalar(
+            select(ScreenerFanoutShadowReview).where(
+                ScreenerFanoutShadowReview.status == "running"
+            )
+        )
+        assert row is not None
+        assert row.provider == "gcp"
+        assert row.provider_resource_id == f"job:{name}"
+        assert row.reserved_cost_microusd == 3_000_000
 
 
 @pytest.mark.asyncio

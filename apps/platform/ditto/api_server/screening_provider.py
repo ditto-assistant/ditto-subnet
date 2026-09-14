@@ -57,6 +57,7 @@ class ReviewSpec:
     env: tuple[tuple[str, str], ...]
     commands: tuple[str, ...]
     args: tuple[str, ...]
+    timeout_seconds: int | None = None
 
 
 @dataclass(frozen=True)

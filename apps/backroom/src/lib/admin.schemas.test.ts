@@ -1890,6 +1890,34 @@ describe('screener review settings schemas', () => {
     expect(parsed.applied_instances[0]?.revision).toBe(42)
   })
 
+  it('parses the historical Platform policy manifest wire shape', () => {
+    const parsed = screenerReviewControlSchema.parse({
+      current: [],
+      history: [],
+      known_instances: [],
+      applied_instances: [],
+      shadow_observations: [],
+      policy_manifests: [{
+        revision: 106,
+        scope: 'subnet-screener-1',
+        policy_version: 13,
+        profile: 'l1_l2',
+        rotation_id: 'policy-v11-global-topdown',
+        digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+        reason: 'Preserve the existing policy manifest contract.',
+        actor: 'operator@example.com',
+        created_at: '2026-09-14T02:51:58.121154Z',
+      }],
+    })
+
+    expect(parsed.policy_manifests[0]).toMatchObject({
+      revision: 106,
+      profile: 'l1_l2',
+      rotation_id: 'policy-v11-global-topdown',
+      digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+    })
+  })
+
   it('fills L1 Luna budget defaults when older payloads omit them', () => {
     const {
       source_review_max_steps,
