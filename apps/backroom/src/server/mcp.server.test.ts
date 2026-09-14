@@ -131,6 +131,7 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_rollout_qualification',
         'get_burn_settings',
         'get_copy_court_settings',
+        'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
         'get_continual_retest_settings',
         'get_core_qualification_policy',
@@ -294,9 +295,10 @@ describe('Backroom MCP tools', () => {
     // policy-activation pair, four short shadow qualification catalog lines,
     // the coding-evaluation ledger read, the bootstrap-grant line, and three
     // short catalog-release lines; operational tutorials stay in
-    // get_backroom_tool_help.
+    // get_backroom_tool_help. 24_200 admits the one-line bench v13+
+    // confirmation seed anchor read (its notes live in the detailed help).
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      24_000,
+      24_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

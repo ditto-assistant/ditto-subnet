@@ -38,33 +38,28 @@ from ditto.api_server.koth import (
     TOP5_MAX_CONFIRMATION_SEEDS,
     TOP5_MIN_CONFIRMATION_SEEDS,
 )
+from ditto_screening_protocol.crn_block_binding import (
+    CRN_ANCHOR_BLOCK_DELTA as _SHARED_CRN_ANCHOR_BLOCK_DELTA,
+)
+from ditto_screening_protocol.crn_block_binding import (
+    CRN_BLOCK_BINDING_MIN_BENCH_VERSION as _SHARED_CRN_BLOCK_BINDING_MIN_BENCH_VERSION,
+)
+from ditto_screening_protocol.crn_block_binding import normalize_block_hash
 
 # Mask to a non-negative signed-63-bit integer, matching dittobench-api's
 # FreshSeed (``int64(uint64 >> 1)``): JSON-clean and never negative.
 _INT63_MASK = (1 << 63) - 1
 
-# Floor from which the confirmation CRN family is bound to a Platform-pinned
-# finalized block hash. A floor, never an enumeration: every later version binds.
-# Versions below it keep the legacy ``block_hash=None`` derivation byte-for-byte,
-# so an in-flight v12 reign's seeds never move. Mirrors the subnet constant.
-CRN_BLOCK_BINDING_MIN_BENCH_VERSION = 13
-
-# Blocks past the ready block Platform waits before it pins the anchor: the
-# hash of ``B_ready + Δ`` is unknown to everyone -- Platform included -- when
-# the reign becomes ready, so "when to read" is not a choice anyone can grind.
-CRN_ANCHOR_BLOCK_DELTA = 10
+# The binding floor and anchor delta are consensus inputs shared with the other
+# CRN copy; both import the one exported constant instead of retyping it. Read
+# through this module at call time (tests lower the floor to a fixture era).
+CRN_BLOCK_BINDING_MIN_BENCH_VERSION = _SHARED_CRN_BLOCK_BINDING_MIN_BENCH_VERSION
+CRN_ANCHOR_BLOCK_DELTA = _SHARED_CRN_ANCHOR_BLOCK_DELTA
 
 
 def crn_block_binding_active(version: int) -> bool:
     """Whether confirmation seeds at ``version`` must carry a block binding."""
     return int(version) >= CRN_BLOCK_BINDING_MIN_BENCH_VERSION
-
-
-def _normalize_block_hash(block_hash: str) -> str:
-    """Canonical hash text for hashing: lowercase, no ``0x``. Pylon and
-    Substrate return either form; the derivation must not depend on which."""
-    h = block_hash.strip().lower()
-    return h[2:] if h.startswith("0x") else h
 
 
 def crn_seed(
@@ -96,7 +91,7 @@ def crn_seed(
         h.update(b"\x00k")
         h.update(str(int(k)).encode("ascii"))
     if block_hash is not None:
-        normalized = _normalize_block_hash(block_hash)
+        normalized = normalize_block_hash(block_hash)
         if not normalized:
             raise ValueError("a block-bound CRN seed requires a non-empty block hash")
         h.update(b"\x00block")
