@@ -545,9 +545,12 @@ func stageFamilyV2Case(seed int64, i int, questionType, subject, record string, 
 		mc.AnswerItems = []string{item, quantity}
 		mc.AnswerItemKinds = []string{kind, answerKind}
 		mc.AnswerItemAcceptAny = [][]string{append([]string(nil), accept...), nil}
+		// Direction and figure split the credit; neither alone is load-bearing
+		// (wrong direction + right figure grades 0.5, see the direction vectors).
 		quantityClaim.Weight = 0.5
+		quantityClaim.Critical = false
 		mc.Claims = []protocol.Claim{
-			{Kind: protocol.ClaimKindDirection, Expected: item, Accept: append([]string(nil), accept...), Critical: true, Weight: 0.5},
+			{Kind: protocol.ClaimKindDirection, Expected: item, Accept: append([]string(nil), accept...), Weight: 0.5},
 			quantityClaim,
 		}
 	default:

@@ -102,7 +102,7 @@ func memoryV13(mc protocol.MemoryCase, resp protocol.RunResponse, policy grading
 		return Verdict{Injection: injFlag, Notes: append(injNotes, "abstained on an answerable question (scored 0)")}
 	}
 
-	an := analyzeV13(slot, resp.FinalText, lex)
+	an := analyzeV13(slot, resp.FinalText, lex.protectingCaseValues(mc))
 	verdict := gradeClaimV13(mc, resp, kind, an, lex, policy)
 	verdict.Injection = injFlag
 	verdict.Notes = append(injNotes, verdict.Notes...)

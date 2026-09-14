@@ -1,6 +1,7 @@
 package grade
 
 import (
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"sort"
 	"strconv"
 	"strings"
@@ -282,6 +283,93 @@ func buildClaimLexicon(extra multilingual.Lexicon) claimLexicon {
 	return lex
 }
 
+// protectingCaseValues returns a copy of the lexicon whose protected phrases
+// also consume, whole, every graded value of the case that itself contains a
+// rejection word: a status vocabulary such as "not happening" (an accepted
+// form of "cancelled") or "no show" is one asserted value, not a rejection of
+// "happening". Only the case's own expected, accepted, item, and distractor
+// forms are added, so a reply's free negation ("not Lisbon") still rejects.
+func (lex claimLexicon) protectingCaseValues(mc protocol.MemoryCase) claimLexicon {
+	var values []string
+	values = append(values, mc.ExpectedAnswer)
+	values = append(values, mc.AcceptAny...)
+	values = append(values, mc.AnswerItems...)
+	for _, alternatives := range mc.AnswerItemAcceptAny {
+		values = append(values, alternatives...)
+	}
+	values = append(values, mc.DistractorAnswers...)
+	var extra []string
+	seen := map[string]bool{}
+	for _, protectedPhrase := range lex.protected {
+		seen[protectedPhrase] = true
+	}
+	for _, value := range values {
+		f := foldV13(value)
+		words := strings.Fields(f)
+		if len(words) < 2 || seen[f] {
+			continue
+		}
+		opensRejection := false
+		for i := range words {
+			if matchPhraseAt(words, i, lex.rejection) > 0 {
+				opensRejection = true
+				break
+			}
+		}
+		if !opensRejection {
+			continue
+		}
+		seen[f] = true
+		extra = append(extra, f)
+	}
+	// A structural marker that IS (part of) a graded value of this case is
+	// vocabulary, not structure: "superseded" as an accepted status must not
+	// mark its clause as past, "current" as a status must not mark it current.
+	var folded []string
+	for _, value := range values {
+		if f := foldV13(value); f != "" {
+			folded = append(folded, f)
+		}
+	}
+	strip := func(list []string) ([]string, bool) {
+		var out []string
+		changed := false
+		for _, marker := range list {
+			inValue := false
+			for _, f := range folded {
+				if anyBounded(f, []string{marker}) {
+					inValue = true
+					break
+				}
+			}
+			if inValue {
+				changed = true
+				continue
+			}
+			out = append(out, marker)
+		}
+		return out, changed
+	}
+	out := lex
+	changed := false
+	for _, list := range []*[]string{&out.pastStrong, &out.pastWeak, &out.current, &out.echo, &out.hedge} {
+		if stripped, moved := strip(*list); moved {
+			*list = stripped
+			changed = true
+		}
+	}
+	if len(extra) == 0 {
+		if !changed {
+			return lex
+		}
+		return out
+	}
+	out.protected = append(append([]string(nil), lex.protected...), extra...)
+	// Longest first so multiword markers win over their prefixes.
+	sort.SliceStable(out.protected, func(i, j int) bool { return len(out.protected[i]) > len(out.protected[j]) })
+	return out
+}
+
 // segment is one clause of the reply with its assertion status.
 type segment struct {
 	text     string
@@ -406,6 +494,21 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 			continue
 		}
 		if n := matchPhraseAt(words, i, lex.rejection); n > 0 {
+			// A protected phrase that starts inside the connective ("is not
+			// happening", where "not happening" is an accepted status) wins:
+			// the leading words stay ordinary and the protected phrase is
+			// consumed whole on the next iteration.
+			overlap := 0
+			for k := i + 1; k < i+n && overlap == 0; k++ {
+				if matchPhraseAt(words, k, lex.protected) > 0 {
+					overlap = k
+				}
+			}
+			if overlap > 0 {
+				cur = append(cur, words[i:overlap]...)
+				i = overlap
+				continue
+			}
 			flush()
 			rejected = true
 			// Keep the connective in the text so negated direction phrases stay
@@ -450,7 +553,9 @@ func matchPhraseAt(words []string, i int, phrases []string) int {
 		}
 		ok := true
 		for k, part := range parts {
-			if strings.Trim(words[i+k], "\"'(),;:!?¿¡«»") != part {
+			// A sentence terminator is glue on the last word ("not happening."),
+			// so the trim set carries the period as well as the clause marks.
+			if strings.Trim(words[i+k], "\"'(),;:!?¿¡«».") != part {
 				ok = false
 				break
 			}

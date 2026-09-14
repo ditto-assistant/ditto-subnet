@@ -17,6 +17,10 @@ const (
 	ClaimKindConflict     = "conflict"
 	ClaimKindQuantity     = "quantity"
 	ClaimKindDirection    = "direction"
+	// ClaimKindValue is an opaque identifier quoted from the evidence (a
+	// statement reference, a code): graded by exact canonical match, never by
+	// a synonym cluster.
+	ClaimKindValue = "value"
 )
 
 // Metamorphic relations carried by V10CaseProvenance.Relation (universe) and,
