@@ -231,14 +231,46 @@ type NoopPass struct{}
 // Translate implements TranslationPass.
 func (NoopPass) Translate(_ Language, text string, _ []string) (string, error) { return text, nil }
 
+// Surface classes a generation pass can draw independently. #1831 sizes the
+// fraction per class (memory questions, planted records, tool requests), so the
+// knob carries one default plus optional per-class overrides.
+const (
+	SurfaceMemory  = "memory"
+	SurfaceRecords = "records"
+	SurfaceTool    = "tool"
+)
+
 // Config is the multilingual profile knob. Fraction is the share of eligible
-// surfaces drawn into a non-English language; Languages is the candidate set;
-// Pass renders the draw. The v13.0 default is Fraction 0 (owner decision: the
-// fraction is set by the starter-kit <2-point calibration, not here).
+// surfaces drawn into a non-English language; SurfaceFractions overrides it per
+// surface class (SurfaceMemory / SurfaceRecords / SurfaceTool); Languages is
+// the candidate set; Pass renders the draw. The v13.0 default is Fraction 0
+// with no overrides (owner decision: the fractions are set by the starter-kit
+// <2-point calibration, not here).
 type Config struct {
-	Fraction  float64
-	Languages []Language
-	Pass      TranslationPass
+	Fraction         float64
+	SurfaceFractions map[string]float64
+	Languages        []Language
+	Pass             TranslationPass
+}
+
+// FractionFor returns the draw fraction for one surface class: the per-class
+// override when set, else Fraction.
+func (c Config) FractionFor(surface string) float64 {
+	if f, ok := c.SurfaceFractions[surface]; ok {
+		return f
+	}
+	return c.Fraction
+}
+
+// maxFraction is the largest fraction any surface class can draw with.
+func (c Config) maxFraction() float64 {
+	m := c.Fraction
+	for _, f := range c.SurfaceFractions {
+		if f > m {
+			m = f
+		}
+	}
+	return m
 }
 
 // DefaultConfig is the v13.0 rehearsal configuration: no multilingual surface,
@@ -253,7 +285,13 @@ func (c Config) Validate() error {
 	if c.Fraction < 0 || c.Fraction > 1 {
 		return fmt.Errorf("multilingual: fraction %v outside [0,1]", c.Fraction)
 	}
-	if c.Fraction > 0 && len(c.Languages) == 0 {
+	for surface, f := range c.SurfaceFractions {
+		if f < 0 || f > 1 {
+			return fmt.Errorf("multilingual: %s fraction %v outside [0,1]", surface, f)
+		}
+	}
+	active := c.maxFraction() > 0
+	if active && len(c.Languages) == 0 {
 		return errors.New("multilingual: fraction > 0 with no candidate languages")
 	}
 	for _, l := range c.Languages {
@@ -264,18 +302,27 @@ func (c Config) Validate() error {
 			return errors.New("multilingual: English is the base language, not a draw candidate")
 		}
 	}
-	if c.Fraction > 0 && c.Pass == nil {
+	if active && c.Pass == nil {
 		return errors.New("multilingual: fraction > 0 without a translation pass")
 	}
 	return nil
 }
 
 // Draw deterministically decides whether the surface identified by (seed, key)
-// is rendered in a non-English language and which one. The draw is a pure
-// function of its inputs, so a dataset regenerates identically; with Fraction 0
-// it never selects a language.
+// is rendered in a non-English language and which one, at the default
+// Fraction. The draw is a pure function of its inputs, so a dataset regenerates
+// identically; with Fraction 0 it never selects a language.
 func (c Config) Draw(seed int64, key string) (Language, bool) {
-	if c.Fraction <= 0 || len(c.Languages) == 0 {
+	return c.DrawFor("", seed, key)
+}
+
+// DrawFor is Draw at the fraction of one surface class (FractionFor). The
+// uniform draw depends only on (seed, key), so raising a class's fraction only
+// ever ADDS drawn surfaces: every surface drawn at a lower fraction is still
+// drawn, in the same language, at a higher one.
+func (c Config) DrawFor(surface string, seed int64, key string) (Language, bool) {
+	fraction := c.FractionFor(surface)
+	if fraction <= 0 || len(c.Languages) == 0 {
 		return English, false
 	}
 	h := fnv.New64a()
@@ -283,7 +330,7 @@ func (c Config) Draw(seed int64, key string) (Language, bool) {
 	sum := h.Sum64()
 	// Top 53 bits as a uniform draw in [0,1); the remaining bits pick the language.
 	u := float64(sum>>11) / float64(uint64(1)<<53)
-	if u >= c.Fraction {
+	if u >= fraction {
 		return English, false
 	}
 	langs := append([]Language(nil), c.Languages...)
@@ -296,10 +343,15 @@ func (c Config) Draw(seed int64, key string) (Language, bool) {
 // failing closed on an unsupported language. The returned language is English
 // when the text was left alone.
 func (c Config) Apply(seed int64, key, text string, protected []string) (string, Language, error) {
+	return c.ApplyFor("", seed, key, text, protected)
+}
+
+// ApplyFor is Apply at the fraction of one surface class.
+func (c Config) ApplyFor(surface string, seed int64, key, text string, protected []string) (string, Language, error) {
 	if err := c.Validate(); err != nil {
 		return "", English, err
 	}
-	lang, ok := c.Draw(seed, key)
+	lang, ok := c.DrawFor(surface, seed, key)
 	if !ok {
 		return text, English, nil
 	}

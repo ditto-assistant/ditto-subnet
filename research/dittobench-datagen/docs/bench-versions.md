@@ -750,6 +750,14 @@ claims.
   "maybe X") asserts everything it lists; a lone value is asserted; a
   multi-value sentence with neither cue nor enumeration is exposition and
   asserts nothing. Temporal qualification counts once, as the current value.
+  Two refinements keep natural concise answers out of the exposition rule: a
+  calendar-year token (1900..2100) beside a count or amount is a qualifier, not
+  a candidate, unless the case's own expected or distractor value is year-like
+  ("You took 3 trips in 2026" asserts 3; "In 2026 you saved $3,800" asserts
+  one amount), and an uncued bare integer beside an explicitly marked amount is
+  exposition ("$3,800 across 4 trips"). A colon that closes a clause cues the
+  value after it ("$5,000 minus $1,200: $3,800"), and verb-object counts
+  ("took 3", "booked 3") are weak claim cues.
 - **Quantities in the requested unit.** `AnswerMoney` reads a bare integer in
   the unit the question asked for (`MemoryCase.AnswerUnit`, inferred from
   "minor unit(s)" / "cents" in the public question when unset): expected
@@ -810,10 +818,13 @@ owns no bank. Until the v13 generation contract lands, the generated-corpus
 gate regrades the newest generatable corpus under the v13 policy and reports
 `corpus_bench_version`; it adds a **per-claim-kind** gate (public-question-only
 passable share strictly below 5% for every non-interaction kind). On the pinned
-40-seed full run the v9 corpus regraded at v13 has 0 passable value, list, money,
+40-seed full run the v12 corpus (the newest generatable version, reported as
+`corpus_bench_version: 12`) regraded at v13 has 0 passable value, list, money,
 and number cases (v9's 120 passable declarative acknowledgements are gone), the
-v13-1 bank's 59 hard negatives all score 0, and its 47 reviewed positives all
-score. The GIH transcript negative (answer present, derivation absent from
+v13-1 bank's 59 hard negatives all score 0, and its 54 reviewed positives all
+score. `datagen-ci.yml` runs `-release-gate` on every datagen pull request;
+`TestReleaseGateCoversEverySupportedVersionAndPolicyFloor` runs the same check
+under `go test ./...` in the release workflow's datagen gate. The GIH transcript negative (answer present, derivation absent from
 completions) needs completion spans and lands with the provenance gate.
 
 ## Auditing an old score

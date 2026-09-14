@@ -168,10 +168,20 @@ func anyPhraseV13(text string, phrases []string) bool {
 
 // containsNumberTokenV13 is the rune-aware counterpart of containsNumberToken.
 func containsNumberTokenV13(text, num string) bool {
-	for i := 0; ; {
+	return indexNumberTokenV13(text, num, 0) >= 0
+}
+
+// indexNumberTokenV13 returns the byte index of the first occurrence of num in
+// text at or after from whose neighbours are not number-attached runes
+// (digits, ".", ",", "-"), or -1.
+func indexNumberTokenV13(text, num string, from int) int {
+	if num == "" || from > len(text) {
+		return -1
+	}
+	for i := from; ; {
 		j := strings.Index(text[i:], num)
 		if j < 0 {
-			return false
+			return -1
 		}
 		j += i
 		before := true
@@ -185,7 +195,7 @@ func containsNumberTokenV13(text, num string) bool {
 			after = !numAttachedV13(r)
 		}
 		if before && after {
-			return true
+			return j
 		}
 		i = j + 1
 	}

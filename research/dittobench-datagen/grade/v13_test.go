@@ -199,10 +199,92 @@ func TestV13StuffingQuantifier(t *testing.T) {
 		"$5,000.00 - $889.33 = $4,110.67",
 		"You started at $5,000.00, paid $889.33, and have $4,110.67 remaining.",
 		"The original budget was $5,000.00. After the $889.33 payment you have $4,110.67 left.",
+		// The colon is a result cue even though it closes the clause before the value.
+		"$5,000.00 minus $889.33: $4,110.67",
+		"Budget $5,000.00, payment $889.33: $4,110.67",
+		// A calendar year beside the amount is a qualifier, not a competing value.
+		"In 2026 you saved $4,110.67.",
+		"The 2026 figure is $4,110.67.",
+		// An uncued bare integer beside an explicit amount is exposition.
+		"You saved $4,110.67 across 4 trips.",
 	} {
 		if got := Memory(mc, protocol.RunResponse{FinalText: text}); got.Score != 1 {
 			t.Errorf("temporally qualified / reasoned %q scored %v: %v", text, got.Score, got.Notes)
 		}
+	}
+	// Uncued explicit amounts stay exposition, and the note says so.
+	got = Memory(mc, protocol.RunResponse{FinalText: "Payment $889.33, budget $5,000.00, current $4,110.67."})
+	if got.Score != 0 || !strings.Contains(strings.Join(got.Notes, " "), "mentioned but not asserted") {
+		t.Fatalf("exposition note: %+v", got)
+	}
+	// A clock time is still not an amount; a bare year beside a hedge is still listed.
+	if got := Memory(mc, protocol.RunResponse{FinalText: "At 10:30 the balance was $4,110.67."}); got.Score != 1 {
+		t.Fatalf("clock time read as an amount: %+v", got)
+	}
+	if got := Memory(mc, protocol.RunResponse{FinalText: "$4,110.67 across 4 trips, or maybe $4,200.00."}); got.Score != 0 {
+		t.Fatalf("hedged distractor beside a bare count passed: %+v", got)
+	}
+}
+
+// TestV13YearNoiseAndCountVerbs pins the #1523 "natural concise and reasoned
+// forms grade equivalently" requirement for counts: a year qualifying a count
+// is not a second candidate, a verb-object count is cued, and the year rule
+// never hides a year-like expected or distractor value.
+func TestV13YearNoiseAndCountVerbs(t *testing.T) {
+	num := v13Case(protocol.AnswerNumber, "3")
+	num.DistractorAnswers = []string{"4"}
+	for _, text := range []string{
+		"You took 3 trips in 2026.", "You booked 3 trips in 2026.", "In 2026 you had 3 trips.",
+		"3 trips.", "You took 3 trips and 4 cruises.", "Three trips in 2026.",
+	} {
+		if got := Memory(num, protocol.RunResponse{FinalText: text}); got.Score != 1 {
+			t.Errorf("count %q scored %v: %v", text, got.Score, got.Notes)
+		}
+	}
+	for _, text := range []string{"You took 4 trips in 2026.", "In 2026 you counted 3 events and in 2025 you counted 4."} {
+		if got := Memory(num, protocol.RunResponse{FinalText: text}); got.Score != 0 {
+			t.Errorf("distractor count %q scored %v: %v", text, got.Score, got.Notes)
+		}
+	}
+	got := Memory(num, protocol.RunResponse{FinalText: "3 trips, 4 cruises."})
+	if got.Score != 0 || !strings.Contains(strings.Join(got.Notes, " "), "mentioned but not asserted") {
+		t.Fatalf("uncued two-count exposition: %+v", got)
+	}
+	frozen := num
+	frozen.BenchVersion = protocol.BenchVersionV12
+	if got := Memory(frozen, protocol.RunResponse{FinalText: "You took 3 trips in 2026."}); got.Score != 1 {
+		t.Fatalf("v12 count grading moved: %+v", got)
+	}
+	// A year-like expected value is still a count.
+	year := v13Case(protocol.AnswerNumber, "2026")
+	if got := Memory(year, protocol.RunResponse{FinalText: "The count is 2026."}); got.Score != 1 {
+		t.Fatalf("year-like expected value dropped: %+v", got)
+	}
+	// A year-like distractor is still a distractor.
+	yd := v13Case(protocol.AnswerNumber, "3")
+	yd.DistractorAnswers = []string{"2026"}
+	if got := Memory(yd, protocol.RunResponse{FinalText: "3 and 2026."}); got.Score != 0 {
+		t.Fatalf("year-like distractor excused: %+v", got)
+	}
+	// A repeated pure-number value is one candidate at every bounded occurrence,
+	// and "26" inside "2026" is never a mention.
+	val := v13Case(protocol.AnswerValue, "26")
+	val.DistractorAnswers = []string{"2026"}
+	if got := Memory(val, protocol.RunResponse{FinalText: "26 rather than 2026"}); got.Score != 1 {
+		t.Fatalf("bounded number value: %+v", got)
+	}
+	if got := Memory(val, protocol.RunResponse{FinalText: "2026."}); got.Score != 0 {
+		t.Fatalf("substring number matched: %+v", got)
+	}
+	// currencySymbols is a deterministic longest-first scan.
+	for i := 1; i < len(currencySymbols); i++ {
+		a, b := currencySymbols[i-1].sym, currencySymbols[i].sym
+		if len(a) < len(b) || (len(a) == len(b) && a > b) {
+			t.Fatalf("currencySymbols not longest-first/bytewise at %d: %q %q", i, a, b)
+		}
+	}
+	if got := Memory(v13Money("What is the balance in BRL?"), protocol.RunResponse{FinalText: "R$4.110,67"}); got.Score != 1 {
+		t.Fatalf("longest currency mark: %+v", got)
 	}
 }
 
@@ -451,6 +533,17 @@ func TestV13UnicodeAndMultilingual(t *testing.T) {
 	if multilingual.Supported("ja") || !multilingual.Supported("") || !multilingual.Supported("en-US") || !multilingual.Supported("ES") {
 		t.Fatal("multilingual.Supported drifted from the grader")
 	}
+	// The Spanish corrective "no es X, sino Y" asserts Y: "sino" introduces
+	// the alternative and is a contrast connective, never a rejection.
+	es := v13Case(protocol.AnswerValue, "Lisboa")
+	es.Language = "es"
+	es.DistractorAnswers = []string{"Oslo"}
+	if got := Memory(es, protocol.RunResponse{FinalText: "No es Oslo, sino Lisboa."}); got.Score != 1 {
+		t.Fatalf("spanish sino corrective: %+v", got)
+	}
+	if got := Memory(es, protocol.RunResponse{FinalText: "No es Lisboa, sino Oslo."}); got.Score != 0 {
+		t.Fatalf("spanish sino with the distractor asserted: %+v", got)
+	}
 	// Number words in the question language.
 	num := v13Case(protocol.AnswerNumber, "17")
 	num.Language = "es"
@@ -527,26 +620,39 @@ func TestV13InjectionAndDumpGuardsCarryForward(t *testing.T) {
 // TestV2ThroughV12RegradeGolden extends the stored-transcript golden to every
 // frozen version: adding v13 cannot move a v2..v12 verdict.
 func TestV2ThroughV12RegradeGolden(t *testing.T) {
-	for version := protocol.BenchVersionV9; version <= protocol.BenchVersionV12; version++ {
+	for version := protocol.BenchVersionV2; version <= protocol.BenchVersionV12; version++ {
 		got := regradeGoldenHashV13Fixtures(t, version)
-		if pinned := regradeGoldenV9ToV12[version]; got != pinned {
+		pinned, ok := regradeGoldenV2ToV12[version]
+		if !ok {
+			t.Fatalf("v%d has no pinned regrade hash", version)
+		}
+		if got != pinned {
 			t.Fatalf("v%d stored-transcript regrade drift: got %s want %s", version, got, pinned)
 		}
 	}
 	// The same fixtures at v13 must NOT hash to any frozen version's bytes:
 	// the new contract is reachable, and only at v13.
 	v13 := regradeGoldenHashV13Fixtures(t, protocol.BenchVersionV13)
-	for version, pinned := range regradeGoldenV9ToV12 {
+	for version, pinned := range regradeGoldenV2ToV12 {
 		if v13 == pinned {
 			t.Fatalf("v13 fixtures grade identically to v%d: the v13 policy is not reachable", version)
 		}
 	}
 }
 
-// regradeGoldenV9ToV12 pins the v9..v12 verdict bytes over the extended
+// regradeGoldenV2ToV12 pins the v2..v12 verdict bytes over the extended
 // fixture corpus (the v9 corpus plus slot, money, direction, and list fixtures
-// that the v13 rules touch). Regenerate ONLY when a version's contract is new.
-var regradeGoldenV9ToV12 = map[int]string{
+// that the v13 rules touch). Every hash was computed with the grade package at
+// origin/main BEFORE v13 existed (git archive origin/main), so the pins are
+// independent of this branch. Regenerate ONLY when a version's contract is new.
+var regradeGoldenV2ToV12 = map[int]string{
+	protocol.BenchVersionV2:  "af296f448a419ddff453d7105b87fab8580649cb7a352792b5f2032b04ccf37d",
+	protocol.BenchVersionV3:  "af296f448a419ddff453d7105b87fab8580649cb7a352792b5f2032b04ccf37d",
+	protocol.BenchVersionV4:  "af296f448a419ddff453d7105b87fab8580649cb7a352792b5f2032b04ccf37d",
+	protocol.BenchVersionV5:  "af296f448a419ddff453d7105b87fab8580649cb7a352792b5f2032b04ccf37d",
+	protocol.BenchVersionV6:  "af296f448a419ddff453d7105b87fab8580649cb7a352792b5f2032b04ccf37d",
+	protocol.BenchVersionV7:  "af296f448a419ddff453d7105b87fab8580649cb7a352792b5f2032b04ccf37d",
+	protocol.BenchVersionV8:  "c4569e060d51d9017af68c0643c7f733528caad8aebfe80f2824f6e8f6899c71",
 	protocol.BenchVersionV9:  "67f76c24a2edef8cfe1e4a8a6c930ef3c25c2421a6e5d0162401dde2e086d831",
 	protocol.BenchVersionV10: "67f76c24a2edef8cfe1e4a8a6c930ef3c25c2421a6e5d0162401dde2e086d831",
 	protocol.BenchVersionV11: "67f76c24a2edef8cfe1e4a8a6c930ef3c25c2421a6e5d0162401dde2e086d831",

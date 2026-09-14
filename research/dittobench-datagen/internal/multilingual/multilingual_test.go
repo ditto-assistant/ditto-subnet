@@ -125,6 +125,58 @@ func TestConfigFailsClosedOnUnsupportedLanguage(t *testing.T) {
 	}
 }
 
+// TestSurfaceFractionsOverridePerClass pins the per-surface knob shape: a
+// class override replaces the default fraction for that class only, the
+// default-zero config still draws nothing for every class, a class fraction
+// outside [0,1] fails validation, and raising a class's fraction only adds
+// drawn surfaces (monotone in the fraction).
+func TestSurfaceFractionsOverridePerClass(t *testing.T) {
+	cfg := Config{Fraction: 0, SurfaceFractions: map[string]float64{SurfaceMemory: 0.2}, Languages: Languages(), Pass: NoopPass{}}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FractionFor(SurfaceMemory) != 0.2 || cfg.FractionFor(SurfaceRecords) != 0 || cfg.FractionFor("") != 0 {
+		t.Fatalf("FractionFor: memory=%v records=%v default=%v", cfg.FractionFor(SurfaceMemory), cfg.FractionFor(SurfaceRecords), cfg.FractionFor(""))
+	}
+	memoryDrawn, recordsDrawn := 0, 0
+	for i := int64(0); i < 2000; i++ {
+		if _, ok := cfg.DrawFor(SurfaceMemory, i, "q"); ok {
+			memoryDrawn++
+		}
+		if _, ok := cfg.DrawFor(SurfaceRecords, i, "q"); ok {
+			recordsDrawn++
+		}
+		if _, ok := cfg.Draw(i, "q"); ok {
+			t.Fatalf("seed %d: default fraction 0 drew a language", i)
+		}
+	}
+	if memoryDrawn == 0 || recordsDrawn != 0 {
+		t.Fatalf("memory drawn %d, records drawn %d", memoryDrawn, recordsDrawn)
+	}
+	low := Config{Fraction: 0.1, Languages: Languages(), Pass: NoopPass{}}
+	high := Config{Fraction: 0.3, Languages: Languages(), Pass: NoopPass{}}
+	for i := int64(0); i < 2000; i++ {
+		if l, ok := low.Draw(i, "q"); ok {
+			if h, okH := high.Draw(i, "q"); !okH || h != l {
+				t.Fatalf("seed %d: raising the fraction dropped or relabelled a drawn surface", i)
+			}
+		}
+	}
+	for _, d := range DefaultConfig().SurfaceFractions {
+		if d != 0 {
+			t.Fatalf("default config carries a non-zero surface fraction %v", d)
+		}
+	}
+	bad := Config{SurfaceFractions: map[string]float64{SurfaceTool: 1.5}, Languages: Languages(), Pass: NoopPass{}}
+	if err := bad.Validate(); err == nil {
+		t.Fatal("surface fraction outside [0,1] accepted")
+	}
+	noPass := Config{SurfaceFractions: map[string]float64{SurfaceTool: 0.1}, Languages: Languages()}
+	if err := noPass.Validate(); err == nil {
+		t.Fatal("surface fraction > 0 without a pass accepted")
+	}
+}
+
 func TestLexiconsAreFoldedLowercaseAndComplete(t *testing.T) {
 	for _, l := range Languages() {
 		lex, ok := For(string(l))

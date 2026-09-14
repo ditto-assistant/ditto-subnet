@@ -168,12 +168,12 @@ func gradeClaimV13(mc protocol.MemoryCase, resp protocol.RunResponse, kind strin
 	}
 
 	// Scalar typed claims: value, number, money, direction, duration, date.
-	set, matched, expectedRejectedOnly, outcome := scalarClaimV13(mc, kind, mc.ExpectedAnswer, an, lex)
+	set, matched, diagnosis, outcome := scalarClaimV13(mc, kind, mc.ExpectedAnswer, an, lex)
 	if outcome.zeroNote != "" {
 		return Verdict{Notes: []string{outcome.zeroNote}}
 	}
 	if set.slotPopulated && !set.slotInProse && matched {
-		return Verdict{Notes: []string{fmt.Sprintf("structured answer has no equivalent %s value asserted in final_text (slot_not_in_prose; scored 0)", kind)}}
+		return Verdict{Notes: []string{fmt.Sprintf("structured answer has no equivalent %s claim asserted in final_text (slot_not_in_prose; scored 0)", kind)}}
 	}
 	if matched {
 		return Verdict{Score: 1, Notes: []string{"deterministic " + kind + " match (one asserted candidate)"}}
@@ -181,54 +181,71 @@ func gradeClaimV13(mc protocol.MemoryCase, resp protocol.RunResponse, kind strin
 	if kind == protocol.AnswerValue && strings.ToLower(mc.QuestionType) == declarativeAckQuestionType && hitAnyV13(mc.AcceptAny, full) {
 		return Verdict{Score: declarativeAckCredit, Notes: []string{fmt.Sprintf("declarative acknowledgement without the stated value (%.2f)", declarativeAckCredit)}}
 	}
-	if expectedRejectedOnly {
+	switch diagnosis {
+	case expectedRejectedV13:
 		return Verdict{Notes: []string{"no deterministic " + kind + " match: the correct value appears only as a rejected or superseded mention"}}
+	case expectedUnassertedV13:
+		return Verdict{Notes: []string{"no deterministic " + kind + " match: the correct value is mentioned but not asserted (multi-value exposition without a claim cue)"}}
 	}
 	return Verdict{Notes: []string{"no deterministic " + kind + " match"}}
 }
 
+// Diagnoses for a correct value that is present in the reply but not asserted.
+const (
+	// expectedRejectedV13: the value sits only in rejected, superseded, or echo
+	// clauses ("It is not Lisbon.").
+	expectedRejectedV13 = "rejected"
+	// expectedUnassertedV13: the value sits in an eligible clause that asserted
+	// nothing (multi-value exposition with neither cue nor enumeration).
+	expectedUnassertedV13 = "unasserted"
+)
+
 // scalarClaimV13 runs the claim engine for one scalar claim and applies the
 // distractor, stuffing, and inconsistency disqualifiers. matched reports
-// whether the expected value is among the asserted candidates;
-// expectedRejectedOnly reports that it occurs in the reply but only in a
-// rejected or superseded clause.
-func scalarClaimV13(mc protocol.MemoryCase, kind, expected string, an analysis, lex claimLexicon) (set candidateSet, matched, expectedRejectedOnly bool, outcome claimOutcome) {
+// whether the expected value is among the asserted candidates; diagnosis is
+// expectedRejectedV13 / expectedUnassertedV13 when the value occurs in the
+// reply without being asserted, "" otherwise.
+func scalarClaimV13(mc protocol.MemoryCase, kind, expected string, an analysis, lex claimLexicon) (set candidateSet, matched bool, diagnosis string, outcome claimOutcome) {
 	spec := claimSpecV13(mc, kind, expected, lex)
 	set = an.collect(spec.extract, spec.equivalent, spec.cueRule, 1)
 	if set.slotUnknown && strings.TrimSpace(an.prose) == "" {
 		// A slot that carries no value of the claimed kind and no prose to fall
 		// back on: nothing asserted.
-		return set, false, false, claimOutcome{}
+		return set, false, "", claimOutcome{}
 	}
 	for _, key := range set.keys {
 		if spec.isDistractor(key) {
-			return set, false, false, claimOutcome{zeroNote: fmt.Sprintf("asserted a wrong same-attribute %s claim (scored 0)", kind)}
+			return set, false, "", claimOutcome{zeroNote: fmt.Sprintf("asserted a wrong same-attribute %s claim (scored 0)", kind)}
 		}
 	}
 	distinct := spec.distinct(set.keys)
 	switch {
 	case distinct > 2:
-		return set, false, false, claimOutcome{zeroNote: fmt.Sprintf("candidate stuffing: %d distinct %s values asserted for one claim (scored 0)", distinct, kind)}
+		return set, false, "", claimOutcome{zeroNote: fmt.Sprintf("candidate stuffing: %d distinct %s values asserted for one claim (scored 0)", distinct, kind)}
 	case distinct == 2:
-		return set, false, false, claimOutcome{zeroNote: fmt.Sprintf("inconsistent assertions: 2 distinct %s values asserted for one claim (scored 0)", kind)}
+		return set, false, "", claimOutcome{zeroNote: fmt.Sprintf("inconsistent assertions: 2 distinct %s values asserted for one claim (scored 0)", kind)}
 	}
 	for _, key := range set.keys {
 		if spec.isExpected(key) {
 			matched = true
 		}
 	}
-	if !matched {
-		// Diagnose a correct value present only in a non-asserted clause.
-		for _, m := range spec.extract(an.prose) {
-			if spec.isExpected(m.key) {
-				expectedRejectedOnly = true
+	if !matched && !(spec.slotExpected != nil && spec.slotExpected(an.slot)) {
+		// Diagnose a correct value present in the prose but not asserted: name
+		// the clause status it sat in, so the note is review evidence.
+		for _, seg := range an.segments {
+			for _, m := range spec.extract(seg.text) {
+				if !spec.isExpected(m.key) {
+					continue
+				}
+				if !seg.eligible() || seg.weakPast {
+					return set, false, expectedRejectedV13, claimOutcome{}
+				}
+				diagnosis = expectedUnassertedV13
 			}
 		}
-		if spec.slotExpected != nil && spec.slotExpected(an.slot) {
-			expectedRejectedOnly = false
-		}
 	}
-	return set, matched, expectedRejectedOnly, claimOutcome{}
+	return set, matched, diagnosis, claimOutcome{}
 }
 
 // claimSpec binds one claim kind to its extractor and identity rules.
@@ -257,9 +274,23 @@ func claimSpecV13(mc protocol.MemoryCase, kind, expected string, lex claimLexico
 				distractors[v] = true
 			}
 		}
+		// knownMinor reports whether a bare integer, read in either unit, is a
+		// value the case itself carries (expected or distractor).
+		knownMinor := func(bare int) bool {
+			for _, minor := range []int{bare, bare * 100} {
+				if (wantOK && minor == want) || distractors[minor] {
+					return true
+				}
+			}
+			return false
+		}
 		extract := func(text string) []mention {
 			var out []mention
 			for _, a := range amountMentionsV13(text, unit, lex) {
+				if a.bare != 0 && yearLikeV13(a.bare) && !knownMinor(a.bare) {
+					// "In 2026 you saved $3,800": a calendar year, not an amount.
+					continue
+				}
 				key := "m:" + strconv.Itoa(a.minor)
 				if a.currency != "" {
 					key += ":" + a.currency
@@ -267,7 +298,7 @@ func claimSpecV13(mc protocol.MemoryCase, kind, expected string, lex claimLexico
 				if a.bare != 0 {
 					key += "|alt:" + strconv.Itoa(a.alternateMinor(unit))
 				}
-				out = append(out, mention{key: key, pos: a.pos, end: a.end})
+				out = append(out, mention{key: key, pos: a.pos, end: a.end, bare: a.bare != 0})
 			}
 			return out
 		}
@@ -336,8 +367,22 @@ func claimSpecV13(mc protocol.MemoryCase, kind, expected string, lex claimLexico
 				distractors[n] = true
 			}
 		}
+		yearNoise := func(key string) bool {
+			n, err := strconv.Atoi(key)
+			return err == nil && yearLikeV13(n) && key != want && !distractors[key]
+		}
 		return claimSpec{
-			extract:      func(text string) []mention { return numberMentionsV13(text, lex) },
+			extract: func(text string) []mention {
+				var out []mention
+				for _, m := range numberMentionsV13(text, lex) {
+					if yearNoise(m.key) {
+						// "You took 3 trips in 2026": the year qualifies the count.
+						continue
+					}
+					out = append(out, m)
+				}
+				return out
+			},
 			cueRule:      true,
 			isExpected:   func(key string) bool { return key == want },
 			isDistractor: func(key string) bool { return distractors[key] },
