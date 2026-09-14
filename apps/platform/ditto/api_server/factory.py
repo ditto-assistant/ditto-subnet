@@ -101,6 +101,7 @@ from ditto.api_server.endpoints import (
     admin_screener_fanout_shadow_router,
     admin_screener_policy_activation_router,
     admin_screener_review_settings_router,
+    admin_screening_decisions_router,
     admin_screening_infra_retry_router,
     admin_source_review_queue_slo_router,
     admin_submission_deposit_address_router,
@@ -180,6 +181,7 @@ from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
+from ditto.api_server.review_timeout_finalizer import ReviewTimeoutFinalizer
 from ditto.api_server.runtime_profiles import RuntimeProfileStore
 from ditto.api_server.screener_capacity_event_janitor import (
     ScreenerCapacityEventJanitor,
@@ -479,6 +481,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 await emission_collector.start()
             app.state.source_emission_collector = emission_collector
 
+            # Policy v13 deadline finalizer. Each tick selects only strict
+            # two-outcome (v13+) non-decisive holds older than the published
+            # window, so before that policy governs it is a cheap no-op and
+            # runs on the platform role unconditionally like the court.
+            review_timeout_finalizer = ReviewTimeoutFinalizer(
+                session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(review_timeout_finalizer.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await review_timeout_finalizer.start()
+            app.state.review_timeout_finalizer = review_timeout_finalizer
+
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
             if _process_role() == PLATFORM_ROLE:
@@ -743,6 +757,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_benchmark_canary_router, prefix="/api/v1")
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
+    app.include_router(admin_screening_decisions_router, prefix="/api/v1")
     app.include_router(admin_v13_private_generation_router, prefix="/api/v1")
     app.include_router(admin_v13_scorer_cohort_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")

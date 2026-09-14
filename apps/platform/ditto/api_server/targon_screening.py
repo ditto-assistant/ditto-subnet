@@ -24,6 +24,7 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.deferred_source_review import (
+    INCONCLUSIVE_REASON_CODE,
     SOURCE_REVIEW_INCONCLUSIVE_PUBLIC_REASON,
 )
 from ditto.api_server.onchain_seed import derive_seed
@@ -762,7 +763,13 @@ async def _quarantine(
         and observation.failure_disposition in ("inconclusive", "pass_inconclusive")
     )
     if inconclusive_budget:
-        reason_code = "source-review-inconclusive"
+        # A v13 processing state, not a finding: the deadline finalizer
+        # terminates it as a no-fault review_timed_out once the published
+        # verification window passes (ditto.api_server.review_timeout_finalizer).
+        # The dashboard keys its "no finding" treatment on this exact public
+        # text (SOURCE_REVIEW_INCONCLUSIVE_REASON in status.ts); a parity test
+        # pins the two.
+        reason_code = INCONCLUSIVE_REASON_CODE
         public_reason = SOURCE_REVIEW_INCONCLUSIVE_PUBLIC_REASON
     else:
         reason_code = "agentic-source-review-tripwire"

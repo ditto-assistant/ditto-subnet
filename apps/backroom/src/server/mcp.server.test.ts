@@ -152,6 +152,8 @@ describe('Backroom MCP tools', () => {
         'get_backroom_access',
         'get_backroom_tool_help',
         'get_ath_review',
+        'get_screening_decision_record',
+        'list_screening_decisions',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
         'get_benchmark_contract_migration',
@@ -5144,6 +5146,138 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('reads the policy-v13 decision record and its no-fault timeout treatment', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '33333333-3333-4333-8333-333333333333'
+    const decision = {
+      decision_id: '44444444-4444-4444-8444-444444444444',
+      agent_id: agentId,
+      attempt_id: '55555555-5555-4555-8555-555555555555',
+      quarantine_id: '66666666-6666-4666-8666-666666666666',
+      review_id: null,
+      outcome: 'review_timed_out',
+      reason_codes: ['review-timed-out', 'V2.platform_verification_failed', 'source-review-inconclusive'],
+      violation_proven: false,
+      failure_domain: 'platform',
+      retry_count: 3,
+      independent_workers: 2,
+      policy_version: 13,
+      identities: {
+        submission_uuid: agentId,
+        artifact_sha256: 'ab'.repeat(32),
+        image_digest: null,
+        build_configuration: null,
+        served_entrypoint: null,
+        permitted_runtime_configuration: null,
+        benchmark_version: 12,
+        applied_policy_version: 13,
+        policy_digest: 'cd'.repeat(32),
+        verification_profile_digest: null,
+      },
+      review_scope: 'policy-v13 non-decisive processing state',
+      completed_checks: ['archive-sha256'],
+      failed_checks: ['source-review-inconclusive'],
+      opaque_components: [],
+      evidence_references: [],
+      evidence_type: 'processing-state-timeout',
+      limitations: ['bounded review exhausted the published verification window'],
+      public_reason: 'Screening review did not complete within the published verification window',
+      reviewer: 'platform:review-timeout-finalizer',
+      decided_at: '2026-09-13T12:00:00Z',
+      supersedes_decision: null,
+      operator_override: null,
+      precedent_weight: false,
+      retry_grant_id: '77777777-7777-4777-8777-777777777777',
+      is_verification_failure: true,
+      no_fault: true,
+    }
+    const policy = {
+      artifact_failure_retries: 1,
+      provider_failure_retries: 2,
+      platform_failure_retries: 2,
+      independent_worker_required_for_platform_provider_failure: true,
+      max_verification_window_hours: 24,
+      applies_from_policy_version: 13,
+      terminal_outcome: 'review_timed_out',
+      ban_on_timeout: false,
+      precedent_weight_on_timeout: false,
+      automatic_priority_rescreen_on_recovery: true,
+      no_fault_retry_grant_on_timeout: true,
+    }
+    const thresholds = {
+      min_healthy_source_review_workers: 1,
+      min_completion_rate: 0.95,
+      max_fail_open_rate: 0.05,
+      max_p95_review_latency_hours: 12,
+      max_backlog_multiplier: 3,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          agent_id: agentId,
+          agent_status: 'screening_failed',
+          latest: decision,
+          decisions: [decision],
+          review_timeout_policy: policy,
+          review_capacity_thresholds: thresholds,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          items: [decision],
+          count: 1,
+          limit: 50,
+          offset: 0,
+          outcome: 'review_timed_out',
+          outcome_counts: { clear: 4, reject: 1, review_timed_out: 1 },
+          review_timeout_policy: policy,
+          review_capacity_thresholds: thresholds,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const record = await client.callTool({
+      name: 'get_screening_decision_record',
+      arguments: { agentId },
+    })
+    expect(record.isError).not.toBe(true)
+    expect(readJsonResult(record)).toMatchObject({
+      agent_id: agentId,
+      latest: {
+        outcome: 'review_timed_out',
+        violation_proven: false,
+        precedent_weight: false,
+        no_fault: true,
+        failure_domain: 'platform',
+        retry_count: 3,
+        independent_workers: 2,
+        retry_grant_id: decision.retry_grant_id,
+      },
+      review_timeout_policy: { max_verification_window_hours: 24, ban_on_timeout: false },
+    })
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-decisions/${agentId}`,
+    )
+
+    const listed = await client.callTool({
+      name: 'list_screening_decisions',
+      arguments: { outcome: 'review_timed_out', limit: 50, offset: 0 },
+    })
+    expect(listed.isError).not.toBe(true)
+    expect(readJsonResult(listed)).toMatchObject({
+      count: 1,
+      outcome_counts: { clear: 4, reject: 1, review_timed_out: 1 },
+    })
+    expect(String(fetchMock.mock.calls[1][0])).toContain(
+      '/api/v1/admin/screening-decisions?limit=50&offset=0&outcome=review_timed_out',
+    )
+
+    await client.close()
+    await server.close()
+  })
+
   it('searches resolved ATH holdings as precedents through a read-only grant', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValue(
@@ -5256,6 +5390,8 @@ describe('Backroom MCP tools', () => {
         agentId,
         resolution: 'clear',
         reason: detailedReason,
+        evidenceReferences: ['src/main.rs:120-131'],
+        reasonCodes: ['I4.reviewed_no_rewrite'],
       },
     })
 
@@ -5268,9 +5404,19 @@ describe('Backroom MCP tools', () => {
         body: JSON.stringify({
           resolution: 'clear',
           reason: detailedReason,
+          evidence_references: ['src/main.rs:120-131'],
+          reason_codes: ['I4.reviewed_no_rewrite'],
         }),
       }),
     )
+
+    // Policy v13: an uncited clear is refused before it reaches the platform.
+    const uncited = await client.callTool({
+      name: 'resolve_ath_review',
+      arguments: { agentId, resolution: 'clear', reason: detailedReason },
+    })
+    expect(uncited.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
 
     await client.close()
     await server.close()
