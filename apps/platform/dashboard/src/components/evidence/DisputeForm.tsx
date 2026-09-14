@@ -44,6 +44,25 @@ export function disputeSigningCommand(
 
 const SIGNATURE_PATTERN = /^[0-9a-fA-F]{128}$/;
 
+const GATE_NOTE_ID_PATTERN = /^[0-9a-f]{16}$/;
+
+/** Parse the optional bench v13+ gate `note_id` list a dispute contests.
+ *
+ * Ids are the 16-hex values shown on the Account page's "Gate notes" panel;
+ * they may be separated by commas, whitespace, or newlines. Returns the
+ * de-duplicated list, `[]` for an empty field, or `null` when any token is
+ * not an id (the form refuses to submit rather than spend the one dispute on
+ * a malformed appeal). */
+export function parseGateNoteIds(raw: string): string[] | null {
+  const tokens = raw
+    .split(/[\s,]+/)
+    .map((token) => token.trim().toLowerCase())
+    .filter(Boolean);
+  if (tokens.some((token) => !GATE_NOTE_ID_PATTERN.test(token))) return null;
+  if (tokens.length > 64) return null;
+  return [...new Set(tokens)];
+}
+
 /** The resolved-dispute card (renderScreeningDispute's dispute branch). */
 function DisputeOutcome(props: { dispute: Dispute }): JSX.Element {
   const heading = () =>
@@ -81,6 +100,7 @@ export function ScreeningDispute(props: {
   const [wallet, setWallet] = createSignal("");
   const [hotkey, setHotkey] = createSignal("");
   const [signature, setSignature] = createSignal("");
+  const [gateNoteIds, setGateNoteIds] = createSignal("");
   const [command, setCommand] = createSignal(
     "Enter your dispute, wallet name, and hotkey name to generate the command.",
   );
@@ -97,7 +117,9 @@ export function ScreeningDispute(props: {
     return value.length >= 20 && value.length <= 1000;
   };
   const signatureValid = () => SIGNATURE_PATTERN.test(signature().trim());
-  const submitDisabled = () => submitting() || !messageValid() || !signatureValid();
+  const gateNoteIdsValid = () => parseGateNoteIds(gateNoteIds()) !== null;
+  const submitDisabled = () =>
+    submitting() || !messageValid() || !signatureValid() || !gateNoteIdsValid();
 
   // The btcli command re-derives whenever any input changes; a stale digest
   // computation is fenced by token exactly like the original's update().
@@ -128,9 +150,12 @@ export function ScreeningDispute(props: {
     if (appeal.length < 20 || appeal.length > 1000 || !signatureValid()) return;
     setSubmitting(true);
     setStatus({ text: "Submitting dispute…", error: false });
+    const noteIds = parseGateNoteIds(gateNoteIds());
+    if (noteIds === null) return;
     postJSON("/public/agent/" + encodeURIComponent(props.agentId) + "/dispute", {
       message: appeal,
       signature: signature().trim(),
+      ...(noteIds.length ? { gate_note_ids: noteIds } : {}),
     })
       .then(() => {
         setStatus({ text: "Dispute submitted.", error: false });
@@ -239,6 +264,27 @@ export function ScreeningDispute(props: {
               <span class="screening-dispute-meta">
                 Run this locally, then paste the <code>signed_message</code> value below. Wallet
                 details stay in this browser and are not submitted.
+              </span>
+            </label>
+            <label for="screening-dispute-gate-notes">
+              Gate note ids <span class="muted">(optional)</span>
+              <input
+                id="screening-dispute-gate-notes"
+                autocomplete="off"
+                spellcheck={false}
+                placeholder="16-hex note ids from Account → Gate notes, comma separated"
+                onInput={(ev) => {
+                  setGateNoteIds(ev.currentTarget.value);
+                }}
+              />
+              <span class="screening-dispute-meta">
+                <span>
+                  Cite the bench v13+ gate verdicts you contest. Ids are checked against this
+                  submission's own scores; the ids are not part of the signed message.
+                </span>
+                <Show when={gateNoteIds().trim() && !gateNoteIdsValid()}>
+                  <span class="error">Each id is 16 hexadecimal characters.</span>
+                </Show>
               </span>
             </label>
             <label for="screening-dispute-signature">

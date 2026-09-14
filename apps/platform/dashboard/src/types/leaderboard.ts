@@ -374,6 +374,28 @@ export interface V9BaseEvidence {
   };
 }
 
+export type GatePosture = "off" | "shadow" | "enforce";
+
+/** Run-level bench v13+ gate verdict published beside a validator's score.
+ *
+ * Aggregates only: the per-case notes behind these counts are owner-only
+ * (`/me/agents/{id}/gate-notes`). `gate_induced_loss` is the composite the
+ * gates would take (`shadow`) or did take (`enforce`). Null below v13 and for
+ * a scorer that emitted no gate telemetry. Mirrors `PublicGateEvidence`. */
+export interface GateEvidence {
+  bench_version: number;
+  posture?: GatePosture | null;
+  composite_with_gates?: number | null;
+  composite_without_gates?: number | null;
+  gate_induced_loss?: number | null;
+  catalog_suppression_rate?: number | null;
+  flagged_case_count?: number;
+  /** Gate note -> cases it fired on (closed vocabulary). */
+  gate_counts?: Record<string, number>;
+  /** Twin / pair relation outcome -> cases. */
+  relation_outcome_counts?: Record<string, number>;
+}
+
 /** Board-level state of the relative-efficiency adjustment.
  *
  * `active` means the frozen factors rank the board. `preview` means the

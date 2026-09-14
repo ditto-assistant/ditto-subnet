@@ -4178,6 +4178,10 @@ export const screeningDisputeSchema = z.object({
   resolved_by: z.string().nullable(),
   resolution: screeningDisputeResolutionSchema.nullable(),
   resolution_reason: z.string().nullable(),
+  // Bench v13+ gate note ids the miner contested; each re-derives from the
+  // submission's own accepted scores, so they are references, never verdicts.
+  // Optional (not defaulted) so pre-v13 fixtures and responses parse unchanged.
+  gate_note_ids: z.array(z.string()).nullish(),
 })
 
 export const screeningDisputeListSchema = z.object({
@@ -7370,6 +7374,26 @@ export const seedSchema = z
   ])
   .transform((seed) => (typeof seed === 'string' ? seed : String(seed)))
 
+// Bench v13+ run-level gate verdict (#1852). Aggregates only -- the per-case
+// notes are owner-only on Platform (`/me/agents/{id}/gate-notes`). Mirrors the
+// generated `PublicGateEvidence`; the posture enum is restated here so a new
+// posture value fails the parse loudly instead of being read as "unknown".
+export const gatePostureSchema = z.enum(['off', 'shadow', 'enforce'])
+
+export const publicGateEvidenceSchema = z.object({
+  bench_version: z.number().int().positive(),
+  posture: gatePostureSchema.nullish().default(null),
+  composite_with_gates: z.number().min(0).max(1).nullish().default(null),
+  composite_without_gates: z.number().min(0).max(1).nullish().default(null),
+  // `composite_without_gates - composite_with_gates`, clamped at zero. In
+  // shadow this is the loss enforcing the gates would introduce.
+  gate_induced_loss: z.number().min(0).max(1).nullish().default(null),
+  catalog_suppression_rate: z.number().min(0).max(1).nullish().default(null),
+  flagged_case_count: z.number().int().nonnegative().default(0),
+  gate_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+  relation_outcome_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+})
+
 export const publicValidatorScoreSchema = z.object({
   validator_hotkey: z.string(),
   composite: z.number().min(0).max(1),
@@ -7388,6 +7412,8 @@ export const publicValidatorScoreSchema = z.object({
   transform_robustness: z.number().min(0).max(1).nullable().optional(),
   audit_case_count: z.number().int().nonnegative().nullable().optional(),
   transcript_sha256: z.string().nullable().optional(),
+  // Null below bench v13 and for a scorer that emitted no gate telemetry.
+  gate_evidence: publicGateEvidenceSchema.nullable().optional(),
 })
 
 export const publicAgentScoresSchema = z.object({
@@ -7504,6 +7530,11 @@ export const agentScoreHistoryVersionSchema = z.object({
   // Median-composite change against the previous listed version; null for
   // the first version group.
   composite_delta_vs_previous: z.number().nullable(),
+  // Bench v13+ gate verdict, folded over the rows that carry one: the posture
+  // when every such row agrees (null when mixed or absent) and the median
+  // gate-induced loss. Null for versions below v13.
+  gate_posture: gatePostureSchema.nullable().default(null),
+  median_gate_induced_loss: z.number().min(0).max(1).nullable().default(null),
 })
 
 export const agentScoreHistorySchema = z.object({

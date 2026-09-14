@@ -3012,6 +3012,13 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
     const composites = rows.map((row) => row.composite)
     const medianComposite = median(composites)
     const generatedAt = rows.map((row) => row.generated_at).sort()
+    // Bench v13+ gate verdicts, over the rows that carry one. A mixed posture
+    // across validators is reported as null rather than picking a winner.
+    const gated = rows.flatMap((row) => (row.gate_evidence ? [row.gate_evidence] : []))
+    const postures = new Set(gated.map((evidence) => evidence.posture ?? null))
+    const losses = gated.flatMap((evidence) =>
+      typeof evidence.gate_induced_loss === 'number' ? [evidence.gate_induced_loss] : [],
+    )
     const version = {
       bench_version: benchVersion,
       score_count: rows.length,
@@ -3026,6 +3033,8 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
       seeds: [...new Set(rows.map((row) => row.seed))],
       composite_delta_vs_previous:
         previousMedian === null ? null : medianComposite - previousMedian,
+      gate_posture: postures.size === 1 ? ([...postures][0] ?? null) : null,
+      median_gate_induced_loss: losses.length ? median(losses) : null,
     }
     previousMedian = medianComposite
     return version

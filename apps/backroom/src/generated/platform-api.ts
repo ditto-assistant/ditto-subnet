@@ -3011,6 +3011,34 @@ export interface paths {
         patch: operations["update_me_api_v1_me_patch"];
         trace?: never;
     };
+    "/api/v1/me/agents/{agent_id}/gate-notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Gate Notes
+         * @description Return this miner's bench v13+ per-case gate notes for one of their agents.
+         *
+         *     The public per-score record carries only the run-level aggregate (posture,
+         *     composite with/without gates, gate-induced loss). The per-case notes -- which
+         *     case tripped which gate, the twin/pair relation outcome, the shadow cost
+         *     factor -- are owner-only, so a miner can see a shadow verdict before it
+         *     enforces and cite the ``note_id`` values in a dispute. Same ownership rule
+         *     as the other ``/me/agents`` reads: unknown and other-miners' agents are the
+         *     same 404.
+         */
+        get: operations["my_gate_notes_api_v1_me_agents__agent_id__gate_notes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/agents/{agent_id}/harness-logs": {
         parameters: {
             query?: never;
@@ -9526,6 +9554,8 @@ export interface components {
              * Format: uuid
              */
             dispute_id: string;
+            /** Gate Note Ids */
+            gate_note_ids?: string[] | null;
             /** Message */
             message: string;
             /** Miner Hotkey */
@@ -15466,6 +15496,11 @@ export interface components {
          * @description One signed appeal of a rejected screening decision.
          */
         CreateScreeningDisputeRequest: {
+            /**
+             * Gate Note Ids
+             * @description Bench v13+ gate ``note_id`` values this dispute contests, as listed on ``GET /me/agents/{agent_id}/gate-notes``. Every id must belong to this submission's own accepted scores.
+             */
+            gate_note_ids?: string[] | null;
             /** Message */
             message: string;
             /** Signature */
@@ -17815,6 +17850,116 @@ export interface components {
             paid_submissions: number;
             /** Priced Submissions */
             priced_submissions: number;
+        };
+        /**
+         * MinerGateNote
+         * @description One gate note on one case, with the id a dispute can cite.
+         */
+        MinerGateNote: {
+            /** Gate */
+            gate: string;
+            /** Note Id */
+            note_id: string;
+        };
+        /**
+         * MinerGateNoteCase
+         * @description One case's gate outcome, as shown to the owning miner.
+         */
+        MinerGateNoteCase: {
+            /**
+             * Case Id
+             * @description Seed-derived case id. Present only once the submission has settled into a public status, where its dataset seed is already published; null while the run is provisional.
+             */
+            case_id?: string | null;
+            /** Case Index */
+            case_index?: number | null;
+            /** Category */
+            category?: string | null;
+            /** Cost Factor */
+            cost_factor?: number | null;
+            /** Kind */
+            kind?: string | null;
+            /** Notes */
+            notes?: components["schemas"]["MinerGateNote"][];
+            /** Relation */
+            relation?: string | null;
+            /** Relation Outcome */
+            relation_outcome?: string | null;
+            /** Score */
+            score?: number | null;
+            /** Score With Gates */
+            score_with_gates?: number | null;
+            /** Score Without Gates */
+            score_without_gates?: number | null;
+            /** Tools Offered */
+            tools_offered?: number | null;
+        };
+        /**
+         * MinerGateNotesResponse
+         * @description Every accepted run's v13 gate notes for one of the miner's own agents.
+         */
+        MinerGateNotesResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /**
+             * Dispute Submit Url
+             * @description Where a rejected submission's one dispute is filed; pass the ``note_id`` values being contested as ``gate_note_ids``.
+             * @default /api/v1/public/agent/{agent_id}/dispute
+             */
+            dispute_submit_url: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Runs */
+            runs?: components["schemas"]["MinerGateNotesRun"][];
+        };
+        /**
+         * MinerGateNotesRun
+         * @description One validator run's gate verdict and its per-case notes (owner only).
+         */
+        MinerGateNotesRun: {
+            /** Bench Version */
+            bench_version: number;
+            /** Cases */
+            cases?: components["schemas"]["MinerGateNoteCase"][];
+            /** Catalog Suppression Rate */
+            catalog_suppression_rate?: number | null;
+            /** Composite */
+            composite: number;
+            /** Composite With Gates */
+            composite_with_gates?: number | null;
+            /** Composite Without Gates */
+            composite_without_gates?: number | null;
+            /**
+             * Flagged Case Count
+             * @default 0
+             */
+            flagged_case_count: number;
+            /** Gate Counts */
+            gate_counts?: {
+                [key: string]: number;
+            };
+            /** Gate Induced Loss */
+            gate_induced_loss?: number | null;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Posture */
+            posture?: ("off" | "shadow" | "enforce") | null;
+            /** Relation Outcome Counts */
+            relation_outcome_counts?: {
+                [key: string]: number;
+            };
+            /** Run Id */
+            run_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /**
          * MinerHarnessLogAttempt
@@ -20306,6 +20451,65 @@ export interface components {
             total: number;
         };
         /**
+         * PublicGateEvidence
+         * @description Run-level v13 gate verdict, published beside a validator's score.
+         *
+         *     Aggregates only: the posture the gates ran under, the composite with and
+         *     without them, the loss the gates would induce (``shadow``) or did induce
+         *     (``enforce``), the catalog-suppression rate and per-gate counts. The
+         *     per-case notes behind these counts are owner-only
+         *     (``GET /me/agents/{agent_id}/gate-notes``).
+         */
+        PublicGateEvidence: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Catalog Suppression Rate
+             * @description Share of deciding turns that offered no tool catalog.
+             */
+            catalog_suppression_rate?: number | null;
+            /**
+             * Composite With Gates
+             * @description Composite after gates.
+             */
+            composite_with_gates?: number | null;
+            /**
+             * Composite Without Gates
+             * @description Ungated composite.
+             */
+            composite_without_gates?: number | null;
+            /**
+             * Flagged Case Count
+             * @description Cases carrying at least one gate note.
+             * @default 0
+             */
+            flagged_case_count: number;
+            /**
+             * Gate Counts
+             * @description Gate note -> number of cases it fired on (closed vocabulary).
+             */
+            gate_counts?: {
+                [key: string]: number;
+            };
+            /**
+             * Gate Induced Loss
+             * @description ``composite_without_gates - composite_with_gates``, clamped at zero. In shadow this is the loss enforce would introduce.
+             */
+            gate_induced_loss?: number | null;
+            /**
+             * Posture
+             * @description ``shadow`` records what the gates would have done without changing the score; ``enforce`` means they did.
+             */
+            posture?: ("off" | "shadow" | "enforce") | null;
+            /**
+             * Relation Outcome Counts
+             * @description Twin / pair relation outcome -> number of cases.
+             */
+            relation_outcome_counts?: {
+                [key: string]: number;
+            };
+        };
+        /**
          * PublicHealthResponse
          * @description Aggregate subnet-health rollup for the public dashboard.
          *
@@ -21541,6 +21745,8 @@ export interface components {
              * @description Pinned hash of the exact generated dataset, when recorded.
              */
             dataset_sha256?: string | null;
+            /** @description Bench v13+ run-level gate verdict (aggregates only); see ``PublicValidatorScore.gate_evidence``. */
+            gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             model_use?: components["schemas"]["PublicModelUse"] | null;
             /**
              * Raw Composite
@@ -22724,6 +22930,8 @@ export interface components {
              */
             composite: number;
             composite_breakdown?: components["schemas"]["PublicCompositeBreakdown"] | null;
+            /** @description Bench v13+ gate verdict for this run: posture, composite with and without the gates, the gate-induced loss and per-gate counts. Aggregates only -- the per-case notes are owner-only (``GET /me/agents/{agent_id}/gate-notes``). Null below v13 and for a scorer that emitted no gate telemetry. */
+            gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             /**
              * Generated At
              * Format: date-time
@@ -33620,6 +33828,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerMeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_gate_notes_api_v1_me_agents__agent_id__gate_notes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerGateNotesResponse"];
                 };
             };
             /** @description Validation Error */

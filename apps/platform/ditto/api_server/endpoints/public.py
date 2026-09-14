@@ -224,6 +224,7 @@ from ditto.api_server.endpoints.scoring import (
 from ditto.api_server.endpoints.screener import GeneratorDep
 from ditto.api_server.endpoints.upload import _verify_signature
 from ditto.api_server.endpoints.validator import SessionDep, StorageDep
+from ditto.api_server.gate_evidence import gate_note_ids_for, public_gate_evidence
 from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
@@ -5153,6 +5154,7 @@ def _public_validator_score(s) -> PublicValidatorScore:
         signature=s.signature,
         generated_at=s.generated_at,
         case_results=_safe_case_results(details),
+        gate_evidence=public_gate_evidence(getattr(s, "gate_evidence", None)),
         transcript_sha256=_safe_transcript_sha256(details),
         transform_robustness=robustness,
         audit_case_count=audit_pairs,
@@ -6517,6 +6519,26 @@ async def create_screening_dispute(
                     status_code=409,
                     detail="only a rejected quarantine decision can be disputed",
                 )
+            gate_note_ids: list[str] | None = None
+            if payload.gate_note_ids:
+                # A cited gate note must re-derive from THIS submission's own
+                # accepted scores: the id is a function of the score identity
+                # and the note, so a foreign or invented id cannot be linked.
+                own_scores = list(
+                    (
+                        await session.scalars(
+                            select(Score).where(Score.agent_id == agent_id)
+                        )
+                    ).all()
+                )
+                known = gate_note_ids_for(agent_id=agent_id, scores=own_scores)
+                unknown = [nid for nid in payload.gate_note_ids if nid not in known]
+                if unknown:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="gate note id does not belong to this submission",
+                    )
+                gate_note_ids = list(dict.fromkeys(payload.gate_note_ids))
             dispute = ScreeningDispute(
                 dispute_id=uuid4(),
                 agent_id=agent.agent_id,
@@ -6525,6 +6547,7 @@ async def create_screening_dispute(
                 message=payload.message,
                 status="pending",
                 created_at=datetime.now(UTC),
+                gate_note_ids=gate_note_ids,
             )
             session.add(dispute)
     except IntegrityError as exc:
@@ -7143,6 +7166,9 @@ async def agent_pipeline(
                 ),
                 case_results=_safe_case_results(
                     score.details if isinstance(score.details, dict) else {}
+                ),
+                gate_evidence=public_gate_evidence(
+                    getattr(score, "gate_evidence", None)
                 ),
                 transcript_sha256=_safe_transcript_sha256(
                     score.details if isinstance(score.details, dict) else {}

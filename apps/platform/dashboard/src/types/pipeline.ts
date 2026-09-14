@@ -3,7 +3,13 @@
 // /public/agent/{id}/pipeline, and the digest-verified transcript telemetry
 // sidecar).
 
-import type { CaseResult, CodingShadowScore, NameHandle, V9BaseEvidence } from "./leaderboard";
+import type {
+  CaseResult,
+  CodingShadowScore,
+  GateEvidence,
+  NameHandle,
+  V9BaseEvidence,
+} from "./leaderboard";
 
 // ── Activity / submissions (/public/activity) ────────────────
 
@@ -222,6 +228,8 @@ export interface AcceptedScore {
   transcript_sha256?: string | null;
   v9_base?: V9BaseEvidence | null;
   case_results?: CaseResult[];
+  /** Bench v13+ run-level gate verdict (aggregates only). */
+  gate_evidence?: GateEvidence | null;
 }
 
 /** A shared-seed continual top-five retest result. */

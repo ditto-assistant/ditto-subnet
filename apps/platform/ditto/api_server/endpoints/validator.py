@@ -157,6 +157,7 @@ from ditto.api_server.efficiency import (
 )
 from ditto.api_server.endpoints.retrieval import AgentNotFoundError
 from ditto.api_server.fingerprint import reference_corpus_provenance
+from ditto.api_server.gate_evidence import build_gate_evidence
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.inference_routing import record_ticket_route_quality
 from ditto.api_server.koth import (
@@ -6247,6 +6248,11 @@ async def submit_score(
             else "model_use"
         )
         score_details[model_use_key] = model_use.as_public_dict()
+        # Bench v13+ per-case gate notes and the run's shadow verdict, projected
+        # from the advisory ``details.gate_evidence`` object and the per-case
+        # notes onto their own column. ``None`` below the v13 floor and for a
+        # v13+ scorer that emitted none, so v<=12 rows are byte-identical.
+        gate_evidence = build_gate_evidence(report, bench_version=ticket.bench_version)
         await upsert_score(
             session,
             agent_id=agent_id,
@@ -6263,6 +6269,7 @@ async def submit_score(
             signature=payload.signature,
             details=score_details or None,
             model_usage=model_usage,
+            gate_evidence=gate_evidence,
         )
         await record_ticket_route_quality(
             session,
