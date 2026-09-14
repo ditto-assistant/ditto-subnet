@@ -15,6 +15,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
@@ -569,7 +570,14 @@ async def classify_agent_retry_states(
         tickets_by_agent.setdefault(ticket.agent_id, []).append(ticket)
     scores_by_agent: dict[UUID, list[Score]] = {}
     for score in (
-        await session.scalars(select(Score).where(Score.agent_id.in_(id_subq)))
+        await session.scalars(
+            # ``details`` is ~27 kB of per-case answer keys per row and this
+            # triage view never reads it; loading it for hundreds of agents was
+            # a 4.5 s statement in production.
+            select(Score)
+            .options(defer(Score.details))
+            .where(Score.agent_id.in_(id_subq))
+        )
     ).all():
         scores_by_agent.setdefault(score.agent_id, []).append(score)
     withdrawals = set(
