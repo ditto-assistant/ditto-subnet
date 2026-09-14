@@ -6222,6 +6222,12 @@ export interface components {
             activation_ceiling_policy_version: number;
             /** Checklist Ceiling Policy Version */
             checklist_ceiling_policy_version: number;
+            /**
+             * Finalizer Mode
+             * @default shadow
+             * @enum {string}
+             */
+            finalizer_mode: "off" | "shadow" | "enforce";
             /** Prerequisites */
             prerequisites: components["schemas"]["ActivationPrerequisiteView"][];
             /** Unverified Count */

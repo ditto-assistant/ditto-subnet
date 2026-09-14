@@ -14,8 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.dependencies import get_session
-from ditto.api_server.review_timeout_finalizer import record_screening_decision
 from ditto.db.models import Agent
+from ditto.db.queries.screening_decisions import record_screening_decision
 from ditto_screening_protocol import (
     PUBLISHED_REVIEW_TIMEOUT_POLICY,
     REVIEW_TIMED_OUT_OUTCOME,

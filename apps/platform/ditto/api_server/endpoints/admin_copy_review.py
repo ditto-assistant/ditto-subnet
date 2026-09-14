@@ -38,7 +38,6 @@ from ditto.api_server.anti_copy_comparison import compare_anti_copy_pair
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.api_server.review_timeout_finalizer import record_screening_decision
 from ditto.api_server.source_diff import (
     build_source_diff_manifest,
     unified_diff_for_file,
@@ -80,6 +79,7 @@ from ditto.db.queries.scores import (
     LedgerRow,
     list_scores_for_agent,
 )
+from ditto.db.queries.screening_decisions import record_screening_decision
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])

@@ -223,6 +223,7 @@ from ditto.db.queries.screening import (
     prerequisite_screening_predicates,
     screening_priority_order,
 )
+from ditto.db.queries.screening_decisions import record_automatic_clear
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenResultOutcome,
@@ -5993,6 +5994,18 @@ async def submit_result(
                     },
                     created_at=cleared_at,
                 )
+            )
+            await record_automatic_clear(
+                session,
+                agent=agent,
+                review_id=deferred_review.review_id,
+                review_scope=DEFERRED_REVIEW_KIND,
+                public_reason=deferred_review.resolution_reason,
+                reviewer=deferred_review.resolved_by,
+                evidence_references=[f"ath-review:{deferred_review.review_id}"],
+                evidence_type="deferred-source-review",
+                decided_at=cleared_at,
+                attempt_id=attempt.attempt_id if attempt is not None else None,
             )
         if attempt is None and not idempotent:
             now = datetime.now(UTC)

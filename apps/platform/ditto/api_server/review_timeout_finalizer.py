@@ -13,22 +13,32 @@ distinct decision:
   be cited against the miner, a sibling, or the hotkey);
 * a public no-fault reason, the failure domain (V2 platform / V3 provider),
   ``retry_count`` and ``independent_workers`` as retry evidence;
-* an automatic no-fault retry grant on the exact attempt so the submission is
-  claimable again and, because its last service time is the oldest in the
-  queue, re-enters screening ahead of newer work once capacity recovers.
+* an automatic no-fault retry grant on the exact attempt -- while the
+  published retry budget for that failure domain has not been spent -- so the
+  submission is claimable again and, because its last service time is the
+  oldest in the queue, re-enters screening ahead of newer work once capacity
+  recovers. Past the budget the timeout is still recorded (no ban, no
+  precedent) but no grant is minted: the submission parks until an operator
+  retries it, so a permanently inconclusive artifact cannot cycle forever.
 
 A quarantine that carries a verified finding is an operator hold, not a
 processing state, and is never touched. Versions below the strict two-outcome
 policy keep their signed compatibility behaviour and are never finalized.
+
+The finalizer runs in one of three postures (``DITTO_REVIEW_TIMEOUT_FINALIZER_MODE``):
+``off`` never queries; ``shadow`` (the default) selects candidates and dry-runs
+every would-be decision inside a transaction it rolls back, logging what it
+would have written; ``enforce`` performs the mutation.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
+import os
+from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args
 from uuid import UUID, uuid4
 
 from sqlalchemy import Text, cast, func, or_, select
@@ -45,17 +55,18 @@ from ditto.db.models import (
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
 )
-from ditto.db.queries.benchmark_rollout import arrival_bench_version
+from ditto.db.queries.screening_decisions import record_screening_decision
 from ditto_screening_protocol import (
+    DEFAULT_REVIEW_TIMEOUT_FINALIZER_MODE,
     NON_DECISIVE_REASON_CODES,
     PUBLISHED_REVIEW_TIMEOUT_POLICY,
     REVIEW_TIMED_OUT_OUTCOME,
     REVIEW_TIMED_OUT_PUBLIC_REASON,
     REVIEW_TIMED_OUT_REASON_CODE,
     REVIEW_TIMEOUT_FINALIZER_ACTOR,
-    FailureDomain,
+    REVIEW_TIMEOUT_FINALIZER_MODE_ENV,
+    ReviewTimeoutFinalizerMode,
     ReviewTimeoutPolicy,
-    ScreeningDecisionOutcome,
     failure_domain_for_reason_code,
     verification_failure_reason_code,
 )
@@ -63,109 +74,51 @@ from ditto_screening_protocol import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
+__all__ = [
+    "DEFAULT_FINALIZER_BATCH",
+    "DEFAULT_FINALIZER_INTERVAL_SECONDS",
+    "ReviewTimeoutFinalizer",
+    "configured_finalizer_mode",
+    "finalize_review_timeouts",
+    "finalize_timed_out_quarantine",
+    "record_screening_decision",
+    "select_timed_out_quarantines",
+]
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_FINALIZER_INTERVAL_SECONDS = 300
 DEFAULT_FINALIZER_BATCH = 25
 
+_MODES: frozenset[str] = frozenset(get_args(ReviewTimeoutFinalizerMode))
+
+
+class ReviewTimeoutFinalizerConfigError(ValueError):
+    """The finalizer mode environment variable names an unknown posture."""
+
+
+def configured_finalizer_mode(
+    environ: Mapping[str, str] | None = None,
+) -> ReviewTimeoutFinalizerMode:
+    """Read ``DITTO_REVIEW_TIMEOUT_FINALIZER_MODE`` (default ``shadow``).
+
+    Unknown values fail boot rather than defaulting: a typo must not silently
+    land the finalizer in either the mutating posture or a dead one.
+    """
+    env = os.environ if environ is None else environ
+    raw = (env.get(REVIEW_TIMEOUT_FINALIZER_MODE_ENV) or "").strip().lower()
+    if not raw:
+        return DEFAULT_REVIEW_TIMEOUT_FINALIZER_MODE
+    if raw not in _MODES:
+        raise ReviewTimeoutFinalizerConfigError(
+            f"{REVIEW_TIMEOUT_FINALIZER_MODE_ENV} must be one of "
+            f"{sorted(_MODES)}, got {raw!r}"
+        )
+    return raw  # type: ignore[return-value]
+
 
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
-async def record_screening_decision(
-    session: AsyncSession,
-    *,
-    agent: Agent,
-    outcome: ScreeningDecisionOutcome,
-    reason_codes: list[str],
-    violation_proven: bool,
-    failure_domain: FailureDomain,
-    retry_count: int,
-    independent_workers: int,
-    policy_version: int,
-    public_reason: str,
-    reviewer: str,
-    decided_at: datetime,
-    evidence_references: list[str],
-    completed_checks: list[str],
-    failed_checks: list[str],
-    limitations: list[str],
-    attempt_id: UUID | None = None,
-    quarantine_id: UUID | None = None,
-    review_id: UUID | None = None,
-    review_scope: str | None = None,
-    evidence_type: str | None = None,
-    opaque_components: list[str] | None = None,
-    policy_digest: str | None = None,
-    verification_profile_digest: str | None = None,
-    precedent_weight: bool = False,
-    retry_grant_id: UUID | None = None,
-    operator_override: dict[str, object] | None = None,
-) -> ScreeningDecisionRecord:
-    """Append one policy-v13 decision record for ``agent``.
-
-    The previous record for the same agent (if any) is linked through
-    ``supersedes_decision`` so appeals and re-reviews keep their history.
-    """
-    previous_id = await session.scalar(
-        select(ScreeningDecisionRecord.decision_id)
-        .where(ScreeningDecisionRecord.agent_id == agent.agent_id)
-        .order_by(
-            ScreeningDecisionRecord.decided_at.desc(),
-            ScreeningDecisionRecord.decision_id.desc(),
-        )
-        .limit(1)
-    )
-    try:
-        benchmark_version: int | None = await arrival_bench_version(
-            session, agent=agent
-        )
-    except Exception:  # pragma: no cover - identity is best-effort evidence
-        benchmark_version = None
-    record = ScreeningDecisionRecord(
-        decision_id=uuid4(),
-        agent_id=agent.agent_id,
-        attempt_id=attempt_id,
-        quarantine_id=quarantine_id,
-        review_id=review_id,
-        outcome=outcome,
-        reason_codes=list(reason_codes),
-        violation_proven=violation_proven,
-        failure_domain=failure_domain,
-        retry_count=retry_count,
-        independent_workers=independent_workers,
-        policy_version=policy_version,
-        identities={
-            "submission_uuid": str(agent.agent_id),
-            "artifact_sha256": agent.sha256,
-            "image_digest": agent.screened_image_id,
-            "build_configuration": None,
-            "served_entrypoint": None,
-            "permitted_runtime_configuration": agent.dataset_run_size,
-            "benchmark_version": benchmark_version,
-            "applied_policy_version": policy_version,
-            "policy_digest": policy_digest,
-            "verification_profile_digest": verification_profile_digest,
-        },
-        review_scope=review_scope,
-        completed_checks=list(completed_checks),
-        failed_checks=list(failed_checks),
-        opaque_components=list(opaque_components or []),
-        evidence_references=list(evidence_references),
-        evidence_type=evidence_type,
-        limitations=list(limitations),
-        public_reason=public_reason,
-        reviewer=reviewer,
-        decided_at=decided_at,
-        supersedes_decision=previous_id,
-        operator_override=operator_override,
-        precedent_weight=precedent_weight,
-        retry_grant_id=retry_grant_id,
-    )
-    session.add(record)
-    await session.flush()
-    return record
 
 
 async def _retry_evidence(
@@ -229,12 +182,14 @@ async def finalize_timed_out_quarantine(
     quarantine_id: UUID,
     now: datetime,
     policy: ReviewTimeoutPolicy = PUBLISHED_REVIEW_TIMEOUT_POLICY,
+    dry_run: bool = False,
 ) -> ScreeningDecisionRecord | None:
     """Terminate one stale processing state as no-fault ``review_timed_out``.
 
     Re-checks every selection predicate under row locks so a concurrent
     operator resolution or a late screener verdict wins. Returns the decision
-    record written, or ``None`` when the row no longer qualifies.
+    record written, or ``None`` when the row no longer qualifies. ``dry_run``
+    only labels the log line; the shadow caller owns the rollback.
     """
     quarantine = await session.scalar(
         select(ScreeningQuarantine)
@@ -312,8 +267,15 @@ async def finalize_timed_out_quarantine(
         )
         or 0
     )
+    retries_used = policy.automatic_retries_used(retry_count)
+    retry_budget = policy.automatic_retry_budget(failure_domain)
+    retry_permitted = policy.automatic_retry_permitted(
+        failure_domain,
+        retry_count=retry_count,
+        independent_workers=independent_workers,
+    )
     retry_grant: ScreeningRetryOverride | None = None
-    if policy.no_fault_retry_grant_on_timeout:
+    if policy.no_fault_retry_grant_on_timeout and retry_permitted:
         # The append-only grant that makes a parked attempt claimable again.
         # One per attempt: an operator who already granted it keeps authorship.
         retry_grant = await session.scalar(
@@ -338,10 +300,11 @@ async def finalize_timed_out_quarantine(
             await session.flush()
 
     if release is None:
-        # Parked, claimable through the grant, and served before newer work
-        # because its last service time is the oldest in the queue.
+        # Parked; claimable through the grant (served before newer work
+        # because its last service time is the oldest in the queue) or, past
+        # the budget, only through an operator's retry authorization.
         agent.status = AgentStatus.SCREENING_FAILED
-    else:
+    elif retry_grant is not None:
         # The scored canary keeps its board row; re-arming the release is the
         # same automatic retry an operator's retry_paused performs.
         release.state = "pending"
@@ -349,12 +312,29 @@ async def finalize_timed_out_quarantine(
         release.actor = REVIEW_TIMEOUT_FINALIZER_ACTOR
         release.reason = REVIEW_TIMED_OUT_PUBLIC_REASON
         release.updated_at = now
+    # else: the canary release stays paused for the operator's retry_paused.
     agent.screening_reason = REVIEW_TIMED_OUT_PUBLIC_REASON
     agent.screening_reason_code = REVIEW_TIMED_OUT_REASON_CODE
 
     completed_checks = ["archive-sha256"]
     if agent.screened_image_id is not None:
         completed_checks.append("image-build")
+    limitations = [
+        "bounded review exhausted the published verification window "
+        "without a decisive finding; no misconduct is alleged",
+        f"retry_count={retry_count} independent_workers={independent_workers} "
+        f"window_hours={policy.max_verification_window_hours}",
+    ]
+    if policy.independent_worker_required(failure_domain):
+        met = "met" if independent_workers >= 2 else "not met"
+        limitations.append(
+            f"independent worker required for {failure_domain} failure retry: {met}"
+        )
+    if not retry_permitted:
+        limitations.append(
+            f"automatic retry budget exhausted ({retries_used}/{retry_budget}); "
+            "operator retry required"
+        )
     record = await record_screening_decision(
         session,
         agent=agent,
@@ -371,12 +351,7 @@ async def finalize_timed_out_quarantine(
         evidence_references=[],
         completed_checks=completed_checks,
         failed_checks=[quarantine.reason_code],
-        limitations=[
-            "bounded review exhausted the published verification window "
-            "without a decisive finding; no misconduct is alleged",
-            f"retry_count={retry_count} independent_workers={independent_workers} "
-            f"window_hours={policy.max_verification_window_hours}",
-        ],
+        limitations=limitations,
         attempt_id=quarantine.attempt_id,
         quarantine_id=quarantine.quarantine_id,
         review_scope="policy-v13 non-decisive processing state",
@@ -387,17 +362,34 @@ async def finalize_timed_out_quarantine(
         retry_grant_id=retry_grant.override_id if retry_grant is not None else None,
     )
     logger.info(
-        "review_timed_out agent_id=%s quarantine_id=%s reason_code=%s domain=%s "
-        "retry_count=%s independent_workers=%s canary=%s",
+        "review_timed_out%s agent_id=%s quarantine_id=%s reason_code=%s domain=%s "
+        "retry_count=%s independent_workers=%s retry_grant=%s canary=%s",
+        " [shadow]" if dry_run else "",
         agent.agent_id,
         quarantine.quarantine_id,
         quarantine.reason_code,
         failure_domain,
         retry_count,
         independent_workers,
+        retry_grant is not None,
         release is not None,
     )
     return record
+
+
+def _counters(
+    *,
+    candidates: int = 0,
+    finalized: int = 0,
+    would_finalize: int = 0,
+    skipped: int = 0,
+) -> dict[str, int]:
+    return {
+        "candidates": candidates,
+        "finalized": finalized,
+        "would_finalize": would_finalize,
+        "skipped": skipped,
+    }
 
 
 async def finalize_review_timeouts(
@@ -406,23 +398,46 @@ async def finalize_review_timeouts(
     now: datetime | None = None,
     policy: ReviewTimeoutPolicy = PUBLISHED_REVIEW_TIMEOUT_POLICY,
     limit: int = DEFAULT_FINALIZER_BATCH,
+    mode: ReviewTimeoutFinalizerMode = DEFAULT_REVIEW_TIMEOUT_FINALIZER_MODE,
 ) -> dict[str, int]:
-    """One bounded finalizer pass. Returns counters for tick logs and tests."""
+    """One bounded finalizer pass. Returns counters for tick logs and tests.
+
+    ``off`` returns zeros without a query. ``shadow`` runs every candidate
+    through the locked re-check and the full decision inside a transaction
+    that is rolled back, so ``would_finalize`` counts exactly the rows
+    ``enforce`` would have written. ``enforce`` commits.
+    """
+    if mode not in _MODES:
+        raise ReviewTimeoutFinalizerConfigError(f"unknown finalizer mode {mode!r}")
+    if mode == "off":
+        return _counters()
     now = now or datetime.now(UTC)
     async with session_maker() as session:
         candidates = await select_timed_out_quarantines(
             session, now=now, policy=policy, limit=limit
         )
-    counters = {"candidates": len(candidates), "finalized": 0, "skipped": 0}
+    counters = _counters(candidates=len(candidates))
     for quarantine_id in candidates:
-        async with session_maker() as session, session.begin():
-            record = await finalize_timed_out_quarantine(
-                session, quarantine_id=quarantine_id, now=now, policy=policy
-            )
-        if record is None:
-            counters["skipped"] += 1
-        else:
-            counters["finalized"] += 1
+        if mode == "enforce":
+            async with session_maker() as session, session.begin():
+                record = await finalize_timed_out_quarantine(
+                    session, quarantine_id=quarantine_id, now=now, policy=policy
+                )
+            counters["finalized" if record is not None else "skipped"] += 1
+            continue
+        async with session_maker() as session:
+            await session.begin()
+            try:
+                record = await finalize_timed_out_quarantine(
+                    session,
+                    quarantine_id=quarantine_id,
+                    now=now,
+                    policy=policy,
+                    dry_run=True,
+                )
+            finally:
+                await session.rollback()
+        counters["would_finalize" if record is not None else "skipped"] += 1
     return counters
 
 
@@ -435,16 +450,25 @@ class ReviewTimeoutFinalizer:
         session_maker: async_sessionmaker,
         interval_seconds: float = DEFAULT_FINALIZER_INTERVAL_SECONDS,
         policy: ReviewTimeoutPolicy = PUBLISHED_REVIEW_TIMEOUT_POLICY,
+        mode: ReviewTimeoutFinalizerMode = DEFAULT_REVIEW_TIMEOUT_FINALIZER_MODE,
     ) -> None:
+        if mode not in _MODES:
+            raise ReviewTimeoutFinalizerConfigError(f"unknown finalizer mode {mode!r}")
         self._session_maker = session_maker
         self._interval_seconds = interval_seconds
         self._policy = policy
+        self._mode: ReviewTimeoutFinalizerMode = mode
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+
+    @property
+    def mode(self) -> ReviewTimeoutFinalizerMode:
+        return self._mode
 
     async def start(self) -> None:
         if self._task is not None:
             return
+        logger.info("review-timeout finalizer starting in %s mode", self._mode)
         self._task = asyncio.create_task(self._run(), name="review-timeout-finalizer")
 
     async def aclose(self) -> None:
@@ -456,8 +480,12 @@ class ReviewTimeoutFinalizer:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
-            with suppress(Exception):
+            try:
                 await self.tick()
+            except Exception:
+                # A persistent DB/schema error must be visible in the platform
+                # logs, not a finalizer that is silently dead forever.
+                logger.exception("review-timeout finalizer tick failed")
             try:
                 await asyncio.wait_for(
                     self._stop.wait(), timeout=self._interval_seconds
@@ -467,8 +495,10 @@ class ReviewTimeoutFinalizer:
 
     async def tick(self) -> dict[str, int]:
         counters = await finalize_review_timeouts(
-            self._session_maker, policy=self._policy
+            self._session_maker, policy=self._policy, mode=self._mode
         )
-        if counters["finalized"]:
-            logger.info("review-timeout finalizer tick %s", counters)
+        if counters["finalized"] or counters["would_finalize"]:
+            logger.info(
+                "review-timeout finalizer tick mode=%s %s", self._mode, counters
+            )
         return counters
