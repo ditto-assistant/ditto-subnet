@@ -383,23 +383,15 @@ func Classify(ac gen.ArtifactCase, pairs map[string]string) (CaseClass, error) {
 	return cc, nil
 }
 
+// knownClaimKind admits exactly the answer kinds protocol defines. New kinds
+// (issue #1824's v13 grader kinds) are added here by importing their protocol
+// constants when they land — never retyped by name — so a generator emitting a
+// kind the grader does not define fails the audit closed.
 func knownClaimKind(kind string) bool {
 	switch kind {
 	case protocol.AnswerValue, protocol.AnswerNumber, protocol.AnswerMoney, protocol.AnswerDirection,
 		protocol.AnswerList, protocol.AnswerOrderedList, protocol.AnswerDuration, protocol.AnswerReversal,
 		protocol.AnswerPersistence, protocol.AnswerDecline, protocol.AnswerAcknowledge, protocol.AnswerChitchat:
-		return true
-	}
-	return knownV13ClaimKind(kind)
-}
-
-// knownV13ClaimKind admits the v13 grader-only kinds once protocol defines
-// them (issue #1824 adds AnswerClarify and AnswerAbstain). They are matched by
-// name so this package compiles against the v12 protocol and starts counting
-// the new kinds the moment the constants land.
-func knownV13ClaimKind(kind string) bool {
-	switch kind {
-	case "clarify", "absence", "abstain":
 		return true
 	}
 	return false
@@ -473,9 +465,6 @@ func familyProfile(family string) (profile, bool) {
 	case "world-story-outcome-summary":
 		return profile{domain: DomainBusiness, subDomain: "project-finance", operation: OpBalanceArithmetic, arithmetic: true,
 			itemDomains: []itemProfile{routing, finance, lesson}}, true
-	// Open query programs (v10..v12) and their v13 successor names.
-	case "v10-open-program", "v11-open-program", "v12-open-program", "v13-open-program":
-		return profile{domain: DomainBusiness, subDomain: "ledger-programs", operation: OpBalanceArithmetic, arithmetic: true, openProgram: true}, true
 	// Anti-family-compiler record families.
 	case "record-balance-plain", "record-balance-adjusted", "record-balance-superseded", "record-balance-capped",
 		"record-balance-forgiven", "record-balance-referred":
@@ -503,9 +492,14 @@ func familyProfile(family string) (profile, bool) {
 	case "world-injection-resistance":
 		return profile{domain: DomainBusiness, subDomain: "accounts-payable", operation: OpBalanceArithmetic, arithmetic: true}, true
 	}
-	// v13 families land under stable prefixes; classify them by prefix so the
-	// audit keeps running while the envelope PR pins their exact profiles.
+	// Version-carrying and v13 families land under stable affixes; classify them
+	// by affix so the audit keeps running while the envelope PR pins their
+	// exact profiles.
 	switch {
+	// Open query programs: every contract from v10 up re-renders the family
+	// under "v<N>-open-program".
+	case strings.HasSuffix(family, "-open-program"):
+		return profile{domain: DomainBusiness, subDomain: "ledger-programs", operation: OpBalanceArithmetic, arithmetic: true, openProgram: true}, true
 	case strings.HasPrefix(family, "abstention-") || strings.HasSuffix(family, "-abstention"):
 		return profile{domain: DomainPersonal, subDomain: "abstention", operation: OpAbstain, abstention: true}, true
 	case strings.HasPrefix(family, "clarify-"):
@@ -518,6 +512,7 @@ func familyProfile(family string) (profile, bool) {
 // defined here (issue #1830) and asserted green only once the v13 envelope PR
 // rebalances the mix; on v12 they document the gap (see docs/v13-family-mix-study.md).
 type Envelope struct {
+	MemoryCasesTarget      int     // exact memory suite size per seed
 	MoneyWeightHardCap     float64 // share of memory weight
 	MoneyWeightTarget      float64
 	MoneyBearingCasesCap   int
@@ -536,6 +531,7 @@ type Envelope struct {
 
 // V13Envelope is the plan's v13.0 memory-mix envelope.
 var V13Envelope = Envelope{
+	MemoryCasesTarget:      250,
 	MoneyWeightHardCap:     0.15,
 	MoneyWeightTarget:      0.12,
 	MoneyBearingCasesCap:   22,
@@ -575,6 +571,7 @@ func (env Envelope) Check(report SeedReport) []Violation {
 	if w == 0 {
 		return []Violation{{Rule: "empty memory suite"}}
 	}
+	add("memory cases == target", float64(report.MemoryCases), float64(env.MemoryCasesTarget), report.MemoryCases != env.MemoryCasesTarget)
 	add("money weight share <= hard cap", report.MoneyShare, env.MoneyWeightHardCap, report.MoneyShare > env.MoneyWeightHardCap)
 	add("money-bearing cases <= cap", float64(report.MoneyBearingCases), float64(env.MoneyBearingCasesCap), report.MoneyBearingCases > env.MoneyBearingCasesCap)
 	add("monetary open programs == 0", float64(report.MonetaryOpenPrograms), float64(env.MonetaryOpenPrograms), report.MonetaryOpenPrograms != env.MonetaryOpenPrograms)

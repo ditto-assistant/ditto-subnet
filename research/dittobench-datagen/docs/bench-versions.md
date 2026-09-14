@@ -768,9 +768,14 @@ strawman the generator itself beats: `persona.Grammar` is a hand-reviewed CFG,
 and a CFG is exactly invertible. The GIH reads only what a harness sees on the
 wire — the `/seed` records, the staged questions, the tool prompts — assembles a
 typo-tolerant parser from the repository's own frames (the world record
-frames, the story fact renderings, the v12 program forms and glossary banks,
-the family-compiler and divergence frames, and `datagen.ToolSurfacesForVersion`
-for every tool category), recovers (family, slots) for every question, applies
+frames, the story fact renderings, the per-contract program grammars —
+`internal/parserprobe/programs.go` registers the v10, v11, and v12 question and
+record surfaces, and the `v<N>-open-program` family name is derived from the
+artifact's `bench_version`, so a contract without a registered grammar is
+reported as unclassified rather than scored as a silent zero — the
+family-compiler and divergence frames, and `datagen.ToolSurfacesForVersion`
+plus `WorldToolSurfaces`, which return the generator's own package-level banks
+rather than copies), recovers (family, slots) for every question, applies
 the public oracle arithmetic that `universe/questions.go resolveWithEvidence`
 defines, launders the value through one "reply exactly" completion, and is
 graded by the real deterministic grader. The router replaces only the
@@ -800,13 +805,21 @@ with one-edit fuzzy joins.
 
 The ceilings the surface pass must meet — GIH composite ≤ starter-kit − 0.05
 overall and on every surface slice (story, programs, personal, quantity, tool
-prompts), same bound for the router — are defined in `gen/parserprobe_test.go`
-and stay **report-only** until the unregenerable surface-pass owner decision
-(validator commit-reveal salt vs Platform private paraphrase) lands. The CI
-gate `TestParserprobeCeilingOnSurfacePassedArtifacts` is armed by
+prompts), and the same bound on the router trained on a disjoint seed range —
+are defined in `gen/parserprobe_test.go` (the 0.70 starter-kit reference is a
+placeholder re-pinned from calibration before the gate is armed) and stay
+**report-only** until the unregenerable surface-pass owner decision (validator
+commit-reveal salt vs Platform private paraphrase) lands. The CI gate
+`TestParserprobeCeilingOnSurfacePassedArtifacts` is armed by
 `DITTOBENCH_SURFACE_PASSED_ARTIFACTS` (a directory of surface-passed artifact
-JSON) and skips otherwise; the pass-off baseline itself is asserted so a frame
-the parser silently stops recognising cannot masquerade as hardening.
+JSON) and skips otherwise; when armed it fails closed on any family the parser
+does not know and asserts both adversaries. Two always-on tests keep a parser
+hole from masquerading as hardening: the pass-off baseline
+(`TestParserprobeBaselineOnPublicSeed`) and
+`TestParserprobeProgramGrammarCoversEveryContract`, which walks every supported
+`bench_version` from v10 up and requires the program family to be recognised
+and inverted near-perfectly — a v13 contract that re-renders the program
+surface fails it until its grammar is registered.
 
 **`cmd/mixaudit` — the per-seed memory-mix histogram and envelope gate.** It
 classifies every memory case by family, semantic domain and sub-domain, answer

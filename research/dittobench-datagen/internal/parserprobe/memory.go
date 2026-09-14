@@ -186,121 +186,29 @@ var memoryFamilies = []memoryFamily{
 	)},
 }
 
-// v12 program question banks: opener . operation clause . unit frame. The
-// operation clause names the schema labels of the operands, which is the direct
-// role binding a reader needs; the glossary parse is the fallback.
-var (
-	v12Openers = []string{
-		"Work only from this batch's own field meanings.",
-		"Read the local glossary before naming any field.",
-		"Ground every label in this workspace's conventions.",
-		"Induce the per-run schema, then compute.",
-		"Do not assume standard field names; use the ones defined here.",
-	}
-	v12UnitFramesBank = []string{
-		"Give the result in %s cents as minor units.",
-		"Answer as a minor-unit figure under %s cents.",
-		"Report minor units, per the %s cents convention.",
-		"State the balance in minor units (%s cents).",
-	}
-	// shape -> forms; slots in generator order: subject, approved, paid[, extra]
-	v12OpForms = map[string][]string{
-		"subtract": {
-			"take the governing %s value for %s and remove the %s amount",
-			"start from the standing %s figure on %s, then deduct %s",
-			"for %s, reconcile the current %s value against the %s amount",
-		},
-		"adjust": {
-			"apply the recorded %s to the %s figure on %s, then remove %s",
-			"for %s, fold the %s into the %s amount before settling %s against it",
-			"adjust %s's %s by its %s, then deduct %s",
-		},
-		"latest": {
-			"more than one %s touches %s's %s; only the most recent governs — deduct %s from it",
-			"%s carries a revised %s after a later %s; use the standing value and remove %s",
-			"resolve which %s value currently stands for %s, then take away %s",
-		},
-		"larger": {
-			"for %s, keep whichever of %s and %s is larger, then deduct %s",
-			"compare %s's %s against its %s, retain the greater, and settle %s",
-			"the governing figure for %s is the larger of %s and %s; remove %s from it",
-		},
-	}
-	// v12OpRoles gives, per form, the role of each captured slot.
-	v12OpRoles = map[string][][]string{
-		"subtract": {{"subject", "approved", "paid"}, {"approved", "subject", "paid"}, {"subject", "approved", "paid"}},
-		"adjust":   {{"adjustment", "approved", "subject", "paid"}, {"subject", "adjustment", "approved", "paid"}, {"subject", "approved", "adjustment", "paid"}},
-		"latest":   {{"correction", "subject", "approved", "paid"}, {"subject", "approved", "correction", "paid"}, {"approved", "subject", "paid"}},
-		"larger":   {{"subject", "draft", "approved", "paid"}, {"subject", "draft", "approved", "paid"}, {"subject", "draft", "approved", "paid"}},
-	}
-	v12OpFrames = func() map[string][]frame {
-		out := map[string][]frame{}
-		for shape, forms := range v12OpForms {
-			for _, f := range forms {
-				// The clause is capitalised and terminated with a period in the question.
-				out[shape] = append(out[shape], compileFrame(strings.ToUpper(f[:1])+f[1:]+"."))
-			}
-		}
-		return out
-	}()
-	v12OpenerFrames = compileFrames(v12Openers...)
-	v12UnitFrames   = compileFrames(v12UnitFramesBank...)
-)
-
 // parsedQuestion is the (family, slots) recovered from one memory question.
 type parsedQuestion struct {
 	family string
 	slots  []string
 	frame  int
 	// program-only
-	shape string
-	roles map[string]string // role -> label
-	unit  string
+	shape   string
+	roles   map[string]string // role -> label
+	unit    string
+	subject string // alias or descriptive binding of the program thread
 }
 
-// classifyMemory recovers the family of a question from the frame banks.
-func classifyMemory(question string) (parsedQuestion, bool) {
+// classifyMemory recovers the family of a question from the frame banks; the
+// program family is matched with benchVersion's registered grammar.
+func classifyMemory(benchVersion int, question string) (parsedQuestion, bool) {
 	q := strings.TrimSpace(question)
 	for _, fam := range memoryFamilies {
 		if i, slots, ok := matchAny(fam.frames, q); ok {
 			return parsedQuestion{family: fam.name, slots: slots, frame: i}, true
 		}
 	}
-	if pq, ok := classifyProgramQuestion(q); ok {
+	if pq, ok := classifyProgramQuestion(benchVersion, q); ok {
 		return pq, true
-	}
-	return parsedQuestion{}, false
-}
-
-// classifyProgramQuestion recognises a v12 open-program question: an opener
-// sentence, the operation clause, and a unit frame.
-func classifyProgramQuestion(q string) (parsedQuestion, bool) {
-	sents := sentences(q)
-	if len(sents) < 3 {
-		return parsedQuestion{}, false
-	}
-	// The opener may itself contain a ';' sentence boundary? No: openers end in
-	// '.', so the first sentence is the opener, the last the unit frame, and the
-	// middle (possibly split by "; ") is the clause.
-	if _, _, ok := matchAny(v12OpenerFrames, sents[0]); !ok {
-		return parsedQuestion{}, false
-	}
-	_, unitSlots, ok := matchAny(v12UnitFrames, sents[len(sents)-1])
-	if !ok {
-		return parsedQuestion{}, false
-	}
-	clause := strings.Join(sents[1:len(sents)-1], " ")
-	shapes := []string{"adjust", "latest", "larger", "subtract"}
-	for _, shape := range shapes {
-		if i, slots, ok := matchAny(v12OpFrames[shape], clause); ok {
-			roles := map[string]string{}
-			for k, role := range v12OpRoles[shape][i] {
-				if k < len(slots) {
-					roles[role] = strings.TrimSuffix(slots[k], "'s")
-				}
-			}
-			return parsedQuestion{family: "v12-open-program", slots: slots, frame: i, shape: shape, roles: roles, unit: unitSlots[0]}, true
-		}
 	}
 	return parsedQuestion{}, false
 }
@@ -440,7 +348,8 @@ func answerMemory(st *store, pq parsedQuestion, ordinal int) derived {
 		if pr := st.projectByAlias(pq.slots[0]); pr != nil && pr.hasCorrection && pr.hasOriginal {
 			return d.val(protocol.AnswerMoney, fmt.Sprint(pr.correctedCents-pr.paidCents))
 		}
-	case "v12-open-program":
+	}
+	if isProgramFamily(pq.family) {
 		return answerProgram(st, pq, ordinal)
 	}
 	return d
@@ -660,15 +569,15 @@ func answerAccount(st *store, subject string) derived {
 	return d
 }
 
-// answerProgram evaluates the sampled program shape over the subject group's
-// records. The v12 question binds its subject relationally ("the workstream
-// carrying a settled payment") and every group in the run has one, so the
-// question text alone cannot select a group; the only wire-visible binding is
-// order — program questions are asked in seeded group order, four per group —
-// which is exactly what a stateful harness counts. ordinal is the 0-based
-// index of this program question within the run's program questions.
-func answerProgram(st *store, pq parsedQuestion, ordinal int) derived {
-	d := derived{family: "v12-open-program"}
+// answerV12Program evaluates the sampled program shape over the subject
+// group's records. The v12 question binds its subject relationally ("the
+// workstream carrying a settled payment") and every group in the run has one,
+// so the question text alone cannot select a group; the only wire-visible
+// binding is order — program questions are asked in seeded group order, four
+// per group — which is exactly what a stateful harness counts. ordinal is the
+// 0-based index of this program question within the run's program questions.
+func answerV12Program(st *store, pq parsedQuestion, ordinal int) derived {
+	d := derived{family: pq.family}
 	// Four cases per group: base, renderer invariant, distractor invariant on
 	// the scenario thread, then the causal counterfactual on its "-revision"
 	// thread; the two threads appear consecutively in the seed stream.

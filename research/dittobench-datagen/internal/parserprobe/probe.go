@@ -23,9 +23,6 @@ type Options struct {
 	// Artifacts, when set, are probed instead of generating seeds (the
 	// surface-passed artifact path).
 	Artifacts []gen.DatasetArtifact
-	// IgnoreSessionIDs is reserved for the session-label leak study; the parser
-	// never reads session ids, so it is informational.
-	IgnoreSessionIDs bool
 }
 
 // Stats is one slice's outcome under one adversary.
@@ -235,7 +232,7 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 	}
 	var unmatched []string
 	missing := map[string]bool{}
-	known := knownFamilies()
+	known := knownFamilies(a.BenchVersion)
 	// Per-user, per-family ordinals for the families whose question repeats
 	// verbatim within a run (see answerMemory).
 	ordinals := map[string]int{}
@@ -253,14 +250,14 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 		}
 		st := stores[user]
 		if st == nil {
-			st = newStore()
+			st = newStore(a.BenchVersion)
 		}
 		if !known[ac.QuestionType] {
 			missing[ac.QuestionType] = true
 		}
 		slice := memorySlice(ac.MemoryCase)
 		// GIH: frame banks decide the family.
-		pq, ok := classifyMemory(ac.Question)
+		pq, ok := classifyMemory(a.BenchVersion, ac.Question)
 		var d derived
 		if ok {
 			d = answerMemory(st, pq, next(ordinals, user, pq.family))
@@ -277,7 +274,7 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 			// Router: the classifier names the family, the family's own frames
 			// extract the slots.
 			fam := rt.predict("mem:", ac.Question)
-			rq, rok := classifyWithin(fam, ac.Question)
+			rq, rok := classifyWithin(a.BenchVersion, fam, ac.Question)
 			var rd derived
 			if rok {
 				rd = answerMemory(st, rq, next(routerOrdinals, user, rq.family))
@@ -357,10 +354,10 @@ func familyMatches(resolved, surface string, ok bool, want string) bool {
 }
 
 // classifyWithin matches the question only against the frames of one family.
-func classifyWithin(family, question string) (parsedQuestion, bool) {
+func classifyWithin(benchVersion int, family, question string) (parsedQuestion, bool) {
 	q := strings.TrimSpace(question)
-	if family == "v12-open-program" {
-		return classifyProgramQuestion(q)
+	if isProgramFamily(family) {
+		return classifyProgramQuestion(benchVersion, q)
 	}
 	for _, fam := range memoryFamilies {
 		if fam.name != family {
@@ -373,8 +370,15 @@ func classifyWithin(family, question string) (parsedQuestion, bool) {
 	return parsedQuestion{}, false
 }
 
-func knownFamilies() map[string]bool {
-	out := map[string]bool{"v12-open-program": true}
+// knownFamilies is the set of artifact families the frame banks can invert for
+// benchVersion. The program family is known only when its contract's grammar is
+// registered (programGrammars), so a re-rendered program surface surfaces in
+// Report.Unclassified instead of scoring a silent zero.
+func knownFamilies(benchVersion int) map[string]bool {
+	out := map[string]bool{}
+	if _, ok := programGrammarFor(benchVersion); ok {
+		out[programFamily(benchVersion)] = true
+	}
 	for _, fam := range memoryFamilies {
 		out[fam.name] = true
 	}

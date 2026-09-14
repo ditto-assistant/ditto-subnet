@@ -56,7 +56,7 @@ any seed that violates the envelope (the CI posture for v13, not v12).
 
 | Measure | Min | Mean | Max | v13 limit |
 | --- | ---: | ---: | ---: | ---: |
-| Memory cases | 251 | 251 | 251 | 250 (envelope PR) |
+| Memory cases | 251 | 251 | 251 | = 250 |
 | Direct `money` cases | 112 | 115.7 | 119 | |
 | Money-bearing cases | 138 | 141.7 | 145 | ≤ 22 |
 | Money share of memory weight | 48.9% | 50.4% | 51.7% | ≤ 15% (target 12%) |

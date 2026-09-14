@@ -14,6 +14,9 @@ import (
 // one memory graph (user_id). Nothing in it comes from the artifact's grading
 // fields: every value below was read out of a pair's prompt or response.
 type store struct {
+	// version is the artifact bench_version; it selects the program record
+	// grammar (programGrammars) and nothing else.
+	version  int
 	people   []*person
 	projects []*project
 	trips    []*trip
@@ -70,20 +73,19 @@ type trip struct {
 
 // storyMem is one long story memory with the facts recoverable from its prose.
 type storyMem struct {
-	pairID, sessionID       string
-	text                    string
-	personName, nickname    string
-	tripAlias               string
-	caseID, purchaseOrder   string
-	emails                  []string
-	baseCents, paidCents    int
-	hasBase, hasPaid        bool
-	deltaCents              int // signed, 0 when absent
-	hasDelta                bool
-	costCents, creditCents  int
-	hasCost, hasCredit      bool
-	lesson                  string
-	projectName, projectAli string
+	pairID, sessionID      string
+	text                   string
+	personName, nickname   string
+	tripAlias              string
+	caseID, purchaseOrder  string
+	emails                 []string
+	baseCents, paidCents   int
+	hasBase, hasPaid       bool
+	deltaCents             int // signed, 0 when absent
+	hasDelta               bool
+	costCents, creditCents int
+	hasCost, hasCredit     bool
+	lesson                 string
 }
 
 // program is one v12/v11 metamorphic-group scenario recovered from its records.
@@ -248,7 +250,7 @@ func buildStores(a gen.DatasetArtifact) map[string]*store {
 		}
 		s, ok := stores[user]
 		if !ok {
-			s = newStore()
+			s = newStore(a.BenchVersion)
 			stores[user] = s
 		}
 		return s
@@ -271,8 +273,9 @@ func buildStores(a gen.DatasetArtifact) map[string]*store {
 	return stores
 }
 
-func newStore() *store {
+func newStore(benchVersion int) *store {
 	return &store{
+		version:  benchVersion,
 		programs: map[string]*program{}, accounts: map[string]*account{}, invoices: map[string]int{},
 		prefs: map[string]string{}, routes: map[string]route{},
 	}
@@ -653,9 +656,13 @@ func (s *store) ingestRoute(p protocol.MemoryPair) bool {
 	return false
 }
 
-// ingestProgram reads one v12 record. The renderer wrapper is stripped first;
-// the thread alias in the acknowledgement groups records into a scenario.
+// ingestProgram reads one program record. Key=value contracts (v10/v11) take
+// their own path; the v12 prose path follows. The renderer wrapper is stripped
+// first; the thread alias in the acknowledgement groups records into a scenario.
 func (s *store) ingestProgram(p protocol.MemoryPair) bool {
+	if g, ok := programGrammarFor(s.version); ok && g.records == programRecordsKeyValue {
+		return s.ingestKeyValueProgram(p)
+	}
 	resp := p.Response
 	i := strings.LastIndex(resp, "(thread: ")
 	if i < 0 || !strings.HasSuffix(strings.TrimSpace(resp), ")") {
@@ -912,15 +919,6 @@ func (s *store) ingestStory(p protocol.MemoryPair) {
 			if j := strings.Index(nick, "."); j > 0 {
 				st.nickname = nick[:j]
 			}
-		}
-	}
-	if i := indexFuzzyPhrase(text, "first planning call for"); i >= 0 {
-		rest := text[i:]
-		if j := strings.Index(rest, ","); j > 0 {
-			st.projectName = rest[:j]
-		}
-		if m := reQuoted.FindStringSubmatch(rest); m != nil {
-			st.projectAli = m[1] + m[2]
 		}
 	}
 	s.stories = append(s.stories, st)

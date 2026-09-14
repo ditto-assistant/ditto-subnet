@@ -105,54 +105,47 @@ type WorldToolSurface struct {
 }
 
 // WorldToolSurfaces returns the world-family prompt frames for benchVersion.
-// The v10 state-dependent routing family composes its cues from banks
-// (V12RoutingCueBanks) and is listed with its v10 fixed frame.
+// Every frame is a copy of the generator's own package-level bank (the
+// worldXxxFrame vars in datagen.go), so a wording change in the generator moves
+// the export with it. The v10 state-dependent routing family composes its cues
+// from banks (V12RoutingCueBanks) and is listed with its v10 fixed frame.
 func WorldToolSurfaces(benchVersion int) []WorldToolSurface {
 	out := []WorldToolSurface{
 		{
 			Category: "world_contact_research_email_result_usage",
 			Tools:    []string{"search_web", "gmail_send"},
 			ArgKeys:  []string{"", "to,body"},
-			Frames: []string{
-				"What is %s at right now? Forward the figure to %s — the %s in %s from the %s.",
-				"Could you check the latest figure for %s and send it to %s? I mean my %s in %s, the one from the %s.",
-				"Please look up %s and pass the current number along to %s, my %s in %s from the %s.",
-				"I need the latest reading for %s sent to %s — my %s over in %s who handled the %s.",
-				"Can you look up %s and email what you find to %s? They're my %s in %s from the %s.",
-				"See where %s stands and send that number to %s, the %s in %s I know from the %s.",
-				"Find the live value for %s, then get it over to %s — my %s in %s from the %s.",
-				"What's the latest on %s? Email the number to %s, my %s in %s from the %s.",
-			},
+			Frames:   append([]string(nil), worldContactEmailFrames...),
 		},
 		{
 			Category: "world_memory_delete",
 			Tools:    []string{"delete_memory"},
 			ArgKeys:  []string{"pair_id"},
-			Frames:   []string{"You can bin that temporary note about fixing %s's email after the %s — they're my %s at %s. Just don't lose their actual contact history."},
+			Frames:   []string{worldMemoryDeleteFrame},
 		},
 		{
 			Category: "world_memory_update",
 			Tools:    []string{"update_memory"},
 			ArgKeys:  []string{"pair_id,content"},
-			Frames:   []string{"Add to the handoff note for %q at %s that we're doing the handoff Friday. It's the %s project; update the scratchpad, not the project history."},
+			Frames:   []string{worldMemoryUpdateFrame},
 		},
 		{
 			Category: "world_theme_discover_set",
 			Tools:    []string{"discover_capabilities", "set_accent_color"},
 			ArgKeys:  []string{"", "color"},
-			Frames:   []string{"Make Ditto use my usual %s-ish accent — the personal app preference, not one of the client brand colors. If I mangled the spelling, check the available appearance options first."},
+			Frames:   []string{worldThemeDiscoverSetFrame},
 		},
 		{
 			Category: "world_business_workflow",
 			Tools:    []string{"list_workflows", "create_workflow"},
 			ArgKeys:  []string{"", "name,steps"},
-			Frames:   []string{"Check whether I already have a workflow for %q, the project for %s. If not, create one under the project's formal name and put the current contact address for internal reviewer %s in its review step."},
+			Frames:   []string{worldBusinessWorkflowFrame},
 		},
 		{
 			Category: "world_link_chain_result_usage",
 			Tools:    []string{"search_web", "read_links"},
 			ArgKeys:  []string{"", ""},
-			Frames:   []string{"See what %s is at right now, and open the actual page rather than relying on the search blurb."},
+			Frames:   []string{worldLinkChainFrame},
 		},
 	}
 	if benchVersion >= protocol.BenchVersionV10 {
@@ -162,7 +155,7 @@ func WorldToolSurfaces(benchVersion int) []WorldToolSurface {
 			// identifies the family and the project alias.
 			Tools:   nil,
 			ArgKeys: nil,
-			Frames:  []string{"Handle the dependency-risk review for %q using the operating choice I approved in our planning note. Start that work now."},
+			Frames:  []string{v10StateDependentRoutingFrame},
 		})
 	}
 	return out
@@ -181,17 +174,18 @@ type RoutingCueBanks struct {
 	RouteSeps  []string
 }
 
-// V12RoutingCueBanks returns the v12 composition banks (frozen with the
-// contract; see applyV10StateDependentActions).
+// V12RoutingCueBanks returns copies of the v12 composition banks (frozen with
+// the contract; see applyV10StateDependentActions).
 func V12RoutingCueBanks() RoutingCueBanks {
+	cp := func(b []string) []string { return append([]string(nil), b...) }
 	return RoutingCueBanks{
-		AskLeads:   []string{"Kick off", "Time to start", "Please begin", "Go ahead and start"},
-		AskTails:   []string{"the way we already agreed. Start now.", "exactly as we settled earlier. Begin.", "following what we decided together. Proceed."},
-		PlanLeads:  []string{"Decision log", "Where we landed", "Outcome of our scoping chat", "Notes from planning"},
-		PlanMids:   []string{" for the risk review on", " about the dependency work for", " covering the review of"},
-		PlanTails:  []string{" at %s.", " (%s).", " for %s."},
-		RouteLeads: []string{"What we settled on", "Agreed path", "Our decision", "The plan we set"},
-		RouteSeps:  []string{": ", " — ", " is: ", ", "},
+		AskLeads:   cp(v12RoutingAskLeads),
+		AskTails:   cp(v12RoutingAskTails),
+		PlanLeads:  cp(v12RoutingPlanLeads),
+		PlanMids:   cp(v12RoutingPlanMids),
+		PlanTails:  cp(v12RoutingPlanTails),
+		RouteLeads: cp(v12RoutingRouteLeads),
+		RouteSeps:  cp(v12RoutingRouteSeps),
 	}
 }
 

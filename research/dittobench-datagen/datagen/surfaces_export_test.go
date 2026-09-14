@@ -2,6 +2,7 @@ package datagen
 
 import (
 	"math/rand"
+	"slices"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -71,5 +72,48 @@ func TestWorldToolSurfacesCoverEveryWorldFamily(t *testing.T) {
 	themesOut, modelsOut, fontsOut := SettingValuePools()
 	if len(themesOut) != len(themes) || len(modelsOut) != len(models) || len(fontsOut) != len(chatFonts) {
 		t.Fatal("setting pools not mirrored")
+	}
+}
+
+// TestWorldToolSurfacesAreTheGeneratorFrames proves the exported world frames
+// and v12 routing banks are the generator's own package-level banks, frame for
+// frame, so a wording change in datagen.go cannot leave the export behind.
+func TestWorldToolSurfacesAreTheGeneratorFrames(t *testing.T) {
+	want := map[string][]string{
+		"world_contact_research_email_result_usage": worldContactEmailFrames,
+		"world_memory_delete":                       {worldMemoryDeleteFrame},
+		"world_memory_update":                       {worldMemoryUpdateFrame},
+		"world_theme_discover_set":                  {worldThemeDiscoverSetFrame},
+		"world_business_workflow":                   {worldBusinessWorkflowFrame},
+		"world_link_chain_result_usage":             {worldLinkChainFrame},
+		"v10_state_dependent_routing":               {v10StateDependentRoutingFrame},
+	}
+	surfaces := WorldToolSurfaces(protocol.BenchVersionV12)
+	if len(surfaces) != len(want) {
+		t.Fatalf("%d world surfaces, want %d", len(surfaces), len(want))
+	}
+	for _, w := range surfaces {
+		frames, ok := want[w.Category]
+		if !ok {
+			t.Errorf("unexpected world surface %q", w.Category)
+			continue
+		}
+		if !slices.Equal(w.Frames, frames) {
+			t.Errorf("%s: exported frames differ from the generator bank\n got %q\nwant %q", w.Category, w.Frames, frames)
+		}
+	}
+	if len(WorldToolSurfaces(protocol.BenchVersionV8)) != len(want)-1 {
+		t.Error("v8 surfaces should omit the v10 routing family")
+	}
+	banks := V12RoutingCueBanks()
+	for name, pair := range map[string][2][]string{
+		"ask leads": {banks.AskLeads, v12RoutingAskLeads}, "ask tails": {banks.AskTails, v12RoutingAskTails},
+		"plan leads": {banks.PlanLeads, v12RoutingPlanLeads}, "plan mids": {banks.PlanMids, v12RoutingPlanMids},
+		"plan tails": {banks.PlanTails, v12RoutingPlanTails}, "route leads": {banks.RouteLeads, v12RoutingRouteLeads},
+		"route seps": {banks.RouteSeps, v12RoutingRouteSeps},
+	} {
+		if !slices.Equal(pair[0], pair[1]) {
+			t.Errorf("v12 routing %s: exported bank differs from the generator bank", name)
+		}
 	}
 }

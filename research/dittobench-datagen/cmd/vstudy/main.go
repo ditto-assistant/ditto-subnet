@@ -80,7 +80,7 @@ func main() {
 
 	summary := map[string]any{}
 	for _, bv := range versions {
-		res := runVersion(bv, *runSize, *firstSeed, *seeds, *outDir)
+		res := runVersion(bv, *runSize, *firstSeed, *seeds, *outDir, *mixAudit)
 		versionSummary := res.summarize(*margin)
 		if *mixAudit {
 			versionSummary["memory_mix_audit"] = mixaudit.Summarize(res.MixReports, mixaudit.V13Envelope)
@@ -187,12 +187,13 @@ type versionResult struct {
 	// (0.5*n_cat/N_suite * cat_mean), champW (decision-boundary tier) only.
 	BoundaryCatContrib []map[string]float64
 	OracleFailures     int
-	// MixReports are the per-seed v13 memory-mix histograms (always collected;
-	// emitted with -mixaudit).
+	// MixReports are the per-seed v13 memory-mix histograms, collected and
+	// emitted only with -mixaudit so the audit's fail-closed classification
+	// cannot stop an unrelated variance run.
 	MixReports []mixaudit.SeedReport
 }
 
-func runVersion(bv int, runSize string, first int64, n int, outDir string) *versionResult {
+func runVersion(bv int, runSize string, first int64, n int, outDir string, mixAudit bool) *versionResult {
 	prof, _ := gen.ProfileForVersion(runSize, bv)
 	vr := &versionResult{
 		BenchVersion: bv,
@@ -220,7 +221,7 @@ func runVersion(bv int, runSize string, first int64, n int, outDir string) *vers
 		}
 		vr.ToolMixes = append(vr.ToolMixes, toolMix)
 		vr.MemoryMixes = append(vr.MemoryMixes, memoryMix)
-		if bv >= protocol.BenchVersionV8 {
+		if mixAudit && bv >= protocol.BenchVersionV8 {
 			mix, err := mixaudit.Audit(a, runSize, false)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "mixaudit v%d seed %d: %v\n", bv, seed, err)
