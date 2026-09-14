@@ -129,6 +129,13 @@ from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.confirmation_candidate_reconciliation import (
     reconcile_confirmation_candidates,
 )
+from ditto.api_server.confirmation_seed_anchor import (
+    LEGACY_PLANNING,
+    bind_confirmation_seed,
+    list_reign_seed_anchors,
+    reign_seed_planning,
+    resolve_reign_seed_anchor,
+)
 from ditto.api_server.continual_retest_settings import (
     ContinualRetestSettingsResolver,
     rollout_standdown_reason,
@@ -3903,6 +3910,15 @@ async def _current_koth_entries(
         for rank, row in enumerate(raw_rows, start=1)
     ]
     raw_members = emission_set(project_koth(raw_entries))
+    fold_block_hash, fold_allow_fresh_seeds = (
+        await reign_seed_planning(
+            session,
+            champion_agent_id=raw_members[0].agent_id,
+            bench_version=canonical_version,
+        )
+        if raw_members
+        else LEGACY_PLANNING
+    )
     eligible_seeds = fold_eligible_seeds_by_agent(
         member_ids=[member.agent_id for member in raw_members],
         seeds_by_agent={
@@ -3916,6 +3932,8 @@ async def _current_koth_entries(
                 seeds_by_agent={
                     agent_id: values.keys() for agent_id, values in history.items()
                 },
+                block_hash=fold_block_hash,
+                allow_fresh_seeds=fold_allow_fresh_seeds,
             )
             if raw_members
             else None
@@ -4242,11 +4260,18 @@ async def _champion_anchored_seed_set(
         agent_ids=tuple(member.agent_id for member in members),
         bench_version=canonical_version,
     )
+    block_hash, allow_fresh_seeds = await reign_seed_planning(
+        session,
+        champion_agent_id=members[0].agent_id,
+        bench_version=canonical_version,
+    )
     return frozenset(
         bounded_continual_seed_set(
             members[0].agent_id,
             version=canonical_version,
             composites_by_agent=history,
+            block_hash=block_hash,
+            allow_fresh_seeds=allow_fresh_seeds,
         )
     )
 
@@ -4259,8 +4284,14 @@ async def _top5_confirmation_seed_plan(
     wave_member_ids: tuple[UUID, ...],
     cohort_member_ids: tuple[UUID, ...] = (),
     canonical_version: int,
+    seed_planning: tuple[str | None, bool] | None = None,
 ) -> tuple[int, ...]:
     """Every seed this member still owes: its backlog first, then wave growth.
+
+    ``seed_planning`` is the reign's ``(block_hash, allow_fresh_seeds)`` from
+    :mod:`ditto.api_server.confirmation_seed_anchor`; ``None`` reads it. At a
+    binding version with no pinned anchor yet, growth is withheld and only
+    catch-up over recorded coverage comes back.
 
     Which seed is open is decided by the emission set alone, never by the wider
     retest cohort. An extended member that never gets leased (or fails) must not
@@ -4289,10 +4320,19 @@ async def _top5_confirmation_seed_plan(
         bench_version=canonical_version,
     )
     wave_history = {agent_id: history.get(agent_id, {}) for agent_id in wave_member_ids}
+    if seed_planning is None:
+        seed_planning = await reign_seed_planning(
+            session,
+            champion_agent_id=champion_agent_id,
+            bench_version=canonical_version,
+        )
+    block_hash, allow_fresh_seeds = seed_planning
     target_seeds = bounded_continual_seed_set(
         champion_agent_id,
         version=canonical_version,
         composites_by_agent=wave_history,
+        block_hash=block_hash,
+        allow_fresh_seeds=allow_fresh_seeds,
     )
     seeds_by_agent = {agent_id: values.keys() for agent_id, values in history.items()}
     # Catch-up spans the whole retest cohort, not just the emission set. It used
@@ -4415,10 +4455,15 @@ async def _unserved_catchup_members(
     history = await confirmation_composites_by_seed(
         session, agent_ids=members, bench_version=canonical_version
     )
+    block_hash, allow_fresh_seeds = await reign_seed_planning(
+        session, champion_agent_id=champion_agent_id, bench_version=canonical_version
+    )
     target_seeds = bounded_continual_seed_set(
         champion_agent_id,
         version=canonical_version,
         composites_by_agent=history,
+        block_hash=block_hash,
+        allow_fresh_seeds=allow_fresh_seeds,
     )
     seeds_by_agent = {agent_id: values.keys() for agent_id, values in history.items()}
     leases = await _live_retest_leases(
@@ -4963,6 +5008,21 @@ async def request_top5_confirmation_job(
             )
         champion = await get_agent_by_id(session, agent_id=champion_agent_id)
         assert champion is not None
+        # Bench v13+: the reign's confirmation family binds to the finalized
+        # hash of ``B_ready + Δ``. First claim of a reign creates the anchor
+        # (unpinned); later claims pin it once the height is finalized. Until
+        # then the plan below withholds fresh seeds and serves catch-up only.
+        reign_anchor = await resolve_reign_seed_anchor(
+            session,
+            chain,
+            champion_agent_id=champion_agent_id,
+            bench_version=canonical_version,
+            ready_block=block.number,
+            now=now,
+        )
+        seed_planning = (
+            reign_anchor.planning if reign_anchor is not None else LEGACY_PLANNING
+        )
         crown_block = champion.dataset_seed_block or block.number
         scheduled_round = top5_round_is_due(
             block.number,
@@ -5068,6 +5128,7 @@ async def request_top5_confirmation_job(
                 wave_member_ids=wave_member_ids,
                 cohort_member_ids=member_ids,
                 canonical_version=canonical_version,
+                seed_planning=seed_planning,
             )
             if not seeds:
                 legacy_decline = (
@@ -5118,6 +5179,15 @@ async def request_top5_confirmation_job(
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
         confirmation_datasets: list[ConfirmationDatasetPin] = []
+        # The seed's finalized-block binding, so the validator can re-derive it
+        # and refuse a seed Platform could have chosen. Searched across every
+        # pinned reign of the version: a catch-up seed introduced under an
+        # earlier champion still binds to that champion's block.
+        seed_binding = bind_confirmation_seed(
+            await list_reign_seed_anchors(session, bench_version=canonical_version),
+            seed=selected_wave_seed,
+            bench_version=canonical_version,
+        )
         if canonical_version >= 3:
             if generator.run_size is None:
                 raise HTTPException(
@@ -5131,6 +5201,22 @@ async def request_top5_confirmation_job(
                         selected_wave_seed, bench_version=canonical_version
                     ),
                     run_size=generator.run_size,
+                    anchor_agent_id=(
+                        seed_binding.anchor_agent_id
+                        if seed_binding is not None
+                        else None
+                    ),
+                    seed_index=(
+                        seed_binding.seed_index if seed_binding is not None else None
+                    ),
+                    seed_block=(
+                        seed_binding.seed_block if seed_binding is not None else None
+                    ),
+                    seed_block_hash=(
+                        seed_binding.seed_block_hash
+                        if seed_binding is not None
+                        else None
+                    ),
                 )
             ]
         # Place this retest on a real execution slot. The lane occupies one
@@ -5183,6 +5269,12 @@ async def request_top5_confirmation_job(
                     "validator has another live assignment or this retest is deferred"
                 ),
             )
+        if seed_binding is not None and ticket.seed == selected_wave_seed:
+            # Record the binding on the lease itself, the same columns the
+            # canonical lane pins, so the seed's provenance is auditable from
+            # the ticket without replaying reign history.
+            ticket.seed_block = seed_binding.seed_block
+            ticket.seed_block_hash = seed_binding.seed_block_hash
         agent = await get_agent_by_id(session, agent_id=ticket.agent_id)
         assert agent is not None
         dataset = await session.get(

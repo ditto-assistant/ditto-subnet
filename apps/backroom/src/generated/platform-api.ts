@@ -15106,14 +15106,41 @@ export interface components {
         /**
          * ConfirmationDatasetPin
          * @description One platform-generated dataset used by a continual confirmation lease.
+         *
+         *     The four optional fields are the seed's **finalized-block binding** (bench
+         *     v13+): ``seed == crn_seed([anchor_agent_id], version=bench_version,
+         *     k=seed_index, block_hash=seed_block_hash)``. The validator re-derives and
+         *     refuses a lease whose seed does not reproduce, so Platform cannot hand out a
+         *     seed it chose. Absent on legacy versions and on seeds no pinned reign
+         *     anchor derives; the lease is then accepted as before.
          */
         ConfirmationDatasetPin: {
+            /**
+             * Anchor Agent Id
+             * @description Champion the seed family is anchored on (bench v13+).
+             */
+            anchor_agent_id?: string | null;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Run Size */
             run_size: string;
             /** Seed */
             seed: number;
+            /**
+             * Seed Block
+             * @description Finalized chain block the family is bound to.
+             */
+            seed_block?: number | null;
+            /**
+             * Seed Block Hash
+             * @description Hash of ``seed_block``; the derivation input.
+             */
+            seed_block_hash?: string | null;
+            /**
+             * Seed Index
+             * @description Replicate index ``k`` of this seed within the family.
+             */
+            seed_index?: number | null;
         };
         /**
          * ConfirmationDimension
@@ -15456,6 +15483,28 @@ export interface components {
              * @description SS58 hotkey of the validator that scored this seed.
              */
             validator_hotkey: string;
+        };
+        /**
+         * ConfirmationSeedAnchorPin
+         * @description One reign's pinned finalized-block anchor, served on the ledger.
+         *
+         *     Lets every validator re-derive the champion-anchored confirmation family
+         *     for ``bench_version`` (``crn_seed(..., block_hash=anchor_block_hash)``) and
+         *     agree fleet-wide without a chain read. Only pinned anchors are served; a
+         *     reign still in its finality wait is simply absent.
+         */
+        ConfirmationSeedAnchorPin: {
+            /** Anchor Block */
+            anchor_block: number;
+            /** Anchor Block Hash */
+            anchor_block_hash: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Champion Agent Id
+             * Format: uuid
+             */
+            champion_agent_id: string;
         };
         /**
          * ConfirmationShadowCalibrationView
@@ -17705,6 +17754,11 @@ export interface components {
              * @default 0
              */
             burn_share: number;
+            /**
+             * Confirmation Seed Anchors
+             * @description Pinned finalized-block anchors of the active version's confirmation seed families (bench v13+), oldest first. A validator derives the champion-anchored CRN family from the anchor whose champion_agent_id matches its fold's champion; with no matching pin at a binding version it introduces no fresh confirmation seed. Empty on older platforms and below the floor.
+             */
+            confirmation_seed_anchors?: components["schemas"]["ConfirmationSeedAnchorPin"][];
             /**
              * Continual Retest Cohort Size
              * @description How many ranked agents the operator currently has the continual retest lane covering: 5 (the emission set) up to 25. Advisory planning input for the validator's shared-seed round — the platform still enforces membership when it issues the lease, so a validator that ignores this field simply keeps planning the top five and loses nothing but the extra coverage. Emissions, the weight fold, and wave completion are always the top five, whatever this says.
