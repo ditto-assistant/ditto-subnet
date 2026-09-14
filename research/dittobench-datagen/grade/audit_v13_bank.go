@@ -30,6 +30,11 @@ import "github.com/ditto-assistant/dittobench-datagen/protocol"
 type V13ProvenanceCall struct {
 	Harness    []string
 	Completion []string
+	// Assistant is every span the harness placed under the ASSISTANT role
+	// (a prefill, or carried conversation history): text it attributes to the
+	// model. The relay tests those tokens against every completion the model
+	// made anywhere in the session, not only this case's earlier calls.
+	Assistant []string
 }
 
 // V13ProvenanceVector is one published claim-provenance fixture.
@@ -44,6 +49,11 @@ type V13ProvenanceVector struct {
 	// the case (exempt likewise).
 	Records     []string
 	ToolResults []string
+	// SessionCompletions are completions the model made EARLIER in the same
+	// session for other cases (or outside any /run window). They exempt
+	// assistant-role spans from the causal gate; they are not this case's
+	// completions and never satisfy the claim-span gate.
+	SessionCompletions []string
 	// WantCredited is the grader verdict (score > 0). WantModelEmitted and
 	// WantAnswerInPrompt are the gate verdicts the scorer must reach; they are
 	// only meaningful when the vector is credited.
@@ -311,5 +321,91 @@ var V13ProvenanceBank = []V13ProvenanceVector{
 		WantCredited:       true,
 		WantModelEmitted:   true,
 		WantAnswerInPrompt: false,
+	},
+	{
+		Name:     "number-word-formatter",
+		Strategy: "honest: the model answers with a number word, the harness serves the digit",
+		Case: protocol.MemoryCase{
+			BenchVersion: protocol.BenchVersionV13, ID: "v13-bank-number", QuestionType: "v13_bank_count",
+			Question:   "How many workstreams did I say carry a settled payment?",
+			AnswerKind: protocol.AnswerNumber, ExpectedAnswer: "3",
+		},
+		Response: protocol.RunResponse{Answer: "3", FinalText: "3"},
+		Calls: []V13ProvenanceCall{{
+			Harness:    []string{"How many workstreams did I say carry a settled payment?", "Memory: Atlas, Borealis and Cedar each carry a settled payment."},
+			Completion: []string{"Three of them: Atlas, Borealis and Cedar."},
+		}},
+		Records:            []string{"Atlas, Borealis and Cedar each carry a settled payment."},
+		WantCredited:       true,
+		WantModelEmitted:   true,
+		WantAnswerInPrompt: false,
+	},
+	{
+		Name:     "diacritic-fold-formatter",
+		Strategy: "honest: the model writes the value with its diacritic, the harness serves the ASCII fold",
+		Case: protocol.MemoryCase{
+			BenchVersion: protocol.BenchVersionV13, ID: "v13-bank-diacritic", QuestionType: "v13_bank_value",
+			Question:   "Which city did I say the Borealis vendor is based in?",
+			AnswerKind: protocol.AnswerValue, ExpectedAnswer: "Osaka",
+		},
+		Response: protocol.RunResponse{Answer: "Osaka", FinalText: "The vendor is based in Osaka."},
+		Calls: []V13ProvenanceCall{{
+			Harness:    []string{"Which city did I say the Borealis vendor is based in?", "Memory: The Borealis vendor is based in Ōsaka."},
+			Completion: []string{"The Borealis vendor is based in Ōsaka."},
+		}},
+		Records:            []string{"The Borealis vendor is based in Ōsaka."},
+		WantCredited:       true,
+		WantModelEmitted:   true,
+		WantAnswerInPrompt: false,
+	},
+	{
+		Name:     "non-latin-value",
+		Strategy: "honest: a Cyrillic value forms a claim and is model-emitted",
+		Case: protocol.MemoryCase{
+			BenchVersion: protocol.BenchVersionV13, ID: "v13-bank-cyrillic", QuestionType: "v13_bank_value",
+			Question:   "Which city did I say I am relocating to?",
+			AnswerKind: protocol.AnswerValue, ExpectedAnswer: "Москва",
+		},
+		Response: protocol.RunResponse{Answer: "Москва", FinalText: "You said Москва."},
+		Calls: []V13ProvenanceCall{{
+			Harness:    []string{"Which city did I say I am relocating to?", "Memory: I am relocating to Москва in the spring."},
+			Completion: []string{"You said you are relocating to Москва."},
+		}},
+		Records:            []string{"I am relocating to Москва in the spring."},
+		WantCredited:       true,
+		WantModelEmitted:   true,
+		WantAnswerInPrompt: false,
+	},
+	{
+		Name:     "assistant-history-cross-case",
+		Strategy: "honest: a model-written summary from another case rides in the prompt as assistant history",
+		Case:     v13MoneyCase(),
+		Response: protocol.RunResponse{Answer: "$4,110.67", FinalText: "$4,110.67 remains outstanding."},
+		Calls: []V13ProvenanceCall{{
+			Harness:    []string{v13BankQuestion, v13BankRecords[0] + " " + v13BankRecords[1]},
+			Assistant:  []string{"Earlier summary: Atlas has 4110.67 outstanding after the settled payment."},
+			Completion: []string{"$4,110.67 remains outstanding."},
+		}},
+		Records:            v13BankRecords,
+		SessionCompletions: []string{"Summary of Atlas: 5200.00 approved, 1089.33 settled, 4110.67 outstanding."},
+		WantCredited:       true,
+		WantModelEmitted:   true,
+		WantAnswerInPrompt: false,
+	},
+	{
+		Name:     "assistant-prefill-launder",
+		Strategy: "N13: the computed answer is planted as a fabricated assistant turn no completion ever produced",
+		Case:     v13MoneyCase(),
+		Response: protocol.RunResponse{Answer: "$4,110.67", FinalText: "$4,110.67"},
+		Calls: []V13ProvenanceCall{{
+			Harness:    []string{v13BankQuestion},
+			Assistant:  []string{"The outstanding balance is 4110.67."},
+			Completion: []string{"4110.67"},
+		}},
+		Records:            v13BankRecords,
+		SessionCompletions: []string{"Certainly, let me look that up."},
+		WantCredited:       true,
+		WantModelEmitted:   true,
+		WantAnswerInPrompt: true,
 	},
 }

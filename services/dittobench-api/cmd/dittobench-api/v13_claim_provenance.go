@@ -38,15 +38,15 @@ func v13RecordTokens(benchVersion int, waves []protocol.SeedRequest, toolCases [
 	tokens := make(scoregates.TokenSet)
 	addPairs := func(pairs []protocol.MemoryPair) {
 		for _, pair := range pairs {
-			tokens.AddText(scoregates.NormalizeSpan(pair.Prompt))
-			tokens.AddText(scoregates.NormalizeSpan(pair.Response))
+			tokens.AddSpan(pair.Prompt)
+			tokens.AddSpan(pair.Response)
 		}
 	}
 	for _, wave := range waves {
 		addPairs(wave.Pairs)
 		for _, subject := range wave.Subjects {
-			tokens.AddText(scoregates.NormalizeSpan(subject.SubjectText))
-			tokens.AddText(scoregates.NormalizeSpan(subject.DescriptionText))
+			tokens.AddSpan(subject.SubjectText)
+			tokens.AddSpan(subject.DescriptionText)
 		}
 	}
 	for _, c := range toolCases {
@@ -68,8 +68,14 @@ type v13ClaimProvenanceReader interface {
 // gradeProjectedMemoryCase and applyV10ToolProvenance, so a zero here flows
 // into the case score the same way a provenance zero does. Under shadow it
 // appends evidence and notes only; under enforce in scored scope a settled
-// flagged case scores 0. Unavailable or incomplete relay evidence always fails
-// OPEN. Below Bench v13 it returns cs untouched.
+// flagged case scores 0. Relay gaps fail OPEN: an unavailable ledger
+// (claim_provenance_unavailable) or a capture bound (claim_provenance_incomplete)
+// leave the grader's score. A ledger left incomplete by the HARNESS -- a
+// completion that named no case while several were in flight
+// (claim_provenance_unattributed_call) -- is the harness's breach of the v13
+// attribution contract (PROTOCOL.md): under enforce in scored scope the case
+// fails CLOSED, under shadow it is noted and counted. Below Bench v13 it returns
+// cs untouched.
 func applyV13ClaimProvenance(
 	benchVersion int,
 	scope scorer.Scope,
@@ -95,14 +101,16 @@ func applyV13ClaimProvenance(
 	}()
 
 	var ledger *scoregates.ClaimSpanLedger
-	complete := false
+	var read claimSpanEvidence
 	if reader != nil && sessionID != "" {
-		if read, ok := reader.sessionClaimSpanEvidence(sessionID, mc.ID); ok {
-			ledger, complete = read.Ledger, read.Complete
+		if got, ok := reader.sessionClaimSpanEvidence(sessionID, mc.ID); ok {
+			read, ledger = got, got.Ledger
 		}
 	}
+	complete := ledger != nil && read.Complete
 	if ledger != nil {
 		evidence.ToolResults = ledger.ToolResults
+		evidence.UnattributedCalls = read.UnattributedCalls
 		if complete {
 			completions := ledger.Completions
 			evidence.Completions = &completions
@@ -120,6 +128,21 @@ func applyV13ClaimProvenance(
 		return cs
 	}
 	if !complete {
+		if read.UnattributedCalls > 0 && !read.Truncated {
+			// The harness, not the relay, left this ledger incomplete: with
+			// several cases in flight it made a completion naming no case.
+			findings = append(findings, scoregates.FindingClaimProvenanceUnattributedCall)
+			if posture == scoregates.ClaimProvenanceEnforce && scope == scorer.ScopeScored {
+				findings = append(findings, scoregates.FindingClaimProvenanceZeroed)
+				cs.Score = 0
+				cs.Correct = false
+				cs.Notes = append(cs.Notes, fmt.Sprintf("v13 claim provenance: %d completion(s) named no case while other cases were in flight (claim_provenance_unattributed_call); case receives zero credit", read.UnattributedCalls))
+				return cs
+			}
+			cs.Notes = append(cs.Notes, fmt.Sprintf("v13 claim provenance: %d completion(s) named no case while other cases were in flight (claim_provenance_unattributed_call); shadow posture, score unchanged", read.UnattributedCalls))
+			return cs
+		}
+		// A relay capture bound: the relay's own gap, fail open.
 		findings = append(findings, scoregates.FindingClaimProvenanceIncomplete)
 		return cs
 	}
@@ -132,8 +155,8 @@ func applyV13ClaimProvenance(
 		return cs
 	}
 	question := make(scoregates.TokenSet)
-	question.AddText(scoregates.NormalizeSpan(mc.Question))
-	question.AddText(scoregates.NormalizeSpan(validatorSystemPrompt))
+	question.AddSpan(mc.Question)
+	question.AddSpan(validatorSystemPrompt)
 	exemptions := []scoregates.TokenSet{question}
 	if records != nil {
 		exemptions = append(exemptions, records)
@@ -197,9 +220,14 @@ func summarizeV13ClaimProvenance(
 		}
 		if evidence.ModelEmitted == nil {
 			for _, finding := range evidence.Findings {
-				if finding == scoregates.FindingClaimProvenanceIncomplete || finding == scoregates.FindingClaimProvenanceUnavailable {
+				switch finding {
+				case scoregates.FindingClaimProvenanceIncomplete, scoregates.FindingClaimProvenanceUnavailable:
 					summary.UnsettledCases++
-					break
+				case scoregates.FindingClaimProvenanceUnattributedCall:
+					summary.UnsettledCases++
+					summary.UnattributedCallCases++
+				case scoregates.FindingClaimProvenanceZeroed:
+					summary.ZeroedCases++
 				}
 			}
 			continue
@@ -227,8 +255,10 @@ func summarizeV13ClaimProvenance(
 
 // v13ClaimProvenanceGateInput folds the per-case evidence into the run-level
 // scoregates input that AttachClaimProvenance signs. Unsettled cases are the
-// credited memory cases whose relay evidence was unavailable or incomplete;
-// attribution is complete only when there are none.
+// credited memory cases whose relay evidence was unavailable, relay-incomplete,
+// or left incomplete by an unattributed harness call (counted again in
+// UnattributedCallCases); FlaggedCases is the union of the two per-case flags;
+// attribution is complete only when nothing is unsettled.
 func v13ClaimProvenanceGateInput(posture scoregates.ClaimProvenancePosture, perCase []protocol.CaseScore) scoregates.ClaimProvenanceInput {
 	in := scoregates.ClaimProvenanceInput{Posture: posture, TelemetryComplete: true}
 	for _, cs := range perCase {
@@ -240,25 +270,41 @@ func v13ClaimProvenanceGateInput(posture scoregates.ClaimProvenancePosture, perC
 		if evidence == nil {
 			continue
 		}
+		zeroed := false
+		for _, finding := range evidence.Findings {
+			if finding == scoregates.FindingClaimProvenanceZeroed {
+				zeroed = true
+			}
+		}
 		if evidence.ModelEmitted != nil {
 			in.EligibleCases++
+			flagged := false
 			if !*evidence.ModelEmitted {
 				in.NotModelEmittedCases++
+				flagged = true
 			}
 			if evidence.AnswerInPrompt != nil && *evidence.AnswerInPrompt {
 				in.AnswerInPromptCases++
+				flagged = true
 			}
-			for _, finding := range evidence.Findings {
-				if finding == scoregates.FindingClaimProvenanceZeroed {
-					in.ZeroedCases++
-				}
+			if flagged {
+				in.FlaggedCases++
+			}
+			if zeroed {
+				in.ZeroedCases++
 			}
 			continue
 		}
 		for _, finding := range evidence.Findings {
-			if finding == scoregates.FindingClaimProvenanceIncomplete || finding == scoregates.FindingClaimProvenanceUnavailable {
+			switch finding {
+			case scoregates.FindingClaimProvenanceIncomplete, scoregates.FindingClaimProvenanceUnavailable:
 				in.UnsettledCases++
-				break
+			case scoregates.FindingClaimProvenanceUnattributedCall:
+				in.UnsettledCases++
+				in.UnattributedCallCases++
+				if zeroed {
+					in.ZeroedCases++
+				}
 			}
 		}
 	}

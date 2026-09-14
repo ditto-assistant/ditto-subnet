@@ -28,6 +28,8 @@ applied to an existing version. It ships as a new one.
 
 | 13 (pre-activation, assembling) | `2027-05-01` | Envelope rebalance and monetary cap: the v8 residual budget becomes a published 250-case slot table (story 78 · ordinary world 32 · business programs 28 · personal programs 24 · abstention 25 · record-determined quantity 16 · divergence 12 · point-in-time 12 · integrity 14 · isolation 9), six oracles per story arc, project-outstanding capped at 4, a fourth injection probe, and a deterministic per-seed mix audit (`cmd/mixaudit`) with the #1529 caps. Generation is explicit; three slots are interim until their generators land. |
 
+| 13 (pre-activation) | `2027-05-01` | Claim-span provenance and causal model dependence (shadow): the grader names the served span it credited (`Verdict.Provenance`) and its accepted forms per claim unit; the validator relay records hashed value tokens of every model completion and harness-authored prompt span per case; the scorer checks `served_text_not_model_emitted` and `answer_in_prompt` per credited claim and signs a run-level `claim_provenance` block. v12 grading is unchanged; the case-scoped `inference_base_url` makes calls attributable under concurrent `/run`. |
+
 ## V10 generator-as-spec contract
 
 V10 starts from a seed-scoped semantic specification rather than a reusable
@@ -1226,6 +1228,35 @@ The pinned candidate measures 36.10% complete tool-outcome accuracy and 1.80%
 verbatim argument exposure on ten held-out seeds. Regenerate the catalog mirrors
 (starter kit `catalog.rs`, screener `_ORACLE_TOOL_NAMES`, OpenClaw plugin) with
 `go run ./cmd/catalogmirror`; `catalog/mirror_test.go` fails when one drifts.
+
+## Bench v13 claim-span provenance and causal gates (shadow)
+
+v13 changes no dataset semantics and no score: the v13 grading policy is the
+v12 policy plus a report of **which served span earned the credit** and the
+canonical forms the grader accepts for that claim (`grade.Verdict.Provenance`,
+`grade.ClaimAlternatives`, grouped per claim unit -- a number's digits and its
+English word, a money claim's major-unit form, a direction's accepted phrases,
+a list's items and their alternatives). Every v2..v12 verdict is byte-identical
+(`TestV13ProvenanceBankGraderVerdicts` re-grades the whole bank under v12).
+
+The validator-side half lives in `services/dittobench-api`: the inference
+broker records, per attributed completion, the hashed value tokens of the
+model's completion spans and of the harness-authored request spans
+(`cmd/dittobench-api/claim_span_capture.go`), and the scorer checks the
+credited claim against them (`internal/scoregates/text_provenance.go`,
+`causal_dependence.go`), publishing `served_text_not_model_emitted`,
+`answer_in_prompt`, `no_model_completion`, `claim_provenance_unattributed_call`
+and the fail-open `claim_provenance_incomplete` / `claim_provenance_unavailable`
+per case, plus a signed run-level `claim_provenance` block (identity factor).
+Both ship behind one posture switch defaulting to **shadow**. The published
+vectors both sides are tested against are in `grade/audit_v13_bank.go`
+(compute-then-launder, GIH, `/100` rewrite, direction map, composed slot, draft
+replacement, assistant-prefill launder; RAG quoting, tool-result quoting,
+JSON mode, `final_answer` tool, formatter, number-word formatter, diacritic
+fold, non-Latin value, markdown/list, two-completion splice, multi-turn
+compute, cross-case assistant history). The wire contract, the attribution
+rules, and the Unicode-aware normaliser are documented in
+`services/dittobench-api/PROTOCOL.md` under "bench_version 13".
 
 ## Auditing an old score
 

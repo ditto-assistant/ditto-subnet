@@ -1045,6 +1045,25 @@ _PASSING_V12_MODEL_DEPENDENCE = {
 }
 
 
+# Passing v13 claim-provenance summary: required on every bench_version>=13
+# digest (the scorer attaches it to every v13 run). Identity factor.
+_PASSING_V13_CLAIM_PROVENANCE = {
+    "administered_cases": 10,
+    "eligible_cases": 10,
+    "not_model_emitted_cases": 0,
+    "answer_in_prompt_cases": 0,
+    "flagged_cases": 0,
+    "unattributed_call_cases": 0,
+    "unsettled_cases": 0,
+    "zeroed_cases": 0,
+    "attribution_complete": True,
+    "posture": "shadow",
+    "flagged_bps": 0,
+    "result": "passed",
+    "factor_bps": 10000,
+}
+
+
 def _score_gates_for_version(score_gates: dict, bench_version: int) -> dict:
     """Rewrite a v9+ gate payload for another epoch of the same contract."""
     payload = dict(score_gates)
@@ -1055,6 +1074,10 @@ def _score_gates_for_version(score_gates: dict, bench_version: int) -> dict:
         payload.pop("model_dependence", None)
         payload.pop("inference_latency", None)
         payload.pop("answer_stuffing", None)
+    if bench_version >= 13:
+        payload.setdefault("claim_provenance", dict(_PASSING_V13_CLAIM_PROVENANCE))
+    else:
+        payload.pop("claim_provenance", None)
     return payload
 
 

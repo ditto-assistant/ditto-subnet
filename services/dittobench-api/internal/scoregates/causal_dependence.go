@@ -37,13 +37,25 @@ package scoregates
 // present in any delivered record are exempt, so an operand that happens to
 // equal the answer is never a flag.
 //
+// Assistant-role request spans (a prefill, carried conversation history) are
+// tested against the SESSION-wide completion set rather than the case's own
+// earlier completions, so a model-written summary produced for another case
+// -- or during /seed, outside any /run window -- that a stateful harness
+// carries into a later prompt is model-derived. A fabricated assistant turn
+// carrying a value no completion ever produced is still harness-first.
+//
 // What it does not claim: a vote the harness takes over several genuine model
 // completions and then re-injects is model-derived (first seen in a
 // completion) and passes here; that is attribution theatre for the cost factor,
 // not laundering. A number the harness template happens to contain by
 // coincidence that also is the computed answer and appears in no record is a
 // flag -- that is why the gate ships in shadow and is calibrated on the honest
-// cohort before enforce.
+// cohort before enforce. The residual case for assistant history: a summary the
+// model wrote for another case in an EARLIER SESSION (a different run) is not
+// in this session's completion set, so a harness that persists model-written
+// summaries across runs and replays them as assistant turns reads as
+// harness-first when such a summary carries a value that later becomes an
+// answer; that pattern is part of the honest-cohort calibration before enforce.
 
 // CausalDependence is the pure verdict: answerInPrompt is true when the claim is
 // non-empty and every claim token lies in the residual harness-first set. An

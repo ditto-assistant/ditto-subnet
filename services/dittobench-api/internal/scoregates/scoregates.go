@@ -543,15 +543,17 @@ func (e Evidence) Validate() error {
 	// matches want exactly.
 	if e.BenchVersion >= BenchVersionV13 && e.ClaimProvenance.administered() {
 		provenance, provErr := buildClaimProvenance(ClaimProvenanceInput{
-			AdministeredCases:    e.ClaimProvenance.AdministeredCases,
-			EligibleCases:        e.ClaimProvenance.EligibleCases,
-			NotModelEmittedCases: e.ClaimProvenance.NotModelEmittedCases,
-			AnswerInPromptCases:  e.ClaimProvenance.AnswerInPromptCases,
-			UnsettledCases:       e.ClaimProvenance.UnsettledCases,
-			ZeroedCases:          e.ClaimProvenance.ZeroedCases,
-			Posture:              e.ClaimProvenance.Posture,
-			TelemetryComplete:    true,
-			AttributionComplete:  e.ClaimProvenance.AttributionComplete,
+			AdministeredCases:     e.ClaimProvenance.AdministeredCases,
+			EligibleCases:         e.ClaimProvenance.EligibleCases,
+			NotModelEmittedCases:  e.ClaimProvenance.NotModelEmittedCases,
+			AnswerInPromptCases:   e.ClaimProvenance.AnswerInPromptCases,
+			FlaggedCases:          e.ClaimProvenance.FlaggedCases,
+			UnattributedCallCases: e.ClaimProvenance.UnattributedCallCases,
+			UnsettledCases:        e.ClaimProvenance.UnsettledCases,
+			ZeroedCases:           e.ClaimProvenance.ZeroedCases,
+			Posture:               e.ClaimProvenance.Posture,
+			TelemetryComplete:     true,
+			AttributionComplete:   e.ClaimProvenance.AttributionComplete,
 		})
 		if provErr != nil {
 			return provErr
@@ -682,7 +684,11 @@ func (e Evidence) CanonicalBytes() ([]byte, error) {
 	// only when administered, so v9..v12 canonical bytes -- and a v13 Evidence
 	// built without the gate -- stay byte-identical.
 	if e.BenchVersion >= BenchVersionV13 && e.ClaimProvenance.administered() {
+		// Key order is the Platform mirror's contract (bench_v9.py
+		// V9ScoreGateEvidence.canonical_bytes); the bit-paired fixture in
+		// testdata/v13_claim_provenance_evidence.json pins the digest.
 		fmt.Fprintf(&b, "claim_provenance.administered_cases=%d\nclaim_provenance.eligible_cases=%d\nclaim_provenance.not_model_emitted_cases=%d\nclaim_provenance.answer_in_prompt_cases=%d\n", e.ClaimProvenance.AdministeredCases, e.ClaimProvenance.EligibleCases, e.ClaimProvenance.NotModelEmittedCases, e.ClaimProvenance.AnswerInPromptCases)
+		fmt.Fprintf(&b, "claim_provenance.flagged_cases=%d\nclaim_provenance.unattributed_call_cases=%d\n", e.ClaimProvenance.FlaggedCases, e.ClaimProvenance.UnattributedCallCases)
 		fmt.Fprintf(&b, "claim_provenance.unsettled_cases=%d\nclaim_provenance.zeroed_cases=%d\nclaim_provenance.attribution_complete=%t\nclaim_provenance.posture=%s\nclaim_provenance.flagged_bps=%d\n", e.ClaimProvenance.UnsettledCases, e.ClaimProvenance.ZeroedCases, e.ClaimProvenance.AttributionComplete, e.ClaimProvenance.Posture, e.ClaimProvenance.FlaggedBPS)
 		fmt.Fprintf(&b, "claim_provenance.result=%s\nclaim_provenance.factor_bps=%d\n", e.ClaimProvenance.Result, e.ClaimProvenance.FactorBPS)
 	}

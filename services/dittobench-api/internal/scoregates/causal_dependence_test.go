@@ -2,7 +2,10 @@ package scoregates
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -56,7 +59,7 @@ func buildV13(t *testing.T, mode RolloutMode) Evidence {
 
 func settledProvenanceInput(posture ClaimProvenancePosture) ClaimProvenanceInput {
 	return ClaimProvenanceInput{
-		AdministeredCases: 12, EligibleCases: 10, NotModelEmittedCases: 2, AnswerInPromptCases: 1,
+		AdministeredCases: 12, EligibleCases: 10, NotModelEmittedCases: 2, AnswerInPromptCases: 1, FlaggedCases: 3,
 		Posture: posture, TelemetryComplete: true, AttributionComplete: true,
 	}
 }
@@ -91,8 +94,8 @@ func TestClaimProvenanceAttachAndCanonicalBytes(t *testing.T) {
 	if attached.ClaimProvenance.Result != ResultClaimProvenanceFlagged || attached.ClaimProvenance.FactorBPS != BasisPointScale {
 		t.Fatalf("result/factor = %s/%d, want flagged/full", attached.ClaimProvenance.Result, attached.ClaimProvenance.FactorBPS)
 	}
-	if attached.ClaimProvenance.FlaggedBPS != 2_000 {
-		t.Fatalf("flagged_bps = %d, want 2000 (max(2,1)/10)", attached.ClaimProvenance.FlaggedBPS)
+	if attached.ClaimProvenance.FlaggedBPS != 3_000 {
+		t.Fatalf("flagged_bps = %d, want 3000 (the UNION 3/10, not max(2,1))", attached.ClaimProvenance.FlaggedBPS)
 	}
 	ab, err := attached.CanonicalBytes()
 	if err != nil {
@@ -131,10 +134,20 @@ func TestClaimProvenanceAttachContracts(t *testing.T) {
 	bad := map[string]func(*ClaimProvenanceInput){
 		"posture":            func(in *ClaimProvenanceInput) { in.Posture = "penalize" },
 		"eligible+unsettled": func(in *ClaimProvenanceInput) { in.UnsettledCases = 5 },
-		"flagged>eligible":   func(in *ClaimProvenanceInput) { in.NotModelEmittedCases = 11 },
+		"flagged>eligible":   func(in *ClaimProvenanceInput) { in.NotModelEmittedCases = 11; in.FlaggedCases = 11 },
 		"zeroed in shadow":   func(in *ClaimProvenanceInput) { in.ZeroedCases = 1 },
 		"complete+unsettled": func(in *ClaimProvenanceInput) { in.UnsettledCases = 1; in.EligibleCases = 9 },
-		"negative":           func(in *ClaimProvenanceInput) { in.AnswerInPromptCases = -1 },
+		"incomplete+settled": func(in *ClaimProvenanceInput) { in.AttributionComplete = false },
+		"union<max":          func(in *ClaimProvenanceInput) { in.FlaggedCases = 1 },
+		"union>sum":          func(in *ClaimProvenanceInput) { in.FlaggedCases = 4 },
+		"unattributed>unsettled": func(in *ClaimProvenanceInput) {
+			in.UnattributedCallCases = 1
+		},
+		"zeroed>flagged+unattributed": func(in *ClaimProvenanceInput) {
+			in.Posture = ClaimProvenanceEnforce
+			in.ZeroedCases = 4
+		},
+		"negative": func(in *ClaimProvenanceInput) { in.AnswerInPromptCases = -1 },
 	}
 	for name, mutate := range bad {
 		in := settledProvenanceInput(ClaimProvenanceShadow)
@@ -148,12 +161,21 @@ func TestClaimProvenanceAttachContracts(t *testing.T) {
 	if _, err := AttachClaimProvenance(v13, in); !errors.Is(err, ErrTelemetryUnavailable) {
 		t.Fatalf("telemetry error = %v", err)
 	}
-	// Incomplete attribution fails OPEN: insufficient_evidence, full factor.
+	// Incomplete attribution publishes insufficient_evidence with a full factor.
 	open := settledProvenanceInput(ClaimProvenanceShadow)
 	open.AttributionComplete, open.UnsettledCases, open.EligibleCases = false, 2, 8
 	e, err := AttachClaimProvenance(v13, open)
 	if err != nil || e.ClaimProvenance.Result != ResultInsufficientEvidence || e.ClaimProvenance.FactorBPS != BasisPointScale {
 		t.Fatalf("incomplete attribution = %+v, %v", e.ClaimProvenance, err)
+	}
+	// Unattributed harness calls under enforce: the affected cases are zeroed
+	// (fail CLOSED) and counted inside the unsettled population.
+	closed := settledProvenanceInput(ClaimProvenanceEnforce)
+	closed.AttributionComplete, closed.UnsettledCases, closed.UnattributedCallCases, closed.EligibleCases = false, 2, 2, 8
+	closed.ZeroedCases = 3 + 2
+	e, err = AttachClaimProvenance(v13, closed)
+	if err != nil || e.ClaimProvenance.ZeroedCases != 5 || e.ClaimProvenance.UnattributedCallCases != 2 {
+		t.Fatalf("unattributed-call enforce = %+v, %v", e.ClaimProvenance, err)
 	}
 	// No applicable claim: not_applicable.
 	none := ClaimProvenanceInput{AdministeredCases: 3, Posture: ClaimProvenanceShadow, TelemetryComplete: true, AttributionComplete: true}
@@ -163,13 +185,13 @@ func TestClaimProvenanceAttachContracts(t *testing.T) {
 	}
 	// Clean run: passed.
 	clean := settledProvenanceInput(ClaimProvenanceShadow)
-	clean.NotModelEmittedCases, clean.AnswerInPromptCases = 0, 0
+	clean.NotModelEmittedCases, clean.AnswerInPromptCases, clean.FlaggedCases = 0, 0, 0
 	e, err = AttachClaimProvenance(v13, clean)
 	if err != nil || e.ClaimProvenance.Result != ResultPassed {
 		t.Fatalf("clean = %+v, %v", e.ClaimProvenance, err)
 	}
 	// A tampered attached evidence fails Validate.
-	e.ClaimProvenance.NotModelEmittedCases = 3
+	e.ClaimProvenance.NotModelEmittedCases, e.ClaimProvenance.FlaggedCases = 3, 3
 	if err := e.Validate(); err == nil || !strings.Contains(err.Error(), "derived evidence") {
 		t.Fatalf("tampered evidence Validate = %v", err)
 	}
@@ -177,5 +199,55 @@ func TestClaimProvenanceAttachContracts(t *testing.T) {
 	v12.ClaimProvenance = e.ClaimProvenance
 	if err := v12.Validate(); !errors.Is(err, ErrInvalidEvidence) {
 		t.Fatalf("v12 with claim gate Validate = %v", err)
+	}
+}
+
+// The Platform-side mirror (ditto_screening_protocol.bench_v9) re-derives the
+// score-gate digest from the same fields; a v13 evidence carrying the claim
+// gate must hash identically on both sides or every v13 run fails ingestion
+// with "score_gates_sha256 does not match". This test pins the Go side of that
+// pair in testdata/v13_claim_provenance_evidence.json (JSON evidence + digest),
+// which tests/test_bench_v9.py re-derives. Regenerate with
+// SCOREGATES_UPDATE_GOLDEN=1 only when the canonical layout changes on purpose,
+// and change the Python mirror in the same commit.
+func TestClaimProvenanceEvidenceBitPairedFixture(t *testing.T) {
+	v13 := buildV13(t, RolloutEnforce)
+	in := settledProvenanceInput(ClaimProvenanceEnforce)
+	in.ZeroedCases = 3
+	attached, err := AttachClaimProvenance(v13, in)
+	if err != nil {
+		t.Fatalf("AttachClaimProvenance: %v", err)
+	}
+	digest, err := attached.DigestHex()
+	if err != nil {
+		t.Fatalf("DigestHex: %v", err)
+	}
+	canonical, _ := attached.CanonicalBytes()
+	factor, _ := attached.CombinedFactorBPS()
+	got, err := json.MarshalIndent(map[string]any{
+		"evidence":            attached,
+		"digest_hex":          digest,
+		"canonical_bytes":     string(canonical),
+		"combined_factor_bps": factor,
+	}, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, '\n')
+	path := filepath.Join("testdata", "v13_claim_provenance_evidence.json")
+	if os.Getenv("SCOREGATES_UPDATE_GOLDEN") == "1" {
+		if err := os.MkdirAll("testdata", 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, got, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read golden (set SCOREGATES_UPDATE_GOLDEN=1 to write it): %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("v13 claim-provenance fixture drifted; the Python mirror must move with it:\n%s\n--- want ---\n%s", got, want)
 	}
 }

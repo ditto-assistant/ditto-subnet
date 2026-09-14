@@ -265,7 +265,20 @@ type CaseOptions struct {
 	ToolEndpoint string
 	UserID       string
 	BenchVersion int
+	// InferenceBaseURL is the case-scoped inference base URL the scorer mints
+	// for Bench v13+ (`<gateway>/run/<case_id>`): the same source-bound broker
+	// route with the case named in the path, so a harness that builds its model
+	// client from the request's inference_base_url -- the starter kit does --
+	// keeps every completion attributable under concurrent /run without setting
+	// a header. Empty below v13 and on the direct-harness path, in which case
+	// the wire field is omitted and the request bytes are unchanged.
+	InferenceBaseURL string
 }
+
+// DefaultSystemPrompt is the validator-authored system prompt every /run
+// carries. It is exported so the Bench v13 causal gate can exempt its tokens:
+// the harness did not author it.
+const DefaultSystemPrompt = "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request."
 
 // AttemptTelemetry is validator-observed execution evidence for one HTTP
 // attempt. It deliberately records a bounded outcome class rather than the raw
@@ -376,11 +389,6 @@ func RunCase(ctx context.Context, harnessURL, caseID, prompt string, tools []pro
 // RunCaseWithTelemetry is RunCase plus validator-observed attempt, timing, and
 // terminal-outcome evidence. Callers that publish a transcript should prefer
 // this form; the legacy RunCase wrapper remains for compatibility.
-// DefaultSystemPrompt is the validator-authored system prompt every /run
-// carries. It is exported so the Bench v13 causal gate can exempt its tokens:
-// the harness did not author it.
-const DefaultSystemPrompt = "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request."
-
 func RunCaseWithTelemetry(ctx context.Context, harnessURL, caseID, prompt string, tools []protocol.ToolDefinition, opts CaseOptions) (protocol.RunResponse, CaseExecution, error) {
 	return runOneWithTelemetry(ctx, harnessURL, protocol.ToolCase{ID: caseID, Prompt: prompt}, tools, opts)
 }
@@ -412,6 +420,9 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 		BenchVersion: wireBenchVersion,
 		ToolEndpoint: opts.ToolEndpoint,
 		UserID:       opts.UserID,
+		// Case-scoped relay route (v13+); omitted when empty so earlier request
+		// bytes are unchanged.
+		InferenceBaseURL: opts.InferenceBaseURL,
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {

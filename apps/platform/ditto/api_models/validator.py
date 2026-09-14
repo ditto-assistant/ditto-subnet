@@ -97,6 +97,9 @@ from ditto_screening_protocol.bench_v9 import (
 from ditto_screening_protocol.bench_v9 import (
     V12ModelDependenceGate as V12ModelDependenceGate,
 )
+from ditto_screening_protocol.bench_v9 import (
+    V13ClaimProvenanceGate as V13ClaimProvenanceGate,
+)
 from ditto_screening_protocol.bench_v9 import normalize_v9_score_report_omitempty
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationCompositePolicy as V9ConfirmationCompositePolicy,

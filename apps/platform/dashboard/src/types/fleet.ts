@@ -156,7 +156,7 @@ export interface ConfirmationSubject {
 export interface ConfirmationProgress {
   bundle_id: string;
   slot_id: string;
-  bench_version: 9 | 10 | 11 | 12;
+  bench_version: 9 | 10 | 11 | 12 | 13;
   mode: "shadow" | "enforce";
   profile_revision: string;
   attempt: number;

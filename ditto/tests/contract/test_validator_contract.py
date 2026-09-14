@@ -53,6 +53,7 @@ _SHARED_BENCH_V9_MODELS = (
     "V12ModelDependenceGate",
     "V12InferenceLatencyGate",
     "V12AnswerStuffingGate",
+    "V13ClaimProvenanceGate",
     "V9ScoreGateEvidence",
     "V9BaseEvidence",
 )

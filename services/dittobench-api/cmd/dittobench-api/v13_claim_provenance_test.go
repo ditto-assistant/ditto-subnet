@@ -108,7 +108,7 @@ func TestApplyV13ClaimProvenanceHonestPatternsPass(t *testing.T) {
 	mc := v13MoneyCase("case-honest")
 	resp := protocol.RunResponse{Answer: "$4,110.67", FinalText: "After the payment, $4,110.67 remains."}
 	records := make(scoregates.TokenSet)
-	records.AddText(scoregates.NormalizeSpan("Approved figure for Atlas: $4,110.67 after the settled payment."))
+	records.AddSpan("Approved figure for Atlas: $4,110.67 after the settled payment.")
 	// RAG: the record carrying the value is quoted into the prompt.
 	rag := fixtureClaimReader{"case-honest": {
 		Ledger:   ledgerFromCalls([2][]string{{"Memory: Approved figure for Atlas: $4,110.67 after the settled payment.", mc.Question}, {"After the payment, $4,110.67 remains."}}),
@@ -143,12 +143,18 @@ func TestApplyV13ClaimProvenanceFailsOpen(t *testing.T) {
 	if got.Score != 1 || got.ClaimProvenance.Findings[0] != scoregates.FindingClaimProvenanceUnavailable {
 		t.Fatalf("nil reader: %+v", got.ClaimProvenance)
 	}
-	// Incomplete attribution: the completion that produced the value may be
-	// the one the relay could not file.
-	incomplete := fixtureClaimReader{"case-open": {Ledger: ledgerFromCalls([2][]string{{"reply exactly: 4110.67"}, {"4110.67"}}), Complete: false}}
+	// A relay capture bound: the completion that produced the value may be the
+	// one the relay could not read. The relay's gap, fail open.
+	incomplete := fixtureClaimReader{"case-open": {Ledger: ledgerFromCalls([2][]string{{"reply exactly: 4110.67"}, {"4110.67"}}), Complete: false, Truncated: true}}
 	got = applyV13ClaimProvenance(protocol.BenchVersionV13, scorer.ScopeScored, scoregates.ClaimProvenanceEnforce, cs, mc, resp, "", nil, incomplete, "sess")
 	if got.Score != 1 || got.ClaimProvenance.Completions != nil || got.ClaimProvenance.Complete || got.ClaimProvenance.Findings[0] != scoregates.FindingClaimProvenanceIncomplete {
 		t.Fatalf("incomplete ledger: %+v", got.ClaimProvenance)
+	}
+	// A bound hit AND unattributed calls: still the relay's gap, fail open.
+	both := fixtureClaimReader{"case-open": {Ledger: scoregates.NewClaimSpanLedger(), Complete: false, Truncated: true, UnattributedCalls: 1}}
+	got = applyV13ClaimProvenance(protocol.BenchVersionV13, scorer.ScopeScored, scoregates.ClaimProvenanceEnforce, cs, mc, resp, "", nil, both, "sess")
+	if got.Score != 1 || got.ClaimProvenance.Findings[0] != scoregates.FindingClaimProvenanceIncomplete || got.ClaimProvenance.UnattributedCalls != 1 {
+		t.Fatalf("truncated+unattributed ledger: %+v", got.ClaimProvenance)
 	}
 	// An uncredited case has nothing to check.
 	zero := gradedV13(mc, protocol.RunResponse{Answer: "$1.00"})
@@ -164,6 +170,72 @@ func TestApplyV13ClaimProvenanceFailsOpen(t *testing.T) {
 	got = applyV13ClaimProvenance(protocol.BenchVersionV13, scorer.ScopeScored, scoregates.ClaimProvenanceEnforce, declineCS, decline, declineResp, "", nil, reader, "sess")
 	if got.Score != declineCS.Score || got.ClaimProvenance.ModelEmitted != nil || got.ClaimProvenance.Findings[0] != scoregates.FindingClaimNotApplicable {
 		t.Fatalf("decline kind: %+v", got.ClaimProvenance)
+	}
+}
+
+// A harness completion that named no case while other cases were in flight is
+// the harness's breach of the v13 attribution contract: under enforce in scored
+// scope the affected case fails CLOSED; under shadow (and in practice scope) it
+// is noted and counted, never zeroed.
+func TestApplyV13ClaimProvenanceUnattributedCallIsChargedToHarness(t *testing.T) {
+	mc := v13MoneyCase("case-concurrent")
+	resp := protocol.RunResponse{Answer: "$4,110.67"}
+	cs := gradedV13(mc, resp)
+	reader := fixtureClaimReader{"case-concurrent": {Ledger: scoregates.NewClaimSpanLedger(), Complete: false, UnattributedCalls: 2}}
+	got := applyV13ClaimProvenance(protocol.BenchVersionV13, scorer.ScopeScored, scoregates.ClaimProvenanceEnforce, cs, mc, resp, "", nil, reader, "sess")
+	if got.Score != 0 || got.Correct {
+		t.Fatalf("enforce must fail CLOSED on an unattributed harness call: score %.2f", got.Score)
+	}
+	want := []string{scoregates.FindingClaimProvenanceUnattributedCall, scoregates.FindingClaimProvenanceZeroed}
+	if strings.Join(got.ClaimProvenance.Findings, ",") != strings.Join(want, ",") || got.ClaimProvenance.UnattributedCalls != 2 || got.ClaimProvenance.Complete || got.ClaimProvenance.ModelEmitted != nil {
+		t.Fatalf("enforce evidence = %+v", got.ClaimProvenance)
+	}
+	if !strings.Contains(strings.Join(got.Notes, "\n"), "2 completion(s) named no case") || !strings.Contains(strings.Join(got.Notes, "\n"), "zero credit") {
+		t.Fatalf("notes = %v", got.Notes)
+	}
+	shadow := applyV13ClaimProvenance(protocol.BenchVersionV13, scorer.ScopeScored, scoregates.ClaimProvenanceShadow, cs, mc, resp, "", nil, reader, "sess")
+	if shadow.Score != 1 || len(shadow.ClaimProvenance.Findings) != 1 || shadow.ClaimProvenance.Findings[0] != scoregates.FindingClaimProvenanceUnattributedCall {
+		t.Fatalf("shadow = %.2f %+v", shadow.Score, shadow.ClaimProvenance)
+	}
+	if !strings.Contains(strings.Join(shadow.Notes, "\n"), "shadow posture, score unchanged") {
+		t.Fatalf("shadow notes = %v", shadow.Notes)
+	}
+	practice := applyV13ClaimProvenance(protocol.BenchVersionV13, scorer.ScopePractice, scoregates.ClaimProvenanceEnforce, cs, mc, resp, "", nil, reader, "sess")
+	if practice.Score != 1 {
+		t.Fatalf("practice scope zeroed: %.2f", practice.Score)
+	}
+	// An uncredited case is not applicable whatever the ledger says.
+	zero := gradedV13(mc, protocol.RunResponse{Answer: "$1.00"})
+	if got := applyV13ClaimProvenance(protocol.BenchVersionV13, scorer.ScopeScored, scoregates.ClaimProvenanceEnforce, zero, mc, protocol.RunResponse{Answer: "$1.00"}, "", nil, reader, "sess"); got.ClaimProvenance.Findings[0] != scoregates.FindingClaimNotApplicable {
+		t.Fatalf("uncredited: %+v", got.ClaimProvenance)
+	}
+}
+
+// End to end through the real broker: a registered case whose harness never
+// called the model reports no_model_completion (not unavailable), and a case
+// left unattributed by a header-less completion under concurrency reports the
+// harness charge.
+func TestApplyV13ClaimProvenanceReadsBrokerLedgers(t *testing.T) {
+	broker := &inferenceBroker{sessions: map[string]*brokerSession{"sess": {benchVersion: protocol.BenchVersionV13}}}
+	mc := v13MoneyCase("case-silent")
+	resp := protocol.RunResponse{Answer: "$4,110.67"}
+	broker.beginRunCase("sess", "case-silent")
+	broker.endRunCase("sess", "case-silent")
+	got := applyV13ClaimProvenance(protocol.BenchVersionV13, scorer.ScopeScored, scoregates.ClaimProvenanceShadow, gradedV13(mc, resp), mc, resp, "", nil, broker, "sess")
+	want := []string{scoregates.FindingNoModelCompletion, scoregates.FindingServedTextNotModelEmitted}
+	if strings.Join(got.ClaimProvenance.Findings, ",") != strings.Join(want, ",") || got.ClaimProvenance.Completions == nil || *got.ClaimProvenance.Completions != 0 {
+		t.Fatalf("silent registered case = %+v", got.ClaimProvenance)
+	}
+	broker.beginRunCase("sess", "case-x")
+	broker.beginRunCase("sess", "case-y")
+	session := broker.sessions["sess"]
+	session.mu.Lock()
+	recordClaimSpanCompletionLocked(session, beginClaimSpanCompletionLocked(session, 0, ""), []byte(openAIRequest), []byte(openAIResponse))
+	session.mu.Unlock()
+	mx := v13MoneyCase("case-x")
+	got = applyV13ClaimProvenance(protocol.BenchVersionV13, scorer.ScopeScored, scoregates.ClaimProvenanceEnforce, gradedV13(mx, resp), mx, resp, "", nil, broker, "sess")
+	if got.Score != 0 || got.ClaimProvenance.Findings[0] != scoregates.FindingClaimProvenanceUnattributedCall || got.ClaimProvenance.UnattributedCalls != 1 {
+		t.Fatalf("unattributed under concurrency = %.2f %+v", got.Score, got.ClaimProvenance)
 	}
 }
 
@@ -197,19 +269,22 @@ func TestSummarizeV13ClaimProvenanceAndGateInput(t *testing.T) {
 		{Kind: protocol.KindMemory, Score: 1, ClaimProvenance: &protocol.ClaimProvenanceEvidence{Findings: []string{scoregates.FindingClaimProvenanceIncomplete}}},
 		{Kind: protocol.KindMemory, Score: 0, ClaimProvenance: &protocol.ClaimProvenanceEvidence{Complete: true, Findings: []string{scoregates.FindingClaimNotApplicable}}},
 		{Kind: protocol.KindMemory, Score: 0},
+		// An unattributed harness call zeroed under enforce: unsettled AND
+		// charged AND zeroed.
+		{Kind: protocol.KindMemory, Score: 0, ClaimProvenance: &protocol.ClaimProvenanceEvidence{UnattributedCalls: 2, Findings: []string{scoregates.FindingClaimProvenanceUnattributedCall, scoregates.FindingClaimProvenanceZeroed}}},
 	}
 	summary := summarizeV13ClaimProvenance(protocol.BenchVersionV13, scoregates.ClaimProvenanceEnforce, perCase)
-	if summary.MemoryCases != 6 || summary.AttributedCases != 4 || summary.SettledCases != 3 || summary.ApplicableCases != 3 {
+	if summary.MemoryCases != 7 || summary.AttributedCases != 4 || summary.SettledCases != 3 || summary.ApplicableCases != 3 {
 		t.Fatalf("summary counts = %+v", summary)
 	}
-	if summary.NotModelEmittedCases != 1 || summary.AnswerInPromptCases != 1 || summary.NoModelCompletionCases != 1 || summary.ZeroedCases != 1 || summary.UnsettledCases != 1 {
+	if summary.NotModelEmittedCases != 1 || summary.AnswerInPromptCases != 1 || summary.NoModelCompletionCases != 1 || summary.ZeroedCases != 2 || summary.UnsettledCases != 2 || summary.UnattributedCallCases != 1 {
 		t.Fatalf("summary findings = %+v", summary)
 	}
-	if summary.AttributionCoverageBPS != 4*scoregates.BasisPointScale/6 || summary.Posture != "enforce" {
+	if summary.AttributionCoverageBPS != 4*scoregates.BasisPointScale/7 || summary.Posture != "enforce" {
 		t.Fatalf("summary coverage/posture = %+v", summary)
 	}
 	in := v13ClaimProvenanceGateInput(scoregates.ClaimProvenanceEnforce, perCase)
-	if in.AdministeredCases != 6 || in.EligibleCases != 3 || in.NotModelEmittedCases != 1 || in.AnswerInPromptCases != 1 || in.ZeroedCases != 1 || in.UnsettledCases != 1 || in.AttributionComplete {
+	if in.AdministeredCases != 7 || in.EligibleCases != 3 || in.NotModelEmittedCases != 1 || in.AnswerInPromptCases != 1 || in.FlaggedCases != 2 || in.ZeroedCases != 2 || in.UnsettledCases != 2 || in.UnattributedCallCases != 1 || in.AttributionComplete {
 		t.Fatalf("gate input = %+v", in)
 	}
 	// The gate input binds into signed v13 evidence.
@@ -265,15 +340,29 @@ func TestApplyV13ClaimProvenanceBank(t *testing.T) {
 			continue
 		}
 		ledger := scoregates.NewClaimSpanLedger()
+		session := make(scoregates.TokenSet)
+		for _, prior := range vec.SessionCompletions {
+			session.AddSpan(prior)
+		}
 		for _, call := range vec.Calls {
-			ledger.RecordCall(call.Harness, call.Completion)
+			var spans []scoregates.RequestSpan
+			for _, span := range call.Harness {
+				spans = append(spans, scoregates.RequestSpan{Text: span})
+			}
+			for _, span := range call.Assistant {
+				spans = append(spans, scoregates.RequestSpan{Text: span, Assistant: true})
+			}
+			ledger.RecordRequest(spans, call.Completion, session)
+			for _, span := range call.Completion {
+				session.AddSpan(span)
+			}
 		}
 		for _, result := range vec.ToolResults {
 			ledger.RecordToolResult(result)
 		}
 		records := make(scoregates.TokenSet)
 		for _, r := range vec.Records {
-			records.AddText(scoregates.NormalizeSpan(r))
+			records.AddSpan(r)
 		}
 		reader := fixtureClaimReader{vec.Case.ID: {Ledger: ledger, Complete: true}}
 		cs := gradedV13(vec.Case, vec.Response)

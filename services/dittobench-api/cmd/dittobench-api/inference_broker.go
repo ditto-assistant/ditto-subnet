@@ -36,6 +36,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/ablation"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/google/uuid"
 )
@@ -227,10 +228,14 @@ type brokerSession struct {
 	claimSpanCases        map[string]*brokerClaimSpanLedger
 	claimSpanCompletions  uint64
 	claimSpanUnattributed uint64
-	embeddingPhaseStarted bool
-	embeddingPhaseActive  bool
-	embeddingInFlight     int
-	embeddingConcurrency  int
+	// claimSpanSessionCompletion is the union of every v13 completion's value
+	// tokens across the whole session (all cases, attributed or not); it exempts
+	// assistant-role prompt spans from the causal gate.
+	claimSpanSessionCompletion scoregates.TokenSet
+	embeddingPhaseStarted      bool
+	embeddingPhaseActive       bool
+	embeddingInFlight          int
+	embeddingConcurrency       int
 	// embeddingQueueChanged wakes calls waiting behind this session's local
 	// lane whenever capacity is released or the phase is revoked. Excess
 	// harness concurrency is queued inside the trusted broker instead of being
@@ -1613,14 +1618,15 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 	forwarded := r.Clone(r.Context())
 	forwarded.URL.Path = "/tool"
 	forwarded.URL.RawQuery = ""
-	if route.provenanceSessionID == "" {
+	if !b.claimSpanCaptureEnabledFor(route.provenanceSessionID) {
+		// v9..v12 sessions (and routes with no provenance session) stream the
+		// tool response through untouched: nothing is allocated below v13.
 		route.handler.ServeHTTP(w, forwarded)
 		return
 	}
 	// Bench v13 claim-span capture: the result the validator serves this case is
 	// exempt from the causal answer_in_prompt gate, so book its value tokens on
-	// the case ledger. The recorder is bounded and the booking is a no-op below
-	// bench_version 13.
+	// the case ledger. The recorder is bounded.
 	recorder := &toolResultRecorder{ResponseWriter: w, limit: claimSpanMaxToolResultBytes}
 	route.handler.ServeHTTP(recorder, forwarded)
 	if recorder.status == 0 || recorder.status == http.StatusOK {
@@ -2879,6 +2885,18 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rest = "/" + strings.TrimLeft(parts[1], "/")
+	}
+	// Bench v13 case-scoped inference_base_url: `/run/<case_id>/...` names the
+	// case the completion serves. It is the same advisory claim as
+	// X-Ditto-Case-Id (verified only against the cases in flight; never an
+	// admission, scoring, or accounting input), so a header-less client built
+	// from the per-run URL stays attributable under concurrent /run.
+	if claimedCase, remainder, ok := splitClaimSpanCasePath(rest); ok {
+		rest = remainder
+		if r.Header.Get(harnessCaseHeader) == "" {
+			r = r.Clone(r.Context())
+			r.Header.Set(harnessCaseHeader, claimedCase)
+		}
 	}
 	if rest == "/health" && r.Method == http.MethodGet {
 		b.health(w, session)
@@ -4478,6 +4496,12 @@ func (b *inferenceBroker) beginRunCase(id, caseID string) bool {
 		session.runCases = make(map[string]int)
 	}
 	session.runCases[caseID]++
+	// Bench v13: a registered case owns a ledger from registration, so a case
+	// whose harness never calls the model settles as an empty, complete ledger
+	// (no_model_completion) rather than reading as "no capture". No-op below v13.
+	if claimSpanCaptureEnabled(session) {
+		ensureClaimSpanLedgerLocked(session, caseID)
+	}
 	return true
 }
 

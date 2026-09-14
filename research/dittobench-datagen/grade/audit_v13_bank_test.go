@@ -71,23 +71,38 @@ func TestV13ProvenanceBankGIHNegativeIsGraderBlind(t *testing.T) {
 
 func TestClaimAlternatives(t *testing.T) {
 	money := protocol.MemoryCase{AnswerKind: protocol.AnswerMoney, ExpectedAnswer: "411067"}
-	if got := ClaimAlternatives(money); len(got) != 1 || got[0] != "4110.67" {
-		t.Fatalf("money alternatives = %v, want [4110.67]", got)
+	if got := ClaimAlternatives(money); len(got) != 1 || len(got[0]) != 1 || got[0][0] != "4110.67" {
+		t.Fatalf("money alternatives = %v, want [[4110.67]]", got)
 	}
 	whole := protocol.MemoryCase{AnswerKind: protocol.AnswerMoney, ExpectedAnswer: "24500"}
-	if got := ClaimAlternatives(whole); len(got) != 1 || got[0] != "245.00" {
-		t.Fatalf("whole-dollar money alternatives = %v, want [245.00]", got)
+	if got := ClaimAlternatives(whole); len(got) != 1 || got[0][0] != "245.00" {
+		t.Fatalf("whole-dollar money alternatives = %v, want [[245.00]]", got)
 	}
 	value := protocol.MemoryCase{ExpectedAnswer: "Lisbon", AcceptAny: []string{"Lisboa"}}
-	if got := ClaimAlternatives(value); len(got) != 2 || got[0] != "Lisbon" || got[1] != "Lisboa" {
+	if got := ClaimAlternatives(value); len(got) != 1 || len(got[0]) != 2 || got[0][0] != "Lisbon" || got[0][1] != "Lisboa" {
 		t.Fatalf("value alternatives = %v", got)
 	}
+	// A number claim accepts the digits, the English word, and the idiom the
+	// grader's numberHit accepts, in ONE group: they are forms of one unit.
+	three := protocol.MemoryCase{AnswerKind: protocol.AnswerNumber, ExpectedAnswer: "3"}
+	if got := ClaimAlternatives(three); len(got) != 1 || len(got[0]) != 2 || got[0][0] != "3" || got[0][1] != "three" {
+		t.Fatalf("number alternatives = %v, want [[3 three]]", got)
+	}
+	two := protocol.MemoryCase{AnswerKind: protocol.AnswerNumber, ExpectedAnswer: "2"}
+	if got := ClaimAlternatives(two); len(got) != 1 || len(got[0]) != 3 || got[0][2] != "twice" {
+		t.Fatalf("number-2 alternatives = %v, want [[2 two twice]]", got)
+	}
+	big := protocol.MemoryCase{AnswerKind: protocol.AnswerNumber, ExpectedAnswer: "1450"}
+	if got := ClaimAlternatives(big); len(got) != 1 || len(got[0]) != 1 || got[0][0] != "1450" {
+		t.Fatalf("large number alternatives = %v, want [[1450]]", got)
+	}
+	// A list is one group per item; an item's alternatives join its group.
 	list := protocol.MemoryCase{AnswerKind: protocol.AnswerList, AnswerItems: []string{"Osaka", "Lima"}, AnswerItemAcceptAny: [][]string{{"Ōsaka"}, nil}}
-	if got := ClaimAlternatives(list); len(got) != 3 {
-		t.Fatalf("list alternatives = %v, want item + alt + item", got)
+	if got := ClaimAlternatives(list); len(got) != 2 || len(got[0]) != 2 || got[0][1] != "Ōsaka" || len(got[1]) != 1 {
+		t.Fatalf("list alternatives = %v, want [[Osaka Ōsaka] [Lima]]", got)
 	}
 	direction := protocol.MemoryCase{AnswerKind: protocol.AnswerDirection, ExpectedAnswer: "went up"}
-	if got := ClaimAlternatives(direction); len(got) != len(increasePhrases) {
+	if got := ClaimAlternatives(direction); len(got) != 1 || len(got[0]) != len(increasePhrases) {
 		t.Fatalf("direction alternatives = %v", got)
 	}
 	for _, kind := range []string{protocol.AnswerDecline, protocol.AnswerAcknowledge, protocol.AnswerChitchat, protocol.AnswerPersistence, protocol.AnswerReversal, protocol.AnswerDuration} {

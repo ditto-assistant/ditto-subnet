@@ -197,19 +197,33 @@ The validator sends one `RunRequest` per case; the harness returns a
 }
 ```
 
-`inference_base_url` is additive-optional and ignored. Harnesses keep the
-process-wide inference URL.
+`inference_base_url` is additive-optional. For `bench_version` <= 12 the scorer
+leaves it empty and harnesses keep the process-wide inference URL. From
+`bench_version` 13 the scorer sends the **case-scoped** form of the same
+source-bound broker route, `<gateway>/run/<case_id>` (the `case_id` is
+URL-path-escaped), and a harness that builds its model client from this field
+per `/run` -- the starter kit already does -- is attributable at any
+concurrency without setting a header. The path names the case; it changes no
+admission, accounting, or model routing.
 
-A harness MAY send `X-Ditto-Case-Id: <case_id>` on the inference calls it makes
-while serving a `/run`. The header is advisory and additive: the broker never
-reads it for admission, scoring or accounting. It stamps the calls it forwards
-to the platform relay with an `X-Ditto-Trace-Context` that names the run,
-agent, slot, the cases the scorer currently has in flight, and -- when the
-claim names one of those cases -- the verified case id, so the relay's trace
-capture can file the call under its benchmark case under concurrent `/run`.
-Without the header a serial run is still attributed exactly; a concurrent run
-records the candidate set. Harnesses built on `ditto-harness`'s
-`ChatModelConfig::OpenAiCompat` cannot set it today (no per-request headers). The scorer may overlap `/run` up to the operator
+A harness MAY instead send `X-Ditto-Case-Id: <case_id>` on the inference calls
+it makes while serving a `/run`; the header and the path segment are the same
+advisory claim. The broker never reads either for admission, scoring or
+accounting. It stamps the calls it forwards to the platform relay with an
+`X-Ditto-Trace-Context` that names the run, agent, slot, the cases the scorer
+currently has in flight, and -- when the claim names one of those cases -- the
+verified case id, so the relay's trace capture can file the call under its
+benchmark case under concurrent `/run`. Without any claim a serial run is still
+attributed exactly; a concurrent run records the candidate set. Harnesses built
+on `ditto-harness`'s `ChatModelConfig::OpenAiCompat` cannot set the header (no
+per-request headers) and should honor `inference_base_url` instead.
+
+**v13 attribution contract.** Under `bench_version >= 13` a chat completion
+made while several cases are in flight that names no case (neither the
+case-scoped `inference_base_url` nor `X-Ditto-Case-Id`) is a harness fault, not
+a relay gap: every case then in flight is marked
+`claim_provenance_unattributed_call`, which fails **closed** under the enforce
+posture and is counted under shadow (see the bench_version 13 section). The scorer may overlap `/run` up to the operator
 `benchmark_runtime.case_concurrency` (default 4, max 64). The broker admits
 `max(4, case_concurrency)` in-flight chat calls and tool calls per harness
 source; above that it answers `429` with `Retry-After: 1`, so a harness that
@@ -607,32 +621,63 @@ Miners run the same functions locally; the vectors are published in
 `research/dittobench-datagen/grade/audit_v13_bank.go`.
 
 **Attribution is exact or absent.** A completion is booked on the case whose
-exclusive window, verified `X-Ditto-Case-Id` claim (naming a case in flight), or
-sole in-flight `/run` admitted it. Under concurrent `/run` with several cases in
-flight and no verified claim the completion is booked nowhere and every case
-then in flight is marked incomplete; the scorer fails **open** on those cases. A
-harness that sends `X-Ditto-Case-Id` on its inference calls keeps every case
-attributable at any concurrency.
+exclusive window, verified case claim (the case-scoped `inference_base_url`
+path `/run/<case_id>/…` the scorer sends in every v13 `/run`, or an
+`X-Ditto-Case-Id` header, either naming a case in flight), or sole in-flight
+`/run` admitted it. Under concurrent `/run` with several cases in flight and no
+verified claim the completion is booked nowhere and every case then in flight
+is marked incomplete **and charged to the harness**
+(`claim_provenance_unattributed_call`): attributable calls under concurrency
+are the harness's obligation in v13, so under **enforce** those cases receive
+zero credit (fail closed) and under shadow they are counted in the summary's
+`unattributed_call_cases`. A relay-side gap -- a capture bound hit, an
+unreadable body -- is `claim_provenance_incomplete` and still fails **open**.
+Every case a v13 `/run` registers owns a ledger from registration, so a credited
+case whose harness made no model call at all settles as `no_model_completion`
+rather than as an unavailable read. A harness that honors the per-run
+`inference_base_url` (or sends the header) keeps every case attributable at any
+concurrency.
+
+**Assistant-role spans.** A request message under the `assistant` role is text
+the harness attributes to the model (a prefill, or carried conversation
+history). Its tokens are tested against every completion the model made
+anywhere in the session -- other cases, calls outside any `/run` window -- so a
+model-written summary from an earlier case that rides in a later prompt is
+model-derived, not harness-first; an assistant prefill carrying a value no
+completion ever produced is still harness-first.
+
+**The tokenizer is Unicode-aware.** `NormalizeSpan` applies NFD, drops every
+combining mark, then NFKC and lowercases, so `José`/`Jose`, `Ōsaka`/`Osaka`,
+`Zürich`/`Zurich` fold to one token, and letters of every script are kept
+(`Москва` is a claim token). The token floor counts runes. The Bench v12
+answer-IO capture keeps its ASCII rule; only the v13 claim-span path uses this.
 
 **Scoring rules (memory cases; tool cases are never gated here).** The grader
 names the served span it credited (`Verdict.Provenance`: the authoritative
 `answer` slot or the `final_text` fallback) and the canonical forms it accepts
 for the claim (the expected value and its accept set; the major-unit decimal for
-money; the accepted phrases for a direction; every item for a list). The **claim
-tokens** are the tokens of every accepted form wholly present in that span.
+money; the accepted phrases for a direction; every item for a list; for a
+number the digits **and** the English number word the grader also credits),
+grouped per claim unit. The **claim tokens** are the tokens of every accepted
+form wholly present in that span.
 
-- (a) **`served_text_not_model_emitted`** — the claim tokens must be a subset of
-  the union of the case's attributed completion tokens. This is containment of
-  the credited value, never a substring test on `final_text`: JSON-mode
-  unwrapping, `final_answer`-tool delivery, formatters, markdown stripping, and
-  a reply spliced from two completions all pass; a value the model never
-  produced does not. A credited value with **no** completion at all is also
-  reported as `no_model_completion`.
+- (a) **`served_text_not_model_emitted`** — for every credited claim unit,
+  **some** grader-accepted form of it must be contained in the union of the
+  case's attributed completion tokens. This is containment of the credited
+  value, never a substring test on `final_text`: JSON-mode unwrapping,
+  `final_answer`-tool delivery, formatters (`4110.67 dollars` → `$4,110.67`,
+  the model's `three` served as `3`, `Lisboa` served as `Lisbon`, `went up`
+  served as `increase`), markdown stripping, and a reply spliced from two
+  completions all pass; a value the model never produced in any accepted form
+  (`411067` for a major-unit money claim, an unlisted direction paraphrase, a
+  slot composed from operands) does not. A credited value with **no**
+  completion at all is also reported as `no_model_completion`.
 - (b) **`answer_in_prompt`** — from the case's harness-first tokens the scorer
   subtracts every token of a record delivered through `/seed` (the dataset),
   every served `tool_endpoint` result, the case's own `user_input`, and the
-  validator's system prompt. If the claim tokens are a subset of what remains,
-  the harness wrote the answer into the prompt and the model only echoed it.
+  validator's system prompt. If the **served** claim tokens are a subset of
+  what remains, the harness wrote the answer into the prompt and the model
+  only echoed it.
   Quoting retrieved memory or a tool result into the prompt is exempt by
   construction; a value the model derived in an earlier completion and the
   harness re-injected later is model-derived, not harness-first.
@@ -642,18 +687,27 @@ tokens** are the tokens of every accepted form wholly present in that span.
 
 **Where it appears.** The report's per-case `claim_provenance` carries the
 `ClaimProvenanceEvidence` (`completions` — null when attribution is incomplete —
-`tool_results`, `claim_tokens`, `complete`, `model_emitted`, `answer_in_prompt`,
-`posture`, `findings`); `details.claim_provenance` summarizes the run (settled,
-flagged, unsettled, zeroed counts and `attribution_coverage_bps`, this
+`unattributed_calls`, `tool_results`, `claim_tokens`, `complete`,
+`model_emitted`, `answer_in_prompt`, `posture`, `findings`);
+`details.claim_provenance` summarizes the run (settled, flagged, unsettled,
+`unattributed_call_cases`, zeroed counts and `attribution_coverage_bps`, this
 validator's half of the enforce precondition); and the signed v9 gate evidence
-gains a `claim_provenance` block for v13 runs whose factor is an identity term
-(the gates act per claim).
+gains a `claim_provenance` block for v13 runs (`administered_cases`,
+`eligible_cases`, `not_model_emitted_cases`, `answer_in_prompt_cases`,
+`flagged_cases` — the union — `unattributed_call_cases`, `unsettled_cases`,
+`zeroed_cases`, `attribution_complete`, `posture`, `flagged_bps`, `result`,
+`factor_bps`) whose factor is an identity term (the gates act per claim). The
+Platform re-derives that block's digest from
+`ditto_screening_protocol.bench_v9.V13ClaimProvenanceGate`; the bit-paired
+fixture lives at
+`services/dittobench-api/internal/scoregates/testdata/v13_claim_provenance_evidence.json`.
 
 **Posture.** Both gates share one switch and ship in **shadow**: findings, notes,
 per-case evidence and the summary are recorded and no score moves. Under
 **enforce** (`DITTOBENCH_V13_CLAIM_PROVENANCE_POSTURE=enforce`) a settled flagged
-claim zeroes the case's score in scored scope; unavailable or incomplete
-evidence always fails **open**. Enforce is an operator decision gated on the
+claim -- and a case left unattributed by a harness completion that named no
+case under concurrency -- zeroes the case's score in scored scope; unavailable
+or relay-incomplete evidence always fails **open**. Enforce is an operator decision gated on the
 honest cohort (including the reference harness) showing zero false zeros.
 Evidence rows are leads for source review either way.
 

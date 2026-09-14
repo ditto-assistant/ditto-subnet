@@ -507,12 +507,16 @@ type RunRequest struct {
 	BenchVersion int    `json:"bench_version,omitempty"`
 	ToolEndpoint string `json:"tool_endpoint,omitempty"`
 	UserID       string `json:"user_id,omitempty"`
-	// InferenceBaseURL was a validator-minted, case-scoped v10 relay capability.
-	// The scorer no longer mints or sends one: exclusive per-case windows forced
-	// serial /run, so scoring overlaps cases on the process-wide session URL and
-	// leaves this field empty. It stays in the wire contract (harnesses fall back
-	// to their launch-configured base URL when it is absent, and the localstack
-	// model harness still honors it) for a restored per-case relay path.
+	// InferenceBaseURL was a validator-minted, case-scoped v10 relay capability;
+	// exclusive per-case windows forced serial /run, so v10..v12 scoring overlaps
+	// cases on the process-wide session URL and leaves it empty. From
+	// bench_version 13 the scorer sends `<gateway>/run/<case_id>`: the same
+	// source-bound broker route with the case NAMED in the path, which the
+	// broker reads as the case claim for claim-span attribution (equivalent to
+	// X-Ditto-Case-Id; never an admission input). A harness that builds its
+	// model client from this field per /run stays attributable at any
+	// concurrency; one that ignores it falls back to its launch-configured base
+	// URL and is attributable only while it is the sole case in flight.
 	InferenceBaseURL string `json:"inference_base_url,omitempty"`
 }
 
@@ -599,6 +603,12 @@ type ClaimProvenanceEvidence struct {
 	// this case. nil when attribution is incomplete (a completion overlapped
 	// several in-flight cases with no verified claim) or no ledger exists.
 	Completions *int `json:"completions,omitempty"`
+	// UnattributedCalls is how many chat completions the harness made while
+	// this case was in flight alongside other cases WITHOUT naming a case (no
+	// case-scoped inference_base_url, no X-Ditto-Case-Id). Each one left this
+	// case's ledger incomplete and is charged to the harness
+	// (claim_provenance_unattributed_call), not to the relay.
+	UnattributedCalls int `json:"unattributed_calls,omitempty"`
 	// ToolResults is how many tool_endpoint results the validator served the
 	// case; their values are exempt from the causal gate.
 	ToolResults int `json:"tool_results"`
@@ -620,10 +630,11 @@ type ClaimProvenanceEvidence struct {
 	AnswerInPrompt *bool `json:"answer_in_prompt,omitempty"`
 	// Posture is the gate posture the run scored under ("shadow" or "enforce").
 	Posture string `json:"posture"`
-	// Findings names the settled outcomes in a fixed order (see the
-	// scoregates.Finding* constants): served_text_not_model_emitted,
-	// answer_in_prompt, no_model_completion, claim_not_applicable,
-	// claim_provenance_incomplete, claim_provenance_unavailable,
+	// Findings names the outcomes, sorted and de-duplicated
+	// (scoregates.SortedFindings), drawn from the scoregates.Finding* constants:
+	// served_text_not_model_emitted, answer_in_prompt, no_model_completion,
+	// claim_not_applicable, claim_provenance_incomplete,
+	// claim_provenance_unattributed_call, claim_provenance_unavailable,
 	// claim_provenance_zeroed.
 	Findings []string `json:"findings,omitempty"`
 }
@@ -641,9 +652,16 @@ type ClaimProvenanceSummary struct {
 	NotModelEmittedCases   int    `json:"not_model_emitted_cases"`
 	AnswerInPromptCases    int    `json:"answer_in_prompt_cases"`
 	NoModelCompletionCases int    `json:"no_model_completion_cases"`
-	UnsettledCases         int    `json:"unsettled_cases"`
-	ZeroedCases            int    `json:"zeroed_cases"`
-	AttributionCoverageBPS int    `json:"attribution_coverage_bps"`
+	// UnsettledCases counts credited memory cases with no settled verdict:
+	// unavailable or relay-incomplete ledgers plus UnattributedCallCases.
+	UnsettledCases int `json:"unsettled_cases"`
+	// UnattributedCallCases is the subset of UnsettledCases the HARNESS caused
+	// by making case-less completions while several cases were in flight; it
+	// is the operator's read of how far the harness is from the v13 attribution
+	// contract, and under enforce those cases are zeroed.
+	UnattributedCallCases  int `json:"unattributed_call_cases"`
+	ZeroedCases            int `json:"zeroed_cases"`
+	AttributionCoverageBPS int `json:"attribution_coverage_bps"`
 }
 
 type ToolProvenanceEvidence struct {

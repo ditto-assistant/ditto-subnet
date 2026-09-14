@@ -1568,6 +1568,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	var handle *sandbox.Handle
 	var runErr error
 	var sourceCapability string
+	// harnessInferenceGateway is the inference base URL the sandboxed harness
+	// was launched with; Bench v13 /run requests carry a case-scoped form of it
+	// (v13CaseInferenceBaseURL) so completions stay attributable under
+	// concurrency. Empty on the direct-harness path.
+	harnessInferenceGateway := ""
 	strictCleanupOnly := false
 	if image != "" {
 		// Register ownership before Sandbox.Run: an implementation may return a
@@ -1602,6 +1607,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				return
 			}
 		}
+		harnessInferenceGateway = env["DITTOBENCH_INFERENCE_BASE_URL"]
 		handle, runErr = s.sandbox.Run(ctx, image, env)
 		if runErr != nil {
 			if sourceCapability != "" {
@@ -2087,7 +2093,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				uid = wave.UserID
 			}
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
-			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion})
+			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{
+				ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion,
+				// v13: name the case in the inference base URL so a per-run model
+				// client is attributable under concurrent /run (empty below v13).
+				InferenceBaseURL: v13CaseInferenceBaseURL(req.BenchVersion, harnessInferenceGateway, mc.ID),
+			})
 			observedCalls := toolSrv.Observed(mc.ID)
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp
