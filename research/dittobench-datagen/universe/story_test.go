@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -224,6 +225,74 @@ func TestStoryProgramsAreInterpersonalComposedAndAnswerSafe(t *testing.T) {
 		}
 		if len(plan.Facts) < 5 || len(plan.Constraints) != 2 || len(plan.Operations) < 4 {
 			t.Fatalf("under-composed story plan %s: facts=%d constraints=%d operations=%d", plan.Case.ID, len(plan.Facts), len(plan.Constraints), len(plan.Operations))
+		}
+	}
+}
+
+// TestStoryV8BalanceIsComputedAndLessonAcceptsEquivalentPhrasing is the
+// grader-level proof for the frozen v8 story oracles (bench 8–12): computed
+// balances never appear verbatim in the evidence, every computed answer and
+// lesson equivalent grades 1, and the distractors grade 0. The v13 story v2
+// oracles are covered by TestStoryOraclesAreTypedAndLessonClaimSetsAccept in
+// story_v2_test.go; this one pins the immutable path.
+func TestStoryV8BalanceIsComputedAndLessonAcceptsEquivalentPhrasing(t *testing.T) {
+	w := Generate(44332211, 3)
+	pairs := storyPairMap(w)
+	seen := map[string]bool{}
+	for _, plan := range w.storyQuestionCandidates() {
+		seen[plan.oracleKind] = true
+		arc := w.StoryArcs[plan.oracleIndex]
+		switch plan.oracleKind {
+		case oracleStoryBalanceCurrent:
+			for _, id := range plan.RequiredPairIDs {
+				body := pairs[id].Prompt + " " + pairs[id].Response
+				if strings.Contains(body, plan.Case.ExpectedAnswer) {
+					t.Fatalf("computed balance %q appears verbatim in story %s", plan.Case.ExpectedAnswer, id)
+				}
+			}
+			if verdict := grade.Memory(plan.Case, protocol.RunResponse{Answer: money(arc.CurrentBalanceCents)}); verdict.Score != 1 {
+				t.Fatalf("computed answer did not grade: %+v", verdict)
+			}
+		case oracleStoryBudgetDelta:
+			if verdict := grade.Memory(plan.Case, protocol.RunResponse{Answer: money(absInt(arc.BudgetDeltaCents))}); verdict.Score != 1 {
+				t.Fatalf("budget delta did not grade: %+v", verdict)
+			}
+		case oracleStoryPostApproval:
+			post := arc.BaseBudgetCents + arc.BudgetDeltaCents - arc.PaidCents
+			if verdict := grade.Memory(plan.Case, protocol.RunResponse{Answer: money(post)}); verdict.Score != 1 {
+				t.Fatalf("post-approval balance did not grade: %+v", verdict)
+			}
+		case oracleStoryLaterNetChange:
+			net := arc.BudgetDeltaCents - arc.UnexpectedCostCents + arc.CreditCents
+			direction := "increase"
+			if net < 0 {
+				direction = "decrease"
+			}
+			if verdict := grade.Memory(plan.Case, protocol.RunResponse{Answer: direction + "; " + money(absInt(net))}); verdict.Score != 1 {
+				t.Fatalf("later net change did not grade: %+v", verdict)
+			}
+		case oracleStoryLesson:
+			for _, accepted := range plan.Case.AcceptAny {
+				if verdict := grade.Memory(plan.Case, protocol.RunResponse{Answer: accepted}); verdict.Score != 1 {
+					t.Fatalf("lesson equivalent %q did not grade: %+v", accepted, verdict)
+				}
+			}
+			if verdict := grade.Memory(plan.Case, protocol.RunResponse{Answer: plan.Case.DistractorAnswers[0]}); verdict.Score != 0 {
+				t.Fatalf("lesson distractor graded nonzero: %+v", verdict)
+			}
+		case oracleStoryOutcomeSummary:
+			answer := strings.Join([]string{arc.CurrentContact, money(arc.CurrentBalanceCents), arc.Lesson}, "; ")
+			if verdict := grade.Memory(plan.Case, protocol.RunResponse{Answer: answer}); verdict.Score != 1 {
+				t.Fatalf("outcome summary did not grade fully: %+v", verdict)
+			}
+			if verdict := grade.Memory(plan.Case, protocol.RunResponse{Answer: plan.Case.DistractorAnswers[0]}); verdict.Score != 0 {
+				t.Fatalf("outcome distractor graded nonzero: %+v", verdict)
+			}
+		}
+	}
+	for _, kind := range []string{oracleStoryBalanceCurrent, oracleStoryBudgetDelta, oracleStoryPostApproval, oracleStoryLaterNetChange, oracleStoryContactCurrent, oracleStoryLesson, oracleStoryOutcomeSummary} {
+		if !seen[kind] {
+			t.Fatalf("seed did not exercise story program %s", kind)
 		}
 	}
 }

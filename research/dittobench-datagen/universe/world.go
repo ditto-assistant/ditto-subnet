@@ -492,6 +492,15 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 	}
 	if v13 {
 		w.assignV13Timestamps(pairs)
+		stamped := make(map[string]string, len(pairs))
+		for _, pair := range pairs {
+			stamped[pair.PairID] = pair.Timestamp
+		}
+		for i := range w.Stories {
+			if at, ok := stamped[w.Stories[i].PairID]; ok && w.Stories[i].Timestamp != "" {
+				w.Stories[i].Timestamp = at
+			}
+		}
 	}
 	return spreadPairs(pairs)
 }

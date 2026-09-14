@@ -44,6 +44,15 @@ func (w World) assignV13Timestamps(pairs []protocol.MemoryPair) {
 		chains = append(chains, []string{trip.PlanPairID, trip.CorrectionPairID})
 	}
 	for _, arc := range w.StoryArcs {
+		if arc.V2 != nil {
+			// Story v2 (bench_version >= 13): the arc's 3-5 memories form one
+			// chain, so the latest-by-time oracles keep their order while the
+			// instants stay inside the shared business-hours window that the
+			// label-leak probe holds every family to (a story-owned clock would
+			// let the calendar month name the story family).
+			chains = append(chains, append([]string(nil), arc.V2.PairIDs[:arc.V2.Memories]...))
+			continue
+		}
 		chains = append(chains, arc.StoryPairIDs[:])
 	}
 	for k, chain := range chains {

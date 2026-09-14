@@ -364,7 +364,8 @@ func TestV13SeedWireCarriesNoFamilyArcOrSlotLabel(t *testing.T) {
 	for seed := int64(1); seed <= 5; seed++ {
 		world := universe.GenerateForVersion(seed, 3, protocol.BenchVersionV13)
 		for _, arc := range world.StoryArcs {
-			if arc.StoryPairIDs[0] == "" {
+			// Story v2 arcs (bench_version >= 13) carry their memories on V2.
+			if arc.StoryPairIDs[0] == "" && (arc.V2 == nil || len(arc.V2.PairIDs) == 0 || arc.V2.PairIDs[0] == "") {
 				t.Fatalf("seed %d arc %s has no story pairs", seed, arc.ID)
 			}
 		}

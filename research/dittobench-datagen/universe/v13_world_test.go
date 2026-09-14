@@ -201,11 +201,18 @@ func TestV13WorldSessionIDsAndTimestampsCarryNoLabels(t *testing.T) {
 		sessions := map[string]bool{}
 		deltas := map[time.Duration]int{}
 		var stamps []time.Time
+		// Story v2 memories share a session inside an arc by design (3-5
+		// memories over >= 2 opaque sessions); story_v2_test.go proves those
+		// sessions never cross arcs. Every other pair owns its session.
+		storyPair := map[string]bool{}
+		for _, story := range w.Stories {
+			storyPair[story.PairID] = true
+		}
 		for _, pair := range w.Pairs {
 			if !opaqueSessionID.MatchString(pair.SessionID) {
 				t.Fatalf("seed %d pair %s session %q is not opaque", seed, pair.PairID, pair.SessionID)
 			}
-			if sessions[pair.SessionID] {
+			if sessions[pair.SessionID] && !storyPair[pair.PairID] {
 				t.Fatalf("seed %d repeats session %q", seed, pair.SessionID)
 			}
 			sessions[pair.SessionID] = true
@@ -248,6 +255,14 @@ func TestV13WorldSessionIDsAndTimestampsCarryNoLabels(t *testing.T) {
 			before(trip.PlanPairID, trip.CorrectionPairID)
 		}
 		for _, arc := range w.StoryArcs {
+			if arc.V2 != nil {
+				// Story v2: the arc's memories form one chronological chain.
+				ids := arc.V2.PairIDs[:arc.V2.Memories]
+				for i := 1; i < len(ids); i++ {
+					before(ids[i-1], ids[i])
+				}
+				continue
+			}
 			before(arc.StoryPairIDs[0], arc.StoryPairIDs[1])
 			before(arc.StoryPairIDs[1], arc.StoryPairIDs[2])
 		}

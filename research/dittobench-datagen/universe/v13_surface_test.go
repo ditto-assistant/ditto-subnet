@@ -108,8 +108,11 @@ func TestV13QuestionPlansValidateAndVaryFrames(t *testing.T) {
 	for _, kind := range []string{
 		oracleContactCurrent, oracleContactPrevious, oracleProjectOutstanding, oracleProjectLeadCurrent,
 		oracleProjectLeadPrevious, oracleTripCurrent, oracleTripChangedLegPrevious, oracleTripChangedLegCurrent,
-		oracleTripLongestCurrent, oracleStoryBalanceCurrent, oracleStoryBudgetDelta, oracleStoryPostApproval,
-		oracleStoryLaterNetChange, oracleStoryContactCurrent, oracleStoryLesson, oracleStoryOutcomeSummary,
+		oracleTripLongestCurrent,
+		// Story v2 (bench_version >= 13) replaces the v8 story oracles with its
+		// typed ones; each renders anchor + task from per-seed grammars.
+		oracleStoryOwnerCurrent, oracleStoryStatusCurrent, oracleStoryStatusDisagree, oracleStoryOrder,
+		oracleStoryNextAction, oracleStoryQuantity, oracleStoryLessonClaims, oracleStoryOwnerEmail,
 	} {
 		if len(frames[kind]) < 5 {
 			t.Errorf("v13 oracle %s rendered only %d distinct frames across 40 seeds", kind, len(frames[kind]))
@@ -121,18 +124,13 @@ func TestV13QuestionPlansValidateAndVaryFrames(t *testing.T) {
 // fact values survive, and the rendering differs from the v12 one.
 func TestV13StoryNoiseUsesTypoV2(t *testing.T) {
 	for seed := int64(1); seed <= 10; seed++ {
-		v12 := GenerateForVersion(seed, 3, protocol.BenchVersionV12)
 		v13 := GenerateForVersion(seed, 3, protocol.BenchVersionV13)
-		if len(v12.Stories) != len(v13.Stories) {
-			t.Fatalf("seed %d story count moved", seed)
+		if len(v13.Stories) == 0 {
+			t.Fatalf("seed %d has no v13 stories", seed)
 		}
 		byID := map[string]protocol.MemoryPair{}
 		for _, pair := range v13.Pairs {
 			byID[pair.PairID] = pair
-		}
-		v12ByID := map[string]protocol.MemoryPair{}
-		for _, pair := range v12.Pairs {
-			v12ByID[pair.PairID] = pair
 		}
 		changed := 0
 		for _, story := range v13.Stories {
@@ -142,12 +140,14 @@ func TestV13StoryNoiseUsesTypoV2(t *testing.T) {
 					t.Fatalf("seed %d story %s lost fact %q", seed, story.ID, fact.Value)
 				}
 			}
-			if prompt != v12ByID[story.PairID].Prompt {
+			// The same draft under the frozen v1 projector (versions <= 12) must
+			// differ from the typo v2 rendering the v13 world emits.
+			if v1Prompt, _ := story.renderForVersion(seed, protocol.BenchVersionV12); prompt != v1Prompt {
 				changed++
 			}
 		}
 		if changed == 0 {
-			t.Fatalf("seed %d v13 stories are byte-identical to v12", seed)
+			t.Fatalf("seed %d v13 stories render like the v1 projector", seed)
 		}
 	}
 }

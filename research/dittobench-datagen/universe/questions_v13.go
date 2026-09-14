@@ -270,6 +270,9 @@ func storyChannelAccept(channel string) []string {
 
 func (w World) storyPlanV13(kind string, index int, question string, constraints []string, answer, answerKind string, distractors, acceptAny []string) QuestionPlan {
 	caseValue := memoryCase(w.Seed, kind, index, question, answer, answerKind, distractors)
+	// memoryCase pins the frozen v8 version; story v2 cases exist only at >= 13,
+	// so stamp the version here and the suite's rewrite is a no-op for them.
+	caseValue.BenchVersion = protocol.BenchVersionV13
 	caseValue.AcceptAny = append([]string(nil), acceptAny...)
 	return QuestionPlan{
 		Case: caseValue, RequiredPairIDs: w.storyV13Evidence(kind, index),
@@ -523,10 +526,18 @@ func (w World) validateStoryPlanV13(plan QuestionPlan) error {
 // expected answer and none contained in an accepted surface form (the grader
 // skips such a distractor; the generator simply never emits one).
 
+// storyV13OtherPeople draws up to n people outside excluded, walking every
+// world person once in a seed- and arc-keyed permutation so each one is
+// reachable. (A fixed stride shared a factor with the six-person small world
+// and reached only two of them, so the small profile could not seat three
+// distractors.) Drawn people are added to excluded.
 func (w World) storyV13OtherPeople(index int, excluded map[int]bool, n int) []int {
+	r := rand.New(rand.NewSource(storyQuestionSeed(w.Seed, w.StoryArcs[index].ID+":people")))
 	out := make([]int, 0, n)
-	for step := 1; len(out) < n && step <= len(w.People); step++ {
-		candidate := (index*7 + step*3) % len(w.People)
+	for _, candidate := range r.Perm(len(w.People)) {
+		if len(out) == n {
+			break
+		}
 		if excluded[candidate] {
 			continue
 		}
@@ -536,15 +547,48 @@ func (w World) storyV13OtherPeople(index int, excluded map[int]bool, n int) []in
 	return out
 }
 
+// storyV13SupersededOwners lists the arc's former owners, latest first. They
+// are the stale-state fallback when the small world leaves fewer than three
+// people outside the anchor and the ownership chain: naming a superseded owner
+// as "the current owner" is exactly the error a stale read makes.
+func (w World) storyV13SupersededOwners(index int) []int {
+	v2 := w.StoryArcs[index].V2
+	out := make([]int, 0, len(v2.OwnerHistory))
+	for i := len(v2.OwnerHistory) - 1; i >= 0; i-- {
+		if p := v2.OwnerHistory[i]; p != v2.Owner && !containsInt(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func containsInt(xs []int, x int) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
 func (w World) storyV13OwnerDistractors(index int) []string {
 	arc := w.StoryArcs[index]
 	excluded := map[int]bool{arc.PersonIndex: true}
 	for _, owner := range arc.V2.OwnerHistory {
 		excluded[owner] = true
 	}
+	people := w.storyV13OtherPeople(index, excluded, 3)
+	for _, p := range w.storyV13SupersededOwners(index) {
+		if len(people) == 3 {
+			break
+		}
+		people = append(people, p)
+	}
 	out := make([]string, 0, 3)
-	for _, p := range w.storyV13OtherPeople(index, excluded, 3) {
-		out = append(out, w.People[p].Name)
+	for _, p := range people {
+		if name := w.People[p].Name; !contains(out, name) {
+			out = append(out, name)
+		}
 	}
 	return out
 }
@@ -552,22 +596,29 @@ func (w World) storyV13OwnerDistractors(index int) []string {
 func (w World) storyV13OwnerEmailDistractors(index int) []string {
 	arc := w.StoryArcs[index]
 	owner := w.People[arc.V2.Owner]
-	out := []string{}
+	out := make([]string, 0, 3)
+	add := func(candidate string) {
+		if len(out) < 3 && candidate != "" && candidate != owner.Email && !contains(out, candidate) {
+			out = append(out, candidate)
+		}
+	}
 	if arc.V2.OwnerInitial != arc.V2.Owner {
-		out = append(out, w.People[arc.V2.OwnerInitial].Email)
+		add(w.People[arc.V2.OwnerInitial].Email)
 	}
 	excluded := map[int]bool{arc.PersonIndex: true}
 	for _, o := range arc.V2.OwnerHistory {
 		excluded[o] = true
 	}
 	for _, p := range w.storyV13OtherPeople(index, excluded, 3) {
-		if len(out) == 3 {
-			break
-		}
-		if candidate := w.People[p].Email; candidate != owner.Email && !contains(out, candidate) {
-			out = append(out, candidate)
-		}
+		add(w.People[p].Email)
 	}
+	// Small-world fallback: the other superseded owners' addresses, then the
+	// owner's own retired address (the state the correction hop exists to
+	// replace, and the same stale-state distractor the v8 contact oracle uses).
+	for _, p := range w.storyV13SupersededOwners(index) {
+		add(w.People[p].Email)
+	}
+	add(owner.PreviousEmail)
 	return out
 }
 
@@ -622,28 +673,59 @@ func (w World) storyV13SequenceDistractors(index int) []string {
 	return out
 }
 
+// storyV13NextDistractors seats one wrong person, one wrong action, and one
+// wrong channel. Every pool is guarded: when the small world has no person
+// left outside the anchor and the actor, a superseded owner stands in, and
+// when no person is available at all the action and channel pools fill the
+// set, so the helper never indexes an empty slice.
 func (w World) storyV13NextDistractors(index int) []string {
 	arc := w.StoryArcs[index]
 	next := arc.V2.Next
 	excluded := map[int]bool{arc.PersonIndex: true, next.Who: true}
 	people := w.storyV13OtherPeople(index, excluded, 1)
-	out := []string{w.People[people[0]].Name}
+	for _, p := range w.storyV13SupersededOwners(index) {
+		if len(people) > 0 {
+			break
+		}
+		if p != next.Who && p != arc.PersonIndex {
+			people = append(people, p)
+		}
+	}
 	accepted := append([]string{next.What}, next.WhatAccept...)
-	for step := 1; len(out) < 2 && step <= len(storyNextActions); step++ {
+	actions := make([]string, 0, 2)
+	for step := 1; len(actions) < 2 && step <= len(storyNextActions); step++ {
 		candidate := storyNextActions[(index+step)%len(storyNextActions)]
-		if candidate.what == next.What || grade.ContainedInAny(candidate.what, accepted) || storyAcceptOverlap(candidate.accept, accepted) {
+		if candidate.what == next.What || grade.ContainedInAny(candidate.what, accepted) || storyAcceptOverlap(candidate.accept, accepted) || contains(actions, candidate.what) {
 			continue
 		}
-		out = append(out, candidate.what)
+		actions = append(actions, candidate.what)
 	}
 	channelAccept := storyChannelAccept(next.Channel)
-	for step := 1; len(out) < 3 && step <= len(storyChannels); step++ {
+	channels := make([]string, 0, 2)
+	for step := 1; len(channels) < 2 && step <= len(storyChannels); step++ {
 		candidate := storyChannels[(index+step)%len(storyChannels)]
-		if candidate.channel == next.Channel || grade.ContainedInAny(candidate.channel, channelAccept) || grade.ContainedInAny(candidate.channel, []string{next.What}) {
+		if candidate.channel == next.Channel || grade.ContainedInAny(candidate.channel, channelAccept) || grade.ContainedInAny(candidate.channel, []string{next.What}) || contains(channels, candidate.channel) {
 			continue
 		}
-		out = append(out, candidate.channel)
+		channels = append(channels, candidate.channel)
 	}
+	out := make([]string, 0, 3)
+	for _, p := range people {
+		out = append(out, w.People[p].Name)
+	}
+	take := func(pool []string, want int) {
+		for _, candidate := range pool {
+			if len(out) >= want {
+				return
+			}
+			if !contains(out, candidate) {
+				out = append(out, candidate)
+			}
+		}
+	}
+	take(actions, 2)
+	take(channels, 3)
+	take(actions, 3)
 	return out
 }
 
