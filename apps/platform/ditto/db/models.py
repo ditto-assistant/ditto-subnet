@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import get_args
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -42,6 +43,7 @@ from sqlalchemy.types import TIMESTAMP
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto_screening_protocol import FailureDomain, ScreeningDecisionOutcome
 
 # Per-case detail is a JSON blob: JSONB on Postgres (indexable, compact),
 # plain JSON on the SQLite unit-test fallback. The variant keeps one model
@@ -1730,6 +1732,11 @@ class ScreeningReviewEvent(Base):
     )
 
 
+def _sql_enum(values: tuple[str, ...]) -> str:
+    """Render a Literal's members as a quoted SQL IN-list."""
+    return ", ".join(f"'{value}'" for value in values)
+
+
 class ScreeningDecisionRecord(Base):
     """Append-only policy v13 decision record for one screening review cycle.
 
@@ -1822,13 +1829,14 @@ class ScreeningDecisionRecord(Base):
             ondelete="SET NULL",
             name="screening_decision_records_retry_grant_fkey",
         ),
+        # Enumerations derived from the protocol Literals (one source); the
+        # migration carries the frozen snapshot and a test pins them equal.
         CheckConstraint(
-            "outcome IN ('clear', 'reject', 'review_timed_out')",
+            f"outcome IN ({_sql_enum(get_args(ScreeningDecisionOutcome))})",
             name="screening_decision_records_outcome_check",
         ),
         CheckConstraint(
-            "failure_domain IN ('artifact', 'submission', 'platform', "
-            "'provider', 'none')",
+            f"failure_domain IN ({_sql_enum(get_args(FailureDomain))})",
             name="screening_decision_records_failure_domain_check",
         ),
         CheckConstraint(

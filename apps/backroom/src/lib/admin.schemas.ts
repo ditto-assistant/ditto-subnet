@@ -7468,11 +7468,16 @@ export const activationPrerequisiteSchema = z.object({
   evidence: z.string().nullable().default(null),
 })
 
+export const reviewTimeoutFinalizerModeSchema = z.enum(['off', 'shadow', 'enforce'])
+
 export const activationCeilingSchema = z.object({
   activation_ceiling_policy_version: z.number().int(),
   checklist_ceiling_policy_version: z.number().int(),
   prerequisites: z.array(activationPrerequisiteSchema),
   unverified_count: z.number().int().nonnegative(),
+  // The platform deadline finalizer's configured posture: shadow logs would-be
+  // review_timed_out decisions without writing them; enforce mutates.
+  finalizer_mode: reviewTimeoutFinalizerModeSchema.default('shadow'),
 })
 
 export const getScreeningDecisionRecordInputSchema = z.object({

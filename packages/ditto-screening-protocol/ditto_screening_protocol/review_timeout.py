@@ -34,6 +34,14 @@ from ditto_screening_protocol.models import (
 ScreeningDecisionOutcome = Literal["clear", "reject", "review_timed_out"]
 FailureDomain = Literal["artifact", "submission", "platform", "provider", "none"]
 
+# The Platform finalizer's posture. ``shadow`` selects and dry-runs every
+# would-be decision (logged, rolled back) without writing; ``enforce`` performs
+# the mutation; ``off`` never queries. New automated decision paths ship in
+# shadow so an operator sees a real dry run before the first live timeout.
+ReviewTimeoutFinalizerMode = Literal["off", "shadow", "enforce"]
+REVIEW_TIMEOUT_FINALIZER_MODE_ENV = "DITTO_REVIEW_TIMEOUT_FINALIZER_MODE"
+DEFAULT_REVIEW_TIMEOUT_FINALIZER_MODE: ReviewTimeoutFinalizerMode = "shadow"
+
 REVIEW_TIMED_OUT_OUTCOME: ScreeningDecisionOutcome = "review_timed_out"
 # Reason code stamped on the agent/attempt (hyphenated, matches the DB regex).
 REVIEW_TIMED_OUT_REASON_CODE = "review-timed-out"
@@ -140,6 +148,55 @@ class ReviewTimeoutPolicy:
     @property
     def max_verification_window_hours(self) -> int:
         return int(self.max_verification_window.total_seconds() // 3600)
+
+    def automatic_retry_budget(self, failure_domain: FailureDomain) -> int:
+        """Published automatic retries for one failure domain.
+
+        ``artifact`` and ``submission`` failures are the miner's to fix and get
+        the artifact budget; ``none`` is not a failure and grants nothing.
+        """
+        if failure_domain == "provider":
+            return self.provider_failure_retries
+        if failure_domain == "platform":
+            return self.platform_failure_retries
+        if failure_domain in ("artifact", "submission"):
+            return self.artifact_failure_retries
+        return 0
+
+    @staticmethod
+    def automatic_retries_used(retry_count: int) -> int:
+        """Retries already spent: every strict-policy attempt after the first."""
+        return max(int(retry_count) - 1, 0)
+
+    def independent_worker_required(self, failure_domain: FailureDomain) -> bool:
+        return (
+            self.independent_worker_required_for_platform_provider_failure
+            and failure_domain in ("platform", "provider")
+        )
+
+    def automatic_retry_permitted(
+        self,
+        failure_domain: FailureDomain,
+        *,
+        retry_count: int,
+        independent_workers: int,
+    ) -> bool:
+        """Whether the finalizer may mint another no-fault retry grant.
+
+        The budget counts every strict-policy attempt after the first as one
+        automatic retry, whichever worker ran it: a same-worker repeat still
+        consumed screener capacity, so it cannot be free or a single-worker
+        fleet would cycle a permanently inconclusive submission forever. When
+        the policy requires an independent worker for platform/provider
+        failures, the recorded ``independent_workers`` is published with the
+        decision so an operator can see whether that requirement was ever
+        met; past the cap the timeout is still recorded (no ban, no
+        precedent) but the retry becomes the operator's call.
+        """
+        del independent_workers  # evidence for the record, not a gate
+        return self.automatic_retries_used(retry_count) < self.automatic_retry_budget(
+            failure_domain
+        )
 
 
 @dataclass(frozen=True)

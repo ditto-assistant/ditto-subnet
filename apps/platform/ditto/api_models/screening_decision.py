@@ -11,23 +11,26 @@ test and would truncate audit evidence).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import TypeAlias
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ditto_screening_protocol import (
+    DEFAULT_REVIEW_TIMEOUT_FINALIZER_MODE,
     POLICY_V13_ACTIVATION_PREREQUISITES,
     PUBLISHED_REVIEW_CAPACITY_THRESHOLDS,
     PUBLISHED_REVIEW_TIMEOUT_POLICY,
     SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
+    FailureDomain,
+    ReviewTimeoutFinalizerMode,
+    ScreeningDecisionOutcome,
     activation_ceiling_from_checklist,
 )
 
-ScreeningDecisionOutcome = Literal["clear", "reject", "review_timed_out"]
-ScreeningFailureDomain = Literal[
-    "artifact", "submission", "platform", "provider", "none"
-]
+# One source for every enumeration: the protocol Literal feeds these wire
+# models, the ORM CHECK constraints and the finalizer alike.
+ScreeningFailureDomain: TypeAlias = FailureDomain
 
 
 class ScreeningDecisionIdentities(BaseModel):
@@ -134,6 +137,9 @@ class ActivationCeilingView(BaseModel):
     checklist_ceiling_policy_version: int
     prerequisites: list[ActivationPrerequisiteView]
     unverified_count: int = Field(ge=0)
+    # The Platform deadline finalizer's configured posture on this build:
+    # shadow logs would-be review_timed_out decisions without writing them.
+    finalizer_mode: ReviewTimeoutFinalizerMode = DEFAULT_REVIEW_TIMEOUT_FINALIZER_MODE
 
 
 class AdminScreeningDecisionRecordResponse(BaseModel):
@@ -198,7 +204,10 @@ def review_capacity_thresholds_view() -> ReviewCapacityThresholdsView:
     )
 
 
-def activation_ceiling_view() -> ActivationCeilingView:
+def activation_ceiling_view(
+    *,
+    finalizer_mode: ReviewTimeoutFinalizerMode = DEFAULT_REVIEW_TIMEOUT_FINALIZER_MODE,
+) -> ActivationCeilingView:
     prerequisites = [
         ActivationPrerequisiteView(
             key=item.key,
@@ -213,4 +222,5 @@ def activation_ceiling_view() -> ActivationCeilingView:
         checklist_ceiling_policy_version=activation_ceiling_from_checklist(),
         prerequisites=prerequisites,
         unverified_count=sum(1 for item in prerequisites if not item.verified),
+        finalizer_mode=finalizer_mode,
     )

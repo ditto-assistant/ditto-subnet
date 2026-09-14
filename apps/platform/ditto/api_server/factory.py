@@ -181,7 +181,10 @@ from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
-from ditto.api_server.review_timeout_finalizer import ReviewTimeoutFinalizer
+from ditto.api_server.review_timeout_finalizer import (
+    ReviewTimeoutFinalizer,
+    configured_finalizer_mode,
+)
 from ditto.api_server.runtime_profiles import RuntimeProfileStore
 from ditto.api_server.screener_capacity_event_janitor import (
     ScreenerCapacityEventJanitor,
@@ -484,9 +487,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             # Policy v13 deadline finalizer. Each tick selects only strict
             # two-outcome (v13+) non-decisive holds older than the published
             # window, so before that policy governs it is a cheap no-op and
-            # runs on the platform role unconditionally like the court.
+            # runs on the platform role unconditionally like the court. Its
+            # posture is env-switched (off | shadow | enforce, default
+            # shadow): a new automated decision path is observed as a logged
+            # dry run before it is allowed to mutate agent status.
             review_timeout_finalizer = ReviewTimeoutFinalizer(
-                session_maker=app.state.session_maker
+                session_maker=app.state.session_maker,
+                mode=configured_finalizer_mode(),
             )
             stack.push_async_callback(review_timeout_finalizer.aclose)
             if _process_role() == PLATFORM_ROLE:
