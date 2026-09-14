@@ -147,10 +147,19 @@ type ToolCase struct {
 	// aliases, people, products, and other join keys out of the typo projector;
 	// it never enters the public artifact or harness request.
 	WritingProtected []string `json:"-"`
+	// TwinGroup (bench_version 13, grader-only) is the pair identity of a tool
+	// decision twin: the two (or more) cases the generator paired share one
+	// TwinGroup, and TwinRelation names how. It is a PAIR identity, never the
+	// family label -- Category is shared by every case of a family in a run,
+	// so keying the twin post-pass on it would collapse a whole family into one
+	// group. Unlike MemoryCase.TwinGroup it is never serialized: not in the
+	// hashed artifact, not on /seed or /run
+	// (gen.TestV13GraderOnlyFieldsNeverReachHarnessWire).
+	TwinGroup string `json:"-"`
 	// TwinRelation (bench_version 13, grader-only) names how this case is paired
-	// with its twin (see the TwinRelation constants); TwinGroup-style pairing
-	// identity for tool cases rides on Category plus this relation. Never
-	// serialized.
+	// with the other member(s) of its TwinGroup (see the TwinRelation
+	// constants). A case needs both TwinGroup and TwinRelation to be paired.
+	// Never serialized.
 	TwinRelation string `json:"-"`
 	// Restraint (bench_version 13, grader-only) is set on a case whose correct
 	// outcome is restraint rather than a call. Never serialized.
@@ -891,16 +900,23 @@ type TwinPostPassSummary struct {
 // failures and 5xx retries are never counted. ChoicesTotal sums the `choices`
 // the provider returned, so `n` sampling is visible even when the request count
 // is small. OutputTokens sums provider-reported completion tokens over those
-// successful completions; UsageUnavailable counts completions whose provider
-// response carried no usage block. Attributed reports whether the broker could
-// bind the completions to this case exactly (a case-scoped capability route, or
-// a serial /run window); Attribution names how. Unattributed completions are
-// summarized at the run level, never guessed onto a case.
+// successful completions MINUS the provider-reported reasoning tokens
+// (`usage.completion_tokens_details.reasoning_tokens`, which OpenRouter folds
+// into `completion_tokens` on the agent-selected reasoning route); the
+// reasoning tokens are carried separately in ReasoningTokens so an honest
+// medium/high-reasoning ReAct step is not read as an over-budget answer.
+// UsageUnavailable counts completions whose provider response carried no
+// usage block. Attributed reports whether the broker could bind the
+// completions to this case exactly (a case-scoped capability route, a
+// verified harness claim, or a serial /run window); Attribution names how.
+// Unattributed completions are summarized at the run level, never guessed
+// onto a case.
 type InferenceCostEvidence struct {
 	Class            string `json:"class"`
 	Completions      int    `json:"completions"`
 	ChoicesTotal     int    `json:"choices_total"`
 	OutputTokens     uint64 `json:"output_tokens"`
+	ReasoningTokens  uint64 `json:"reasoning_tokens,omitempty"`
 	UsageUnavailable int    `json:"usage_unavailable,omitempty"`
 	Attributed       bool   `json:"attributed"`
 	Attribution      string `json:"attribution"`
@@ -920,6 +936,13 @@ type InferenceCostBudget struct {
 // InferenceCostSummary (bench_version 13) is the run-level shadow record of the
 // cost factor. Posture is always "shadow" and Applied always false in v13.0:
 // the factor is reported per case and here, never multiplied into a score.
+//
+// AttributedShare (AttributedCases / Cases) and CasesByAttribution are the
+// honesty rails of the shadow reading: an unattributed case reports the full
+// factor by construction, so "factor 1.0 on >= 95% of cases" means nothing
+// unless the attributed share is itself high. A calibration must read the two
+// together and must separate self-claimed bookings (verified_claim) from the
+// broker-bound ones (case_capability, serial_run_case).
 type InferenceCostSummary struct {
 	Posture                    string                `json:"posture"`
 	Applied                    bool                  `json:"applied"`
@@ -928,10 +951,13 @@ type InferenceCostSummary struct {
 	Budgets                    []InferenceCostBudget `json:"budgets"`
 	Cases                      int                   `json:"cases"`
 	AttributedCases            int                   `json:"attributed_cases"`
+	AttributedShare            float64               `json:"attributed_share"`
+	CasesByAttribution         map[string]int        `json:"cases_by_attribution,omitempty"`
 	CasesBelowFullFactor       int                   `json:"cases_below_full_factor"`
 	Completions                int                   `json:"completions"`
 	ChoicesTotal               int                   `json:"choices_total"`
 	OutputTokens               uint64                `json:"output_tokens"`
+	ReasoningTokens            uint64                `json:"reasoning_tokens"`
 	UnattributedCompletions    int                   `json:"unattributed_completions"`
 	UnattributedChoices        int                   `json:"unattributed_choices"`
 	UnattributedOutputTokens   uint64                `json:"unattributed_output_tokens"`
@@ -1310,7 +1336,9 @@ type RunDetails struct {
 	// post-pass over decision/as-of twin groups and metamorphic base +
 	// counterfactual pairs (issue #1835): which rule ran, under which posture,
 	// how many groups were concordant, and the per-relation means. nil for
-	// every earlier contract and for a v13 run that drew no paired case.
+	// every earlier contract; present on EVERY v13 run, including one that drew
+	// no paired case (every count 0), so the effective posture and rule are
+	// always visible to Platform.
 	TwinPostPass *TwinPostPassSummary `json:"twin_post_pass,omitempty"`
 	// InferenceCost (bench_version 13) is the run-level shadow cost-factor
 	// summary over CaseScore.InferenceCost (issue #1850): the published budgets,

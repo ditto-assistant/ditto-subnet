@@ -109,6 +109,68 @@
     "type": "object"
   },
   "CaseScore": {
+    "$defs": {
+      "InferenceCostEvidence": {
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "unattributed",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "class"
+        ],
+        "type": "object"
+      }
+    },
     "properties": {
       "called": {
         "items": {
@@ -144,6 +206,17 @@
           "type": "string"
         },
         "type": "array"
+      },
+      "inference_cost": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/InferenceCostEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "injection": {
         "default": false,
@@ -4763,6 +4836,17 @@
             },
             "type": "array"
           },
+          "inference_cost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InferenceCostEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "injection": {
             "default": false,
             "type": "boolean"
@@ -4877,6 +4961,66 @@
           "v",
           "k",
           "card"
+        ],
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "unattributed",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "class"
         ],
         "type": "object"
       }
@@ -5089,6 +5233,17 @@
             },
             "type": "array"
           },
+          "inference_cost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InferenceCostEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "injection": {
             "default": false,
             "type": "boolean"
@@ -5203,6 +5358,66 @@
           "v",
           "k",
           "card"
+        ],
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "unattributed",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "class"
         ],
         "type": "object"
       },

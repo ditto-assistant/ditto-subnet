@@ -891,6 +891,84 @@ class ValidatorHeartbeatResponse(BaseModel):
     ] = None
 
 
+class InferenceCostEvidence(BaseModel):
+    """bench_version >= 13 shadow inference-cost record for one case.
+
+    Mirrors the DittoBench ``InferenceCostEvidence`` wire shape
+    (``pkg/protocol``): the ticket-bound broker's booking of successful
+    completions, sampled ``choices``, and answer output tokens (provider
+    ``completion_tokens`` minus reported reasoning tokens) against the published
+    per-class budget, plus the factor the v13 rule WOULD apply. Shadow only in
+    v13.0 -- reported, never multiplied into a score, and outside the signed
+    evidence root. ``attribution`` names how the completions were bound to the
+    case (``case_capability`` / ``verified_claim`` / ``serial_run_case``) or
+    ``unattributed``; an unattributed case carries no bookings and the full
+    factor by construction, so a calibration must read the factor together with
+    the attributed share in ``details.inference_cost``.
+    """
+
+    # ``class`` is a Python keyword: the attribute is ``class_`` and every dump
+    # (Platform persists ``per_case`` from ``model_dump``) must emit the Go wire
+    # key, so serialization is by alias -- the wire shape never mutates.
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    class_: Annotated[
+        str,
+        Field(
+            alias="class",
+            description="Budget class: ``memory`` | ``single_tool`` | ``tool_chain``.",
+        ),
+    ]
+    completions: Annotated[
+        int, Field(ge=0, default=0, description="Successful completions booked.")
+    ] = 0
+    choices_total: Annotated[
+        int, Field(ge=0, default=0, description="Sum of provider ``choices`` lengths.")
+    ] = 0
+    output_tokens: Annotated[
+        int,
+        Field(
+            ge=0, default=0, description="Answer output tokens (reasoning excluded)."
+        ),
+    ] = 0
+    reasoning_tokens: Annotated[
+        int,
+        Field(ge=0, default=0, description="Provider-reported reasoning tokens."),
+    ] = 0
+    usage_unavailable: Annotated[
+        int,
+        Field(ge=0, default=0, description="Completions without a usage block."),
+    ] = 0
+    attributed: Annotated[
+        bool, Field(default=False, description="Bookings bound to this case exactly.")
+    ] = False
+    attribution: Annotated[
+        str,
+        Field(
+            default="unattributed",
+            description=(
+                "``case_capability`` | ``verified_claim`` | ``serial_run_case`` | "
+                "``unattributed``."
+            ),
+        ),
+    ] = "unattributed"
+    budget_tokens: Annotated[
+        int, Field(ge=0, default=0, description="Published class budget in tokens.")
+    ] = 0
+    excess_tokens: Annotated[
+        int, Field(ge=0, default=0, description="Output tokens above the budget.")
+    ] = 0
+    factor_bps: Annotated[
+        int,
+        Field(
+            ge=0,
+            le=10_000,
+            default=10_000,
+            description="Shadow cost factor in basis points, floored at 6000.",
+        ),
+    ] = 10_000
+
+
 class CaseScore(BaseModel):
     """Per-case breakdown inside a :class:`ScoreReport`.
 
@@ -1007,6 +1085,19 @@ class CaseScore(BaseModel):
             ),
         ),
     ] = ""
+    # bench_version >= 13 shadow cost record. Go emits it ``omitempty`` for v13
+    # runs only; declared so ``extra="ignore"`` cannot drop the #1850 telemetry
+    # the calibration reads from Platform.
+    inference_cost: Annotated[
+        InferenceCostEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "bench_version>=13: shadow per-case inference cost record and "
+                "the factor the rule would apply; null below v13."
+            ),
+        ),
+    ] = None
 
     @field_validator("called", "expected", "notes", mode="before")
     @classmethod

@@ -2024,7 +2024,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	toolResults = scorer.ApplyV13RestraintGroupRule(req.BenchVersion, toolResults, v13RestraintGroupPosture())
 	for i, cs := range toolResults {
 		perCase = append(perCase, cs)
-		if toolTwins[i].Group != "" {
+		if toolTwins[i].Paired() {
 			twinEvidence[cs.CaseID] = toolTwins[i]
 		}
 		if toolWasObserved[i] {
@@ -2188,7 +2188,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		perCase = append(perCase, waveResults...)
 		transcripts = append(transcripts, waveTranscripts...)
 		for i, cs := range waveResults {
-			if waveTwins[i].Group != "" {
+			if waveTwins[i].Paired() {
 				twinEvidence[cs.CaseID] = waveTwins[i]
 			}
 		}

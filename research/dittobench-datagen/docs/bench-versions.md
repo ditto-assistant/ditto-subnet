@@ -512,8 +512,10 @@ extends it when its lever lands.
 - Grader-only protocol types, all tagged `json:"-"` so they never enter the
   hashed artifact, `/seed`, or `/run`: `MemoryCase.Claims []Claim{Kind,
   Expected, Accept, Unit, Critical, Weight}`, `MemoryCase.TwinRelation` /
-  `ToolCase.TwinRelation` (`decision_twin`, `as_of_twin`),
-  `ToolSpec.RequiredArgClaims`, `ToolCase.Restraint *RestraintClaim`
+  `ToolCase.TwinRelation` (`decision_twin`, `as_of_twin`), `ToolCase.TwinGroup`
+  (the tool twin pair identity; `MemoryCase.TwinGroup` stays a serialized
+  validator-internal field as in v5+), `ToolSpec.RequiredArgClaims`,
+  `ToolCase.Restraint *RestraintClaim`
   (`no_call`, `clarify_first`, `decline`), and the answer kinds `AnswerClarify`
   and `AnswerAbsence`. `CaseScore.Relation` carries
   `V10CaseProvenance.Relation` into the report for v13 runs only.
@@ -570,7 +572,11 @@ cases for one error. The scorer's v13 post-pass
 the evidence of a default:
 
 - **`decision_twin` / `as_of_twin` groups** (`protocol.TwinRelation*`, paired
-  through the case `TwinGroup`, or the tool `Category` for tool twins). An
+  through the memory case `TwinGroup`, or the grader-only `ToolCase.TwinGroup`
+  for tool twins — a pair identity, never the family `Category`, which every
+  case of a family shares and would collapse a whole family into one group).
+  A case that is also a metamorphic program member carries the two identities
+  separately (`TwinEvidence.MetamorphicGroup` vs `TwinEvidence.TwinGroup`). An
   identical decision class (`answer` / `abstain` / `act`, classified from the
   observed trajectory and the grader's own decline rule `grade.Declines`)
   across every delivered member of a decision twin, or an identical asserted
@@ -591,13 +597,20 @@ the evidence of a default:
   graded independently, so a solver is capped at 0.5 of the group and one
   honest miss recovers 0.5.
 - Groups with an undelivered member (transport failure) or a mixed relation
-  are skipped, exactly as `MetamorphicConsistency` skips them.
+  are skipped, exactly as `MetamorphicConsistency` skips them; undelivered
+  cases are also left out of the published per-relation means.
 - The posture switch `DITTOBENCH_V13_TWIN_POSTURE` defaults to **observe**:
   cases receive the exact marker notes `twin_concordant` /
   `counterfactual_insensitive` plus a reason, and `details.twin_post_pass`
   publishes rule, posture, group counts, `cases_affected_share` (auditable
   against the envelope cascade cap), and per-relation means — but no score
-  moves. `enforce` is an explicit, fleet-wide operator choice after #1521.
+  moves. The summary is present on every v13 run, including one that drew no
+  paired case, so the effective posture is always visible. `enforce` is an
+  explicit, fleet-wide operator choice after #1521 — and the switch is a
+  per-validator environment variable that nothing makes uniform, so before
+  any enforce decision the posture must come from a Platform-published
+  contract (rollout policy / score-gate evidence) and Platform must reject a
+  report whose `details.twin_post_pass.posture` disagrees with it.
 - `CaseScore.Relation` carries the generator relation into the report for v13
   runs; v2–v12 reports and scores are byte-identical (the pass is the identity
   below v13, pinned by `TestTwinPostPassLeavesEarlierVersionsUntouched`).
@@ -619,23 +632,42 @@ cost_factor = clamp(1 − α · max(0, tokens_out − budget_c), 0.6, 1)
 ```
 
 - The ticket-bound broker books every **successful** (2xx) chat completion on
-  the `/run` case it can bind exactly — a case-scoped inference capability
-  route, or a serial `/run` window with one case in flight — recording
-  completions, `choices` length (so `n=5` is visible), and provider-reported
-  completion tokens. Provider failures and 5xx retries never reach the ledger.
-  Completions that overlap several in-flight cases (concurrent `/run`) are
-  booked unattributed and reported at run level; nothing is guessed onto a
-  case, and an unattributed case reports the full factor.
+  the `/run` case it can bind, strongest binding first: a case-scoped
+  inference capability route (`case_capability`, broker-exact); a **verified
+  harness claim** (`verified_claim`: the completion carried `X-Ditto-Case-Id`
+  naming a case the broker has in flight — the same verified "claim" path the
+  trace context files, and what keeps the ledger populated under the default
+  concurrent `/run`; a claim naming a case not in flight is never booked); or
+  a serial `/run` window with one case in flight (`serial_run_case`). It
+  records completions, `choices` length (so `n=5` is visible), and **answer
+  output tokens** — provider `completion_tokens` minus the provider-reported
+  `completion_tokens_details.reasoning_tokens`, which OpenRouter folds into
+  `completion_tokens` on the agent-selected reasoning route; the reasoning
+  tokens are carried separately (`reasoning_tokens`), not charged, so an honest
+  medium/high-reasoning ReAct step is not read as an over-budget answer.
+  Provider failures and 5xx retries never reach the ledger. Completions that
+  overlap several in-flight cases with no verified claim are booked
+  unattributed and reported at run level; nothing is guessed onto a case, and
+  an unattributed case reports the full factor.
 - Published budgets (`scoregates.CostBudgets()`): one completion-equivalent is
   512 output tokens; `memory` and `single_tool` cases get 3 equivalents
   (1536 tokens), `tool_chain` cases 5 (2560 tokens) — plan → call → observe →
   answer plus one LLM tool-router completion sits inside budget. α is
   `(1 − 0.6) / budget_c`, so the floor is reached at exactly twice the budget.
+  **The budget is a shadow constant**: because the factor is kept out of the
+  signed evidence root, the completion-equivalent size and per-class budgets
+  may be re-published from #1521 calibration data before any enforce decision
+  without a contract bump.
 - **Shadow only in v13.0.** `per_case[].inference_cost` and
   `details.inference_cost` (`posture: "shadow"`, `applied: false`) report the
   factor; it is never multiplied into a composite and is kept out of the signed
   score-gate evidence root until the enforce decision, which follows #1521
-  showing honest ReAct and LLM-router loops at factor 1.0 on ≥95% of cases.
+  showing honest ReAct and LLM-router loops at factor 1.0 on ≥95% of
+  **attributed** cases. `details.inference_cost.attributed_share` and
+  `cases_by_attribution` are the honesty rails of that reading: an
+  unattributed case is at 1.0 by construction, so a ≥95% figure is accepted
+  only alongside a high attributed share, and self-claimed (`verified_claim`)
+  bookings are read separately from the broker-bound ones.
 
 ### Case families (#1520, #1836, #1837, #1838)
 

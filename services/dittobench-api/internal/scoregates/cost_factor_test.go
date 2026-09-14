@@ -107,7 +107,7 @@ func TestBuildInferenceCostIsVersionGatedAndShadow(t *testing.T) {
 func TestSummarizeInferenceCostIsShadowAndAggregates(t *testing.T) {
 	perCase := []protocol.CaseScore{
 		{CaseID: "a", InferenceCost: &protocol.InferenceCostEvidence{Attributed: true, Attribution: CostAttributionSerialRunCase, Completions: 2, ChoicesTotal: 2, OutputTokens: 300, FactorBPS: BasisPointScale}},
-		{CaseID: "b", InferenceCost: &protocol.InferenceCostEvidence{Attributed: true, Attribution: CostAttributionCaseCapability, Completions: 5, ChoicesTotal: 25, OutputTokens: 9000, FactorBPS: CostFactorFloorBPS}},
+		{CaseID: "b", InferenceCost: &protocol.InferenceCostEvidence{Attributed: true, Attribution: CostAttributionVerifiedClaim, Completions: 5, ChoicesTotal: 25, OutputTokens: 9000, ReasoningTokens: 2500, FactorBPS: CostFactorFloorBPS}},
 		{CaseID: "c", InferenceCost: &protocol.InferenceCostEvidence{Attribution: CostAttributionUnavailable, FactorBPS: BasisPointScale}},
 		{CaseID: "d"},
 	}
@@ -118,8 +118,22 @@ func TestSummarizeInferenceCostIsShadowAndAggregates(t *testing.T) {
 	if got.Cases != 3 || got.AttributedCases != 2 || got.CasesBelowFullFactor != 1 {
 		t.Fatalf("counts = %+v", got)
 	}
-	if got.Completions != 7 || got.ChoicesTotal != 27 || got.OutputTokens != 9300 {
+	if got.Completions != 7 || got.ChoicesTotal != 27 || got.OutputTokens != 9300 || got.ReasoningTokens != 2500 {
 		t.Fatalf("attributed totals = %+v", got)
+	}
+	// The honesty rails: a >= 95%-at-1.0 reading is meaningless without the
+	// attributed share and the self-claimed vs broker-bound split beside it.
+	if got.AttributedShare != 2.0/3.0 {
+		t.Fatalf("attributed share = %v", got.AttributedShare)
+	}
+	wantBy := map[string]int{CostAttributionSerialRunCase: 1, CostAttributionVerifiedClaim: 1, CostAttributionUnavailable: 1}
+	if len(got.CasesByAttribution) != len(wantBy) {
+		t.Fatalf("cases by attribution = %+v", got.CasesByAttribution)
+	}
+	for k, v := range wantBy {
+		if got.CasesByAttribution[k] != v {
+			t.Fatalf("cases by attribution[%s] = %d, want %d (%+v)", k, got.CasesByAttribution[k], v, got.CasesByAttribution)
+		}
 	}
 	if got.UnattributedCompletions != 7 || got.UnattributedOutputTokens != 1234 {
 		t.Fatalf("unattributed totals = %+v", got)
@@ -131,8 +145,27 @@ func TestSummarizeInferenceCostIsShadowAndAggregates(t *testing.T) {
 		t.Fatalf("published constants missing: %+v", got)
 	}
 	empty := SummarizeInferenceCost(BenchVersionV13, nil, InferenceCostRecord{})
-	if empty.Cases != 0 || empty.MeanFactorBPS != BasisPointScale {
+	if empty.Cases != 0 || empty.MeanFactorBPS != BasisPointScale || empty.AttributedShare != 0 || empty.CasesByAttribution != nil {
 		t.Fatalf("empty summary = %+v", empty)
+	}
+}
+
+func TestCostAttributionRankOrdersStrongestFirst(t *testing.T) {
+	if !(CostAttributionRank(CostAttributionCaseCapability) > CostAttributionRank(CostAttributionVerifiedClaim) &&
+		CostAttributionRank(CostAttributionVerifiedClaim) > CostAttributionRank(CostAttributionSerialRunCase) &&
+		CostAttributionRank(CostAttributionSerialRunCase) > CostAttributionRank(CostAttributionUnavailable)) {
+		t.Fatal("attribution rank order drifted")
+	}
+	if CostAttributionRank("") != CostAttributionRank(CostAttributionUnavailable) || CostAttributionRank("bogus") != 0 {
+		t.Fatal("unknown attributions must rank with unattributed")
+	}
+	record := &InferenceCostRecord{Completions: 1, ChoicesTotal: 1, OutputTokens: 100, ReasoningTokens: 2000, Attribution: CostAttributionVerifiedClaim}
+	got := BuildInferenceCost(BenchVersionV13, CostClassMemory, record)
+	if !got.Attributed || got.Attribution != CostAttributionVerifiedClaim || got.ReasoningTokens != 2000 || got.FactorBPS != BasisPointScale {
+		t.Fatalf("reasoning tokens were charged against the answer budget: %+v", got)
+	}
+	if err := ValidateInferenceCost(*got); err != nil {
+		t.Fatal(err)
 	}
 }
 

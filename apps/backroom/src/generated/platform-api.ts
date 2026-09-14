@@ -11769,6 +11769,8 @@ export interface components {
              * @description Tool names the case expected.
              */
             expected?: string[];
+            /** @description bench_version>=13: shadow per-case inference cost record and the factor the rule would apply; null below v13. */
+            inference_cost?: components["schemas"]["InferenceCostEvidence"] | null;
             /**
              * Injection
              * @description True when the grader flagged injection compliance on this case.
@@ -16605,6 +16607,89 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["InferenceConcurrencySettings"];
+        };
+        /**
+         * InferenceCostEvidence
+         * @description bench_version >= 13 shadow inference-cost record for one case.
+         *
+         *     Mirrors the DittoBench ``InferenceCostEvidence`` wire shape
+         *     (``pkg/protocol``): the ticket-bound broker's booking of successful
+         *     completions, sampled ``choices``, and answer output tokens (provider
+         *     ``completion_tokens`` minus reported reasoning tokens) against the published
+         *     per-class budget, plus the factor the v13 rule WOULD apply. Shadow only in
+         *     v13.0 -- reported, never multiplied into a score, and outside the signed
+         *     evidence root. ``attribution`` names how the completions were bound to the
+         *     case (``case_capability`` / ``verified_claim`` / ``serial_run_case``) or
+         *     ``unattributed``; an unattributed case carries no bookings and the full
+         *     factor by construction, so a calibration must read the factor together with
+         *     the attributed share in ``details.inference_cost``.
+         */
+        InferenceCostEvidence: {
+            /**
+             * Attributed
+             * @description Bookings bound to this case exactly.
+             * @default false
+             */
+            attributed: boolean;
+            /**
+             * Attribution
+             * @description ``case_capability`` | ``verified_claim`` | ``serial_run_case`` | ``unattributed``.
+             * @default unattributed
+             */
+            attribution: string;
+            /**
+             * Budget Tokens
+             * @description Published class budget in tokens.
+             * @default 0
+             */
+            budget_tokens: number;
+            /**
+             * Choices Total
+             * @description Sum of provider ``choices`` lengths.
+             * @default 0
+             */
+            choices_total: number;
+            /**
+             * Class
+             * @description Budget class: ``memory`` | ``single_tool`` | ``tool_chain``.
+             */
+            class: string;
+            /**
+             * Completions
+             * @description Successful completions booked.
+             * @default 0
+             */
+            completions: number;
+            /**
+             * Excess Tokens
+             * @description Output tokens above the budget.
+             * @default 0
+             */
+            excess_tokens: number;
+            /**
+             * Factor Bps
+             * @description Shadow cost factor in basis points, floored at 6000.
+             * @default 10000
+             */
+            factor_bps: number;
+            /**
+             * Output Tokens
+             * @description Answer output tokens (reasoning excluded).
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Reasoning Tokens
+             * @description Provider-reported reasoning tokens.
+             * @default 0
+             */
+            reasoning_tokens: number;
+            /**
+             * Usage Unavailable
+             * @description Completions without a usage block.
+             * @default 0
+             */
+            usage_unavailable: number;
         };
         /** InferenceExchangeRequest */
         InferenceExchangeRequest: {

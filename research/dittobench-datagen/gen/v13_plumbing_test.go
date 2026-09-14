@@ -136,6 +136,11 @@ func TestV13GraderOnlyFieldsNeverReachHarnessWire(t *testing.T) {
 			gotTool.TwinGroup == "" || gotTool.EffectAnswer == "" || len(gotTool.EffectForbidden) == 0 || gotTool.RunAfterCaseID == "" || len(gotTool.ForbiddenTools) == 0 || len(gotTool.AlternativeExpectedTools) != 1 || len(gotTool.Restraint.Grounding) == 0 {
 			t.Fatalf("v%d: grader-only tool fields did not survive assembly: %+v", version, gotTool)
 		}
+		// MemoryCase.TwinGroup is a serialized validator-internal field (v5+
+		// phrasing twins), so "twin_group" cannot be banned artifact-wide; the
+		// TOOL case's TwinGroup is grader-only and must not appear under any
+		// tool case.
+		assertNoToolCaseKey(t, "v"+string(rune('0'+version/10))+string(rune('0'+version%10))+" artifact", body, "twin_group")
 	}
 
 	// Byte identity: stripping the grader-only fields must not move the hash.
@@ -143,8 +148,8 @@ func TestV13GraderOnlyFieldsNeverReachHarnessWire(t *testing.T) {
 	bare.Case.Claims = nil
 	bare.Case.TwinRelation = ""
 	bareTool := tc
-	bareTool.TwinRelation = ""
 	bareTool.TwinGroup = ""
+	bareTool.TwinRelation = ""
 	bareTool.ForbiddenTools = nil
 	bareTool.EffectAnswer = ""
 	bareTool.EffectForbidden = nil
@@ -174,6 +179,30 @@ func TestV13GraderOnlyFieldsNeverReachHarnessWire(t *testing.T) {
 	assertNoGraderOnlyKeys(t, "MemoryCase", mcBody)
 	tcBody, _ := json.Marshal(tc)
 	assertNoGraderOnlyKeys(t, "ToolCase", tcBody)
+	if strings.Contains(string(tcBody), "twin_group") || strings.Contains(strings.ToLower(string(tcBody)), "tool-pair-v13") {
+		t.Fatalf("ToolCase.TwinGroup reached the wire: %s", tcBody)
+	}
+}
+
+// assertNoToolCaseKey fails when key appears on any element of the artifact's
+// tool_cases array (ToolCase-scoped grader-only keys whose name is a legitimate
+// serialized field elsewhere, e.g. MemoryCase.TwinGroup).
+func assertNoToolCaseKey(t *testing.T, surface string, body []byte, key string) {
+	t.Helper()
+	var artifact struct {
+		ToolCases []map[string]any `json:"tool_cases"`
+	}
+	if err := json.Unmarshal(body, &artifact); err != nil {
+		t.Fatalf("%s: %v", surface, err)
+	}
+	if len(artifact.ToolCases) == 0 {
+		t.Fatalf("%s: no tool_cases to inspect", surface)
+	}
+	for i, tc := range artifact.ToolCases {
+		if _, ok := tc[key]; ok {
+			t.Fatalf("%s: grader-only tool key %q reached the wire at $.tool_cases[%d]", surface, key, i)
+		}
+	}
 }
 
 // TestV13ProfileAndEnvelope pins the plumbing acceptance: ProfileForVersion

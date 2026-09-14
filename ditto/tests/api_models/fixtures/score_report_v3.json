@@ -43,7 +43,20 @@
       "called": [
         "search_memories"
       ],
-      "expected": null
+      "expected": null,
+      "inference_cost": {
+        "class": "memory",
+        "completions": 3,
+        "choices_total": 3,
+        "output_tokens": 700,
+        "reasoning_tokens": 1900,
+        "attributed": true,
+        "attribution": "verified_claim",
+        "budget_tokens": 1536,
+        "excess_tokens": 0,
+        "factor_bps": 10000,
+        "usage_unavailable": 1
+      }
     },
     {
       "case_id": "memory-fixture-0003",

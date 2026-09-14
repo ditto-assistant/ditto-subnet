@@ -81,6 +81,27 @@ def test_v13_relation_round_trips() -> None:
     assert "" in relations
 
 
+def test_v13_inference_cost_round_trips() -> None:
+    # bench_version >= 13 shadow cost record (Go ``CaseScore.InferenceCost``,
+    # ``omitempty``): declared as a typed mirror so the #1850 telemetry the
+    # calibration reads from Platform is not dropped by ``extra="ignore"``.
+    report = ScoreReport.model_validate(_fixture())
+    assert "inference_cost" in type(report.per_case[0]).model_fields
+    costed = [case for case in report.per_case if case.inference_cost is not None]
+    assert len(costed) == 1
+    cost = costed[0].inference_cost
+    assert cost is not None
+    assert cost.class_ == "memory"
+    assert cost.attribution == "verified_claim"
+    assert cost.completions == 3 and cost.usage_unavailable == 1
+    assert cost.output_tokens == 700
+    assert cost.reasoning_tokens == 1900
+    assert cost.factor_bps == 10_000
+    # Alias round-trips as the Go wire key, not the Python attribute name.
+    dumped = cost.model_dump(by_alias=True)
+    assert dumped["class"] == "memory" and "class_" not in dumped
+
+
 def test_v3_audit_fields_round_trip() -> None:
     report = ScoreReport.model_validate(_fixture())
     assert set(type(report.per_case[0]).model_fields) >= V3_CASE_AUDIT_FIELDS
