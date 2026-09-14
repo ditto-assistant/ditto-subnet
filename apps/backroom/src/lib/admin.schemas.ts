@@ -6575,6 +6575,179 @@ export const openAthReviewResponseSchema = z.object({
   reopened: z.boolean().default(false),
 })
 
+// Batched ATH rulings: presigned upload -> dry-run preview -> guarded execute.
+// The document shape is the Platform wire shape (snake_case) on purpose: the
+// same JSON an operator uploads through the presigned PUT is accepted inline,
+// so a review write-up's rulings paste straight into either path.
+export const ATH_RULINGS_CONFIRMATION = 'APPLY ATH RULINGS BATCH'
+export const ATH_RULINGS_MAX_ITEMS = 50
+
+type GeneratedAthRulingsUploadResponse =
+  PlatformComponents['schemas']['AdminAthRulingsUploadResponse']
+type GeneratedAthRulingsBoardProjection =
+  PlatformComponents['schemas']['AdminAthRulingsBoardProjection']
+type GeneratedAthRulingPreviewItem = PlatformComponents['schemas']['AdminAthRulingPreviewItem']
+type GeneratedAthRulingsPreviewResponse =
+  PlatformComponents['schemas']['AdminAthRulingsPreviewResponse']
+type GeneratedAthRulingExecuteItem = PlatformComponents['schemas']['AdminAthRulingExecuteItem']
+type GeneratedAthRulingsExecuteResponse =
+  PlatformComponents['schemas']['AdminAthRulingsExecuteResponse']
+
+export const athRulingActionSchema = z.enum(['open', 'clear', 'reject'])
+
+export const athRulingDispositionSchema = z.enum([
+  'ready',
+  'already_applied',
+  'stale_guard',
+  'conflict',
+  'not_found',
+  'invalid',
+])
+
+// ``path:line`` or ``path:line-line`` -- the citation every reject carries.
+export const athRulingEvidenceReferenceSchema = z
+  .string()
+  .trim()
+  .min(3)
+  .max(512)
+  .regex(/^[^\s:]+(?:\/[^\s:]+)*:\d+(?:-\d+)?$/)
+
+export const athRulingSchema = z.object({
+  action: athRulingActionSchema,
+  agent_id: z.string().uuid(),
+  expected_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expected_score_count: z.number().int().nonnegative(),
+  reason: auditReasonSchema(3),
+  evidence_references: z.array(athRulingEvidenceReferenceSchema).max(64).default([]),
+})
+
+const uniqueRulingAgents = (
+  rulings: ReadonlyArray<{ agent_id: string }> | undefined,
+  context: z.RefinementCtx,
+) => {
+  if (!rulings) return
+  const ids = rulings.map((ruling) => ruling.agent_id)
+  if (new Set(ids).size !== ids.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['rulings'],
+      message: 'Each agent can appear only once per batch',
+    })
+  }
+}
+
+export const athRulingsUploadResponseSchema = z.object({
+  bucket: z.string(),
+  key: z.string(),
+  url: z.string(),
+  method: z.literal('PUT'),
+  content_type: z.string(),
+  expires_in: z.number().int().positive(),
+  max_bytes: z.number().int().positive(),
+} satisfies PlatformResponseShape<GeneratedAthRulingsUploadResponse>)
+
+export const previewAthRulingsBatchInputSchema = z
+  .object({
+    uploadKey: z.string().min(1).max(512).optional(),
+    rulings: z.array(athRulingSchema).min(1).max(ATH_RULINGS_MAX_ITEMS).optional(),
+    source: z.string().max(512).optional(),
+  })
+  .superRefine((value, context) => {
+    if ((value.uploadKey === undefined) === (value.rulings === undefined)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['uploadKey'],
+        message: 'Provide exactly one of uploadKey or rulings',
+      })
+    }
+    uniqueRulingAgents(value.rulings, context)
+  })
+
+export const athRulingsBoardProjectionSchema = z.object({
+  bench_version: z.number().int().positive(),
+  read_at: z.string(),
+  ranked_count: z.number().int().nonnegative(),
+  champion_agent_id: z.string().uuid().nullable(),
+  champion_hotkey: z.string().nullable(),
+  champion_score: z.number().nullable(),
+  raw_leader_agent_id: z.string().uuid().nullable(),
+  raw_leader_score: z.number().nullable(),
+  fingerprint: z.string(),
+} satisfies PlatformResponseShape<GeneratedAthRulingsBoardProjection>)
+
+export const athRulingPreviewItemSchema = z.object({
+  index: z.number().int().nonnegative(),
+  action: athRulingActionSchema,
+  agent_id: z.string().uuid(),
+  agent_name: z.string().nullable().default(null),
+  agent_version: z.number().int().nullable().default(null),
+  miner_hotkey: z.string().nullable().default(null),
+  agent_status: z.string().nullable().default(null),
+  artifact_sha256: z.string().nullable().default(null),
+  score_count: z.number().int().nonnegative().nullable().default(null),
+  ok: z.boolean(),
+  disposition: athRulingDispositionSchema,
+  stale_guard: z.boolean(),
+  would_change_crown: z.boolean(),
+  conflict_reason: z.string().nullable().default(null),
+  steps: z.array(athRulingActionSchema).default([]),
+  reason: z.string(),
+  evidence_references: z.array(z.string()).default([]),
+  message: z.string(),
+} satisfies PlatformResponseShape<GeneratedAthRulingPreviewItem>)
+
+export const athRulingsPreviewResponseSchema = z.object({
+  preview_token: z.string(),
+  expires_at: z.string(),
+  rulings_sha256: z.string(),
+  upload_key: z.string().nullable().default(null),
+  source: z.string().nullable().default(null),
+  board: athRulingsBoardProjectionSchema,
+  items: z.array(athRulingPreviewItemSchema),
+  ready_count: z.number().int().nonnegative(),
+  already_applied_count: z.number().int().nonnegative(),
+  blocked_count: z.number().int().nonnegative(),
+  crown_moving_count: z.number().int().nonnegative(),
+} satisfies PlatformResponseShape<GeneratedAthRulingsPreviewResponse>)
+
+export const executeAthRulingsBatchInputSchema = z
+  .object({
+    previewToken: z.string().min(32).max(16384),
+    confirmation: z.literal(ATH_RULINGS_CONFIRMATION),
+    // Required when the batch was previewed inline: the token binds the
+    // rulings digest, not their bytes.
+    rulings: z.array(athRulingSchema).min(1).max(ATH_RULINGS_MAX_ITEMS).optional(),
+  })
+  .superRefine((value, context) => uniqueRulingAgents(value.rulings, context))
+
+export const athRulingExecuteItemSchema = z.object({
+  index: z.number().int().nonnegative(),
+  action: athRulingActionSchema,
+  agent_id: z.string().uuid(),
+  status: z.enum(['applied', 'already_applied', 'failed']),
+  agent_status: z.string().nullable().default(null),
+  would_change_crown: z.boolean(),
+  steps_applied: z.array(athRulingActionSchema).default([]),
+  message: z.string(),
+} satisfies PlatformResponseShape<GeneratedAthRulingExecuteItem>)
+
+export const athRulingsExecuteResponseSchema = z.object({
+  batch_id: z.string().uuid(),
+  rulings_sha256: z.string(),
+  upload_key: z.string().nullable().default(null),
+  board_before: athRulingsBoardProjectionSchema,
+  board_after: athRulingsBoardProjectionSchema,
+  items: z.array(athRulingExecuteItemSchema),
+  applied_count: z.number().int().nonnegative(),
+  already_applied_count: z.number().int().nonnegative(),
+  failed_count: z.number().int().nonnegative(),
+} satisfies PlatformResponseShape<GeneratedAthRulingsExecuteResponse>)
+
+export type AthRulingsDocument = {
+  rulings: Array<z.input<typeof athRulingSchema>>
+  source?: string
+}
+
 // Per-file diff between a held agent and the agent it was matched against, so
 // an operator can see which files were copied verbatim vs. altered inline.
 

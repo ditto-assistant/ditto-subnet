@@ -18,6 +18,11 @@ import {
   openAthReviewInputSchema,
   searchAthPrecedentsInputSchema,
   openAthReviewResponseSchema,
+  athRulingsUploadResponseSchema,
+  previewAthRulingsBatchInputSchema,
+  athRulingsPreviewResponseSchema,
+  executeAthRulingsBatchInputSchema,
+  athRulingsExecuteResponseSchema,
   resolveCopyReviewInputSchema,
   resolveCopyReviewResponseSchema,
   baselineDiffFileDetailSchema,
@@ -1742,6 +1747,47 @@ export async function openAthReview(rawInput: unknown, actor: string) {
   )
   invalidateCopyReviewsCache()
   return openAthReviewResponseSchema.parse(payload)
+}
+
+export async function createAthRulingsUpload(actor: string) {
+  const payload = await platformAdminRequest('/api/v1/admin/ath-rulings/upload-url', {
+    method: 'POST',
+    actor,
+    body: {},
+  })
+  return athRulingsUploadResponseSchema.parse(payload)
+}
+
+export async function previewAthRulingsBatch(rawInput: unknown, actor: string) {
+  const input = previewAthRulingsBatchInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/ath-rulings/batch-preview', {
+    method: 'POST',
+    actor,
+    body: {
+      upload_key: input.uploadKey ?? null,
+      rulings: input.rulings ?? null,
+      source: input.source ?? null,
+    },
+    // Fifty rows each re-read the board; give the dry run room.
+    timeoutMs: 60_000,
+  })
+  return athRulingsPreviewResponseSchema.parse(payload)
+}
+
+export async function executeAthRulingsBatch(rawInput: unknown, actor: string) {
+  const input = executeAthRulingsBatchInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/ath-rulings/batch-execute', {
+    method: 'POST',
+    actor,
+    body: {
+      preview_token: input.previewToken,
+      confirmation: input.confirmation,
+      rulings: input.rulings ?? null,
+    },
+    timeoutMs: 120_000,
+  })
+  invalidateCopyReviewsCache()
+  return athRulingsExecuteResponseSchema.parse(payload)
 }
 
 export async function fetchScreeningSubmissions(

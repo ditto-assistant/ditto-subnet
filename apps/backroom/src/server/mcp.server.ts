@@ -30,6 +30,8 @@ import {
   benchmarkContractRefreshLookupInputSchema,
   getAthReviewInputSchema,
   openAthReviewInputSchema,
+  previewAthRulingsBatchInputSchema,
+  executeAthRulingsBatchInputSchema,
   searchAthPrecedentsInputSchema,
   quarantineResolutionSchema,
   resolveCopyReviewInputSchema,
@@ -139,6 +141,9 @@ import {
   previewScreeningQuarantineBatch,
   openAthReview,
   resolveCopyReview,
+  createAthRulingsUpload,
+  previewAthRulingsBatch,
+  executeAthRulingsBatch,
   resolveScreeningQuarantine,
   resolveScreeningDispute,
   rescreenRejectedSubmission,
@@ -281,6 +286,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'reject_screening_submission',
   'open_ath_review',
   'resolve_ath_review',
+  'create_ath_rulings_upload',
+  'execute_ath_rulings_batch',
   'execute_screening_quarantine_batch',
   'retry_validator_evaluation',
   'remove_failed_submission_from_queue',
@@ -508,6 +515,12 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_ledger_epoch_snapshots:
     'Read the epoch-pinned validator ledger history: per chain epoch, the frozen fold input digest, champion, incumbent, recipients, and whether the crown changed.',
+  create_ath_rulings_upload:
+    'Presigned five-minute PUT (<= 1 MiB JSON) for one ATH rulings document under this operator\'s prefix. Requires backroom:write.',
+  preview_ath_rulings_batch:
+    'Dry-run up to 50 open|clear|reject ATH rulings (uploadKey or inline) against live guards and the crown; per-item disposition, would_change_crown; returns a preview token. Never mutates.',
+  execute_ath_rulings_batch:
+    'Apply the previewed rulings under "APPLY ATH RULINGS BATCH"; re-reads the board, audits per item, refuses rows whose guards or crown outcome moved. Requires backroom:write.',
   get_validator_weight_diagnostics:
     'Read block-bound vTrust, revealed weights, pending timelock rounds, and each commit\'s implied reveal block; never submits weights.',
   agent_scoring_readiness:
@@ -965,6 +978,51 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => resolveCopyReview(input, props.session.email)),
+  )
+
+  registerTool(
+    'create_ath_rulings_upload',
+    {
+      title: 'Create ATH rulings upload',
+      description:
+        'Issue a five-minute presigned PUT URL for one batched ATH rulings document. The object lands under this operator\'s own prefix (ath-rulings/v1/<actor>/...) of the private trace bucket; the upload must be application/json and at most 1 MiB. Upload the document with `curl -X PUT -H "Content-Type: application/json" --data-binary @rulings.json "<url>"`, then call preview_ath_rulings_batch with the returned key. Document shape: {"source": "<write-up path>", "rulings": [{"action": "open" | "clear" | "reject", "agent_id", "expected_sha256", "expected_score_count", "reason" (>= 3 chars, public and miner-visible, unbounded), "evidence_references": ["path:line" | "path:line-line", ...]}]}. Each agent may appear once per batch; a reject must cite at least one evidence reference. Small batches can skip the upload and pass `rulings` inline to preview_ath_rulings_batch. Requires backroom:write; answers 503 when rulings storage is not configured (preview inline instead).',
+      annotations: toolAnnotations('write', false),
+    },
+    async () => write(() => createAthRulingsUpload(props.session.email)),
+  )
+
+  registerTool(
+    'preview_ath_rulings_batch',
+    {
+      title: 'Preview ATH rulings batch',
+      description:
+        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is read from the same eligible ledger, official-score fold and KOTH projection the validator weight fold uses and returned as `board` (champion, raw leader, fingerprint); `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear an agent whose canonical score would re-enter at or above the raw leader. The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
+      inputSchema: previewAthRulingsBatchInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      result(
+        compacted(await previewAthRulingsBatch(input, props.session.email), {
+          items: { pin: ['agent_id', 'action', 'disposition'] },
+        }),
+      ),
+  )
+
+  registerTool(
+    'execute_ath_rulings_batch',
+    {
+      title: 'Execute ATH rulings batch',
+      description:
+        'Apply exactly the rulings a current preview token describes; confirmation must be "APPLY ATH RULINGS BATCH". The Platform verifies the token (operator, digest, TTL), re-downloads the uploaded document (or requires the identical inline `rulings`), RE-READS THE BOARD, and re-previews every item before touching it. Each ruling is then applied independently through the same open_ath_review / resolve_ath_review code path -- a reject on a scored agent opens the hold and resolves it in one item -- and is separately audited: the AthReview provenance and the clear/reject action rows carry batch_id, index, evidence_references, the rulings digest, the upload key, and the board fingerprint. Rows come back as applied / already_applied / failed with the refusal reason, so a partial batch is safe to preview and re-run. An item is refused when its guards moved, or when its crown outcome differs from the preview (would_change_crown flipped, or the champion / raw leader changed and the item touches the crown) -- preview again and read the new `board`. board_before and board_after report the crown around the batch. Requires backroom:write.',
+      inputSchema: executeAthRulingsBatchInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(async () =>
+        compacted(await executeAthRulingsBatch(input, props.session.email), {
+          items: { pin: ['agent_id', 'action', 'status'] },
+        }),
+      ),
   )
 
   registerTool(

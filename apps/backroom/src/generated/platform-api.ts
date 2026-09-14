@@ -239,6 +239,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/ath-rulings/batch-execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Ath Rulings Batch
+         * @description Apply the exact previewed rulings; each item is audited on its own.
+         *
+         *     Refuses an item whose identity guards moved, or whose crown outcome
+         *     (``would_change_crown``, champion, raw leader) differs from the preview.
+         *     Failures never hide successful rows.
+         */
+        post: operations["execute_ath_rulings_batch_api_v1_admin_ath_rulings_batch_execute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ath-rulings/batch-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Ath Rulings Batch
+         * @description Dry-run every ruling against live state; this never mutates.
+         */
+        post: operations["preview_ath_rulings_batch_api_v1_admin_ath_rulings_batch_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ath-rulings/upload-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Ath Rulings Upload
+         * @description Issue a five-minute presigned PUT for one rulings document.
+         */
+        post: operations["create_ath_rulings_upload_api_v1_admin_ath_rulings_upload_url_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/benchmark-rollout": {
         parameters: {
             query?: never;
@@ -6313,6 +6377,242 @@ export interface components {
             current: components["schemas"]["ArtifactReleaseSettingsRevision"];
             /** History */
             history: components["schemas"]["ArtifactReleaseSettingsRevision"][];
+        };
+        /**
+         * AdminAthRuling
+         * @description One guarded ruling: the same guards ``open_ath_review`` takes.
+         *
+         *     ``reason`` is public and miner-visible; it is deliberately unbounded above
+         *     so a detailed citation-bearing reason survives every validation surface.
+         */
+        AdminAthRuling: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "open" | "clear" | "reject";
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Evidence References */
+            evidence_references?: string[];
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminAthRulingExecuteItem */
+        AdminAthRulingExecuteItem: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "open" | "clear" | "reject";
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status?: string | null;
+            /** Index */
+            index: number;
+            /** Message */
+            message: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "applied" | "already_applied" | "failed";
+            /** Steps Applied */
+            steps_applied?: ("open" | "clear" | "reject")[];
+            /** Would Change Crown */
+            would_change_crown: boolean;
+        };
+        /** AdminAthRulingPreviewItem */
+        AdminAthRulingPreviewItem: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "open" | "clear" | "reject";
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Status */
+            agent_status?: string | null;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Artifact Sha256 */
+            artifact_sha256?: string | null;
+            /** Conflict Reason */
+            conflict_reason?: string | null;
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "ready" | "already_applied" | "stale_guard" | "conflict" | "not_found" | "invalid";
+            /** Evidence References */
+            evidence_references?: string[];
+            /** Index */
+            index: number;
+            /** Message */
+            message: string;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /** Ok */
+            ok: boolean;
+            /** Reason */
+            reason: string;
+            /** Score Count */
+            score_count?: number | null;
+            /** Stale Guard */
+            stale_guard: boolean;
+            /** Steps */
+            steps?: ("open" | "clear" | "reject")[];
+            /** Would Change Crown */
+            would_change_crown: boolean;
+        };
+        /**
+         * AdminAthRulingsBoardProjection
+         * @description The crown arithmetic the batch was previewed (or executed) against.
+         *
+         *     Read from the same eligible ledger, official-score fold, and KOTH
+         *     projection the validator weight fold and the public ``rank`` consume.
+         */
+        AdminAthRulingsBoardProjection: {
+            /** Bench Version */
+            bench_version: number;
+            /** Champion Agent Id */
+            champion_agent_id: string | null;
+            /** Champion Hotkey */
+            champion_hotkey: string | null;
+            /** Champion Score */
+            champion_score: number | null;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Ranked Count */
+            ranked_count: number;
+            /** Raw Leader Agent Id */
+            raw_leader_agent_id: string | null;
+            /** Raw Leader Score */
+            raw_leader_score: number | null;
+            /**
+             * Read At
+             * Format: date-time
+             */
+            read_at: string;
+        };
+        /** AdminAthRulingsExecuteRequest */
+        AdminAthRulingsExecuteRequest: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "APPLY ATH RULINGS BATCH";
+            /** Preview Token */
+            preview_token: string;
+            /** Rulings */
+            rulings?: components["schemas"]["AdminAthRuling"][] | null;
+        };
+        /** AdminAthRulingsExecuteResponse */
+        AdminAthRulingsExecuteResponse: {
+            /** Already Applied Count */
+            already_applied_count: number;
+            /** Applied Count */
+            applied_count: number;
+            /**
+             * Batch Id
+             * Format: uuid
+             */
+            batch_id: string;
+            board_after: components["schemas"]["AdminAthRulingsBoardProjection"];
+            board_before: components["schemas"]["AdminAthRulingsBoardProjection"];
+            /** Failed Count */
+            failed_count: number;
+            /** Items */
+            items: components["schemas"]["AdminAthRulingExecuteItem"][];
+            /** Rulings Sha256 */
+            rulings_sha256: string;
+            /** Upload Key */
+            upload_key?: string | null;
+        };
+        /**
+         * AdminAthRulingsPreviewRequest
+         * @description Exactly one of ``upload_key`` (presigned upload) or inline ``rulings``.
+         */
+        AdminAthRulingsPreviewRequest: {
+            /** Rulings */
+            rulings?: components["schemas"]["AdminAthRuling"][] | null;
+            /** Source */
+            source?: string | null;
+            /** Upload Key */
+            upload_key?: string | null;
+        };
+        /** AdminAthRulingsPreviewResponse */
+        AdminAthRulingsPreviewResponse: {
+            /** Already Applied Count */
+            already_applied_count: number;
+            /** Blocked Count */
+            blocked_count: number;
+            board: components["schemas"]["AdminAthRulingsBoardProjection"];
+            /** Crown Moving Count */
+            crown_moving_count: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Items */
+            items: components["schemas"]["AdminAthRulingPreviewItem"][];
+            /** Preview Token */
+            preview_token: string;
+            /** Ready Count */
+            ready_count: number;
+            /** Rulings Sha256 */
+            rulings_sha256: string;
+            /** Source */
+            source?: string | null;
+            /** Upload Key */
+            upload_key?: string | null;
+        };
+        /** AdminAthRulingsUploadRequest */
+        AdminAthRulingsUploadRequest: {
+            /**
+             * Content Type
+             * @default application/json
+             * @constant
+             */
+            content_type: "application/json";
+        };
+        /** AdminAthRulingsUploadResponse */
+        AdminAthRulingsUploadResponse: {
+            /** Bucket */
+            bucket: string;
+            /** Content Type */
+            content_type: string;
+            /** Expires In */
+            expires_in: number;
+            /** Key */
+            key: string;
+            /** Max Bytes */
+            max_bytes: number;
+            /**
+             * Method
+             * @default PUT
+             * @constant
+             */
+            method: "PUT";
+            /** Url */
+            url: string;
         };
         /**
          * AdminAttestationRevokeRequest
@@ -27395,6 +27695,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactReleaseSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_ath_rulings_batch_api_v1_admin_ath_rulings_batch_execute_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthRulingsExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthRulingsExecuteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_ath_rulings_batch_api_v1_admin_ath_rulings_batch_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthRulingsPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthRulingsPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_ath_rulings_upload_api_v1_admin_ath_rulings_upload_url_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthRulingsUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthRulingsUploadResponse"];
                 };
             };
             /** @description Validation Error */

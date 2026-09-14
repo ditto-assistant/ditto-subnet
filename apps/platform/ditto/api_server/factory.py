@@ -65,6 +65,7 @@ from ditto.api_server.efficiency_settings import (
 from ditto.api_server.embedding import create_embedder
 from ditto.api_server.endpoints import (
     admin_artifact_release_settings_router,
+    admin_ath_rulings_router,
     admin_attestation_router,
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
@@ -673,6 +674,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
+    app.include_router(admin_ath_rulings_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
     app.include_router(admin_coding_certifications_router, prefix="/api/v1")
     app.include_router(admin_coding_control_plane_router, prefix="/api/v1")

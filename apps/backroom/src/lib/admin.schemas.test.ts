@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
@@ -14,6 +16,15 @@ import {
   validatorFleetSchema,
   copyReviewListSchema,
   openAthReviewInputSchema,
+  ATH_RULINGS_CONFIRMATION,
+  athRulingSchema,
+  athRulingPreviewItemSchema,
+  athRulingsPreviewResponseSchema,
+  athRulingsExecuteResponseSchema,
+  athRulingsUploadResponseSchema,
+  athRulingsBoardProjectionSchema,
+  previewAthRulingsBatchInputSchema,
+  executeAthRulingsBatchInputSchema,
   resolveCopyReviewInputSchema,
   resolveScreeningQuarantineInputSchema,
   screeningDisputeListSchema,
@@ -4255,5 +4266,134 @@ describe('public leaderboard rows that do not rank', () => {
     >().toMatchTypeOf<
       ZodInput<typeof publicLeaderboardSchema>['entries'][number]['rank']
     >()
+  })
+})
+
+describe('batched ATH rulings schemas', () => {
+  const ruling = {
+    action: 'reject',
+    agent_id: 'c25489aa-faf0-46fc-8b06-8e2240a5ac01',
+    expected_sha256: 'ab'.repeat(32),
+    expected_score_count: 3,
+    reason: 'Reject under screening policy v12 for I5',
+    evidence_references: ['routing.py:357-395', 'src/agent.rs:441'],
+  }
+
+  it('accepts the uploaded document shape inline and refuses ambiguous input', () => {
+    expect(previewAthRulingsBatchInputSchema.parse({ rulings: [ruling] }).rulings).toHaveLength(1)
+    expect(
+      previewAthRulingsBatchInputSchema.parse({
+        uploadKey: 'ath-rulings/v1/peyton-omniaura.ai/2026-09-13/x.json',
+      }).uploadKey,
+    ).toContain('ath-rulings/v1/')
+    expect(() => previewAthRulingsBatchInputSchema.parse({})).toThrow(/exactly one/)
+    expect(() =>
+      previewAthRulingsBatchInputSchema.parse({ uploadKey: 'k', rulings: [ruling] }),
+    ).toThrow(/exactly one/)
+    expect(() =>
+      previewAthRulingsBatchInputSchema.parse({ rulings: [ruling, { ...ruling, action: 'clear' }] }),
+    ).toThrow(/only once/)
+  })
+
+  it('keeps citations to path:line and reasons unbounded above', () => {
+    expect(() => athRulingSchema.parse({ ...ruling, evidence_references: ['no line'] })).toThrow()
+    expect(() => athRulingSchema.parse({ ...ruling, reason: 'no' })).toThrow()
+    expect(athRulingSchema.parse({ ...ruling, reason: 'x'.repeat(20_000) }).reason).toHaveLength(
+      20_000,
+    )
+    expect(athRulingSchema.parse({ ...ruling, evidence_references: undefined }).evidence_references).toEqual([])
+  })
+
+  it('binds execute to the exact confirmation phrase', () => {
+    const token = `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`
+    expect(
+      executeAthRulingsBatchInputSchema.parse({
+        previewToken: token,
+        confirmation: ATH_RULINGS_CONFIRMATION,
+      }).rulings,
+    ).toBeUndefined()
+    expect(() =>
+      executeAthRulingsBatchInputSchema.parse({ previewToken: token, confirmation: 'APPLY' }),
+    ).toThrow()
+    expect(() =>
+      executeAthRulingsBatchInputSchema.parse({ previewToken: 'short', confirmation: ATH_RULINGS_CONFIRMATION }),
+    ).toThrow()
+  })
+
+  // The drift guard: every Platform response field has an explicit validator
+  // and the key sets match the generated contract in both directions.
+  it('mirrors the generated Platform contract field-for-field', () => {
+    expectTypeOf<keyof ZodOutput<typeof athRulingsUploadResponseSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsUploadResponse']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingsBoardProjectionSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsBoardProjection']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingPreviewItemSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingPreviewItem']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingsPreviewResponseSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsPreviewResponse']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingsExecuteResponseSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsExecuteResponse']
+    >()
+    expectTypeOf<ZodInput<typeof athRulingSchema>>().toMatchTypeOf<
+      PlatformComponents['schemas']['AdminAthRuling']
+    >()
+    expect(
+      Object.keys(
+        athRulingPreviewItemSchema.parse({
+          index: 0,
+          action: 'reject',
+          agent_id: ruling.agent_id,
+          ok: true,
+          disposition: 'ready',
+          stale_guard: false,
+          would_change_crown: true,
+          reason: ruling.reason,
+          message: 'will open then reject',
+        }),
+      ).sort(),
+    ).toEqual([
+      'action',
+      'agent_id',
+      'agent_name',
+      'agent_status',
+      'agent_version',
+      'artifact_sha256',
+      'conflict_reason',
+      'disposition',
+      'evidence_references',
+      'index',
+      'message',
+      'miner_hotkey',
+      'ok',
+      'reason',
+      'score_count',
+      'stale_guard',
+      'steps',
+      'would_change_crown',
+    ])
+  })
+
+  it('parses the 2026-09-13 top-5 replay fixture the Platform tests execute', () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(
+          __dirname,
+          '../../../platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json',
+        ),
+        'utf8',
+      ),
+    ) as { source: string; rulings: Array<unknown> }
+    const parsed = previewAthRulingsBatchInputSchema.parse({
+      rulings: fixture.rulings,
+      source: fixture.source,
+    })
+    expect(parsed.rulings).toHaveLength(5)
+    expect(parsed.rulings?.every((item) => item.action === 'reject')).toBe(true)
+    expect(parsed.rulings?.every((item) => item.evidence_references.length > 0)).toBe(true)
+    expect(parsed.source).toBe('docs/sn118-top5-board-review-2026-09-13.json')
   })
 })

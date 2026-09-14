@@ -226,6 +226,9 @@ describe('Backroom MCP tools', () => {
         'resolve_screening_quarantine',
         'resolve_screening_dispute',
         'resolve_ath_review',
+        'create_ath_rulings_upload',
+        'preview_ath_rulings_batch',
+        'execute_ath_rulings_batch',
         'rescreen_rejected_submission',
         'retry_failed_screening_now',
         'retry_trusted_image_build',
@@ -287,8 +290,11 @@ describe('Backroom MCP tools', () => {
     // Coding control tools add bounded release, exact-run, and fixed-k=3 input
     // schemas; the large private receipt remains a record in the MCP catalog
     // and is parsed exactly by the service before forwarding. The epoch-pin
-    // history read tool adds one more small input schema.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(125_000)
+    // history read tool adds one more small input schema. The batched ATH
+    // rulings triple adds the rulings-document schema twice (inline preview and
+    // inline execute) plus the bounded board projection; its tutorials live in
+    // get_backroom_tool_help.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(130_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 24_500 admits the screener
@@ -296,10 +302,12 @@ describe('Backroom MCP tools', () => {
     // the coding-evaluation ledger read, the bootstrap-grant line, and three
     // short catalog-release lines; operational tutorials stay in
     // get_backroom_tool_help. Raised from 24_000 for the epoch-pin history
-    // line: its catalog entry is already the concise 157-char form, and the
-    // catalog had no headroom left under 24_000.
+    // line (its catalog entry is already the concise 157-char form, and the
+    // catalog had no headroom left under 24_000), then to 25_100 to admit the
+    // three one-line batched ATH rulings catalog entries (upload, preview,
+    // execute).
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      24_500,
+      25_100,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -4127,6 +4135,226 @@ describe('Backroom MCP tools', () => {
         }),
       }),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('previews ATH rulings read-only and gates upload and execute behind write', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = 'c25489aa-faf0-46fc-8b06-8e2240a5ac01'
+    const ruling = {
+      action: 'reject',
+      agent_id: agentId,
+      expected_sha256: 'ab'.repeat(32),
+      expected_score_count: 3,
+      reason: 'Reject lets_623 v1 under screening policy v12 for I5 (production-general engine)',
+      evidence_references: ['routing.py:357-395', 'baseline.py:1884-1887'],
+    }
+    const board = {
+      bench_version: 12,
+      read_at: '2026-09-13T16:30:56Z',
+      ranked_count: 41,
+      champion_agent_id: 'db0d4d25-dce7-4c7c-a49a-425beacb6c05',
+      champion_hotkey: '5Champion',
+      champion_score: 0.7812,
+      raw_leader_agent_id: agentId,
+      raw_leader_score: 0.819326,
+      fingerprint: 'f'.repeat(64),
+    }
+    const previewPayload = {
+      preview_token: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+      expires_at: '2026-09-13T16:40:56Z',
+      rulings_sha256: 'c'.repeat(64),
+      upload_key: null,
+      source: null,
+      board,
+      items: [
+        {
+          index: 0,
+          action: 'reject',
+          agent_id: agentId,
+          agent_name: 'lets_623',
+          agent_version: 1,
+          miner_hotkey: '5ECg59rv1wM4a3dY7Aka2bGRCKKCQoHmasAhAyaAJeqemR7Z',
+          agent_status: 'scored',
+          artifact_sha256: ruling.expected_sha256,
+          score_count: 3,
+          ok: true,
+          disposition: 'ready',
+          stale_guard: false,
+          would_change_crown: true,
+          conflict_reason: null,
+          steps: ['open', 'reject'],
+          reason: ruling.reason,
+          evidence_references: ruling.evidence_references,
+          message: 'will open then reject',
+        },
+      ],
+      ready_count: 1,
+      already_applied_count: 0,
+      blocked_count: 0,
+      crown_moving_count: 1,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(previewPayload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const preview = await client.callTool({
+      name: 'preview_ath_rulings_batch',
+      arguments: { rulings: [ruling] },
+    })
+    expect(preview.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/ath-rulings/batch-preview',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        body: JSON.stringify({ upload_key: null, rulings: [ruling], source: null }),
+      }),
+    )
+    const previewBody = readJsonResult(preview) as {
+      board: { raw_leader_agent_id: string }
+      crown_moving_count: number
+      items: Array<{ would_change_crown: boolean; steps: Array<string> }>
+    }
+    expect(previewBody.board.raw_leader_agent_id).toBe(agentId)
+    expect(previewBody.crown_moving_count).toBe(1)
+    expect(previewBody.items[0]?.would_change_crown).toBe(true)
+    expect(previewBody.items[0]?.steps).toEqual(['open', 'reject'])
+
+    // Both uploadKey and rulings, or neither, is a client-side refusal.
+    const ambiguous = await client.callTool({
+      name: 'preview_ath_rulings_batch',
+      arguments: { uploadKey: 'ath-rulings/v1/peyton-omniaura.ai/x.json', rulings: [ruling] },
+    })
+    expect(ambiguous.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const upload = await client.callTool({ name: 'create_ath_rulings_upload', arguments: {} })
+    expect(upload.isError).toBe(true)
+    expect(readTextResult(upload)).toContain('read-only')
+    const execute = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: {
+        previewToken: previewPayload.preview_token,
+        confirmation: 'APPLY ATH RULINGS BATCH',
+        rulings: [ruling],
+      },
+    })
+    expect(execute.isError).toBe(true)
+    expect(readTextResult(execute)).toContain('read-only')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await client.close()
+    await server.close()
+  })
+
+  it('issues rulings uploads and executes a previewed batch with the exact phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const uploadPayload = {
+      bucket: 'ditto-subnet-traces',
+      key: 'ath-rulings/v1/peyton-omniaura.ai/2026-09-13/6f1d7d9a-1a1a-4b2b-8c3c-4d4d5e5e6f6f.json',
+      url: 'https://s3.hippius.com/ditto-subnet-traces/ath-rulings/v1/peyton-omniaura.ai/x.json?X-Amz-Signature=stub',
+      method: 'PUT',
+      content_type: 'application/json',
+      expires_in: 300,
+      max_bytes: 1048576,
+    }
+    const board = {
+      bench_version: 12,
+      read_at: '2026-09-13T16:30:56Z',
+      ranked_count: 41,
+      champion_agent_id: 'db0d4d25-dce7-4c7c-a49a-425beacb6c05',
+      champion_hotkey: '5Champion',
+      champion_score: 0.7812,
+      raw_leader_agent_id: 'c25489aa-faf0-46fc-8b06-8e2240a5ac01',
+      raw_leader_score: 0.819326,
+      fingerprint: 'f'.repeat(64),
+    }
+    const executePayload = {
+      batch_id: '0b3c5d7e-9f01-4a23-8b45-c67d89e0f123',
+      rulings_sha256: 'c'.repeat(64),
+      upload_key: uploadPayload.key,
+      board_before: board,
+      board_after: { ...board, raw_leader_agent_id: board.champion_agent_id, fingerprint: 'e'.repeat(64) },
+      items: [
+        {
+          index: 0,
+          action: 'reject',
+          agent_id: 'c25489aa-faf0-46fc-8b06-8e2240a5ac01',
+          status: 'applied',
+          agent_status: 'banned',
+          would_change_crown: true,
+          steps_applied: ['open', 'reject'],
+          message: 'ruling applied and audit rows annotated',
+        },
+        {
+          index: 1,
+          action: 'clear',
+          agent_id: 'db9b919d-241b-4131-a2cc-f426b4356950',
+          status: 'failed',
+          agent_status: 'scored',
+          would_change_crown: false,
+          steps_applied: [],
+          message: 'agent is scored, not held',
+        },
+      ],
+      applied_count: 1,
+      already_applied_count: 0,
+      failed_count: 1,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(uploadPayload))
+      .mockResolvedValueOnce(Response.json(executePayload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const upload = await client.callTool({ name: 'create_ath_rulings_upload', arguments: {} })
+    expect(upload.isError).not.toBe(true)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/ath-rulings/upload-url',
+    )
+    expect((readJsonResult(upload) as { key: string }).key).toBe(uploadPayload.key)
+
+    const wrongPhrase = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: { previewToken: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`, confirmation: 'APPLY' },
+    })
+    expect(wrongPhrase.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const execute = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: {
+        previewToken: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+        confirmation: 'APPLY ATH RULINGS BATCH',
+      },
+    })
+    expect(execute.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/ath-rulings/batch-execute',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        body: JSON.stringify({
+          preview_token: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+          confirmation: 'APPLY ATH RULINGS BATCH',
+          rulings: null,
+        }),
+      }),
+    )
+    const body = readJsonResult(execute) as {
+      applied_count: number
+      failed_count: number
+      board_after: { raw_leader_agent_id: string }
+      items: Array<{ status: string; message: string }>
+    }
+    expect(body.applied_count).toBe(1)
+    expect(body.failed_count).toBe(1)
+    expect(body.board_after.raw_leader_agent_id).toBe(board.champion_agent_id)
+    expect(body.items.map((item) => item.status)).toEqual(['applied', 'failed'])
 
     await client.close()
     await server.close()
