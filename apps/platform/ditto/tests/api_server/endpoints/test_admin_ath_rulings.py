@@ -317,7 +317,7 @@ def _board_rulings(board: dict[str, tuple[UUID, str]]) -> list[dict[str, object]
     return [
         _ruling("open", champion[0], champion[1], refs=()),
         _ruling("reject", runner[0], runner[1]),
-        _ruling("clear", held[0], held[1], refs=()),
+        _ruling("clear", held[0], held[1]),
         _ruling("open", stale[0], "0" * 64, refs=()),
         _ruling("reject", uuid4(), "1" * 64),
         _ruling("reject", uncited[0], uncited[1], refs=()),
@@ -1048,9 +1048,9 @@ async def test_preview_mirrors_the_resolve_guards_on_a_drifted_hold(
     _install(app, maker)
 
     rulings = [
-        _ruling("clear", evidence_drift[0], evidence_drift[1], refs=()),
+        _ruling("clear", evidence_drift[0], evidence_drift[1]),
         _ruling("reject", reason_drift[0], reason_drift[1]),
-        _ruling("clear", intact[0], intact[1], refs=()),
+        _ruling("clear", intact[0], intact[1]),
     ]
     preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
     assert preview.status_code == 200, preview.text
@@ -1143,3 +1143,58 @@ async def test_execute_reports_applied_when_only_the_annotation_fails(
     review, actions = await _review(maker, agent[0])
     assert review is not None and review.resolution == "reject"
     assert "batch_ruling" not in actions[-1].evidence
+
+
+async def test_an_uncited_clear_is_invalid_on_both_legs(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Policy v13 makes a clear cite the reviewed source, like a reject.
+
+    ``AdminCopyReviewResolveRequest`` refuses an uncited clear, so the preview
+    classifies it ``invalid`` instead of promising a "ready" item that execute
+    would fail; a cited clear on the same hold still lands.
+    """
+    await _activate(maker)
+    uncited = await _seed_held(
+        maker, hotkey="5Uncited", composite=0.7, created_at=_T0 - timedelta(hours=1)
+    )
+    cited = await _seed_held(
+        maker, hotkey="5Cited", composite=0.6, created_at=_T0 - timedelta(hours=1)
+    )
+    _install(app, maker)
+
+    rulings = [
+        _ruling("clear", uncited[0], uncited[1], refs=()),
+        _ruling("clear", cited[0], cited[1]),
+    ]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    items = preview.json()["items"]
+    assert [item["disposition"] for item in items] == ["invalid", "ready"]
+    assert items[0]["conflict_reason"] == "clear requires evidence_references"
+    assert items[0]["message"] == "a clear ruling must cite at least one path:line"
+    assert preview.json()["blocked_count"] == 1
+
+    executed = await client.post(
+        _EXECUTE,
+        json={
+            "preview_token": preview.json()["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+        headers=_HEADERS,
+    )
+    assert executed.status_code == 200, executed.text
+    assert [item["status"] for item in executed.json()["items"]] == [
+        "failed",
+        "applied",
+    ]
+    assert executed.json()["items"][0]["message"] == (
+        "clear requires evidence_references"
+    )
+    assert await _status(maker, uncited[0]) == AgentStatus.ATH_PENDING_REVIEW.value
+    assert await _status(maker, cited[0]) == AgentStatus.SCORED.value
+    _, actions = await _review(maker, cited[0])
+    assert [action.action for action in actions] == ["clear"]
+    # The citation reached the shared resolve path, not only the batch note.
+    assert actions[0].evidence["evidence_references"] == ["src/baseline.rs:1195-1207"]
