@@ -582,6 +582,68 @@ CREATE FUNCTION public.guard_efficiency_snapshot_curve() RETURNS trigger
 
 
 --
+-- Name: guard_hosted_assignment_cancellation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.guard_hosted_assignment_cancellation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        DECLARE a coding_hosted_assignments%ROWTYPE;
+        BEGIN
+            IF TG_TABLE_NAME = 'coding_hosted_assignment_cancellations' THEN
+                -- Row lock serialises with admission, start, binding and close.
+                SELECT * INTO a FROM coding_hosted_assignments
+                    WHERE evaluation_id = NEW.evaluation_id FOR UPDATE;
+                IF NOT FOUND
+                   OR a.assignment_sha256 IS DISTINCT FROM NEW.assignment_sha256
+                   OR a.started_at IS NOT NULL
+                   OR a.worker_id IS NOT NULL
+                   OR NEW.prior_state IS DISTINCT FROM (CASE
+                        WHEN a.admitted_at IS NULL THEN 'pending_admission'
+                        ELSE 'admitted' END)
+                   OR NEW.cancelled_at < a.created_at
+                   OR NEW.cancelled_at > clock_timestamp()
+                THEN
+                    RAISE EXCEPTION
+                        'hosted cancellation requires an unstarted assignment'
+                        USING ERRCODE = '23514';
+                END IF;
+                -- Object access is removed before the ledger row is appended.
+                IF EXISTS (
+                    SELECT 1 FROM coding_hosted_private_tasks t
+                    WHERE t.evaluation_id = NEW.evaluation_id
+                      AND t.closed_at IS NULL
+                ) THEN
+                    RAISE EXCEPTION
+                        'hosted cancellation requires a closed private task'
+                        USING ERRCODE = '23514';
+                END IF;
+            ELSIF TG_TABLE_NAME = 'coding_hosted_private_tasks' THEN
+                -- FOR SHARE waits for a cancellation holding FOR UPDATE and
+                -- makes a later cancellation wait for this insert to commit.
+                PERFORM 1 FROM coding_hosted_assignments
+                    WHERE evaluation_id = NEW.evaluation_id FOR SHARE;
+                IF EXISTS (
+                    SELECT 1 FROM coding_hosted_assignment_cancellations c
+                    WHERE c.evaluation_id = NEW.evaluation_id
+                ) THEN
+                    RAISE EXCEPTION 'hosted assignment is cancelled'
+                        USING ERRCODE = '23514';
+                END IF;
+            -- A BEFORE UPDATE row trigger fires with the row lock already held.
+            ELSIF NEW IS DISTINCT FROM OLD AND EXISTS (
+                SELECT 1 FROM coding_hosted_assignment_cancellations c
+                WHERE c.evaluation_id = NEW.evaluation_id
+            ) THEN
+                RAISE EXCEPTION 'hosted assignment is cancelled'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+
+
+--
 -- Name: guard_hosted_authoring_insert(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1396,6 +1458,21 @@ CREATE TABLE public.coding_certification_leases (
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_e585 CHECK ((weight_eligible = false)),
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_e6b0 CHECK (((artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (core_qualification_policy_checksum ~ '^[0-9a-f]{64}$'::text) AND (canary_manifest_sha256 ~ '^[0-9a-f]{64}$'::text) AND (runner_plan_sha256 ~ '^[0-9a-f]{64}$'::text) AND (grader_plan_sha256 ~ '^[0-9a-f]{64}$'::text) AND (resource_profile_sha256 ~ '^[0-9a-f]{64}$'::text) AND (inference_policy_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_fe07 CHECK ((status = ANY (ARRAY['issued'::text, 'claimed'::text, 'aborted'::text, 'expired'::text])))
+);
+
+
+--
+-- Name: coding_hosted_assignment_cancellations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_assignment_cancellations (
+    evaluation_id uuid NOT NULL,
+    assignment_sha256 text NOT NULL,
+    prior_state text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    cancelled_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_assignment_cancellations_coding_hosted_e78a CHECK (((assignment_sha256 ~ '^[0-9a-f]{64}$'::text) AND (prior_state = ANY (ARRAY['pending_admission'::text, 'admitted'::text])) AND ((length(TRIM(BOTH FROM reason)) >= 8) AND (length(TRIM(BOTH FROM reason)) <= 512)) AND ((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))))
 );
 
 
@@ -5646,6 +5723,14 @@ ALTER TABLE ONLY public.coding_certification_leases
 
 
 --
+-- Name: coding_hosted_assignment_cancellations pk_coding_hosted_assignment_cancellations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_assignment_cancellations
+    ADD CONSTRAINT pk_coding_hosted_assignment_cancellations PRIMARY KEY (evaluation_id);
+
+
+--
 -- Name: coding_hosted_assignments pk_coding_hosted_assignments; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7577,10 +7662,31 @@ CREATE TRIGGER coding_catalog_retirements_append_only_guard BEFORE DELETE OR UPD
 
 
 --
+-- Name: coding_hosted_assignment_cancellations coding_hosted_assignment_cancellations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_assignment_cancellations_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_assignment_cancellations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_assignment_cancellations coding_hosted_assignment_cancellations_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_assignment_cancellations_insert BEFORE INSERT ON public.coding_hosted_assignment_cancellations FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_assignment_cancellation();
+
+
+--
 -- Name: coding_hosted_assignments coding_hosted_assignment_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER coding_hosted_assignment_guard BEFORE DELETE OR UPDATE ON public.coding_hosted_assignments FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_assignment_guard();
+
+
+--
+-- Name: coding_hosted_assignments coding_hosted_assignments_cancellation_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_assignments_cancellation_guard BEFORE UPDATE ON public.coding_hosted_assignments FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_assignment_cancellation();
 
 
 --
@@ -7679,6 +7785,13 @@ CREATE TRIGGER coding_hosted_inference_request_guard BEFORE INSERT OR DELETE OR 
 --
 
 CREATE TRIGGER coding_hosted_private_task_guard BEFORE INSERT OR DELETE OR UPDATE ON public.coding_hosted_private_tasks FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_private_task_guard();
+
+
+--
+-- Name: coding_hosted_private_tasks coding_hosted_private_tasks_cancellation_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_private_tasks_cancellation_guard BEFORE INSERT ON public.coding_hosted_private_tasks FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_assignment_cancellation();
 
 
 --
@@ -8323,6 +8436,14 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.benchmark_rollout_members
     ADD CONSTRAINT fk_benchmark_rollout_members_rollout_id_benchmark_rollouts FOREIGN KEY (rollout_id) REFERENCES public.benchmark_rollouts(rollout_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_hosted_assignment_cancellations fk_coding_hosted_assignment_cancellations_evaluation_id_2de8; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_assignment_cancellations
+    ADD CONSTRAINT fk_coding_hosted_assignment_cancellations_evaluation_id_2de8 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_assignments(evaluation_id) ON DELETE RESTRICT;
 
 
 --

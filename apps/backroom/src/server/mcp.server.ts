@@ -71,6 +71,11 @@ import {
   transitionCodingPrivateV2ReleaseInputSchema,
   reconcileCodingShadowInputSchema,
   issueCodingShadowTicketSetInputSchema,
+  cancelCodingHostedAssignmentMcpInputSchema,
+  createCodingHostedAssignmentMcpInputSchema,
+  getCodingHostedAssignmentInputSchema,
+  listCodingHostedAssignmentsInputSchema,
+  previewCodingHostedAssignmentInputSchema,
   registerCodingCatalogMcpInputSchema,
   retireCodingCatalogInputSchema,
   supersedeCodingCatalogInputSchema,
@@ -165,6 +170,11 @@ import {
   retireCodingPrivateV2Release,
   reconcileCodingShadowArtifact,
   issueCodingShadowTicketSet,
+  fetchCodingHostedAssignments,
+  fetchCodingHostedAssignment,
+  previewCodingHostedAssignment,
+  createCodingHostedAssignment,
+  cancelCodingHostedAssignment,
   registerCodingCatalogRelease,
   retireCodingCatalogRelease,
   supersedeCodingCatalogRelease,
@@ -279,6 +289,11 @@ export const WRITE_TOOL_NAMES = new Set([
   'retire_coding_private_v2_release',
   'reconcile_coding_shadow_artifact',
   'issue_coding_shadow_ticket_set',
+  // Preview writes nothing, but it is the first half of an exact-confirmation
+  // write and returns the phrase create requires, so it shares the write gate.
+  'preview_coding_hosted_assignment',
+  'create_coding_hosted_assignment',
+  'cancel_coding_hosted_assignment',
   'resolve_screening_quarantine',
   'resolve_screening_dispute',
   'rescreen_rejected_submission',
@@ -551,6 +566,16 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Prepare one exact weight-zero Coding run.',
   issue_coding_shadow_ticket_set:
     'Issue fixed k=3 weight-zero Coding tickets.',
+  list_coding_hosted_assignments:
+    'Page hosted-v2 lifecycles.',
+  get_coding_hosted_assignment:
+    'Read one hosted-v2 lifecycle.',
+  preview_coding_hosted_assignment:
+    'Derive hosted-v2 authority; no write.',
+  create_coding_hosted_assignment:
+    'Create a previewed hosted-v2 assignment.',
+  cancel_coding_hosted_assignment:
+    'Cancel unstarted hosted-v2 assignment.',
   register_coding_catalog_release:
     'Register one curator-signed, weight-zero catalog commitment.',
   supersede_coding_catalog_release:
@@ -1551,6 +1576,74 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => issueCodingShadowTicketSet(input, props.session.email)),
+  )
+
+  registerTool(
+    'list_coding_hosted_assignments',
+    {
+      title: 'List hosted-v2 Coding assignments',
+      description:
+        'Page Platform-hosted native-v2 shadow assignments, newest first (created_at, then evaluation_id), with count (the untruncated total), returned, limit (1-100, default 20), offset and has_more. Each row carries identity digests, derived state (cancelled, completed, failed, aborted, expired, running, admitted, pending_admission), lifecycle timestamps, cancellation time, private task close reason, terminal outcome and whether any result delivery was acknowledged. Private selections, grading details, grant and worker identifiers are never returned. Requires backroom:read; no mutation is performed.',
+      inputSchema: listCodingHostedAssignmentsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      result(
+        compacted(await fetchCodingHostedAssignments(input), {
+          assignments: { pin: ['evaluation_id'] },
+        }),
+      ),
+  )
+
+  registerTool(
+    'get_coding_hosted_assignment',
+    {
+      title: 'Get one hosted-v2 Coding assignment',
+      description:
+        'Read one hosted-v2 assignment by evaluationId: lifecycle and authority digests, cancellable flag, cancellation record, private task bind/freeze/close timestamps, authoring evidence and grading-claim presence, terminal outcome with its sealed evidence digest, inference grant limits with request counts and charged (settled plus reserved/uncertain ceilings) versus settled totals, and up to 20 newest result delivery digests with acknowledgement times. Catalog index, patch digest, test counts, terminal domain, settlement documents, result bodies, grant and worker identifiers are never returned. Requires backroom:read.',
+      inputSchema: getCodingHostedAssignmentInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCodingHostedAssignment(input)),
+  )
+
+  registerTool(
+    'preview_coding_hosted_assignment',
+    {
+      title: 'Preview hosted-v2 Coding assignment',
+      description:
+        'Ask Platform to derive, without writing, the exact hosted-v2 shadow authority for one subject: agent, registered private-v2 release, catalog index, validator hotkey, approved policy/execution/grading profile digests, patch bound and lease seconds. Platform derives artifact, image, registration, schedule, selection and assignment digests from locked state, checks the active coding certification, and returns fresh evaluation/attempt IDs, the deadline and its own confirmation phrase. Review it, then pass the returned values unchanged to create_coding_hosted_assignment. Requires backroom:write.',
+      inputSchema: previewCodingHostedAssignmentInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      write(() => previewCodingHostedAssignment(input, props.session.email)),
+  )
+
+  registerTool(
+    'create_coding_hosted_assignment',
+    {
+      title: 'Create hosted-v2 Coding assignment',
+      description:
+        'Create and bind one previewed hosted-v2 shadow assignment. Pass the same subject plus the preview evaluationId, attemptId, deadlineUnix, confirmedAssignmentSha256, a specific reason (8-512 characters), and the exact confirmation CREATE SHADOW CODING HOSTED ASSIGNMENT {evaluation_id} {assignment_sha256}. Platform re-derives the authority and refuses any drift; Backroom never builds the phrase. Replays are idempotent. The response omits private task grant identifiers. Always weight-zero; this does not start a worker. Requires backroom:write; the signed-in operator is the audit actor.',
+      inputSchema: createCodingHostedAssignmentMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => createCodingHostedAssignment(input, props.session.email)),
+  )
+
+  registerTool(
+    'cancel_coding_hosted_assignment',
+    {
+      title: 'Cancel unstarted hosted-v2 Coding assignment',
+      description:
+        'Append one immutable cancellation for a hosted-v2 assignment whose attempt never started (pending admission or admitted), even past its deadline. Read get_coding_hosted_assignment first, then pass evaluationId, expectedAssignmentSha256, a specific reason (8-512 characters) and the exact confirmation CANCEL SHADOW CODING HOSTED ASSIGNMENT {evaluation_id} {assignment_sha256}. Platform closes the private task as aborted and refuses later admission, start, binding, object grants and inference; no row is deleted. A started attempt is refused: only its worker can abort it. Replaying the same reason as the same operator is idempotent. Returns the post-write assignment view. Requires backroom:write.',
+      inputSchema: cancelCodingHostedAssignmentMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => cancelCodingHostedAssignment(input, props.session.email)),
   )
 
   registerTool(

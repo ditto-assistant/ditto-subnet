@@ -195,6 +195,11 @@ describe('Backroom MCP tools', () => {
         'get_coding_control_plane',
         'get_coding_private_v2_releases',
         'issue_coding_shadow_ticket_set',
+        'list_coding_hosted_assignments',
+        'get_coding_hosted_assignment',
+        'preview_coding_hosted_assignment',
+        'create_coding_hosted_assignment',
+        'cancel_coding_hosted_assignment',
         'get_validator_weight_diagnostics',
         'get_agent_core_qualification',
         'get_agent_scores',
@@ -295,7 +300,11 @@ describe('Backroom MCP tools', () => {
     // rulings triple adds the rulings-document schema twice (inline preview and
     // inline execute) plus the bounded board projection; its tutorials live in
     // get_backroom_tool_help.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(130_000)
+    // The five hosted-v2 assignment tools (list/get/preview/create/cancel) add
+    // 5.7k of exact UUID, digest and subject bounds (the rest of the catalog
+    // stays under the previous 130_000). Platform derives every digest from
+    // those fields, so none is droppable.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(136_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. 24_500 admits the screener
@@ -306,10 +315,18 @@ describe('Backroom MCP tools', () => {
     // line (its catalog entry is already the concise 157-char form, and the
     // catalog had no headroom left under 24_000), then to 25_100 to admit the
     // three one-line batched ATH rulings catalog entries (upload, preview,
-    // execute).
+    // execute). The five hosted-v2 assignment catalog lines (170 chars) fit
+    // under 25_100 as they are; existing Coding lines keep their routing terms.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
       25_100,
     )
+    // Raise the budget with a reason rather than strip routing terms clients
+    // use to pick these tools.
+    const catalogLine = (name: string) => response.tools.find((tool) => tool.name === name)?.description
+    expect(catalogLine('get_agent_coding_shadow_evaluations')).toMatch(
+      /future-height assignments, finalized issuances.*repair outcomes/,
+    )
+    expect(catalogLine('get_coding_catalog_releases')).toMatch(/signed .*commitments, retirement/)
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
       response.tools.find((tool) => tool.name === 'get_screening_review_queue')?.annotations
@@ -7691,6 +7708,423 @@ describe('Backroom MCP tools', () => {
       await client.close()
       await server.close()
     }
+  })
+
+  describe('hosted-v2 Coding assignment operations', () => {
+    const evaluationId = '11111111-1111-4111-8111-111111111111'
+    const attemptId = '22222222-2222-4222-8222-222222222222'
+    const agentId = '33333333-3333-4333-8333-333333333333'
+    const releaseRowId = '44444444-4444-4444-8444-444444444444'
+    const validatorHotkey = `5${'V'.repeat(47)}`
+    const assignmentSha256 = 'a'.repeat(64)
+    const subject = {
+      agentId,
+      releaseRowId,
+      catalogIndex: 3,
+      validatorHotkey,
+      policySha256: '2'.repeat(64),
+      executionProfileSha256: '3'.repeat(64),
+      gradingProfileSha256: '4'.repeat(64),
+      maxPatchBytes: 1 << 20,
+    }
+    const selection = {
+      schema: 'dittobench-coding-hosted-task-selection-v2',
+      coding_contract_version: 2,
+      shadow_only: true,
+      weight_eligible: false,
+      evaluation_id: evaluationId,
+      attempt_id: attemptId,
+      registration_sha256: '5'.repeat(64),
+      artifact_sha256: '6'.repeat(64),
+      schedule_sha256: '7'.repeat(64),
+      catalog_index: 3,
+      max_patch_bytes: 1 << 20,
+    }
+    const authority = {
+      schema: 'dittobench-coding-hosted-assignment-v2',
+      coding_contract_version: 2,
+      shadow_only: true,
+      weight_eligible: false,
+      evaluation_id: evaluationId,
+      attempt_id: attemptId,
+      release_row_id: releaseRowId,
+      registration_sha256: '5'.repeat(64),
+      agent_id: agentId,
+      validator_hotkey: validatorHotkey,
+      artifact_sha256: '6'.repeat(64),
+      screened_image_sha256: '8'.repeat(64),
+      selection_sha256: '9'.repeat(64),
+      policy_sha256: '2'.repeat(64),
+      execution_profile_sha256: '3'.repeat(64),
+      grading_profile_sha256: '4'.repeat(64),
+      deadline_unix: 1_789_000_000,
+    }
+    const plan = {
+      evaluation_id: evaluationId,
+      attempt_id: attemptId,
+      deadline_unix: 1_789_000_000,
+      artifact_sha256: '6'.repeat(64),
+      screened_image_sha256: '8'.repeat(64),
+      registration_sha256: '5'.repeat(64),
+      bench_version: 12,
+      certification_row_id: '55555555-5555-4555-8555-555555555555',
+      schedule_sha256: '7'.repeat(64),
+      selection_sha256: '9'.repeat(64),
+      selection,
+      assignment_sha256: assignmentSha256,
+      authority,
+      confirmation: `CREATE SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+      shadow_only: true,
+      weight_eligible: false,
+    }
+    const summary = {
+      evaluation_id: evaluationId,
+      attempt_id: attemptId,
+      release_row_id: releaseRowId,
+      registration_sha256: '5'.repeat(64),
+      agent_id: agentId,
+      validator_hotkey: validatorHotkey,
+      artifact_sha256: '6'.repeat(64),
+      screened_image_sha256: '8'.repeat(64),
+      assignment_sha256: assignmentSha256,
+      state: 'cancelled',
+      created_at: '2026-09-14T12:00:00Z',
+      expires_at: '2026-09-14T12:15:00Z',
+      admitted_at: '2026-09-14T12:01:00Z',
+      started_at: null,
+      cancelled_at: '2026-09-14T12:02:00Z',
+      closed_at: '2026-09-14T12:02:00Z',
+      close_reason: 'aborted',
+      terminal_outcome: null,
+      acknowledged: false,
+      registered_actor: 'peyton@omniaura.ai',
+      registered_reason: 'synthetic hosted canary assignment',
+      shadow_only: true,
+      weight_eligible: false,
+    }
+    const cancellation = {
+      assignment_sha256: assignmentSha256,
+      prior_state: 'admitted',
+      reason: 'cancel the unstarted canary assignment',
+      actor: 'peyton@omniaura.ai',
+      cancelled_at: '2026-09-14T12:02:00Z',
+    }
+    const detail = {
+      ...summary,
+      observed_at: '2026-09-14T12:03:00Z',
+      deadline_unix: 1_789_000_000,
+      selection_sha256: '9'.repeat(64),
+      policy_sha256: '2'.repeat(64),
+      execution_profile_sha256: '3'.repeat(64),
+      grading_profile_sha256: '4'.repeat(64),
+      admission_request_sha256: 'b'.repeat(64),
+      cancellable: false,
+      cancellation,
+      private_task: {
+        bound_at: '2026-09-14T12:00:00Z',
+        selection_sha256: '9'.repeat(64),
+        frozen_at: null,
+        closed_at: '2026-09-14T12:02:00Z',
+        close_reason: 'aborted',
+        catalog_index: 3,
+      },
+      authoring_evidence_reserved_at: null,
+      authoring_evidence_finalized_at: null,
+      grading_claimed_at: null,
+      terminal: null,
+      inference: null,
+      delivery_count: 0,
+      acknowledged_count: 0,
+      deliveries: [],
+      deliveries_truncated: false,
+      worker_id: 'must-not-escape-worker',
+    }
+
+    function hostedFetch() {
+      return vi.fn().mockImplementation(async (url: string) => {
+        if (url.endsWith('/coding-hosted-assignments/preview')) return Response.json(plan)
+        if (url.endsWith('/coding-hosted-assignments')) {
+          return Response.json({
+            ...plan,
+            authoring_grant_id: '66666666-6666-4666-8666-666666666666',
+            grading_grant_id: '77777777-7777-4777-8777-777777777777',
+          })
+        }
+        if (url.endsWith('/cancel')) {
+          return Response.json({
+            idempotent: false,
+            private_task_closed: true,
+            cancellation,
+            assignment: detail,
+            shadow_only: true,
+            weight_eligible: false,
+          })
+        }
+        if (url.includes('/coding-hosted-assignments?')) {
+          return Response.json({
+            total: 3,
+            limit: 2,
+            offset: 0,
+            observed_at: '2026-09-14T12:03:00Z',
+            assignments: [summary, { ...summary, evaluation_id: attemptId }],
+            shadow_only: true,
+            weight_eligible: false,
+          })
+        }
+        return Response.json(detail)
+      })
+    }
+
+    it('pages and reads redacted lifecycles with backroom:read only', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = hostedFetch()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+      try {
+        const listed = await client.callTool({
+          name: 'list_coding_hosted_assignments',
+          arguments: { limit: 2 },
+        })
+        expect(listed.isError, readTextResult(listed)).not.toBe(true)
+        const page = readJsonResult(listed) as Record<string, unknown>
+        expect(page).toMatchObject({ count: 3, returned: 2, limit: 2, offset: 0, has_more: true })
+        const detailResponse = await client.callTool({
+          name: 'get_coding_hosted_assignment',
+          arguments: { evaluationId },
+        })
+        expect(detailResponse.isError, readTextResult(detailResponse)).not.toBe(true)
+        const body = readJsonResult(detailResponse) as typeof detail
+        expect(body.state).toBe('cancelled')
+        expect(body.cancellation).toEqual(cancellation)
+        expect(JSON.stringify(body)).not.toContain('must-not-escape-worker')
+        expect(JSON.stringify(body)).not.toContain('catalog_index')
+        expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+          'https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments?limit=2&offset=0',
+          `https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments/${evaluationId}`,
+        ])
+        for (const name of [
+          'preview_coding_hosted_assignment',
+          'create_coding_hosted_assignment',
+          'cancel_coding_hosted_assignment',
+        ]) {
+          const refused = await client.callTool({
+            name,
+            arguments:
+              name === 'cancel_coding_hosted_assignment'
+                ? {
+                    evaluationId,
+                    expectedAssignmentSha256: assignmentSha256,
+                    reason: 'cancel the unstarted canary assignment',
+                    confirmation: 'CANCEL SHADOW CODING HOSTED ASSIGNMENT',
+                  }
+                : name === 'create_coding_hosted_assignment'
+                  ? {
+                      ...subject,
+                      evaluationId,
+                      attemptId,
+                      deadlineUnix: 1_789_000_000,
+                      confirmedAssignmentSha256: assignmentSha256,
+                      reason: 'synthetic hosted canary assignment',
+                      confirmation: plan.confirmation,
+                    }
+                  : subject,
+          })
+          expect(refused.isError, name).toBe(true)
+          expect(readTextResult(refused)).toContain('backroom:write')
+        }
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+      } finally {
+        await client.close()
+        await server.close()
+      }
+    })
+
+    it('forwards preview, create and cancel with exact operator values', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = hostedFetch()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        const previewed = await client.callTool({
+          name: 'preview_coding_hosted_assignment',
+          arguments: { ...subject, leaseSeconds: 600 },
+        })
+        expect(previewed.isError, readTextResult(previewed)).not.toBe(true)
+        expect(readJsonResult(previewed)).toEqual(plan)
+
+        // Backroom never fills in the phrase: whatever the operator typed is
+        // what Platform sees, and Platform alone decides whether it matches.
+        const typedConfirmation = `CREATE SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${'f'.repeat(64)}`
+        const created = await client.callTool({
+          name: 'create_coding_hosted_assignment',
+          arguments: {
+            ...subject,
+            evaluationId,
+            attemptId,
+            deadlineUnix: 1_789_000_000,
+            confirmedAssignmentSha256: assignmentSha256,
+            reason: 'synthetic hosted canary assignment',
+            confirmation: typedConfirmation,
+          },
+        })
+        expect(created.isError, readTextResult(created)).not.toBe(true)
+        const createdText = readTextResult(created)
+        expect(createdText).not.toContain('authoring_grant_id')
+        expect(createdText).not.toContain('66666666-6666-4666-8666-666666666666')
+
+        const missingConfirmation = await client.callTool({
+          name: 'create_coding_hosted_assignment',
+          arguments: {
+            ...subject,
+            evaluationId,
+            attemptId,
+            deadlineUnix: 1_789_000_000,
+            confirmedAssignmentSha256: assignmentSha256,
+            reason: 'synthetic hosted canary assignment',
+          },
+        })
+        expect(missingConfirmation.isError).toBe(true)
+
+        const cancelled = await client.callTool({
+          name: 'cancel_coding_hosted_assignment',
+          arguments: {
+            evaluationId,
+            expectedAssignmentSha256: assignmentSha256,
+            reason: 'cancel the unstarted canary assignment',
+            confirmation: `CANCEL SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+          },
+        })
+        expect(cancelled.isError, readTextResult(cancelled)).not.toBe(true)
+        const cancelBody = readJsonResult(cancelled) as { assignment: typeof detail }
+        expect(cancelBody.assignment.state).toBe('cancelled')
+        expect(JSON.stringify(cancelBody)).not.toContain('must-not-escape-worker')
+
+        const calls = fetchMock.mock.calls.map(([url, options]) => ({
+          url: String(url),
+          method: options?.method,
+          actor: (options?.headers as Record<string, string> | undefined)?.['X-Admin-Actor'],
+          body: options?.body ? JSON.parse(String(options.body)) : null,
+        }))
+        expect(calls).toHaveLength(3)
+        expect(calls[0]).toEqual({
+          url: 'https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments/preview',
+          method: 'POST',
+          actor: 'peyton@omniaura.ai',
+          body: {
+            agent_id: agentId,
+            release_row_id: releaseRowId,
+            catalog_index: 3,
+            validator_hotkey: validatorHotkey,
+            policy_sha256: '2'.repeat(64),
+            execution_profile_sha256: '3'.repeat(64),
+            grading_profile_sha256: '4'.repeat(64),
+            max_patch_bytes: 1 << 20,
+            lease_seconds: 600,
+          },
+        })
+        expect(calls[1]).toMatchObject({
+          url: 'https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments',
+          method: 'POST',
+          actor: 'peyton@omniaura.ai',
+          body: {
+            evaluation_id: evaluationId,
+            attempt_id: attemptId,
+            deadline_unix: 1_789_000_000,
+            confirmed_assignment_sha256: assignmentSha256,
+            reason: 'synthetic hosted canary assignment',
+            actor: 'peyton@omniaura.ai',
+            confirmation: typedConfirmation,
+          },
+        })
+        expect(calls[2]).toEqual({
+          url: `https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments/${evaluationId}/cancel`,
+          method: 'POST',
+          actor: 'peyton@omniaura.ai',
+          body: {
+            expected_assignment_sha256: assignmentSha256,
+            reason: 'cancel the unstarted canary assignment',
+            actor: 'peyton@omniaura.ai',
+            confirmation: `CANCEL SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+          },
+        })
+
+        fetchMock.mockResolvedValueOnce(
+          Response.json({ detail: 'hosted attempt already started; only its worker can abort it' }, { status: 409 }),
+        )
+        const refused = await client.callTool({
+          name: 'cancel_coding_hosted_assignment',
+          arguments: {
+            evaluationId,
+            expectedAssignmentSha256: assignmentSha256,
+            reason: 'cancel the unstarted canary assignment',
+            confirmation: `CANCEL SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+          },
+        })
+        expect(refused.isError).toBe(true)
+      } finally {
+        await client.close()
+        await server.close()
+      }
+    })
+
+    it('bounds hosted assignment inputs before any request', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = hostedFetch()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        for (const [name, args] of [
+          ['list_coding_hosted_assignments', { limit: 101 }],
+          ['list_coding_hosted_assignments', { offset: -1 }],
+          ['get_coding_hosted_assignment', { evaluationId: 'not-a-uuid' }],
+          ['preview_coding_hosted_assignment', { ...subject, catalogIndex: 250 }],
+          ['preview_coding_hosted_assignment', { ...subject, leaseSeconds: 3601 }],
+          ['cancel_coding_hosted_assignment', {
+            evaluationId,
+            expectedAssignmentSha256: 'A'.repeat(64),
+            reason: 'cancel the unstarted canary assignment',
+            confirmation: 'x',
+          }],
+          ['cancel_coding_hosted_assignment', {
+            evaluationId,
+            expectedAssignmentSha256: assignmentSha256,
+            reason: ' short ',
+            confirmation: 'x',
+          }],
+        ] as const) {
+          const response = await client.callTool({ name, arguments: args })
+          expect(response.isError, `${name} ${JSON.stringify(args)}`).toBe(true)
+        }
+        // Platform refuses a trimmed reason over 512 characters; the service
+        // names the field before any request instead of forwarding a 409.
+        for (const [name, args] of [
+          ['create_coding_hosted_assignment', {
+            ...subject,
+            evaluationId,
+            attemptId,
+            deadlineUnix: 1_789_000_000,
+            confirmedAssignmentSha256: assignmentSha256,
+            reason: 'r'.repeat(513),
+            confirmation: plan.confirmation,
+          }],
+          ['cancel_coding_hosted_assignment', {
+            evaluationId,
+            expectedAssignmentSha256: assignmentSha256,
+            reason: 'r'.repeat(513),
+            confirmation: `CANCEL SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+          }],
+        ] as const) {
+          const response = await client.callTool({ name, arguments: args })
+          expect(response.isError, name).toBe(true)
+          expect(readTextResult(response), name).toMatch(/reason/)
+          expect(readTextResult(response), name).toMatch(/512/)
+        }
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally {
+        await client.close()
+        await server.close()
+      }
+    })
   })
 
   it('registers, reads, and retires signed shadow coding catalog commitments', async () => {

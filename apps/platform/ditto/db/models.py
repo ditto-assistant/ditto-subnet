@@ -1779,6 +1779,36 @@ class CodingHostedAssignment(Base):
     )
 
 
+class CodingHostedAssignmentCancellation(Base):
+    """Append-only operator cancellation of an assignment that never started."""
+
+    __tablename__ = "coding_hosted_assignment_cancellations"
+
+    evaluation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    assignment_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    prior_state: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    cancelled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["evaluation_id"],
+            ["coding_hosted_assignments.evaluation_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "assignment_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND prior_state IN ('pending_admission','admitted') "
+            "AND length(trim(reason)) BETWEEN 8 AND 512 "
+            "AND length(trim(actor)) BETWEEN 1 AND 120",
+            name="coding_hosted_assignment_cancellations_audit_check",
+        ),
+    )
+
+
 class CodingHostedPrivateTask(Base):
     """Private selected arm and irreversible object-access phase boundaries."""
 

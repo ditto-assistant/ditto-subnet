@@ -5350,6 +5350,8 @@ export const codingNativeControlStatusSchema = z.object({
     artifact_sha256: codingPrivateV2Digest,
     screened_image_sha256: codingPrivateV2Digest,
     assignment_sha256: codingPrivateV2Digest,
+    // Platform never widens this published enum: an unknown value would fail
+    // the whole read. A cancelled assignment reads `aborted` with `cancelled`.
     state: z.enum([
       'pending_admission',
       'admitted',
@@ -5366,6 +5368,8 @@ export const codingNativeControlStatusSchema = z.object({
     frozen: z.boolean(),
     closed_at: z.string().nullable(),
     close_reason: z.enum(['completed', 'failed', 'aborted']).nullable(),
+    // Additive; absent from a Platform deployed before cancellation.
+    cancelled: z.boolean().default(false),
     registered_actor: z.string(),
     registered_reason: z.string(),
     shadow_only: z.literal(true),
@@ -5495,6 +5499,250 @@ export const codingShadowTicketSetResponseSchema = z.object({
     deadline: z.string(),
   })).length(3),
   idempotent: z.boolean(),
+  weight_eligible: z.literal(false),
+})
+
+// Hosted-v2 assignment operator path (Platform #1823 plus bounded cancellation
+// and redacted lifecycle reads). Platform derives every artifact, release,
+// selection and assignment digest from locked state and owns the confirmation
+// phrase; Backroom forwards the operator's exact values and never builds one.
+// Explicit response projections strip unknown fields, including the private
+// task grant identifiers create returns.
+const codingHostedSs58Hotkey = z.string().regex(SS58_HOTKEY_PATTERN)
+const codingHostedOutcomeSchema = z.enum([
+  'completed',
+  'candidate_failure',
+  'infrastructure_failure',
+  'integrity_failure',
+])
+const codingHostedCloseReasonSchema = z.enum(['completed', 'failed', 'aborted'])
+// Platform derives the lifecycle view state from durable rows and its database
+// clock: cancelled, then the private task close reason, then expired, running,
+// admitted, pending_admission. Only these new views carry `cancelled`.
+export const codingHostedAssignmentStateSchema = z.enum([
+  'pending_admission',
+  'admitted',
+  'running',
+  'completed',
+  'failed',
+  'aborted',
+  'expired',
+  'cancelled',
+])
+// Platform refuses a trimmed reason outside 8-512 characters on both writes, so
+// the service parse refuses it first with a named field error. The MCP catalog
+// copies below keep `reason` unbounded above, like every other MCP reason, and
+// state the bound in their descriptions instead.
+const codingHostedReasonSchema = auditReasonSchema(8).max(512)
+
+export const codingHostedAssignmentSubjectInputSchema = z.object({
+  agentId: z.string().uuid(),
+  releaseRowId: z.string().uuid(),
+  catalogIndex: z.number().int().min(0).max(249),
+  validatorHotkey: codingHostedSs58Hotkey,
+  policySha256: codingPrivateV2Digest,
+  executionProfileSha256: codingPrivateV2Digest,
+  gradingProfileSha256: codingPrivateV2Digest,
+  maxPatchBytes: z.number().int().min(1).max(128 << 20),
+})
+
+export const previewCodingHostedAssignmentInputSchema =
+  codingHostedAssignmentSubjectInputSchema.extend({
+    leaseSeconds: z.number().int().min(60).max(3600).default(900),
+  })
+
+export const createCodingHostedAssignmentInputSchema =
+  codingHostedAssignmentSubjectInputSchema.extend({
+    evaluationId: z.string().uuid(),
+    attemptId: z.string().uuid(),
+    deadlineUnix: z.number().int().positive(),
+    confirmedAssignmentSha256: codingPrivateV2Digest,
+    reason: codingHostedReasonSchema,
+    confirmation: z.string().min(1).max(1024),
+  })
+
+export const cancelCodingHostedAssignmentInputSchema = z.object({
+  evaluationId: z.string().uuid(),
+  expectedAssignmentSha256: codingPrivateV2Digest,
+  reason: codingHostedReasonSchema,
+  confirmation: z.string().min(1).max(1024),
+})
+
+export const createCodingHostedAssignmentMcpInputSchema =
+  createCodingHostedAssignmentInputSchema.extend({ reason: auditReasonSchema(8) })
+
+export const cancelCodingHostedAssignmentMcpInputSchema =
+  cancelCodingHostedAssignmentInputSchema.extend({ reason: auditReasonSchema(8) })
+
+export const listCodingHostedAssignmentsInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(20),
+  offset: z.number().int().min(0).default(0),
+})
+
+export const getCodingHostedAssignmentInputSchema = z.object({
+  evaluationId: z.string().uuid(),
+})
+
+export const codingHostedTaskSelectionSchema = z.object({
+  schema: z.literal('dittobench-coding-hosted-task-selection-v2'),
+  coding_contract_version: z.literal(2),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+  evaluation_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  registration_sha256: codingPrivateV2Digest,
+  artifact_sha256: codingPrivateV2Digest,
+  schedule_sha256: codingPrivateV2Digest,
+  catalog_index: z.number().int().min(0).max(249),
+  max_patch_bytes: z.number().int().min(1).max(128 << 20),
+})
+
+export const codingHostedAssignmentAuthoritySchema = z.object({
+  schema: z.literal('dittobench-coding-hosted-assignment-v2'),
+  coding_contract_version: z.literal(2),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+  evaluation_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  release_row_id: z.string().uuid(),
+  registration_sha256: codingPrivateV2Digest,
+  agent_id: z.string().uuid(),
+  validator_hotkey: codingHostedSs58Hotkey,
+  artifact_sha256: codingPrivateV2Digest,
+  screened_image_sha256: codingPrivateV2Digest,
+  selection_sha256: codingPrivateV2Digest,
+  policy_sha256: codingPrivateV2Digest,
+  execution_profile_sha256: codingPrivateV2Digest,
+  grading_profile_sha256: codingPrivateV2Digest,
+  deadline_unix: z.number().int().positive(),
+})
+
+export const codingHostedAssignmentPlanSchema = z.object({
+  evaluation_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  deadline_unix: z.number().int().positive(),
+  artifact_sha256: codingPrivateV2Digest,
+  screened_image_sha256: codingPrivateV2Digest,
+  registration_sha256: codingPrivateV2Digest,
+  bench_version: z.number().int(),
+  certification_row_id: z.string().uuid(),
+  schedule_sha256: codingPrivateV2Digest,
+  selection_sha256: codingPrivateV2Digest,
+  selection: codingHostedTaskSelectionSchema,
+  assignment_sha256: codingPrivateV2Digest,
+  authority: codingHostedAssignmentAuthoritySchema,
+  confirmation: z.string(),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+})
+
+const codingHostedCancellationRecordSchema = z.object({
+  assignment_sha256: codingPrivateV2Digest,
+  prior_state: z.enum(['pending_admission', 'admitted']),
+  reason: z.string(),
+  actor: z.string(),
+  cancelled_at: z.string(),
+})
+
+export const codingHostedAssignmentSummarySchema = z.object({
+  evaluation_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  release_row_id: z.string().uuid(),
+  registration_sha256: codingPrivateV2Digest,
+  agent_id: z.string().uuid(),
+  validator_hotkey: codingHostedSs58Hotkey,
+  artifact_sha256: codingPrivateV2Digest,
+  screened_image_sha256: codingPrivateV2Digest,
+  assignment_sha256: codingPrivateV2Digest,
+  state: codingHostedAssignmentStateSchema,
+  created_at: z.string(),
+  expires_at: z.string(),
+  admitted_at: z.string().nullable(),
+  started_at: z.string().nullable(),
+  cancelled_at: z.string().nullable(),
+  closed_at: z.string().nullable(),
+  close_reason: codingHostedCloseReasonSchema.nullable(),
+  terminal_outcome: codingHostedOutcomeSchema.nullable(),
+  acknowledged: z.boolean(),
+  registered_actor: z.string(),
+  registered_reason: z.string(),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+})
+
+export const codingHostedAssignmentListSchema = z.object({
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().min(1).max(100),
+  offset: z.number().int().nonnegative(),
+  observed_at: z.string(),
+  assignments: z.array(codingHostedAssignmentSummarySchema).max(100),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+})
+
+export const codingHostedAssignmentDetailSchema = codingHostedAssignmentSummarySchema.extend({
+  observed_at: z.string(),
+  deadline_unix: z.number().int().positive(),
+  selection_sha256: codingPrivateV2Digest,
+  policy_sha256: codingPrivateV2Digest,
+  execution_profile_sha256: codingPrivateV2Digest,
+  grading_profile_sha256: codingPrivateV2Digest,
+  admission_request_sha256: codingPrivateV2Digest.nullable(),
+  cancellable: z.boolean(),
+  cancellation: codingHostedCancellationRecordSchema.nullable(),
+  private_task: z.object({
+    bound_at: z.string(),
+    selection_sha256: codingPrivateV2Digest,
+    frozen_at: z.string().nullable(),
+    closed_at: z.string().nullable(),
+    close_reason: codingHostedCloseReasonSchema.nullable(),
+  }).nullable(),
+  authoring_evidence_reserved_at: z.string().nullable(),
+  authoring_evidence_finalized_at: z.string().nullable(),
+  grading_claimed_at: z.string().nullable(),
+  terminal: z.object({
+    outcome: codingHostedOutcomeSchema,
+    evidence_sha256: codingPrivateV2Digest,
+    reserved_at: z.string(),
+    finalized_at: z.string().nullable(),
+  }).nullable(),
+  inference: z.object({
+    policy_sha256: codingPrivateV2Digest,
+    issued_at: z.string(),
+    expires_at: z.string(),
+    revoked_at: z.string().nullable(),
+    request_limit: z.number().int().min(1),
+    prompt_token_limit: z.number().int().min(1),
+    completion_token_limit: z.number().int().min(1),
+    cost_usd_micros_limit: z.number().int().min(1),
+    request_count: z.number().int().nonnegative(),
+    reserved_count: z.number().int().nonnegative(),
+    settled_count: z.number().int().nonnegative(),
+    uncertain_count: z.number().int().nonnegative(),
+    charged_prompt_tokens: z.number().int().nonnegative(),
+    charged_completion_tokens: z.number().int().nonnegative(),
+    charged_cost_usd_micros: z.number().int().nonnegative(),
+    settled_prompt_tokens: z.number().int().nonnegative(),
+    settled_completion_tokens: z.number().int().nonnegative(),
+    settled_cost_usd_micros: z.number().int().nonnegative(),
+    verified: z.boolean(),
+  }).nullable(),
+  delivery_count: z.number().int().nonnegative(),
+  acknowledged_count: z.number().int().nonnegative(),
+  deliveries: z.array(z.object({
+    result_sha256: codingPrivateV2Digest,
+    delivered_at: z.string(),
+    acknowledged_at: z.string().nullable(),
+  })).max(20),
+  deliveries_truncated: z.boolean(),
+})
+
+export const codingHostedAssignmentCancelledSchema = z.object({
+  idempotent: z.boolean(),
+  private_task_closed: z.boolean(),
+  cancellation: codingHostedCancellationRecordSchema,
+  assignment: codingHostedAssignmentDetailSchema,
+  shadow_only: z.literal(true),
   weight_eligible: z.literal(false),
 })
 

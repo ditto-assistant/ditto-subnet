@@ -10,6 +10,8 @@ from pydantic import Field
 
 from ditto.api_models.coding_evaluation import CodingEvaluationModel, Sha256
 
+# Published control-plane states. Do not widen: a deployed Backroom rejects the
+# whole response on an unknown value, so new lifecycle facts ride additive fields.
 CodingHostedOperationState = Literal[
     "pending_admission",
     "admitted",
@@ -39,6 +41,8 @@ class CodingHostedOperationRecord(CodingEvaluationModel):
     frozen: bool
     closed_at: datetime | None
     close_reason: Literal["completed", "failed", "aborted"] | None
+    # An operator-cancelled assignment reads ``aborted`` here with this flag set.
+    cancelled: bool = False
     registered_actor: str
     registered_reason: str
     shadow_only: Literal[True] = True

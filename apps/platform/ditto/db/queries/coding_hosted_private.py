@@ -214,6 +214,15 @@ async def close_hosted_private_task(
     task = await _task(session, evaluation_id)
     if task is None:
         raise HostedPrivateTaskError("hosted private task is unavailable")
+    return await _record_close(session, task, reason)
+
+
+async def _record_close(
+    session: AsyncSession,
+    task: CodingHostedPrivateTask,
+    reason: Literal["completed", "failed", "aborted"],
+) -> bool:
+    """Record the one-way close; the caller holds the assignment -> task locks."""
     if task.closed_at is not None:
         return False
     task.closed_at, task.close_reason = await _now(session), reason

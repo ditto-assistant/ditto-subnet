@@ -120,6 +120,15 @@ import {
   codingShadowReconciliationResponseSchema,
   issueCodingShadowTicketSetInputSchema,
   codingShadowTicketSetResponseSchema,
+  cancelCodingHostedAssignmentInputSchema,
+  codingHostedAssignmentCancelledSchema,
+  codingHostedAssignmentDetailSchema,
+  codingHostedAssignmentListSchema,
+  codingHostedAssignmentPlanSchema,
+  createCodingHostedAssignmentInputSchema,
+  getCodingHostedAssignmentInputSchema,
+  listCodingHostedAssignmentsInputSchema,
+  previewCodingHostedAssignmentInputSchema,
   registerCodingCatalogInputSchema,
   retireCodingCatalogInputSchema,
   supersedeCodingCatalogInputSchema,
@@ -2301,6 +2310,119 @@ export async function issueCodingShadowTicketSet(rawInput: unknown, actor: strin
     },
   })
   return codingShadowTicketSetResponseSchema.parse(payload)
+}
+
+const CODING_HOSTED_ASSIGNMENTS_PATH = '/api/v1/admin/coding-hosted-assignments'
+
+type CodingHostedOperation<Name extends keyof PlatformOperations> =
+  PlatformOperations[Name] extends {
+    responses: { 200: { content: { 'application/json': infer Body } } }
+  }
+    ? Body
+    : never
+
+function codingHostedSubjectBody(input: {
+  agentId: string
+  releaseRowId: string
+  catalogIndex: number
+  validatorHotkey: string
+  policySha256: string
+  executionProfileSha256: string
+  gradingProfileSha256: string
+  maxPatchBytes: number
+}) {
+  return {
+    agent_id: input.agentId,
+    release_row_id: input.releaseRowId,
+    catalog_index: input.catalogIndex,
+    validator_hotkey: input.validatorHotkey,
+    policy_sha256: input.policySha256,
+    execution_profile_sha256: input.executionProfileSha256,
+    grading_profile_sha256: input.gradingProfileSha256,
+    max_patch_bytes: input.maxPatchBytes,
+  }
+}
+
+export async function fetchCodingHostedAssignments(rawInput: unknown = {}) {
+  const input = listCodingHostedAssignmentsInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  const payload = await platformAdminRequest(`${CODING_HOSTED_ASSIGNMENTS_PATH}?${query}`)
+  const list = codingHostedAssignmentListSchema.parse(payload) satisfies CodingHostedOperation<
+    'list_hosted_assignments_api_v1_admin_coding_hosted_assignments_get'
+  >
+  // Platform pages this collection; `total` is the untruncated row count.
+  return {
+    ...list,
+    count: list.total,
+    returned: list.assignments.length,
+    has_more: list.offset + list.assignments.length < list.total,
+  }
+}
+
+export async function fetchCodingHostedAssignment(rawInput: unknown) {
+  const input = getCodingHostedAssignmentInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `${CODING_HOSTED_ASSIGNMENTS_PATH}/${encodeURIComponent(input.evaluationId)}`,
+  )
+  return codingHostedAssignmentDetailSchema.parse(payload) satisfies CodingHostedOperation<
+    'get_hosted_assignment_api_v1_admin_coding_hosted_assignments__evaluation_id__get'
+  >
+}
+
+export async function previewCodingHostedAssignment(rawInput: unknown, actor: string) {
+  const input = previewCodingHostedAssignmentInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(`${CODING_HOSTED_ASSIGNMENTS_PATH}/preview`, {
+    method: 'POST',
+    actor,
+    body: { ...codingHostedSubjectBody(input), lease_seconds: input.leaseSeconds },
+  })
+  return codingHostedAssignmentPlanSchema.parse(payload) satisfies CodingHostedOperation<
+    'preview_hosted_assignment_api_v1_admin_coding_hosted_assignments_preview_post'
+  >
+}
+
+export async function createCodingHostedAssignment(rawInput: unknown, actor: string) {
+  const input = createCodingHostedAssignmentInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(CODING_HOSTED_ASSIGNMENTS_PATH, {
+    method: 'POST',
+    actor,
+    body: {
+      ...codingHostedSubjectBody(input),
+      evaluation_id: input.evaluationId,
+      attempt_id: input.attemptId,
+      deadline_unix: input.deadlineUnix,
+      confirmed_assignment_sha256: input.confirmedAssignmentSha256,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  // The plan projection deliberately omits the private task grant identifiers
+  // Platform returns; the hosted worker, not an operator, consumes them.
+  return codingHostedAssignmentPlanSchema.parse(payload)
+}
+
+export async function cancelCodingHostedAssignment(rawInput: unknown, actor: string) {
+  const input = cancelCodingHostedAssignmentInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `${CODING_HOSTED_ASSIGNMENTS_PATH}/${encodeURIComponent(input.evaluationId)}/cancel`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        expected_assignment_sha256: input.expectedAssignmentSha256,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return codingHostedAssignmentCancelledSchema.parse(payload) satisfies CodingHostedOperation<
+    'cancel_hosted_assignment_endpoint_api_v1_admin_coding_hosted_assignments__evaluation_id__cancel_post'
+  >
 }
 
 export async function registerCodingCatalogRelease(rawInput: unknown, actor: string) {

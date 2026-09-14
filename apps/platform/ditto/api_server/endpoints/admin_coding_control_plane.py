@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import Annotated, cast
+from datetime import datetime
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import func, select
@@ -16,7 +16,13 @@ from ditto.api_models.coding_control_plane import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import CodingHostedAssignment, CodingHostedPrivateTask
+from ditto.db.models import (
+    CodingHostedAssignment,
+    CodingHostedAssignmentCancellation,
+    CodingHostedPrivateTask,
+)
+from ditto.db.queries.coding_hosted_admission import _now
+from ditto.db.queries.coding_hosted_operations import hosted_operation_state
 
 router = APIRouter(prefix="/admin/coding-control-plane", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -28,17 +34,21 @@ def _state(
     task: CodingHostedPrivateTask | None,
     *,
     now: datetime,
+    cancelled: bool = False,
 ) -> CodingHostedOperationState:
-    if task is not None and task.closed_at is not None:
-        assert task.close_reason in {"completed", "failed", "aborted"}
-        return cast(CodingHostedOperationState, task.close_reason)
-    if assignment.expires_at <= now:
-        return "expired"
-    if assignment.started_at is not None:
-        return "running"
-    if assignment.admitted_at is not None:
-        return "admitted"
-    return "pending_admission"
+    state = hosted_operation_state(
+        started_at=assignment.started_at,
+        admitted_at=assignment.admitted_at,
+        expires_at=assignment.expires_at,
+        closed_at=task.closed_at if task is not None else None,
+        close_reason=task.close_reason if task is not None else None,
+        cancelled=cancelled,
+        now=now,
+    )
+    # This projection keeps its published seven states so a Backroom deployed
+    # before cancellation still parses it. A cancellation already closed any
+    # bound task as aborted; the record's ``cancelled`` flag carries the rest.
+    return "aborted" if state == "cancelled" else state
 
 
 @router.get("", response_model=AdminCodingControlPlaneResponse)
@@ -58,10 +68,19 @@ async def get_coding_control_plane(
     )
     rows = (
         await session.execute(
-            select(CodingHostedAssignment, CodingHostedPrivateTask)
+            select(
+                CodingHostedAssignment,
+                CodingHostedPrivateTask,
+                CodingHostedAssignmentCancellation.evaluation_id,
+            )
             .outerjoin(
                 CodingHostedPrivateTask,
                 CodingHostedPrivateTask.evaluation_id
+                == CodingHostedAssignment.evaluation_id,
+            )
+            .outerjoin(
+                CodingHostedAssignmentCancellation,
+                CodingHostedAssignmentCancellation.evaluation_id
                 == CodingHostedAssignment.evaluation_id,
             )
             .order_by(
@@ -71,7 +90,7 @@ async def get_coding_control_plane(
             .limit(limit)
         )
     ).all()
-    now = datetime.now(UTC)
+    now = await _now(session)
     operations = [
         CodingHostedOperationRecord(
             evaluation_id=assignment.evaluation_id,
@@ -83,7 +102,7 @@ async def get_coding_control_plane(
             artifact_sha256=assignment.artifact_sha256,
             screened_image_sha256=assignment.screened_image_sha256,
             assignment_sha256=assignment.assignment_sha256,
-            state=_state(assignment, task, now=now),
+            state=_state(assignment, task, now=now, cancelled=cancellation is not None),
             expires_at=assignment.expires_at,
             created_at=assignment.created_at,
             admitted_at=assignment.admitted_at,
@@ -91,12 +110,13 @@ async def get_coding_control_plane(
             frozen=task is not None and task.frozen_at is not None,
             closed_at=task.closed_at if task is not None else None,
             close_reason=task.close_reason if task is not None else None,
+            cancelled=cancellation is not None,
             registered_actor=assignment.actor,
             registered_reason=assignment.reason,
             shadow_only=True,
             weight_eligible=False,
         )
-        for assignment, task in rows
+        for assignment, task, cancellation in rows
     ]
     config = request.app.state.config
     return AdminCodingControlPlaneResponse(
