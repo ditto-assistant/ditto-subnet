@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ditto-assistant/dittobench-datagen/internal/appearance"
 	"github.com/ditto-assistant/dittobench-datagen/internal/assistantvoice"
 	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
 	"github.com/ditto-assistant/dittobench-datagen/internal/publicdata"
@@ -714,18 +715,12 @@ func fillerForVersion(r *rand.Rand, cat string, benchVersion int) string {
 		p := poolV5(base, extra, benchVersion)
 		return p[r.Intn(len(p))]
 	}
-	if benchVersion >= protocol.BenchVersionV13 {
-		// v13 (#1825): the appearance fillers draw from the public colour and
-		// font corpora, and the addressee fillers from the human-name corpus,
-		// instead of hand lists of four or five entries.
-		switch cat {
-		case "set_accent":
-			return publicdata.Color(r)
-		case "set_font":
-			return publicdata.FontFamily(r, r.Intn(4))
-		case "email_send":
-			return corpusEmailRecipient(r)
-		}
+	if benchVersion >= protocol.BenchVersionV13 && cat == "email_send" {
+		// v13 (#1825): the addressee filler draws from the human-name corpus
+		// instead of a hand list of four entries. The appearance categories are
+		// not fillers at v8+ (v8ArgIntents owns their value); at v13 that value
+		// comes from the seed's appearance inventory in v13AppearanceIntent.
+		return corpusEmailRecipient(r)
 	}
 	switch cat {
 	case "entity_lookup_chain":
@@ -2213,6 +2208,12 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 			if strings.Contains(it.prompt, it.value) {
 				usedFiller = it.value
 			}
+			if benchVersion >= protocol.BenchVersionV13 {
+				if value, ok := v13AppearanceIntent(seed, r, cat.name); ok {
+					argValue = value
+					usedFiller = value
+				}
+			}
 		case strings.Contains(tmpl, "%s"):
 			prompt = fmt.Sprintf(tmpl, filler)
 			// A real tool case has a load-bearing entity; no_tool / abstention fillers
@@ -2362,6 +2363,26 @@ func applyV8AssistantVoice(seed int64, cases []protocol.ToolCase) {
 			pair.Response = assistantvoice.Render(seed, pair.PairID, pair.SessionID, userName, pair.Prompt, pair.Response)
 		}
 	}
+}
+
+// v13AppearanceIntent draws the set_accent / set_font target from the seed's
+// appearance inventory, the same appearance.ForSeed the scorer runtime serves
+// through toolexec.BuildFixtureForVersion's discover_capabilities result. The v8
+// intent bank names eight fixed colours and six fonts; at v13 the served
+// inventory is seed-specific, so a fixed value would be unsolvable through the
+// honest inspect-the-options path. applyV8CapabilityResolution then renders the
+// misspelled "check the options" prompt around the returned value. Other
+// categories report ok=false and keep their intent value.
+func v13AppearanceIntent(seed int64, r *rand.Rand, category string) (string, bool) {
+	switch category {
+	case "set_accent":
+		options := appearance.ForSeed(seed).AccentOptions
+		return options[r.Intn(len(options))], true
+	case "set_font":
+		options := appearance.ForSeed(seed).FontOptions
+		return options[r.Intn(len(options))], true
+	}
+	return "", false
 }
 
 // applyV8CapabilityResolution makes closed product choices behave like smart

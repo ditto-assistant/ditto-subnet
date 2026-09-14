@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"strings"
 	"testing"
+
+	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
 )
 
 // TestFrozenCorpusIdentity pins every embedded table to the SHA-256 recorded in
@@ -21,7 +23,7 @@ func TestFrozenCorpusIdentity(t *testing.T) {
 		{"occupations", occupationsTSV, "cbf91627ace1b935da67eb8be3bc6a9d22334990f86da788d4b95e381b7b4649"},
 		{"fonts", fontsTSV, "8029e779b6ebd5a69175caa3e46bbe2d38aa05b59047a84fcd9c89467f334cc3"},
 		{"colors", colorsTSV, "ce308f2165e03d1f51238923b4895e4a15967add6cded1579f9a8a72996edca0"},
-		{"org_stems", orgStemsTSV, "e0da61d10a87a7e91ee9ea4fdcdd1036eb1d7ea57b2cde48a63ed1d103cce747"},
+		{"org_stems", orgStemsTSV, "d683c01a72bd537fa7d5290091a37f3643405ed37ca38e1516abf5001bcd5367"},
 		{"purposes", purposesTSV, "78057f19f5e77d3423747df31635b62a857662b310880e3e3ca959ca6650d60d"},
 	}
 	for _, tt := range tests {
@@ -31,6 +33,37 @@ func TestFrozenCorpusIdentity(t *testing.T) {
 				t.Fatalf("corpus drift: got %s want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestOrgStemsExcludeNamesPlacesAndHouseholdBrands pins the second-stage
+// exclusions of tools/freeze.py (refine_org_stems): no organisation stem is a
+// persona given name or surname, a world city, or one of the household brands,
+// places, and sensitive labels the review named. A stem that collides with a
+// name or place would turn a fictional employer into a real one.
+func TestOrgStemsExcludeNamesPlacesAndHouseholdBrands(t *testing.T) {
+	excluded := map[string]bool{}
+	for _, name := range humandata.AllGivenNames() {
+		excluded[strings.ToLower(name)] = true
+	}
+	for _, name := range humandata.AllSurnames() {
+		excluded[strings.ToLower(name)] = true
+	}
+	for _, city := range AllCities() {
+		excluded[strings.ToLower(city)] = true
+	}
+	for _, reviewed := range []string{
+		"Gucci", "Toshiba", "Sony", "Uber", "Rolex", "Volkswagen", "Pepsico", "Unilever",
+		"Robert", "Louis", "Duke", "Brown", "Boston", "Seoul", "Singapore", "Qatar",
+		"Malaysia", "Leipzig", "Uppsala", "Norwegian", "Austrian", "Deutsche",
+		"Xvideos", "Trump", "Islamic", "Anthropic",
+	} {
+		excluded[strings.ToLower(reviewed)] = true
+	}
+	for _, stem := range AllOrgStems() {
+		if excluded[strings.ToLower(stem)] {
+			t.Fatalf("org stem %q is a person, place, or reviewed household name", stem)
+		}
 	}
 }
 

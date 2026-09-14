@@ -1112,14 +1112,17 @@ pins against every version from v8 to v12).
   SHA-pinned tables — GeoNames cities ≥ 15k (31,799; CC-BY 4.0), O*NET
   occupation titles (721; CC-BY 4.0), Google Fonts families (1,946; OFL/Apache
   metadata), the xkcd colour survey plus CSS named colours (952; CC0), Wikidata
-  organisation stems (1,528; CC0), and an authored 181-entry purpose bank — with
+  organisation stems (805 after the name, place, and household-brand exclusions; CC0), and an authored 181-entry purpose bank — with
   provenance in `internal/publicdata/data/SOURCES.md` and the humandata-style
   weighted head + long-tail sampler. At v13 the world's relations, roles,
   cities, event contexts, employers, clients, vendors, project-name families,
   trip aliases, purposes, accent colour, and interface font all come from these
   corpora or from compositional banks whose product exceeds 500 surfaces; the
-  `datagen` appearance and addressee fillers and the `toolexec` needle names,
-  web sources, and URL hosts do too. The one deliberately small list left is the
+  `datagen` addressee filler and the `toolexec` needle names, web sources, and
+  URL hosts do too. The `set_accent` / `set_font` targets are drawn from the
+  seed's appearance inventory (`internal/appearance`) rather than the v8 intent
+  bank, so the value a prompt misspells is always one the mock
+  `discover_capabilities` result serves. The one deliberately small list left is the
   closed company-suffix enum. The mock `discover_capabilities` inventory is now
   seed-specific (`internal/appearance`): it lists the seeded accent and font
   among corpus near-misses ("Inter" beside "Inter Tight", "teal" beside "dark
