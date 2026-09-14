@@ -336,6 +336,15 @@ def _ledger_seed_anchors(ledger: LedgerResponse) -> list[object]:
     return list(anchors) if isinstance(anchors, (list, tuple)) else []
 
 
+def _binding_enforced(config: object) -> bool:
+    """Whether a missing reign pin at a binding version defers a
+    validator-derived lane (``enforce``) or falls it back to the legacy
+    unbound family with a warning (``observe``, the v13.0 default). Read
+    defensively: a config without the field is the observe posture."""
+    posture = getattr(config, "crn_block_binding_posture", "observe")
+    return isinstance(posture, str) and posture.strip().lower() == "enforce"
+
+
 def _confirmation_pin_binding_mismatch(
     pins: Sequence[ConfirmationDatasetPin], *, bench_version: int | None
 ) -> ConfirmationDatasetPin | None:
@@ -346,6 +355,12 @@ def _confirmation_pin_binding_mismatch(
     partially bound pin (some binding fields, not all) is a mismatch too. A pin
     with no binding fields is legacy and is not checked here. ``None`` means
     every pin re-derives.
+
+    This proves the seed is *consistent with the pin Platform served*, the
+    same trust model as the P2 ``derive_validator_seed`` check: the validator
+    does not read ``seed_block_hash`` back from the chain, so it agrees with
+    Platform's pin, not independently with the chain. Verifying the pin
+    against the chain is a separate follow-up (see ``crn.py``).
     """
     for pin in pins:
         fields = (
@@ -2657,8 +2672,9 @@ class ValidatorWorker:
                 return False
             # Bench v13+ anti-grind, the confirmation-lane twin of the P2 check
             # in ``_score_job``: a seed Platform says is bound to a finalized
-            # block must re-derive from that block here, or Platform issued a
-            # seed it could have chosen. Refuse rather than lend it a signature.
+            # block must re-derive from that block here, or the lease is not
+            # even consistent with Platform's own pin. Refuse rather than lend
+            # it a signature. (Not a posture: an inconsistent pin is a defect.)
             mismatched = _confirmation_pin_binding_mismatch(
                 job.confirmation_datasets, bench_version=job.bench_version
             )
@@ -2982,19 +2998,31 @@ class ValidatorWorker:
         # dethrone must replicate across seeds, not ride one lucky draw.
         # Bench v13+: the seeds also hash the version's oldest Platform-pinned
         # finalized block, so nobody could have named them at submission. With
-        # no pin on the ledger yet, wait: an unbound sweep would hand a
-        # precomputable dataset to the very agents being compared.
+        # no pin on the ledger yet the posture decides: ``enforce`` waits (an
+        # unbound sweep would hand a precomputable dataset to the very agents
+        # being compared); ``observe`` -- the v13.0 default -- logs and sweeps
+        # the legacy unbound family so a Platform pin gap cannot stall it.
         sweep_block_hash, sweep_allowed = version_seed_planning(
             _ledger_seed_anchors(ledger), version=current_version
         )
         if not sweep_allowed:
-            logger.info(
-                "bench_version %d re-score sweep deferred: the ledger carries no "
-                "pinned confirmation seed anchor yet (%d stale agent(s))",
+            if _binding_enforced(self._config):
+                logger.info(
+                    "bench_version %d re-score sweep deferred: the ledger carries "
+                    "no pinned confirmation seed anchor yet (%d stale agent(s); "
+                    "crn_block_binding_posture=enforce)",
+                    current_version,
+                    len(stale),
+                )
+                return ledger
+            logger.warning(
+                "bench_version %d re-score sweep: the ledger carries no pinned "
+                "confirmation seed anchor yet; sweeping the legacy unbound "
+                "family under the observe posture (%d stale agent(s))",
                 current_version,
                 len(stale),
             )
-            return ledger
+            sweep_block_hash = None
         sweep_seeds = confirmation_seeds(
             (str(e.agent_id) for e in stale),
             version=current_version,
@@ -3085,22 +3113,34 @@ class ValidatorWorker:
         # Champion-anchored: a pure function of the champion's identity and the
         # version, so it is stable across sweeps and identical fleet-wide. From
         # bench v13 it also hashes the finalized block Platform pinned for this
-        # reign (served on the ledger); without that pin no fresh seed is drawn.
+        # reign (served on the ledger); without that pin the posture decides:
+        # ``enforce`` draws no fresh seed, ``observe`` (the v13.0 default)
+        # logs and derives the legacy unbound family.
         block_hash, allowed = reign_seed_planning(
             _ledger_seed_anchors(ledger),
             champion_agent_id=champion.agent_id,
             version=current_version,
         )
         if not allowed:
-            logger.info(
-                "contested dethrone deferred: champion %s has no pinned "
-                "confirmation seed anchor on the ledger at bench_version %d "
-                "(%d challenger(s) in band)",
+            if _binding_enforced(self._config):
+                logger.info(
+                    "contested dethrone deferred: champion %s has no pinned "
+                    "confirmation seed anchor on the ledger at bench_version %d "
+                    "(%d challenger(s) in band; crn_block_binding_posture=enforce)",
+                    champion.agent_id,
+                    current_version,
+                    len(challengers),
+                )
+                return
+            logger.warning(
+                "contested dethrone: champion %s has no pinned confirmation seed "
+                "anchor on the ledger at bench_version %d; deriving the legacy "
+                "unbound family under the observe posture (%d challenger(s))",
                 champion.agent_id,
                 current_version,
                 len(challengers),
             )
-            return
+            block_hash = None
         seeds = confirmation_seeds(
             [str(champion.agent_id)],
             version=current_version,

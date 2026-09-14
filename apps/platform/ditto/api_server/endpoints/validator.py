@@ -133,6 +133,7 @@ from ditto.api_server.confirmation_seed_anchor import (
     LEGACY_PLANNING,
     bind_confirmation_seed,
     list_reign_seed_anchors,
+    prefetch_finalized_anchor_hashes,
     reign_seed_planning,
     resolve_reign_seed_anchor,
 )
@@ -4744,6 +4745,14 @@ async def request_top5_confirmation_job(
         getattr(request.app.state, "session_maker", None)
     )
     slot_settings = await _validator_slot_settings(request)
+    # Bench v13+: read the finalized hash of any reign anchor whose height the
+    # head has reached BEFORE the write transaction opens. The Substrate read
+    # is a fresh websocket and three RPCs; holding a Platform row lock across
+    # it is how a slow endpoint takes public reads dark. The transaction below
+    # pins from this map and never touches the chain itself.
+    finalized_anchor_hashes = await prefetch_finalized_anchor_hashes(
+        session, chain, latest_block=block.number
+    )
 
     async with session.begin():
         await _assert_validator_compatible(
@@ -5010,15 +5019,16 @@ async def request_top5_confirmation_job(
         assert champion is not None
         # Bench v13+: the reign's confirmation family binds to the finalized
         # hash of ``B_ready + Δ``. First claim of a reign creates the anchor
-        # (unpinned); later claims pin it once the height is finalized. Until
-        # then the plan below withholds fresh seeds and serves catch-up only.
+        # (unpinned); a later claim pins it from the hash prefetched above once
+        # the height is finalized. Until then the plan below withholds fresh
+        # seeds and serves catch-up only.
         reign_anchor = await resolve_reign_seed_anchor(
             session,
-            chain,
             champion_agent_id=champion_agent_id,
             bench_version=canonical_version,
             ready_block=block.number,
             now=now,
+            finalized_hashes=finalized_anchor_hashes,
         )
         seed_planning = (
             reign_anchor.planning if reign_anchor is not None else LEGACY_PLANNING
@@ -5180,9 +5190,10 @@ async def request_top5_confirmation_job(
 
         confirmation_datasets: list[ConfirmationDatasetPin] = []
         # The seed's finalized-block binding, so the validator can re-derive it
-        # and refuse a seed Platform could have chosen. Searched across every
-        # pinned reign of the version: a catch-up seed introduced under an
-        # earlier champion still binds to that champion's block.
+        # and refuse a seed inconsistent with the pin it is told about (the
+        # validator trusts the pin as served; it reads no chain). Searched
+        # across every pinned reign of the version: a catch-up seed introduced
+        # under an earlier champion still binds to that champion's block.
         seed_binding = bind_confirmation_seed(
             await list_reign_seed_anchors(session, bench_version=canonical_version),
             seed=selected_wave_seed,

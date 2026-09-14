@@ -54,6 +54,52 @@ async def list_pinned_confirmation_seed_anchors(
     return list(rows.all())
 
 
+async def list_confirmation_seed_anchors(
+    session: AsyncSession, *, bench_version: int, limit: int | None = None
+) -> list[ConfirmationSeedAnchor]:
+    """Every reign anchor of one version, pinned or waiting, oldest anchor first.
+
+    The operator read surface: "is the reign pinned yet?" is the first live
+    question at a binding version, and a waiting row is exactly what the
+    ledger does not serve.
+    """
+    query = (
+        select(ConfirmationSeedAnchor)
+        .where(ConfirmationSeedAnchor.bench_version == bench_version)
+        .order_by(
+            ConfirmationSeedAnchor.anchor_block,
+            ConfirmationSeedAnchor.champion_agent_id,
+        )
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    return list((await session.scalars(query)).all())
+
+
+async def list_unpinned_confirmation_seed_anchors(
+    session: AsyncSession, *, up_to_block: int, limit: int
+) -> list[ConfirmationSeedAnchor]:
+    """Waiting anchors whose height the chain head has already reached.
+
+    Bounded and oldest first: these are the rows one claim may try to pin,
+    and the chain read for each happens outside any write transaction, so the
+    per-claim RPC budget is ``limit`` reads at most.
+    """
+    rows = await session.scalars(
+        select(ConfirmationSeedAnchor)
+        .where(
+            ConfirmationSeedAnchor.anchor_block_hash.is_(None),
+            ConfirmationSeedAnchor.anchor_block <= int(up_to_block),
+        )
+        .order_by(
+            ConfirmationSeedAnchor.anchor_block,
+            ConfirmationSeedAnchor.champion_agent_id,
+        )
+        .limit(max(0, int(limit)))
+    )
+    return list(rows.all())
+
+
 async def ensure_confirmation_seed_anchor(
     session: AsyncSession,
     *,

@@ -131,6 +131,7 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_rollout_qualification',
         'get_burn_settings',
         'get_copy_court_settings',
+        'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
         'get_continual_retest_settings',
         'get_core_qualification_policy',

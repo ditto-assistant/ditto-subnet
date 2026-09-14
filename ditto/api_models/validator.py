@@ -257,9 +257,10 @@ class ConfirmationDatasetPin(BaseModel):
     The four optional fields are the seed's **finalized-block binding** (bench
     v13+): ``seed == crn_seed([anchor_agent_id], version=bench_version,
     k=seed_index, block_hash=seed_block_hash)``. The validator re-derives and
-    refuses a lease whose seed does not reproduce, so Platform cannot hand out a
-    seed it chose. Absent on legacy versions and on seeds no pinned reign
-    anchor derives; the lease is then accepted as before.
+    refuses a lease whose seed is not consistent with the pin Platform served
+    (it does not read the pinned hash back from the chain). Absent on legacy
+    versions and on seeds no pinned reign anchor derives; the lease is then
+    accepted as before.
     """
 
     seed: Annotated[int, Field(ge=0)]

@@ -42,6 +42,26 @@ class TestKothConfig:
         assert cfg.epoch_seconds == 3600
         assert cfg.dittobench_timeout_seconds == 9900
 
+    def test_crn_block_binding_posture_defaults_to_observe(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Owner default for v13.0: every new gate ships observe, never enforce.
+        A missing pin logs and falls back; it does not stall the lanes."""
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", raising=False)
+        assert parse_validator_config_from_env().crn_block_binding_posture == "observe"
+
+    def test_crn_block_binding_posture_is_an_explicit_opt_in(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", " Enforce ")
+        assert parse_validator_config_from_env().crn_block_binding_posture == "enforce"
+        # A consensus knob never silently falls back to either posture.
+        monkeypatch.setenv("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", "shadow")
+        with pytest.raises(ValidatorConfigError, match="CRN_BLOCK_BINDING_POSTURE"):
+            parse_validator_config_from_env()
+
     def test_env_cannot_override_frozen_knobs(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

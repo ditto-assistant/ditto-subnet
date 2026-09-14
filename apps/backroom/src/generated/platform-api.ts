@@ -699,6 +699,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/confirmation-seed-anchors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Admin Confirmation Seed Anchors
+         * @description List every reign anchor of one version -- pinned and still waiting.
+         *
+         *     Defaults to the active benchmark. The ledger serves only pinned anchors,
+         *     so a reign in its finality wait is visible only here; a binding version
+         *     with zero rows means no continual-retest claim has opened a reign yet.
+         */
+        get: operations["list_admin_confirmation_seed_anchors_api_v1_admin_confirmation_seed_anchors_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/continual-retest-settings": {
         parameters: {
             query?: never;
@@ -7423,6 +7447,60 @@ export interface components {
             effective: components["schemas"]["EffectiveConfirmationBundleSettings"];
             /** History */
             history: components["schemas"]["ConfirmationBundleSettingsRevision"][];
+        };
+        /**
+         * AdminConfirmationSeedAnchor
+         * @description One ``(champion, bench_version)`` reign anchor, pinned or still waiting.
+         */
+        AdminConfirmationSeedAnchor: {
+            /** Anchor Block */
+            anchor_block: number;
+            /** Anchor Block Hash */
+            anchor_block_hash?: string | null;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Champion Agent Id
+             * Format: uuid
+             */
+            champion_agent_id: string;
+            /** Champion Miner Hotkey */
+            champion_miner_hotkey?: string | null;
+            /** Champion Name */
+            champion_name?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Pinned */
+            pinned: boolean;
+            /** Pinned At */
+            pinned_at?: string | null;
+            /** Ready Block */
+            ready_block: number;
+        };
+        /**
+         * AdminConfirmationSeedAnchorList
+         * @description Every anchor of one bench version, oldest anchor block first.
+         */
+        AdminConfirmationSeedAnchorList: {
+            /** Anchor Block Delta */
+            anchor_block_delta: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Binding Active */
+            binding_active: boolean;
+            /** Binding Floor Bench Version */
+            binding_floor_bench_version: number;
+            /** Count */
+            count: number;
+            /** Items */
+            items?: components["schemas"]["AdminConfirmationSeedAnchor"][];
+            /** Pinned Count */
+            pinned_count: number;
+            /** Waiting Count */
+            waiting_count: number;
         };
         /** AdminContinualRetestSettingsRequest */
         AdminContinualRetestSettingsRequest: {
@@ -15110,9 +15188,10 @@ export interface components {
          *     The four optional fields are the seed's **finalized-block binding** (bench
          *     v13+): ``seed == crn_seed([anchor_agent_id], version=bench_version,
          *     k=seed_index, block_hash=seed_block_hash)``. The validator re-derives and
-         *     refuses a lease whose seed does not reproduce, so Platform cannot hand out a
-         *     seed it chose. Absent on legacy versions and on seeds no pinned reign
-         *     anchor derives; the lease is then accepted as before.
+         *     refuses a lease whose seed is not consistent with the pin Platform served
+         *     (it does not read the pinned hash back from the chain). Absent on legacy
+         *     versions and on seeds no pinned reign anchor derives; the lease is then
+         *     accepted as before.
          */
         ConfirmationDatasetPin: {
             /**
@@ -30034,6 +30113,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminConfirmationBundleRetestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_admin_confirmation_seed_anchors_api_v1_admin_confirmation_seed_anchors_get: {
+        parameters: {
+            query?: {
+                bench_version?: number | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminConfirmationSeedAnchorList"];
                 };
             };
             /** @description Validation Error */
