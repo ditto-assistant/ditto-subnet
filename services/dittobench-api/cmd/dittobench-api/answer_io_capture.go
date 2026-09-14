@@ -19,8 +19,9 @@ package main
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
+
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 )
 
 // answerIO capture bounds. Size is NOT a signal: a legitimate deep-RAG agent is
@@ -28,7 +29,10 @@ import (
 // so high that a real context-window-sized prompt can never reach it (see
 // answerIOMaxTokensPerSide). The truncation-marks-the-capture path is only a
 // last-resort safety net bounding a truly malformed/malicious body far beyond any
-// real context window.
+// real context window. The token rule itself (bounds, hash, canonical number,
+// tokenizer) lives in the shared scoregates package since Bench v13 so the relay
+// capture and the scorer-side claim gates cannot drift; the v12 names below are
+// aliases onto it and the captured bytes are unchanged.
 const (
 	answerIOMaxCalls = 64
 	// answerIOMaxTokensPerSide is the maximum distinct normalized value-token
@@ -42,13 +46,13 @@ const (
 	// is ~2 MB of raw keys per side, and the set only ever grows to the ACTUAL
 	// distinct-value-token count of the prompt, so normal full-context runs cost a
 	// few MB total (see the memory note below), not the ceiling.
-	answerIOMaxTokensPerSide = 262144
-	answerIOMaxTokenLen      = 64
+	answerIOMaxTokensPerSide = scoregates.MaxValueTokensPerSide
+	answerIOMaxTokenLen      = scoregates.MaxValueTokenLen
 	// answerIOMinStringTokenLen bounds which non-numeric tokens are kept. Numbers
 	// of any length are always kept (the v12 program families are money/number
 	// answers); short common words are dropped so a value never matches on a bare
 	// stopword.
-	answerIOMinStringTokenLen = 4
+	answerIOMinStringTokenLen = scoregates.MinStringTokenLen
 )
 
 // hashToken maps a normalized value token to a 64-bit FNV-1a hash. The capture
@@ -57,18 +61,7 @@ const (
 // flat 8 bytes per distinct value token. FNV-1a is seed-free, so a broker's
 // capture-time hashes and any later post-run candidate hashes agree without
 // sharing any state.
-func hashToken(tok string) uint64 {
-	const (
-		offset64 = 14695981039346656037
-		prime64  = 1099511628211
-	)
-	h := uint64(offset64)
-	for i := 0; i < len(tok); i++ {
-		h ^= uint64(tok[i])
-		h *= prime64
-	}
-	return h
-}
+func hashToken(tok string) uint64 { return scoregates.HashToken(tok) }
 
 // caseModelCall is one bounded, normalized clean-pass model call: the set of
 // candidate answer-value token HASHES the harness placed in the model INPUT and
@@ -90,49 +83,11 @@ type caseModelIOLog struct {
 	truncated bool
 }
 
-// numberPattern matches a currency/number run: optional sign, optional '$',
-// digits with grouping commas, optional fractional part.
-var numberPattern = regexp.MustCompile(`-?\$?\d[\d,]*(?:\.\d+)?`)
-
-// alnumTokenPattern matches lowercase alphanumeric runs (already lowercased text).
-var alnumTokenPattern = regexp.MustCompile(`[a-z0-9]+`)
-
 // canonicalNumber normalizes a numeric token to a stable canonical string:
 // strips '$' and grouping commas, drops an insignificant fractional part and its
 // trailing zeros, drops leading zeros, and collapses "-0" to "0". Returns ""
 // when the token is not a number after stripping.
-func canonicalNumber(raw string) string {
-	s := strings.TrimSpace(raw)
-	neg := strings.HasPrefix(s, "-")
-	s = strings.TrimPrefix(s, "-")
-	s = strings.ReplaceAll(s, "$", "")
-	s = strings.ReplaceAll(s, ",", "")
-	if s == "" {
-		return ""
-	}
-	intPart, fracPart := s, ""
-	if dot := strings.IndexByte(s, '.'); dot >= 0 {
-		intPart, fracPart = s[:dot], s[dot+1:]
-	}
-	fracPart = strings.TrimRight(fracPart, "0")
-	intPart = strings.TrimLeft(intPart, "0")
-	if intPart == "" {
-		intPart = "0"
-	}
-	for _, r := range intPart + fracPart {
-		if r < '0' || r > '9' {
-			return ""
-		}
-	}
-	out := intPart
-	if fracPart != "" {
-		out = intPart + "." + fracPart
-	}
-	if neg && out != "0" {
-		out = "-" + out
-	}
-	return out
-}
+func canonicalNumber(raw string) string { return scoregates.CanonicalNumber(raw) }
 
 // valueTokenSet extracts the bounded set of candidate answer-value token HASHES
 // from a blob of message/completion text: every canonical number, plus lowercase
@@ -142,33 +97,8 @@ func canonicalNumber(raw string) string {
 // never cause. It never stores raw prose or token text -- only value-token hashes
 // -- so it cannot reproduce the prompt or leak the answer key.
 func valueTokenSet(text string) (map[uint64]struct{}, bool) {
-	tokens := make(map[uint64]struct{})
-	truncated := false
-	add := func(tok string) {
-		if tok == "" || len(tok) > answerIOMaxTokenLen {
-			return
-		}
-		h := hashToken(tok)
-		if _, ok := tokens[h]; ok {
-			return
-		}
-		if len(tokens) >= answerIOMaxTokensPerSide {
-			truncated = true
-			return
-		}
-		tokens[h] = struct{}{}
-	}
-	for _, match := range numberPattern.FindAllString(text, -1) {
-		add(canonicalNumber(match))
-	}
-	for _, tok := range alnumTokenPattern.FindAllString(strings.ToLower(text), -1) {
-		// Pure-digit runs are already covered by the number pass in canonical form;
-		// keep only sufficiently long non-numeric-length tokens here.
-		if len(tok) >= answerIOMinStringTokenLen && strings.IndexFunc(tok, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-			add(tok)
-		}
-	}
-	return tokens, truncated
+	tokens, truncated := scoregates.ValueTokenHashes(text)
+	return map[uint64]struct{}(tokens), truncated
 }
 
 func parseChatInputText(body []byte) (string, bool) {

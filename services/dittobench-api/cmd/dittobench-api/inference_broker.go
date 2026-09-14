@@ -227,10 +227,19 @@ type brokerSession struct {
 	catalogCompletionsWithCatalog  uint64
 	catalogUnattributedCompletions uint64
 	catalogUnattributedAdmitted    uint64
-	embeddingPhaseStarted          bool
-	embeddingPhaseActive           bool
-	embeddingInFlight              int
-	embeddingConcurrency           int
+	// Bench v13 claim-span capture (claim_span_capture.go): per wire case, the
+	// value-token hashes of every harness-authored request span and every
+	// model-emitted completion span the relay attributed to the case, plus the
+	// tool_endpoint results it served the case, and the run-wide completion
+	// counts. Populated only for bench_version>=13, so v9..v12 are
+	// byte-identical and unaffected.
+	claimSpanCases        map[string]*brokerClaimSpanLedger
+	claimSpanCompletions  uint64
+	claimSpanUnattributed uint64
+	embeddingPhaseStarted bool
+	embeddingPhaseActive  bool
+	embeddingInFlight     int
+	embeddingConcurrency  int
 	// embeddingQueueChanged wakes calls waiting behind this session's local
 	// lane whenever capacity is released or the phase is revoked. Excess
 	// harness concurrency is queued inside the trusted broker instead of being
@@ -1613,7 +1622,44 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 	forwarded := r.Clone(r.Context())
 	forwarded.URL.Path = "/tool"
 	forwarded.URL.RawQuery = ""
-	route.handler.ServeHTTP(w, forwarded)
+	if route.provenanceSessionID == "" {
+		route.handler.ServeHTTP(w, forwarded)
+		return
+	}
+	// Bench v13 claim-span capture: the result the validator serves this case is
+	// exempt from the causal answer_in_prompt gate, so book its value tokens on
+	// the case ledger. The recorder is bounded and the booking is a no-op below
+	// bench_version 13.
+	recorder := &toolResultRecorder{ResponseWriter: w, limit: claimSpanMaxToolResultBytes}
+	route.handler.ServeHTTP(recorder, forwarded)
+	if recorder.status == 0 || recorder.status == http.StatusOK {
+		b.recordClaimSpanToolResult(route.provenanceSessionID, caseID, recorder.body.Bytes())
+	}
+}
+
+// toolResultRecorder mirrors a bounded prefix of a tool_endpoint response body
+// while passing every byte through to the harness unchanged.
+type toolResultRecorder struct {
+	http.ResponseWriter
+	body   bytes.Buffer
+	limit  int
+	status int
+}
+
+func (r *toolResultRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *toolResultRecorder) Write(p []byte) (int, error) {
+	if remaining := r.limit - r.body.Len(); remaining > 0 {
+		if len(p) > remaining {
+			r.body.Write(p[:remaining])
+		} else {
+			r.body.Write(p)
+		}
+	}
+	return r.ResponseWriter.Write(p)
 }
 
 func (r registeredToolRoute) endpoint(baseURL, caseID, userID string) string {
@@ -3926,6 +3972,10 @@ func (b *inferenceBroker) proxy(
 	// admission, from the same evidence the trace context uses; the booking
 	// itself happens on the success path below. No-op for bench_version<13.
 	catalogAttribution := beginCatalogCompletionLocked(session, caseGeneration, r.Header.Get(harnessCaseHeader))
+	// Bench v13 claim-span capture resolves WHICH case this completion serves at
+	// admission, from the same evidence the trace context uses; the booking
+	// itself happens on the success path below. No-op for bench_version<13.
+	claimSpanAttribution := beginClaimSpanCompletionLocked(session, caseGeneration, r.Header.Get(harnessCaseHeader))
 	session.requests++
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
@@ -4201,6 +4251,10 @@ func (b *inferenceBroker) proxy(
 	// tool_choice, system-span digest) paired with what the model CHOSE.
 	// Metadata only; no-op for bench_version<13.
 	recordCatalogCompletionLocked(session, catalogAttribution, body, responseBody)
+	// Bench v13 claim-span capture: the harness-authored request spans and the
+	// model-emitted completion spans, as value-token hashes on the attributed
+	// case. No-op for bench_version<13.
+	recordClaimSpanCompletionLocked(session, claimSpanAttribution, body, responseBody)
 	session.providerLatency += totalLatency
 	if usageOK {
 		session.usageAvailable++

@@ -116,6 +116,16 @@ func memoryV13(mc protocol.MemoryCase, resp protocol.RunResponse, policy grading
 	verdict := gradeClaimV13(mc, resp, kind, an, lex, policy)
 	verdict.Injection = injFlag
 	verdict.Notes = append(injNotes, verdict.Notes...)
+	// Claim-span provenance (#1849): report the served span the typed check
+	// credited so the scorer's gate checks exactly that text. The populated
+	// slot is the authoritative claim; otherwise the prose earned the credit.
+	if policy.claimProvenance && verdict.Score > 0 && verdict.Provenance == nil {
+		span, source := resp.FinalText, SpanSourceFinalText
+		if slot != "" {
+			span, source = slot, SpanSourceAnswer
+		}
+		verdict.Provenance = &ClaimProvenance{Span: span, Source: source, Kind: kind, Alternatives: ClaimAlternatives(mc)}
+	}
 	return verdict
 }
 
