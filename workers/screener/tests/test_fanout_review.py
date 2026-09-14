@@ -782,7 +782,7 @@ async def test_raw_contradictory_specialists_reach_always_run_adjudicator(
     )
 
 
-async def test_adjudicator_can_read_missing_citation_after_invalid_final(tmp_path):
+async def test_adjudicator_reserves_read_repair_after_forced_final(tmp_path):
     from .test_source_review import (
         _BENIGN_REVIEW,
         _archive_files,
@@ -818,15 +818,15 @@ async def test_adjudicator_can_read_missing_citation_after_invalid_final(tmp_pat
         payload = json.loads(request.content)
         requests.append(payload)
         turn = len(requests)
-        if turn == 1:
+        if turn <= 9:
             calls = [
                 _tool(
-                    "read-1",
+                    f"read-{turn}",
                     "read_file",
                     {"path": "src/main.rs", "start_line": 1, "end_line": 1},
                 )
             ]
-        elif turn == 3:
+        elif turn == 11:
             assert "did not read" in json.dumps(payload["messages"])
             assert any(
                 tool["function"]["name"] == "read_file" for tool in payload["tools"]
@@ -868,7 +868,7 @@ async def test_adjudicator_can_read_missing_citation_after_invalid_final(tmp_pat
         api_key_file=str(key),
         model="z-ai/glm-5.3-flash",
         base_url="https://router.example/v1",
-        max_steps=4,
+        max_steps=12,
         max_read_bytes=180_000,
         max_completion_tokens=8000,
         timeout_seconds=60,
@@ -883,7 +883,13 @@ async def test_adjudicator_can_read_missing_citation_after_invalid_final(tmp_pat
         deadline=asyncio.get_running_loop().time() + 60,
     )
     assert result["outcome"] == "candidate"
-    assert len(requests) == 4
+    assert len(requests) == 12
+    assert [tool["function"]["name"] for tool in requests[9]["tools"]] == [
+        "submit_fanout_adjudication"
+    ]
+    assert [tool["function"]["name"] for tool in requests[11]["tools"]] == [
+        "submit_fanout_adjudication"
+    ]
     assert len(reviewer.validation_errors) == 1
     assert reviewer.validation_errors[0].startswith(
         "fanout adjudicator cited source it did not read"

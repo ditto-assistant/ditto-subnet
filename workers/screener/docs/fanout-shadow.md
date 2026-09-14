@@ -65,7 +65,7 @@ The recommended global revision uses:
 | Jobs globally | 1 |
 | In-job concurrency | 2 |
 | Steps per specialist | 4 |
-| Steps for adjudicator | 8 |
+| Steps for adjudicator | 12 |
 | Requests per artifact | 40 |
 | Pre-admitted token bound | 1,500,000 |
 | Wall time per artifact | 900 seconds |
@@ -81,10 +81,12 @@ retain their full bounds. Each response must fit its own pre-admitted envelope.
 Platform retains the full $3 artifact reservation even after local settlement. The shadow uses
 low reasoning effort and required tool calls to leave room for a structured result.
 Provisional specialist semantics are never schema-corrected. An invalid atomic
-stage-two result gets at most two corrections within its eight-step allowance and
-the same request/token budget. The adjudicator may use source inspection tools
-between attempts when a submitted citation was not yet read; the central review
-must still pass the authoritative parser and source-read proofs.
+stage-two result gets at most two corrections within its twelve-step allowance and
+the same request/token budget. The tenth turn forces the first atomic submission,
+reserving one source-repair turn before a final forced settlement. The adjudicator
+may use source inspection tools between attempts when a submitted citation was not
+yet read; the central review must still pass the authoritative parser and
+source-read proofs.
 It is never converted to a pass. Overlong display summaries are shortened to 240
 characters while originals remain in `full_summaries` (up to 8,000 characters,
 with explicit truncation metadata) and the adjudicator context. Risk, categories,

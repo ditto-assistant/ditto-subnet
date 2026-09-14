@@ -1005,14 +1005,22 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                 if remaining <= 0:
                     raise TimeoutError("fanout adjudicator exceeded global deadline")
                 final_turn = step + 1 == self._max_steps
-                if final_turn:
+                first_settlement_turn = step + 3 == self._max_steps
+                force_submission = first_settlement_turn or final_turn
+                if force_submission:
                     messages.append(
                         {
                             "role": "user",
                             "content": (
-                                "This is the final allowed turn. Submit one canonical "
-                                "final review and one assessment for every candidate "
-                                "now; leave anything unverified unresolved."
+                                "Submit one canonical final review and one assessment "
+                                "for every candidate now; leave anything unverified "
+                                "unresolved."
+                                + (
+                                    " This is the final allowed turn."
+                                    if final_turn
+                                    else " Two repair turns remain if source-read "
+                                    "validation identifies missing evidence."
+                                )
                             ),
                         }
                     )
@@ -1023,9 +1031,9 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                     timeout=min(self._timeout_seconds, remaining),
                     reasoning_effort="low",
                     tools=_adjudication_tools(
-                        policy_version, candidate_ids, final_turn=final_turn
+                        policy_version, candidate_ids, final_turn=force_submission
                     ),
-                    tool_choice="required" if final_turn else "auto",
+                    tool_choice="required" if force_submission else "auto",
                 )
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
@@ -1242,7 +1250,7 @@ async def review_archive(
     inference_provider: str = "openrouter",
     concurrency: int = 5,
     max_steps: int = 12,
-    adjudicator_max_steps: int = 8,
+    adjudicator_max_steps: int = 12,
     timeout_seconds: float = 300,
     policy_version: int = SCREENING_POLICY_VERSION,
     policy_manifest_profile: str = "l1",
