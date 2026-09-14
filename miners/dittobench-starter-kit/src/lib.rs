@@ -11,6 +11,8 @@
 //! - [`reranker`]: ONNX cross-encoder reranker (production retrieval stage).
 //! - [`seed`]: the bundled LongMemEval seed user (memory retrieval practice).
 //! - [`playground`]: the interactive web playground (fake tools + submit flow).
+//! - [`v13`]: Bench v13 honest-reference helpers (slot-from-prose, published
+//!   semantic top-k safe harbor, completion log for `local-rehearsal.py --gates`).
 
 pub mod baseline;
 pub mod catalog;
@@ -22,3 +24,4 @@ pub mod protocol;
 pub mod reranker;
 pub mod scorer;
 pub mod seed;
+pub mod v13;

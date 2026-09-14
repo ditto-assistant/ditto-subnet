@@ -38,6 +38,42 @@
 //!    `openai/gpt-oss-20b`, so it is not a scored lever; use it to rehearse against
 //!    the reference weights locally.
 //!
+//! ======================= BENCH V13 HONEST ARCHITECTURE =====================
+//! Bench v13 grades the prose and adds relay-observed gates (see `v13.rs`
+//! and PROTOCOL.md "Bench v13"). The kit stays inside every gate by
+//! construction, and each rule below is the line a rewrite would cross:
+//!
+//!  * The model's value is served as the model wrote it. The `answer` slot is
+//!    only ever a verbatim substring of `final_text` (`v13::answer_slot_from_prose`);
+//!    the host never rescales (`/100`), maps a direction word, reformats a
+//!    number, or composes a slot. (`slot_not_in_prose`,
+//!    `served_text_not_model_emitted`.) The slot is OFF unless
+//!    `DITTOBENCH_ANSWER_SLOT` is set (the `--gates` rehearsal sets it): the
+//!    wire stays at bench 9, so a default-on slot would change live v12
+//!    grading (an authoritative slot has no prose fallback).
+//!  * The graded value is never written into a harness-authored span. The
+//!    system prompt carries a values-free policy (`v13::HARNESS_POLICY_PROMPT`);
+//!    retrieved memory is injected by the harness library as `/seed`-derived
+//!    context, which the causal gate exempts. (`answer_in_prompt`.)
+//!  * The whole catalog is offered on every turn, including the deciding one.
+//!    The documented preloading example (`DITTOBENCH_PRELOAD_TOP_K`) trims by
+//!    the PUBLISHED embedding and always retains its top-3, which is the
+//!    safe harbor. Restraint is the model's choice: a model-emitted call is
+//!    always executed, never swallowed. (`restraint_without_offer`,
+//!    `expected_tool_not_offered`, `swallowed_model_call`.)
+//!  * Clarifying questions and declines come from the model, name the missing
+//!    detail, and cite what memory search found (the policy asks for it; the
+//!    stock `inferred_abstain` grammar only maps the model's own grounded
+//!    decline onto the `abstain` flag).
+//!  * Runtime-described options (`set_accent_color`, `set_chat_font`) are
+//!    solved list-then-act: the model calls `discover_capabilities`, reads the
+//!    served inventory, and passes one listed spelling; a near-miss is decided
+//!    by the qualifier the user used. The mock's "unknown option" error is fed
+//!    back to the model to recover, never patched on the host.
+//!
+//! `scripts/local-rehearsal.py --gates` replays the public rules against a
+//! local run and prints per-case notes before you upload.
+//!
 //! =========================================================================
 
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -60,6 +96,7 @@ use ditto_harness::types::{
 use serde_json::{json, Value};
 
 use crate::protocol;
+use crate::v13;
 
 // This is a starter-harness safety boundary, not a benchmark scoring limit.
 // Outcome-driven agents may legitimately use more than fifteen tool calls;
@@ -1009,14 +1046,39 @@ impl Baseline {
         // catalog arrives on the wire. Memory tools are dropped here when the
         // harness serves the real ones (avoids duplicate declarations).
         // EXTENSION POINT: see `WireTool`.
-        let host_tools: Vec<Arc<dyn Tool>> = req
+        //
+        // Bench v13 catalog-present gate: the model must be OFFERED the catalog
+        // on the deciding turn for restraint or a tool choice to be its own.
+        // The default offers everything. `DITTOBENCH_PRELOAD_TOP_K` is the
+        // documented semantic-preloading example: it trims by the published
+        // embedding and always keeps the safe-harbor top-3 (`v13::preload_catalog`).
+        let wire_tools: Vec<protocol::ToolDefWire> = req
             .tools
             .iter()
             .filter(|d| {
                 !(self.include_memory_tools && MEMORY_TOOL_NAMES.contains(&d.name.as_str()))
             })
+            .cloned()
+            .collect();
+        let offered =
+            v13::preload_catalog(&req.user_input, &wire_tools, v13::preload_top_k_from_env());
+        let mut tools_offered: Vec<String> = offered.iter().map(|d| d.name.clone()).collect();
+        if self.include_memory_tools {
+            tools_offered.extend(MEMORY_TOOL_NAMES.iter().map(|name| name.to_string()));
+        }
+        let host_tools: Vec<Arc<dyn Tool>> = offered
+            .iter()
             .map(|d| Arc::new(WireTool::from_wire(d, exec_ctx.clone())) as Arc<dyn Tool>)
             .collect();
+
+        // The system prompt the model runs on: the wire prompt first, then the
+        // values-free v13 answering policy (answer in the requested unit, ask
+        // by naming the missing detail, list-then-act, grounded declines), and
+        // the `Answer:` line request only when the slot is enabled.
+        // EXTENSION POINT: keep it values-free — a graded value written here is
+        // a harness-authored span and the v13 causal gate zeroes it.
+        let answer_slot = v13::answer_slot_enabled();
+        let system_prompt = v13::compose_system_prompt(&req.system_prompt, answer_slot);
 
         let case_model = match req
             .inference_base_url
@@ -1043,7 +1105,7 @@ impl Baseline {
                         user_id: user_id.clone(),
                         // user_input drives memory retrieval (the query)...
                         user_input: req.user_input.clone(),
-                        system_prompt: req.system_prompt.clone(),
+                        system_prompt,
                         // ...and is ALSO passed explicitly as the user turn:
                         // `normalize_messages` only seeds `user_input` as a
                         // message when there is no system prompt, so with a
@@ -1103,19 +1165,41 @@ impl Baseline {
             output_tokens += c.usage.output_tokens;
         }
 
+        // Local gate diagnostics: when the rehearsal asks for it, record what
+        // the model was offered and what it emitted so `--gates` can replay the
+        // v13 rules. Never set on-chain; the validator's relay holds its own
+        // record.
+        if let Ok(path) = std::env::var(v13::COMPLETION_LOG_ENV) {
+            if !path.trim().is_empty() {
+                let entry = v13::completion_log_entry(
+                    &req,
+                    &user_id,
+                    tools_offered,
+                    &result.result.messages,
+                );
+                if let Err(err) = v13::append_completion_log(std::path::Path::new(&path), &entry) {
+                    eprintln!("completion log append failed for {}: {err}", req.case_id);
+                }
+            }
+        }
+
         let final_text = result.result.text;
         Ok(protocol::RunResponse {
             abstain: inferred_abstain(&final_text),
+            // The slot is the model's own trailing `Answer:` line, copied
+            // verbatim, or absent; absent always while `DITTOBENCH_ANSWER_SLOT`
+            // is unset (see `v13::ANSWER_SLOT_ENV`). Bench v13 grades the prose
+            // and uses the slot as a tie-break; a slot the prose does not carry,
+            // or one the model never emitted (a `/100` rescale, a direction map,
+            // a reformatted number), is what `slot_not_in_prose` /
+            // `served_text_not_model_emitted` charge. EXTENSION POINT: keep any
+            // extractor a verbatim copy.
+            answer: v13::answer_slot(&final_text, answer_slot),
             final_text,
             tool_calls,
             prompt_tokens,
             output_tokens,
             latency_ms,
-            // EXTENSION POINT: populate the answer slot with the bare value
-            // your final_text asserts (and abstain when the fact is not in
-            // memory). The validator grades the slot when present, prose
-            // containment otherwise -- an explicit slot removes phrasing risk.
-            answer: None,
         })
     }
 }

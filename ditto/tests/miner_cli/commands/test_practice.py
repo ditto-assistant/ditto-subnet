@@ -25,6 +25,8 @@ def _args(**overrides: object) -> argparse.Namespace:
         "longmem_eval": False,
         "longmem_limit": None,
         "longmem_shards": 5,
+        "gates": False,
+        "keep_artifacts": None,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -38,6 +40,19 @@ def test_rehearsal_argv_defaults_leave_live_bench_version_to_the_runner() -> Non
     assert "--seed" not in command
     assert "--bench-version" not in command
     assert "--longmem-eval" not in command
+    assert "--gates" not in command
+    assert "--keep-artifacts" not in command
+
+
+def test_rehearsal_argv_forwards_the_v13_gate_replay(tmp_path: Path) -> None:
+    command = practice.rehearsal_argv(
+        _args(gates=True, keep_artifacts=tmp_path / "kept")
+    )
+    assert command.count("--gates") == 1
+    assert command[command.index("--keep-artifacts") + 1] == str(tmp_path / "kept")
+    without_dir = practice.rehearsal_argv(_args(gates=True))
+    assert "--gates" in without_dir
+    assert "--keep-artifacts" not in without_dir
 
 
 def test_rehearsal_argv_forwards_every_reproducibility_option(tmp_path: Path) -> None:
@@ -108,6 +123,21 @@ def test_run_fails_actionably_without_source_assets() -> None:
         (
             ["practice", "--run-size", "medium", "--longmem-shards", "7"],
             {"run_size": "medium", "longmem_shards": 7},
+        ),
+        (
+            [
+                "practice",
+                "--bench-version",
+                "13",
+                "--gates",
+                "--keep-artifacts",
+                "/tmp/kept",
+            ],
+            {
+                "bench_version": 13,
+                "gates": True,
+                "keep_artifacts": Path("/tmp/kept"),
+            },
         ),
     ],
 )

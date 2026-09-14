@@ -23,7 +23,11 @@ Live scoring is **bench 12**, `run_size=full`, observed tools, locked
 activates a new version. The kit and the rehearsal script also *accept*
 bench 13 (`MAX_SUPPORTED_BENCH_VERSION` / `MAX_BENCH_VERSION`) so a submitted
 image does not 400 `/run` when validators rehearse it; 13 is not live until
-the owner activates it after the v13 qualification report.
+the owner activates it after the v13 qualification report. **Bench 13** is
+generated and scored locally ahead of activation (`--bench-version 13`) as soon
+as the local scorer build advertises it; its gates are shadow and replayed
+locally with `--gates` (below). The wire `bench_version` a harness receives
+stays 9 in every contract.
 
 ## Practice loops (do not collapse these)
 
@@ -35,6 +39,7 @@ the owner activates it after the v13 qualification report.
 | `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, bench 12 | Smoke after a harness change |
 | `uv run ditto practice --run-size medium` | Same path, deeper seeding and isolation | Development once small is healthy |
 | `uv run ditto practice --run-size full` | Same path, **on-chain envelope** | Required before upload |
+| `uv run ditto practice --bench-version 13 --gates` | Same path on the v13 contract + shadow replay of the public v13 gates with per-case notes | Before upload; after any answer, prompt, catalog, or tool-execution change |
 | Hosted `/v1/submit` | Remote rehearsal, tools **self-report-capped**, often defaults to bench 9 | Reachability only |
 | On-chain | Screened image + ticket-bound chat/embeddings | The only payout score |
 
@@ -136,6 +141,8 @@ Go + Ollama `embeddinggemma`. Chat uses `.env`; on-chain ignores that key.
 3. Confirm observed tools still work → `uv run ditto practice --run-size small`
 4. After small is healthy, catch seeding/isolation misses → `--run-size medium`
 5. After any answer, prompt, tool, or routing change → walk the served path
+   and run `uv run ditto practice --bench-version 13 --gates`; every would-zero
+   note names a served-path defect (see *Bench v13 gates*)
 6. Before upload or quoting a transferrable score → served-path review must
    pass, then `--run-size full --report /tmp/dittobench-report.json`
 
@@ -147,7 +154,9 @@ would fail `$backroom-review`.
 
 Require all of:
 
-- `bench_version` is 12 (the live version in the rehearsal constant; 13 only when you passed `--bench-version 13` to rehearse the pre-activation contract)
+- `bench_version` is 12 (the live version in the rehearsal constant; 13 only
+  when you passed `--bench-version 13 --gates` to rehearse the pre-activation
+  contract)
 - `run_size` is the one you asked for
 - `capped_tool_cases` is 0 (or explain why)
 - `observed_tool_cases` is > 0 on a tool-heavy run
@@ -155,6 +164,36 @@ Require all of:
 
 `run_size` in the report must match the flag you passed. A 1.0 `tool_mean` on
 `small` or `medium` does not predict `full`.
+
+## Bench v13 gates (shadow; replay locally)
+
+Bench v13 grades the prose and adds relay-observed gates that charge
+substitution, never a correct model-emitted answer
+(`miners/dittobench-starter-kit/PROTOCOL.md` "Bench v13"). `--gates` records
+what the kit offered and emitted per case and replays every public rule against
+the public (salt 0) pass-off artifact:
+
+```bash
+uv run ditto practice --bench-version 13 --gates --keep-artifacts /tmp/v13-gates
+python3 miners/dittobench-starter-kit/scripts/rehearsal_gates.py \
+  --dataset /tmp/v13-gates/dataset.json --transcript /tmp/v13-gates/transcript.json \
+  --completions /tmp/v13-gates/completions.jsonl \
+  --projection /tmp/v13-gates/projection.json --report /tmp/v13-gates/report.json
+```
+
+| Note | What it charges | Honest fix |
+|---|---|---|
+| `served_text_not_model_emitted` | `/100` rescale, direction map, composed or replaced slot | serve the model's value as written; the slot is a verbatim copy or absent |
+| `slot_not_in_prose` | a slot the prose does not carry | same |
+| `answer_in_prompt` | the graded value computed on the host and placed in a prompt span | keep the system prompt values-free; retrieved memory is exempt |
+| `restraint_without_offer` / `expected_tool_not_offered` | a request-keyed empty or one-tool catalog | offer the full catalog, or keep the published semantic top-3 |
+| `swallowed_model_call` | a model-emitted call the host did not execute | execute every model call through `tool_endpoint` |
+| `twin_concordant` / `counterfactual_insensitive` | always-ask / always-decline / always-act across a matched pair | let the model read memory and decide |
+
+The notes are shadow in v13.0: nothing moves the local score. Treat a would-zero
+note as the same served-path finding the operator review bar reads; fix the
+path, do not tune the note away. The stock kit passes every rule by
+construction (`src/v13.rs`).
 
 ## Package and upload
 
@@ -175,6 +214,8 @@ Do not put keys, `.env`, or host Docker sockets in the image. Follow
 
 - Treat `evaluate` / hosted rehearsal as on-chain certification
 - Change v8+ scoring to make a local run look better
+- Rewrite the model's value on the way out (`/100`, direction map, reformat),
+  swallow a model tool call, or key the catalog on the request
 - Ship a served path that would fail `$backroom-review`
 - Widen a mutation past the harness the miner is iterating
 

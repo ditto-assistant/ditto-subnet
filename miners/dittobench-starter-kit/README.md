@@ -283,6 +283,10 @@ uv run ditto practice --run-size full --report /tmp/dittobench-report.json
 # Keep the complete run envelope for comparing changes.
 uv run ditto practice --run-size small --report /tmp/dittobench-report.json
 
+# Replay the public Bench v13 gates (shadow) and print per-case notes; keep the
+# pass-off artifacts for an offline re-run with scripts/rehearsal_gates.py.
+uv run ditto practice --bench-version 13 --gates --keep-artifacts /tmp/v13-gates
+
 # Append the separate, official 500-question LongMemEval-S adapter score.
 uv run ditto practice --run-size small --longmem-eval
 
@@ -545,6 +549,40 @@ The stock harness allows 24 model turns so composed tasks can include retries,
 dependent calls, and useful exploration. This is a starter implementation
 guardrail, not a scoring cap: a correct trajectory is not penalized merely for
 using more than 15 tool calls, and miners may tune the harness turn bound.
+
+### Bench v13: staying inside the gates
+
+Bench v13 grades the prose and adds relay-observed gates that charge
+substitution, never a correct model answer ([PROTOCOL.md](PROTOCOL.md) "Bench
+v13"). The stock kit is the reference honest architecture; `src/v13.rs` holds
+each piece and `src/baseline.rs` wires them. Verified honest patterns and the
+rewrite each one must not become:
+
+| Honest pattern (passes) | Rewrite it must not become (charged) |
+| --- | --- |
+| Serve the model's value as written; the `answer` slot is a verbatim copy of the model's own `Answer:` line (`v13::answer_slot_from_prose`) or absent | `/100` rescale, direction-word map, `%.2f` reformat, composed slot, replaced draft (`served_text_not_model_emitted`, `slot_not_in_prose`) |
+| A formatter, JSON mode, or a `final_answer` tool that carries the model's number | Any value the model did not emit |
+| Values-free system prompt (`v13::HARNESS_POLICY_PROMPT`); retrieved memory injected as `/seed`-derived context | The answer computed on the host and placed in the prompt ("reply exactly: X") (`answer_in_prompt`) |
+| Full catalog on every turn, or a semantic top-k preloader that keeps the published top-3 (`DITTOBENCH_PRELOAD_TOP_K`, `v13::preload_catalog`) | A request-keyed empty or one-tool catalog (`restraint_without_offer`, `expected_tool_not_offered`) |
+| Every model-emitted call is executed through `tool_endpoint` | A host that swallows the model's call to look restrained (`swallowed_model_call`) |
+| The model asks a clarifying question that names the missing detail and cites what memory search found; declines say what was found | An always-ask or always-decline phrase rule (`twin_concordant`) |
+| List-then-act on runtime-described options: `discover_capabilities`, then one listed spelling; the qualifier decides a near-miss; the mock's "unknown option" error is fed back to the model | A baked option registry or a host-side edit-distance repair of the argument |
+
+Run the gate replay before you upload:
+
+```bash
+uv run ditto practice --bench-version 13 --gates --keep-artifacts /tmp/v13-gates
+python3 miners/dittobench-starter-kit/scripts/rehearsal_gates.py \
+  --dataset /tmp/v13-gates/dataset.json --transcript /tmp/v13-gates/transcript.json \
+  --completions /tmp/v13-gates/completions.jsonl --projection /tmp/v13-gates/projection.json \
+  --report /tmp/v13-gates/report.json
+```
+
+Every gate is shadow in v13.0, so the replay never moves a local score: it
+prints what the validator's relay would record on the same behavior and a
+"gate-induced loss (shadow)". Fix the served path a note points at; do not tune
+the note away. The local log is the kit's own view of the model exchange; the
+validator's relay record is the authoritative one.
 
 ### What isn't scored, and why
 
@@ -884,6 +922,11 @@ cannot occupy a Tokio worker that other cases need for I/O.
 a rare fallback on one version can become the unconditional hot path on the next
 one. Diff the per-request work your agent does across versions before you submit,
 not after a run times out.
+- Never rewrite the model's value on the way out. Bench v13 grades the prose and
+checks that the graded value was model-emitted; a `/100`, a direction-word map,
+or a reformatted number in the `answer` slot is `served_text_not_model_emitted`
+(and the screener's I4). Run `uv run ditto practice --bench-version 13 --gates`
+and read the per-case notes before upload.
 
 
 

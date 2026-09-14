@@ -22,6 +22,10 @@ from pathlib import Path
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+import rehearsal_gates  # noqa: E402  (sibling module: the public v13 gate replay)
+
 DEFAULT_KIT_DIR = SCRIPT_DIR.parent
 REPO_ROOT = DEFAULT_KIT_DIR.parents[1]
 API_DIR = REPO_ROOT / "services" / "dittobench-api"
@@ -35,6 +39,12 @@ MIN_BENCH_VERSION = 8
 # Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
 # ditto/tests/test_bench_version_pins.py diffs across every layer.
 MAX_BENCH_VERSION = 13
+# Environment variables the harness honours only during a local rehearsal.
+COMPLETION_LOG_ENV = "DITTOBENCH_COMPLETION_LOG"
+# The kit's `answer` slot is off by default (the wire stays at bench 9, so a
+# default-on slot would change live v12 grading); `--gates` turns it on so the
+# v13 slot rules are exercised locally. Mirrors src/v13.rs ANSWER_SLOT_ENV.
+ANSWER_SLOT_ENV = "DITTOBENCH_ANSWER_SLOT"
 LONGMEM_DATASET_SHA256 = (
     "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
 )
@@ -104,6 +114,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="write the combined Bench and optional LongMemEval report as JSON",
     )
     parser.add_argument(
+        "--gates",
+        action="store_true",
+        help=(
+            "replay the public Bench v13 gates (catalog-present + safe harbor, "
+            "swallowed call, provenance normaliser, causal gate, twin/pair "
+            "post-pass) against the run and print per-case notes; shadow only"
+        ),
+    )
+    parser.add_argument(
+        "--keep-artifacts",
+        type=Path,
+        help=(
+            "copy the pass-off dataset artifact, transcript, completion log, and "
+            "gate result into this directory for an offline re-run "
+            "(scripts/rehearsal_gates.py)"
+        ),
+    )
+    parser.add_argument(
         "--longmem-eval",
         action="store_true",
         help="also run the pinned native-memory-tools LongMemEval-S condition",
@@ -133,6 +161,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             f"--bench-version must be between {MIN_BENCH_VERSION} and "
             f"{MAX_BENCH_VERSION}"
         )
+    if args.keep_artifacts is not None and not args.gates:
+        parser.error("--keep-artifacts requires --gates")
     return args
 
 
@@ -715,6 +745,120 @@ def run_longmem(
             output.close()
 
 
+def harness_rehearsal_env(tmp: Path, *, gates: bool) -> dict[str, str]:
+    """Harness environment for the rehearsal: an isolated store, plus the
+    completion log the v13 gate replay reads and the `answer` slot switch
+    when `--gates` is on."""
+    environment = os.environ.copy()
+    # A canonical validator starts every submission with a fresh store. Keep
+    # local rehearsals equally isolated from seed-user and previous runs.
+    environment["DITTOBENCH_DB"] = str(tmp / "rehearsal.db")
+    if gates:
+        environment[COMPLETION_LOG_ENV] = str(tmp / "completions.jsonl")
+        environment[ANSWER_SLOT_ENV] = "1"
+    else:
+        environment.pop(COMPLETION_LOG_ENV, None)
+        environment.pop(ANSWER_SLOT_ENV, None)
+    return environment
+
+
+def scorer_advertised_bench_versions(api_url: str) -> list[int] | None:
+    """The bench versions the local scorer build advertises (`/v1/capabilities`
+    `supported_bench_versions`), or None when the build carries no release
+    identity and cannot answer."""
+    try:
+        capabilities = request_json(f"{api_url}/v1/capabilities")
+    except RehearsalError:
+        return None
+    versions = capabilities.get("supported_bench_versions")
+    if not isinstance(versions, list):
+        return None
+    return sorted(int(v) for v in versions)
+
+
+def require_scorer_bench_version(api_url: str, bench_version: int) -> None:
+    """Fail loudly, before submitting, when the local scorer at this checkout
+    does not advertise the requested contract. The kit ceiling
+    (`MAX_BENCH_VERSION`) may lead the scorer while a contract is still landing;
+    the scorer's `(supported: ...)` 400 on /v1/submit is the same fact stated
+    less helpfully."""
+    advertised = scorer_advertised_bench_versions(api_url)
+    if advertised is None or bench_version in advertised:
+        return
+    raise RehearsalError(
+        f"the local scorer build advertises bench versions {advertised}, not "
+        f"{bench_version}; run --bench-version {max(advertised)} or check out a "
+        "services/dittobench-api that advertises "
+        f"{bench_version} (cmd/dittobench-api supportedBenchVersions)"
+    )
+
+
+def gate_artifact_paths(tmp: Path, run_id: str) -> dict[str, Path]:
+    """Where the local scorer and harness left the pass-off artifacts."""
+    return {
+        "dataset": tmp / "artifacts" / f"{run_id}.json",
+        "transcript": tmp / "artifacts" / f"{run_id}.transcript.json",
+        "projection": tmp / "private-projections" / f"{run_id}.projection.json",
+        "completions": tmp / "completions.jsonl",
+    }
+
+
+def replay_gates(tmp: Path, completed: dict[str, Any]) -> dict[str, Any]:
+    """Replay the public v13 gates over a finished run's kept artifacts."""
+    run_id = str(completed.get("run_id", ""))
+    paths = gate_artifact_paths(tmp, run_id)
+    for name in ("dataset", "transcript"):
+        if not paths[name].is_file():
+            raise RehearsalError(
+                f"--gates needs the {name} artifact from the local scorer; "
+                f"missing {paths[name]}"
+            )
+    completions = (
+        rehearsal_gates.load_jsonl(paths["completions"])
+        if paths["completions"].is_file()
+        else []
+    )
+    projection = (
+        rehearsal_gates.load_json(paths["projection"])
+        if paths["projection"].is_file()
+        else None
+    )
+    report = (
+        completed.get("report") if isinstance(completed.get("report"), dict) else None
+    )
+    return rehearsal_gates.evaluate_run(
+        rehearsal_gates.load_json(paths["dataset"]),
+        rehearsal_gates.load_json(paths["transcript"]),
+        completions,
+        report,
+        projection,
+    )
+
+
+def keep_gate_artifacts(
+    destination: Path, tmp: Path, completed: dict[str, Any], gates: dict[str, Any]
+) -> list[Path]:
+    """Copy the pass-off artifacts and the gate result out of the temporary
+    directory so `scripts/rehearsal_gates.py` can re-run offline. The private
+    projection manifest is copied too: it is this run's own alias map, needed
+    to join the harness log to the canonical case ids."""
+    destination.mkdir(parents=True, exist_ok=True)
+    run_id = str(completed.get("run_id", ""))
+    kept: list[Path] = []
+    for name, source in gate_artifact_paths(tmp, run_id).items():
+        if not source.is_file():
+            continue
+        target = destination / f"{name}{source.suffix or '.json'}"
+        shutil.copyfile(source, target)
+        os.chmod(target, 0o600)
+        kept.append(target)
+    for name, payload in (("report.json", completed), ("gates.json", gates)):
+        target = destination / name
+        write_report(target, payload)
+        kept.append(target)
+    return kept
+
+
 def run(args: argparse.Namespace) -> int:
     require_command("cargo")
     require_command("go")
@@ -760,10 +904,7 @@ def run(args: argparse.Namespace) -> int:
             check=True,
         )
 
-        harness_env = os.environ.copy()
-        # A canonical validator starts every submission with a fresh store. Keep
-        # local rehearsals equally isolated from seed-user and previous runs.
-        harness_env["DITTOBENCH_DB"] = str(tmp / "rehearsal.db")
+        harness_env = harness_rehearsal_env(tmp, gates=args.gates)
         api_env = scorer_environment(tmp, broker_port)
 
         harness: subprocess.Popen[bytes] | None = None
@@ -789,6 +930,7 @@ def run(args: argparse.Namespace) -> int:
                 print("waiting for the harness and scorer...", flush=True)
                 wait_for_health(harness_url, harness)
                 wait_for_health(api_url, api)
+                require_scorer_bench_version(api_url, args.bench_version)
 
                 accepted = request_json(
                     f"{api_url}/v1/submit",
@@ -818,6 +960,20 @@ def run(args: argparse.Namespace) -> int:
                     raise RehearsalError(f"local scorer failed run {run_id}: {detail}")
                 print(format_summary(completed))
                 combined = dict(completed)
+                if args.gates:
+                    gates = replay_gates(tmp, completed)
+                    combined["gates"] = gates
+                    print(rehearsal_gates.format_gates(gates))
+                    if args.keep_artifacts is not None:
+                        kept = keep_gate_artifacts(
+                            args.keep_artifacts.expanduser().resolve(),
+                            tmp,
+                            completed,
+                            gates,
+                        )
+                        print(
+                            f"kept {len(kept)} pass-off artifacts in {args.keep_artifacts}"
+                        )
                 report_path = (
                     args.report.expanduser().resolve()
                     if args.report is not None
