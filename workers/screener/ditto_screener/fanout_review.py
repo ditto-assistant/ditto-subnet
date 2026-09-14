@@ -13,6 +13,7 @@ from pathlib import Path
 
 import httpx
 
+from ditto_screener.fanout_discovery import semantic_discovery
 from ditto_screener.fanout_guidance import fanout_policy_guidance
 from ditto_screener.policy import builtin_policy_manifest
 from ditto_screener.source_review import (
@@ -27,6 +28,7 @@ from ditto_screener.source_review import (
 )
 from ditto_screener.source_signals import source_path_priority
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol.models import source_review_invariants_for_policy
 
 REVISION = "fanout-source-review-v5"
 ADJUDICATOR_REVISION = "fanout-adjudicator-v3"
@@ -212,6 +214,25 @@ def _adjudication_tools(
                 break
     if final_review_parameters is None:
         raise ValueError("source review final tool is unavailable")
+    # Copy the policy tool before changing only the adjudicator wire shape.
+    # Specialists and authoritative source review retain their original schema.
+    from copy import deepcopy
+
+    final_review_parameters = deepcopy(final_review_parameters)
+    review_properties = final_review_parameters["properties"]
+    assert isinstance(review_properties, dict)
+    invariant_schema = review_properties["invariants"]["items"]
+    invariant_schema["properties"].pop("invariant")
+    invariant_schema["required"].remove("invariant")
+    invariant_ids = sorted(
+        item.value for item in source_review_invariants_for_policy(policy_version)
+    )
+    review_properties["invariants"] = {
+        "type": "object",
+        "properties": dict.fromkeys(invariant_ids, invariant_schema),
+        "required": invariant_ids,
+        "additionalProperties": False,
+    }
     candidate_id_schema: dict[str, object] = {"type": "string"}
     if candidate_ids:
         candidate_id_schema["enum"] = candidate_ids
@@ -521,9 +542,32 @@ def _normalize_final_adjudication(
     """Validate the one canonical stage-two decision and its candidate bindings."""
     if not isinstance(payload, dict):
         raise ValueError("fanout adjudicator result is not an object")
+    review = payload.get("final_review")
+    if isinstance(review, dict) and isinstance(review.get("invariants"), dict):
+        decisions = review["invariants"]
+        invariant_ids = sorted(
+            item.value for item in source_review_invariants_for_policy(policy_version)
+        )
+        missing = set(invariant_ids) - set(decisions)
+        unknown = set(decisions) - set(invariant_ids)
+        if missing or unknown:
+            raise ValueError(
+                "fanout adjudicator invariant keys do not match policy: "
+                f"missing_count={len(missing)} unknown_count={len(unknown)}"
+            )
+        normalized_decisions = []
+        for invariant in invariant_ids:
+            decision = decisions[invariant]
+            if not isinstance(decision, dict) or "invariant" in decision:
+                raise ValueError(
+                    "fanout adjudicator invariant decision must be an object "
+                    "without a repeated invariant field"
+                )
+            normalized_decisions.append({**decision, "invariant": invariant})
+        review = {**review, "invariants": normalized_decisions}
     try:
         observation = _parse_review(
-            payload.get("final_review"),
+            review,
             artifact_sha256=artifact_sha256,
             repository=repository,
             policy_version=policy_version,
@@ -714,6 +758,16 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                             invariant_summary_chars,
                         )
                         for i, item in enumerate(invariants)
+                        if isinstance(item, dict)
+                    )
+                elif combined and isinstance(invariants, dict):
+                    fields.extend(
+                        (
+                            f"final_review.invariants[{invariant}].summary",
+                            item,
+                            210 if self._review_policy_version >= 13 else 240,
+                        )
+                        for invariant, item in invariants.items()
                         if isinstance(item, dict)
                     )
             assessments = arguments.get("candidate_assessments")
@@ -1058,6 +1112,8 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
             "submit_fanout_adjudication with one canonical final_review and one "
             "assessment under each exact candidate ID key in candidate_assessments "
             "(an object, not an array; no repeated candidate_id field). "
+            "Bind final_review.invariants by the exact policy invariant object "
+            "keys from the tool schema, without repeated invariant fields. "
             "Run this full review "
             "even when the provisional candidate list is empty."
         )
@@ -1463,6 +1519,7 @@ async def review_archive(
     )
     started = time.monotonic()
     deadline = asyncio.get_running_loop().time() + global_timeout_seconds
+    discovery = semantic_discovery(str(archive)) if policy_version == 13 else None
     semaphore = asyncio.Semaphore(concurrency)
     budget = FanoutBudget(
         max_requests=max_requests,
@@ -1499,6 +1556,17 @@ async def review_archive(
                     "opened_assigned_paths": [],
                     "notes": [],
                 }
+            if name == "benchmark_engine" and discovery is not None:
+                leads = discovery["leads"]
+                focus += (
+                    "\nPrioritize this independent semantic discovery packet before "
+                    "the shared inventory hotspots. Batch source reads/searches, "
+                    "then follow definitions, data provenance and served consumers. "
+                    "Do not substitute unrelated I7 concerns for the I5 investigation. "
+                    + discovery["guidance"]
+                    + "\nBounded discovery coverage: "
+                    + json.dumps(discovery["coverage"], sort_keys=True)
+                )
             reviewer = reviewer_factory(
                 focus=focus,
                 leads=leads,
@@ -1734,6 +1802,7 @@ async def review_archive(
         "candidates": candidates,
         "partition": partition,
         "file_plan": plan,
+        "semantic_discovery": discovery,
         "critic": critic,
         "duration_seconds": time.monotonic() - started,
         "budgets": {

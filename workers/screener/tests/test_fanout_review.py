@@ -216,7 +216,11 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
                 "summary": "Bounded test adjudication.",
             }
 
-    archive = _archive(tmp_path, "fn main() { call_model(); }")
+    archive = _archive(
+        tmp_path,
+        "fn main() { call_model(); }\n"
+        "fn lookup(question) { table.get(question); }",
+    )
     result = await review_archive(
         archive,
         artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
@@ -227,7 +231,14 @@ async def test_single_specialist_survives_majority_and_transcripts_are_independe
     )
     assert peak == 2
     assert len(instances) == 6
-    assert all(not r.kwargs["leads"] for r in instances[:5])
+    for reviewer in instances[:5]:
+        if FOCI["benchmark_engine"] in reviewer.kwargs["focus"]:
+            assert reviewer.kwargs["leads"] == result["semantic_discovery"]["leads"]
+            assert reviewer.kwargs["leads"]
+            assert "not a finding" in reviewer.kwargs["focus"]
+        else:
+            assert not reviewer.kwargs["leads"]
+    assert result["semantic_discovery"]["coverage"]["exhaustive"] is False
     assert all("Exact active policy manifest" in r.kwargs["focus"] for r in instances)
     assert all(r.kwargs["timeout_seconds"] == 120 for r in instances)
     assert all(r.kwargs["max_completion_request_seconds"] == 120 for r in instances)

@@ -66,10 +66,23 @@ result alone cannot establish a violation. This guidance applies to policy v13
 only and does not alter the authoritative policy or screener prompts.
 
 The adjudicator tool binds assessments with an object keyed by the exact
-server-assigned candidate IDs. The report retains the existing list shape for
+server-assigned candidate IDs, and invariant decisions with exact policy-derived
+keys. Neither identity is guessed from array position. The report retains the existing list shape for
 consumers. Runtime validation still rejects unknown or conflicting identities,
 preserves omitted candidates as unresolved, and requires source reads. It never
 guesses a binding from array position or silently changes a policy disposition.
+
+The benchmark specialist also receives at most eight independent location hints
+from `shadow-semantic-discovery-v1`. This shadow-only scan explores request-keyed
+lookups, program interfaces, delegated-result returns, and semantic-validation
+feedback. It scans up to 512 eligible source files, 16 MiB total and 2 MiB per
+file before selecting across rule families and files; nearby duplicates collapse.
+Comments and strings do not supply code matches. The report records file, byte,
+window and hint omissions and always labels this scan non-exhaustive. Other
+specialists retain their independent discovery, and the adjudicator receives
+their source-grounded notes. Hints never satisfy citation or clearance checks.
+Legitimate caches, model-authored programs and syntax validators can match; the
+reviewer must establish source causality and the applicable policy independently.
 
 Evaluate changes with SHA-bound, source-only replays. Keep baseline verdicts and
 findings out of the model input. Require exact-mechanism recall on known-rejected

@@ -211,3 +211,122 @@ async def test_reports_preserve_only_bounded_internal_budget_reasons(
         else:
             assert row["budget_exhaustion_reason"] is None
         assert "private arbitrary error text" not in str(row)
+
+
+def _keyed_review():
+    from .test_source_review import _with_policy_v10_invariants
+
+    review = _with_policy_v10_invariants(
+        {
+            "risk_level": "low",
+            "confidence": 0.9,
+            "categories": ["none"],
+            "evidence": [],
+            "summary": "Source independently reviewed.",
+        }
+    )
+    review["invariants"] = {
+        row["invariant"]: {k: v for k, v in row.items() if k != "invariant"}
+        for row in review["invariants"]
+    }
+    return review
+
+
+@pytest.mark.parametrize("policy", [10, 12, 13])
+def test_adjudicator_only_invariant_schema_has_exact_policy_keys(policy):
+    from ditto_screener.source_review import _source_review_tools_for_policy
+    from ditto_screening_protocol.models import source_review_invariants_for_policy
+
+    properties = _adjudication_tools(policy, [], final_turn=True)[0]["function"][
+        "parameters"
+    ]["properties"]
+    schema = properties["final_review"]["properties"]["invariants"]
+    expected = {x.value for x in source_review_invariants_for_policy(policy)}
+    assert schema["type"] == "object"
+    assert set(schema["properties"]) == set(schema["required"]) == expected
+    assert schema["additionalProperties"] is False
+    assert all(
+        "invariant" not in item["properties"] for item in schema["properties"].values()
+    )
+    canonical = _source_review_tools_for_policy(policy, final_turn=True)[-1][
+        "function"
+    ]["parameters"]["properties"]["invariants"]
+    assert canonical["type"] == "array"
+    assert "invariant" in canonical["items"]["properties"]
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "missing", "unknown", "repeated", "contradictory"]
+)
+def test_keyed_invariants_normalize_without_weakening_policy(tmp_path, fault):
+    from ditto_screener.fanout_review import _normalize_final_adjudication
+
+    review = _keyed_review()
+    first = next(iter(review["invariants"]))
+    if fault == "missing":
+        review["invariants"].pop(first)
+    elif fault == "unknown":
+        review["invariants"]["invented"] = review["invariants"].pop(first)
+    elif fault == "repeated":
+        review["invariants"][first]["invariant"] = first
+    elif fault == "contradictory":
+        review["invariants"][first].update(disposition="inconclusive", pass_clause=None)
+    archive = _archive_files(tmp_path, {"src/main.rs": b"fn main() {}"})
+
+    def normalize():
+        return _normalize_final_adjudication(
+            {"final_review": review, "candidate_assessments": {}},
+            artifact_sha256="a" * 64,
+            policy_version=13,
+            candidates=[],
+            repository=TarSourceRepository(str(archive)),
+            opened_lines=set(),
+            clearance_certified=True,
+        )
+
+    if fault:
+        with pytest.raises(ValueError):
+            normalize()
+    else:
+        result = normalize()
+        assert isinstance(
+            result["final_review"]["invariant_assessment"]["decisions"], list
+        )
+        assert len(result["final_review"]["invariant_assessment"]["decisions"]) == 8
+        assert result["outcome"] == "no_findings"
+
+
+def test_keyed_invariant_summaries_are_bounded_without_semantic_changes():
+    import json
+
+    from ditto_screener.fanout_review import ExperimentalReviewer
+
+    reviewer = object.__new__(ExperimentalReviewer)
+    reviewer._review_policy_version = 13
+    reviewer.full_summaries = []
+    review = _keyed_review()
+    for row in review["invariants"].values():
+        row["summary"] = "x" * 300
+    message = {
+        "tool_calls": [
+            {
+                "id": "bound",
+                "type": "function",
+                "function": {
+                    "name": "submit_fanout_adjudication",
+                    "arguments": json.dumps({"final_review": review}),
+                },
+            }
+        ]
+    }
+    result = reviewer._bound_summary_fields(message)
+    bounded = json.loads(result["tool_calls"][0]["function"]["arguments"])[
+        "final_review"
+    ]["invariants"]
+    assert set(bounded) == set(review["invariants"])
+    assert all(len(row["summary"]) == 210 for row in bounded.values())
+    assert all(
+        row["disposition"] == review["invariants"][key]["disposition"]
+        for key, row in bounded.items()
+    )
+    assert len(reviewer.full_summaries) == 8
