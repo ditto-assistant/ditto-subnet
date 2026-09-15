@@ -22,6 +22,7 @@ func hostedFixture(t *testing.T) (HostedManifest, HostedGradingAuthority, coding
 	manifest.CodingContractVersion = 2
 	manifest.CaseID, manifest.VariantID = submission.CaseID, "opaque-hosted-variant"
 	manifest.GraderContractSHA256 = HostedGraderContractSHA256()
+	manifest.TestManifestSHA256 = ""
 	manifest.ResourceProfileSHA256, _ = HostedResourceProfileSHA256(manifest.ResourcePolicy)
 	manifest.TestGroups = []TestGroupSpec{
 		{Group: "hidden", Command: codingrunner.CommandSpec{ID: "hidden-tests", Argv: []string{"dittobench-test-driver", "hidden"}, Timeout: time.Minute}, ExpectedTotal: 3},
@@ -167,5 +168,69 @@ func TestHostedProfileCannotBeUsedByV1AndRejectsMissingOrUnsafeGroups(t *testing
 		if bad.Validate(time.Now()) == nil {
 			t.Fatalf("accepted %s", change)
 		}
+	}
+}
+
+func TestHostedV2BindsNoTestManifestWhileV1StillRequiresOne(t *testing.T) {
+	manifest, authority, submission, visible, protected := hostedFixture(t)
+	for name, check := range map[string]func(HostedManifest) error{
+		"validate":          func(m HostedManifest) error { return m.Validate(time.Now()) },
+		"execution_profile": func(m HostedManifest) error { return m.ValidateExecutionProfile() },
+	} {
+		// Reusing the grader bundle digest as a test manifest is exactly what is refused.
+		bad := HostedManifest(cloneManifest(Manifest(manifest)))
+		bad.TestManifestSHA256 = bad.GraderBundleSHA256
+		bad.GraderPlanSHA256, _ = HostedGraderPlanSHA256(bad)
+		if check(bad) == nil {
+			t.Fatalf("%s accepted a hosted test manifest digest", name)
+		}
+	}
+
+	var plan map[string]any
+	body, err := canonicalJSON(planProjectionOf(Manifest(manifest), "dittobench-coding-grader-plan-v2", hostedExecutionOrder))
+	if err != nil || json.Unmarshal(body, &plan) != nil {
+		t.Fatal("hosted plan projection")
+	}
+	keys := make([]string, 0, len(plan))
+	for key := range plan {
+		keys = append(keys, key)
+	}
+	slices.Sort(keys)
+	want := slices.Clone(hostedPlanFields)
+	slices.Sort(want)
+	if !slices.Equal(keys, want) || slices.Contains(hostedEvidenceFields, "test_manifest_sha256") {
+		t.Fatalf("hosted contract fields differ from the plan: %v", keys)
+	}
+
+	result := GradeHosted(t.Context(), authority, manifest, submission, bytes.NewReader(visible), protectedReader(protected), passingExecutor(Manifest(manifest)))
+	if result.Result.TerminalDomain != codingcontract.DomainResolved {
+		t.Fatalf("hosted grade failed: %#v", result)
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || bytes.Contains(encoded, []byte("test_manifest_sha256")) {
+		t.Fatal("hosted evidence carries a test manifest key")
+	}
+	evidence := *result.Result.Evidence
+	if validateHostedEvidence(&evidence) != nil {
+		t.Fatal("valid hosted evidence rejected")
+	}
+	evidence.TestManifestSHA256 = evidence.GraderBundleSHA256
+	if validateHostedEvidence(&evidence) == nil {
+		t.Fatal("hosted evidence accepted a test manifest digest")
+	}
+
+	legacySubmission, _, legacyLimits := frozenFixtureVersion(t, false)
+	legacy, _ := graderFixture(t, legacySubmission, legacyLimits)
+	if legacy.Validate(time.Now()) != nil {
+		t.Fatal("v1 fixture invalid")
+	}
+	v1Evidence, err := json.Marshal(codingcontract.GraderEvidence{TestManifestSHA256: legacy.TestManifestSHA256})
+	if err != nil || !bytes.Contains(v1Evidence, []byte(`"test_manifest_sha256":"`+legacy.TestManifestSHA256+`"`)) {
+		t.Fatal("v1 evidence lost its test manifest")
+	}
+	legacy.TestManifestSHA256 = ""
+	legacy.GraderPlanSHA256, _ = GraderPlanSHA256(legacy)
+	if legacy.Validate(time.Now()) == nil {
+		t.Fatal("v1 accepted a missing test manifest")
 	}
 }

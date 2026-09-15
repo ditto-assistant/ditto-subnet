@@ -47,17 +47,19 @@ type groupProjection struct {
 }
 
 type planProjection struct {
-	Schema                string            `json:"schema"`
-	CodingContractVersion int               `json:"coding_contract_version"`
-	CaseID                string            `json:"case_id"`
-	VariantID             string            `json:"variant_id"`
-	VisibleBundleSHA256   string            `json:"visible_bundle_sha256"`
-	BaseTreeSHA256        string            `json:"base_tree_sha256"`
-	GraderContractSHA256  string            `json:"grader_contract_sha256"`
-	GraderBundleSHA256    string            `json:"grader_bundle_sha256"`
-	GraderImageDigest     string            `json:"grader_image_digest"`
-	GraderPlatform        string            `json:"grader_platform"`
-	TestManifestSHA256    string            `json:"test_manifest_sha256"`
+	Schema                string `json:"schema"`
+	CodingContractVersion int    `json:"coding_contract_version"`
+	CaseID                string `json:"case_id"`
+	VariantID             string `json:"variant_id"`
+	VisibleBundleSHA256   string `json:"visible_bundle_sha256"`
+	BaseTreeSHA256        string `json:"base_tree_sha256"`
+	GraderContractSHA256  string `json:"grader_contract_sha256"`
+	GraderBundleSHA256    string `json:"grader_bundle_sha256"`
+	GraderImageDigest     string `json:"grader_image_digest"`
+	GraderPlatform        string `json:"grader_platform"`
+	// Required and always present in v1. Hosted v2 has no test-manifest object,
+	// requires it empty, and therefore omits the key from its plan digest.
+	TestManifestSHA256    string            `json:"test_manifest_sha256,omitempty"`
 	ResourceProfileSHA256 string            `json:"resource_profile_sha256"`
 	ExecutionTimeoutMS    int64             `json:"execution_timeout_milliseconds"`
 	BuildRequired         bool              `json:"build_required"`
@@ -184,6 +186,10 @@ func GraderPlanSHA256(manifest Manifest) (string, error) {
 }
 
 func graderPlanSHA256(manifest Manifest, schema string, order []string) (string, error) {
+	return digestCanonical(planProjectionOf(manifest, schema, order))
+}
+
+func planProjectionOf(manifest Manifest, schema string, order []string) planProjection {
 	groups := make([]groupProjection, len(manifest.TestGroups))
 	for index, group := range manifest.TestGroups {
 		groups[index] = groupProjection{
@@ -192,7 +198,7 @@ func graderPlanSHA256(manifest Manifest, schema string, order []string) (string,
 			ExpectedTotal: group.ExpectedTotal,
 		}
 	}
-	return digestCanonical(planProjection{
+	return planProjection{
 		Schema:                schema,
 		CodingContractVersion: manifest.CodingContractVersion,
 		CaseID:                manifest.CaseID,
@@ -210,7 +216,7 @@ func graderPlanSHA256(manifest Manifest, schema string, order []string) (string,
 		BuildCommand:          commandValue(manifest.Build.Command.ID, manifest.Build.Command.Argv, manifest.Build.Command.Timeout.Milliseconds()),
 		TestGroups:            groups,
 		ExecutionOrder:        append([]string(nil), order...),
-	})
+	}
 }
 
 // CommandSHA256 identifies the exact fixed command used in a receipt.

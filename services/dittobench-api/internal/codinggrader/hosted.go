@@ -13,6 +13,19 @@ import (
 var hostedEvidenceGroups = []string{"hidden", "visible"}
 var hostedExecutionOrder = []string{"visible", "hidden"}
 
+var hostedPlanFields = []string{
+	"schema", "coding_contract_version", "case_id", "variant_id", "visible_bundle_sha256",
+	"base_tree_sha256", "grader_contract_sha256", "grader_bundle_sha256", "grader_image_digest",
+	"grader_platform", "resource_profile_sha256", "execution_timeout_milliseconds", "build_required",
+	"build_command", "test_groups", "execution_order",
+}
+
+var hostedEvidenceFields = []string{
+	"grader_contract_sha256", "grader_bundle_sha256", "grader_image_digest", "grader_platform",
+	"grader_plan_sha256", "resource_profile_sha256", "execution_receipt_root_sha256", "execution_receipt_count",
+	"grader_integrity_before_sha256", "grader_integrity_after_sha256", "build", "test_groups",
+}
+
 // HostedManifest is deliberately distinct from the permanently v1 Manifest API.
 // Commands, images, complete resource policy and expected counts are trusted
 // Platform/curator inputs, never candidate-authored claims.
@@ -35,12 +48,15 @@ func (manifest HostedManifest) Validate(now time.Time) error {
 // Execution still requires full Validate plus committed replay authority.
 func (manifest HostedManifest) ValidateExecutionProfile() error {
 	if manifest.GraderContractSHA256 != HostedGraderContractSHA256() || !ociDigest(manifest.GraderImageDigest) ||
-		manifest.GraderPlatform != "linux/amd64" || !lowerSHA256(manifest.GraderBundleSHA256) || !lowerSHA256(manifest.TestManifestSHA256) {
+		manifest.GraderPlatform != "linux/amd64" || !lowerSHA256(manifest.GraderBundleSHA256) || manifest.TestManifestSHA256 != "" {
 		return errors.New("hosted grading execution profile identity is invalid")
 	}
 	return Manifest(manifest).validateExecutionProfile(true)
 }
 
+// HostedGraderContractSHA256 inherits v1 isolation but states its own plan and
+// evidence fields: hosted v2 has no test-manifest object, so neither carries
+// test_manifest_sha256.
 func HostedGraderContractSHA256() string {
 	value, err := digestCanonical(map[string]any{
 		"schema":                              "dittobench-coding-hosted-grader-contract-v2",
@@ -49,6 +65,8 @@ func HostedGraderContractSHA256() string {
 		"plan_schema":                         "dittobench-coding-grader-plan-v2",
 		"resource_schema":                     "dittobench-coding-grader-resource-v2",
 		"receipt_schema":                      "dittobench-coding-grader-receipt-v2",
+		"plan_fields":                         hostedPlanFields,
+		"grader_evidence_fields":              hostedEvidenceFields,
 		"evidence_groups":                     hostedEvidenceGroups, "execution_order": hostedExecutionOrder,
 		"maximum_group_tests": 1_000_000, "maximum_lifetime_seconds": 3600,
 		"committed_patch_required": true, "trusted_test_driver_required": true,
@@ -106,7 +124,7 @@ func GradeHosted(ctx context.Context, authority HostedGradingAuthority, manifest
 func validateHostedEvidence(evidence *codingcontract.GraderEvidence) error {
 	if evidence == nil || evidence.GraderContractSHA256 != HostedGraderContractSHA256() ||
 		!lowerSHA256(evidence.GraderBundleSHA256) || !ociDigest(evidence.GraderImageDigest) ||
-		evidence.GraderPlatform != "linux/amd64" || !lowerSHA256(evidence.TestManifestSHA256) ||
+		evidence.GraderPlatform != "linux/amd64" || evidence.TestManifestSHA256 != "" ||
 		!lowerSHA256(evidence.GraderPlanSHA256) || !lowerSHA256(evidence.ResourceProfileSHA256) ||
 		!lowerSHA256(evidence.ExecutionReceiptRootSHA256) || !lowerSHA256(evidence.GraderIntegrityBeforeSHA256) ||
 		!lowerSHA256(evidence.GraderIntegrityAfterSHA256) || !validIdentifier(evidence.Build.CommandID, 80) ||

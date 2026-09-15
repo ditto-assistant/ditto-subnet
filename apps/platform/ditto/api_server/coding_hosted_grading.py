@@ -40,6 +40,21 @@ from ditto.db.queries.coding_hosted_private import (
     close_hosted_private_task,
 )
 
+# Hosted v2 grading profiles carry no test manifest: nothing in the private task
+# authority enumerates tests, and no other digest may stand in for one.
+GRADING_PROFILE_KEYS = frozenset(
+    {
+        "schema",
+        "image_digest",
+        "grader_contract_sha256",
+        "grader_bundle_sha256",
+        "resource_policy",
+        "build",
+        "test_groups",
+        "execution_timeout",
+    }
+)
+
 
 def _hash(value) -> str:
     return sha(canonical(value, 65536))
@@ -106,7 +121,6 @@ def expected_grading(profile: dict, source: SourceBinding, submission: dict) -> 
         "grader_bundle_sha256": profile["grader_bundle_sha256"],
         "grader_image_digest": profile["image_digest"],
         "grader_platform": "linux/amd64",
-        "test_manifest_sha256": profile["test_manifest_sha256"],
         "resource_profile_sha256": resource_sha,
         "execution_timeout_milliseconds": profile["execution_timeout"] // 1_000_000,
         "build_required": profile["build"]["Required"],
@@ -120,7 +134,6 @@ def expected_grading(profile: dict, source: SourceBinding, submission: dict) -> 
         "grader_contract_sha256": profile["grader_contract_sha256"],
         "grader_bundle_sha256": profile["grader_bundle_sha256"],
         "grader_image_digest": profile["image_digest"],
-        "test_manifest_sha256": profile["test_manifest_sha256"],
         "final_tree_sha256": submission["final_tree_sha256"],
         "build_required": profile["build"]["Required"],
         "build_command_id": profile["build"]["Command"]["ID"],
@@ -178,12 +191,14 @@ def validate_grading_result(value: dict, binding: dict) -> str:
         "grader_contract_sha256",
         "grader_bundle_sha256",
         "grader_image_digest",
-        "test_manifest_sha256",
         "grader_plan_sha256",
         "resource_profile_sha256",
     ):
         if evidence.get(key) != binding[key]:
             raise HostedEvidenceError("terminal grader profile differs")
+    # Hosted v2 has no test-manifest object; evidence must not claim one.
+    if "test_manifest_sha256" in evidence:
+        raise HostedEvidenceError("terminal grader profile differs")
     if (
         result.get("replayed_final_tree_sha256") != binding["final_tree_sha256"]
         or evidence.get("grader_platform") != "linux/amd64"
@@ -314,6 +329,7 @@ class HostedGradingControl:
         value = _decode_json_document(profile, maximum_bytes=65536)
         if (
             not isinstance(value, dict)
+            or value.keys() != GRADING_PROFILE_KEYS
             or value.get("schema") != "dittobench-coding-hosted-grading-profile-v2"
             or canonical(value, 65536) != profile
         ):

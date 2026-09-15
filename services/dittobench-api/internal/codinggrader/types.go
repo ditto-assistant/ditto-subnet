@@ -78,12 +78,18 @@ func (manifest Manifest) validateProfile(now time.Time, hosted bool) error {
 		resourceDigestFunc = HostedResourceProfileSHA256
 		planDigestFunc = func(m Manifest) (string, error) { return HostedGraderPlanSHA256(HostedManifest(m)) }
 	}
+	// v1 binds a curator test manifest. Hosted v2 has no such object and must
+	// not reuse another digest in its place.
+	testManifestValid := lowerSHA256(manifest.TestManifestSHA256)
+	if hosted {
+		testManifestValid = manifest.TestManifestSHA256 == ""
+	}
 	if manifest.CodingContractVersion != version || !validIdentifier(manifest.CaseID, 256) ||
 		!validIdentifier(manifest.VariantID, 256) || !lowerSHA256(manifest.VisibleBundleSHA256) ||
 		!lowerSHA256(manifest.BaseTreeSHA256) ||
 		!lowerSHA256(manifest.GraderContractSHA256) || !lowerSHA256(manifest.GraderBundleSHA256) ||
 		!ociDigest(manifest.GraderImageDigest) || manifest.GraderPlatform != "linux/amd64" ||
-		!lowerSHA256(manifest.TestManifestSHA256) ||
+		!testManifestValid ||
 		!lowerSHA256(manifest.GraderPlanSHA256) || !lowerSHA256(manifest.ResourceProfileSHA256) {
 		return errors.New("coding grader manifest identity is invalid")
 	}
