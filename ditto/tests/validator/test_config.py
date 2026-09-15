@@ -332,25 +332,38 @@ class TestCodingShadowConfig:
             parse_validator_config_from_env()
 
 
+_CERTIFICATION_ENV = {
+    "VALIDATOR_CODING_CERTIFICATION_SOCKET_UID": "61001",
+    "VALIDATOR_CODING_CERTIFICATION_SOCKET_GID": "61002",
+    "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN": (
+        "coding-certification-token-0000000000001"
+    ),
+    "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST": "sha256:" + "1" * 64,
+    "VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256": "2" * 64,
+}
+
+
 class TestCodingCanaryConfig:
     def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
         config = parse_validator_config_from_env()
         assert config.coding_canary_enabled is False
 
-    def test_enable_requires_control_token(
+    def test_enable_requires_the_certification_settings(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _base_env(monkeypatch)
         monkeypatch.setenv("VALIDATOR_CODING_CANARY_ENABLED", "true")
-        with pytest.raises(ValidatorConfigError, match="coding canary"):
+        with pytest.raises(ValidatorConfigError, match="CERTIFICATION_SOCKET_UID"):
             parse_validator_config_from_env()
-        monkeypatch.setenv(
-            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
-            "coding-canary-control-token-0000000000000001",
-        )
+        self._enable(monkeypatch)
         config = parse_validator_config_from_env()
         assert config.coding_canary_enabled is True
+        assert config.coding_certification_socket_uid == 61001
+        assert config.coding_certification_socket_gid == 61002
+        assert config.coding_certification_runtime_image_digest == "sha256:" + "1" * 64
+        assert config.coding_certification_pack_manifest_sha256 == "2" * 64
+        assert "coding-certification-token" not in repr(config)
         # Enabled without targets is inert: the worker refuses every lease.
         assert config.coding_canary_agent_ids == ()
         assert config.coding_canary_validator_hotkey == ""
@@ -358,10 +371,79 @@ class TestCodingCanaryConfig:
     def _enable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
         monkeypatch.setenv("VALIDATOR_CODING_CANARY_ENABLED", "true")
+        for name, value in _CERTIFICATION_ENV.items():
+            monkeypatch.setenv(name, value)
+
+    @pytest.mark.parametrize(
+        ("name", "value", "match"),
+        [
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "0", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "-1", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "061001", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "2147483647", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_GID", "", "SOCKET_GID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_GID", "0", "SOCKET_GID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_GID", "root", "SOCKET_GID"),
+            ("VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN", "", "CONTROL_TOKEN"),
+            ("VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN", "short", "CONTROL_TOKEN"),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN",
+                "coding certification token with space",
+                "CONTROL_TOKEN",
+            ),
+            ("VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST", "", "IMAGE_DIGEST"),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST",
+                "latest",
+                "IMAGE_DIGEST",
+            ),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST",
+                "sha256:" + "A" * 64,
+                "IMAGE_DIGEST",
+            ),
+            ("VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256", "", "MANIFEST"),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256",
+                "F" * 64,
+                "MANIFEST",
+            ),
+        ],
+    )
+    def test_rejects_invalid_certification_settings(
+        self, monkeypatch: pytest.MonkeyPatch, name: str, value: str, match: str
+    ) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv(name, value)
+        with pytest.raises(ValidatorConfigError, match=match) as raised:
+            parse_validator_config_from_env()
+        if len(value) > 4:
+            assert value not in str(raised.value)
+
+    def test_certification_token_must_differ_from_the_scorer_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._enable(monkeypatch)
         monkeypatch.setenv(
             "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
-            "coding-canary-control-token-0000000000000001",
+            _CERTIFICATION_ENV["VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN"],
         )
+        with pytest.raises(ValidatorConfigError, match="distinct"):
+            parse_validator_config_from_env()
+
+    def test_disabled_canary_ignores_certification_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "0")
+        monkeypatch.setenv("VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN", "x")
+        monkeypatch.setenv("VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST", "x")
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_enabled is False
+        assert config.coding_certification_socket_uid == 0
+        assert config.coding_certification_control_token == ""
+        assert config.coding_certification_runtime_image_digest == ""
 
     def test_parses_exact_targets(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._enable(monkeypatch)

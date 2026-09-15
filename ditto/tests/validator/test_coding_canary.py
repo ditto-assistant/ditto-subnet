@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +37,7 @@ from ditto.validator.coding_canary import (
     CodingCanaryWorker,
 )
 from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
+from ditto.validator.coding_certification_socket import CertificationSocketTransport
 from ditto.validator.errors import (
     PlatformError,
     PlatformInfrastructureError,
@@ -326,9 +328,21 @@ class _Runtime:
         self.certified: list[CodingCertificationLeaseResponse] = []
         self.available = True
         self.readiness = _readiness()
+        # Optional per-probe answers (True = ready, False = refused, or a
+        # readiness identity); later probes fall back to the fields above.
+        self.script: list[bool | CodingCanaryReadiness | Exception] = []
 
     async def require_ready(self) -> CodingCanaryReadiness:
         self.probes += 1
+        if self.script:
+            answer = self.script.pop(0)
+            if answer is False:
+                raise PlatformInfrastructureError("coding canary runtime is not ready")
+            if isinstance(answer, BaseException):
+                raise answer
+            if isinstance(answer, CodingCanaryReadiness):
+                return answer
+            return self.readiness
         if not self.available:
             raise PlatformInfrastructureError("coding canary runtime is not ready")
         return self.readiness
@@ -516,6 +530,59 @@ async def test_canary_worker_offers_only_allowlisted_agents() -> None:
     assert platform.issues == 1
 
 
+async def test_canary_worker_proves_readiness_again_before_claim() -> None:
+    platform = _Platform()
+    runtime = _Runtime()
+    worker = _worker(platform, runtime)
+    worker.offer(_AGENT, 12)
+    assert await worker.run_once() is True
+    # Once before issue, once between issue and the irreversible claim.
+    assert runtime.probes == 2
+    assert platform.claims == 1
+
+
+@pytest.mark.parametrize(
+    "second",
+    [
+        # The service stopped being ready after issue (daemon restart, socket
+        # swap, stale listener namespace).
+        False,
+        # The service now reports a different pack identity.
+        _readiness(canary_manifest_sha256="9" * 64),
+    ],
+)
+async def test_canary_worker_aborts_issued_lease_when_readiness_changes_before_claim(
+    second: bool | CodingCanaryReadiness,
+) -> None:
+    platform = _Platform()
+    runtime = _Runtime()
+    runtime.script = [True, second]
+    worker = _worker(platform, runtime)
+    worker.offer(_AGENT, 12)
+    with pytest.raises(PlatformInfrastructureError, match="not ready|changed"):
+        await worker.run_once()
+    assert platform.issues == 1
+    assert platform.aborts == 1
+    assert platform.claims == 0
+    assert runtime.certified == []
+
+
+async def test_canary_worker_aborts_issued_lease_when_the_second_probe_errors() -> None:
+    # An unexpected probe failure (not a reported refusal) after issue must
+    # still abort the issued lease rather than leave it to expire.
+    platform = _Platform()
+    runtime = _Runtime()
+    runtime.script = [True, OSError("fstat failed")]
+    worker = _worker(platform, runtime)
+    worker.offer(_AGENT, 12)
+    with pytest.raises(OSError):
+        await worker.run_once()
+    assert platform.issues == 1
+    assert platform.aborts == 1
+    assert platform.claims == 0
+    assert runtime.certified == []
+
+
 async def test_canary_worker_keeps_the_offer_until_the_scorer_is_ready() -> None:
     platform = _Platform()
     runtime = _Runtime()
@@ -589,11 +656,42 @@ async def test_canary_worker_aborts_a_lease_the_ready_scorer_pack_cannot_run(
     assert runtime.certified == []
 
 
-def _runtime_config(url: str = "http://127.0.0.1:18081") -> Any:
-    return SimpleNamespace(
-        dittobench_api_url=url,
-        dittobench_control_token=_TOKEN,
+_IMAGE_DIGEST = "sha256:" + "1" * 64
+_SCORER_TOKEN = "scorer-control-token-000000000000000001"
+
+
+def _runtime_config(**updates: object) -> Any:
+    values: dict[str, object] = {
+        "dittobench_api_url": "http://sandbox-docker:8000",
+        "dittobench_control_token": _SCORER_TOKEN,
+        "coding_certification_control_token": _TOKEN,
+        "coding_certification_socket_uid": 61001,
+        "coding_certification_socket_gid": 61002,
+        "coding_certification_runtime_image_digest": _IMAGE_DIGEST,
+        "coding_certification_pack_manifest_sha256": (
+            _authority().canary_manifest_sha256
+        ),
+    }
+    values.update(updates)
+    return SimpleNamespace(**values)
+
+
+@asynccontextmanager
+async def _mock_runtime(
+    handler: Any,
+    *,
+    config: Any = None,
+    clock: Any = None,
+) -> AsyncIterator[CodingCanaryRuntime]:
+    runtime = CodingCanaryRuntime(
+        config if config is not None else _runtime_config(),
+        transport=httpx.MockTransport(handler),
+        clock=clock,
     )
+    try:
+        yield runtime
+    finally:
+        await runtime.aclose()
 
 
 def _canary_response_payload() -> dict[str, object]:
@@ -622,10 +720,7 @@ async def test_canary_runtime_certify_accepts_private_json() -> None:
             json=_canary_response_payload(),
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False
-    ) as http:
-        runtime = CodingCanaryRuntime(_runtime_config(), http, clock=lambda: _NOW)
+    async with _mock_runtime(handler, clock=lambda: _NOW) as runtime:
         outcome = await runtime.certify(
             _lease(status=CodingCertificationLeaseStatus.CLAIMED),
             _harness(),
@@ -650,10 +745,7 @@ async def test_canary_runtime_rejects_missing_no_store() -> None:
             json=_canary_response_payload(),
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False
-    ) as http:
-        runtime = CodingCanaryRuntime(_runtime_config(), http, clock=lambda: _NOW)
+    async with _mock_runtime(handler, clock=lambda: _NOW) as runtime:
         with pytest.raises(ValidatorInfrastructureError, match="cache policy"):
             await runtime.certify(
                 _lease(status=CodingCertificationLeaseStatus.CLAIMED),
@@ -667,14 +759,18 @@ async def test_canary_runtime_rejects_missing_no_store() -> None:
 def _readiness_payload(**updates: object) -> dict[str, object]:
     authority = _authority()
     value: dict[str, object] = {
-        "schema": "dittobench-coding-certification-canary-readiness-v1",
+        "schema": "dittobench-coding-certification-canary-readiness-v2",
         "coding_contract_version": 1,
         "weight_eligible": False,
         "ready": True,
         "failure": "",
         "pack_loaded": True,
+        "rootless_topology_ready": True,
+        "listener_namespace_ready": True,
+        "control_socket_ready": True,
         "executor_daemon_ready": True,
         "runtime_image_ready": True,
+        "runtime_image_digest": _IMAGE_DIGEST,
         "canary_manifest_sha256": authority.canary_manifest_sha256,
         "runner_plan_sha256": authority.runner_plan_sha256,
         "grader_plan_sha256": authority.grader_plan_sha256,
@@ -696,10 +792,7 @@ async def test_canary_runtime_readiness_returns_the_ready_pack_identity() -> Non
             json=_readiness_payload(),
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False
-    ) as http:
-        runtime = CodingCanaryRuntime(_runtime_config(), http, clock=lambda: _NOW)
+    async with _mock_runtime(handler, clock=lambda: _NOW) as runtime:
         readiness = await runtime.require_ready()
     assert readiness == _readiness()
     assert readiness.binds(_authority())
@@ -736,6 +829,56 @@ async def test_canary_runtime_readiness_returns_the_ready_pack_identity() -> Non
             _readiness_payload(runtime_image_ready=False),
         ),
         (200, {"Cache-Control": "no-store"}, _readiness_payload(pack_loaded=False)),
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            _readiness_payload(rootless_topology_ready=False),
+        ),
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            _readiness_payload(listener_namespace_ready=False),
+        ),
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            _readiness_payload(control_socket_ready=False),
+        ),
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            _readiness_payload(ready=False, failure="rootless_topology"),
+        ),
+        # The service's pinned runtime image or pack differs from this validator's.
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            _readiness_payload(runtime_image_digest="sha256:" + "2" * 64),
+        ),
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            _readiness_payload(runtime_image_digest="latest"),
+        ),
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            _readiness_payload(runtime_image_digest=""),
+        ),
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            _readiness_payload(canary_manifest_sha256="9" * 64),
+        ),
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            {
+                key: value
+                for key, value in _readiness_payload().items()
+                if key != "control_socket_ready"
+            },
+        ),
         (200, {"Cache-Control": "no-store"}, _readiness_payload(failure="pack")),
         (200, {"Cache-Control": "no-store"}, _readiness_payload(weight_eligible=True)),
         (
@@ -743,7 +886,13 @@ async def test_canary_runtime_readiness_returns_the_ready_pack_identity() -> Non
             {"Cache-Control": "no-store"},
             _readiness_payload(coding_contract_version=2),
         ),
-        (200, {"Cache-Control": "no-store"}, _readiness_payload(schema="other-v1")),
+        (
+            200,
+            {"Cache-Control": "no-store"},
+            _readiness_payload(
+                schema="dittobench-coding-certification-canary-readiness-v1"
+            ),
+        ),
         (
             200,
             {"Cache-Control": "no-store"},
@@ -777,10 +926,7 @@ async def test_canary_runtime_readiness_fails_closed(
             json=payload,
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False
-    ) as http:
-        runtime = CodingCanaryRuntime(_runtime_config(), http, clock=lambda: _NOW)
+    async with _mock_runtime(handler, clock=lambda: _NOW) as runtime:
         with pytest.raises(PlatformInfrastructureError, match="canary runtime"):
             await runtime.require_ready()
 
@@ -792,7 +938,7 @@ async def test_canary_runtime_readiness_accepts_the_shared_contract_vector() -> 
             / "packages"
             / "dittobench-coding-contract"
             / "testdata"
-            / "coding_certification_canary_readiness_v1.json"
+            / "coding_certification_canary_readiness_v2.json"
         ).read_text(encoding="utf-8")
     )
     ready = vector["ready"]
@@ -804,10 +950,11 @@ async def test_canary_runtime_readiness_accepts_the_shared_contract_vector() -> 
             json=ready,
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False
-    ) as http:
-        runtime = CodingCanaryRuntime(_runtime_config(), http, clock=lambda: _NOW)
+    config = _runtime_config(
+        coding_certification_runtime_image_digest=ready["runtime_image_digest"],
+        coding_certification_pack_manifest_sha256=ready["canary_manifest_sha256"],
+    )
+    async with _mock_runtime(handler, config=config, clock=lambda: _NOW) as runtime:
         readiness = await runtime.require_ready()
         assert readiness == CodingCanaryReadiness(
             canary_manifest_sha256=ready["canary_manifest_sha256"],
@@ -830,65 +977,51 @@ async def test_canary_runtime_readiness_refuses_an_unreachable_scorer() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False
-    ) as http:
-        runtime = CodingCanaryRuntime(_runtime_config(), http, clock=lambda: _NOW)
+    async with _mock_runtime(handler, clock=lambda: _NOW) as runtime:
         with pytest.raises(PlatformInfrastructureError, match="unreachable"):
             await runtime.require_ready()
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        # The fixed Compose scorer origin on the stack's private bridge.
-        "http://sandbox-docker:8000",
-        "http://sandbox-docker:8000/",
-        "http://127.0.0.1:18081",
-        "http://localhost:18081",
-        "https://scorer.invalid",
-    ],
-)
-async def test_canary_runtime_accepts_compose_loopback_and_tls_origins(
-    url: str,
-) -> None:
-    async with httpx.AsyncClient(trust_env=False) as http:
-        CodingCanaryRuntime(_runtime_config(url), http)
+async def test_canary_runtime_defaults_to_the_verified_fixed_socket() -> None:
+    runtime = CodingCanaryRuntime(_runtime_config())
+    try:
+        transport = runtime._client._transport
+        assert isinstance(transport, CertificationSocketTransport)
+        assert runtime._client.trust_env is False
+        assert runtime._base == "http://coding-certification.invalid"
+        pool = transport._pool
+        assert pool._uds == "/run/ditto-coding-certification/control.sock"
+        assert pool._max_keepalive_connections == 0
+    finally:
+        await runtime.aclose()
 
 
 @pytest.mark.parametrize(
-    "url",
+    "updates",
     [
-        "http://sandbox-docker",
-        "http://sandbox-docker:8001",
-        "http://SANDBOX-DOCKER:8000",
-        "http://sandbox-docker.:8000",
-        "http://sandbox-docker.invalid:8000",
-        "http://scorer.invalid:8000",
-        "http://10.0.0.5:8000",
-        "https://sandbox-docker:8000/v1",
-        "http://sandbox-docker:8000/v1",
-        "http://operator:secret@sandbox-docker:8000",
-        "http://sandbox-docker:8000?next=1",
-        "http://sandbox-docker:8000#fragment",
-        "ws://sandbox-docker:8000",
-        "http://127.0.0.1:not-a-port",
-        "sandbox-docker:8000",
+        # Certification never reuses the Compose scorer's bearer.
+        {"coding_certification_control_token": _SCORER_TOKEN},
+        {"coding_certification_control_token": ""},
+        {"coding_certification_control_token": "short"},
+        {"coding_certification_control_token": "x" * 31},
+        {"coding_certification_control_token": "coding canary token with spaces 00"},
+        {"coding_certification_runtime_image_digest": ""},
+        {"coding_certification_runtime_image_digest": "latest"},
+        {"coding_certification_runtime_image_digest": "sha256:" + "A" * 64},
+        {"coding_certification_runtime_image_digest": "1" * 64},
+        {"coding_certification_pack_manifest_sha256": ""},
+        {"coding_certification_pack_manifest_sha256": "AB" * 32},
+        {"coding_certification_socket_uid": 0},
+        {"coding_certification_socket_gid": 0},
+        {"coding_certification_socket_uid": -1},
+        {"coding_certification_socket_gid": "61002"},
     ],
 )
-async def test_canary_runtime_rejects_other_plaintext_or_shaped_origins(
-    url: str,
+async def test_canary_runtime_refuses_shared_or_unpinned_settings(
+    updates: dict[str, object],
 ) -> None:
-    async with httpx.AsyncClient(trust_env=False) as http:
-        with pytest.raises(ValueError, match="configuration is invalid"):
-            CodingCanaryRuntime(_runtime_config(url), http)
-
-
-async def test_canary_runtime_rejects_a_proxy_inheriting_client() -> None:
-    async with httpx.AsyncClient() as http:
-        assert http.trust_env is True
-        with pytest.raises(ValueError, match="configuration is invalid"):
-            CodingCanaryRuntime(_runtime_config("http://sandbox-docker:8000"), http)
+    with pytest.raises(ValueError, match="invalid"):
+        CodingCanaryRuntime(_runtime_config(**updates))
 
 
 class _HangingBody(httpx.AsyncByteStream):
@@ -938,14 +1071,7 @@ async def test_canary_runtime_bounds_certify_only_by_the_lease_deadline(
         )
 
     monkeypatch.setattr(runtime_module.asyncio, "timeout", recording_timeout)
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False, timeout=30.0
-    ) as http:
-        runtime = CodingCanaryRuntime(
-            _runtime_config("http://sandbox-docker:8000"),
-            http,
-            clock=lambda: deadline - remaining,
-        )
+    async with _mock_runtime(handler, clock=lambda: deadline - remaining) as runtime:
         await _certify(runtime)
     # The whole exchange is bounded by exactly the time left on the lease, with
     # no separate cap and no per-read timeout that could fire first.
@@ -967,12 +1093,7 @@ async def test_canary_runtime_never_sends_after_the_lease_deadline(
         calls += 1
         return httpx.Response(500)
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False
-    ) as http:
-        runtime = CodingCanaryRuntime(
-            _runtime_config(), http, clock=lambda: deadline + offset
-        )
+    async with _mock_runtime(handler, clock=lambda: deadline + offset) as runtime:
         with pytest.raises(ValidatorInfrastructureError, match="deadline exceeded"):
             await _certify(runtime)
     assert calls == 0
@@ -986,12 +1107,9 @@ async def test_canary_runtime_rejects_a_naive_clock_before_sending() -> None:
         calls += 1
         return httpx.Response(500)
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False
-    ) as http:
-        runtime = CodingCanaryRuntime(
-            _runtime_config(), http, clock=lambda: _NOW.replace(tzinfo=None)
-        )
+    async with _mock_runtime(
+        handler, clock=lambda: _NOW.replace(tzinfo=None)
+    ) as runtime:
         with pytest.raises(ValidatorInfrastructureError, match="clock is invalid"):
             await _certify(runtime)
     assert calls == 0
@@ -1011,14 +1129,9 @@ async def test_canary_runtime_deadline_closes_a_stalled_stream_without_retry() -
             stream=body,
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False, timeout=30.0
-    ) as http:
-        runtime = CodingCanaryRuntime(
-            _runtime_config("http://sandbox-docker:8000"),
-            http,
-            clock=lambda: deadline - timedelta(milliseconds=100),
-        )
+    async with _mock_runtime(
+        handler, clock=lambda: deadline - timedelta(milliseconds=100)
+    ) as runtime:
         started = time.monotonic()
         with pytest.raises(ValidatorInfrastructureError, match="deadline exceeded"):
             await asyncio.wait_for(_certify(runtime), timeout=5)
@@ -1041,14 +1154,9 @@ async def test_canary_runtime_deadline_abandons_a_scorer_that_never_answers() ->
             released.set()
         raise AssertionError("unreachable")  # pragma: no cover
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False, timeout=30.0
-    ) as http:
-        runtime = CodingCanaryRuntime(
-            _runtime_config(),
-            http,
-            clock=lambda: deadline - timedelta(milliseconds=100),
-        )
+    async with _mock_runtime(
+        handler, clock=lambda: deadline - timedelta(milliseconds=100)
+    ) as runtime:
         with pytest.raises(ValidatorInfrastructureError, match="deadline exceeded"):
             await asyncio.wait_for(_certify(runtime), timeout=5)
     assert calls == 1
@@ -1067,10 +1175,7 @@ async def test_canary_runtime_cancellation_closes_the_stream_and_propagates() ->
             stream=body,
         )
 
-    async with httpx.AsyncClient(
-        transport=httpx.MockTransport(handler), trust_env=False
-    ) as http:
-        runtime = CodingCanaryRuntime(_runtime_config(), http, clock=lambda: _NOW)
+    async with _mock_runtime(handler, clock=lambda: _NOW) as runtime:
         task = asyncio.create_task(_certify(runtime))
         await asyncio.wait_for(streaming.wait(), timeout=5)
         await asyncio.sleep(0)

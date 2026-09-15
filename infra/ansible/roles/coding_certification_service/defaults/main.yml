@@ -1,0 +1,35 @@
+---
+# Render-only review artifacts for the host coding certification service.
+#
+# This role never touches a managed host. Every task runs on the Ansible
+# controller (delegate_to: localhost) and only writes files below
+# coding_certification_service_render_root for operator review. It installs,
+# enables and starts nothing, and it reads and renders no secret. Installing
+# the rendered units, creating the users, provisioning the rootless daemon and
+# its egress guard, and materializing the control token are separate,
+# explicitly approved operator steps.
+coding_certification_service_render_enabled: false
+# Absolute controller-local directory that receives the rendered files. It must
+# not be a system configuration or runtime location.
+coding_certification_service_render_root: ""
+
+# Dedicated, otherwise-empty identities. The validator socket group is the only
+# group with access to the control socket directory.
+coding_certification_service_user: ditto-coding-cert
+coding_certification_service_client_group: ditto-coding-cert-clients
+coding_certification_service_uid: 0
+coding_certification_service_client_gid: 0
+
+# The rootless daemon's default bridge is pinned so the router address is known
+# before the daemon starts; the router listens on its gateway inside
+# RootlessKit's network namespace.
+coding_certification_service_bip: ""
+coding_certification_service_router_port: 11438
+coding_certification_service_egress_network: ""
+coding_certification_service_egress_proxy: ""
+coding_certification_service_runtime_image_repository: ""
+coding_certification_service_runtime_image_digest: ""
+coding_certification_service_pack_manifest_sha256: ""
+# SHA-256 of the reviewed router listener helper installed at
+# /usr/local/lib/ditto-coding-certification/dittobench-coding-router-listener.
+coding_certification_service_router_helper_sha256: ""

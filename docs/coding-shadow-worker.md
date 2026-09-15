@@ -150,16 +150,22 @@ validator stack, beside scoring, through the supported lease, grant, and
 receipt path. There is no admin certification bypass. Every switch below ships
 false, and every target list ships empty.
 
+- **Host certification service.** The canary runtime reaches only the host
+  certification service, over the fixed Unix socket
+  `/run/ditto-coding-certification/control.sock` with a pinned owner, group and
+  mode, its own bearer, and pinned runtime image and canary manifest digests.
+  It never uses the Compose scorer origin, the scorer bearer or the shared
+  scorer client. See `infra/docs/coding-certification-service.md` for the
+  topology, socket verification and readiness order.
 - **Scorer origin.** `coding_executor_transport.scorer_control_origin` is the
-  single rule for the canary runtime and the local-mode shadow supervisor. It
-  accepts an HTTPS origin, a loopback origin, or exactly the Compose service
-  origin `http://sandbox-docker:8000`. Every other plaintext host or port is
+  rule for the local-mode shadow supervisor. It accepts an HTTPS origin, a
+  loopback origin, or exactly the Compose service origin
+  `http://sandbox-docker:8000`. Every other plaintext host or port is
   rejected, as are paths, userinfo, queries, and fragments. Plaintext is
   acceptable only there: the scorer shares sandbox-docker's network namespace
   on the stack's private bridge, and miner containers in the nested daemon
-  cannot reach port 8000. Both workers share one private scorer client, which
-  ignores proxy environment settings, for the scorer bearer and the per-lease
-  broker private key.
+  cannot reach port 8000. The shadow worker's private scorer client ignores
+  proxy environment settings.
 - **Dedicated coding daemon.** The scorer's coding host reaches Docker only
   through `DITTOBENCH_CODING_DOCKER_HOST`. That value must be a local
   `unix:///...sock` endpoint. It must not be a conventional rootful socket
@@ -194,15 +200,19 @@ false, and every target list ships empty.
   separate certification allowlist binds the same agent and hotkey plus the
   artifact.
 - **Readiness before issue and claim.** Before issuing a lease, the worker
-  calls `GET /v1/coding/certifier/canary/readiness` with the canary bearer.
-  The probe creates no harness, container, grant, or lease. It reports ready
-  only when three checks pass: the loaded pack re-verifies; the dedicated
-  daemon passes the harness check and the executor's rootless and
-  isolated-label checks; and the exact runtime image digest is present with the
-  supervisor contract. It also returns the pack's five lease digests. Any other
-  answer, including a 404 from a refused host, refuses before issue and keeps
-  the offer. After issue, the worker aborts the still-issued lease if its pack
-  digests differ from the ready scorer's.
+  calls `GET /v1/coding/certifier/canary/readiness` (schema v2) over the
+  verified certification socket with the certification bearer. The probe
+  creates no harness, container, grant, or lease. It reports ready only when,
+  in order, the loaded pack re-verifies; the rootless topology, the router
+  listener's namespace and the control socket are proven; the dedicated daemon
+  passes the harness check and the executor's rootless and isolated-label
+  checks; and the pinned runtime image digest is present with the supervisor
+  contract. It also returns the runtime image digest and the pack's five lease
+  digests, and the runtime image and manifest digests must equal the
+  validator's pins. Any other answer, including a refused socket, refuses
+  before issue and keeps the offer. After issue, the worker aborts the
+  still-issued lease if its pack digests differ, and proves readiness again
+  before the claim, aborting the issued lease if that fails or changes.
 - **Certify bound.** The certify call is single-shot. Its only bound is the
   time left before the lease deadline. Platform issues 20-minute deadlines, the
   lease model rejects a deadline more than 30 minutes after issue, and the
@@ -240,7 +250,9 @@ false, and every target list ships empty.
     poll interval, `validator_stack_coding_canary_agent_ids`, and
     `validator_stack_coding_canary_validator_hotkey`. It requires the scorer
     switch, the dedicated daemon endpoint, and 1 to 16 exact targets bound to
-    `validator_stack_hotkey`.
+    `validator_stack_hotkey`. With the host certification service, the role
+    refuses this switch outright until it renders the certification socket
+    route (`infra/docs/coding-certification-service.md`).
 
   Validation runs before any host mutation. Stage the scorer switch first. Then
   confirm two things before turning on the validator switch: the scorer stays
@@ -255,6 +267,12 @@ false, and every target list ships empty.
   unset.
 
 ### Remaining prerequisite: rootless coding daemon
+
+Superseded for the canary by the host certification service
+(`infra/docs/coding-certification-service.md`): readiness v2 requires a
+rootless-topology, listener-namespace and control-socket proof that only that
+service provides, so the Compose scorer's canary readiness never reports ready.
+The list below still describes what the Compose scorer's shadow gate needs.
 
 The production `sandbox-docker` service is privileged rootful DinD, and it is
 the only daemon in the stack. Nothing here installs the dedicated rootless

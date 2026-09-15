@@ -8,18 +8,39 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
 
+const testRuntimeImageDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+
+func placed(context.Context) TopologyCheck {
+	return TopologyCheck{RootlessTopology: true, ListenerNamespace: true, ControlSocket: true}
+}
+
 func readinessService(t *testing.T, pack PublicPack, readiness func(context.Context) ReadinessCheck) *Service {
 	t.Helper()
+	return readinessServiceWith(t, pack, placed, testRuntimeImageDigest, readiness)
+}
+
+func readinessServiceWith(
+	t *testing.T,
+	pack PublicPack,
+	topology func(context.Context) TopologyCheck,
+	digest string,
+	readiness func(context.Context) ReadinessCheck,
+) *Service {
+	t.Helper()
 	service, err := New(Config{
-		ControlToken: testToken,
-		Backend:      stubBackend{},
-		Now:          func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
-		Pack:         pack,
-		Readiness:    readiness,
+		ControlToken:       testToken,
+		Backend:            stubBackend{},
+		Now:                func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+		Pack:               pack,
+		Readiness:          readiness,
+		Topology:           topology,
+		RuntimeImageDigest: digest,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,36 +94,79 @@ func TestReadinessFailsClosedUntilPackDaemonAndImageAreAllReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	ready := func(context.Context) ReadinessCheck { return ReadinessCheck{ExecutorDaemon: true, RuntimeImage: true} }
 	for name, test := range map[string]struct {
 		pack      PublicPack
+		topology  func(context.Context) TopologyCheck
+		digest    string
 		readiness func(context.Context) ReadinessCheck
 		ready     bool
 		failure   string
 	}{
-		"no pack": {
-			pack:      PublicPack{},
-			readiness: func(context.Context) ReadinessCheck { return ReadinessCheck{ExecutorDaemon: true, RuntimeImage: true} },
-			failure:   "pack",
+		// A scorer without the host certification service (the Compose stack)
+		// has no placement proof and is never ready.
+		"no topology probe": {pack: pack, digest: testRuntimeImageDigest, readiness: ready, failure: "rootless_topology"},
+		"rootful or detached daemon": {
+			pack: pack, digest: testRuntimeImageDigest, readiness: ready, failure: "rootless_topology",
+			topology: func(context.Context) TopologyCheck {
+				return TopologyCheck{ListenerNamespace: true, ControlSocket: true}
+			},
 		},
-		"no probe": {pack: pack, failure: "executor_daemon"},
+		"listener outside the rootless namespace": {
+			pack: pack, digest: testRuntimeImageDigest, readiness: ready, failure: "listener_namespace",
+			topology: func(context.Context) TopologyCheck {
+				return TopologyCheck{RootlessTopology: true, ControlSocket: true}
+			},
+		},
+		"swapped control socket": {
+			pack: pack, digest: testRuntimeImageDigest, readiness: ready, failure: "control_socket",
+			topology: func(context.Context) TopologyCheck {
+				return TopologyCheck{RootlessTopology: true, ListenerNamespace: true}
+			},
+		},
+		"topology probe past its deadline": {
+			pack: pack, digest: testRuntimeImageDigest, readiness: ready, failure: "rootless_topology",
+			topology: func(ctx context.Context) TopologyCheck {
+				<-ctx.Done()
+				return TopologyCheck{RootlessTopology: true, ListenerNamespace: true, ControlSocket: true}
+			},
+		},
+		"runtime image tag instead of digest": {
+			pack: pack, topology: placed, digest: "latest", readiness: ready, failure: "runtime_image",
+		},
+		"uppercase runtime image digest": {
+			pack: pack, topology: placed, digest: "sha256:" + strings.Repeat("A", 64), readiness: ready, failure: "runtime_image",
+		},
+		"no pack": {
+			pack: PublicPack{}, topology: placed, digest: testRuntimeImageDigest, readiness: ready, failure: "pack",
+		},
+		"no probe": {pack: pack, topology: placed, digest: testRuntimeImageDigest, failure: "executor_daemon"},
 		"rootful or unlabelled daemon": {
-			pack:      pack,
+			pack: pack, topology: placed, digest: testRuntimeImageDigest,
 			readiness: func(context.Context) ReadinessCheck { return ReadinessCheck{RuntimeImage: true} },
 			failure:   "executor_daemon",
 		},
 		"missing runtime image": {
-			pack:      pack,
+			pack: pack, topology: placed, digest: testRuntimeImageDigest,
 			readiness: func(context.Context) ReadinessCheck { return ReadinessCheck{ExecutorDaemon: true} },
 			failure:   "runtime_image",
 		},
-		"ready": {
-			pack:      pack,
-			readiness: func(context.Context) ReadinessCheck { return ReadinessCheck{ExecutorDaemon: true, RuntimeImage: true} },
-			ready:     true,
-		},
+		"ready": {pack: pack, topology: placed, digest: testRuntimeImageDigest, readiness: ready, ready: true},
 	} {
 		t.Run(name, func(t *testing.T) {
-			response, decoded := getReadiness(t, readinessService(t, test.pack, test.readiness), http.MethodGet, ReadinessPath, true)
+			timeout := test.topology
+			ctxService := readinessServiceWith(t, test.pack, timeout, test.digest, test.readiness)
+			if name == "topology probe past its deadline" {
+				// Keep the test fast: the handler's own deadline is 20 seconds.
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+				defer cancel()
+				decoded := ctxService.readinessResult(ctx)
+				if decoded.Ready || decoded.Failure != test.failure || decoded.RootlessTopologyReady {
+					t.Fatalf("readiness=%+v", decoded)
+				}
+				return
+			}
+			response, decoded := getReadiness(t, ctxService, http.MethodGet, ReadinessPath, true)
 			if response.Code != http.StatusOK {
 				t.Fatalf("status=%d", response.Code)
 			}
@@ -110,7 +174,25 @@ func TestReadinessFailsClosedUntilPackDaemonAndImageAreAllReady(t *testing.T) {
 				decoded.Ready != test.ready || decoded.Failure != test.failure {
 				t.Fatalf("readiness=%+v", decoded)
 			}
-			if test.ready && (!decoded.PackLoaded || !decoded.ExecutorDaemonReady || !decoded.RuntimeImageReady ||
+			if !test.ready && decoded.Ready {
+				t.Fatalf("not-ready response reported ready: %+v", decoded)
+			}
+			if !test.ready {
+				// Each flag requires every earlier one: the failed step and all
+				// later steps report false even when their own probe said true.
+				flags := []bool{
+					decoded.PackLoaded, decoded.RootlessTopologyReady, decoded.ListenerNamespaceReady,
+					decoded.ControlSocketReady, decoded.ExecutorDaemonReady, decoded.RuntimeImageReady,
+				}
+				order := []string{"pack", "rootless_topology", "listener_namespace", "control_socket", "executor_daemon", "runtime_image"}
+				failed := slices.Index(order, decoded.Failure)
+				if failed < 0 || slices.Contains(flags[failed:], true) || slices.Contains(flags[:failed], false) {
+					t.Fatalf("readiness flags do not stop at failure %q: %+v", decoded.Failure, decoded)
+				}
+			}
+			if test.ready && (!decoded.PackLoaded || !decoded.RootlessTopologyReady || !decoded.ListenerNamespaceReady ||
+				!decoded.ControlSocketReady || decoded.RuntimeImageDigest != testRuntimeImageDigest ||
+				!decoded.ExecutorDaemonReady || !decoded.RuntimeImageReady ||
 				decoded.CanaryManifestSHA256 != pack.CanaryManifestSHA256 || decoded.RunnerPlanSHA256 != pack.RunnerPlanSHA256 ||
 				decoded.GraderPlanSHA256 != pack.GraderPlanSHA256 || decoded.ResourceProfileSHA256 != pack.ResourceProfileSHA256 ||
 				decoded.InferencePolicySHA256 != pack.InferencePolicySHA256) {
@@ -182,7 +264,7 @@ func TestReadinessProbeIsBoundedByItsTimeout(t *testing.T) {
 // The shared contract vector is the wire both the scorer and the validator
 // runtime are pinned to.
 func TestReadinessEncodesTheSharedContractVector(t *testing.T) {
-	body, err := os.ReadFile(filepath.Join(repoRoot(t), "packages", "dittobench-coding-contract", "testdata", "coding_certification_canary_readiness_v1.json"))
+	body, err := os.ReadFile(filepath.Join(repoRoot(t), "packages", "dittobench-coding-contract", "testdata", "coding_certification_canary_readiness_v2.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,14 +292,21 @@ func TestReadinessEncodesTheSharedContractVector(t *testing.T) {
 	}
 	seen := map[string]bool{}
 	for _, check := range []struct {
-		pack  PublicPack
-		check ReadinessCheck
+		pack     PublicPack
+		topology func(context.Context) TopologyCheck
+		check    ReadinessCheck
 	}{
-		{PublicPack{}, ReadinessCheck{ExecutorDaemon: true, RuntimeImage: true}},
-		{pack, ReadinessCheck{}},
-		{pack, ReadinessCheck{ExecutorDaemon: true}},
+		{PublicPack{}, placed, ReadinessCheck{ExecutorDaemon: true, RuntimeImage: true}},
+		{pack, nil, ReadinessCheck{ExecutorDaemon: true, RuntimeImage: true}},
+		{pack, func(context.Context) TopologyCheck { return TopologyCheck{RootlessTopology: true} }, ReadinessCheck{}},
+		{pack, func(context.Context) TopologyCheck {
+			return TopologyCheck{RootlessTopology: true, ListenerNamespace: true}
+		}, ReadinessCheck{}},
+		{pack, placed, ReadinessCheck{}},
+		{pack, placed, ReadinessCheck{ExecutorDaemon: true}},
 	} {
-		_, decoded := getReadiness(t, readinessService(t, check.pack, func(context.Context) ReadinessCheck { return check.check }), http.MethodGet, ReadinessPath, true)
+		_, decoded := getReadiness(t, readinessServiceWith(t, check.pack, check.topology, testRuntimeImageDigest,
+			func(context.Context) ReadinessCheck { return check.check }), http.MethodGet, ReadinessPath, true)
 		seen[decoded.Failure] = true
 	}
 	for _, failure := range vector.Failures {

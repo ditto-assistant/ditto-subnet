@@ -6,3 +6,7 @@ coding_hosted_worker_config: ""
 coding_hosted_worker_mode: single
 coding_hosted_rollout_approval_sha256: ""
 coding_hosted_rollout_connectivity_sha256: ""
+# "host" keeps the existing worker sandbox. "rootless-netns" must match the
+# runtime config's router_namespace: the worker then reads only RootlessKit's
+# child_pid below the daemon user's otherwise hidden runtime directory.
+coding_hosted_router_namespace: host

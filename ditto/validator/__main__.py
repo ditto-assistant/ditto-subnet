@@ -156,7 +156,7 @@ async def _amain() -> int:
                     config=config,
                     platform=platform,
                     keypair=keypair,
-                    scorer_http=scorer_http,
+                    resources=coding_resources,
                 )
                 # Router-track compute-destination seam. Default-off: unless
                 # VALIDATOR_ROUTER_LEDGER_READ_ENABLED is set the worker keeps its
@@ -237,11 +237,11 @@ async def _amain() -> int:
 class _ScorerControlClient:
     """One private, no-proxy client to the local scorer control plane.
 
-    The scorer control bearer and the certification canary's per-lease broker
-    private key cross this client, so it stays separate from Platform and Pylon
-    traffic and never inherits a proxy setting. The canary worker and the
-    local-mode shadow worker share it. It is created on first use and closed
-    with the coding exit stack.
+    The scorer control bearer crosses this client, so it stays separate from
+    Platform and Pylon traffic and never inherits a proxy setting. The local-mode
+    shadow worker uses it. The certification canary never does: it has its own
+    client over the host certification service's verified Unix socket. It is
+    created on first use and closed with the coding exit stack.
     """
 
     def __init__(self, config: ValidatorConfig, resources: AsyncExitStack) -> None:
@@ -265,12 +265,14 @@ async def _create_coding_canary_worker(
     config: ValidatorConfig,
     platform: PlatformClient,
     keypair: Any,
-    scorer_http: _ScorerControlClient,
+    resources: AsyncExitStack,
 ) -> CodingCanaryWorker | None:
     if not config.coding_canary_enabled:
         return None
 
-    canary_http = await scorer_http.get()
+    # Only the fixed, verified certification socket; no scorer origin or bearer.
+    runtime = CodingCanaryRuntime(config)
+    resources.push_async_callback(runtime.aclose)
 
     def _sign_canary_receipt(
         lease: CodingCertificationLeaseResponse,
@@ -291,7 +293,7 @@ async def _create_coding_canary_worker(
     )
     worker = CodingCanaryWorker(
         platform=platform,
-        runtime=CodingCanaryRuntime(config, canary_http),
+        runtime=runtime,
         sign_receipt=_sign_canary_receipt,
         validator_hotkey=config.validator_hotkey,
         targets=targets,

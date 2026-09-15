@@ -18,6 +18,12 @@
     canary_private_ipv4: '^(?:10\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){2}\Z'
   ansible.builtin.assert:
     that:
+      # The validator worker reaches certification only through the host
+      # service's control socket. This role renders neither that socket mount
+      # nor the VALIDATOR_CODING_CERTIFICATION_* settings, and the validator
+      # exits at startup without them, taking ordinary scoring down with it.
+      # Refuse the switch until that route is rendered and reviewed.
+      - not canary_validator
       - not canary_validator or canary_scorer
       - not canary_validator or not (validator_stack_coding_executor_connectivity_canary_enabled | bool)
       - not canary_validator or not (validator_stack_coding_executor_connectivity_canary_run_enabled | bool)
@@ -56,4 +62,5 @@
       and gateway. The validator worker also needs 1-16 exact agent
       UUIDs and a target hotkey equal to this validator's hotkey. Keep both
       canary switches false until the rootless coding daemon exists and the
-      whole profile has been approved.
+      whole profile has been approved. The validator worker switch is refused
+      outright until this role renders the certification socket route.

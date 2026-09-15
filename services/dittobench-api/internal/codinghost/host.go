@@ -49,13 +49,17 @@ type Config struct {
 	RuntimeImageDigest     string
 	CanaryEnabled          bool
 	CertificationRoot      string
-	Docker                 *sandbox.LocalDocker
-	CandidateUID           uint32
-	CandidateGID           uint32
-	MaxTotalBytes          int64
-	JournalMaxTotalBytes   int64
-	MaxAttempts            int
-	Now                    func() time.Time
+	// CanaryTopology proves the host certification service's placement (rootless
+	// topology, router listener namespace, control socket). Nil keeps canary
+	// readiness permanently not ready.
+	CanaryTopology       func(context.Context) codingcanary.TopologyCheck
+	Docker               *sandbox.LocalDocker
+	CandidateUID         uint32
+	CandidateGID         uint32
+	MaxTotalBytes        int64
+	JournalMaxTotalBytes int64
+	MaxAttempts          int
+	Now                  func() time.Time
 }
 
 type Host struct {
@@ -258,6 +262,7 @@ func newHost(config Config, availability func(context.Context) error) (*Host, er
 		imageDigest := config.RuntimeImageDigest
 		canary, err = codingcanary.New(codingcanary.Config{
 			ControlToken: config.ControlToken, Backend: canaryBackend, Now: now, Pack: pack,
+			Topology: config.CanaryTopology, RuntimeImageDigest: imageDigest,
 			Readiness: func(ctx context.Context) codingcanary.ReadinessCheck {
 				// The harness runtime and the executor share the dedicated daemon;
 				// both must pass the checks certify would run after a claim.

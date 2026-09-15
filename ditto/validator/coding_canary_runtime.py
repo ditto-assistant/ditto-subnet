@@ -1,4 +1,11 @@
-"""DittoBench control-plane client for one public certification canary."""
+"""Host certification service client for one public certification canary.
+
+The validator reaches the certification service only over its fixed Unix socket
+(see ``coding_certification_socket``), with its own bearer, pinned runtime image
+digest and pinned canary manifest digest. It never uses the Compose scorer
+origin, the scorer bearer, or any proxy, TLS or socket setting from the
+environment.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +29,11 @@ from ditto.api_models.coding_inference_grants import (
     CodingCertificationInferenceExchangeResponse,
 )
 from ditto.validator.coding_canary import CodingCanaryOutcome, CodingCanaryReadiness
-from ditto.validator.coding_executor_transport import scorer_control_origin
+from ditto.validator.coding_certification_socket import (
+    CERTIFICATION_ORIGIN,
+    CertificationSocketIdentity,
+    CertificationSocketTransport,
+)
 from ditto.validator.config import ValidatorConfig
 from ditto.validator.errors import (
     PlatformInfrastructureError,
@@ -31,12 +42,24 @@ from ditto.validator.errors import (
 
 _REQUEST_SCHEMA = "dittobench-coding-certification-canary-request-v1"
 _RESPONSE_SCHEMA = "dittobench-coding-certification-canary-response-v1"
-_READINESS_SCHEMA = "dittobench-coding-certification-canary-readiness-v1"
+_READINESS_SCHEMA = "dittobench-coding-certification-canary-readiness-v2"
 _CANARY_PATH = "/v1/coding/certifier/canary"
 _READINESS_PATH = f"{_CANARY_PATH}/readiness"
 _MAX_BODY_BYTES = 8 << 20
 _MAX_READINESS_BYTES = 64 << 10
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+_IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+# Reported in this order by the service; anything else is logged as unknown.
+_READINESS_FAILURES = frozenset(
+    {
+        "pack",
+        "rootless_topology",
+        "listener_namespace",
+        "control_socket",
+        "executor_daemon",
+        "runtime_image",
+    }
+)
 # The scorer bounds its own probe at 20 seconds.
 _READINESS_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 # The lease deadline is the only bound on a certify call; asyncio.timeout
@@ -76,15 +99,21 @@ class _CanaryReadiness(_WireModel):
     ready: bool
     failure: str
     pack_loaded: bool
+    rootless_topology_ready: bool
+    listener_namespace_ready: bool
+    control_socket_ready: bool
     executor_daemon_ready: bool
     runtime_image_ready: bool
+    runtime_image_digest: str
     canary_manifest_sha256: str
     runner_plan_sha256: str
     grader_plan_sha256: str
     resource_profile_sha256: str
     inference_policy_sha256: str
 
-    def identity(self) -> CodingCanaryReadiness:
+    def identity(
+        self, *, runtime_image_digest: str, canary_manifest_sha256: str
+    ) -> CodingCanaryReadiness:
         digests = (
             self.canary_manifest_sha256,
             self.runner_plan_sha256,
@@ -99,8 +128,14 @@ class _CanaryReadiness(_WireModel):
             or not self.ready
             or self.failure
             or not self.pack_loaded
+            or not self.rootless_topology_ready
+            or not self.listener_namespace_ready
+            or not self.control_socket_ready
             or not self.executor_daemon_ready
             or not self.runtime_image_ready
+            or _IMAGE_DIGEST.fullmatch(self.runtime_image_digest) is None
+            or self.runtime_image_digest != runtime_image_digest
+            or self.canary_manifest_sha256 != canary_manifest_sha256
             or any(_SHA256.fullmatch(digest) is None for digest in digests)
         ):
             raise ValueError("coding canary readiness is not ready")
@@ -108,35 +143,57 @@ class _CanaryReadiness(_WireModel):
 
 
 class CodingCanaryRuntime:
-    """Call the protected scorer canary control plane."""
+    """Call the host certification service over its verified Unix socket."""
 
     def __init__(
         self,
         config: ValidatorConfig,
-        client: httpx.AsyncClient,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        token = config.dittobench_control_token
+        token = config.coding_certification_control_token
+        image = config.coding_certification_runtime_image_digest
+        manifest = config.coding_certification_pack_manifest_sha256
         if (
-            not scorer_control_origin(config.dittobench_api_url)
-            or not _valid_control_token(token)
-            # The bearer and the broker private key travel on this client; an
-            # inherited proxy setting must never receive them.
-            or getattr(client, "trust_env", True)
+            not _valid_control_token(token)
+            # Certification has its own bearer; the Compose scorer's is refused.
+            or token == config.dittobench_control_token
+            or _IMAGE_DIGEST.fullmatch(image) is None
+            or _SHA256.fullmatch(manifest) is None
         ):
             raise ValueError("coding canary runtime configuration is invalid")
-        self._base = config.dittobench_api_url.rstrip("/")
+        identity = CertificationSocketIdentity(
+            config.coding_certification_socket_uid,
+            config.coding_certification_socket_gid,
+        )
         self._token = token
-        self._client = client
+        self._runtime_image_digest = image
+        self._canary_manifest_sha256 = manifest
+        self._base = CERTIFICATION_ORIGIN
+        # The bearer and the broker private key travel on this client only. It
+        # reads no proxy, TLS or socket setting from the environment, and the
+        # default transport can reach nothing but the verified socket.
+        self._client = httpx.AsyncClient(
+            transport=transport or CertificationSocketTransport(identity),
+            trust_env=False,
+            follow_redirects=False,
+            timeout=_READINESS_TIMEOUT,
+        )
         self._clock = clock or (lambda: datetime.now(UTC))
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
 
     async def require_ready(self) -> CodingCanaryReadiness:
         """Return the scorer's ready pack identity or refuse.
 
-        This is read-only on the scorer: no harness, container, grant, or lease.
-        Anything but an explicit, complete ready answer is a refusal, so the
-        worker never issues or claims a lease against a scorer whose dedicated
-        rootless daemon, runtime image, or pack would fail certify afterwards.
+        This is read-only on the service: no harness, container, grant, or
+        lease. Anything but an explicit, complete ready answer is a refusal: the
+        pack, the rootless topology, the router listener namespace, the control
+        socket, the executor daemon and the runtime image must all be ready, and
+        the reported runtime image and canary manifest digests must equal this
+        validator's pins. The socket itself is verified before connecting.
         """
 
         try:
@@ -148,7 +205,7 @@ class CodingCanaryRuntime:
             )
         except httpx.HTTPError as error:
             raise PlatformInfrastructureError(
-                "coding canary runtime is unreachable"
+                "coding canary runtime is unreachable or its socket was refused"
             ) from error
         if (
             response.status_code != 200
@@ -165,9 +222,19 @@ class CodingCanaryRuntime:
                 "coding canary runtime readiness is invalid"
             ) from error
         try:
-            return readiness.identity()
+            return readiness.identity(
+                runtime_image_digest=self._runtime_image_digest,
+                canary_manifest_sha256=self._canary_manifest_sha256,
+            )
         except ValueError as error:
-            failure = readiness.failure if readiness.failure.isidentifier() else ""
+            failure = (
+                readiness.failure if readiness.failure in _READINESS_FAILURES else ""
+            )
+            if not failure and (
+                readiness.runtime_image_digest != self._runtime_image_digest
+                or readiness.canary_manifest_sha256 != self._canary_manifest_sha256
+            ):
+                failure = "pinned_digest"
             raise PlatformInfrastructureError(
                 f"coding canary runtime is not ready (failure={failure or 'unknown'})"
             ) from error

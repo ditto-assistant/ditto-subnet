@@ -18,8 +18,10 @@ import httpx
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from pydantic import ValidationError
 from sqlalchemy import update
 
+from ditto.api_models.coding_hosted_runtime import HostedRuntimeHostSettings
 from ditto.api_models.coding_hosted_start import HostedStartRequest
 from ditto.api_server import coding_hosted_runtime as runtime
 from ditto.api_server.coding_hippius_custody import RsaOaepHippiusEvidenceKeyWrapper
@@ -452,6 +454,9 @@ async def test_factory_and_generated_go_config_complete_native_flow(
         )
         path = runtime.write_worker_config(f.config, services, expected, harness)
         serialized = read_private(path, 65536)
+        # The default remains the existing host-namespace router listener.
+        assert b'"router_namespace":"host"' in serialized
+        assert b"router_expires_at_unix" not in serialized
         for secret in (
             b"synthetic-provider-key",
             b"synthetic-reader-secret",
@@ -676,6 +681,90 @@ async def test_runtime_configuration_rejects_invalid_known_fields(
     with pytest.raises(ValueError):
         load_runtime_config(f.path)
     assert not (f.root / "platform-consumed").exists()
+
+
+async def test_rootless_router_requires_the_installed_v3_router_listener(
+    runtime_fixture, monkeypatch
+):
+    from ditto.api_server import coding_hosted_runtime_config as loader
+
+    f = runtime_fixture
+    body = {
+        **f.wire,
+        "host": {
+            **f.wire["host"],
+            "router_namespace": "rootless-netns",
+            "router_expires_at_unix": int(time.time()) + 600,
+        },
+    }
+    f.path.write_bytes(canonical(body, 65536))
+    # The fixture's private worker is not an installed bundle, so it has no
+    # receipt-pinned helper and cannot serve the in-namespace router.
+    with pytest.raises(HostedRuntimeError, match="router listener"):
+        load_runtime_config(f.path)
+    calls = []
+
+    def installed(path, *, router_listener=False):
+        calls.append((path, router_listener))
+
+    monkeypatch.setattr(loader, "require_installed_worker", installed)
+    config = load_runtime_config(f.path)
+    assert config.wire.host.router_namespace == "rootless-netns"
+    assert calls == [(Path(f.wire["worker_executable"]), True)]
+    f.path.write_bytes(canonical(f.wire, 65536))
+    calls.clear()
+    load_runtime_config(f.path)
+    assert calls == []
+    assert not (f.root / "platform-consumed").exists()
+
+
+def test_router_namespace_defaults_to_host_and_accepts_only_known_modes():
+    host = {
+        "docker_executable": "/usr/bin/docker",
+        "docker_socket": "/run/ditto-coding-hosted/docker.sock",
+        "router_listen": "172.17.0.1:18080",
+        "egress_network": "ditto-coding-restricted",
+        "egress_proxy": "http://10.33.0.2:18090",
+        "executor_repository": "example.invalid/native",
+        "candidate_uid": 10001,
+        "candidate_gid": 10001,
+    }
+    default = HostedRuntimeHostSettings.model_validate(host)
+    assert default.router_namespace == "host"
+    assert default.model_dump()["router_namespace"] == "host"
+    assert default.router_expires_at_unix is None
+    assert "router_expires_at_unix" not in default.model_dump(exclude_none=True)
+    rootless = HostedRuntimeHostSettings.model_validate(
+        {
+            **host,
+            "router_namespace": "rootless-netns",
+            "router_expires_at_unix": 2000000600,
+        }
+    )
+    assert rootless.model_dump(exclude_none=True)["router_namespace"] == (
+        "rootless-netns"
+    )
+    assert rootless.model_dump(exclude_none=True)["router_expires_at_unix"] == (
+        2000000600
+    )
+    for value in ("", "Host", "rootless", "slirp4netns", " rootless-netns", 1, None):
+        with pytest.raises(ValidationError):
+            HostedRuntimeHostSettings.model_validate(
+                {**host, "router_namespace": value}
+            )
+    # The worker-enforced router window exists exactly in rootless-netns mode.
+    for changes in (
+        {"router_namespace": "rootless-netns"},
+        {"router_namespace": "rootless-netns", "router_expires_at_unix": None},
+        {"router_namespace": "rootless-netns", "router_expires_at_unix": 0},
+        {"router_namespace": "rootless-netns", "router_expires_at_unix": "2000000600"},
+        {"router_namespace": "rootless-netns", "router_expires_at_unix": True},
+        {"router_namespace": "rootless-netns", "router_expires_at_unix": 2**32},
+        {"router_expires_at_unix": 2000000600},
+        {"router_namespace": "host", "router_expires_at_unix": 2000000600},
+    ):
+        with pytest.raises(ValidationError):
+            HostedRuntimeHostSettings.model_validate({**host, **changes})
 
 
 async def test_runtime_rejects_stale_probe_without_start(

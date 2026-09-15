@@ -1,0 +1,29 @@
+---
+# Render-only. No task here may run on a managed host or change one.
+- name: Skip the default-off certification service render
+  ansible.builtin.meta: end_role
+  when: not (coding_certification_service_render_enabled is sameas true)
+
+- name: Validate the certification service render inputs
+  ansible.builtin.include_tasks: validate.yml
+
+- name: Create the controller-local render directory
+  ansible.builtin.file:
+    path: "{{ coding_certification_service_render_root }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+
+- name: Render the certification service review files
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "{{ coding_certification_service_render_root }}/{{ item }}"
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  loop:
+    - ditto-coding-certification-docker.service
+    - daemon.json
+    - ditto-coding-certification.service
+    - ditto-coding-certification.env
