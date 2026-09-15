@@ -283,10 +283,13 @@ func (executor *Executor) inspectTerminalState(container string) (dockerContaine
 	return values[0], nil
 }
 
+// upperSorted normalizes capability names for comparison. Docker 29 reports
+// HostConfig.CapAdd as CAP_CHOWN while older engines echo CHOWN; both name the
+// same capability, so the CAP_ prefix is dropped before the exact set compare.
 func upperSorted(values []string) []string {
 	result := make([]string, len(values))
 	for index, value := range values {
-		result[index] = strings.ToUpper(value)
+		result[index] = strings.TrimPrefix(strings.ToUpper(value), "CAP_")
 	}
 	slices.Sort(result)
 	return result

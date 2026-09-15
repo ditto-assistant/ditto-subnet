@@ -498,7 +498,16 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
         "matrix": {"shard": [0, 1, 2]},
     }
     shard = _step(root_tests["steps"], "Root test shard from the exact source")
-    assert shard["env"] == {"SHARD": "${{ matrix.shard }}", "SHARD_COUNT": 3}
+    assert shard["env"] == {
+        "SHARD": "${{ matrix.shard }}",
+        "SHARD_COUNT": 3,
+        # The probe-runner tests must build the Go runner, never skip.
+        "DITTOBENCH_REQUIRE_PROBE_RUNNER": "1",
+    }
+    assert any(
+        str(step.get("uses", "")).startswith("actions/setup-go@")
+        for step in root_tests["steps"]
+    )
     assert "uv run pytest --collect-only -q --color=no" in shard["run"]
     assert 'ditto/tests/*::*) test_nodeids+=("$test_nodeid")' in shard["run"]
     assert "index % SHARD_COUNT == SHARD" in shard["run"]

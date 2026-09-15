@@ -84,6 +84,16 @@ func (executor *Executor) ensurePreflight(ctx context.Context) error {
 }
 
 func (executor *Executor) probeContainerPolicy(ctx context.Context) (returnedErr error) {
+	return executor.withProbeContainer(ctx, func(container, workspace, protected, control string) error {
+		return executor.inspectContainerPolicy(ctx, container, modeTest, workspace, protected, control)
+	})
+}
+
+// withProbeContainer creates one fresh grading-mode container from the exact
+// production launch code, runs visit against it, and removes it by exact id.
+// It is the single create+cleanup path shared by the preflight policy probe and
+// the native-enforcement resource observer.
+func (executor *Executor) withProbeContainer(ctx context.Context, visit func(container, workspace, protected, control string) error) (returnedErr error) {
 	workspace, err := os.MkdirTemp("", "dittobench-coding-probe-workspace-")
 	if err != nil {
 		return err
@@ -122,7 +132,7 @@ func (executor *Executor) probeContainerPolicy(ctx context.Context) (returnedErr
 		return err
 	}
 	cleanupTarget, cleanupUncertain = containerID, false
-	return executor.inspectContainerPolicy(ctx, containerID, modeTest, workspace, protected, control)
+	return visit(containerID, workspace, protected, control)
 }
 
 // Preflight verifies the daemon and pinned image before grader bytes are read.

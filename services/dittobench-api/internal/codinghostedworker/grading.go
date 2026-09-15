@@ -79,6 +79,27 @@ func (p GradingProfile) manifest(source codingsource.HostedBinding, sub codingru
 	return m, nil
 }
 
+// EnforcementProbeManifest converts this approved grading profile into a hosted
+// manifest through the same conversion Grade uses, for the native enforcement
+// probe runner. imageDigest selects the approved language image the probe
+// targets. The case, snapshot and bundle identities are fixed probe-only
+// digests: no attempt, patch or protected grader is bound, so the manifest can
+// launch and inspect an executor container but can never grade a submission.
+func (p GradingProfile) EnforcementProbeManifest(imageDigest string, deadline time.Time) (codinggrader.HostedManifest, error) {
+	p.ImageDigest = imageDigest
+	source := codingsource.HostedBinding{AttemptID: "native-enforcement-probe", Deadline: deadline}
+	submission := codingrunner.FrozenSubmission{
+		VisibleBundleSHA256: probeIdentity("visible-bundle"),
+		BaseTreeSHA256:      probeIdentity("base-tree"),
+	}
+	return p.manifest(source, submission)
+}
+
+func probeIdentity(label string) string {
+	sum := sha256.Sum256([]byte("dittobench-coding-native-enforcement-probe-v1\x00" + label))
+	return fmt.Sprintf("%x", sum)
+}
+
 type gradingHeader struct {
 	Schema        string `json:"schema"`
 	ClaimID       string `json:"claim_id"`
