@@ -252,6 +252,11 @@ type LocalDocker struct {
 	// validator-local certificate mounted from this path. The corresponding TLS
 	// listener remains source-bound by the inference broker.
 	OpenRouterShimCABundleHostPath string
+	// DockerHost, when set, selects the Docker endpoint for every CLI call this
+	// runtime makes instead of the process DOCKER_HOST. The dedicated coding
+	// host uses it to reach its own rootless daemon while ordinary scoring keeps
+	// the stack's sandbox daemon.
+	DockerHost string
 	// dockerCommand is injectable only for deterministic command/parse tests.
 	dockerCommand func(context.Context, ...string) ([]byte, error)
 }
@@ -466,8 +471,11 @@ func (d *LocalDocker) Build(ctx context.Context, src Source) (string, string, *p
 	args := []string{"build", "-t", image}
 	args = append(args, contextDir)
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
+	cmd := d.docker(ctx, args...)
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, "DOCKER_BUILDKIT=1")
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -554,7 +562,24 @@ func (d *LocalDocker) dockerOutput(ctx context.Context, args ...string) ([]byte,
 	if d.dockerCommand != nil {
 		return d.dockerCommand(ctx, args...)
 	}
-	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	return d.docker(ctx, args...).CombinedOutput()
+}
+
+// docker builds one Docker CLI command against this runtime's endpoint.
+func (d *LocalDocker) docker(ctx context.Context, args ...string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "docker", args...)
+	command.Env = d.dockerEnvironment()
+	return command
+}
+
+// dockerEnvironment is nil (inherit) unless DockerHost selects an endpoint. A
+// dedicated endpoint never inherits the process's Docker context, TLS, config
+// or proxy selectors.
+func (d *LocalDocker) dockerEnvironment() []string {
+	if d.DockerHost == "" {
+		return nil
+	}
+	return dedicatedDockerEnvironment(os.Environ(), d.DockerHost)
 }
 
 // CleanupStale removes only resources carrying this scorer's ownership label.
@@ -1095,7 +1120,7 @@ func (d *LocalDocker) containerIP(ctx context.Context, containerID string) (stri
 
 // mappedPort returns the host port docker assigned to the harness port.
 func (d *LocalDocker) mappedPort(ctx context.Context, containerID string) (string, error) {
-	out, err := exec.CommandContext(ctx, "docker", "port", containerID, d.HarnessPort).CombinedOutput()
+	out, err := d.docker(ctx, "port", containerID, d.HarnessPort).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("docker port: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -1125,8 +1150,8 @@ func (d *LocalDocker) StopRetainingImage(ctx context.Context, h *Handle) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	removeOutput, removeErr := exec.CommandContext(ctx, "docker", "rm", "-f", h.ContainerID).CombinedOutput()
-	inspectOutput, inspectErr := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}}", h.ContainerID).CombinedOutput()
+	removeOutput, removeErr := d.docker(ctx, "rm", "-f", h.ContainerID).CombinedOutput()
+	inspectOutput, inspectErr := d.docker(ctx, "inspect", "--format", "{{.Id}}", h.ContainerID).CombinedOutput()
 	if inspectErr == nil {
 		return fmt.Errorf("sandbox container removal was not confirmed")
 	}
@@ -1167,7 +1192,7 @@ func (d *LocalDocker) Release(ctx context.Context, image string) {
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	_ = exec.CommandContext(cleanupCtx, "docker", "image", "rm", image).Run()
+	_ = d.docker(cleanupCtx, "image", "rm", image).Run()
 }
 
 // safeTag derives a docker-safe tag from the source ref.

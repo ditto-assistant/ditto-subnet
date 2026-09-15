@@ -351,6 +351,75 @@ class TestCodingCanaryConfig:
         )
         config = parse_validator_config_from_env()
         assert config.coding_canary_enabled is True
+        # Enabled without targets is inert: the worker refuses every lease.
+        assert config.coding_canary_agent_ids == ()
+        assert config.coding_canary_validator_hotkey == ""
+
+    def _enable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_ENABLED", "true")
+        monkeypatch.setenv(
+            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
+            "coding-canary-control-token-0000000000000001",
+        )
+
+    def test_parses_exact_targets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CANARY_AGENT_IDS",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, "
+            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY",
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        )
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_agent_ids == (
+            UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+            UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+        )
+        assert config.coding_canary_validator_hotkey == (
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+        )
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "not-a-uuid",
+            "00000000-0000-0000-0000-000000000000",
+            "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA",
+            "aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa,",
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa,aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            ",".join(f"aaaaaaaa-aaaa-4aaa-8aaa-{index:012x}" for index in range(1, 18)),
+        ],
+    )
+    def test_rejects_malformed_targets(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_AGENT_IDS", value)
+        with pytest.raises(ValidatorConfigError, match="CODING_CANARY_AGENT_IDS"):
+            parse_validator_config_from_env()
+
+    def test_rejects_a_malformed_target_hotkey(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY", "0" * 48)
+        with pytest.raises(ValidatorConfigError, match="CANARY_VALIDATOR_HOTKEY"):
+            parse_validator_config_from_env()
+
+    def test_disabled_canary_ignores_target_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_AGENT_IDS", "not-a-uuid")
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY", "bad")
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_agent_ids == ()
+        assert config.coding_canary_validator_hotkey == ""
 
 
 class TestRequiredConfig:

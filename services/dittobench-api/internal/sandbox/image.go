@@ -13,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -160,7 +159,7 @@ func (d *LocalDocker) loadScreenedImage(ctx context.Context, src Source, workdir
 	// somehow already present. Every exit after docker load restores the prior
 	// tag (or removes the newly imported one), including partial load failures.
 	priorID := d.inspectImageID(ctx, src.ScreenedImageRef)
-	loadOut, err := exec.CommandContext(ctx, "docker", "image", "load", "--input", path).CombinedOutput()
+	loadOut, err := d.docker(ctx, "image", "load", "--input", path).CombinedOutput()
 	if err != nil {
 		_ = d.restoreImageRef(ctx, src.ScreenedImageRef, priorID)
 		return "", tail(string(loadOut), 4000), fmt.Errorf("docker image load failed: %w", err)
@@ -191,11 +190,11 @@ func (d *LocalDocker) loadScreenedImage(ctx context.Context, src Source, workdir
 		if _, ok := acceptedLoadedIDs[loadedID]; !ok {
 			return "", tail(string(loadOut), 4000), fmt.Errorf("untagged screened image id mismatch: expected %s got %s", src.ScreenedImageID, loadedID)
 		}
-		if out, err := exec.CommandContext(ctx, "docker", "image", "tag", loadedRef, src.ScreenedImageRef).CombinedOutput(); err != nil {
+		if out, err := d.docker(ctx, "image", "tag", loadedRef, src.ScreenedImageRef).CombinedOutput(); err != nil {
 			return "", tail(string(loadOut), 4000), fmt.Errorf("tag untagged screened image: %s: %w", strings.TrimSpace(string(out)), err)
 		}
 	}
-	inspectOut, err := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", src.ScreenedImageRef).CombinedOutput()
+	inspectOut, err := d.docker(ctx, "image", "inspect", "--format", "{{.Id}}", src.ScreenedImageRef).CombinedOutput()
 	if err != nil {
 		return "", tail(string(loadOut), 4000), fmt.Errorf("loaded archive missing expected image ref: %w", err)
 	}
@@ -203,9 +202,8 @@ func (d *LocalDocker) loadScreenedImage(ctx context.Context, src Source, workdir
 	if _, ok := acceptedLoadedIDs[loadedID]; !ok {
 		return "", tail(string(loadOut), 4000), fmt.Errorf("screened image id mismatch: expected %s got %s", src.ScreenedImageID, loadedID)
 	}
-	volumeOut, volumeErr := exec.CommandContext(
+	volumeOut, volumeErr := d.docker(
 		ctx,
-		"docker",
 		"image",
 		"inspect",
 		"--format",
@@ -227,7 +225,7 @@ func (d *LocalDocker) loadScreenedImage(ctx context.Context, src Source, workdir
 		return "", tail(string(loadOut), 4000), err
 	}
 	localRef := "dittobench-sub:" + safeTag(src) + "-" + identity
-	if out, err := exec.CommandContext(ctx, "docker", "image", "tag", src.ScreenedImageRef, localRef).CombinedOutput(); err != nil {
+	if out, err := d.docker(ctx, "image", "tag", src.ScreenedImageRef, localRef).CombinedOutput(); err != nil {
 		return "", tail(string(out), 4000), fmt.Errorf("tag screened image: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	// The local request-scoped tag now owns the image. Drop/restore the archive's
@@ -886,7 +884,7 @@ func canonicalSHA256Digest(value string) bool {
 }
 
 func (d *LocalDocker) inspectImageID(ctx context.Context, ref string) string {
-	out, err := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", ref).Output()
+	out, err := d.docker(ctx, "image", "inspect", "--format", "{{.Id}}", ref).Output()
 	if err != nil {
 		return ""
 	}
@@ -895,13 +893,13 @@ func (d *LocalDocker) inspectImageID(ctx context.Context, ref string) string {
 
 func (d *LocalDocker) restoreImageRef(ctx context.Context, ref, priorID string) error {
 	if priorID == "" {
-		out, err := exec.CommandContext(ctx, "docker", "image", "rm", ref).CombinedOutput()
+		out, err := d.docker(ctx, "image", "rm", ref).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("docker image rm %s: %s: %w", ref, strings.TrimSpace(string(out)), err)
 		}
 		return nil
 	}
-	out, err := exec.CommandContext(ctx, "docker", "image", "tag", priorID, ref).CombinedOutput()
+	out, err := d.docker(ctx, "image", "tag", priorID, ref).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("restore docker image ref %s: %s: %w", ref, strings.TrimSpace(string(out)), err)
 	}

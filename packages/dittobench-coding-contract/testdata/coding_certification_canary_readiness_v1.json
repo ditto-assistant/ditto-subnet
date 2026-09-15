@@ -1,0 +1,23 @@
+{
+  "description": "Ready answer from GET /v1/coding/certifier/canary/readiness for the committed public certification/v1 pack. A validator issues or claims a certification lease only after an answer with exactly these fields reports ready, and aborts an issued lease whose five pack digests differ.",
+  "ready": {
+    "schema": "dittobench-coding-certification-canary-readiness-v1",
+    "coding_contract_version": 1,
+    "weight_eligible": false,
+    "ready": true,
+    "failure": "",
+    "pack_loaded": true,
+    "executor_daemon_ready": true,
+    "runtime_image_ready": true,
+    "canary_manifest_sha256": "cb608113db0cc31001fe0a7294854453061f9e85d1471520100ce99eca97a903",
+    "runner_plan_sha256": "e73de1a6b473e2df974edd653829c1d294792cfff8872b97b0a0ee28819860dd",
+    "grader_plan_sha256": "164e87b0915bb511e06df3a03c2286fffe21e994830cc4468e126cba2983c2a3",
+    "resource_profile_sha256": "e1517f4c0d3e8d7281dbe892bfa50c3093a33c90bfb8b675ed8537e0ada48d98",
+    "inference_policy_sha256": "6dd79225817b56ebf155f8344cd5faf752c8dd57802b21d6d2cbbae9cc2ff0b4"
+  },
+  "not_ready_failures": [
+    "pack",
+    "executor_daemon",
+    "runtime_image"
+  ]
+}

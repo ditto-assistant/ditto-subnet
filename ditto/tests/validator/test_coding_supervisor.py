@@ -611,3 +611,54 @@ def test_supervisor_remains_unmounted_and_unconstructed() -> None:
     ).read_text()
     assert "CodingSupervisorRuntime" not in worker
     assert "internal/codingsupervisor" not in scorer_main
+
+
+@pytest.mark.parametrize(
+    ("url", "accepted"),
+    [
+        ("http://sandbox-docker:8000", True),
+        ("http://sandbox-docker:8000/", True),
+        ("http://127.0.0.1:18081", True),
+        ("http://localhost:18081", True),
+        ("https://scorer.invalid", True),
+        ("http://sandbox-docker", False),
+        ("http://sandbox-docker:8001", False),
+        ("http://SANDBOX-DOCKER:8000", False),
+        ("http://sandbox-docker.invalid:8000", False),
+        ("http://10.0.0.5:8000", False),
+        ("http://sandbox-docker:8000/v1", False),
+        ("http://operator:secret@sandbox-docker:8000", False),
+        ("http://sandbox-docker:8000?next=1", False),
+        ("http://sandbox-docker:8000#fragment", False),
+        ("ws://sandbox-docker:8000", False),
+        ("http://127.0.0.1:not-a-port", False),
+    ],
+)
+async def test_local_supervisor_and_canary_share_one_scorer_origin_rule(
+    url: str, accepted: bool
+) -> None:
+    from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
+    from ditto.validator.coding_executor_transport import scorer_control_origin
+
+    config: Any = SimpleNamespace(
+        dittobench_api_url=url,
+        dittobench_control_token="coding-supervisor-control-token-000000000000",
+    )
+    outcomes: list[bool] = []
+    async with httpx.AsyncClient(trust_env=False) as client:
+        for construct in (
+            lambda: CodingSupervisorRuntime(
+                config,
+                client,
+                object(),  # type: ignore[arg-type]
+            ),
+            lambda: CodingCanaryRuntime(config, client),
+        ):
+            try:
+                construct()
+            except ValueError:
+                outcomes.append(False)
+            else:
+                outcomes.append(True)
+    assert outcomes == [accepted, accepted]
+    assert scorer_control_origin(url) is accepted

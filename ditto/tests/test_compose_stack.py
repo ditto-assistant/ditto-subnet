@@ -195,8 +195,33 @@ def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None
 
     assert _compose_default(scorer["DITTOBENCH_CODING_SHADOW_ENABLED"]) == "false"
     assert _compose_default(scorer["DITTOBENCH_CODING_CANARY_ENABLED"]) == "false"
-    assert _compose_default(scorer["DITTOBENCH_CODING_CERTIFICATION_ROOT"]) == ""
+    # Fixed image path, consumed only behind the canary gate above.
+    assert scorer["DITTOBENCH_CODING_CERTIFICATION_ROOT"] == (
+        "/opt/ditto/coding/certification-root"
+    )
     assert _compose_default(scorer["DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST"]) == ""
+    # No dedicated rootless coding daemon by default: every coding gate refuses,
+    # and the coding host never falls back to the rootful sandbox DOCKER_HOST.
+    assert _compose_default(scorer["DITTOBENCH_CODING_DOCKER_HOST"]) == ""
+    # The coding runtime's own proxy, gateway and network default empty (refuse)
+    # and are distinct keys from the ordinary scorer's sandbox settings. There
+    # is no coding CA bundle setting.
+    for name in (
+        "DITTOBENCH_CODING_EGRESS_NETWORK",
+        "DITTOBENCH_CODING_EGRESS_PROXY",
+        "DITTOBENCH_CODING_HOST_GATEWAY_IP",
+    ):
+        assert _compose_default(scorer[name]) == ""
+    assert not [
+        name
+        for name in scorer
+        if name.startswith("DITTOBENCH_CODING_")
+        and "CA" in name.removeprefix("DITTOBENCH_CODING_").split("_")
+    ]
+    assert scorer["DOCKER_HOST"] == "tcp://127.0.0.1:2375"
+    assert _compose_default(validator["VALIDATOR_CODING_CANARY_ENABLED"]) == "false"
+    assert _compose_default(validator["VALIDATOR_CODING_CANARY_AGENT_IDS"]) == ""
+    assert _compose_default(validator["VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY"]) == ""
     assert _compose_default(validator["VALIDATOR_CODING_SHADOW_ENABLED"]) == "false"
     assert _compose_default(validator["VALIDATOR_CODING_SHADOW_RUN_ID"]) == ""
     assert (

@@ -469,6 +469,13 @@ class ValidatorConfig:
     coding_canary_poll_seconds: float = 10.0
     """Idle polling interval for the public certification canary worker."""
 
+    coding_canary_agent_ids: tuple[UUID, ...] = ()
+    """Exact agents the certification canary may target. Empty refuses all."""
+
+    coding_canary_validator_hotkey: str = ""
+    """Validator hotkey the canary targets are bound to. It must equal
+    ``validator_hotkey`` or the worker refuses every lease."""
+
     # --- Competition-track split (scalable, retirable registry) ---
     track_shares_bps: dict[str, int] = field(
         default_factory=lambda: dict(TRACK_SHARES_BPS)
@@ -734,6 +741,18 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         if coding_canary_enabled
         else 10.0
     )
+    coding_canary_agent_ids = (
+        _parse_coding_canary_agent_ids(
+            os.environ.get("VALIDATOR_CODING_CANARY_AGENT_IDS", "")
+        )
+        if coding_canary_enabled
+        else ()
+    )
+    coding_canary_validator_hotkey = (
+        os.environ.get("VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY", "").strip()
+        if coding_canary_enabled
+        else ""
+    )
     config = ValidatorConfig(
         platform_api_url=platform_api_url,
         platform_inference_base_url=(
@@ -807,6 +826,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_executor_timeout_seconds=coding_executor_timeout_seconds,
         coding_canary_enabled=coding_canary_enabled,
         coding_canary_poll_seconds=coding_canary_poll_seconds,
+        coding_canary_agent_ids=coding_canary_agent_ids,
+        coding_canary_validator_hotkey=coding_canary_validator_hotkey,
         router_ledger_read_enabled=(
             os.environ.get("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", "false").lower()
             in _truthy
@@ -901,4 +922,49 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         raise ValidatorConfigError(
             "enabled coding canary requires a control token and poll in [1, 300]"
         )
+    if config.coding_canary_validator_hotkey and not _is_ss58_hotkey(
+        config.coding_canary_validator_hotkey
+    ):
+        raise ValidatorConfigError(
+            "VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY must be an SS58 hotkey"
+        )
     return config
+
+
+_MAX_CODING_CANARY_TARGETS = 16
+_SS58_ALPHABET = frozenset("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+
+
+def _parse_coding_canary_agent_ids(raw: str) -> tuple[UUID, ...]:
+    """Parse the exact canary targets: canonical, non-nil, unique UUIDs.
+
+    Empty is valid and refuses every lease. The bound matches Platform's
+    certification allowlist.
+    """
+
+    values = [value.strip() for value in raw.split(",")] if raw.strip() else []
+    agent_ids: list[UUID] = []
+    for value in values:
+        try:
+            agent_id = UUID(value)
+        except ValueError as error:
+            raise ValidatorConfigError(
+                "VALIDATOR_CODING_CANARY_AGENT_IDS must be canonical UUIDs"
+            ) from error
+        if str(agent_id) != value or agent_id.int == 0 or agent_id in agent_ids:
+            raise ValidatorConfigError(
+                "VALIDATOR_CODING_CANARY_AGENT_IDS must be unique, canonical, "
+                "non-nil UUIDs"
+            )
+        agent_ids.append(agent_id)
+    if len(agent_ids) > _MAX_CODING_CANARY_TARGETS:
+        raise ValidatorConfigError(
+            "VALIDATOR_CODING_CANARY_AGENT_IDS allows at most 16 agents"
+        )
+    return tuple(agent_ids)
+
+
+def _is_ss58_hotkey(value: str) -> bool:
+    return 47 <= len(value) <= 48 and all(
+        character in _SS58_ALPHABET for character in value
+    )
