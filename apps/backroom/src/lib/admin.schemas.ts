@@ -24,6 +24,10 @@ type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewF
 type GeneratedSourceReviewNote = PlatformComponents['schemas']['SourceReviewNote']
 type GeneratedValidatorUpdaterStatus = PlatformComponents['schemas']['ValidatorUpdaterStatus']
 type GeneratedAdminActiveHotkeyBan = PlatformComponents['schemas']['AdminActiveHotkeyBan']
+type GeneratedAdminTeamCanaryAgent = PlatformComponents['schemas']['AdminTeamCanaryAgent']
+type GeneratedAdminTeamCanaryExclusion =
+  PlatformComponents['schemas']['AdminTeamCanaryExclusion']
+type GeneratedAdminTeamCanaryList = PlatformComponents['schemas']['AdminTeamCanaryList']
 type GeneratedAdminHotkeyBanAuditEntry =
   PlatformComponents['schemas']['AdminHotkeyBanAuditEntry']
 type GeneratedAdminHotkeyBanControl = PlatformComponents['schemas']['AdminHotkeyBanControl']
@@ -1038,6 +1042,50 @@ export function unbanHotkeyConfirmation(hotkey: string) {
 }
 
 export type HotkeyBanControl = z.infer<typeof hotkeyBanControlSchema>
+
+// Audited noncompetitive team canaries. Read-only in Backroom: an exclusion can
+// only remove an exact identity from weights and emissions, never lift a gate.
+export const teamCanaryAgentSchema = z.object({
+  agent_id: z.string().uuid(),
+  status: z.enum([
+    'uploaded',
+    'screening',
+    'screening_passed',
+    'screening_failed',
+    'quarantined',
+    'rejected',
+    'evaluating',
+    'scored',
+    'live',
+    'ath_pending_review',
+    'banned',
+  ]),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  screened_image_sha256: z.string().nullable(),
+  state: z.enum(['reserved', 'bound', 'binding_drift']),
+  competition_excluded: z.literal(true).default(true),
+} satisfies PlatformResponseShape<GeneratedAdminTeamCanaryAgent>)
+
+export const teamCanaryExclusionSchema = z.object({
+  exclusion_id: z.string().uuid(),
+  kind: z.literal('team_canary').default('team_canary'),
+  miner_hotkey: z.string().min(1),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string().min(1),
+  created_by: z.string().min(1),
+  created_at: z.string().datetime({ offset: true }),
+  agent_id: z.string().uuid().nullable(),
+  screened_image_sha256: z.string().nullable(),
+  bound_by: z.string().nullable(),
+  bound_reason: z.string().nullable(),
+  bound_at: z.string().datetime({ offset: true }).nullable(),
+  matched_agents: z.array(teamCanaryAgentSchema),
+} satisfies PlatformResponseShape<GeneratedAdminTeamCanaryExclusion>)
+
+export const teamCanaryListSchema = z.object({
+  total: z.number().int().nonnegative(),
+  exclusions: z.array(teamCanaryExclusionSchema).max(200),
+} satisfies PlatformResponseShape<GeneratedAdminTeamCanaryList>)
 
 // SN118 relative token-efficiency bonus (bench_version >= 7).
 //
@@ -7237,6 +7285,8 @@ export const publicLeaderboardEntrySchema = z.object({
   median_ms: z.number().int().nonnegative().nullable().optional(),
   n: z.number().int().nonnegative().nullable().optional(),
   eligible: z.boolean(),
+  // An audited team canary is scored normally but never ranked or paid.
+  team_canary: z.boolean().default(false),
   bench_version: z.number().int().nullable().optional(),
   dataset_sha256: z.string().nullable().optional(),
   composite_breakdown: publicCompositeBreakdownSchema.nullable().optional(),

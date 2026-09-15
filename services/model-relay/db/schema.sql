@@ -797,6 +797,32 @@ CREATE FUNCTION public.guard_validator_ticket_purpose() RETURNS trigger
         $$;
 
 
+--
+-- Name: noncompetitive_agent_exclusions_append_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.noncompetitive_agent_exclusions_append_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                RAISE EXCEPTION 'noncompetitive agent exclusions are append-only';
+            END IF;
+            IF OLD.agent_id IS NOT NULL
+                OR NEW.exclusion_id IS DISTINCT FROM OLD.exclusion_id
+                OR NEW.kind IS DISTINCT FROM OLD.kind
+                OR NEW.miner_hotkey IS DISTINCT FROM OLD.miner_hotkey
+                OR NEW.artifact_sha256 IS DISTINCT FROM OLD.artifact_sha256
+                OR NEW.reason IS DISTINCT FROM OLD.reason
+                OR NEW.created_by IS DISTINCT FROM OLD.created_by
+                OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'noncompetitive agent exclusions bind once';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -3164,6 +3190,31 @@ CREATE TABLE public.name_claims (
     CONSTRAINT ck_name_claims_name_claims_stem_length_check CHECK (((length(name_stem) >= 3) AND (length(name_stem) <= 64))),
     CONSTRAINT ck_name_claims_name_claims_upheld_pair CHECK (((status = 'upheld'::text) = (upheld_at IS NOT NULL))),
     CONSTRAINT ck_name_claims_name_claims_withdrawn_pair CHECK (((status = 'withdrawn'::text) = (withdrawn_at IS NOT NULL)))
+);
+
+
+--
+-- Name: noncompetitive_agent_exclusions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.noncompetitive_agent_exclusions (
+    exclusion_id uuid NOT NULL,
+    kind text NOT NULL,
+    miner_hotkey text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    reason text NOT NULL,
+    created_by text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    agent_id uuid,
+    screened_image_sha256 text,
+    bound_by text,
+    bound_reason text,
+    bound_at timestamp with time zone,
+    CONSTRAINT noncompetitive_agent_exclusions_artifact CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT noncompetitive_agent_exclusions_binding CHECK ((((agent_id IS NULL) AND (screened_image_sha256 IS NULL) AND (bound_by IS NULL) AND (bound_reason IS NULL) AND (bound_at IS NULL)) OR ((agent_id IS NOT NULL) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((length(TRIM(BOTH FROM bound_by)) >= 1) AND (length(TRIM(BOTH FROM bound_by)) <= 120)) AND (length(TRIM(BOTH FROM bound_reason)) >= 8) AND (bound_at IS NOT NULL)))),
+    CONSTRAINT noncompetitive_agent_exclusions_created_by CHECK (((length(TRIM(BOTH FROM created_by)) >= 1) AND (length(TRIM(BOTH FROM created_by)) <= 120))),
+    CONSTRAINT noncompetitive_agent_exclusions_kind CHECK ((kind = 'team_canary'::text)),
+    CONSTRAINT noncompetitive_agent_exclusions_reason CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
 );
 
 
@@ -5550,6 +5601,30 @@ ALTER TABLE ONLY public.name_claims
 
 
 --
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_agent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.noncompetitive_agent_exclusions
+    ADD CONSTRAINT noncompetitive_agent_exclusions_agent_key UNIQUE (agent_id);
+
+
+--
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_identity_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.noncompetitive_agent_exclusions
+    ADD CONSTRAINT noncompetitive_agent_exclusions_identity_key UNIQUE (miner_hotkey, artifact_sha256);
+
+
+--
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.noncompetitive_agent_exclusions
+    ADD CONSTRAINT noncompetitive_agent_exclusions_pkey PRIMARY KEY (exclusion_id);
+
+
+--
 -- Name: owner_attestations owner_attestations_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7164,6 +7239,13 @@ CREATE INDEX name_claims_status_idx ON public.name_claims USING btree (netuid, s
 
 
 --
+-- Name: noncompetitive_agent_exclusions_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX noncompetitive_agent_exclusions_hotkey_idx ON public.noncompetitive_agent_exclusions USING btree (miner_hotkey);
+
+
+--
 -- Name: owner_attestations_active_pair_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7805,6 +7887,13 @@ CREATE TRIGGER efficiency_bonuses_curve_guard BEFORE INSERT OR UPDATE OF agent_i
 --
 
 CREATE TRIGGER efficiency_cohort_snapshots_curve_guard BEFORE INSERT OR UPDATE ON public.efficiency_cohort_snapshots FOR EACH ROW EXECUTE FUNCTION public.guard_efficiency_snapshot_curve();
+
+
+--
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER noncompetitive_agent_exclusions_append_only BEFORE DELETE OR UPDATE ON public.noncompetitive_agent_exclusions FOR EACH ROW EXECUTE FUNCTION public.noncompetitive_agent_exclusions_append_only();
 
 
 --
@@ -8531,6 +8620,14 @@ ALTER TABLE ONLY public.miner_session_tokens
 
 ALTER TABLE ONLY public.name_claim_endorsements
     ADD CONSTRAINT name_claim_endorsements_claim_id_fkey FOREIGN KEY (claim_id) REFERENCES public.name_claims(claim_id) ON DELETE CASCADE;
+
+
+--
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.noncompetitive_agent_exclusions
+    ADD CONSTRAINT noncompetitive_agent_exclusions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
 
 
 --

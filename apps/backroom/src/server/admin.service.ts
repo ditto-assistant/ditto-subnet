@@ -190,6 +190,7 @@ import {
   submissionSettingsControlSchema,
   hotkeyBanControlSchema,
   hotkeyBanListSchema,
+  teamCanaryListSchema,
   hotkeyBanLookupInputSchema,
   hotkeyUnbanResponseSchema,
   unbanHotkeyInputSchema,
@@ -673,6 +674,17 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
     },
   })
   return fetchSubmissionSettingsControl()
+}
+
+const TEAM_CANARIES_PATH = '/api/v1/admin/noncompetitive-canaries'
+
+export async function fetchTeamCanaries(limit: number, offset: number) {
+  const query = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  })
+  const payload = await platformAdminRequest(`${TEAM_CANARIES_PATH}?${query}`)
+  return teamCanaryListSchema.parse(payload)
 }
 
 const HOTKEY_BANS_PATH = '/api/v1/admin/hotkey-bans'

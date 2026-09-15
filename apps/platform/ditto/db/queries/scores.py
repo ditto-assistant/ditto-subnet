@@ -54,6 +54,7 @@ from ditto.db.models import (
 )
 from ditto.db.queries.agents import get_agent_by_id
 from ditto.db.queries.inference import LeaseModelUsage
+from ditto.db.queries.noncompetitive_exclusions import agent_competition_excluded
 from ditto.score_order import (
     owner_family_order_terms,
     score_order_key,
@@ -347,6 +348,13 @@ class LedgerRow:
     profile) or a full run that scored 0.000; both are surfaced for transparency
     but never ranked or folded into weights, matching the validator's two-gate
     fold — see :data:`MIN_ELIGIBLE_CASES`."""
+    competition_excluded: bool = False
+    """Whether this agent is an audited noncompetitive team canary.
+
+    Such a row is also forced ``eligible = False`` and must never reach the
+    validator weight fold, public emissions or any winner selection. It stays in
+    the ledger only so copy detection, image retention and rescreening still see
+    it. See :mod:`ditto.db.queries.noncompetitive_exclusions`."""
     shadow: bool = False
     """Whether the owner submitted this in *shadow mode* (``agents.shadow``).
 
@@ -598,6 +606,8 @@ async def list_memory_leader_timeline(
                 Score.bench_version.in_(versions),
                 Score.n >= MIN_ELIGIBLE_CASES,
                 Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+                # A team canary never holds a public leader record.
+                ~agent_competition_excluded(),
             )
             .order_by(
                 Score.bench_version,
@@ -1399,8 +1409,9 @@ async def ranked_quorum_agent_ids(
             # Shadow submissions are graded but never authoritative: they must
             # not count toward a bench-version quorum any more than they rank or
             # earn weight. Excluding them here keeps the authority switch and the
-            # ledger's eligibility in agreement.
+            # ledger's eligibility in agreement. Team canaries likewise.
             Agent.shadow.is_(False),
+            ~agent_competition_excluded(),
             per_version.c.cnt >= SCORING_QUORUM,
             per_version.c.eligible,
             or_(
@@ -1915,8 +1926,14 @@ async def list_eligible_ledger(
             # A shadow submission is graded and keeps its composite, but is
             # forced ineligible: score_order sorts ``eligible`` first, so this
             # demotes it below every ranked peer and drops it from the weight
-            # fold and the crown lineage without discarding its feedback.
-            and_(agent_best.c.eligible, Agent.shadow.is_(False)).label("eligible"),
+            # fold and the crown lineage without discarding its feedback. An
+            # audited team canary is demoted the same way here and is also
+            # dropped outright from the validator ledger (``competition_excluded``).
+            and_(
+                agent_best.c.eligible,
+                Agent.shadow.is_(False),
+                ~agent_competition_excluded(),
+            ).label("eligible"),
             agent_best.c.validator_hotkey,
             agent_best.c.bench_version,
             agent_best.c.cnt,
@@ -2447,6 +2464,7 @@ async def list_eligible_ledger(
             Score.median_ms,
             Score.n,
             winners.c.eligible,
+            agent_competition_excluded().label("competition_excluded"),
             Score.details["composite_stderr"]
             .as_float()
             .label("stored_composite_stderr"),
@@ -2603,6 +2621,7 @@ async def list_eligible_ledger(
                 median_ms=row.median_ms,
                 n=row.n,
                 eligible=bool(row.eligible),
+                competition_excluded=bool(row.competition_excluded),
                 details=row.details,
                 official_composite=float(row.official_score),
                 stored_composite_stderr=row.stored_composite_stderr,
@@ -2757,7 +2776,12 @@ async def list_provisional_ledger(
     canonical_version = bench_version or await active_bench_version(session)
     rows = (
         await session.execute(
-            select(Agent, Score, EvaluationPayment.miner_coldkey)
+            select(
+                Agent,
+                Score,
+                EvaluationPayment.miner_coldkey,
+                agent_competition_excluded().label("competition_excluded"),
+            )
             .join(Score, Score.agent_id == Agent.agent_id)
             .outerjoin(
                 EvaluationPayment,
@@ -2776,14 +2800,14 @@ async def list_provisional_ledger(
         )
     ).all()
 
-    by_agent: dict[UUID, tuple[Agent, str | None, list[Score]]] = {}
-    for agent, score, miner_coldkey in rows:
+    by_agent: dict[UUID, tuple[Agent, str | None, bool, list[Score]]] = {}
+    for agent, score, miner_coldkey, excluded in rows:
         if agent.agent_id not in by_agent:
-            by_agent[agent.agent_id] = (agent, miner_coldkey, [])
-        by_agent[agent.agent_id][2].append(score)
+            by_agent[agent.agent_id] = (agent, miner_coldkey, bool(excluded), [])
+        by_agent[agent.agent_id][3].append(score)
 
     candidates: list[tuple[LedgerRow, int]] = []
-    for agent, miner_coldkey, scores in by_agent.values():
+    for agent, miner_coldkey, excluded, scores in by_agent.values():
         if not scores:
             continue
         representative = sorted(
@@ -2815,8 +2839,12 @@ async def list_provisional_ledger(
                     median_ms=median_ms,
                     n=n,
                     eligible=(
-                        n >= MIN_ELIGIBLE_CASES and composite > 0.0 and not agent.shadow
+                        n >= MIN_ELIGIBLE_CASES
+                        and composite > 0.0
+                        and not agent.shadow
+                        and not excluded
                     ),
+                    competition_excluded=excluded,
                     shadow=agent.shadow,
                     details=None,
                 ),

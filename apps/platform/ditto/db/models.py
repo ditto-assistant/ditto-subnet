@@ -7147,6 +7147,78 @@ class HotkeyBanAudit(Base):
     )
 
 
+class NoncompetitiveAgentExclusion(Base):
+    """An audited team canary that must never compete for weights or emissions.
+
+    Reserved before upload for one exact ``(miner_hotkey, artifact_sha256)``
+    pair, then bound once to the resulting ``agent_id`` and its screened image
+    digest. It is only ever an additional exclusion (AND-NOT) on top of normal
+    status, screening and copy-detection rules: nothing reads it as permission,
+    and agent status is never changed by it. Rows are append-only; there is no
+    revoke path. See :mod:`ditto.db.queries.noncompetitive_exclusions`.
+    """
+
+    __tablename__ = "noncompetitive_agent_exclusions"
+
+    exclusion_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    agent_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    screened_image_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bound_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bound_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bound_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="noncompetitive_agent_exclusions_agent_id_fkey",
+        ),
+        UniqueConstraint(
+            "miner_hotkey",
+            "artifact_sha256",
+            name="noncompetitive_agent_exclusions_identity_key",
+        ),
+        UniqueConstraint("agent_id", name="noncompetitive_agent_exclusions_agent_key"),
+        CheckConstraint(
+            "kind = 'team_canary'", name="noncompetitive_agent_exclusions_kind"
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            name="noncompetitive_agent_exclusions_artifact",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="noncompetitive_agent_exclusions_reason",
+        ),
+        CheckConstraint(
+            "length(trim(created_by)) BETWEEN 1 AND 120",
+            name="noncompetitive_agent_exclusions_created_by",
+        ),
+        CheckConstraint(
+            "(agent_id IS NULL AND screened_image_sha256 IS NULL AND bound_by IS NULL "
+            "AND bound_reason IS NULL AND bound_at IS NULL) OR "
+            "(agent_id IS NOT NULL AND screened_image_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND length(trim(bound_by)) BETWEEN 1 AND 120 "
+            "AND length(trim(bound_reason)) >= 8 AND bound_at IS NOT NULL)",
+            name="noncompetitive_agent_exclusions_binding",
+        ),
+        Index("noncompetitive_agent_exclusions_hotkey_idx", "miner_hotkey"),
+    )
+
+
 class ScoreAuditEntry(Base):
     """One append-only, hash-chained entry in the public score audit log.
 

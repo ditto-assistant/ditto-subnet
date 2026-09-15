@@ -893,6 +893,8 @@ export interface EligibilityFlags {
   registered?: boolean | null;
   /** Cases scored; n >= 100 distinguishes a zero-scoring full run. */
   n?: number | null;
+  /** An audited noncompetitive team canary: scored, never ranked or paid. */
+  team_canary?: boolean;
 }
 
 /** isEligible(e) = `!e || e.eligible !== false` (5562). */
@@ -919,7 +921,9 @@ export function isRegistered(e: EligibilityFlags | null | undefined): boolean {
  */
 export function unrankedKind(
   e: EligibilityFlags | null | undefined,
-): "zero" | "provisional" | null {
+): "team_canary" | "zero" | "provisional" | null {
+  // Strict === true: a team canary is never ranked regardless of its score.
+  if (e?.team_canary === true) return "team_canary";
   if (isEligible(e)) return null;
   return e && e.n != null && e.n >= 100 ? "zero" : "provisional";
 }

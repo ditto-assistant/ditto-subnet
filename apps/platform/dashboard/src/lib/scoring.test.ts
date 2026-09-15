@@ -526,6 +526,12 @@ describe("unrankedKind", () => {
     expect(unrankedKind({ eligible: false, n: 250 })).toBe("zero");
   });
 
+  it("labels an audited team canary regardless of its score or run size", () => {
+    expect(unrankedKind({ eligible: false, n: 250, team_canary: true })).toBe("team_canary");
+    expect(unrankedKind({ eligible: true, n: 250, team_canary: true })).toBe("team_canary");
+    expect(unrankedKind({ eligible: true, n: 250, team_canary: false })).toBeNull();
+  });
+
   it("labels smaller or unreported profiles 'provisional'", () => {
     expect(unrankedKind({ eligible: false, n: 99 })).toBe("provisional");
     expect(unrankedKind({ eligible: false, n: null })).toBe("provisional");

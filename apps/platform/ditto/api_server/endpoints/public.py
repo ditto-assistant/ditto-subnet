@@ -2316,11 +2316,14 @@ def _public_entry(
     return PublicLeaderboardEntry(
         rank=(
             None
-            if supports_confirmation(bench_version)
-            and not finalized
-            and (
-                v9_confirmation is None
-                or v9_confirmation.result_status != "full_confirmed"
+            if r.competition_excluded
+            or (
+                supports_confirmation(bench_version)
+                and not finalized
+                and (
+                    v9_confirmation is None
+                    or v9_confirmation.result_status != "full_confirmed"
+                )
             )
             else rank
         ),
@@ -2426,6 +2429,7 @@ def _public_entry(
         median_ms=r.median_ms,
         n=r.n,
         eligible=r.eligible,
+        team_canary=r.competition_excluded,
         shadow=r.shadow,
         bench_version=bench_version,
         settled_composite=settled_composite,

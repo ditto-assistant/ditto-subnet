@@ -77,6 +77,9 @@ from ditto.api_server.endpoints.admin_lease_revocations import (
 from ditto.api_server.endpoints.admin_miner_fees import (
     router as admin_miner_fees_router,
 )
+from ditto.api_server.endpoints.admin_noncompetitive_canaries import (
+    router as admin_noncompetitive_canaries_router,
+)
 from ditto.api_server.endpoints.admin_owner import (
     router as admin_owner_router,
 )
@@ -190,6 +193,7 @@ __all__ = [
     "admin_efficiency_bonus_settings_router",
     "admin_inference_routes_router",
     "admin_hotkey_bans_router",
+    "admin_noncompetitive_canaries_router",
     "admin_leaderboard_router",
     "admin_validator_weights_router",
     "admin_lease_revocations_router",

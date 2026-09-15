@@ -288,6 +288,8 @@ export interface LeaderboardEntry {
   bench_version?: number | null;
   /** Missing counts as eligible (older APIs omit it). */
   eligible?: boolean;
+  /** Audited noncompetitive team canary: never ranked, weighted or paid. */
+  team_canary?: boolean;
   /** Missing counts as finalized. */
   finalized?: boolean;
   /** Strict === true means registered; null/missing is UNKNOWN, not false. */

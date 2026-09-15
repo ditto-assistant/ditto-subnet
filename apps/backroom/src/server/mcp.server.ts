@@ -240,6 +240,7 @@ import {
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
   fetchHotkeyBans,
+  fetchTeamCanaries,
   unbanHotkey,
   fetchConfirmationBundleSettings,
   setConfirmationBundleSettings,
@@ -665,6 +666,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_submission_cooldown:
     'Read the current miner submission fee and owner-coldkey cooldown. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
   list_hotkey_bans: 'Hotkey bans.',
+  list_team_canaries: 'Team canaries.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
     'Read isolated LongMem confirmation issuance settings and optional audit history. Shadow cannot full-confirm. This does not activate rewards.',
@@ -1806,6 +1808,32 @@ export function createBackroomMcpServer(props: McpGrantProps) {
             has_more: offset + value.bans.length < value.total,
           },
           { bans: { pin: ['hotkey', 'banned_at'] } },
+        ),
+      )
+    },
+  )
+
+  registerTool(
+    'list_team_canaries',
+    {
+      title: 'List noncompetitive team canaries',
+      description: 'Noncompetitive team canaries and matched agents. Read-only.',
+      inputSchema: MCP_PAGINATION_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset }) => {
+      const value = await fetchTeamCanaries(limit, offset)
+      return result(
+        compacted(
+          {
+            ...value,
+            count: value.total,
+            returned: value.exclusions.length,
+            limit,
+            offset,
+            has_more: offset + value.exclusions.length < value.total,
+          },
+          { exclusions: { pin: ['exclusion_id', 'miner_hotkey'] } },
         ),
       )
     },

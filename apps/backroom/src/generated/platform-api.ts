@@ -1258,6 +1258,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/noncompetitive-canaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Team Canaries
+         * @description List audited team canaries, oldest first, with the agents each excludes.
+         */
+        get: operations["team_canaries_api_v1_admin_noncompetitive_canaries_get"];
+        put?: never;
+        /**
+         * Reserve
+         * @description Reserve one exact hotkey + artifact as a noncompetitive team canary.
+         */
+        post: operations["reserve_api_v1_admin_noncompetitive_canaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/noncompetitive-canaries/{exclusion_id}/bind": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bind
+         * @description Bind a reservation once to the exact agent and screened image digest.
+         */
+        post: operations["bind_api_v1_admin_noncompetitive_canaries__exclusion_id__bind_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/owner-attestations/{attestation_id}/revoke": {
         parameters: {
             query?: never;
@@ -10290,6 +10334,105 @@ export interface components {
             replacement_commitment: components["schemas"]["CodingCatalogCommitment"];
             /** Replacement Signature */
             replacement_signature: string;
+        };
+        /** AdminTeamCanaryAgent */
+        AdminTeamCanaryAgent: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Competition Excluded
+             * @default true
+             * @constant
+             */
+            competition_excluded: true;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string | null;
+            /** Sha256 */
+            sha256: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "reserved" | "bound" | "binding_drift";
+            status: components["schemas"]["AgentStatus"];
+        };
+        /** AdminTeamCanaryBindRequest */
+        AdminTeamCanaryBindRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Reason */
+            reason: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+        };
+        /** AdminTeamCanaryExclusion */
+        AdminTeamCanaryExclusion: {
+            /** Agent Id */
+            agent_id: string | null;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bound At */
+            bound_at: string | null;
+            /** Bound By */
+            bound_by: string | null;
+            /** Bound Reason */
+            bound_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /**
+             * Exclusion Id
+             * Format: uuid
+             */
+            exclusion_id: string;
+            /**
+             * Kind
+             * @default team_canary
+             * @constant
+             */
+            kind: "team_canary";
+            /** Matched Agents */
+            matched_agents: components["schemas"]["AdminTeamCanaryAgent"][];
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Reason */
+            reason: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string | null;
+        };
+        /** AdminTeamCanaryList */
+        AdminTeamCanaryList: {
+            /** Exclusions */
+            exclusions: components["schemas"]["AdminTeamCanaryExclusion"][];
+            /** Total */
+            total: number;
+        };
+        /** AdminTeamCanaryReserveRequest */
+        AdminTeamCanaryReserveRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Reason */
+            reason: string;
         };
         /** AdminTransitionCodingPrivateV2ReleaseRequest */
         AdminTransitionCodingPrivateV2ReleaseRequest: {
@@ -20791,6 +20934,12 @@ export interface components {
             shadow: boolean;
             /** @description Compact finalized children sharing this entry's owner slot. Only identity/version and canonical score are included; full family evidence is loaded from the agent detail endpoint. */
             submission_family?: components["schemas"]["PublicLeaderboardFamily"] | null;
+            /**
+             * Team Canary
+             * @description Whether this is an audited noncompetitive team canary. It is screened, copy-checked and scored normally, but it is never ranked, never earns weight or emissions, and never holds a leader, crown or rollout position.
+             * @default false
+             */
+            team_canary: boolean;
             /** @description Benchmark-v5 efficiency adjustment. */
             token_efficiency?: components["schemas"]["PublicTokenEfficiency"] | null;
             /** @description Validator-proxy token accounting. */
@@ -30063,6 +30212,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminOwnerFootprint"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    team_canaries_api_v1_admin_noncompetitive_canaries_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamCanaryList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reserve_api_v1_admin_noncompetitive_canaries_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTeamCanaryReserveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamCanaryExclusion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bind_api_v1_admin_noncompetitive_canaries__exclusion_id__bind_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                exclusion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTeamCanaryBindRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamCanaryExclusion"];
                 };
             };
             /** @description Validation Error */

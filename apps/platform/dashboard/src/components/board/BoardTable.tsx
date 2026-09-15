@@ -598,14 +598,16 @@ function BoardRow(props: {
     finalizedEntry() && elig() && e().emission_eligible === true && (e().rank as number) <= 3
       ? " r" + e().rank
       : "";
-  const kind = (): "zero" | "provisional" | null => unrankedKind(e());
+  const kind = (): "team_canary" | "zero" | "provisional" | null => unrankedKind(e());
   const displayName = (): string => publicDisplayName(e().agent_name, e().name_handle);
   const rowLabel = (): string =>
-    (elig()
-      ? (finalizedEntry() ? "Rank " : "Provisional rank ") + e().rank
-      : kind() === "zero"
-        ? "Unranked, scored zero"
-        : "Provisional, unranked") +
+    (kind() === "team_canary"
+      ? "Team canary, unranked"
+      : elig()
+        ? (finalizedEntry() ? "Rank " : "Provisional rank ") + e().rank
+        : kind() === "zero"
+          ? "Unranked, scored zero"
+          : "Provisional, unranked") +
     ", agent " +
     agentLabel(e().agent_name, e().agent_version) +
     ", composite " +
@@ -681,7 +683,11 @@ function BoardRow(props: {
                     class="rank prov-rank tip-chip"
                     text={
                       "Not ranked (" +
-                      (kind() === "zero" ? "scored 0.000" : "provisional run") +
+                      (kind() === "team_canary"
+                        ? "team canary"
+                        : kind() === "zero"
+                          ? "scored 0.000"
+                          : "provisional run") +
                       ")."
                     }
                   >
@@ -718,6 +724,14 @@ function BoardRow(props: {
                   />
                 </span>
                 <HandleBadge handle={e().name_handle} />
+                <Show when={kind() === "team_canary"}>
+                  <TipTarget
+                    class="prov tip-chip"
+                    text="An audited team canary. It is screened, copy-checked and scored normally, but it never ranks and never earns weight or emissions."
+                  >
+                    team canary
+                  </TipTarget>
+                </Show>
                 <Show when={kind() === "zero"}>
                   <TipTarget
                     class="prov tip-chip"

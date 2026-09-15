@@ -1202,6 +1202,18 @@ class PublicLeaderboardEntry(BaseModel):
             ),
         ),
     ]
+    team_canary: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether this is an audited noncompetitive team canary. It is "
+                "screened, copy-checked and scored normally, but it is never "
+                "ranked, never earns weight or emissions, and never holds a "
+                "leader, crown or rollout position."
+            ),
+        ),
+    ]
     shadow: Annotated[
         bool,
         Field(

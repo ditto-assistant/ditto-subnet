@@ -54,6 +54,7 @@ from ditto.db.queries.confirmation_bundles import (
     record_base_only_subject,
 )
 from ditto.db.queries.confirmation_policy_lock import try_lock_confirmation_policy
+from ditto.db.queries.noncompetitive_exclusions import agent_competition_excluded
 from ditto.db.queries.scores import (
     MIN_ELIGIBLE_CASES,
     SCORING_QUORUM,
@@ -355,6 +356,8 @@ async def reconcile_confirmation_candidates(
             .where(
                 ConfirmationBundleSubject.bench_version == bench_version,
                 Agent.status == AgentStatus.SCORED,
+                # A persisted subject must not re-admit a team canary.
+                ~agent_competition_excluded(),
             )
             .order_by(Agent.created_at, Agent.agent_id)
         )

@@ -69,6 +69,11 @@ from ditto.db.queries.confirmation_scores import (
 from ditto.db.queries.heartbeats import (
     live_validator_fleet_supports_protocol,
 )
+from ditto.db.queries.noncompetitive_exclusions import (
+    TeamCanaryExclusion,
+    list_team_canary_exclusions,
+    matching_exclusion,
+)
 from ditto.db.queries.score_ranking import (
     VALIDATOR_STALE_WINDOW,
     EfficiencyFactorRequesterNotReady,
@@ -197,6 +202,8 @@ class _LedgerContext:
     unbounded_factor_fleet_ready: bool = False
     dethrone_band_clamp_fleet_ready: bool = False
     crown_incumbent_fleet_ready: bool = False
+    competition_exclusions: tuple[TeamCanaryExclusion, ...] = ()
+    """Audited team canaries; any addition or binding invalidates reuse."""
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -387,6 +394,9 @@ async def resolve_ledger_context(
         bench_version=bench_version,
         now=now,
     )
+    competition_exclusions = await list_team_canary_exclusions(session)
+    # Remembered for a database-failure replay of an older snapshot.
+    app_state.ledger_competition_exclusions = competition_exclusions
     return _LedgerContext(
         policy=policy,
         active_bench_version=bench_version,
@@ -396,6 +406,7 @@ async def resolve_ledger_context(
         unbounded_factor_fleet_ready=unbounded_factor_fleet_ready,
         dethrone_band_clamp_fleet_ready=dethrone_band_clamp_fleet_ready,
         crown_incumbent_fleet_ready=crown_incumbent_fleet_ready,
+        competition_exclusions=competition_exclusions,
     )
 
 
@@ -600,6 +611,9 @@ async def materialize_ledger_snapshot(
         ),
         dedupe_owners=False,
     )
+    # A team canary never reaches the weight fold, live or pinned. Dropped
+    # before owner dedupe so a legitimate sibling can still represent the owner.
+    rows = [row for row in rows if not row.competition_excluded]
     v9_confirmation_mode: Literal["enforce"] | None = (
         "enforce" if await v9_confirmation_enforcement_active(session) else None
     )
@@ -1007,8 +1021,24 @@ def _serve_last_known(
     # that may have regressed to a legacy protocol while the database was
     # unavailable.  Preserve the established v1/v2 bonus behavior; only the new
     # protocol-19 factor and its projection fail closed here.
+    # Fail closed on replay too: drop any identity excluded by the snapshot's
+    # own context or by a later successful context read.
+    exclusions = (
+        *(snapshot.context.competition_exclusions if snapshot.context else ()),
+        *getattr(request.app.state, "ledger_competition_exclusions", ()),
+    )
     entries = []
     for entry in snapshot.entries:
+        if (
+            matching_exclusion(
+                exclusions,
+                agent_id=entry.agent_id,
+                miner_hotkey=entry.miner_hotkey,
+                sha256=entry.sha256,
+            )
+            is not None
+        ):
+            continue
         had_factor = entry.efficiency_factor is not None
         entries.append(
             entry.model_copy(

@@ -36,6 +36,7 @@ from ditto.db.models import (
     ValidatorHeartbeat,
     ValidatorTicket,
 )
+from ditto.db.queries.noncompetitive_exclusions import agent_competition_excluded
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -382,6 +383,8 @@ async def rolling_top_five(
             .join(Score, Score.agent_id == Agent.agent_id)
             .where(
                 Agent.status == AgentStatus.SCORED,
+                # A team canary never occupies a rollout top-five position.
+                ~agent_competition_excluded(),
                 Score.bench_version.in_(
                     (source_version, target_version)
                     if target_version is not None
@@ -486,7 +489,9 @@ async def historical_rescore_cohort(
     agents = list(
         await session.scalars(
             select(Agent).where(
-                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
+                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+                # A team canary never takes a real miner's frozen rescore slot.
+                ~agent_competition_excluded(),
             )
         )
     )
