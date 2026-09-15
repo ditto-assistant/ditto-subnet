@@ -29,6 +29,8 @@ import {
   benchmarkContractMigrationLookupInputSchema,
   benchmarkContractRefreshLookupInputSchema,
   getAthReviewInputSchema,
+  getScreeningDecisionRecordInputSchema,
+  listScreeningDecisionsInputSchema,
   openAthReviewInputSchema,
   previewAthRulingsBatchInputSchema,
   executeAthRulingsBatchInputSchema,
@@ -121,6 +123,8 @@ import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
   fetchAthReview,
+  fetchScreeningDecisionRecord,
+  fetchScreeningDecisions,
   fetchAthPrecedents,
   fetchQuarantineBaselineDiff,
   fetchQuarantineBaselineDiffFile,
@@ -523,6 +527,12 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Dry-run up to 50 open|clear|reject ATH rulings (uploadKey or inline) against live guards and the crown; per-item disposition, would_change_crown; returns a preview token. Never mutates.',
   execute_ath_rulings_batch:
     'Apply the previewed rulings under "APPLY ATH RULINGS BATCH"; re-reads the board, audits per item, refuses rows whose guards or crown outcome moved. Requires backroom:write.',
+  get_screening_decision_record:
+    'Read one agent\'s policy-v13 decision records (clear | reject | no-fault review_timed_out): reason_codes, violation_proven, failure_domain, retry evidence, identities, evidence_references, published timeout policy.',
+  list_screening_decisions:
+    'Page policy-v13 decision records with subnet-wide outcome counts; review_timed_out is the activation monitor.',
+  resolve_ath_review:
+    'Clear or reject one ATH hold with a public reason. A clear requires file:line evidenceReferences (policy v13); rejecting bans. Writes a decision record. Requires backroom:write.',
   get_validator_weight_diagnostics:
     'Read block-bound vTrust, revealed weights, pending timelock rounds, and each commit\'s implied reveal block; never submits weights.',
   agent_scoring_readiness:
@@ -941,6 +951,38 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_screening_decision_record',
+    {
+      title: 'Get screening decision record',
+      description:
+        'Read the policy-v13 decision record(s) for one agent, newest first: outcome (clear | reject | review_timed_out), exact reason_codes, violation_proven, failure_domain (artifact | submission | platform | provider | none), retry_count and independent_workers, the ten bound identities (submission_uuid, artifact_sha256, image_digest, build_configuration, served_entrypoint, permitted_runtime_configuration, benchmark_version, applied_policy_version, policy_digest, verification_profile_digest), completed_checks / failed_checks / opaque_components, file:line evidence_references, limitations, reviewer, decided_at, supersedes_decision, operator_override, precedent_weight and the no-fault retry_grant_id. `review_timed_out` is the Platform deadline finalizer\'s terminal treatment of a v13 processing state (inconclusive, escalate-without-finding, unavailable court) that outlived the published 24-hour verification window: it is NOT a REJECT, carries no ban and no precedent weight (`precedent_weight: false`, `no_fault: true`), records V2/V3 as the failure domain, mints a no-fault retry grant and re-queues the submission ahead of newer work when capacity recovers. Operator clear/reject decisions written through resolve_ath_review appear here too; a clear must have cited at least one file:line evidence reference. The response also carries `review_timeout_policy` (published retry defaults 1/2/2, 24h window) and `review_capacity_thresholds`. An agent with no record answers 200 with an empty history. Use list_screening_decisions to monitor review_timed_out counts subnet-wide. Requires backroom:read and exposes no miner source.',
+      inputSchema: getScreeningDecisionRecordInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchScreeningDecisionRecord(input)),
+  )
+
+  registerTool(
+    'list_screening_decisions',
+    {
+      title: 'List screening decisions',
+      description:
+        'Page policy-v13 screening decision records across every agent, newest first, with subnet-wide `outcome_counts` for clear / reject / review_timed_out. Filter with outcome. The review_timed_out count is the activation monitor named in the v13 rollout plan: a rising count means review capacity is not meeting the published thresholds and honest submissions are being no-fault timed out and re-queued rather than decided. Each row is the same decision record get_screening_decision_record returns. Requires backroom:read and exposes no miner source.',
+      inputSchema: {
+        ...listScreeningDecisionsInputSchema.shape,
+        ...MCP_PAGINATION_INPUT,
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset, ...input }) =>
+      result(
+        compacted(await fetchScreeningDecisions(input, limit, offset), {
+          items: { pin: ['decision_id', 'agent_id', 'outcome'] },
+        }),
+      ),
+  )
+
+  registerTool(
     'search_ath_precedents',
     {
       title: 'Search ATH precedents',
@@ -977,7 +1019,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Resolve ATH review',
       description:
-        'Clear or reject one ATH hold with an auditable public reason. Clearing restores the status held before a manual benchmark-overfit review; rejecting bans the submission. Requires backroom:write.',
+        'Clear or reject one ATH hold with an auditable public reason. Clearing restores the status held before a manual benchmark-overfit review and REQUIRES evidenceReferences: at least one file:line citation into the reviewed source (policy v13 decision record; the platform refuses an uncited clear with 422). Optional reasonCodes carry published policy codes (e.g. I4.final_text_rewritten) onto the decision record. Rejecting bans the submission. Both write a screening decision record readable with get_screening_decision_record. Requires backroom:write.',
       inputSchema: resolveCopyReviewInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -989,7 +1031,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Create ATH rulings upload',
       description:
-        'Issue a five-minute presigned PUT URL for one batched ATH rulings document. The object lands under this operator\'s own prefix (ath-rulings/v1/<actor>/...) of the private trace bucket; the upload must be application/json and at most 1 MiB. Upload the document with `curl -X PUT -H "Content-Type: application/json" --data-binary @rulings.json "<url>"`, then call preview_ath_rulings_batch with the returned key. Document shape: {"source": "<write-up path>", "rulings": [{"action": "open" | "clear" | "reject", "agent_id", "expected_sha256", "expected_score_count", "reason" (>= 3 chars, public and miner-visible, unbounded), "evidence_references": ["path:line" | "path:line-line", ...]}]}. Each agent may appear once per batch; a reject must cite at least one evidence reference. Small batches can skip the upload and pass `rulings` inline to preview_ath_rulings_batch. Requires backroom:write; answers 503 when rulings storage is not configured (preview inline instead).',
+        'Issue a five-minute presigned PUT URL for one batched ATH rulings document. The object lands under this operator\'s own prefix (ath-rulings/v1/<actor>/...) of the private trace bucket; the upload must be application/json and at most 1 MiB. Upload the document with `curl -X PUT -H "Content-Type: application/json" --data-binary @rulings.json "<url>"`, then call preview_ath_rulings_batch with the returned key. Document shape: {"source": "<write-up path>", "rulings": [{"action": "open" | "clear" | "reject", "agent_id", "expected_sha256", "expected_score_count", "reason" (>= 3 chars, public and miner-visible, unbounded), "evidence_references": ["path:line" | "path:line-line", ...]}]}. Each agent may appear once per batch; a clear or reject must cite at least one evidence reference (policy v13). Small batches can skip the upload and pass `rulings` inline to preview_ath_rulings_batch. Requires backroom:write; answers 503 when rulings storage is not configured (preview inline instead).',
       annotations: toolAnnotations('write', false),
     },
     async () => write(() => createAthRulingsUpload(props.session.email)),
@@ -1000,7 +1042,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Preview ATH rulings batch',
       description:
-        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear an agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
+        'Dry-run a batch of up to 50 ATH rulings without changing anything. Pass either uploadKey (from create_ath_rulings_upload) or the same document\'s `rulings` inline (Platform wire shape, snake_case). Every item is re-read from live state: agent_status, artifact SHA-256 and score count against the ruling\'s expected_sha256 / expected_score_count guards (stale_guard=true and disposition stale_guard when they moved), plus the review row, so the disposition says what execute will do: ready (with `steps`, e.g. a reject on a scored agent is ["open","reject"], on a held agent ["reject"]), already_applied (idempotent replay), conflict (conflict_reason is the 409 the underlying route would answer), not_found, or invalid (a clear or reject without evidence_references). The crown arithmetic is the board the operator sees: the validator-equivalent KOTH fold (eligible ledger with stderr, quorum, confirmation and efficiency inputs) under the same fleet-gated tie-weighting and ceiling-band-clamp flags the public leaderboard applies, returned as `board` (champion, raw leader, fingerprint). `would_change_crown` marks rulings that hold or reject the champion / raw leader, or clear an agent whose canonical score would re-enter as champion or raw leader -- judged CUMULATIVELY against the board after the earlier items in the batch, so rejecting the champion in item 0 flags the runner-up a later item removes (a batch that empties the top five flags every row). The preview_token is HMAC-signed, bound to the signed-in operator, the rulings digest, the upload key, and the crown outcome, and expires after 10 minutes. Inline previews must resend the identical `rulings` to execute. Requires backroom:read.',
       inputSchema: previewAthRulingsBatchInputSchema,
       annotations: toolAnnotations('read'),
     },

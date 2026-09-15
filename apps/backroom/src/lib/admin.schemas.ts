@@ -6578,11 +6578,33 @@ export const copyReviewConsoleListSchema = z.object({
   rollout_bench_version: z.number().int().positive().nullable(),
 })
 
-export const resolveCopyReviewInputSchema = z.object({
-  agentId: z.string().uuid(),
-  resolution: copyReviewResolutionSchema,
-  reason: auditReasonSchema(3),
-})
+// One `file:line` (or `file:line-line`) citation into the reviewed source, or
+// a machine-produced evidence record reference such as
+// `anti-copy-comparison:<agent uuid>` / `<module>:<sha256>`. Mirrors
+// EVIDENCE_REFERENCE_PATTERN in apps/platform/ditto/api_models/admin_copy_review.py.
+export const EVIDENCE_REFERENCE_PATTERN =
+  /^\S+:(?:\d+(?:-\d+)?|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-f]{64})$/
+
+export const evidenceReferenceSchema = z.string().trim().regex(EVIDENCE_REFERENCE_PATTERN)
+
+// Policy v13: a clear must cite where in the source it was decided. The
+// platform refuses an uncited clear with 422; refusing it here keeps the
+// operator's own reason text intact instead of a generic validation failure.
+export const resolveCopyReviewInputSchema = z
+  .object({
+    agentId: z.string().uuid(),
+    resolution: copyReviewResolutionSchema,
+    reason: auditReasonSchema(3),
+    evidenceReferences: z.array(evidenceReferenceSchema).default([]),
+    reasonCodes: z.array(z.string().trim().min(2)).default([]),
+  })
+  .refine(
+    (input) => input.resolution !== 'clear' || input.evidenceReferences.length > 0,
+    {
+      message: 'clearing an ATH hold requires at least one file:line evidence reference',
+      path: ['evidenceReferences'],
+    },
+  )
 
 export const resolveCopyReviewResponseSchema = z.object({
   review: copyReviewItemSchema,
@@ -6651,8 +6673,141 @@ export const athReviewAuditSchema = z.object({
     previous_status: z.string().nullable(),
     artifact_sha256: z.string().nullable(),
     score_count: z.number().int().nonnegative().nullable(),
+    // Policy-v13 citations; absent from platforms older than the decision record.
+    evidence_references: z.array(z.string()).default([]),
+    reason_codes: z.array(z.string()).default([]),
   })).default([]),
 })
+
+// Policy-v13 screening decision record (`GET /admin/screening-decisions/{agent_id}`).
+// One row per terminal review decision: an operator clear/reject through
+// resolve_ath_review, or the finalizer's no-fault review_timed_out.
+
+export const screeningDecisionOutcomeSchema = z.enum(['clear', 'reject', 'review_timed_out'])
+export const screeningFailureDomainSchema = z.enum([
+  'artifact',
+  'submission',
+  'platform',
+  'provider',
+  'none',
+])
+
+export const screeningDecisionIdentitiesSchema = z.object({
+  submission_uuid: z.string().uuid(),
+  artifact_sha256: z.string(),
+  image_digest: z.string().nullable().default(null),
+  build_configuration: z.string().nullable().default(null),
+  served_entrypoint: z.string().nullable().default(null),
+  permitted_runtime_configuration: z.string().nullable().default(null),
+  benchmark_version: z.number().int().nullable().default(null),
+  applied_policy_version: z.number().int(),
+  policy_digest: z.string().nullable().default(null),
+  verification_profile_digest: z.string().nullable().default(null),
+})
+
+export const screeningDecisionRecordSchema = z.object({
+  decision_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  attempt_id: z.string().uuid().nullable(),
+  quarantine_id: z.string().uuid().nullable(),
+  review_id: z.string().uuid().nullable(),
+  outcome: screeningDecisionOutcomeSchema,
+  reason_codes: z.array(z.string()),
+  violation_proven: z.boolean(),
+  failure_domain: screeningFailureDomainSchema,
+  retry_count: z.number().int().nonnegative(),
+  independent_workers: z.number().int().nonnegative(),
+  policy_version: z.number().int().positive(),
+  identities: screeningDecisionIdentitiesSchema,
+  review_scope: z.string().nullable(),
+  completed_checks: z.array(z.string()),
+  failed_checks: z.array(z.string()),
+  opaque_components: z.array(z.string()),
+  evidence_references: z.array(z.string()),
+  evidence_type: z.string().nullable(),
+  limitations: z.array(z.string()),
+  public_reason: z.string(),
+  reviewer: z.string(),
+  decided_at: z.string(),
+  supersedes_decision: z.string().uuid().nullable(),
+  operator_override: z.record(z.string(), z.unknown()).nullable(),
+  precedent_weight: z.boolean(),
+  retry_grant_id: z.string().uuid().nullable(),
+  is_verification_failure: z.boolean(),
+  no_fault: z.boolean(),
+})
+
+export const reviewTimeoutPolicySchema = z.object({
+  artifact_failure_retries: z.number().int(),
+  provider_failure_retries: z.number().int(),
+  platform_failure_retries: z.number().int(),
+  independent_worker_required_for_platform_provider_failure: z.boolean(),
+  max_verification_window_hours: z.number().int(),
+  applies_from_policy_version: z.number().int(),
+  terminal_outcome: screeningDecisionOutcomeSchema,
+  ban_on_timeout: z.boolean(),
+  precedent_weight_on_timeout: z.boolean(),
+  automatic_priority_rescreen_on_recovery: z.boolean(),
+  no_fault_retry_grant_on_timeout: z.boolean(),
+})
+
+export const reviewCapacityThresholdsSchema = z.object({
+  min_healthy_source_review_workers: z.number().int(),
+  min_completion_rate: z.number(),
+  max_fail_open_rate: z.number(),
+  max_p95_review_latency_hours: z.number().int(),
+  max_backlog_multiplier: z.number().int(),
+})
+
+export const activationPrerequisiteSchema = z.object({
+  key: z.string(),
+  summary: z.string(),
+  verified: z.boolean(),
+  evidence: z.string().nullable().default(null),
+})
+
+export const reviewTimeoutFinalizerModeSchema = z.enum(['off', 'shadow', 'enforce'])
+
+export const activationCeilingSchema = z.object({
+  activation_ceiling_policy_version: z.number().int(),
+  checklist_ceiling_policy_version: z.number().int(),
+  prerequisites: z.array(activationPrerequisiteSchema),
+  unverified_count: z.number().int().nonnegative(),
+  // The platform deadline finalizer's configured posture: shadow logs would-be
+  // review_timed_out decisions without writing them; enforce mutates.
+  finalizer_mode: reviewTimeoutFinalizerModeSchema.default('shadow'),
+})
+
+export const getScreeningDecisionRecordInputSchema = z.object({
+  agentId: z.string().uuid(),
+})
+
+export const screeningDecisionRecordResponseSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_status: z.string().nullable(),
+  latest: screeningDecisionRecordSchema.nullable(),
+  decisions: z.array(screeningDecisionRecordSchema),
+  review_timeout_policy: reviewTimeoutPolicySchema,
+  review_capacity_thresholds: reviewCapacityThresholdsSchema,
+})
+
+export const listScreeningDecisionsInputSchema = z.object({
+  outcome: screeningDecisionOutcomeSchema.optional(),
+})
+
+export const screeningDecisionListSchema = z.object({
+  items: z.array(screeningDecisionRecordSchema),
+  count: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  outcome: screeningDecisionOutcomeSchema.nullable(),
+  outcome_counts: z.record(z.string(), z.number().int()),
+  review_timeout_policy: reviewTimeoutPolicySchema,
+  review_capacity_thresholds: reviewCapacityThresholdsSchema,
+})
+
+export type ScreeningDecisionRecord = z.infer<typeof screeningDecisionRecordSchema>
+export type ScreeningDecisionRecordResponse = z.infer<typeof screeningDecisionRecordResponseSchema>
 
 export const openAthReviewInputSchema = z.object({
   agentId: z.string().uuid(),
@@ -7715,6 +7870,11 @@ export const screenerPolicyActivationViewSchema = z.object({
     .max(MAX_SCREENER_POLICY_ACTIVATION_REVISIONS),
   // Absent from platforms older than heartbeat protocol v7.
   fleet: screenerFleetPolicyReadinessSchema.nullish().transform((value) => value ?? null),
+  // Policy-v13 activation ceiling checklist and the published no-fault
+  // review-timeout treatment; absent from older platforms.
+  activation_ceiling: activationCeilingSchema.nullable().optional(),
+  review_timeout_policy: reviewTimeoutPolicySchema.nullable().optional(),
+  review_capacity_thresholds: reviewCapacityThresholdsSchema.nullable().optional(),
 })
 
 // The offset requirement is what makes the schedule unambiguous: a naive

@@ -1722,6 +1722,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Screening Decisions
+         * @description Page decision records newest first, with subnet-wide outcome counts.
+         */
+        get: operations["list_screening_decisions_api_v1_admin_screening_decisions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screening-decisions/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screening Decision Record
+         * @description Every decision recorded for one agent, newest first.
+         *
+         *     An agent with no record is a 200 with an empty history, not a 404: the
+         *     operator's question is "what was decided", and "nothing yet" answers it.
+         */
+        get: operations["get_screening_decision_record_api_v1_admin_screening_decisions__agent_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-disputes": {
         parameters: {
             query?: never;
@@ -6360,6 +6403,40 @@ export interface components {
             upstream_requests: 0;
         };
         /**
+         * ActivationCeilingView
+         * @description Why the activation ceiling sits where it does.
+         */
+        ActivationCeilingView: {
+            /** Activation Ceiling Policy Version */
+            activation_ceiling_policy_version: number;
+            /** Checklist Ceiling Policy Version */
+            checklist_ceiling_policy_version: number;
+            /**
+             * Finalizer Mode
+             * @default shadow
+             * @enum {string}
+             */
+            finalizer_mode: "off" | "shadow" | "enforce";
+            /** Prerequisites */
+            prerequisites: components["schemas"]["ActivationPrerequisiteView"][];
+            /** Unverified Count */
+            unverified_count: number;
+        };
+        /**
+         * ActivationPrerequisiteView
+         * @description One published policy-v13 activation prerequisite and its verification.
+         */
+        ActivationPrerequisiteView: {
+            /** Evidence */
+            evidence?: string | null;
+            /** Key */
+            key: string;
+            /** Summary */
+            summary: string;
+            /** Verified */
+            verified: boolean;
+        };
+        /**
          * ActiveBenchmarkSlot
          * @description One active, ticket-bound benchmark execution slot.
          */
@@ -7498,10 +7575,14 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Evidence References */
+            evidence_references?: string[];
             /** Previous Status */
             previous_status?: string | null;
             /** Reason */
             reason: string;
+            /** Reason Codes */
+            reason_codes?: string[];
             /** Score Count */
             score_count?: number | null;
         };
@@ -7791,10 +7872,23 @@ export interface components {
              */
             status: "resolved" | "all";
         };
-        /** AdminCopyReviewResolveRequest */
+        /**
+         * AdminCopyReviewResolveRequest
+         * @description Resolve one ATH hold.
+         *
+         *     Policy v13 requires every decision record to cite its evidence. A ``clear``
+         *     must therefore carry at least one ``file:line`` reference into the reviewed
+         *     source (two of five prior clears carried none and would have been refused).
+         *     A ``reject`` records whatever the operator cites; its reason text is the
+         *     miner-visible ground either way.
+         */
         AdminCopyReviewResolveRequest: {
+            /** Evidence References */
+            evidence_references?: string[];
             /** Reason */
             reason: string;
+            /** Reason Codes */
+            reason_codes?: string[];
             /**
              * Resolution
              * @enum {string}
@@ -9502,6 +9596,46 @@ export interface components {
              * @enum {string}
              */
             status: "running" | "passed" | "rejected" | "failed" | "expired" | "quarantined";
+        };
+        /**
+         * AdminScreeningDecisionList
+         * @description Paged decision records across agents with outcome counts.
+         */
+        AdminScreeningDecisionList: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["ScreeningDecisionRecordView"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Outcome */
+            outcome: ("clear" | "reject" | "review_timed_out") | null;
+            /** Outcome Counts */
+            outcome_counts: {
+                [key: string]: number;
+            };
+            review_capacity_thresholds: components["schemas"]["ReviewCapacityThresholdsView"];
+            review_timeout_policy: components["schemas"]["ReviewTimeoutPolicyView"];
+        };
+        /**
+         * AdminScreeningDecisionRecordResponse
+         * @description Every decision recorded for one agent, newest first.
+         */
+        AdminScreeningDecisionRecordResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string | null;
+            /** Decisions */
+            decisions: components["schemas"]["ScreeningDecisionRecordView"][];
+            latest: components["schemas"]["ScreeningDecisionRecordView"] | null;
+            review_capacity_thresholds: components["schemas"]["ReviewCapacityThresholdsView"];
+            review_timeout_policy: components["schemas"]["ReviewTimeoutPolicyView"];
         };
         /** AdminScreeningDisputeItem */
         AdminScreeningDisputeItem: {
@@ -22955,6 +23089,53 @@ export interface components {
             score_count: number;
         };
         /**
+         * ReviewCapacityThresholdsView
+         * @description Published review-capacity, completion, latency and backlog thresholds.
+         */
+        ReviewCapacityThresholdsView: {
+            /** Max Backlog Multiplier */
+            max_backlog_multiplier: number;
+            /** Max Fail Open Rate */
+            max_fail_open_rate: number;
+            /** Max P95 Review Latency Hours */
+            max_p95_review_latency_hours: number;
+            /** Min Completion Rate */
+            min_completion_rate: number;
+            /** Min Healthy Source Review Workers */
+            min_healthy_source_review_workers: number;
+        };
+        /**
+         * ReviewTimeoutPolicyView
+         * @description The published retry/deadline procedure and the timeout treatment.
+         */
+        ReviewTimeoutPolicyView: {
+            /** Applies From Policy Version */
+            applies_from_policy_version: number;
+            /** Artifact Failure Retries */
+            artifact_failure_retries: number;
+            /** Automatic Priority Rescreen On Recovery */
+            automatic_priority_rescreen_on_recovery: boolean;
+            /** Ban On Timeout */
+            ban_on_timeout: boolean;
+            /** Independent Worker Required For Platform Provider Failure */
+            independent_worker_required_for_platform_provider_failure: boolean;
+            /** Max Verification Window Hours */
+            max_verification_window_hours: number;
+            /** No Fault Retry Grant On Timeout */
+            no_fault_retry_grant_on_timeout: boolean;
+            /** Platform Failure Retries */
+            platform_failure_retries: number;
+            /** Precedent Weight On Timeout */
+            precedent_weight_on_timeout: boolean;
+            /** Provider Failure Retries */
+            provider_failure_retries: number;
+            /**
+             * Terminal Outcome
+             * @enum {string}
+             */
+            terminal_outcome: "clear" | "reject" | "review_timed_out";
+        };
+        /**
          * RouteCalibrationRequest
          * @description Exact reviewed manifest decision for one immutable route profile.
          */
@@ -24559,6 +24740,7 @@ export interface components {
          * @description What the screening queue requires now, plus the governing schedule.
          */
         ScreenerPolicyActivationView: {
+            activation_ceiling?: components["schemas"]["ActivationCeilingView"] | null;
             /** Builtin Policy Version */
             builtin_policy_version: number;
             /** Effective Policy Version */
@@ -24567,6 +24749,8 @@ export interface components {
             /** Floor Policy Version */
             floor_policy_version: number;
             latest: components["schemas"]["ScreenerPolicyActivationRevision"] | null;
+            review_capacity_thresholds?: components["schemas"]["ReviewCapacityThresholdsView"] | null;
+            review_timeout_policy?: components["schemas"]["ReviewTimeoutPolicyView"] | null;
             /** Revisions */
             revisions: components["schemas"]["ScreenerPolicyActivationRevision"][];
         };
@@ -25159,6 +25343,115 @@ export interface components {
              * @enum {string}
              */
             source: "platform" | "cache" | "bootstrap";
+        };
+        /**
+         * ScreeningDecisionIdentities
+         * @description The ten identities policy-v13.md binds into every decision record.
+         */
+        ScreeningDecisionIdentities: {
+            /** Applied Policy Version */
+            applied_policy_version: number;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Benchmark Version */
+            benchmark_version?: number | null;
+            /** Build Configuration */
+            build_configuration?: string | null;
+            /** Image Digest */
+            image_digest?: string | null;
+            /** Permitted Runtime Configuration */
+            permitted_runtime_configuration?: string | null;
+            /** Policy Digest */
+            policy_digest?: string | null;
+            /** Served Entrypoint */
+            served_entrypoint?: string | null;
+            /**
+             * Submission Uuid
+             * Format: uuid
+             */
+            submission_uuid: string;
+            /** Verification Profile Digest */
+            verification_profile_digest?: string | null;
+        };
+        /**
+         * ScreeningDecisionRecordView
+         * @description One terminal review decision, in policy-v13.md decision-record shape.
+         */
+        ScreeningDecisionRecordView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Attempt Id */
+            attempt_id: string | null;
+            /** Completed Checks */
+            completed_checks: string[];
+            /**
+             * Decided At
+             * Format: date-time
+             */
+            decided_at: string;
+            /**
+             * Decision Id
+             * Format: uuid
+             */
+            decision_id: string;
+            /** Evidence References */
+            evidence_references: string[];
+            /** Evidence Type */
+            evidence_type: string | null;
+            /** Failed Checks */
+            failed_checks: string[];
+            /**
+             * Failure Domain
+             * @enum {string}
+             */
+            failure_domain: "artifact" | "submission" | "platform" | "provider" | "none";
+            identities: components["schemas"]["ScreeningDecisionIdentities"];
+            /** Independent Workers */
+            independent_workers: number;
+            /** Is Verification Failure */
+            is_verification_failure: boolean;
+            /** Limitations */
+            limitations: string[];
+            /** No Fault */
+            no_fault: boolean;
+            /** Opaque Components */
+            opaque_components: string[];
+            /** Operator Override */
+            operator_override: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "clear" | "reject" | "review_timed_out";
+            /** Policy Version */
+            policy_version: number;
+            /** Precedent Weight */
+            precedent_weight: boolean;
+            /** Public Reason */
+            public_reason: string;
+            /** Quarantine Id */
+            quarantine_id: string | null;
+            /** Reason Codes */
+            reason_codes: string[];
+            /** Retry Count */
+            retry_count: number;
+            /** Retry Grant Id */
+            retry_grant_id: string | null;
+            /** Review Id */
+            review_id: string | null;
+            /** Review Scope */
+            review_scope: string | null;
+            /** Reviewer */
+            reviewer: string;
+            /** Supersedes Decision */
+            supersedes_decision: string | null;
+            /** Violation Proven */
+            violation_proven: boolean;
         };
         /**
          * ShadowReviewObservationRequest
@@ -31137,6 +31430,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreenerReviewSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_screening_decisions_api_v1_admin_screening_decisions_get: {
+        parameters: {
+            query?: {
+                outcome?: ("clear" | "reject" | "review_timed_out") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScreeningDecisionList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screening_decision_record_api_v1_admin_screening_decisions__agent_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScreeningDecisionRecordResponse"];
                 };
             };
             /** @description Validation Error */

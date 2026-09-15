@@ -21,7 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.attestation import canonical_pair, link_message
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import Agent, AthReview, AthReviewAction, EvaluationPayment
+from ditto.db.models import (
+    Agent,
+    AthReview,
+    AthReviewAction,
+    EvaluationPayment,
+    ScreeningDecisionRecord,
+)
 
 _TOKEN = "test-admin-token-at-least-32-characters"
 _HEADERS = {"Authorization": f"Bearer {_TOKEN}", "X-Admin-Actor": "operator"}
@@ -230,6 +236,23 @@ async def test_valid_link_backfills_pending_direct_pair_copy_review(
         assert (
             action.evidence["owner_attestation_id"] == response.json()["attestation_id"]
         )
+        # The automatic clear is part of the agent's decision history: no
+        # operator, no finding, no precedent, cited by the attestation itself.
+        record = await session.scalar(
+            select(ScreeningDecisionRecord).where(
+                ScreeningDecisionRecord.agent_id == held_id
+            )
+        )
+        assert record is not None
+        assert record.outcome == "clear"
+        assert record.review_id == review_id
+        assert record.reviewer == f"owner-link:{response.json()['attestation_id']}"
+        assert record.evidence_references == [
+            f"owner-attestation:{response.json()['attestation_id']}"
+        ]
+        assert record.violation_proven is False
+        assert record.precedent_weight is False
+        assert record.failure_domain == "none"
 
 
 async def test_pair_order_does_not_matter(

@@ -10,6 +10,16 @@ Platform build accepted a future schedule row for them. Until then the queue req
 ``SCREENING_FLOOR_POLICY_VERSION`` and workers screen under that older text,
 stamping outcomes with the version they actually screened under.
 
+``SCREENING_ACTIVATION_CEILING_POLICY_VERSION`` moved to v13 on 2026-09-14 by
+recorded release decision (#1891); ``ditto_screening_protocol.review_timeout``'s
+checklist (``test_policy_v13_activation_checklist``) stays the ledger of which
+published prerequisites are actually verified, and the activation board shows
+both numbers. The strict two-outcome policy's deadline finalizer -- the
+prerequisite still pending -- lives in
+``ditto.api_server.review_timeout_finalizer`` and terminates stale v13
+processing states as the no-fault ``review_timed_out`` decision, never a
+``REJECT``.
+
 Short-TTL cached, matching ``ditto.api_server.queue_policy_settings``: the
 poll/claim/heartbeat paths read this on every request, and an operator who
 schedules an activation and immediately re-reads the board must see their own

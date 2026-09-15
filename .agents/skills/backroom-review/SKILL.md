@@ -183,9 +183,10 @@ quarantine court's shape, with the crown re-read on both legs.
 
    `action` is `open` (hold for investigation), `clear`, or `reject`. A
    `reject` on a scored/live agent opens and resolves in one item; on a held
-   agent it resolves only. Each agent appears once; every reject cites at
-   least one `path:line`. The replay of the 2026-09-13 top-5 rejects lives at
-   `apps/platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json`.
+   agent it resolves only. Each agent appears once; every clear and every
+   reject cites at least one `path:line` (policy v13 refuses an uncited clear
+   on the single-item route too). The replay of the 2026-09-13 top-5 rejects
+   lives at `apps/platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json`.
 2. `create_ath_rulings_upload` (backroom:write), then
    `curl -X PUT -H "Content-Type: application/json" --data-binary @rulings.json "<url>"`
    within five minutes (<= 1 MiB). Small batches may skip the upload and pass
