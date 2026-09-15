@@ -16,6 +16,9 @@ coding_executor_host_count = 0
 enable_coding_hosted_host     = true
 coding_hosted_operators       = ["user:brian@omniaura.ai"]
 enable_coding_hosted_postgres = true
+
+# The root-capable protected host workflow grant needs its own reviewed change.
+enable_coding_hosted_operate_workflow = false
 # The generator VM must never become persistent production intent. The
 # protected plan workflow overrides this only for a supervised bootstrap/armed
 # window, then seals a teardown plan returning it to absent.

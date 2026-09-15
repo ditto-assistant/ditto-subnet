@@ -30,6 +30,11 @@ module "coding_hosted_host" {
   region    = var.region
   zone      = var.zone
   operators = var.coding_hosted_operators
+  workflow_operator = (
+    var.enable_coding_hosted_operate_workflow
+    ? "serviceAccount:${google_service_account.coding_hosted_operate.email}"
+    : ""
+  )
   postgres_peer = var.enable_coding_hosted_postgres ? {
     network_self_link = module.network.network_self_link
     private_ip        = module.pg_vm.internal_ip

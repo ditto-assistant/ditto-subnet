@@ -55,3 +55,14 @@ variable "boot_disk_gb" {
     error_message = "The host boot disk must be an integer between 200 and 1000 GB."
   }
 }
+
+variable "workflow_operator" {
+  description = "Optional single protected-workflow service account granted root-capable IAP SSH to this host only. Kept separate from human custodians; its only project-level grant is a custom role holding compute.projects.get."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.workflow_operator == "" || can(regex("^serviceAccount:[a-z][a-z0-9-]{4,28}[a-z0-9]@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$", var.workflow_operator))
+    error_message = "The workflow operator must be empty or exactly one project service account, never a user, group, domain, or public principal."
+  }
+}
