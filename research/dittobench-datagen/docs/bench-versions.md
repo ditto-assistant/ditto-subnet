@@ -24,7 +24,7 @@ applied to an existing version. It ships as a new one.
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
-| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types, v12-copy surface pass); families, grader, and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
+| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types); surface levers shipped (per-seed `persona.Grammar` banks for every tool/world/settings/integrity/question surface, permuted-clause identity records, typo projector v2, the salted artifact surface pass with a private-pass hand-off and a regeneration canary); families, grader, and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
 
 ## V10 generator-as-spec contract
 
@@ -515,9 +515,10 @@ extends it when its lever lands.
   `V10CaseProvenance.Relation` into the report for v13 runs only.
   `gen.TestV13GraderOnlyFieldsNeverReachHarnessWire` and the runner-side
   `TestV13GraderOnlyFieldsNeverReachRunPayload` pin the strip.
-- `gen/v13_surface.go`: the v13 surface pass, today a byte-for-byte copy of the
-  v12 pass (pinned by `TestV13SurfacePassStartsAsV12Copy`). It becomes the
-  public pre-pass whose output the private surface pass rewrites.
+- `gen/v13_surface.go`: the v13 surface pass. It started as a byte-for-byte
+  copy of the v12 pass and now carries the salted surface stages described
+  under "Surface levers" below; it is the public pre-pass whose output the
+  private surface pass rewrites.
 - Every staged v13 case is stamped `bench_version 13` (the program, divergence
   and family-compiler builders stamp the version that introduced them, and the
   grader dispatches its policy on that stamp). Effect on grading: none. The
@@ -535,14 +536,94 @@ extends it when its lever lands.
   verbatim hit, so the strict verbatim share (`StrictTransformedShare`) stays
   visible in the probe output and a v13 family regression cannot hide behind
   the classification.
-- `TestV13KnownVector` is a **placeholder** pin (seed `123456789`, full):
-  `b9bfb611f4509599fb6c79579114244178ca09077737a0313b6db9c5b6f1966c`. It is
-  re-pinned when the envelope lands, after the `/seed` label-leak fix.
+- `TestV13KnownVector` pins seed `123456789`, full, at surface salt 0. It moves
+  deliberately with every v13 lever (the surface PR re-pinned it from the
+  plumbing placeholder) and is re-pinned again after the `/seed` label-leak
+  fix; every v2..v12 vector must stay put.
 
 Scorer side: `scoregates.SupportedBenchVersion` accepts v13 (inheriting the v12
 gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
 technically ready; the runtime's advertised `supported_bench_versions` does
 **not** include 13 until the last v13 PR.
+
+### Surface levers (#1828 grammars + typo v2, #1832 salted surface pass)
+
+v13 keeps every v12 program semantic, oracle, run size, grader rule and the v9
+efficiency stack, and rebuilds the one thing a generator-inverse harness still
+had: a public, fixed surface. A parser holding the repository could recover
+every role binding from the v12 frames without reading, because the tool
+templates, the world tool prompts, the settings intents, the chitchat and
+declarative banks, the identity records and the question phrasings were finite
+literal lists. Every v13 lever is gated on `bench_version >= 13`, so v12 and
+earlier regenerate byte-identically (the v2–v12 known-vector tests are
+unchanged). The levers:
+
+- **Grammars for every surface, drawn from per-seed banks.** Every tool
+  category that rendered from a template list renders from a `persona.Grammar`
+  (`datagen/grammars_v13.go`); the seven shared-world tool prompts, the
+  state-dependent routing cues, the settings intents and the
+  discover-then-set capability prompts are slot-bound grammars; the
+  conversational, declarative, canary and stored-instruction probes
+  (`gen/v13_integrity.go`), the ordinary and story question frames and the
+  story anchors (`universe/v13_surface.go`) are grammars too. Before expansion
+  each grammar passes through `persona.SeedBank`, which keeps a per-(seed,
+  surface) two-thirds subset of every non-root symbol with at least four
+  alternatives; the root symbol and short banks are never thinned, so a
+  root-only grammar (several world tool prompts) still draws from its full
+  frame list and per-seed thinning narrows only the nested banks. Thinning is
+  a rotation, not the gate: the parserprobe ceiling (#1829) is what bounds a
+  grammar-inverse parser. Routing intent, `argKey` pins, expected tool
+  sequences, oracles and constraints are unchanged, and `validatePlan` still
+  proves every rendered question answerable.
+- **Identity records as permuted-clause grammars.** The project identity record
+  (`universe/world.go`) permutes its four role clauses per record — alias/formal
+  equivalence, internal owner, vendor, AP record — omits the vendor clause on
+  ~40% of records (the business paste restates every vendor line; the clause is
+  never graded from this record), and states the alias and formal name as
+  interchangeable ("X and Y are the same project") rather than only as "when I
+  say X I mean Y". The person identity record varies how the nickname is
+  attributed. Every join key stays present.
+- **Typo projector v2** (`internal/textnoise/v2.go`). The keyboard layout is
+  drawn per (seed, salt) from QWERTY, AZERTY, QWERTZ and a fat-finger mobile
+  layout; a chosen token receives 1–3 edits bounded by ⌊len/3⌋ (minimum 1);
+  mechanisms are keyboard neighbour, transposition, omission, duplication,
+  phonetic digraph swap and autocorrect-style vowel confusion — no closed
+  misspelling table; ANY token class is eligible except protected values, quoted
+  spans, identifiers and sentence-interior capitalised tokens (the proper-noun
+  proxy), so there is no framing safelist to invert; a meaning-preserving
+  neighbour check rejects every edit whose result is a different real word
+  (`form`→`from`) and the polarity/temporal/comparative vocabulary (`not`,
+  `before`, `increase`, …) is never edited; word edges are preserved. The v8
+  single-edit projector is retired for v13 tool prompts, questions and seeded
+  prompts; the story compiler uses v2 with its fact-protected six-token budget.
+- **The salted surface pass** (`gen/v13_surface.go`,
+  `V13ApplyArtifactSurfacePass`). One pass over the assembled artifact renders
+  every harness-visible surface as a function of `(seed, surface salt)`: the
+  v12 compositional stored-directive markers keyed by the surface seed; typo v2
+  over a stable 70% of tool prompts, memory questions and non-story seeded
+  prompts (one token per twelve words, at most four); a `TranslationPass` hook
+  (no-op by default) that a validator or the Platform can bind to a private
+  paraphrase/translation pass; and, under a non-zero salt, a regeneration
+  canary — the world canary nonce is re-keyed within its per-seed shape and the
+  public (salt 0) nonce is planted as a distractor, so a harness that answers
+  from a dataset it regenerated from the public generator scores zero on the
+  canary. This canary re-key is the one deliberate exception to "the pass never
+  touches an oracle" (#1832 AC2) and only fires under a non-zero salt, so the
+  salt-0 production/rehearsal path stays oracle-exact; it needs owner sign-off
+  before any non-zero salt is served.
+  `GenerateDatasetWithSurface` / `BuildArtifactForVersionWithSurface`
+  carry `SurfaceOptions{Salt, Translation}`; `generate -surface-salt` exposes
+  it. Salt 0 is the public rehearsal default and is byte-identical to the
+  unsalted path (`TestV13SaltZeroIsByteIdenticalToUnsaltedPath`); a non-zero
+  salt changes surfaces only (`TestV13SaltChangesOnlySurfaces`) and is recorded
+  on the artifact as `surface_salt`. Which side holds the salt — validator
+  commit-reveal or Platform-side private paraphrase — is an owner decision
+  tracked separately; no salt exchange ships with this contract.
+
+The wire/artifact schema is otherwise unchanged: v13 emits the same
+`MemoryCase` / `ToolCase` / `DatasetArtifact` shapes, with the same
+grading-authoritative fields. The harness wire (`RunRequest`, `SeedRequest`)
+does not change; `surface_salt` is an artifact/audit field only.
 
 ### Governing invariants
 

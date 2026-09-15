@@ -473,10 +473,25 @@ func storyFactAt(phase string, afterEvent int, key, value string, renderings ...
 }
 
 func (s Story) render(seed int64) (string, string) {
+	return s.renderForVersion(seed, 0)
+}
+
+// renderForVersion renders the story prompt with the fact-safe writing noise
+// of the requested contract. Versions through 12 use the v1 projector (six
+// single edits, QWERTY); bench_version >= 13 uses the typo v2 projector (six
+// tokens, per-seed layout, bounded multi-edit, meaning-preserving check). Story
+// pairs are excluded from the artifact-level v13 pass, so this is the only
+// noise a story carries; it is seed-keyed, and a salt-keyed variant belongs to
+// the private surface pass follow-up.
+func (s Story) renderForVersion(seed int64, benchVersion int) (string, string) {
 	draft, response := s.renderDraft(seed)
 	protected := make([]string, 0, len(s.Facts))
 	for _, fact := range s.Facts {
 		protected = append(protected, fact.Value)
+	}
+	if benchVersion >= protocol.BenchVersionV13 {
+		prompt, _ := textnoise.ProjectV2(draft, seed, 0, "story:"+s.ID, textnoise.OptionsV2{MaxTokens: 6, Protected: protected})
+		return prompt, response
 	}
 	prompt, _ := textnoise.Project(draft, seed, "story:"+s.ID, textnoise.Options{
 		MaxEdits: 6, Grammar: true, Protected: protected,
