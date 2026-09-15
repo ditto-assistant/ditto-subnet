@@ -188,6 +188,7 @@ describe('Backroom MCP tools', () => {
         'apply_copy_court_settings',
         'list_hotkey_bans',
         'list_team_canaries',
+        'set_team_canary',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
         'get_agent_coding_certifications',
@@ -295,7 +296,9 @@ describe('Backroom MCP tools', () => {
     // history read tool adds one more small input schema. The batched ATH
     // rulings triple adds the rulings-document schema twice (inline preview and
     // inline execute) plus the bounded board projection; its tutorials live in
-    // get_backroom_tool_help.
+    // get_backroom_tool_help. Four long read notes (quarantine contexts, copy
+    // diff manifest, submissions page, contract refresh) moved to concise
+    // catalog lines to reclaim ~1,050 chars rather than raise this budget.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(130_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
@@ -970,6 +973,20 @@ describe('Backroom MCP tools', () => {
     expect(payload.guidance.length).toBeGreaterThan(3_000)
     expect(payload.guidance).toContain('APPLY QUEUE POLICY SETTINGS')
     expect(payload.guidance).toContain('deferred_source_review')
+
+    // Reads whose catalog line was shortened keep their full notes verbatim.
+    for (const [tool, needle] of [
+      ['list_screening_submissions', 'get_screening_submission is the exact one-row detail path'],
+      ['get_copy_review_source_diff', 'a reformatted copy'],
+      ['get_screening_quarantine_contexts', 'one stale queue row does not hide the rest'],
+      ['get_benchmark_contract_refresh', 'accepted-score count, active-screening state'],
+    ] as const) {
+      const help = readJsonResult(
+        await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool } }),
+      ) as { summary: string; guidance: string }
+      expect(help.guidance).toContain(needle)
+      expect(help.summary.length).toBeLessThan(help.guidance.length)
+    }
 
     await client.close()
     await server.close()
@@ -5109,6 +5126,278 @@ describe('Backroom MCP tools', () => {
     )
     await connection.client.close()
     await connection.server.close()
+  })
+
+  it('reserves and binds team canaries only with the exact confirmation and the session actor', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const exclusionId = '3f1c9d27-b40a-4e6b-9c1d-2a7f0e5b8c41'
+    const agentId = '11ad9203-0860-40a9-9432-059b4ef68865'
+    const minerHotkey = '5FKbkmKbJHTgsELVPigLJqbmovaviDN7dHZzX7UJ6xoqG4fx'
+    const artifactSha256 = 'c1'.repeat(32)
+    const screenedImageSha256 = 'e3'.repeat(32)
+    const reserved = {
+      exclusion_id: exclusionId,
+      kind: 'team_canary',
+      miner_hotkey: minerHotkey,
+      artifact_sha256: artifactSha256,
+      reason: 'team canary for hosted coding certification',
+      created_by: 'peyton@omniaura.ai',
+      created_at: '2026-09-14T00:00:00Z',
+      agent_id: null,
+      screened_image_sha256: null,
+      bound_by: null,
+      bound_reason: null,
+      bound_at: null,
+      matched_agents: [],
+    }
+    const bound = {
+      ...reserved,
+      agent_id: agentId,
+      screened_image_sha256: screenedImageSha256,
+      bound_by: 'peyton@omniaura.ai',
+      bound_reason: 'bound after the screened image was verified',
+      bound_at: '2026-09-14T01:00:00Z',
+      matched_agents: [
+        {
+          agent_id: agentId,
+          status: 'screening_passed',
+          sha256: artifactSha256,
+          screened_image_sha256: screenedImageSha256,
+          state: 'bound',
+          competition_excluded: true,
+        },
+      ],
+    }
+    const reserve = {
+      action: 'reserve',
+      minerHotkey,
+      artifactSha256,
+      reason: reserved.reason,
+      confirmation: `RESERVE TEAM CANARY ${minerHotkey} ${artifactSha256}`,
+    }
+    const bind = {
+      action: 'bind',
+      exclusionId,
+      agentId,
+      minerHotkey,
+      artifactSha256,
+      screenedImageSha256,
+      reason: bound.bound_reason,
+      confirmation: `BIND TEAM CANARY ${exclusionId} ${agentId}`,
+    }
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    // A read-only connection cannot reach Platform even with a valid request.
+    const readConnection = await connect([BACKROOM_READ_SCOPE])
+    const readOnly = await readConnection.client.callTool({
+      name: 'set_team_canary',
+      arguments: reserve,
+    })
+    expect(readOnly.isError).toBe(true)
+    expect(readTextResult(readOnly)).toContain('backroom:write')
+    await readConnection.client.close()
+    await readConnection.server.close()
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const help = readJsonResult(
+        await client.callTool({
+          name: 'get_backroom_tool_help',
+          arguments: { tool: 'set_team_canary' },
+        }),
+      ) as { guidance: string }
+      for (const needle of [
+        'RESERVE TEAM CANARY <minerHotkey> <artifactSha256>',
+        'BIND TEAM CANARY <exclusionId> <agentId>',
+        'screenedImageSha256',
+        'including actor, is refused',
+        'no tool or endpoint that lifts it',
+        'Requires backroom:write',
+      ]) {
+        expect(help.guidance).toContain(needle)
+      }
+
+      for (const refused of [
+        // Wrong or reordered phrases.
+        { ...reserve, confirmation: `RESERVE TEAM CANARY ${artifactSha256} ${minerHotkey}` },
+        { ...reserve, confirmation: `${reserve.confirmation} ` },
+        { ...bind, confirmation: `BIND TEAM CANARY ${agentId} ${exclusionId}` },
+        { ...bind, confirmation: reserve.confirmation },
+        // Platform formats UUIDs lowercase, so an uppercase id could never match there.
+        {
+          ...bind,
+          agentId: agentId.toUpperCase(),
+          confirmation: `BIND TEAM CANARY ${exclusionId} ${agentId.toUpperCase()}`,
+        },
+        // Bad shapes.
+        { ...reserve, action: 'lift' },
+        { ...reserve, artifactSha256: 'C1'.repeat(32), confirmation: `RESERVE TEAM CANARY ${minerHotkey} ${'C1'.repeat(32)}` },
+        { ...reserve, minerHotkey: 'not-a-hotkey', confirmation: `RESERVE TEAM CANARY not-a-hotkey ${artifactSha256}` },
+        { ...reserve, reason: 'short' },
+        { ...bind, screenedImageSha256: undefined },
+        { ...bind, screenedImageSha256: 'e3'.repeat(31) },
+        // A reserve request cannot smuggle bind fields, and nobody may choose the actor.
+        { ...reserve, agentId },
+        { ...reserve, actor: 'someone-else@example.com' },
+        { ...bind, actor: 'someone-else@example.com' },
+        {},
+      ]) {
+        const response = await client.callTool({ name: 'set_team_canary', arguments: refused })
+        expect(response.isError, JSON.stringify(refused)).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      // Each write is followed by one re-read of the durable list, and the
+      // result is what Platform stores, not what the write response claimed.
+      fetchMock
+        .mockResolvedValueOnce(Response.json(reserved, { status: 201 }))
+        .mockResolvedValueOnce(Response.json({ total: 1, exclusions: [reserved] }))
+      const reservedResult = await client.callTool({ name: 'set_team_canary', arguments: reserve })
+      expect(reservedResult.isError, readTextResult(reservedResult)).not.toBe(true)
+      expect(readJsonResult(reservedResult)).toMatchObject({
+        exclusion: { exclusion_id: exclusionId, agent_id: null, created_by: 'peyton@omniaura.ai' },
+        total: 1,
+      })
+
+      fetchMock
+        .mockResolvedValueOnce(Response.json({ ...bound, bound_reason: 'stale write response' }))
+        .mockResolvedValueOnce(Response.json({ total: 1, exclusions: [bound] }))
+      const boundResult = await client.callTool({ name: 'set_team_canary', arguments: bind })
+      expect(boundResult.isError, readTextResult(boundResult)).not.toBe(true)
+      expect(readJsonResult(boundResult)).toMatchObject({
+        exclusion: {
+          agent_id: agentId,
+          bound_reason: bound.bound_reason,
+          matched_agents: [{ state: 'bound', competition_excluded: true }],
+        },
+        total: 1,
+      })
+
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+      for (const index of [1, 3]) {
+        const [rereadUrl, rereadInit] = fetchMock.mock.calls[index] as [string, RequestInit]
+        expect(rereadUrl).toBe(
+          'https://platform-api.heyditto.ai/api/v1/admin/noncompetitive-canaries?limit=200&offset=0',
+        )
+        expect(rereadInit.method ?? 'GET').toBe('GET')
+      }
+      const [reserveUrl, reserveInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(reserveUrl).toBe('https://platform-api.heyditto.ai/api/v1/admin/noncompetitive-canaries')
+      expect(reserveInit.method).toBe('POST')
+      expect(reserveInit.headers).toMatchObject({
+        Authorization: 'Bearer platform-admin-token',
+        'X-Admin-Actor': 'peyton@omniaura.ai',
+      })
+      expect(JSON.parse(String(reserveInit.body))).toEqual({
+        miner_hotkey: minerHotkey,
+        artifact_sha256: artifactSha256,
+        reason: reserved.reason,
+        confirmation: reserve.confirmation,
+      })
+      const [bindUrl, bindInit] = fetchMock.mock.calls[2] as [string, RequestInit]
+      expect(bindUrl).toBe(
+        `https://platform-api.heyditto.ai/api/v1/admin/noncompetitive-canaries/${exclusionId}/bind`,
+      )
+      expect(bindInit.method).toBe('POST')
+      expect(bindInit.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+      expect(JSON.parse(String(bindInit.body))).toEqual({
+        agent_id: agentId,
+        miner_hotkey: minerHotkey,
+        artifact_sha256: artifactSha256,
+        screened_image_sha256: screenedImageSha256,
+        reason: bound.bound_reason,
+        confirmation: bind.confirmation,
+      })
+
+      // Platform's own refusals surface verbatim and are never retried.
+      fetchMock.mockClear()
+      fetchMock.mockResolvedValueOnce(
+        Response.json(
+          { detail: 'team canary artifact already has scores; reserve before upload' },
+          { status: 409 },
+        ),
+      )
+      const scored = await client.callTool({ name: 'set_team_canary', arguments: reserve })
+      expect(scored.isError).toBe(true)
+      expect(readTextResult(scored)).toContain('already has scores')
+      fetchMock.mockResolvedValueOnce(
+        Response.json({ detail: 'team canary binding does not match the exact agent identity' }, { status: 409 }),
+      )
+      const drifted = await client.callTool({ name: 'set_team_canary', arguments: bind })
+      expect(drifted.isError).toBe(true)
+      expect(readTextResult(drifted)).toContain('does not match the exact agent identity')
+      fetchMock.mockResolvedValueOnce(
+        Response.json({ detail: 'team canary was not found' }, { status: 404 }),
+      )
+      const missing = await client.callTool({ name: 'set_team_canary', arguments: bind })
+      expect(missing.isError).toBe(true)
+      expect(readTextResult(missing)).toContain('team canary was not found')
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+
+      // Once a write was sent, a failed re-read, an unparseable write response or
+      // a list that lacks the exclusion reports an unknown outcome and never
+      // retries the write.
+      const unconfirmed: Array<[string, Record<string, unknown>, Response[]]> = [
+        [
+          'failed re-read',
+          bind,
+          [Response.json(bound), Response.json({ detail: 'database unavailable' }, { status: 503 })],
+        ],
+        ['unparseable write response', reserve, [Response.json({ ok: true }, { status: 201 })]],
+        [
+          'exclusion missing from the re-read',
+          bind,
+          [Response.json(bound), Response.json({ total: 0, exclusions: [] })],
+        ],
+        [
+          'short re-read',
+          reserve,
+          [
+            Response.json(reserved, { status: 201 }),
+            Response.json({ total: 2, exclusions: [reserved] }),
+            Response.json({ total: 2, exclusions: [] }),
+          ],
+        ],
+      ]
+      for (const [label, argumentsForCall, responses] of unconfirmed) {
+        fetchMock.mockReset()
+        for (const response of responses) fetchMock.mockResolvedValueOnce(response)
+        const outcome = await client.callTool({ name: 'set_team_canary', arguments: argumentsForCall })
+        expect(outcome.isError, label).toBe(true)
+        expect(readTextResult(outcome), label).toContain('The write may have succeeded. It was not retried')
+        expect(fetchMock, label).toHaveBeenCalledTimes(responses.length)
+        expect(
+          fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST'),
+          label,
+        ).toHaveLength(1)
+      }
+      fetchMock.mockReset()
+      fetchMock
+        .mockResolvedValueOnce(Response.json(bound))
+        .mockResolvedValueOnce(Response.json({ detail: 'database unavailable' }, { status: 503 }))
+      const failedReread = await client.callTool({ name: 'set_team_canary', arguments: bind })
+      expect(readTextResult(failedReread)).toContain(`bind for team canary ${exclusionId}`)
+
+      // The re-read pages through a list longer than one Platform page.
+      fetchMock.mockReset()
+      const earlier = Array.from({ length: 200 }, (_, index) => ({
+        ...reserved,
+        exclusion_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      }))
+      fetchMock
+        .mockResolvedValueOnce(Response.json(reserved, { status: 201 }))
+        .mockResolvedValueOnce(Response.json({ total: 201, exclusions: earlier }))
+        .mockResolvedValueOnce(Response.json({ total: 201, exclusions: [reserved] }))
+      const paged = await client.callTool({ name: 'set_team_canary', arguments: reserve })
+      expect(paged.isError, readTextResult(paged)).not.toBe(true)
+      expect(readJsonResult(paged)).toMatchObject({ exclusion: { exclusion_id: exclusionId }, total: 201 })
+      expect(String(fetchMock.mock.calls[2]?.[0])).toContain('limit=200&offset=200')
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('answers owner attestations on read scope alone, keeping every grade and revoked links', async () => {

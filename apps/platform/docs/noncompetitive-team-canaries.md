@@ -85,6 +85,9 @@ winner projection:
 - **Operators.** `GET /api/v1/admin/noncompetitive-canaries` and the read-only
   Backroom tool `list_team_canaries` list every exclusion. Each entry shows its
   audit fields and the exact agents it currently removes, with their state.
+  The Backroom write tool `set_team_canary` (`action` reserve or bind, see
+  `apps/backroom/docs/mcp.md`) calls the two POST endpoints with the same
+  confirmations and the signed-in operator as the audit actor.
 
 ## Operating a canary
 

@@ -79,6 +79,7 @@ import {
   getCoreQualificationPolicyInputSchema,
   refreshAgentCoreQualificationInputSchema,
   setCoreQualificationPolicyMcpInputSchema,
+  setTeamCanaryMcpInputSchema,
   agentScoresLookupInputSchema,
   scoreLeaderboardInputSchema,
   ownerFootprintLookupInputSchema,
@@ -241,6 +242,7 @@ import {
   updateSubmissionSettings,
   fetchHotkeyBans,
   fetchTeamCanaries,
+  setTeamCanary,
   unbanHotkey,
   fetchConfirmationBundleSettings,
   setConfirmationBundleSettings,
@@ -320,6 +322,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'start_runtime_profile',
   'set_submission_cooldown',
   'unban_hotkey',
+  'set_team_canary',
   'set_source_release_policy',
   'set_burn_settings',
   'set_confirmation_bundle_settings',
@@ -667,6 +670,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read the current miner submission fee and owner-coldkey cooldown. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
   list_hotkey_bans: 'Hotkey bans.',
   list_team_canaries: 'Team canaries.',
+  set_team_canary: 'Reserve or bind a team canary; read its tool help first.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
     'Read isolated LongMem confirmation issuance settings and optional audit history. Shadow cannot full-confirm. This does not activate rewards.',
@@ -706,6 +710,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   // repeating the excerpt semantics that get_backroom_tool_help carries.
   read_screening_source_file:
     'Read a bounded line range (max 400 lines) from one file in a screened submission. Get the line first from search_screening_source, or from flagged path:line evidence. Requires backroom:artifact:read.',
+  // Concise catalog lines for four reads whose full notes previously rode in
+  // every session's catalog. The notes stay verbatim in get_backroom_tool_help;
+  // this reclaims whole-payload headroom instead of raising the budget.
+  get_screening_quarantine_contexts:
+    'Review context for up to 50 quarantines; each item returns its context or its own error. Never returns source or artifact URLs.',
+  get_copy_review_source_diff:
+    'Per-file diff manifest between a held agent and its matched agent: added, removed, modified, identical or renamed, line counts, and normalized-identical copies. Requires backroom:artifact:read.',
+  list_screening_submissions:
+    'Page SN118 submissions newest first. generation=active (default) is the current benchmark admission set; all is the cross-benchmark audit view. detail=full returns every attempt.',
+  get_benchmark_contract_refresh:
+    'Inspect whether one submission\'s stale benchmark contract can be safely rebuilt, with any blocking reason. Read-only.',
 }
 
 export function createBackroomMcpServer(props: McpGrantProps) {
@@ -1837,6 +1852,26 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         ),
       )
     },
+  )
+
+  registerTool(
+    'set_team_canary',
+    {
+      title: 'Set team canary',
+      description:
+        'Reserve or bind one audited noncompetitive team canary. The exclusion only removes that exact identity from ranking, weights and emissions: it never changes agent status, screening, copy detection or any other gate, it is append-only, and there is no tool or endpoint that lifts it. Read list_team_canaries first. Arguments are one of two exact shapes; any other key, including actor, is refused. ' +
+        'action="reserve": minerHotkey (SS58), artifactSha256 (64 lowercase hex), reason (at least 8 characters), and confirmation exactly "RESERVE TEAM CANARY <minerHotkey> <artifactSha256>". Reserve before upload: Platform refuses the reservation if that hotkey + artifact pair already has any score, or is already reserved. ' +
+        'action="bind": exclusionId and agentId (lowercase UUIDs), minerHotkey, artifactSha256, screenedImageSha256 (64 lowercase hex), reason, and confirmation exactly "BIND TEAM CANARY <exclusionId> <agentId>". Bind after screening: Platform binds a reservation once, and only when the hotkey and artifact equal the reservation and the agent row, and that agent\'s screened image digest equals screenedImageSha256; a mismatch, an unscreened agent, an already-bound reservation, an agent bound to another canary, or an unknown exclusion or agent is refused. ' +
+        'Invalid shapes and a wrong confirmation are refused before any Platform call, and Platform checks the confirmation again. The signed-in operator email is the audit actor. After the write it re-reads Platform, like unban_hotkey, and returns the durable exclusion with its matched agents plus the full team canary list. If that response or re-read fails, it reports that the write may have succeeded and never retries; check list_team_canaries before acting again. Requires backroom:write.',
+      inputSchema: setTeamCanaryMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(async () =>
+        compacted(await setTeamCanary(input, props.session.email), {
+          exclusions: { pin: ['exclusion_id', 'miner_hotkey'] },
+        }),
+      ),
   )
 
   registerTool(

@@ -1,5 +1,7 @@
 import '@tanstack/react-start/server-only'
 
+import type { z } from 'zod'
+
 import type { operations as PlatformOperations } from '../generated/platform-api'
 
 import {
@@ -191,6 +193,8 @@ import {
   hotkeyBanControlSchema,
   hotkeyBanListSchema,
   teamCanaryListSchema,
+  teamCanaryExclusionSchema,
+  setTeamCanaryInputSchema,
   hotkeyBanLookupInputSchema,
   hotkeyUnbanResponseSchema,
   unbanHotkeyInputSchema,
@@ -685,6 +689,98 @@ export async function fetchTeamCanaries(limit: number, offset: number) {
   })
   const payload = await platformAdminRequest(`${TEAM_CANARIES_PATH}?${query}`)
   return teamCanaryListSchema.parse(payload)
+}
+
+// Team canaries are few, so the post-write re-read collects the whole durable
+// list in bounded pages rather than trusting the write response.
+const TEAM_CANARY_REREAD_PAGE_SIZE = 200
+const TEAM_CANARY_REREAD_MAX_PAGES = 5
+
+async function fetchAllTeamCanaries() {
+  const exclusions: z.infer<typeof teamCanaryListSchema>['exclusions'] = []
+  let total = 0
+  for (let page = 0; page < TEAM_CANARY_REREAD_MAX_PAGES; page += 1) {
+    const value = await fetchTeamCanaries(TEAM_CANARY_REREAD_PAGE_SIZE, exclusions.length)
+    total = value.total
+    exclusions.push(...value.exclusions)
+    if (value.exclusions.length === 0 || exclusions.length >= total) break
+  }
+  if (exclusions.length !== total) {
+    throw new Error(`the list returned ${exclusions.length} of ${total} team canaries`)
+  }
+  return { total, exclusions }
+}
+
+// Once Platform has been sent a write, every later failure (an unparseable
+// response or a failed re-read) leaves its outcome unknown here. Say so and
+// stop: the tool never retries a write on its own.
+function teamCanaryWriteUnconfirmed(action: string, exclusionId: string | undefined, error: unknown) {
+  const target = exclusionId ? `team canary ${exclusionId}` : 'the team canary'
+  const reason = error instanceof Error ? error.message : String(error)
+  return new Error(
+    `Platform was sent the ${action} for ${target}, but reading back the durable team canary list failed: ${reason}. ` +
+      'The write may have succeeded. It was not retried; check list_team_canaries before any further change.',
+  )
+}
+
+// Reserve or bind one audited team canary. The exact shape and confirmation are
+// parsed here before any Platform call, Platform checks the same confirmation
+// again, and the audit actor is always the signed-in operator. Like
+// unban_hotkey, the result is re-read from Platform after the write.
+export async function setTeamCanary(rawInput: unknown, actor: string) {
+  const input = setTeamCanaryInputSchema.parse(rawInput)
+  const payload = await sendTeamCanaryWrite(input, actor)
+  const knownId = input.action === 'bind' ? input.exclusionId : undefined
+  try {
+    const written = teamCanaryExclusionSchema.parse(payload)
+    if (knownId !== undefined && written.exclusion_id !== knownId) {
+      throw new Error(`Platform answered for exclusion ${written.exclusion_id}`)
+    }
+    const durable = await fetchAllTeamCanaries()
+    const exclusion = durable.exclusions.find((row) => row.exclusion_id === written.exclusion_id)
+    if (!exclusion) {
+      throw new Error(`exclusion ${written.exclusion_id} is not in the re-read list`)
+    }
+    return { exclusion, ...durable }
+  } catch (error) {
+    const writtenId =
+      knownId ??
+      (typeof payload === 'object' && payload !== null && 'exclusion_id' in payload
+        ? String(payload.exclusion_id)
+        : undefined)
+    throw teamCanaryWriteUnconfirmed(input.action, writtenId, error)
+  }
+}
+
+async function sendTeamCanaryWrite(
+  input: z.infer<typeof setTeamCanaryInputSchema>,
+  actor: string,
+): Promise<unknown> {
+  if (input.action === 'reserve') {
+    type ReserveRequest =
+      PlatformOperations['reserve_api_v1_admin_noncompetitive_canaries_post']['requestBody']['content']['application/json']
+    const body = {
+      miner_hotkey: input.minerHotkey,
+      artifact_sha256: input.artifactSha256,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    } satisfies ReserveRequest
+    return platformAdminRequest(TEAM_CANARIES_PATH, { method: 'POST', actor, body })
+  }
+  type BindRequest =
+    PlatformOperations['bind_api_v1_admin_noncompetitive_canaries__exclusion_id__bind_post']['requestBody']['content']['application/json']
+  const body = {
+    agent_id: input.agentId,
+    miner_hotkey: input.minerHotkey,
+    artifact_sha256: input.artifactSha256,
+    screened_image_sha256: input.screenedImageSha256,
+    reason: input.reason,
+    confirmation: input.confirmation,
+  } satisfies BindRequest
+  return platformAdminRequest(
+    `${TEAM_CANARIES_PATH}/${encodeURIComponent(input.exclusionId)}/bind`,
+    { method: 'POST', actor, body },
+  )
 }
 
 const HOTKEY_BANS_PATH = '/api/v1/admin/hotkey-bans'

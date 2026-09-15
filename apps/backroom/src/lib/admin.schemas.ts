@@ -1046,8 +1046,9 @@ export function unbanHotkeyConfirmation(hotkey: string) {
 
 export type HotkeyBanControl = z.infer<typeof hotkeyBanControlSchema>
 
-// Audited noncompetitive team canaries. Read-only in Backroom: an exclusion can
-// only remove an exact identity from weights and emissions, never lift a gate.
+// Audited noncompetitive team canaries. An exclusion can only remove an exact
+// identity from weights and emissions, never lift a gate, and Backroom has no
+// way to lift an exclusion: set_team_canary only reserves or binds.
 export const teamCanaryAgentSchema = z.object({
   agent_id: z.string().uuid(),
   status: z.enum([
@@ -1089,6 +1090,70 @@ export const teamCanaryListSchema = z.object({
   total: z.number().int().nonnegative(),
   exclusions: z.array(teamCanaryExclusionSchema).max(200),
 } satisfies PlatformResponseShape<GeneratedAdminTeamCanaryList>)
+
+// Platform formats both confirmations from its canonical values: the SS58
+// hotkey and lowercase digest as sent, and each UUID as Python's lowercase
+// str(UUID). Backroom requires those exact canonical forms so the phrase an
+// operator types here is the phrase Platform checks again.
+const TEAM_CANARY_HOTKEY = /^[1-9A-HJ-NP-Za-km-z]{47,48}$/
+const TEAM_CANARY_SHA256 = /^[0-9a-f]{64}$/
+const TEAM_CANARY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+export function teamCanaryReserveConfirmation(minerHotkey: string, artifactSha256: string) {
+  return `RESERVE TEAM CANARY ${minerHotkey} ${artifactSha256}`
+}
+
+export function teamCanaryBindConfirmation(exclusionId: string, agentId: string) {
+  return `BIND TEAM CANARY ${exclusionId} ${agentId}`
+}
+
+// The MCP catalog carries every tool schema in every session and has almost no
+// headroom under its whole-payload budget, so set_team_canary publishes an open
+// object envelope. Its fields live in get_backroom_tool_help, and the service
+// parses the exact schema below before any Platform call. Unknown keys,
+// including a client-supplied actor, are refused rather than dropped.
+export const setTeamCanaryMcpInputSchema = z.looseObject({})
+
+const teamCanaryIdentityShape = {
+  minerHotkey: z.string().regex(TEAM_CANARY_HOTKEY, 'minerHotkey must be an SS58 hotkey'),
+  artifactSha256: z
+    .string()
+    .regex(TEAM_CANARY_SHA256, 'artifactSha256 must be 64 lowercase hex characters'),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+}
+
+export const setTeamCanaryInputSchema = z
+  .discriminatedUnion('action', [
+    z.strictObject({
+      action: z.literal('reserve'),
+      ...teamCanaryIdentityShape,
+    }),
+    z.strictObject({
+      action: z.literal('bind'),
+      exclusionId: z
+        .string()
+        .regex(TEAM_CANARY_UUID, 'exclusionId must be a lowercase UUID'),
+      agentId: z.string().regex(TEAM_CANARY_UUID, 'agentId must be a lowercase UUID'),
+      ...teamCanaryIdentityShape,
+      screenedImageSha256: z
+        .string()
+        .regex(TEAM_CANARY_SHA256, 'screenedImageSha256 must be 64 lowercase hex characters'),
+    }),
+  ])
+  .superRefine((input, context) => {
+    const expected =
+      input.action === 'reserve'
+        ? teamCanaryReserveConfirmation(input.minerHotkey, input.artifactSha256)
+        : teamCanaryBindConfirmation(input.exclusionId, input.agentId)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        path: ['confirmation'],
+        message: `confirmation must be exactly ${expected}`,
+      })
+    }
+  })
 
 // SN118 relative token-efficiency bonus (bench_version >= 7).
 //
