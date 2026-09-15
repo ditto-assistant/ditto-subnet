@@ -17,6 +17,24 @@ from ditto.api_models.coding_hosted import (
 )
 
 MAX_HOSTED_RESULT_BYTES = 8192
+
+
+def hosted_canonical_bytes(
+    value: HostedCodingRequest | HostedCodingResult | HostedCodingStatus,
+) -> bytes:
+    """The exact wire bytes Platform emits and the validator sends for receipts."""
+    return (
+        json.dumps(
+            value.model_dump(mode="json", by_alias=True),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode()
+
+
 _Receipt = TypeVar("_Receipt", HostedCodingResult, HostedCodingStatus)
 
 
@@ -48,6 +66,7 @@ def verify_hosted_result(
     expected: HostedResultExpectation,
     trusted_verifiers: Mapping[str, SignatureVerifier],
     now_unix: int,
+    clock_skew_seconds: int = 0,
 ) -> HostedCodingResult:
     """Accept only a canonical projection signed by an out-of-band trusted key.
 
@@ -61,6 +80,7 @@ def verify_hosted_result(
         trusted_verifiers=trusted_verifiers,
         now_unix=now_unix,
         model=HostedCodingResult,
+        clock_skew_seconds=clock_skew_seconds,
     )
 
 
@@ -70,6 +90,7 @@ def verify_hosted_status(
     expected: HostedResultExpectation,
     trusted_verifiers: Mapping[str, SignatureVerifier],
     now_unix: int,
+    clock_skew_seconds: int = 0,
 ) -> HostedCodingStatus:
     """Verify a short-lived pending projection, never a terminal result."""
     return _verify_projection(
@@ -78,6 +99,7 @@ def verify_hosted_status(
         trusted_verifiers=trusted_verifiers,
         now_unix=now_unix,
         model=HostedCodingStatus,
+        clock_skew_seconds=clock_skew_seconds,
     )
 
 
@@ -88,24 +110,22 @@ def _verify_projection(  # noqa: UP047 - mirrored Platform source supports Pytho
     trusted_verifiers: Mapping[str, SignatureVerifier],
     now_unix: int,
     model: type[_Receipt],
+    clock_skew_seconds: int = 0,
 ) -> _Receipt:
-    if type(now_unix) is not int or not body or len(body) > MAX_HOSTED_RESULT_BYTES:
+    if (
+        type(now_unix) is not int
+        or type(clock_skew_seconds) is not int
+        or not 0 <= clock_skew_seconds <= 60
+        or not body
+        or len(body) > MAX_HOSTED_RESULT_BYTES
+    ):
         raise HostedCodingVerificationError("hosted Coding response bounds failed")
     verifier = trusted_verifiers.get(expected.platform_hotkey)
     if verifier is None:
         raise HostedCodingVerificationError("hosted Coding signer is not trusted")
     try:
         result = model.model_validate_json(body)
-        canonical = (
-            json.dumps(
-                result.model_dump(mode="json", by_alias=True),
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                allow_nan=False,
-            )
-            + "\n"
-        ).encode()
+        canonical = hosted_canonical_bytes(result)
         # Reject unknown response fields rather than inadvertently retaining them.
         # Request parsing remains forward compatible and drops unknown fields.
         if canonical != body:
@@ -115,7 +135,12 @@ def _verify_projection(  # noqa: UP047 - mirrored Platform source supports Pytho
             for field in expected.__dataclass_fields__
         ):
             raise ValueError("assignment drift")
-        if not result.issued_at_unix <= now_unix < result.expires_at_unix:
+        # Tolerate bounded clock skew between Platform and the validator in both
+        # directions; the signed lifetime itself is never extended beyond it.
+        if not (
+            result.issued_at_unix <= now_unix + clock_skew_seconds
+            and now_unix - clock_skew_seconds < result.expires_at_unix
+        ):
             raise ValueError("expired")
         if not verifier.verify(
             hosted_signing_bytes(result), bytes.fromhex(result.signature)

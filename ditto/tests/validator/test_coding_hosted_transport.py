@@ -294,3 +294,110 @@ async def test_valid_http_does_not_bypass_signature_verification() -> None:
     ) as client:
         with pytest.raises(HostedCodingTransportError):
             await client.exchange(request=request, expected=expected)
+
+
+def _acknowledgement_case() -> tuple[
+    HostedCodingRequest, HostedCodingResult, HostedResultExpectation, bittensor.Keypair
+]:
+    request, result, expected, platform = _exchange_case()
+    validator = bittensor.Keypair.create_from_uri("//Bob")
+    acknowledgement = request.model_copy(
+        update={
+            "operation": "acknowledge",
+            "result_sha256": hosted_message_digest(result),
+            "nonce": UUID(int=11),
+        }
+    )
+    acknowledgement = acknowledgement.model_copy(
+        update={
+            "signature": validator.sign(hosted_signing_bytes(acknowledgement)).hex()
+        }
+    )
+    return acknowledgement, result, expected, platform
+
+
+async def test_acknowledgement_accepts_only_an_empty_no_store_204() -> None:
+    request, result, expected, key = _acknowledgement_case()
+    for response, accepted in (
+        (
+            lambda: httpx.Response(
+                204, headers={"Cache-Control": "no-store"}, stream=Chunks([])
+            ),
+            True,
+        ),
+        (
+            lambda: httpx.Response(
+                204, headers={"Cache-Control": "public"}, stream=Chunks([])
+            ),
+            False,
+        ),
+        (
+            lambda: httpx.Response(
+                204,
+                headers={"Cache-Control": "no-store"},
+                stream=Chunks([b"PRIVATE_MARKER"]),
+            ),
+            False,
+        ),
+        (lambda: _response(_body(result), status=200), False),
+        (
+            lambda: httpx.Response(
+                409, headers={"Cache-Control": "no-store"}, stream=Chunks([])
+            ),
+            False,
+        ),
+    ):
+        calls = 0
+
+        def respond(_: httpx.Request, make=response) -> httpx.Response:
+            nonlocal calls
+            calls += 1
+            return make()
+
+        async with HostedCodingTransport(
+            platform_origin="https://platform.example",
+            trusted_verifiers={key.ss58_address: key},
+            clock=lambda: NOW,
+            transport=httpx.MockTransport(respond),
+        ) as client:
+            if accepted:
+                await client.acknowledge(
+                    request=request, result=result, expected=expected
+                )
+            else:
+                with pytest.raises(HostedCodingTransportError) as caught:
+                    await client.acknowledge(
+                        request=request, result=result, expected=expected
+                    )
+                assert "PRIVATE_MARKER" not in str(caught.value)
+        assert calls == 1
+
+
+async def test_acknowledgement_is_bound_to_the_verified_result_before_network() -> None:
+    request, result, expected, key = _acknowledgement_case()
+    forged = result.model_copy(update={"outcome": "candidate_failure"})
+    other = request.model_copy(update={"result_sha256": "f" * 64})
+    status_request, _, _, _ = _exchange_case()
+    for req, res in ((request, forged), (other, result), (status_request, result)):
+        async with HostedCodingTransport(
+            platform_origin="https://platform.example",
+            trusted_verifiers={key.ss58_address: key},
+            clock=lambda: NOW,
+            transport=httpx.MockTransport(lambda _: pytest.fail("network used")),
+        ) as client:
+            with pytest.raises(HostedCodingTransportError):
+                await client.acknowledge(request=req, result=res, expected=expected)
+
+
+async def test_exchange_never_sends_an_acknowledgement() -> None:
+    request, _, expected, key = _acknowledgement_case()
+    # Bind the expectation to this request so only the operation guard can refuse.
+    expected = replace(expected, request_sha256=hosted_message_digest(request))
+    async with HostedCodingTransport(
+        platform_origin="https://platform.example",
+        trusted_verifiers={key.ss58_address: key},
+        clock=lambda: NOW,
+        transport=httpx.MockTransport(lambda _: pytest.fail("network used")),
+    ) as client:
+        with pytest.raises(HostedCodingTransportError):
+            await client.exchange(request=request, expected=expected)
