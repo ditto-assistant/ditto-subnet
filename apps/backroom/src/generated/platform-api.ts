@@ -11804,6 +11804,12 @@ export interface components {
              */
             quality: number;
             /**
+             * Relation
+             * @description bench_version>=13: generator metamorphic/counterfactual relation for the case (``V10CaseProvenance.Relation``); empty below v13.
+             * @default
+             */
+            relation: string;
+            /**
              * Result Usage
              * @description Result-usage half of an observed tool case: did the final answer incorporate the value only the executed tool served.
              * @default 0

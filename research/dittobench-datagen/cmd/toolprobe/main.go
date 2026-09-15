@@ -6,10 +6,13 @@ import (
 	"os"
 
 	"github.com/ditto-assistant/dittobench-datagen/internal/toolprobe"
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 func main() {
-	version := flag.Int("bench-version", 8, "benchmark contract version")
+	// Defaults to the newest version this module can reproduce so a bench bump
+	// never silently re-pins the probe to an older contract.
+	version := flag.Int("bench-version", protocol.NewestSupportedBenchVersion(), "benchmark contract version")
 	runSize := flag.String("run-size", "full", "small, medium, or full")
 	train := flag.Int("train-seeds", 30, "number of training seeds")
 	heldOut := flag.Int("held-out-seeds", 10, "number of held-out seeds")

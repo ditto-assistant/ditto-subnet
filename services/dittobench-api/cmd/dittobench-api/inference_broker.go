@@ -494,8 +494,9 @@ func (b *inferenceBroker) beginAblationCase(
 	// confirmation session is never a counterfactual even at v12 — otherwise its
 	// embedding ablation lane (below) would be rejected. A confirmation session
 	// runs the paired inference+embedding ablation under the frozen v9-named
-	// contract at any supported confirmation version ({9, 12}); the v9 branch's
-	// admission is unchanged (v9 short-circuits before the confirmation clause).
+	// contract at any supported confirmation instrument version (v9, >= v12 up
+	// to the accepted set); the v9 branch's admission is unchanged (v9
+	// short-circuits before the confirmation clause).
 	counterfactual := session.benchVersion >= ablation.BenchVersionV12 && !session.confirmationSession
 	allowedVersion := session.benchVersion == ablation.BenchVersionV9 || counterfactual ||
 		(session.confirmationSession && ablation.ConfirmationBenchVersionSupported(session.benchVersion))

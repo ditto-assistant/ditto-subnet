@@ -24,6 +24,7 @@ applied to an existing version. It ships as a new one.
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
+| 13 (in development) | `2027-05-01` | Typed-semantic contract (#1518): label-insufficiency, unregenerable surface, causal model dependence, provenance over containment, bounded money share, grader-only claim sets. Plumbing shipped (version, 250-case envelope, grader-only protocol types, v12-copy surface pass); families, grader, and gates land behind `bench_version >= 13`; not advertised by the runtime until the contract is complete. |
 
 ## V10 generator-as-spec contract
 
@@ -474,6 +475,148 @@ grading-authoritative `ExpectedAnswer`, `DistractorAnswers`, `AnswerKind`, and
 expected tool specs. v12 changes what competence a run must demonstrate, not the
 transport. Run sizes, the deterministic grader, the inference boundary,
 LongMemEval floors, and the v9 efficiency stack all carry forward unchanged.
+
+## Bench v13 (in development, typed-semantic contract)
+
+v13 is the contract issue #1518 defines: **typed semantic outcomes graded
+through claim sets, on a surface a harness cannot regenerate, with the graded
+value causally traced to a model completion.** It answers the v12 board review
+(operator-private records `sn118-top5-board-review-2026-09-13.json` and
+`sn118-bench-v12-adversary-briefing.md`, held with the Backroom board-review
+precedents — they quote never-released miner source, so they do not live in
+this public repository), where 4/5 rejected top-5
+artifacts lived on the tool axis and the memory axis rewarded a request-keyed
+`/100` rewrite of a correct bare-cents answer (the v12 minor-unit inversion:
+`411067` → 0, `$4,110.67` → 1 on a question that asked for minor units).
+
+Every lever is gated on `bench_version >= 13`; v2–v12 regenerate and re-grade
+byte-identically (the v2–v12 known vectors and transcript regrades are the
+guard). This section is the **stub the plumbing PR ships**; each child issue
+extends it when its lever lands.
+
+### What the plumbing PR (#1824) ships
+
+- `protocol.BenchVersionV13`, `datasetEpochV13 = 2027-05-01`, and one derived
+  list (`protocol.SupportedBenchVersions()`, `NewestSupportedBenchVersion()`,
+  `SupportedBenchVersionList()`) that every acceptance check, error string,
+  and probe default reads — the bump discipline is *floors and shared
+  constants, never retyped enumerations*.
+- `profilesV13`: small/medium pinned to v10; full = 100 tool cases, **250 memory
+  cases** (224 primary-envelope + 9 isolation; `v13PrimaryCaseBudget` carves
+  228 primary cases so the fixed 13-case conversational/integrity tail lands the
+  envelope at exactly 250). Waves stay at 5.
+- Grader-only protocol types, all tagged `json:"-"` so they never enter the
+  hashed artifact, `/seed`, or `/run`: `MemoryCase.Claims []Claim{Kind,
+  Expected, Accept, Unit, Critical, Weight}`, `MemoryCase.TwinRelation` /
+  `ToolCase.TwinRelation` (`decision_twin`, `as_of_twin`),
+  `ToolSpec.RequiredArgClaims`, `ToolCase.Restraint *RestraintClaim`
+  (`no_call`, `clarify_first`, `decline`), and the answer kinds `AnswerClarify`
+  and `AnswerAbsence`. `CaseScore.Relation` carries
+  `V10CaseProvenance.Relation` into the report for v13 runs only.
+  `gen.TestV13GraderOnlyFieldsNeverReachHarnessWire` and the runner-side
+  `TestV13GraderOnlyFieldsNeverReachRunPayload` pin the strip.
+- `gen/v13_surface.go`: the v13 surface pass, today a byte-for-byte copy of the
+  v12 pass (pinned by `TestV13SurfacePassStartsAsV12Copy`). It becomes the
+  public pre-pass whose output the private surface pass rewrites.
+- Every staged v13 case is stamped `bench_version 13` (the program, divergence
+  and family-compiler builders stamp the version that introduced them, and the
+  grader dispatches its policy on that stamp). Effect on grading: none. The
+  v10..v12 primary plan loop already stamps every planned case with the run's
+  contract (a v12 full artifact is 251/251 stamped 12; `TestV13ProfileAndEnvelope`
+  pins that), and the only cases the v13 loop re-stamps are the divergence and
+  family-compiler cases their builders stamp `12` after that loop — which
+  `grade/grade.go` grades under the same `>= V12` slot-scoped distractor policy
+  either way. The loop exists so a v13 case can never fall back to a builder
+  stamp when a future `>= V13` grading branch lands.
+- `cmd/memoryprobe` / `cmd/toolprobe` take `-bench-version` defaulting to the
+  newest supported version; `gen.AuditMemoryExposureForVersion` names its
+  contract and, from v13, counts correction/join families as computed.
+  `MemoryExposureResult.ComputedByRule` counts the cases that rule moved off a
+  verbatim hit, so the strict verbatim share (`StrictTransformedShare`) stays
+  visible in the probe output and a v13 family regression cannot hide behind
+  the classification.
+- `TestV13KnownVector` is a **placeholder** pin (seed `123456789`, full):
+  `b9bfb611f4509599fb6c79579114244178ca09077737a0313b6db9c5b6f1966c`. It is
+  re-pinned when the envelope lands, after the `/seed` label-leak fix.
+
+Scorer side: `scoregates.SupportedBenchVersion` accepts v13 (inheriting the v12
+gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
+technically ready; the runtime's advertised `supported_bench_versions` does
+**not** include 13 until the last v13 PR.
+
+### Governing invariants
+
+1. **Label-insufficiency.** For every family, knowing the family label and the
+   extractable operands must be insufficient to score — stored state, a
+   per-seed served artifact, or a time anchor must decide.
+2. **Unregenerable surface (v13.0, not v13.1).** The surface a harness sees
+   (renderings, names, language/typo draws, decoy set, inventories, fixtures)
+   must not be recomputable from the public repo + the published seed. The
+   public v13 surface pass is the pre-pass; the private pass (validator
+   commit-reveal salt or Platform-side private paraphrase — an owner decision
+   recorded in #1832) is a v13.0 activation blocker.
+3. **Causal model dependence.** The graded value must have been produced by a
+   model completion the relay observed, and must not appear in any
+   harness-authored prompt span except spans hash-matched to `/seed` records or
+   delivered tool results (`answer_in_prompt` → 0). This is the v11
+   compute-then-launder lesson.
+4. **Provenance over containment; cost is never free; reward the production
+   skill; immutability** (`bench_version >= 13` only; v2–v12 byte-identical).
+
+### Honest-agent invariant (binding on every gate)
+
+No gate may zero a response whose graded claim is correct and model-emitted.
+Gates fail only on evidence of substitution (text not model-emitted, value
+present in a harness-authored span), evidence-independent default behaviour
+(twin/pair concordance), or catalog withholding outside the published safe
+harbor. Ditto's production agent (HeyDitto) is the canonical honest positive;
+calibration (#1521) requires every honest positive to carry gate-induced loss
+≤ 0.02 and every S/N carrier to land ≤ starter-kit composite − 0.05.
+
+**Scan-scope rule.** The positive check runs on `final_text ∪ answer`.
+Distractor/forbidden scans are **claim-scoped**: asserted candidates only (the
+slot when populated, per `grade/grade.go` `distractorScanSlotOnly`), and a value
+cited-and-rejected as insufficient evidence is never a forbidden hit. Prose is
+graded; the `answer` slot is a tie-break; `slot_not_in_prose` → 0 only when the
+typed matcher finds no equivalent value asserted in `final_text` AND the slot
+alone passes. Declarative acknowledgement credit is 0.25.
+
+Gates the plan marks *shadow in v13.0* (catalog-present, provenance, causal,
+cost factor, twin rule) ship behind switches defaulting to shadow/observe,
+never enforce; the ladder is review → penalize (graduated, capped) → enforce,
+and enforce is reserved for provable signals. Never enforce retroactively.
+
+### Adversary model this contract must defeat
+
+| Class | Ids | Made score-negative by |
+|---|---|---|
+| Request-keyed empty catalog / response sheets / decline gates | S1 S2 S16 | restraint triplets + clarifying-claim grading + catalog-present gate (model-emitted calls, not executed calls) |
+| Baked option pools + one-edit ladders | S3 S12 | discovery inventories from public corpora; drop set_model/set_chat_font; enum schemas |
+| Sign sheets / money formula / closed programs | S4 S13 S7 | money cap (≤12% target / 15% hard), record-stated ops, sign variance, typed claims |
+| Exact-output arg recipes | S5 | paraphrase-accepting argument claims (reward side) + causal gate + screener I5 (punish side) |
+| Draft replacement / slot rewrites / hedged slots | S6 S7 S14 | claim-span provenance gate; prose graded, slot tie-break; stuffing quantifier |
+| Generator fingerprint tables, regex routers, typo tricks | S8 S11 S12 | grammars → private surface pass; typo v2; multilingual via private translation; parserprobe ceiling |
+| Marker-keyed compaction, ingest-time compilation | S9 N5 N10 | same-turn corrections (primary), point-in-time twins (`as_of_twin`), label-leak fix |
+| Host tool plans / class collapse | S10 | effect-graded retrieval, cue-unreliable mutations |
+| Injection wrapper stripping | S15 | data-inside-envelope + envelope-free injections with mock-observable forbidden action |
+| Trained routers / distilled generators / planner prose | N1 N2 N9 | label-insufficiency + unregenerable surface + causal gate |
+| Seed regeneration / answer-key regression | N3 | CRN block binding + egress proof; surface pass |
+| Voting / attribution theatre | N4 N8 | provenance gate, cost factor over choices+tokens (shadow), pair post-pass |
+| Layout / language inference from public generator tables | N6 | private surface pass (layouts and languages unannounced) |
+| Fixture memorisation | N7 | per-seed coined fixtures |
+| In-run twin pairing / forced discordance | N11 | distributionally matched triplets, ≤chance acceptance |
+| Edit-distance-only option picking | N12 | near-miss inventories with margin test |
+| **Generator-inverse harness + launder (GIH)** | **N13** | unregenerable surface pass + causal gate; parserprobe ceiling in CI |
+| **Router trained on 10k locally generated seeds** | **N14** | same as N13; W13 declaration in policy v14 |
+
+### Scope
+
+Both axes are in scope; tool-bench, story-v2, surfaces, seeds and screener-v14
+issues are children of #1518 (superseding #1108/#1109). Acceptance is verified
+by the #1521 calibration PR against real cleared agents and synthetic S/N
+carriers, not by CI alone. Activation is a separate owner gate after shadow
+calibration: `CurrentBenchVersion` stays v8, the runtime advertises v13 only
+when the contract is complete, and Platform rollout state activates it.
 
 ## Auditing an old score
 
