@@ -1,0 +1,39 @@
+---
+# Before any role-internal name is created, refuse a preset of any of them. See
+# the materialization role for the rationale; the message is constant and names
+# no value.
+- name: Refuse a preset gate, capture, result or credential-named variable
+  ansible.builtin.assert:
+    that:
+      - >-
+        lookup('ansible.builtin.varnames', '^coding_hosted_worker_credentials_journal_check_', wantlist=True)
+        | sort == ['coding_hosted_worker_credentials_journal_check_confirmation',
+        'coding_hosted_worker_credentials_journal_check_enabled',
+        'coding_hosted_worker_credentials_journal_check_source_revision']
+      - >-
+        lookup('ansible.builtin.varnames',
+        '(?i)^(DITTO_CODING_WORKER_|DITTO_CODING_HIPPIUS_)', wantlist=True) | length == 0
+    fail_msg: >-
+      Only the enabled, confirmation and source_revision inputs are accepted, and no worker
+      credential may be passed as an Ansible variable; a registered result, a capture, the gate
+      or an undocumented coding_hosted_worker_credentials_journal_check_ variable is set. Nothing
+      was read.
+    quiet: true
+
+# Freeze the enabled gate exactly once, with `is sameas true` (never the bool
+# filter, which prints a coerced value), default(false, true) and no_log. The
+# check runs through a dynamic include_tasks that --start-at-task cannot enter.
+- name: Freeze the enabled gate once
+  ansible.builtin.set_fact:
+    coding_hosted_worker_credentials_journal_check_gate: >-
+      {{ (coding_hosted_worker_credentials_journal_check_enabled | default(false, true)) is sameas true }}
+  no_log: true
+
+- name: Explain the dormant worker credential log spot-check
+  ansible.builtin.debug:
+    msg: The native Coding worker credential log spot-check is disabled; nothing is read.
+  when: not coding_hosted_worker_credentials_journal_check_gate
+
+- name: Spot-check the host logs behind the enabled gate
+  ansible.builtin.include_tasks: check.yml
+  when: coding_hosted_worker_credentials_journal_check_gate

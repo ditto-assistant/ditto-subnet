@@ -1,0 +1,220 @@
+---
+# Reached only when the enabled gate in main.yml froze true once, and after
+# main.yml refused any preset internal name. Every message here is constant: no
+# input is interpolated into a fail_msg, and the only interpolation is the
+# validated, non-secret source revision in the final report.
+
+# --start-at-task can begin at main.yml's gate freeze and skip its static preset
+# refusal, but it cannot enter this dynamically included file, so this first
+# in-include guard repeats it: only the three inputs and the gate may carry the
+# prefix, no credential-named variable may be defined, and the raw enabled flag
+# must itself be boolean true, so a preset gate fact alone cannot open removal.
+- name: Refuse a preset internal name, a preset gate or a credential-named variable
+  ansible.builtin.assert:
+    that:
+      - (coding_hosted_worker_credentials_cleanup_enabled | default(false, true)) is sameas true
+      - >-
+        lookup('ansible.builtin.varnames', '^coding_hosted_worker_credentials_cleanup_', wantlist=True)
+        | sort == ['coding_hosted_worker_credentials_cleanup_confirmation',
+        'coding_hosted_worker_credentials_cleanup_enabled',
+        'coding_hosted_worker_credentials_cleanup_gate',
+        'coding_hosted_worker_credentials_cleanup_source_revision']
+      - >-
+        lookup('ansible.builtin.varnames',
+        '(?i)^(DITTO_CODING_WORKER_|DITTO_CODING_HIPPIUS_)', wantlist=True) | length == 0
+    fail_msg: >-
+      Enable removal only with coding_hosted_worker_credentials_cleanup_enabled=true and the
+      documented inputs; a preset gate, registered result or a credential-named Ansible variable
+      is set, or --start-at-task skipped the enable flag. Nothing was removed.
+    quiet: true
+
+# Accident guard only. The supported entry point,
+# infra/scripts/coding-hosted-guarded-run.py, verifies the reviewed checkout,
+# validates the controller inputs before ansible parses anything, builds the
+# enabled flag, confirmation and revision itself, and sets this marker in
+# ansible's environment. Anyone able to run ansible-playbook can set the same
+# variable, so the marker proves nothing about the caller: it only stops an
+# accidental direct run, which is unsupported. It sits inside the dynamic
+# include so --start-at-task cannot skip it, and reads the controller
+# environment, never an operator template.
+- name: Require the guarded entry point marker, an accident guard only
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.env', 'DITTO_CODING_HOSTED_GUARDED_RUN') == 'worker-credentials-remove'
+    fail_msg: >-
+      Run this only through uv run --locked --script infra/scripts/coding-hosted-guarded-run.py
+      worker-credentials-remove REVIEWED_REVISION; direct ansible-playbook runs are
+      unsupported. Nothing was removed.
+    quiet: true
+
+# ansible_play_batch and ansible_play_hosts_all are computed from the run's
+# targeting and are not overridable by -e; require exactly the one dedicated host
+# (batch and the whole host set, so serial: 1 cannot pass without --limit) so a
+# role=coding_hosted VM that merely reports this hostname cannot be reached.
+- name: Require the run to target exactly the one dedicated host
+  ansible.builtin.assert:
+    that:
+      - ansible_play_batch == ['ditto-coding-hosted-v2']
+      - ansible_play_hosts_all == ['ditto-coding-hosted-v2']
+    fail_msg: >-
+      Run this only against the single dedicated host with
+      --limit ditto-coding-hosted-v2; the play targets more than that host. Nothing was removed.
+    quiet: true
+
+- name: Refuse check mode for an enabled removal
+  ansible.builtin.assert:
+    that:
+      - not ansible_check_mode
+    fail_msg: Enabled removal must run its host checks for real; the disabled fixture covers check mode.
+    quiet: true
+
+# Freeze confirmation and source_revision once; default('', true) turns an
+# undefined-class template error into '' rather than leaking it later.
+- name: Freeze the confirmation and source revision once
+  ansible.builtin.set_fact:
+    coding_hosted_worker_credentials_cleanup_gate_confirmation: >-
+      {{ coding_hosted_worker_credentials_cleanup_confirmation | default('', true) }}
+    coding_hosted_worker_credentials_cleanup_gate_source_revision: >-
+      {{ coding_hosted_worker_credentials_cleanup_source_revision | default('', true) }}
+  no_log: true
+
+- name: Require the exact confirmation and source revision as frozen literals
+  ansible.builtin.assert:
+    that:
+      - coding_hosted_worker_credentials_cleanup_gate_confirmation is string
+      - coding_hosted_worker_credentials_cleanup_gate_confirmation == 'REMOVE NATIVE CODING WORKER CREDENTIALS'
+      - coding_hosted_worker_credentials_cleanup_gate_source_revision is string
+      - coding_hosted_worker_credentials_cleanup_gate_source_revision is match('^[0-9a-f]{40}$')
+      - coding_hosted_worker_credentials_cleanup_gate_source_revision | length == 40
+      - not (coding_hosted_worker_credentials_cleanup_gate_confirmation is search('[{][{]|[{][%]|[{][#]'))
+      - not (coding_hosted_worker_credentials_cleanup_gate_source_revision is search('[{][{]|[{][%]|[{][#]'))
+    fail_msg: Require the exact removal confirmation and a 40-character lowercase-hex source revision. Nothing was removed.
+    quiet: true
+
+- name: Probe this machine's identity into a result extra vars cannot preset
+  ansible.builtin.setup:
+    gather_subset: ['!all', '!min', platform, distribution]
+  register: coding_hosted_worker_credentials_cleanup_identity
+
+- name: Require the dedicated host
+  ansible.builtin.assert:
+    that:
+      - coding_hosted_worker_credentials_cleanup_identity.ansible_facts.ansible_hostname == 'ditto-coding-hosted-v2'
+      - coding_hosted_worker_credentials_cleanup_identity.ansible_facts.ansible_architecture == 'x86_64'
+      - coding_hosted_worker_credentials_cleanup_identity.ansible_facts.ansible_distribution == 'Debian'
+      - coding_hosted_worker_credentials_cleanup_identity.ansible_facts.ansible_distribution_major_version == '13'
+    fail_msg: Require the dedicated Debian 13 x86_64 host ditto-coding-hosted-v2 in role_coding_hosted. Nothing was removed.
+    quiet: true
+
+- name: Inspect host accounts once
+  ansible.builtin.getent:
+    database: passwd
+  register: coding_hosted_worker_credentials_cleanup_accounts
+
+# getent_passwd rows are [password, uid, gid, gecos, home, shell].
+- name: Require the worker account
+  ansible.builtin.assert:
+    that:
+      - coding_hosted_worker_credentials_cleanup_accounts.ansible_facts.getent_passwd.get('ditto-coding-hosted') is not none
+      - coding_hosted_worker_credentials_cleanup_accounts.ansible_facts.getent_passwd['ditto-coding-hosted'][4] == '/var/lib/ditto-coding-hosted'
+    fail_msg: The native worker account is missing; there is nothing to remove for it. Nothing was removed.
+    quiet: true
+
+- name: List live worker and custody units
+  ansible.builtin.command:
+    argv: [/usr/bin/systemctl, list-units, --all, --plain, --no-legend, --full, ditto-coding-hosted-worker.service, "ditto-coding-custody@*.service"]
+  register: coding_hosted_worker_credentials_cleanup_units
+  changed_when: false
+  check_mode: false
+
+- name: Refuse to remove credentials unless every listed unit is inactive or failed
+  ansible.builtin.assert:
+    that:
+      - >-
+        coding_hosted_worker_credentials_cleanup_units.stdout_lines
+        | reject('match', '^(ditto-coding-hosted-worker[.]service|ditto-coding-custody@\\S+[.]service)\\s+\\S+\\s+(inactive|failed)(\\s|$)')
+        | list | length == 0
+    fail_msg: >-
+      Stop the hosted worker and every custody instance before removing credentials; each listed
+      unit must be inactive or failed and this role stops nothing. Nothing was removed.
+    quiet: true
+
+- name: Require no process is running as the worker UID
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/find
+      - /proc
+      - -maxdepth
+      - "1"
+      - -regextype
+      - posix-extended
+      - -regex
+      - '/proc/[0-9]+'
+      - -uid
+      - "{{ coding_hosted_worker_credentials_cleanup_accounts.ansible_facts.getent_passwd['ditto-coding-hosted'][1] }}"
+      - -printf
+      - "x"
+  register: coding_hosted_worker_credentials_cleanup_worker_procs
+  changed_when: false
+  check_mode: false
+
+- name: Refuse if any process runs as the worker UID
+  ansible.builtin.assert:
+    that:
+      - coding_hosted_worker_credentials_cleanup_worker_procs.stdout | length == 0
+    fail_msg: >-
+      A process is running as the worker UID; stop the worker's user session before removing
+      credentials so no worker-owned process can swap a directory during the unlink. Nothing was
+      removed.
+    quiet: true
+
+# The role-local module opens every path component with O_NOFOLLOW, unlinks the
+# three fixed names and any leftover .<name>.*.tmp with unlinkat, and reports
+# only filenames and states. It takes no secret.
+- name: Remove the three files through the symlink-safe module
+  coding_hosted_worker_credentials_unlink:
+    private_dir: /var/lib/ditto-coding-hosted/private
+    owner: ditto-coding-hosted
+  register: coding_hosted_worker_credentials_cleanup_helper
+  failed_when: false
+
+- name: Require the module to have removed or confirmed absent all three files
+  ansible.builtin.assert:
+    that:
+      - coding_hosted_worker_credentials_cleanup_helper.refused | default(['no receipt']) | length == 0
+    fail_msg: >-
+      The worker credential removal module refused; it names only filenames and states, never a
+      value. refused={{ coding_hosted_worker_credentials_cleanup_helper.refused | default([]) | to_json }};
+      removed={{ coding_hosted_worker_credentials_cleanup_helper.removed | default([]) | to_json }};
+      not_attempted={{ coding_hosted_worker_credentials_cleanup_helper.not_attempted | default([]) | to_json }}.
+    quiet: true
+
+- name: Re-list live worker and custody units after removing
+  ansible.builtin.command:
+    argv: [/usr/bin/systemctl, list-units, --all, --plain, --no-legend, --full, ditto-coding-hosted-worker.service, "ditto-coding-custody@*.service"]
+  register: coding_hosted_worker_credentials_cleanup_units_after
+  changed_when: false
+  check_mode: false
+
+- name: Refuse if any worker or custody unit went live during removal
+  ansible.builtin.assert:
+    that:
+      - >-
+        coding_hosted_worker_credentials_cleanup_units_after.stdout_lines
+        | reject('match', '^(ditto-coding-hosted-worker[.]service|ditto-coding-custody@\\S+[.]service)\\s+\\S+\\s+(inactive|failed)(\\s|$)')
+        | list | length == 0
+    fail_msg: >-
+      A worker or custody unit became active during removal. Reconcile the running unit before
+      starting anything.
+    quiet: true
+
+- name: Report only the source revision and which fixed files were removed or already absent
+  ansible.builtin.debug:
+    msg: >-
+      Native Coding worker credential cleanup;
+      source_revision={{ coding_hosted_worker_credentials_cleanup_gate_source_revision }};
+      removed={{ coding_hosted_worker_credentials_cleanup_helper.removed | to_json }};
+      already_absent={{ coding_hosted_worker_credentials_cleanup_helper.already_absent | to_json }};
+      leftover_temps_removed={{ coding_hosted_worker_credentials_cleanup_helper.leftover_temps | to_json }};
+      private_dir_mode={{ coding_hosted_worker_credentials_cleanup_helper.private_dir_mode | to_json }};
+      directories_kept=true; services_stopped=false; credentials_read=false; credentials_revoked=false.

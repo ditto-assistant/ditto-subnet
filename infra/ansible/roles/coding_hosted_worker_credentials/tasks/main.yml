@@ -1,0 +1,52 @@
+---
+# Before any role-internal name is created, refuse a preset of any of them, not
+# only the input prefix. Extra vars outrank set_facts and registered results, so
+# a preset gate, frozen capture, registered result or an Ansible variable named
+# like a controller credential must be refused here, once, before the gate is
+# frozen. varnames lists names without rendering any value; the message is
+# constant. The lookahead excludes the cleanup role's prefix so neither refusal
+# matches the other's variables.
+- name: Refuse a preset gate, capture, result or credential-named variable
+  ansible.builtin.assert:
+    that:
+      - >-
+        lookup('ansible.builtin.varnames', '^coding_hosted_worker_credentials_(?!cleanup_)', wantlist=True)
+        | sort == ['coding_hosted_worker_credentials_confirmation',
+        'coding_hosted_worker_credentials_enabled',
+        'coding_hosted_worker_credentials_source_revision']
+      - >-
+        lookup('ansible.builtin.varnames',
+        '(?i)^(DITTO_CODING_WORKER_|DITTO_CODING_HIPPIUS_)', wantlist=True) | length == 0
+    fail_msg: >-
+      Only the enabled, confirmation and source_revision inputs are accepted, and no worker
+      credential may be passed as an Ansible variable; a registered result, a capture, the gate,
+      an undocumented coding_hosted_worker_credentials_ variable or a DITTO_CODING_WORKER_* /
+      DITTO_CODING_HIPPIUS_* variable is set. Export each credential in the controller
+      environment and re-run. Nothing was written.
+    quiet: true
+
+# Freeze the enabled gate exactly once, in a no_log task with no loop variable in
+# scope. ansible re-templates a variable on every read, so a lazily templated
+# extra var such as `-e '{"..._enabled": "{{ item is defined }}"}'` evaluates
+# false here and true inside a write loop; a block-level `when` is pushed down to
+# every child task and re-evaluated with the loop variable in scope, which is the
+# #1888 flip. Freezing to a plain bool defeats that, `default(false, true)` turns
+# an undefined-class template error into false, `is sameas true` opens the gate
+# only for a real boolean true (the bool filter is avoided: on 2.21 it prints any
+# non-boolean it coerces in a deprecation warning even under no_log), and no_log
+# censors the fatal result. The enabled branch runs through a dynamic
+# include_tasks, which --start-at-task cannot jump into.
+- name: Freeze the enabled gate once
+  ansible.builtin.set_fact:
+    coding_hosted_worker_credentials_gate: >-
+      {{ (coding_hosted_worker_credentials_enabled | default(false, true)) is sameas true }}
+  no_log: true
+
+- name: Explain dormant native worker credential materialization
+  ansible.builtin.debug:
+    msg: Native Coding worker credential materialization is disabled; no credential file is written.
+  when: not coding_hosted_worker_credentials_gate
+
+- name: Materialize the worker-owned credential files behind the enabled gate
+  ansible.builtin.include_tasks: materialize.yml
+  when: coding_hosted_worker_credentials_gate
