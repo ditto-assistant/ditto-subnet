@@ -128,6 +128,7 @@ def compute_confirmation_contract() -> dict[str, Any]:
         CONFIRMATION_MODELS, module="ditto.api_models.validator_confirmation"
     )
 
+
 def compute_router_contract() -> dict[str, Any]:
     """Return the normalized structure of the shadow router-ledger wire models."""
     return compute_contract(ROUTER_MODELS, module="ditto.api_models.router_ledger")

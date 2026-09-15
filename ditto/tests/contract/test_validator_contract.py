@@ -191,6 +191,7 @@ def test_router_models_match_platform_contract() -> None:
         f"with the change.{stale_install_hint()}"
     )
 
+
 def test_public_agent_status_matches_platform_generated_contract() -> None:
     """Keep the shared lifecycle enum aligned with the platform contract."""
     golden = json.loads(_GOLDEN.read_text())

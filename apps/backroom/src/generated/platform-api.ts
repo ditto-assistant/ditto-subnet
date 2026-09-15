@@ -4201,6 +4201,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/scoring/router-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Router Ledger
+         * @description Relay the shadow router-track ledger the offloaded scorer publishes.
+         *
+         *     The router eval never runs on a validator: one trusted ``dittobench-api``
+         *     scorer drives the coding harnesses against each miner's router, scores it,
+         *     and publishes a ledger; this endpoint relays that published ledger to any
+         *     permitted validator behind the same signed proof-of-possession as
+         *     :func:`scores`. The validator only reads and folds it, so no provider secret
+         *     or harness container ever touches a validator.
+         *
+         *     Shadow-only: every relayed entry stays ``weight_eligible=False`` with folded
+         *     ``combined_score=0`` (the real measurement rides ``shadow_composite``), so a
+         *     served ledger contributes zero emission — identical to the empty default.
+         *
+         *     Fail-closed to empty: when no scorer feed is configured, or a live read
+         *     fails with no fresh last-known snapshot, an **empty** ledger is served
+         *     (``count=0``), which folds to zero router emission. The validator's
+         *     :class:`PlatformRouterLedgerSource` also degrades any error here to empty, so
+         *     the two layers agree: a router-track problem can never distort the memory
+         *     fold or the on-chain weight vector.
+         */
+        get: operations["router_ledger_api_v1_scoring_router_ledger_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/scoring/scores": {
         parameters: {
             query?: never;
@@ -20767,6 +20805,13 @@ export interface components {
              */
             rollout_score_count?: number | null;
             /**
+             * Router Shadow Composite
+             * @description Display-only shadow router-track efficiency composite from the published router ledger. Never ranked or weighted while the router track is shadow.
+             */
+            router_shadow_composite?: number | null;
+            /** Router Shadow Status */
+            router_shadow_status?: ("queued" | "running" | "measured") | null;
+            /**
              * Score Count
              * @description Accepted independent validator scores currently available.
              * @default 3
@@ -20939,6 +20984,11 @@ export interface components {
              * @default false
              */
             registration_stale: boolean;
+            /**
+             * Router Shadow Mode
+             * @description Router track measurement phase. ``shadow`` is present only when the published router ledger carries at least one measurement; the board's router surface is display-only and never changes ranking or emissions. Null means the router surface is off.
+             */
+            router_shadow_mode?: "shadow" | null;
             /**
              * Selection Mode
              * @description authoritative is the pool that drives validator weights: pinned to active_bench_version while a rollout is collecting (the desired version takes over only at rollout activation); historical is a requested single version.
@@ -22930,6 +22980,140 @@ export interface components {
             sample_count: number;
             /** Tool Accuracy */
             tool_accuracy: number;
+        };
+        /**
+         * RouterHarness
+         * @description The big-four third-party coding harnesses the router must power.
+         *
+         *     The string values are the stable ledger keys; the centralized scorer and the
+         *     validator's failure classifier both key per-harness state on them.
+         * @enum {string}
+         */
+        RouterHarness: "claude_code" | "codex" | "opencode" | "grok";
+        /**
+         * RouterHarnessResult
+         * @description One harness's outcome for one miner router, as decided by the scorer.
+         *
+         *     ``operational`` (the router powered the harness end-to-end) and ``floor_pass``
+         *     (the run cleared the deterministic frontier-quality correctness floor) are the
+         *     two gates; ``efficiency`` is the token-cost-dominant rank term in ``(0, 1]``,
+         *     and ``upstream_token_cost_micros`` is the router's *upstream* provider token
+         *     cost for the harness's tasks (informational — what compression bought). A
+         *     harness contributes to the combined score only when both gates hold.
+         */
+        RouterHarnessResult: {
+            /**
+             * Efficiency
+             * @description Token-cost-dominant efficiency score in [0, 1] the scorer assigned this harness slice (eff_h). Only meaningful when the harness was operational and cleared the floor.
+             */
+            efficiency: number;
+            /**
+             * Floor Pass
+             * @description The run cleared the deterministic correctness floor at the frontier-quality bar (task build/tests). The gate, not the rank.
+             */
+            floor_pass: boolean;
+            harness: components["schemas"]["RouterHarness"];
+            /**
+             * Operational
+             * @description The miner router powered this harness end-to-end.
+             */
+            operational: boolean;
+            /**
+             * Upstream Token Cost Micros
+             * @description Router's upstream provider token cost for this harness's tasks, in micro-units of the canonical cost model. Informational: the basis for the dominant token axis of eff_h.
+             */
+            upstream_token_cost_micros: number;
+        };
+        /**
+         * RouterLedgerEntry
+         * @description One miner's router-track result, published by the centralized scorer.
+         *
+         *     ``combined_score`` is the scorer's soft, per-harness-weighted, floor-gated
+         *     aggregate in ``[0, 1]`` (``Σ_h weight_h × (eff_h if operational and floor else
+         *     0)``). A failed harness forfeits only its slice, so the weight destination is
+         *     always this ``miner_hotkey`` and the fold ranks by this one number.
+         */
+        RouterLedgerEntry: {
+            /**
+             * Agent Id
+             * Format: uuid
+             * @description The miner's scored router agent.
+             */
+            agent_id: string;
+            /**
+             * Combined Score
+             * @description Soft per-harness-weighted, floor-gated aggregate in [0, 1]. The raw double the scorer reported (never rounded), the sole rank key. Forced 0 in shadow (v1): the validator folds this, so a shadow feed contributes zero emission by construction.
+             */
+            combined_score: number;
+            /**
+             * First Seen
+             * Format: date-time
+             * @description First-seen tie-break (UTC): when this miner's router lineage first reached the score it defends. The scorer resolves it; the validator folds it as served, so the original beats a later copy.
+             */
+            first_seen: string;
+            /**
+             * Harnesses
+             * @description Per-harness outcomes (one entry per harness the scorer ran). Read by the validator's failure classifier for telemetry; the combined score already reflects any soft-forfeited slices.
+             */
+            harnesses: components["schemas"]["RouterHarnessResult"][];
+            /**
+             * Miner Hotkey
+             * @description Miner's SS58 hotkey.
+             */
+            miner_hotkey: string;
+            /**
+             * Router Contract Version
+             * @constant
+             */
+            router_contract_version: 1;
+            /**
+             * Shadow Composite
+             * @description The real measured, floor-gated aggregate in [0, 1] the scorer computed for this router — carried separately from combined_score so a shadow feed can report a genuine number the dashboard shows while combined_score stays 0 and folds to zero emission. In shadow (v1) this holds the measurement and combined_score is 0; at promotion the two converge. Never a weight input on its own.
+             * @default 0
+             */
+            shadow_composite: number;
+            /**
+             * Weight Eligible
+             * @description Whether this router result may contribute emissions. False in shadow (v1). Tightened at promotion; the validator's track state is the authority, this is a defensive echo.
+             */
+            weight_eligible: boolean;
+        };
+        /**
+         * RouterLedgerResponse
+         * @description Published by the centralized router scorer; read by every validator.
+         *
+         *     Ordered highest-``combined_score`` first (ties broken by ``first_seen`` then
+         *     ``agent_id``), the same deterministic order the router fold uses, so the
+         *     exposed pool and the computed router weights agree by construction.
+         */
+        RouterLedgerResponse: {
+            /**
+             * Count
+             * @description Number of entries returned.
+             * @default 0
+             */
+            count: number;
+            /**
+             * Entries
+             * @description One router result per miner, highest combined score first. Empty (or an older feed that omits it) folds to zero router emission, identical to the shadow state.
+             */
+            entries?: components["schemas"]["RouterLedgerEntry"][];
+            /**
+             * Generated At
+             * @description When the router ledger was produced (UTC).
+             */
+            generated_at?: string | null;
+            /**
+             * Router Contract Version
+             * @description Router contract version this feed was scored under. None means the responding scorer predates the field.
+             */
+            router_contract_version?: number | null;
+            /**
+             * Stale
+             * @description True when the scorer served a last-known-good snapshot because a live read failed. The fold may still use it but should log it.
+             * @default false
+             */
+            stale: boolean;
         };
         /**
          * RoutingPolicyRequest
@@ -34985,6 +35169,61 @@ export interface operations {
             };
             /** @description Malformed UUID path parameter. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    router_ledger_api_v1_scoring_router_ledger_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+                "x-validator-ledger-nonce"?: string | null;
+                "x-validator-ledger-requested-at"?: string | null;
+                "x-validator-ledger-signature"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RouterLedgerResponse"];
+                };
+            };
+            /** @description Missing/invalid validator auth. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale or replayed ledger request proof. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Chain unavailable, or nonce store unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
