@@ -7,6 +7,9 @@ on:
       - scripts/test-coding-hosted-connectivity-kernel.py
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
+      - ditto/tests/test_coding_hosted_unit_uninstall.py
+      - pyproject.toml
+      - uv.lock
   push:
     branches: [main]
     paths:
@@ -14,6 +17,9 @@ on:
       - scripts/test-coding-hosted-connectivity-kernel.py
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
+      - ditto/tests/test_coding_hosted_unit_uninstall.py
+      - pyproject.toml
+      - uv.lock
 
 permissions:
   contents: read
@@ -95,7 +101,7 @@ jobs:
 
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/hetzner-screener-fleet.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-unit-uninstall.yml playbooks/hetzner-screener-fleet.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
 
@@ -119,3 +125,21 @@ jobs:
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i localhost, tests/coding-hosted-custody-service.yml
+
+      # The rehearsal runs the unit uninstall role's enabled tasks through
+      # ansible-core 2.21.2 against temporary unit trees and mutates each guard.
+      # It needs network for uvx, so it runs here and not in every root pytest
+      # shard.
+      - name: Rehearse the native worker and custody unit uninstall guards against a temporary tree
+        working-directory: ${{ github.workspace }}
+        env:
+          DITTO_ANSIBLE_REHEARSAL: "1"
+        run: >-
+          uv run --locked --only-group dev
+          pytest -p no:cacheprovider -rs
+          ditto/tests/test_coding_hosted_unit_uninstall.py
+
+      - name: Prove the native worker and custody unit uninstall stays disabled
+        run: >-
+          uvx --from ansible-core==2.21.2 ansible-playbook --check
+          -i localhost, tests/coding-hosted-unit-uninstall.yml
