@@ -5,12 +5,20 @@ on:
     paths:
       - infra/scripts/build-coding-native-release.py
       - infra/scripts/inspect-coding-native-host.py
+      - infra/scripts/coding-native-evidence.py
+      - services/dittobench-api/internal/codingenforcement/**
+      - services/dittobench-api/internal/sandbox/sandbox.go
+      - services/dittobench-api/internal/codingexecutor/**
+      - services/dittobench-api/internal/codinggrader/types.go
+      - services/dittobench-api/internal/codinghostedworker/grading.go
+      - infra/ansible/roles/coding_hosted_connectivity/files/connectivity-policy.py
       - infra/scripts/build-coding-hosted-runtime.py
       - infra/ansible/roles/coding_hosted_image/files/image-bundle.py
       - infra/ansible/roles/coding_hosted_runtime/files/runtime-bundle.py
       - infra/ansible/roles/coding_hosted/files/host-policy.py
       - ditto/tests/test_coding_native_release.py
       - ditto/tests/test_coding_native_host_preflight.py
+      - ditto/tests/test_coding_native_enforcement_evidence.py
       - ditto/tests/test_coding_native_matrix.py
       - ditto/tests/test_coding_qualification.py
       - services/dittobench-api/coding_runtime/qualification/**
@@ -40,6 +48,7 @@ jobs:
         run: >-
           uv run --frozen pytest -q ditto/tests/test_coding_native_release.py
           ditto/tests/test_coding_native_host_preflight.py
+          ditto/tests/test_coding_native_enforcement_evidence.py
           ditto/tests/test_coding_native_matrix.py ditto/tests/test_coding_qualification.py
           ditto/tests/test_coding_hosted_image_import.py
           ditto/tests/test_coding_hosted_runtime_bundle.py
@@ -49,6 +58,9 @@ jobs:
           uv run --frozen ruff format --check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
           uv run --frozen ruff check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
           uv run --frozen ruff format --check infra/scripts/inspect-coding-native-host.py ditto/tests/test_coding_native_host_preflight.py
+          uv run --frozen ruff check infra/scripts/coding-native-evidence.py ditto/tests/test_coding_native_enforcement_evidence.py
+          uv run --frozen ruff format --check infra/scripts/coding-native-evidence.py ditto/tests/test_coding_native_enforcement_evidence.py
+          uv run --frozen mypy infra/scripts/coding-native-evidence.py
           uv run --frozen ruff check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
           uv run --frozen ruff format --check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
   public-build:
