@@ -1205,6 +1205,22 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
             "inspection_complete": bool(inspection_complete),
         }
 
+    def _completion_request_headers(
+        self, api_key: str, effective_timeout: float
+    ) -> dict[str, str]:
+        headers = super()._completion_request_headers(api_key, effective_timeout)
+        if self._inference_provider == "ditto":
+            # The router must leave time to try another eligible provider before
+            # this buffered request is cancelled. This hint only shortens the
+            # existing request/pass/global deadline; it never grants more time.
+            headers["X-Ditto-Request-Timeout-Ms"] = str(
+                max(
+                    1,
+                    int(min(effective_timeout, SHADOW_REQUEST_TIMEOUT_SECONDS) * 1000),
+                )
+            )
+        return headers
+
     async def _post_completion(self, client, api_key, messages, **kwargs):
         # Only successful host tool outputs count as observed reads, never model
         # assertions. Opening a file does not prove its entire contents were read.

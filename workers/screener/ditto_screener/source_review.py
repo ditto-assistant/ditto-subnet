@@ -3803,6 +3803,15 @@ class OpenRouterSourceReviewAgent:
 
         raise AssertionError("model retry loop exhausted without a result")
 
+    def _completion_request_headers(
+        self, api_key: str, _effective_timeout: float
+    ) -> dict[str, str]:
+        """Gateway headers; subclasses can communicate an already bounded deadline."""
+        return {
+            "Authorization": f"Bearer {api_key}",
+            **review_gateway_headers(self._inference_provider),
+        }
+
     async def _post_completion(
         self,
         client: httpx.AsyncClient,
@@ -3844,10 +3853,7 @@ class OpenRouterSourceReviewAgent:
         async with asyncio.timeout(effective_timeout):
             response = await client.post(
                 f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    **review_gateway_headers(self._inference_provider),
-                },
+                headers=self._completion_request_headers(api_key, effective_timeout),
                 json=request,
                 timeout=effective_timeout,
             )
