@@ -198,6 +198,14 @@ type LocalDocker struct {
 	MemoryLimit string
 	// TmpfsLimit caps the only writable filesystem mounted at /tmp.
 	TmpfsLimit string
+	// MemorySwapLimit, when set, is passed as docker --memory-swap. Hosted-v2
+	// sets it equal to MemoryLimit so its harness gets no swap. Empty keeps
+	// Docker's default and the shared sandbox's existing arguments.
+	MemorySwapLimit string
+	// PullNever adds --pull never, so a missing local image fails the start
+	// instead of falling back to a registry pull. Hosted-v2 sets it on top of
+	// its screened image digest check.
+	PullNever bool
 	// CPULimit is passed to docker --cpus.
 	CPULimit string
 	// BuildTimeout bounds a single `docker build` (cold dependency builds are slow).
@@ -619,6 +627,12 @@ func (d *LocalDocker) runArgsForNetwork(image string, env map[string]string, net
 		// the tighter single-file/8 MiB bound and disable unusable rotation
 		// compression explicitly so rootless executors fail closed consistently.
 		"--log-opt", "compress=false",
+	}
+	if d.MemorySwapLimit != "" {
+		args = append(args, "--memory-swap", d.MemorySwapLimit)
+	}
+	if d.PullNever {
+		args = append(args, "--pull", "never")
 	}
 	if identity != "" {
 		args = append(args,

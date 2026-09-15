@@ -18,6 +18,11 @@ type SandboxRuntime struct{ docker *sandbox.LocalDocker }
 type HostedSandboxRuntime struct{ *SandboxRuntime }
 
 func NewHostedSandboxRuntime(docker *sandbox.LocalDocker) (*HostedSandboxRuntime, error) {
+	// Hosted-v2 harnesses run without swap and never pull: a missing screened
+	// image must fail the start rather than reach a registry.
+	if docker == nil || !docker.PullNever || docker.MemoryLimit == "" || docker.MemorySwapLimit != docker.MemoryLimit {
+		return nil, ErrInvalidConfig
+	}
 	runtime, err := NewSandboxRuntime(docker)
 	if err != nil {
 		return nil, err

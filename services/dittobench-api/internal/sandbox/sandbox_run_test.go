@@ -231,6 +231,10 @@ func TestRunArgs_DefaultsHardenAndBound(t *testing.T) {
 	if slices.Contains(args, "--rm") {
 		t.Errorf("--rm would erase OOM evidence before diagnostics: %v", args)
 	}
+	// Swap and pull policy are hosted-v2 opt-ins; the shared sandbox is unchanged.
+	if slices.Contains(args, "--memory-swap") || slices.Contains(args, "--pull") {
+		t.Errorf("shared sandbox must keep Docker's default swap and pull policy, got %v", args)
+	}
 	for _, a := range args {
 		if strings.HasPrefix(a, "HTTPS_PROXY=") || strings.HasPrefix(a, "HTTP_PROXY=") {
 			t.Errorf("default must not inject a proxy, got %v", args)
@@ -279,6 +283,23 @@ func TestDiagnosticsNonOOMExitIsNotInfrastructure(t *testing.T) {
 	diagnostics := d.Diagnostics(context.Background(), &Handle{ContainerID: "opaque"})
 	if diagnostics.ExitCode != 2 || diagnostics.InfrastructureCode() != "" {
 		t.Fatalf("ordinary exit must remain non-infrastructure: %+v", diagnostics)
+	}
+}
+
+func TestRunArgs_HostedSwapAndPullPolicy(t *testing.T) {
+	d := NewLocalDocker()
+	d.MemoryLimit = "2147483648"
+	d.MemorySwapLimit = "2147483648"
+	d.PullNever = true
+	args := d.runArgsForNetwork("operator-image:latest", nil, "ditto-job-test", "abc123")
+	if !hasFlagPair(args, "--memory", "2147483648") || !hasFlagPair(args, "--memory-swap", "2147483648") {
+		t.Errorf("expected swap limit equal to the memory limit, got %v", args)
+	}
+	if !hasFlagPair(args, "--pull", "never") {
+		t.Errorf("expected --pull never, got %v", args)
+	}
+	if args[len(args)-1] != "operator-image:latest" {
+		t.Errorf("image must be the final arg, got %v", args)
 	}
 }
 

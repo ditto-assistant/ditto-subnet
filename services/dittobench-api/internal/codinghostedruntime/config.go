@@ -246,7 +246,10 @@ func loadConfigChecked(path string, executable func(string) bool) (*runtimeConfi
 		}
 	}
 	p := profile.ResourcePolicy
-	docker := &sandbox.LocalDocker{HarnessPort: "8080", MemoryLimit: strconv.FormatUint(p.MemoryLimitBytes, 10), TmpfsLimit: strconv.FormatUint(p.ScratchLimitBytes, 10),
+	// Swap equals memory, so the harness has no swap, and --pull never: both
+	// apply only to hosted-v2, never to the shared sandbox.
+	memory := strconv.FormatUint(p.MemoryLimitBytes, 10)
+	docker := &sandbox.LocalDocker{HarnessPort: "8080", MemoryLimit: memory, MemorySwapLimit: memory, PullNever: true, TmpfsLimit: strconv.FormatUint(p.ScratchLimitBytes, 10),
 		CPULimit: fmt.Sprintf("%d.%03d", p.CPUQuotaMillis/1000, p.CPUQuotaMillis%1000), PidsLimit: int(p.PidsLimit), StartTimeout: 2 * time.Minute,
 		Harden: true, RequireRootless: true, RequireIsolatedDaemon: true, HostGatewayIP: routerAddress.Addr().String(), EgressNetwork: wire.EgressNetwork, EgressProxy: wire.EgressProxy,
 		SeccompProfile: wire.SeccompProfile, AppArmorProfile: wire.AppArmorProfile}
