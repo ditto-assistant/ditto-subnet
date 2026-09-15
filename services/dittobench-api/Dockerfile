@@ -74,7 +74,7 @@ RUN wget -q -O /longmemeval_s_cleaned.json \
 # This opt-in target runs the API beside a host Docker daemon. The binary shells
 # out to both git and docker when it materializes and runs miner submissions.
 # Keep the ordinary runtime below as the default target for hosted practice.
-FROM docker:28.3.3-cli-alpine3.22 AS sandbox
+FROM docker:28.5.2-cli-alpine3.22 AS sandbox
 ARG DITTOBENCH_SOFTWARE_VERSION
 ARG DITTOBENCH_SOURCE_SHA
 RUN apk add --no-cache git
@@ -118,7 +118,7 @@ ENTRYPOINT ["/dittobench-api", "-port", "8000"]
 # policy required by its candidate-capability router. A later reviewed service
 # profile must still supply the socket, token, private state, host network, and
 # narrowed firewall before it can receive work.
-FROM docker:28.3.3-cli-alpine3.22 AS coding-executor-scorer
+FROM docker:28.5.2-cli-alpine3.22 AS coding-executor-scorer
 ARG DITTOBENCH_SOFTWARE_VERSION
 ARG DITTOBENCH_SOURCE_SHA
 LABEL io.heyditto.dittobench.coding-executor-scorer-contract="1"
