@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "scope": "campaign_build_and_local_validation_only",
+  "verified_at": "2026-09-12T22:04:33Z",
+  "status": "binary_identity_verified_not_a_benchmark_result",
+  "source_report_sha256": "91b3f16cca94515892e3b389273a6afd24a4dccf93b1c7342f3e74e77cb83cf7",
+  "source_sha": "1b5755609b3ea95660fdba289e6a747adb8c5dae",
+  "baseline_dependency_sha": "2cff0de8d4eef52e32ce9217272d7d9d87b0bc5c",
+  "source_evidence": "clean-go-build-vcs-and-git-startup",
+  "source_and_build_checkout_sha_match": true,
+  "pre_build_git_status_clean": true,
+  "post_build_git_status_clean": true,
+  "source_checkout_clean_at_independent_verification": true,
+  "build_checkout_kind": "task-local clean clone with a .git directory",
+  "binary_sha256": "695b6c3a0338b902949deb55456a87b17e1ba97e2b92dca63054e187ef75fa21",
+  "binary_bytes": 235116018,
+  "build_command": "GOMAXPROCS=3 go build -p 1 -buildvcs=true -o ../dittobench-campaign-vcs-1b575560 ./cmd/dittobench",
+  "go_version": "go1.26.5",
+  "goos": "darwin",
+  "goarch": "arm64",
+  "cgo_enabled": true,
+  "embedded_vcs": {
+    "vcs": "git",
+    "vcs.revision": "1b5755609b3ea95660fdba289e6a747adb8c5dae",
+    "vcs.time": "2026-09-12T21:59:33Z",
+    "vcs.modified": "false"
+  },
+  "validation": {
+    "full_harness": {
+      "status": "pass",
+      "scope": "pkg/dittobench/... and cmd/dittobench",
+      "log_sha256": "a0fe41afcbda7e3fea44f532c46fb34c2bcef2e6b6f60f1548ff834bffde3376"
+    },
+    "focused_graph_receipt_tools": {
+      "status": "pass",
+      "scope": "focused graph, receipt, retrieval and memory-tool checks; includes PostgreSQL-backed graph checks",
+      "log_sha256": "d351b59581ebae7219339f704512d7aca6c2887c3a67d8e0ec7d38bd654bf222"
+    },
+    "golangci": {
+      "status": "zero issues in changed-code scope",
+      "log_sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47"
+    },
+    "custom_dittolint": {
+      "status": "No graph-owned findings; unchanged baseline primitive-format warnings remain advisory",
+      "log_sha256": "78ab3dfbb1c03fbdd5564beefa868a9f78d9324942c89470434c64408a2b35d2"
+    },
+    "ci": {
+      "status": "not attested by this local build artifact"
+    }
+  },
+  "runtime_configuration_boundary": {
+    "initial_settle_startup_attempt": "failed before preparation or inference because the isolated build clone omitted ignored embedded local configuration",
+    "required_followup": "Provide the authorized local/common configuration explicitly as process environment and verify precedence plus the private loopback database target; do not rebuild or infer successful startup from build success.",
+    "successful_runtime_startup": "not attested by this build artifact"
+  },
+  "planned_paired_run": {
+    "reader": "openai/gpt-5.6-luna",
+    "reasoning_effort": "medium",
+    "same_binary_and_source_for_both_arms": true,
+    "same_finalized_opaque_prepared_fixture_for_both_arms": true,
+    "both_arms_require_graph_preparation": true,
+    "only_graph_arm_enables_subject_graph": true,
+    "status": "planned after all preparation, blinding, receipt and snapshot barriers"
+  },
+  "not_verified_by_this_artifact": [
+    "Successful receipt-aware settle startup, a receipt for any case, or completed preparation.",
+    "A 500-question answer run, graph accuracy improvement, or a benchmark score.",
+    "CI completion, PR merge, deployment, or production activation."
+  ],
+  "publication_boundary": "Sanitized immutable build receipt; private local paths, credentials, runtime configuration values, raw answers and transcripts are excluded."
+}
