@@ -4021,7 +4021,11 @@ def _fanout_protocol_complete(report: dict, outcome: str) -> bool:
         }
         or report.get("outcome") != outcome
         or report.get("revision")
-        not in ("fanout-source-review-v4", "fanout-source-review-v5")
+        not in (
+            "fanout-source-review-v4",
+            "fanout-source-review-v5",
+            "fanout-source-review-v6",
+        )
         or report.get("mode") != "shadow_report_only"
         or report.get("partition") != "specialists"
         or report.get("coverage_protocol") != "five-specialists-adjudicator-v2"
@@ -4058,6 +4062,7 @@ def _fanout_protocol_complete(report: dict, outcome: str) -> bool:
         not in (
             ("fanout-source-review-v4", "fanout-adjudicator-v2"),
             ("fanout-source-review-v5", "fanout-adjudicator-v3"),
+            ("fanout-source-review-v6", "fanout-adjudicator-v4"),
         )
         or critic.get("error_code") is not None
         or critic.get("outcome") != outcome
@@ -4093,6 +4098,10 @@ def _fanout_protocol_complete(report: dict, outcome: str) -> bool:
         return False
     risk = finding.risk_level
     if risk == "low" and critic.get("clearance_certified") is not True:
+        return False
+    if report.get(
+        "revision"
+    ) == "fanout-source-review-v6" and not _fanout_obligations_complete(report, risk):
         return False
     candidates = report.get("candidates")
     assessments = critic.get("candidate_assessments")
@@ -4139,6 +4148,123 @@ def _fanout_protocol_complete(report: dict, outcome: str) -> bool:
         else "no_findings"
     )
     return outcome == expected_outcome
+
+
+def _fanout_obligations_complete(report: dict, risk: str) -> bool:
+    """Do not let a v6 report omit structured specialist uncertainty."""
+    if report.get("policy_version") == 13 and risk == "low":
+        required = set(source_review_invariants_for_policy(13))
+        for source in report["passes"]:
+            decisions = source["raw_review"].get("invariants")
+            if (
+                not isinstance(decisions, list)
+                or len(decisions) != len(required)
+                or any(
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("invariant"), str)
+                    or item.get("disposition") not in ("pass", "breach", "inconclusive")
+                    for item in decisions
+                )
+                or {item["invariant"] for item in decisions} != required
+            ):
+                return False
+    expected = []
+    for source in report["passes"]:
+        decisions = source["raw_review"].get("invariants")
+        for decision in decisions if isinstance(decisions, list) else []:
+            if (
+                isinstance(decision, dict)
+                and decision.get("disposition") == "inconclusive"
+            ):
+                expected.append(
+                    (
+                        source["name"],
+                        "inconclusive_invariant",
+                        decision.get("invariant"),
+                        decision.get("summary"),
+                    )
+                )
+        for note in source["notes"]:
+            if isinstance(note, dict) and note.get("kind") == "concern":
+                expected.append(
+                    (source["name"], "concern_note", None, note.get("summary"))
+                )
+    obligations = report.get("review_obligations")
+    critic = report["critic"]
+    resolutions = critic.get("obligation_resolutions")
+    if (
+        len(expected) > 64
+        or not isinstance(obligations, list)
+        or len(obligations) != len(expected)
+        or not isinstance(resolutions, list)
+        or len(resolutions) != len(expected)
+        or critic.get("obligation_evidence_verified") is not True
+    ):
+        return False
+    by_id = {}
+    for item in resolutions:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("obligation_id"), str)
+            or item["obligation_id"] in by_id
+        ):
+            return False
+        by_id[item["obligation_id"]] = item
+    for index, (obligation, identity) in enumerate(
+        zip(obligations, expected, strict=True), start=1
+    ):
+        oid = f"obligation-{index:03d}"
+        if (
+            not isinstance(obligation, dict)
+            or obligation.get("obligation_id") != oid
+            or tuple(
+                obligation.get(key)
+                for key in ("source_pass", "kind", "invariant", "summary")
+            )
+            != identity
+        ):
+            return False
+        resolution = by_id.get(oid)
+        if not isinstance(resolution, dict) or resolution.get("disposition") not in (
+            "resolved",
+            "unresolved",
+        ):
+            return False
+        if risk == "low" and resolution["disposition"] != "resolved":
+            return False
+        summary = resolution.get("summary")
+        if not isinstance(summary, str) or not 1 <= len(summary) <= 240:
+            return False
+        anchors = obligation.get("locations")
+        evidence = resolution.get("source_evidence")
+        if (
+            not isinstance(anchors, list)
+            or not isinstance(evidence, list)
+            or len(evidence) > 16
+        ):
+            return False
+        for item in anchors + evidence:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("path"), str)
+                or not item["path"]
+                or type(item.get("line")) is not int
+                or item["line"] < 1
+            ):
+                return False
+        locations = {
+            (item["path"].removeprefix("./"), item["line"]) for item in evidence
+        }
+        anchor_locations = {
+            (item["path"].removeprefix("./"), item["line"]) for item in anchors
+        }
+        if resolution["disposition"] == "resolved" and not (
+            bool(locations & anchor_locations)
+            if anchor_locations
+            else len(locations) >= 2
+        ):
+            return False
+    return True
 
 
 def _fanout_models_complete(models: object, expected_model: object) -> bool:

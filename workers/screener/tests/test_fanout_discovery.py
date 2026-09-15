@@ -164,3 +164,48 @@ def test_failed_decode_and_tokenization_are_not_scanned(tmp_path):
     assert report["coverage"]["files_scanned"] == 1
     assert report["coverage"]["unreadable_files"] == 2
     assert report["coverage"]["truncated"]
+
+
+def test_late_answer_replacement_survives_early_generic_sinks(tmp_path):
+    early = "if condition {\nanswer = value;\n}\n" + "\n" * 30
+    source = (
+        early * 8
+        + "if available {\nfinal_text = final_text.replace(marker, chosen);\n"
+        "answer = Some(chosen);\n}\n"
+    )
+    archive = _archive_files(tmp_path, {"z.rs": source.encode()})
+    report = semantic_discovery(str(archive))
+    leads = [x for x in report["leads"] if x["kind"] == "host-answer-mutation"]
+    assert leads and leads[0]["locations"][0]["line"] > 250
+    assert report["coverage"]["windows_omitted"] > 0
+    assert "replacement value provenance" in report["guidance"]
+
+
+def test_serialization_and_unchanged_model_copy_are_not_mutation_hints(tmp_path):
+    archive = _archive_files(
+        tmp_path,
+        {
+            "x.rs": b"""let final_text = result.text.clone();
+let response = Reply { answer: answer, final_text: final_text };
+answer = None;
+// final_text = final_text.replace(marker, chosen);
+"""
+        },
+    )
+    report = semantic_discovery(str(archive))
+    assert not any(x["kind"] == "host-answer-mutation" for x in report["leads"])
+
+
+def test_generic_interpreter_result_remains_only_a_hint(tmp_path):
+    archive = _archive_files(
+        tmp_path,
+        {
+            "runtime.py": b"""if program_was_delegated:
+    answer = execute(parsed_program)
+"""
+        },
+    )
+    report = semantic_discovery(str(archive))
+    assert any(x["kind"] == "host-answer-mutation" for x in report["leads"])
+    assert "model-authored programs can be legitimate" in report["guidance"]
+    assert "not a finding or a clearance requirement" in report["guidance"]

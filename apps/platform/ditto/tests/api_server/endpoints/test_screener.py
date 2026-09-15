@@ -10859,6 +10859,7 @@ def test_shadow_final_review_must_be_canonical_and_individually_model_bound(faul
     [
         ("fanout-source-review-v4", "fanout-adjudicator-v2", True),
         ("fanout-source-review-v5", "fanout-adjudicator-v3", True),
+        ("fanout-source-review-v6", "fanout-adjudicator-v4", True),
         ("fanout-source-review-v4", "fanout-adjudicator-v3", False),
         ("fanout-source-review-v5", "fanout-adjudicator-v2", False),
         ("fanout-source-review-v6", "fanout-adjudicator-v3", False),
@@ -10874,6 +10875,10 @@ def test_specialist_protocol_accepts_only_explicit_revision_pairs(
     report = _complete_specialist_adjudication_report()
     report["revision"] = outer
     report["critic"]["revision"] = critic
+    if outer == "fanout-source-review-v6":
+        report["review_obligations"] = []
+        report["critic"]["obligation_resolutions"] = []
+        report["critic"]["obligation_evidence_verified"] = True
     assert _fanout_protocol_complete(report, "no_findings") is accepted
     for field, value in [
         ("evidence_verified", False),
@@ -10886,3 +10891,96 @@ def test_specialist_protocol_accepts_only_explicit_revision_pairs(
         assert not _fanout_protocol_complete(broken, "no_findings")
     report["passes"].pop()
     assert not _fanout_protocol_complete(report, "no_findings")
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "omitted",
+        "unresolved",
+        "unrelated",
+        "duplicate",
+        "unverified",
+        "wrong_source",
+        "bad_disposition",
+    ],
+)
+def test_shadow_obligations_cannot_disappear_into_clearance(fault):
+    from ditto.api_server.endpoints.screener import _fanout_obligations_complete
+
+    report = _complete_specialist_adjudication_report()
+    report["passes"][2]["raw_review"]["invariants"] = [
+        {
+            "invariant": "i4_derived_value_authority",
+            "disposition": "inconclusive",
+            # Invalid provisional pass clause must not erase its concern.
+            "pass_clause": "untrusted_candidate_channel",
+            "summary": "Post-model writer needs provenance tracing.",
+        }
+    ]
+    report["review_obligations"] = [
+        {
+            "obligation_id": "obligation-001",
+            "source_pass": "benchmark_engine",
+            "kind": "inconclusive_invariant",
+            "invariant": "i4_derived_value_authority",
+            "summary": "Post-model writer needs provenance tracing.",
+            "locations": [{"path": "src/runtime.rs", "line": 80}],
+        }
+    ]
+    report["critic"]["obligation_evidence_verified"] = True
+    report["critic"]["obligation_resolutions"] = [
+        {
+            "obligation_id": "obligation-001",
+            "disposition": "resolved",
+            "summary": "Writer traced independently.",
+            "source_evidence": [{"path": "src/runtime.rs", "line": 80}],
+        }
+    ]
+    resolutions = report["critic"]["obligation_resolutions"]
+    if fault == "omitted":
+        report["review_obligations"] = []
+        report["critic"]["obligation_resolutions"] = []
+    elif fault == "unresolved":
+        resolutions[0]["disposition"] = "unresolved"
+    elif fault == "unrelated":
+        resolutions[0]["source_evidence"][0]["line"] = 3
+    elif fault == "duplicate":
+        resolutions.append(resolutions[0])
+    elif fault == "unverified":
+        report["critic"]["obligation_evidence_verified"] = False
+    elif fault == "wrong_source":
+        report["review_obligations"][0]["source_pass"] = "generalist"
+    elif fault == "bad_disposition":
+        resolutions[0]["disposition"] = []
+    assert _fanout_obligations_complete(report, "low") is (fault is None)
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "missing", "duplicate", "unknown", "malformed"]
+)
+def test_shadow_v13_clearance_requires_complete_specialist_invariant_shapes(fault):
+    from ditto.api_server.endpoints.screener import _fanout_obligations_complete
+    from ditto_screening_protocol.models import source_review_invariants_for_policy
+
+    report = _complete_specialist_adjudication_report()
+    report["policy_version"] = 13
+    for source in report["passes"]:
+        source["raw_review"]["invariants"] = [
+            {"invariant": item.value, "disposition": "pass"}
+            for item in source_review_invariants_for_policy(13)
+        ]
+    report["review_obligations"] = []
+    report["critic"]["obligation_resolutions"] = []
+    report["critic"]["obligation_evidence_verified"] = True
+    rows = report["passes"][0]["raw_review"]["invariants"]
+    if fault == "missing":
+        rows.pop()
+    elif fault == "duplicate":
+        rows[-1] = rows[0]
+    elif fault == "unknown":
+        rows[0]["invariant"] = "invented"
+    elif fault == "malformed":
+        rows[0] = None
+    assert _fanout_obligations_complete(report, "low") is (fault is None)

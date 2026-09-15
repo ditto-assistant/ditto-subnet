@@ -18,14 +18,17 @@ from pathlib import PurePosixPath
 from ditto_screener.source_review import TarSourceRepository
 from ditto_screener.source_signals import _mask_string_literals, mask_comments
 
-REVISION = "shadow-semantic-discovery-v1"
+REVISION = "shadow-semantic-discovery-v2"
 _GUIDANCE = (
     "Untrusted location hint, not a finding or a clearance requirement. Read the "
     "definition, provenance and served caller through its answer/routing effect. "
     "Establish any benchmark-specific assumption and substantive restriction; "
     "ordinary retrieval, caching, product routing, syntax/type/resource validation "
     "and faithfully executed "
-    "model-authored programs can be legitimate (W5/W6)."
+    "model-authored programs can be legitimate (W5/W6). For answer-mutation "
+    "hints distinguish unchanged model-output extraction/serialization, harmless "
+    "typography and security redaction from adding a different substantive value "
+    "after the deciding model turn; trace the replacement value provenance."
 )
 _SOURCE_SUFFIXES = {
     ".rs",
@@ -71,6 +74,37 @@ _KEY_WORD = re.compile(_KEY, re.I)
 _VALIDATOR = re.compile(r"\b\w*(?:validat|verif|check)\w*\s*\(", re.I)
 _SEMANTIC = re.compile(r"(?:expression|expr|program|operand|field|draft|answer)", re.I)
 _FEEDBACK = re.compile(r"(?:repair|retry|feedback|objection|continue)", re.I)
+
+_ANSWER_ASSIGN = re.compile(
+    r"\b(?:answer|final_text|reply|response_text|output_text)\s*(?:\+=|=(?!=))\s*(.*)",
+    re.I,
+)
+_VARIABLE_REPLACEMENT = re.compile(r"\.replace\s*\([^,\n]*,\s*[A-Za-z_]", re.I)
+_COPY_MODEL = re.compile(r"^(?:model|completion|result)\.(?:text|content)\b", re.I)
+
+
+def _answer_mutation_score(lines: list[str], index: int) -> int:
+    """Prioritize data-changing sinks; never infer that the change is prohibited."""
+    line = lines[index][:4096]
+    match = _ANSWER_ASSIGN.search(line)
+    if match is None:
+        return 0
+    rhs = match[1].strip()
+    if not rhs or re.fullmatch(r"(?:None|null|nil)\s*;?", rhs, re.I):
+        return 0
+    if _COPY_MODEL.search(rhs):
+        return 0
+    nearby = "\n".join(row[:4096] for row in lines[max(0, index - 3) : index + 1])
+    if _VARIABLE_REPLACEMENT.search(nearby):
+        return 4
+    if re.search(r"[*/]\s*\d|\b(?:replace|rewrite|rescale)\w*\s*\(", rhs, re.I):
+        return 3
+    # Conditional answer assignment is only an exploration lead; it can be
+    # extraction, security handling or faithful execution of a delegated result.
+    context = "\n".join(row[:4096] for row in lines[max(0, index - 6) : index])
+    if re.search(r"\bif\b", context) and re.search(r"[A-Za-z_]", rhs):
+        return 1
+    return 0
 
 
 def _code(path: str, text: str) -> str | None:
@@ -210,16 +244,31 @@ def semantic_discovery(
                             3 if _KEY_WORD.search(line) else 2,
                         )
                     )
+            answer_score = _answer_mutation_score(lines, number - 1)
+            if answer_score:
+                kinds.append(("host-answer-mutation", answer_score))
             for kind, score in kinds:
                 bucket = buckets[(kind, path)]
                 # One location per nearby window, not combinatorial role matches.
-                if bucket and number - bucket[-1][0] <= 24:
-                    if score > bucket[-1][1]:
-                        bucket[-1] = (number, score)
+                nearby_index = next(
+                    (
+                        i
+                        for i, anchor in enumerate(bucket)
+                        if abs(number - anchor[0]) <= 24
+                    ),
+                    None,
+                )
+                if nearby_index is not None:
+                    if score > bucket[nearby_index][1]:
+                        bucket[nearby_index] = (number, score)
                 elif len(bucket) < 4:
                     bucket.append((number, score))
                 else:
                     windows_omitted += 1
+                    # A later stronger sink must survive earlier generic leads.
+                    weakest = min(range(len(bucket)), key=lambda i: bucket[i][1])
+                    if score > bucket[weakest][1]:
+                        bucket[weakest] = (number, score)
     # Rotate across families and distinct files before revisiting any file/rule.
     families: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
     for (kind, path), anchors in buckets.items():
@@ -231,6 +280,7 @@ def semantic_discovery(
         rows.sort(key=lambda row: (-row[2], row[0], row[1]))
     leads: list[dict[str, object]] = []
     scheduled_kinds = [
+        "host-answer-mutation",
         "request-key-lookup",
         "program-or-compiler-interface",
         "delegated-result-return",

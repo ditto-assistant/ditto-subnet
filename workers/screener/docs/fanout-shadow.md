@@ -56,7 +56,7 @@ support. It remains a shadow observation, not proof and not a vote.
 
 ### I5 calibration and adjudicator binding
 
-The v5 shadow guidance makes each reviewer trace a suspected semantic compiler
+The shadow guidance makes each reviewer trace a suspected semantic compiler
 from its served caller through its rule definition to the authoritative sink,
 including early-return paths. Notes distinguish the benchmark-specific
 assumption, activation, substantive effect, and counterevidence under W5/W6.
@@ -72,10 +72,10 @@ consumers. Runtime validation still rejects unknown or conflicting identities,
 preserves omitted candidates as unresolved, and requires source reads. It never
 guesses a binding from array position or silently changes a policy disposition.
 
-The benchmark specialist also receives at most eight independent location hints
-from `shadow-semantic-discovery-v1`. This shadow-only scan explores request-keyed
+The benchmark and answer-authority specialists also receive at most eight independent location hints
+from `shadow-semantic-discovery-v2`. This shadow-only scan explores request-keyed
 lookups, program interfaces, delegated-result returns, and semantic-validation
-feedback. It scans up to 512 eligible source files, 16 MiB total and 2 MiB per
+feedback and post-model answer mutations. It scans up to 512 eligible source files, 16 MiB total and 2 MiB per
 file before selecting across rule families and files; nearby duplicates collapse.
 Comments and strings do not supply code matches. The report records file, byte,
 window and hint omissions and always labels this scan non-exhaustive. Other
@@ -90,6 +90,17 @@ seven, leaving five turns for source reads and field repairs before the final
 forced submission. Diagnostics identify invalid candidate fields without echoing
 arbitrary payload text. This redistributes the same turn allowance; it does not
 increase request, token, cost or deadline limits or coerce an incomplete verdict.
+
+The v6/v4 report contract turns explicit inconclusive specialist invariants and
+concern notes into separately keyed adjudication obligations, even when the raw
+review is contradictory or its candidate list is empty. Clearance requires each
+obligation to be resolved with source-read evidence; anchored concerns require
+evidence at their original locations. Missing or malformed v13 invariant sets
+cannot yield clearance. These checks establish an explicit investigation trail,
+not semantic correctness: the adjudicator can still misinterpret inspected code.
+Answer-authority guidance distinguishes security redaction from inserting a
+different host-selected substantive value and treats compliance comments as
+untrusted claims.
 
 Evaluate changes with SHA-bound, source-only replays. Keep baseline verdicts and
 findings out of the model input. Require exact-mechanism recall on known-rejected
@@ -247,7 +258,8 @@ plus an always-present adjudicator record containing a canonical final
 review, source-read proof, clearance proof for low risk, and an exactly bound
 assessment for every provisional candidate. Platform accepts only the paired
 revisions `fanout-source-review-v4` / `fanout-adjudicator-v2` and
-`fanout-source-review-v5` / `fanout-adjudicator-v3`. Mixed pairs and older
+`fanout-source-review-v5` / `fanout-adjudicator-v3`, plus
+`fanout-source-review-v6` / `fanout-adjudicator-v4`. Mixed pairs and older
 reports cannot satisfy this contract. The v5/v3 producer uses exact candidate-ID
 object keys in the tool response and normalizes them to the same canonical
 assessment list; neither pair bypasses source-read or clearance verification. It is

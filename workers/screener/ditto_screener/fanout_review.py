@@ -30,8 +30,8 @@ from ditto_screener.source_signals import source_path_priority
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
 from ditto_screening_protocol.models import source_review_invariants_for_policy
 
-REVISION = "fanout-source-review-v5"
-ADJUDICATOR_REVISION = "fanout-adjudicator-v3"
+REVISION = "fanout-source-review-v6"
+ADJUDICATOR_REVISION = "fanout-adjudicator-v4"
 COVERAGE_PROTOCOL = "five-specialists-adjudicator-v2"
 MODEL = "z-ai/glm-5.3-flash"
 ALLOWED_RESPONSE_MODELS = frozenset({MODEL, "glm-5.3-flash"})
@@ -201,8 +201,173 @@ def response_model_matches(expected_model: str, response_model: object) -> bool:
     )
 
 
+def _specialist_invariant_shapes_complete(
+    pass_summaries: list[dict], policy_version: int
+) -> bool:
+    if policy_version != 13:
+        return True
+    expected = {
+        item.value for item in source_review_invariants_for_policy(policy_version)
+    }
+    for source in pass_summaries:
+        review = source.get("raw_review")
+        decisions = review.get("invariants") if isinstance(review, dict) else None
+        if not isinstance(decisions, list) or len(decisions) != len(expected):
+            return False
+        if any(
+            not isinstance(row, dict)
+            or row.get("disposition") not in ("pass", "breach", "inconclusive")
+            or not isinstance(row.get("invariant"), str)
+            for row in decisions
+        ):
+            return False
+        if {row["invariant"] for row in decisions} != expected:
+            return False
+    return bool(pass_summaries)
+
+
+def _review_obligations(
+    pass_summaries: list[dict], repository: TarSourceRepository
+) -> list[dict]:
+    """Preserve structured uncertainty, including invalid provisional reviews.
+
+    Narrative text is carried as untrusted context; no keyword predicts guilt.
+    """
+    obligations: list[dict] = []
+    for source in pass_summaries:
+        review = source.get("raw_review")
+        review = review if isinstance(review, dict) else {}
+        evidence = review.get("evidence")
+        evidence = evidence if isinstance(evidence, list) else []
+        decisions = review.get("invariants")
+        decisions = decisions if isinstance(decisions, list) else []
+        concerns = []
+        for decision in decisions:
+            if (
+                not isinstance(decision, dict)
+                or decision.get("disposition") != "inconclusive"
+            ):
+                continue
+            indices = decision.get("evidence_indices")
+            locations = (
+                [
+                    evidence[i]
+                    for i in indices
+                    if type(i) is int and 0 <= i < len(evidence)
+                ]
+                if isinstance(indices, list)
+                else []
+            )
+            concerns.append(
+                (
+                    "inconclusive_invariant",
+                    decision.get("invariant"),
+                    decision.get("summary"),
+                    locations,
+                )
+            )
+        notes = source.get("notes")
+        for note in notes if isinstance(notes, list) else []:
+            if isinstance(note, dict) and note.get("kind") == "concern":
+                concerns.append(("concern_note", None, note.get("summary"), [note]))
+        for kind, invariant, summary, locations in concerns:
+            valid = [
+                {"path": item["path"], "line": item["line"]}
+                for item in locations
+                if _valid_source_citation(repository, item)
+            ]
+            obligations.append(
+                {
+                    "obligation_id": f"obligation-{len(obligations) + 1:03d}",
+                    "source_pass": source.get("name"),
+                    "kind": kind,
+                    "invariant": invariant,
+                    "summary": summary,
+                    "locations": valid,
+                }
+            )
+            if len(obligations) > 64:
+                raise FanoutBudgetExhausted(
+                    "fanout unresolved obligation limit exceeded"
+                )
+    return obligations
+
+
+def _normalize_obligation_resolutions(
+    payload: dict,
+    obligations: list[dict],
+    repository: TarSourceRepository,
+    opened_lines: set[tuple[str, int]],
+) -> list[dict]:
+    if not obligations:
+        return []
+    submitted = payload.get("obligation_resolutions")
+    expected = {item["obligation_id"] for item in obligations}
+    if (
+        len(expected) != len(obligations)
+        or not isinstance(submitted, dict)
+        or set(submitted) != expected
+    ):
+        raise ValueError(
+            "fanout obligation resolutions require every exact obligation ID"
+        )
+    normalized = []
+    for obligation in obligations:
+        oid = obligation["obligation_id"]
+        row = submitted[oid]
+        if not isinstance(row, dict) or set(row) != {
+            "disposition",
+            "source_evidence",
+            "summary",
+        }:
+            raise ValueError(f"fanout obligation {oid} fields invalid")
+        disposition = row["disposition"]
+        if (
+            disposition not in ("resolved", "unresolved")
+            or not isinstance(row["summary"], str)
+            or not 1 <= len(row["summary"]) <= 240
+            or not isinstance(row["source_evidence"], list)
+        ):
+            raise ValueError(f"fanout obligation {oid} field types or bounds invalid")
+        citations = row["source_evidence"]
+        if len(citations) > 16 or any(
+            not isinstance(item, dict)
+            or set(item) != {"path", "line"}
+            or not _valid_source_citation(repository, item)
+            for item in citations
+        ):
+            raise ValueError(f"fanout obligation {oid} source citations invalid")
+        locations = {
+            (item["path"].removeprefix("./"), item["line"]) for item in citations
+        }
+        if not locations <= opened_lines:
+            raise ValueError(f"fanout obligation {oid} cites source not read")
+        anchors = {
+            (item["path"].removeprefix("./"), item["line"])
+            for item in obligation["locations"]
+        }
+        # Locationless narrative concerns need explicit runtime investigation;
+        # matching source locations is necessary, never proof of semantics.
+        verified = (
+            bool(locations & anchors)
+            if anchors
+            else len(locations) >= 2
+            and any(_is_generator_runtime_source(path) for path, _ in locations)
+        )
+        if disposition == "resolved" and not verified:
+            raise ValueError(
+                f"fanout obligation {oid} lacks relevant source-read evidence"
+            )
+        normalized.append({"obligation_id": oid, **row})
+    return normalized
+
+
 def _adjudication_tools(
-    policy_version: int, candidate_ids: list[str], *, final_turn: bool = False
+    policy_version: int,
+    candidate_ids: list[str],
+    *,
+    final_turn: bool = False,
+    obligations: list[dict] | None = None,
 ) -> tuple[dict[str, object], ...]:
     final_review_parameters: dict[str, object] | None = None
     for tool in _source_review_tools_for_policy(policy_version, final_turn=True):
@@ -333,6 +498,37 @@ def _adjudication_tools(
             "use an empty object when there are no candidates."
         ),
     }
+    if obligations:
+        resolution_schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "disposition": {"type": "string", "enum": ["resolved", "unresolved"]},
+                "summary": {"type": "string", "minLength": 1, "maxLength": 240},
+                "source_evidence": {
+                    "type": "array",
+                    "maxItems": 16,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "path": {"type": "string"},
+                            "line": {"type": "integer", "minimum": 1},
+                        },
+                        "required": ["path", "line"],
+                    },
+                },
+            },
+            "required": ["disposition", "summary", "source_evidence"],
+        }
+        ids = [item["obligation_id"] for item in obligations]
+        parameters["properties"]["obligation_resolutions"] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": dict.fromkeys(ids, resolution_schema),
+            "required": ids,
+        }
+        parameters["required"].append("obligation_resolutions")
     if final_turn:
         return (submit,)
     inspection: list[dict[str, object]] = []
@@ -548,6 +744,8 @@ def _normalize_final_adjudication(
     repository: TarSourceRepository,
     opened_lines: set[tuple[str, int]],
     clearance_certified: bool,
+    obligations: list[dict] | None = None,
+    specialist_invariant_shapes_complete: bool = True,
 ) -> dict:
     """Validate the one canonical stage-two decision and its candidate bindings."""
     if not isinstance(payload, dict):
@@ -607,6 +805,15 @@ def _normalize_final_adjudication(
     if observation.risk_level == "low" and not clearance_certified:
         raise ValueError("fanout adjudicator did not establish clearance coverage")
 
+    if observation.risk_level == "low" and not specialist_invariant_shapes_complete:
+        raise ValueError("fanout malformed specialist invariant set prevents clearance")
+    obligation_resolutions = _normalize_obligation_resolutions(
+        payload, obligations or [], repository, opened_lines
+    )
+    if observation.risk_level == "low" and any(
+        row["disposition"] != "resolved" for row in obligation_resolutions
+    ):
+        raise ValueError("fanout unresolved specialist obligation prevents clearance")
     candidate_result = _normalize_candidate_adjudications(
         payload,
         candidates=candidates,
@@ -639,6 +846,10 @@ def _normalize_final_adjudication(
         "clearance_certified": bool(clearance_certified),
         "evidence_verified": evidence_verified,
         "candidate_assessments": assessments,
+        "review_obligations": obligations or [],
+        "obligation_resolutions": obligation_resolutions,
+        "obligation_evidence_verified": True,
+        "specialist_invariant_shapes_complete": specialist_invariant_shapes_complete,
         "summary": candidate_result["summary"],
     }
 
@@ -791,6 +1002,13 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                 fields.extend(
                     (f"candidate_assessments[{candidate_id}].summary", item, 240)
                     for candidate_id, item in assessments.items()
+                    if isinstance(item, dict)
+                )
+            resolutions = arguments.get("obligation_resolutions")
+            if isinstance(resolutions, dict):
+                fields.extend(
+                    (f"obligation_resolutions[{oid}].summary", item, 240)
+                    for oid, item in resolutions.items()
                     if isinstance(item, dict)
                 )
             for field, item, max_chars in fields:
@@ -1114,6 +1332,7 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
         self._adjudication_runtime_source_read = False
         api_key = self._read_api_key()
         candidate_ids = [row["candidate_id"] for row in candidates]
+        obligations = _review_obligations(all_pass_summaries, repository)
         adjudicator_system = _source_review_system_prompt(policy_version) + (
             "\nThis is report-only stage-two adjudication. The five specialist "
             "reports are provisional, may be internally contradictory, and are "
@@ -1125,7 +1344,11 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
             "Bind final_review.invariants by the exact policy invariant object "
             "keys from the tool schema, without repeated invariant fields. "
             "Run this full review "
-            "even when the provisional candidate list is empty."
+            "even when the provisional candidate list is empty. Resolve each "
+            "review_obligation explicitly with source_evidence you actually read; "
+            "cite an original concern location when provided, otherwise at least "
+            "two source locations including runtime code. Unread or unresolved "
+            "concerns prohibit low-risk clearance but never imply guilt."
         )
         messages: list[dict[str, object]] = [
             {"role": "system", "content": adjudicator_system},
@@ -1145,6 +1368,7 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                         {
                             "candidates": candidates,
                             "all_pass_summaries": all_pass_summaries,
+                            "review_obligations": obligations,
                         },
                         sort_keys=True,
                     )
@@ -1188,7 +1412,10 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                     timeout=min(self._timeout_seconds, remaining),
                     reasoning_effort="low",
                     tools=_adjudication_tools(
-                        policy_version, candidate_ids, final_turn=force_submission
+                        policy_version,
+                        candidate_ids,
+                        final_turn=force_submission,
+                        obligations=obligations,
                     ),
                     tool_choice="required" if force_submission else "auto",
                 )
@@ -1270,6 +1497,10 @@ class ExperimentalReviewer(OpenRouterSourceReviewAgent):
                                 candidates=candidates,
                                 repository=repository,
                                 opened_lines=self.opened_lines,
+                                obligations=obligations,
+                                specialist_invariant_shapes_complete=_specialist_invariant_shapes_complete(
+                                    all_pass_summaries, policy_version
+                                ),
                                 clearance_certified=(
                                     self._adjudication_inspection_calls >= 2
                                     and self._adjudication_runtime_source_read
@@ -1578,6 +1809,13 @@ async def review_archive(
                     + "\nBounded discovery coverage: "
                     + json.dumps(discovery["coverage"], sort_keys=True)
                 )
+            if name == "answer_authority" and discovery is not None:
+                leads = [
+                    lead
+                    for lead in discovery["leads"]
+                    if lead.get("kind") == "host-answer-mutation"
+                ]
+                focus += "\n" + discovery["guidance"]
             reviewer = reviewer_factory(
                 focus=focus,
                 leads=leads,
@@ -1815,6 +2053,7 @@ async def review_archive(
         "file_plan": plan,
         "semantic_discovery": discovery,
         "critic": critic,
+        "review_obligations": critic.get("review_obligations", []),
         "duration_seconds": time.monotonic() - started,
         "budgets": {
             "concurrency": concurrency,

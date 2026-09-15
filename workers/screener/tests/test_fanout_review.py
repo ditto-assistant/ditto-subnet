@@ -684,7 +684,9 @@ async def test_raw_contradictory_specialists_reach_always_run_adjudicator(
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
     key.chmod(0o600)
-    archive = _archive_files(tmp_path, {"src/main.rs": b"fn main() { call_model(); }"})
+    archive = _archive_files(
+        tmp_path, {"src/main.rs": b"fn main() { call_model(); }\nfn helper() {}\n"}
+    )
     stage_two_requests = []
     specialist_requests = []
     policy_invariants = {
@@ -717,7 +719,7 @@ async def test_raw_contradictory_specialists_reach_always_run_adjudicator(
                 _tool(
                     f"read-{index}",
                     "read_file",
-                    {"path": "src/main.rs", "start_line": 1, "end_line": 1},
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 2},
                 )
                 for index in (1, 2)
             ]
@@ -730,6 +732,7 @@ async def test_raw_contradictory_specialists_reach_always_run_adjudicator(
                         "final_review": policy_review(_BENIGN_REVIEW),
                         "candidate_assessments": [],
                         "summary": "Stage two independently cleared the source.",
+                        "obligation_resolutions": _resolved_obligations(payload),
                     },
                 )
             ]
@@ -768,7 +771,7 @@ async def test_raw_contradictory_specialists_reach_always_run_adjudicator(
             transport=transport, **kwargs
         ),
     )
-    assert result["revision"] == "fanout-source-review-v5"
+    assert result["revision"] == "fanout-source-review-v6"
     assert result["coverage_protocol"] == "five-specialists-adjudicator-v2"
     assert result["outcome"] == "no_findings"
     assert result["candidates"] == []
@@ -1266,6 +1269,7 @@ async def test_default_budget_completes_two_turn_fanout_and_source_read(tmp_path
                             }
                         ],
                         "summary": "The bounded check remains unresolved.",
+                        "obligation_resolutions": _resolved_obligations(payload),
                     },
                 )
             ]
@@ -1819,3 +1823,27 @@ async def test_conflicting_final_calls_cannot_select_first_clean(tmp_path, corre
     assert result.finding is None
     assert reviewer.usage["requests"] == (2 if corrected else 1)
     assert reviewer.full_summaries == []
+
+
+def _resolved_obligations(payload):
+    tool = next(
+        tool
+        for tool in payload["tools"]
+        if tool["function"]["name"] == "submit_fanout_adjudication"
+    )
+    ids = (
+        tool["function"]["parameters"]["properties"]
+        .get("obligation_resolutions", {})
+        .get("required", [])
+    )
+    return {
+        oid: {
+            "disposition": "resolved",
+            "summary": "Independently traced original source.",
+            "source_evidence": [
+                {"path": "src/main.rs", "line": 1},
+                {"path": "src/main.rs", "line": 2},
+            ],
+        }
+        for oid in ids
+    }
