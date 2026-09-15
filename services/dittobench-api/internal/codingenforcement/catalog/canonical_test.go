@@ -12,7 +12,7 @@ import (
 
 // Pinned identically in ditto/tests/test_coding_native_enforcement_evidence.py.
 const (
-	goldenRecordSHA256    = "8ed4ce9e831a20ae9bee4c60a865c44a3340c6098d4074615938c7446d8aff6c"
+	goldenRecordSHA256    = "ff6acb22aab1b6241f3d6790ec6f0fda0c5deeed8fd11a7207745167457c5360"
 	canonicalVectorSHA256 = "1948b8f75bd3f0c25825ed268d2390e89ffe1993a37790ee740c19e5cd491a74"
 )
 

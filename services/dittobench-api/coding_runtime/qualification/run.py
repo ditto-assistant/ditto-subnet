@@ -8,7 +8,6 @@ import argparse
 import concurrent.futures
 import contextlib
 import hashlib
-import importlib.util
 import json
 import os
 import platform
@@ -17,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import types
 import uuid
 from pathlib import Path
 
@@ -36,12 +36,41 @@ def retained_case(root):
     yield tempfile.mkdtemp(prefix="case-", dir=root)
 
 
+def protected_ancestors(path):
+    # Binding re-checks these from inside native.py, which is too late to
+    # refuse a module another account could have edited: check before compiling.
+    for parent in path.parents:
+        info = parent.lstat()
+        require(
+            stat.S_ISDIR(info.st_mode)
+            and info.st_uid in (0, os.geteuid())
+            and not info.st_mode & 0o022,
+            "native binding rejected",
+        )
+
+
 def load_native():
+    # Compile native.py from one read of its bytes: no cached bytecode can stand
+    # in for it, and it checks the digest of exactly what was compiled.
     path = Path(__file__).resolve().with_name("native.py")
-    spec = importlib.util.spec_from_file_location("coding_native_binding", path)
-    assert spec is not None and spec.loader is not None
-    value = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(value)
+    protected_ancestors(path)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(fd)
+        require(
+            stat.S_ISREG(info.st_mode)
+            and info.st_nlink == 1
+            and info.st_uid in (0, os.geteuid())
+            and not info.st_mode & 0o022
+            and 0 < info.st_size <= 1 << 20,
+            "native binding rejected",
+        )
+        raw = stream.read((1 << 20) + 1)
+    require(len(raw) == info.st_size, "native binding changed during read")
+    value = types.ModuleType("coding_native_binding")
+    value.__file__ = str(path)
+    value.LOADED_SHA256 = digest(raw)
+    exec(compile(raw, str(path), "exec", dont_inherit=True), value.__dict__)
     return value
 
 
@@ -261,7 +290,7 @@ def stable(value):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--images", type=Path, required=True)
     parser.add_argument("--corpus", type=Path, required=True)
@@ -272,13 +301,15 @@ def main():
     parser.add_argument("--collect-failures", action="store_true")
     parser.add_argument("--private-native-controls-once", action="store_true")
     parser.add_argument("--native-approval", type=Path)
-    parser.add_argument("--native-approval-sha256")
+    # The host verifies the detached curator signature itself; an approval
+    # digest on the command line is not accepted as authority.
+    parser.add_argument("--native-approval-signature", type=Path)
     parser.add_argument("--native-release-index", type=Path)
     args = parser.parse_args()
     native_options = (
         args.private_native_controls_once,
         args.native_approval,
-        args.native_approval_sha256,
+        args.native_approval_signature,
         args.native_release_index,
     )
     if any(native_options) and not all(native_options):
@@ -358,7 +389,7 @@ def main():
         )
         binding = native.Binding(
             args.native_approval,
-            args.native_approval_sha256,
+            args.native_approval_signature,
             args.native_release_index,
             source=source,
             plan_sha=plan_sha,

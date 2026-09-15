@@ -260,7 +260,10 @@ A record is refused unless all of these hold:
 
 - a 64-byte detached Ed25519 signature over the exact approval bytes;
 - a PEM Ed25519 curator public key whose raw-key sha256 equals
-  `--curator-signing-key-sha256`.
+  `--curator-signing-key-sha256`;
+- that same key identity pinned as `CURATOR_SIGNING_KEY_SHA256` in the reviewed
+  `native.py` the approval binds, the only key the host accepts. An approval
+  checked against any other key would pass here and still be refused on-host.
 
 This is the algorithm and key identity that the profile approval and the
 curator key loader use. The infra Python environment has neither `cryptography`
@@ -505,21 +508,49 @@ approval's `private_input_custody` digest is the digest of that object.
 - **Custody binding and the other tolerances** from the first round remain
   open.
 
-## Host-side enforcement follow-up (B5 PR 3a)
+## Host approval verification (B5 PR 3a)
 
-Peyton (2026-09-15): this is not deferred beyond B5. No host collection can
-count as approval evidence until the host verifies the detached curator signature
-and the daemon identity is bound into the signed approval and evidence. This PR
-does not change runtime code. The native consumer still has three gaps:
+Peyton (2026-09-15): before any host collection can count as approval
+evidence, the host verifies the detached curator signature and the Docker daemon
+identity is bound into the signed approval and the evidence.
 
-- `native.py` and `run.py` take `--native-approval-sha256` on the command line
-  and never check the curator signature on the host. The signature is checked
-  offline by `check-approval`, but the host run is authorized by the operator
-  supplying the approval digest.
-- `native.policy`'s closed approval shape has no `daemon_identity_sha256`, so a
-  run cannot be tied to the daemon the evidence named.
-- `expires_at_unix` may be up to 24 hours after `issued_at_unix`, although the
-  evidence is only fresh for six hours at issuance.
+- **On-host signature.** `native.py` no longer accepts an approval digest.
+  - `run.py` takes `--native-approval` and `--native-approval-signature`.
+    `--native-approval-sha256` is refused before any input is read.
+  - The host compiles this tool from one read of its bytes and runs its own
+    `verify_ed25519` over the exact approval bytes, with the curator key pinned
+    in `native.py` source. Only after that does it parse them with
+    `parse_canonical`.
+  - The approval (`dittobench-coding-native-controls-approval-v3`) names
+    `curator_signing_key_sha256` and `evidence_tool_sha256`. The host refuses a
+    different key or verifier. `check-approval` refuses them offline too, and
+    now also requires canonical approval bytes.
+- **Daemon identity.** `dittobench-coding-native-daemon-identity-v1` is a
+  closed object; see the qualification README for its fields and why each is
+  included.
+  - The host preflight (schema `dittobench-coding-native-host-preflight-v3`)
+    records it and its canonical digest. The verifier refuses a digest that
+    does not match the object, a non-rootless identity, or a preflight v2.
+  - Records carry that digest as `host.daemon_identity_sha256`, and every record
+    and both preflights must agree.
+  - `check-approval` requires `sha256(canonical(approval.daemon_identity))` to
+    equal the evidence daemon. `native.policy` fixes the socket and data root.
+  - On the host, `docker info` must reproduce the approved identity before and
+    after the run, served over the fixed socket by the native principal.
+- **Endpoint set in the signed document.** `approval.profile_pins` carries
+  the endpoint-set, execution-profile and grading-profile pins. They must equal
+  the reviewed pins given to `check-approval`.
+- **Boot and replay.** The approval pins machine and boot. The host rechecks
+  both before every step, and the single-use marker refuses a second run on the
+  same boot. An identical daemon after a reboot is still refused.
+- **Go parity.** `catalog.DaemonIdentityFromInfo` and
+  `catalog.ApprovalDaemonIdentitySHA256` share golden vectors with the Python
+  side (`daemon-identity-vector-v1.json`, `approval-vector-v3.json`). Go can
+  read an approval's daemon digest to refuse a different daemon. It verifies no
+  signature and can't create an approval.
+- **Still open:** `expires_at_unix` may be up to 24 hours after
+  `issued_at_unix`, although the evidence is only fresh for six hours at
+  issuance.
 
 ## Not covered
 

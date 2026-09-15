@@ -4,9 +4,10 @@
 This tool encodes, retains and verifies native enforcement evidence records and
 checks a curator-signed approval against their review. It runs no probes,
 contacts no host, daemon or service, opens no custody paths and never mints
-approval. It checks Peyton's detached curator signature offline; the host's
-``native.py`` does not, and consumes an approval by the digest its operator
-supplies (see the host-side follow-up in the evidence doc).
+approval. It checks Peyton's detached curator signature offline. The host's
+``native.py`` compiles this same file (pinned by ``evidence_tool_sha256`` in
+the signed approval) and runs its ``verify_ed25519`` and ``parse_canonical``
+on-host before it consumes an approval.
 """
 
 from __future__ import annotations
@@ -39,8 +40,9 @@ REVIEW_SCHEMA = "dittobench-coding-native-evidence-review-v1"
 VERIFICATION_SCHEMA = "dittobench-coding-native-evidence-verification-v1"
 CUSTODY_SCHEMA = "dittobench-coding-native-custody-binding-v1"
 CHECK_SCHEMA = "dittobench-coding-native-evidence-approval-check-v1"
-PREFLIGHT_SCHEMA = "dittobench-coding-native-host-preflight-v2"
-APPROVAL_SCHEMA = "dittobench-coding-native-controls-approval-v2"
+PREFLIGHT_SCHEMA = "dittobench-coding-native-host-preflight-v3"
+APPROVAL_SCHEMA = "dittobench-coding-native-controls-approval-v3"
+DAEMON_IDENTITY_SCHEMA = "dittobench-coding-native-daemon-identity-v1"
 EXECUTION_PROFILE_SCHEMA = "dittobench-coding-hosted-authoring-profile-v2"
 GRADING_PROFILE_SCHEMA = "dittobench-coding-hosted-grading-profile-v2"
 CONNECTIVITY_SCHEMAS = (
@@ -278,6 +280,7 @@ PREFLIGHT_KEYS = {
     "image_approval_sha256",
     "config_sha256",
     "host",
+    "daemon_identity",
     "daemon_identity_sha256",
     "tool_sha256",
     "nft_snapshot_sha256",
@@ -404,6 +407,49 @@ CONNECTIVITY_KEYS = {
     "trusted_dns",
     "trusted_loopback_tcp",
     "candidate_tcp",
+}
+# The dedicated rootless dockerd (catalog.DaemonIdentity in Go, native.py and the
+# host preflight derive it from `docker info`; one shared vector pins all three).
+DAEMON_IDENTITY_KEYS = {
+    "schema",
+    "engine_id",
+    "server_version",
+    "rootless",
+    "socket_path",
+    "docker_root_dir",
+    "storage_driver",
+    "image_store",
+    "containerd_address",
+    "cgroup_driver",
+    "cgroup_version",
+    "security_options",
+    "default_runtime",
+}
+DAEMON_IMAGE_STORE = "io.containerd.snapshotter.v1"
+DAEMON_TEXT = re.compile(r"[\x21-\x7e]{1,512}")
+APPROVAL_KEYS = {
+    "schema",
+    "purpose",
+    "source_revision",
+    "release_manifest_sha256",
+    "plan_sha256",
+    "helper_sha256",
+    "runner_sha256",
+    "binding_sha256",
+    "evidence_tool_sha256",
+    "curator_signing_key_sha256",
+    "machine_id_sha256",
+    "boot_id",
+    "daemon_identity",
+    "issued_at_unix",
+    "expires_at_unix",
+    "controls",
+    "max_jobs",
+    "images",
+    "evidence_sha256",
+    "profile_pins",
+    "shadow_only",
+    "weight_eligible",
 }
 SPKI_ED25519_PREFIX = bytes.fromhex("302a300506032b6570032100")
 PEM_BEGIN = b"-----BEGIN PUBLIC KEY-----\n"
@@ -1502,6 +1548,37 @@ def resolve_bind(
 # Host preflight and custody binding
 
 
+def parse_daemon_identity(value: object, label: str) -> dict[str, Any]:
+    """The closed daemon identity; its digest is sha256 of the canonical bytes.
+
+    The fixed native socket and data root are checked by ``native.policy`` when
+    an approval names this identity; this tool names no host path.
+    """
+
+    identity = closed(value, DAEMON_IDENTITY_KEYS, f"{label} daemon identity")
+    texts = DAEMON_IDENTITY_KEYS - {"schema", "rootless", "security_options"}
+    options = identity["security_options"]
+    require(
+        same(identity["schema"], DAEMON_IDENTITY_SCHEMA)
+        and identity["rootless"] is True
+        and all(
+            type(identity[name]) is str and DAEMON_TEXT.fullmatch(identity[name])
+            for name in texts
+        )
+        and identity["socket_path"].startswith("/")
+        and identity["docker_root_dir"].startswith("/")
+        and same(identity["image_store"], DAEMON_IMAGE_STORE)
+        and same(identity["cgroup_driver"], "systemd")
+        and same(identity["cgroup_version"], "2")
+        and type(options) is list
+        and all(type(item) is str and DAEMON_TEXT.fullmatch(item) for item in options)
+        and options == sorted(set(options))
+        and "name=rootless" in options,
+        f"{label} daemon identity is not the native rootless daemon",
+    )
+    return identity
+
+
 def parse_preflight(raw: bytes, checkout: Checkout | None) -> dict[str, Any]:
     """The verbatim ``inspect-coding-native-host.py`` stdout.
 
@@ -1558,6 +1635,11 @@ def parse_preflight(raw: bytes, checkout: Checkout | None) -> dict[str, Any]:
         "host preflight host binding is malformed",
     )
     require(is_int(value["checked_at_unix"], 1), "host preflight time is malformed")
+    identity = parse_daemon_identity(value["daemon_identity"], "host preflight")
+    require(
+        canonical_sha256(identity) == value["daemon_identity_sha256"],
+        "host preflight daemon identity digest differs from its identity",
+    )
     tools = value["tool_sha256"]
     require(
         type(tools) is dict and set(tools) == set(PREFLIGHT_TOOL_FILES),
@@ -2358,8 +2440,14 @@ def verify_ed25519(openssl: Path, key: bytes, message: bytes, signature: bytes) 
         shutil.rmtree(directory, ignore_errors=True)
 
 
-def load_native_policy(checkout: Checkout, expected_sha256: object) -> Callable:
-    """native.py compiled from exactly the hashed bytes; no loader or pyc cache."""
+def load_native_policy(
+    checkout: Checkout, expected_sha256: object
+) -> tuple[Callable, object]:
+    """native.py compiled from exactly the hashed bytes; no loader or pyc cache.
+
+    Returns its ``policy`` and the curator key identity it pins in source, the
+    only key the host accepts.
+    """
 
     source = checkout.read(NATIVE_BINDING_FILE)
     require(
@@ -2376,7 +2464,7 @@ def load_native_policy(checkout: Checkout, expected_sha256: object) -> Callable:
     policy = namespace.get("policy")
     require(callable(policy), "native.py has no policy")
     assert callable(policy)
-    return policy
+    return policy, namespace.get("CURATOR_SIGNING_KEY_SHA256")
 
 
 def parse_review(raw: bytes) -> dict[str, Any]:
@@ -2431,9 +2519,9 @@ def check_approval(
         canonical_bytes(rebuilt) == review_raw,
         "review differs from the evidence it names",
     )
-    # native.policy's closed approval shape cannot carry profile digests. They are
-    # bound through the record digests the approval names, and must also equal
-    # independently reviewed pins (for example the signed profile approval). The
+    # Profile digests are bound through the record digests the approval names,
+    # must equal independently reviewed pins (for example the signed profile
+    # approval), and the signed approval carries the same pins itself. The
     # connectivity pin is the endpoint set, which the canary's own later profile
     # reproduces; the evidenced probe profile's full digest stays in the review.
     require(
@@ -2454,14 +2542,24 @@ def check_approval(
             f"review {name} differs from the reviewed pin",
         )
 
-    approval = parse_json(approval_raw, "approval")
+    # The signature covers canonical bytes only, so the host and this tool
+    # parse one unambiguous document.
+    approval = parse_canonical(approval_raw, "approval")
     require(type(approval) is dict, "approval must be an object")
     require(same(approval.get("schema"), APPROVAL_SCHEMA), "approval schema is unknown")
     require(
         same(approval.get("runner_sha256"), checkout.file_sha256(NATIVE_RUNNER_FILE)),
         "approval runner hash differs from the reviewed run.py",
     )
-    policy = load_native_policy(checkout, approval.get("binding_sha256"))
+    policy, host_key_sha256 = load_native_policy(
+        checkout, approval.get("binding_sha256")
+    )
+    # The host verifies with the key its reviewed native.py pins, so an approval
+    # checked here against any other key would only ever be refused on-host.
+    require(
+        same(host_key_sha256, curator_signing_key_sha256),
+        "the reviewed native.py pins another curator signing key",
+    )
     issued = approval.get("issued_at_unix")
     try:
         policy(
@@ -2477,12 +2575,33 @@ def check_approval(
         raise Refusal("approval is rejected by native.policy") from None
     require(type(issued) is int, "approval is rejected by native.policy")
     assert isinstance(issued, int)
+    closed(approval, APPROVAL_KEYS, "approval")
+    require(
+        same(approval["curator_signing_key_sha256"], curator_signing_key_sha256),
+        "approval names another curator signing key",
+    )
+    require(
+        same(
+            approval["evidence_tool_sha256"],
+            checkout.file_sha256(TOOL_FILES["evidence_tool_sha256"]),
+        ),
+        "approval verifier hash differs from the reviewed evidence tool",
+    )
 
     require(
         same(approval["evidence_sha256"], rebuilt["evidence_sha256"]),
         "approval evidence digests differ from the review",
     )
+    require(
+        same(approval["profile_pins"], profile_pins),
+        "approval profile pins differ from the reviewed pins",
+    )
     host, release = rebuilt["host"], rebuilt["release"]
+    identity = parse_daemon_identity(approval["daemon_identity"], "approval")
+    require(
+        canonical_sha256(identity) == host["daemon_identity_sha256"],
+        "approval daemon identity differs from the evidence daemon",
+    )
     require(
         same(approval["machine_id_sha256"], host["machine_id_sha256"]),
         "approval machine differs from the evidence",

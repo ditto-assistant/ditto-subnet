@@ -1,8 +1,10 @@
 package probe
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingenforcement/catalog"
@@ -11,7 +13,7 @@ import (
 // goldenRecordSHA256 is pinned identically in catalog/canonical_test.go and the
 // Python evidence tests. Reassembling it here proves the runner's record
 // assembly is byte-for-byte the canonical evidence form both sides hash.
-const goldenRecordSHA256 = "8ed4ce9e831a20ae9bee4c60a865c44a3340c6098d4074615938c7446d8aff6c"
+const goldenRecordSHA256 = "ff6acb22aab1b6241f3d6790ec6f0fda0c5deeed8fd11a7207745167457c5360"
 
 func goldenEnv() Env {
 	return Env{
@@ -19,7 +21,7 @@ func goldenEnv() Env {
 			MachineIDSHA256:      "4be2df8ab9c9d66c3041722a09fe777d22fe87525f04937b3a4685433b9a0a9d",
 			BootID:               "11111111-2222-3333-4444-555555555555",
 			KernelRelease:        "6.12.43+deb13-cloud-amd64",
-			DaemonIdentitySHA256: "1a6167c7a37a205c2503beadd64d72e9d1860b63a790faead47de32998ec187a",
+			DaemonIdentitySHA256: "1a91bc3c603b6d4a3392db0af1ea8d60e19fda2fd9569eee0c5ecc2ce2247c20",
 			RouterNamespace:      "rootless-netns",
 			Subordinate:          catalog.SubordinateIDs{UIDStart: 100000, UIDCount: 65536, GIDStart: 100000, GIDCount: 65536},
 		},
@@ -99,6 +101,11 @@ func TestSyntheticRecordReproducesTheGoldenRecordBytes(t *testing.T) {
 	sum := sha256.Sum256(result.Canonical)
 	if got := hex.EncodeToString(sum[:]); got != goldenRecordSHA256 {
 		t.Fatalf("assembled record digest = %s, want the pinned golden %s\n%s", got, goldenRecordSHA256, result.Canonical)
+	}
+	// The pinned constant must stay the shared golden file, not a local copy.
+	golden, err := os.ReadFile("../catalog/testdata/golden-record-v1.json")
+	if err != nil || !bytes.Equal(golden, result.Canonical) {
+		t.Fatalf("assembled record differs from catalog/testdata/golden-record-v1.json: %v", err)
 	}
 	if result.Passed != result.Total || result.Total != 10 || len(result.Unmatched) != 0 {
 		t.Fatalf("golden record must fully match: %+v", result)

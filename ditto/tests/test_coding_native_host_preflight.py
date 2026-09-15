@@ -20,6 +20,12 @@ from ditto.tests.test_coding_native_release import (
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "infra/scripts/inspect-coding-native-host.py"
+DAEMON_VECTOR = json.loads(
+    (
+        ROOT / "services/dittobench-api/internal/codingenforcement/catalog/testdata/"
+        "daemon-identity-vector-v1.json"
+    ).read_bytes()
+)
 spec = importlib.util.spec_from_file_location("native_host_preflight", SCRIPT)
 assert spec is not None and spec.loader is not None
 HOST = importlib.util.module_from_spec(spec)
@@ -45,11 +51,10 @@ def context(request, monkeypatch):
         "weight_eligible": False,
     }
     info = {
-        "ID": "synthetic-daemon",
+        **copy.deepcopy(DAEMON_VECTOR["info"]),
         "OSType": "linux",
         "Architecture": "x86_64",
         "DockerRootDir": str(RELEASE.IMAGE.HOME_DIR / "docker"),
-        "SecurityOptions": ["name=rootless"],
         "Labels": ["io.heyditto.dittobench.isolated=true"],
         "CgroupDriver": "systemd",
         "CgroupVersion": "2",
@@ -68,7 +73,7 @@ def context(request, monkeypatch):
         identity=lambda: identity,
         private_path=lambda *_args, **_kwargs: None,
         DAEMON_HOME=empty_home,
-        SOCKET=directory / "docker.sock",
+        SOCKET=Path(HOST.SOCKET),
         TABLE="ditto_coding_hosted",
     )
     calls, installed = [], []
@@ -170,6 +175,29 @@ def test_post_import_inspects_all_pins_but_does_not_claim_qualification(context)
         if args[0].endswith("systemctl")
     )
     assert str(context.config["release_directory"]) not in json.dumps(result)
+    assert result["schema"] == "dittobench-coding-native-host-preflight-v3"
+    assert result["daemon_identity"] == DAEMON_VECTOR["identity"]
+    assert result["daemon_identity_sha256"] == DAEMON_VECTOR["identity_sha256"]
+
+
+def test_daemon_identity_matches_the_shared_go_vector():
+    info, socket = DAEMON_VECTOR["info"], DAEMON_VECTOR["socket_path"]
+    identity = HOST.daemon_identity(copy.deepcopy(info), socket)
+    raw = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    assert raw == DAEMON_VECTOR["identity_canonical"]
+    assert HOST.checksum(raw.encode()) == DAEMON_VECTOR["identity_sha256"]
+    for key, value in DAEMON_VECTOR["volatile"].items():
+        assert HOST.daemon_identity({**info, key: value}, socket) == identity, key
+    for key, value in DAEMON_VECTOR["binding"].items():
+        assert HOST.daemon_identity({**info, key: value}, socket) != identity, key
+    for key, value in DAEMON_VECTOR["refused"].items():
+        with pytest.raises(ValueError):
+            HOST.daemon_identity({**info, key: value}, socket)
+        with pytest.raises(ValueError):
+            HOST.daemon_identity({k: v for k, v in info.items() if k != key}, socket)
+    for socket in ("", "relative.sock", "//run/docker.sock", "/run/../x.sock"):
+        with pytest.raises(ValueError):
+            HOST.daemon_identity(copy.deepcopy(info), socket)
 
 
 @pytest.mark.parametrize(
@@ -217,6 +245,7 @@ def test_daemon_mismatch_refused(context, field, value):
         "container",
         "image",
         "daemon-drift",
+        "daemon-version-drift",
         "nft-table",
         "boot-drift",
     ],
@@ -245,6 +274,10 @@ def test_live_snapshot_faults_never_produce_success(context, monkeypatch, fault)
             seen += 1
             if seen == 2:
                 return json.dumps({**context.info, "ID": "changed"}).encode()
+        if fault == "daemon-version-drift" and args[1] == "info":
+            seen += 1
+            if seen == 2:
+                return json.dumps({**context.info, "ServerVersion": "29.9.9"}).encode()
         return raw
 
     monkeypatch.setattr(HOST, "command", command)

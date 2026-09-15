@@ -31,6 +31,10 @@ TOOL_FILES = (
     "infra/ansible/roles/coding_hosted_runtime/files/runtime-bundle.py",
     "infra/ansible/roles/coding_hosted/files/host-policy.py",
 )
+SOCKET = "/run/ditto-coding-hosted/docker.sock"
+DAEMON_IDENTITY_SCHEMA = "dittobench-coding-native-daemon-identity-v1"
+DAEMON_IMAGE_STORE = "io.containerd.snapshotter.v1"
+DAEMON_TEXT = re.compile(r"[\x21-\x7e]{1,512}")
 PENDING = [
     "live_network_and_expiry_enforcement",
     "live_resource_limit_enforcement",
@@ -85,6 +89,48 @@ def object_json(raw):
     return result
 
 
+def daemon_identity(info, socket_path=SOCKET):
+    """Canonical daemon identity; mirrors native.daemon_identity and Go's
+    catalog.DaemonIdentityFromInfo, all pinned to one shared vector."""
+
+    def text(value):
+        return type(value) is str and DAEMON_TEXT.fullmatch(value) is not None
+
+    require(type(info) is dict and text(socket_path))
+    require(socket_path.startswith("/") and not socket_path.startswith("//"))
+    require(os.path.normpath(socket_path) == socket_path)
+    fields = {
+        "engine_id": "ID",
+        "server_version": "ServerVersion",
+        "docker_root_dir": "DockerRootDir",
+        "storage_driver": "Driver",
+        "cgroup_driver": "CgroupDriver",
+        "cgroup_version": "CgroupVersion",
+        "default_runtime": "DefaultRuntime",
+    }
+    identity = {name: info.get(key) for name, key in fields.items()}
+    require(all(text(item) for item in identity.values()))
+    containerd = info.get("Containerd")
+    require(type(containerd) is dict and text(containerd.get("Address")))
+    options = info.get("SecurityOptions")
+    require(type(options) is list and all(text(item) for item in options))
+    require(len(set(options)) == len(options) and "name=rootless" in options)
+    status = info.get("DriverStatus")
+    require(type(status) is list and ["driver-type", DAEMON_IMAGE_STORE] in status)
+    require(
+        identity["cgroup_driver"] == "systemd" and identity["cgroup_version"] == "2"
+    )
+    identity.update(
+        schema=DAEMON_IDENTITY_SCHEMA,
+        rootless=True,
+        socket_path=socket_path,
+        image_store=DAEMON_IMAGE_STORE,
+        containerd_address=containerd["Address"],
+        security_options=sorted(options),
+    )
+    return identity
+
+
 def config_policy(value):
     required = {
         "schema",
@@ -136,7 +182,7 @@ def command(arguments, *, uid=None, gid=None):
         require(type(uid) is int and uid >= 1000 and type(gid) is int and gid >= 1000)
         env.update(
             {
-                "DOCKER_HOST": "unix:///run/ditto-coding-hosted/docker.sock",
+                "DOCKER_HOST": f"unix://{SOCKET}",
                 "DOCKER_CONFIG": "/var/lib/ditto-coding-hosted/empty-client",
             }
         )
@@ -287,6 +333,7 @@ def inspect_host(config):
             config["runtime_archive_sha256"],
         )
     user = native.identity()
+    require(str(native.SOCKET) == SOCKET)
     for path in (
         native.DAEMON_HOME,
         native.SOCKET.parent,
@@ -323,22 +370,22 @@ def inspect_host(config):
     require(tables[0].get("family") == "inet" and tables[0].get("name") == native.TABLE)
     after = object_json(docker(["info", "--format", "{{json .}}"]))
     image.validate_daemon(after)
-    require(
-        type(before.get("ID")) is str
-        and bool(before["ID"])
-        and before["ID"] == after.get("ID")
-    )
+    identity = daemon_identity(before)
+    require(daemon_identity(after) == identity)
     require(docker(["ps", "--all", "--quiet"]).strip() == b"")
     require(host_binding(config) == host)
     return {
-        "schema": "dittobench-coding-native-host-preflight-v2",
+        "schema": "dittobench-coding-native-host-preflight-v3",
         "source_revision": config["source_revision"],
         "release_manifest_sha256": config["release_manifest_sha256"],
         "runtime_archive_sha256": config["runtime_archive_sha256"],
         "image_approval_sha256": config["image_approval_sha256"],
         "config_sha256": checksum(image.json_bytes(config)),
         "host": host,
-        "daemon_identity_sha256": checksum(before["ID"].encode()),
+        "daemon_identity": identity,
+        "daemon_identity_sha256": checksum(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ),
         "tool_sha256": tools,
         "nft_snapshot_sha256": checksum(rules),
         "checked_at_unix": int(time.time()),
