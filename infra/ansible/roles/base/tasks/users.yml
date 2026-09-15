@@ -43,10 +43,13 @@
     comment: "Ditto Deploy"
     password: "*"  # disabled password
 
-- name: Ensure team members exist with sudo + ditto group
+# systemd-journal gives team members read-only journal access without sudo, so
+# `journalctl` runs as the member and no pager or journalctl option runs as
+# root. The deploy service account is deliberately not a member.
+- name: Ensure team members exist with sudo, ditto and read-only journal groups
   ansible.builtin.user:
     name: "{{ item }}"
-    groups: "{{ [deploy_group | default('ditto'), 'sudo'] }}"
+    groups: "{{ [deploy_group | default('ditto'), 'sudo', 'systemd-journal'] }}"
     shell: /bin/bash
     state: present
     create_home: true
@@ -74,6 +77,21 @@
   loop_control:
     label: "{{ item.0.key }}"
 
+# Service management for team members only. The earlier `%ditto ALL=(ALL)`
+# rules also covered the deploy service account (a ditto member) and used
+# `ditto-*` wildcards, which in sudoers match any further arguments: extra units
+# (`stop ditto-x docker.service`), options that open a pager as root, and any
+# run-as user. Now every command is an exact argument vector for one reviewed
+# unit, runs only as root, and deploy is excluded; it gets narrow rules from the
+# roles that need them. Security guards (coding executor and hosted egress,
+# sandbox firewall, IMDS guard, egress proxy) are deliberately absent.
+#
+# There is no journalctl or systemctl status rule: journalctl accepted any
+# option as root (--cursor-file= writes a root-owned file at any path,
+# --vacuum-*, --setup-keys) and both ran a pager as root. Team members are in
+# systemd-journal (above) and run `journalctl -u <unit>` and
+# `systemctl status <unit>` without sudo. Operators with OS Login admin keep
+# their own full sudo, as before.
 - name: Ensure team sudoers grant
   ansible.builtin.copy:
     dest: /etc/sudoers.d/ditto-team
@@ -83,14 +101,119 @@
     validate: /usr/sbin/visudo -cf %s
     content: |
       # Managed by infra/ansible/roles/base. Edits here are wiped on next run.
-      # Service management without password
-      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl restart ditto-*
-      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl stop ditto-*
-      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl start ditto-*
-      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl status ditto-*
-      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl daemon-reload
-      %ditto ALL=(ALL) NOPASSWD: /bin/systemctl reload caddy
-      %ditto ALL=(ALL) NOPASSWD: /bin/journalctl *
+      # Exact unit commands for team members, as root only; deploy excluded.
+      # No wildcard, journalctl or systemctl status rule (see users.yml).
+      Cmnd_Alias DITTO_TEAM_UNITS = \
+        /bin/systemctl start ditto-image-builder, \
+        /bin/systemctl stop ditto-image-builder, \
+        /bin/systemctl restart ditto-image-builder, \
+        /bin/systemctl start ditto-image-builder.service, \
+        /bin/systemctl stop ditto-image-builder.service, \
+        /bin/systemctl restart ditto-image-builder.service, \
+        /bin/systemctl start ditto-platform-api, \
+        /bin/systemctl stop ditto-platform-api, \
+        /bin/systemctl restart ditto-platform-api, \
+        /bin/systemctl start ditto-platform-api.service, \
+        /bin/systemctl stop ditto-platform-api.service, \
+        /bin/systemctl restart ditto-platform-api.service, \
+        /bin/systemctl start ditto-platform-pylon, \
+        /bin/systemctl stop ditto-platform-pylon, \
+        /bin/systemctl restart ditto-platform-pylon, \
+        /bin/systemctl start ditto-platform-pylon.service, \
+        /bin/systemctl stop ditto-platform-pylon.service, \
+        /bin/systemctl restart ditto-platform-pylon.service, \
+        /bin/systemctl start ditto-pylon, \
+        /bin/systemctl stop ditto-pylon, \
+        /bin/systemctl restart ditto-pylon, \
+        /bin/systemctl start ditto-pylon.service, \
+        /bin/systemctl stop ditto-pylon.service, \
+        /bin/systemctl restart ditto-pylon.service, \
+        /bin/systemctl start ditto-screener, \
+        /bin/systemctl stop ditto-screener, \
+        /bin/systemctl restart ditto-screener, \
+        /bin/systemctl start ditto-screener.service, \
+        /bin/systemctl stop ditto-screener.service, \
+        /bin/systemctl restart ditto-screener.service, \
+        /bin/systemctl start ditto-screener-capacity, \
+        /bin/systemctl stop ditto-screener-capacity, \
+        /bin/systemctl restart ditto-screener-capacity, \
+        /bin/systemctl start ditto-screener-capacity.service, \
+        /bin/systemctl stop ditto-screener-capacity.service, \
+        /bin/systemctl restart ditto-screener-capacity.service, \
+        /bin/systemctl start ditto-screener-enroll, \
+        /bin/systemctl stop ditto-screener-enroll, \
+        /bin/systemctl restart ditto-screener-enroll, \
+        /bin/systemctl start ditto-screener-enroll.service, \
+        /bin/systemctl stop ditto-screener-enroll.service, \
+        /bin/systemctl restart ditto-screener-enroll.service, \
+        /bin/systemctl start ditto-screener-fleet-agent, \
+        /bin/systemctl stop ditto-screener-fleet-agent, \
+        /bin/systemctl restart ditto-screener-fleet-agent, \
+        /bin/systemctl start ditto-screener-fleet-agent.service, \
+        /bin/systemctl stop ditto-screener-fleet-agent.service, \
+        /bin/systemctl restart ditto-screener-fleet-agent.service, \
+        /bin/systemctl start ditto-screener-fleet-auto-update, \
+        /bin/systemctl stop ditto-screener-fleet-auto-update, \
+        /bin/systemctl restart ditto-screener-fleet-auto-update, \
+        /bin/systemctl start ditto-screener-fleet-auto-update.service, \
+        /bin/systemctl stop ditto-screener-fleet-auto-update.service, \
+        /bin/systemctl restart ditto-screener-fleet-auto-update.service, \
+        /bin/systemctl start ditto-screener-source-review-secret, \
+        /bin/systemctl stop ditto-screener-source-review-secret, \
+        /bin/systemctl restart ditto-screener-source-review-secret, \
+        /bin/systemctl start ditto-screener-source-review-secret.service, \
+        /bin/systemctl stop ditto-screener-source-review-secret.service, \
+        /bin/systemctl restart ditto-screener-source-review-secret.service, \
+        /bin/systemctl start ditto-validator, \
+        /bin/systemctl stop ditto-validator, \
+        /bin/systemctl restart ditto-validator, \
+        /bin/systemctl start ditto-validator.service, \
+        /bin/systemctl stop ditto-validator.service, \
+        /bin/systemctl restart ditto-validator.service, \
+        /bin/systemctl start ditto-validator-stack-auto-update, \
+        /bin/systemctl stop ditto-validator-stack-auto-update, \
+        /bin/systemctl restart ditto-validator-stack-auto-update, \
+        /bin/systemctl start ditto-validator-stack-auto-update.service, \
+        /bin/systemctl stop ditto-validator-stack-auto-update.service, \
+        /bin/systemctl restart ditto-validator-stack-auto-update.service, \
+        /bin/systemctl start ditto-validator-stack-prefetch, \
+        /bin/systemctl stop ditto-validator-stack-prefetch, \
+        /bin/systemctl restart ditto-validator-stack-prefetch, \
+        /bin/systemctl start ditto-validator-stack-prefetch.service, \
+        /bin/systemctl stop ditto-validator-stack-prefetch.service, \
+        /bin/systemctl restart ditto-validator-stack-prefetch.service, \
+        /bin/systemctl start ditto-validator-stack-updater-refresh, \
+        /bin/systemctl stop ditto-validator-stack-updater-refresh, \
+        /bin/systemctl restart ditto-validator-stack-updater-refresh, \
+        /bin/systemctl start ditto-validator-stack-updater-refresh.service, \
+        /bin/systemctl stop ditto-validator-stack-updater-refresh.service, \
+        /bin/systemctl restart ditto-validator-stack-updater-refresh.service, \
+        /bin/systemctl start ditto-worker, \
+        /bin/systemctl stop ditto-worker, \
+        /bin/systemctl restart ditto-worker, \
+        /bin/systemctl start ditto-worker.service, \
+        /bin/systemctl stop ditto-worker.service, \
+        /bin/systemctl restart ditto-worker.service, \
+        /bin/systemctl start ditto-screener-fleet-auto-update.timer, \
+        /bin/systemctl stop ditto-screener-fleet-auto-update.timer, \
+        /bin/systemctl restart ditto-screener-fleet-auto-update.timer, \
+        /bin/systemctl start ditto-screener-source-review-secret.timer, \
+        /bin/systemctl stop ditto-screener-source-review-secret.timer, \
+        /bin/systemctl restart ditto-screener-source-review-secret.timer, \
+        /bin/systemctl start ditto-validator-auto-update.timer, \
+        /bin/systemctl stop ditto-validator-auto-update.timer, \
+        /bin/systemctl restart ditto-validator-auto-update.timer, \
+        /bin/systemctl start ditto-validator-stack-auto-update.timer, \
+        /bin/systemctl stop ditto-validator-stack-auto-update.timer, \
+        /bin/systemctl restart ditto-validator-stack-auto-update.timer, \
+        /bin/systemctl start ditto-validator-stack-prefetch.timer, \
+        /bin/systemctl stop ditto-validator-stack-prefetch.timer, \
+        /bin/systemctl restart ditto-validator-stack-prefetch.timer, \
+        /bin/systemctl start ditto-validator-stack-updater-refresh.timer, \
+        /bin/systemctl stop ditto-validator-stack-updater-refresh.timer, \
+        /bin/systemctl restart ditto-validator-stack-updater-refresh.timer
+      %ditto,!deploy ALL=(root) NOPASSWD: DITTO_TEAM_UNITS
+      %ditto,!deploy ALL=(root) NOPASSWD: /bin/systemctl daemon-reload, /bin/systemctl reload caddy
 
       # Switch to deploy user
       %ditto ALL=(deploy) NOPASSWD: ALL

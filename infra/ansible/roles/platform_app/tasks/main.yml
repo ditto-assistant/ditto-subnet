@@ -12,6 +12,30 @@
 - name: Validate env-sourced configuration before rendering anything
   ansible.builtin.import_tasks: preflight.yml
 
+# --- The user that runs ditto-api. A fact, not an inventory variable: deploy
+# under pm2 by default, the dedicated ditto-api user only when the reviewed
+# identity switch is on (tasks/api_service_identity.yml).
+- name: Resolve the user that runs ditto-api
+  ansible.builtin.set_fact:
+    platform_api_process_user: >-
+      {{ 'ditto-api' if platform_api_service_identity_enabled | bool else platform_owner }}
+
+# --- Hosted-v2 control signer: metadata-only verification of the seed placed by
+# the protected ceremony, before any other platform_app task (the playbook's
+# base role has already run). Imported statically so syntax checks parse it;
+# a disabled converge skips every imported task, so the fixed seed path is not
+# even stat()ed (mirrors the Python loader's disabled no-read behaviour).
+- name: Verify the pre-placed hosted-v2 control signer without reading it
+  ansible.builtin.import_tasks: coding_hosted_signer.yml
+  when: platform_coding_hosted_control_enabled | bool
+
+# --- The dedicated users must exist before any task below chowns to ditto-api
+# (Hippius evidence files, the environment copy), so a first converge with the
+# identity and Hippius evidence both on works in one pass.
+- name: Create the dedicated ditto-api and ditto-api-build accounts
+  ansible.builtin.import_tasks: api_service_accounts.yml
+  when: platform_api_service_identity_enabled | bool
+
 # --- gcloud (used to read secrets via the VM's attached runtime SA / ADC) ---
 - name: Ensure gcloud is available (GCE Debian images normally ship it)
   ansible.builtin.command: gcloud --version
@@ -81,11 +105,16 @@
     enabled: true
     state: started
 
+# Docker group membership is root-equivalent. update.sh needs it only for
+# `docker compose up -d --wait pylon`; with the reviewed
+# platform_pylon_root_unit_enabled switch that runs through a root-owned unit
+# and tasks/pylon_root_unit.yml removes deploy from the group instead.
 - name: Add the deploy user to the docker group
   ansible.builtin.user:
     name: "{{ platform_owner }}"
     groups: docker
     append: true
+  when: not (platform_pylon_root_unit_enabled | bool)
 
 # --- Node + pm2 (the API process manager; scripts/ecosystem.config.js) ---
 - name: Install Node.js + npm
@@ -537,11 +566,12 @@
     that:
       - item.stat.exists
       - item.stat.isreg
-      - item.stat.pw_name == platform_owner
+      - item.stat.pw_name == platform_api_process_user
       - item.stat.mode in ['0400', '0600']
     fail_msg: >-
       Hippius probe receipt and evidence wrapping public key must be existing
-      regular files owned by the Platform user with mode 0400 or 0600.
+      regular files owned by the user that runs ditto-api
+      ({{ platform_api_process_user }}) with mode 0400 or 0600.
   loop: "{{ platform_coding_hippius_authority_files.results }}"
   when: platform_coding_hippius_evidence_enabled | bool
 
@@ -549,8 +579,8 @@
   ansible.builtin.file:
     path: "{{ platform_coding_hippius_evidence_spool_root }}"
     state: directory
-    owner: "{{ platform_owner }}"
-    group: "{{ platform_group }}"
+    owner: "{{ platform_api_process_user }}"
+    group: "{{ 'ditto-api' if platform_api_service_identity_enabled | bool else platform_group }}"
     mode: "0700"
   when: platform_coding_hippius_evidence_enabled | bool
 
@@ -581,6 +611,17 @@
       Export the Terraform-derived values first:
       `source infra/ansible/scripts/platform-app-env.sh`
       (see infra/ansible/playbooks/gcp-platform-app.yml for the full invocation).
+
+# --- Deploy access narrowing and the dedicated ditto-api identity. Both are
+# reviewed activations that default off; a disabled converge skips every
+# imported task and leaves pm2, docker and sudoers exactly as they were.
+- name: Run Pylon from a root-owned unit and take deploy out of the docker group
+  ansible.builtin.import_tasks: pylon_root_unit.yml
+  when: platform_pylon_root_unit_enabled | bool
+
+- name: Prepare the dedicated ditto-api identity and its sealed releases
+  ansible.builtin.import_tasks: api_service_identity.yml
+  when: platform_api_service_identity_enabled | bool
 
 # What got turned off by an empty optional value, restated at the end of the run
 # so it is not buried under 50 ok= lines (this is how silently-disabled dataset

@@ -1,0 +1,77 @@
+# Managed by Ansible (platform_app role) — do not edit by hand.
+#
+# ditto-api under its dedicated ditto-api service identity, from a sealed
+# root-owned release (infra/docs/coding-hosted-control-signer-v2.md). Installed
+# only while platform_api_service_identity_enabled; Ansible never enables or
+# starts it. scripts/update.sh drives it through the root release installer.
+# The relays and the image-cleanup job stay on the deploy user's pm2.
+[Unit]
+Description=Ditto Platform API (dedicated ditto-api identity, sealed release)
+Documentation=https://github.com/ditto-assistant/ditto-subnet/blob/main/infra/docs/coding-hosted-control-signer-v2.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=exec
+User=ditto-api
+Group=ditto-api
+SupplementaryGroups=
+# One launcher run resolves the release once, runs the metadata-only seed check
+# as ditto-api from it, then execs the server from the same release. It sources
+# only the root-owned /etc/ditto-platform/api environment files.
+ExecStart=/usr/local/libexec/ditto-platform-api/launch serve
+Restart=on-failure
+RestartSec=2
+# Mirrors the pm2 definition in apps/platform/scripts/ecosystem.config.js:
+# SIGINT with uvicorn's 30s graceful shutdown, a 3 GiB memory backstop.
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=35
+MemoryMax=3072M
+LimitNOFILE=65536
+UMask=0077
+Environment=HOME=/var/lib/ditto-platform-api
+StateDirectory=ditto-platform-api
+StateDirectoryMode=0700
+
+# Filesystem: everything read-only; the code tree and its environment are
+# root-owned. The deploy checkout, relay releases, the installer's Git
+# workspace, the builder's cache and the Docker socket are not visible at all.
+ProtectSystem=strict
+ReadOnlyPaths=/opt/ditto-platform-api /etc/ditto-platform
+{% if platform_coding_hippius_evidence_enabled | bool %}
+ReadWritePaths={{ platform_coding_hippius_evidence_spool_root }}
+{% endif %}
+InaccessiblePaths=-/opt/ditto-subnet -/opt/ditto-platform -/opt/ditto-platform-relay -/var/lib/ditto-platform-api-release -/var/lib/ditto-platform-api-build -/run/docker.sock
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+
+# Privilege: no capabilities, no set-id, no way back to root.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+
+# Kernel and process surface.
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

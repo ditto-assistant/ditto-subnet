@@ -1,0 +1,57 @@
+---
+# Imported from tasks/main.yml under `when: platform_coding_hosted_control_enabled
+# | bool`, so a disabled converge skips every task here without a stat.
+#
+# Metadata-only. Nothing here opens, reads, hashes, creates, copies, templates,
+# fetches or moves the seed. Seed creation, backup and placement are a separate
+# protected ceremony (infra/docs/coding-hosted-control-signer-v2.md). These
+# checks mirror read_private() in apps/platform/ditto/api_server/
+# coding_hosted_runtime_io.py, which requires the seed and its directory to be
+# owned by the process reading them: ditto-api. A missing or unsafe seed fails
+# this converge instead of failing ditto-api closed at its next restart.
+
+- name: Require the reviewed hosted-v2 control signer profile
+  ansible.builtin.assert:
+    that:
+      - platform_coding_hosted_signer_hotkey is string
+      - platform_coding_hosted_signer_hotkey | length == 48
+      - platform_coding_hosted_signer_hotkey is match('^5[1-9A-HJ-NP-Za-km-z]{47}$')
+      - platform_coding_hosted_signer_hotkey != (platform_screener_hotkey | default('', true) | string | trim)
+      # Only ditto-api may read the seed: it must run as its dedicated user,
+      # and deploy must not be root-equivalent through the docker group.
+      - platform_api_service_identity_enabled | bool
+      - platform_pylon_root_unit_enabled | bool
+      - platform_api_process_user == 'ditto-api'
+      - platform_owner is string
+      - platform_owner | length > 0
+      - platform_owner not in ['root', 'ditto-api']
+    fail_msg: >-
+      Hosted-v2 control signer activation requires the reviewed public SS58
+      hotkey of the dedicated Platform control key (never the screener, a
+      validator or the curator key), the dedicated ditto-api service identity
+      (platform_api_service_identity_enabled) and the root-owned Pylon unit
+      that takes deploy out of the docker group
+      (platform_pylon_root_unit_enabled).
+    quiet: true
+
+# The seed path is FIXED. These literals must equal the path platform.env.j2
+# renders; they are import vars rather than role variables so inventory cannot
+# move the checked path away from the rendered one.
+- name: Verify the seed metadata through the stat-only guard
+  ansible.builtin.import_tasks: coding_hosted_signer_seed_stat.yml
+  vars:
+    platform_coding_hosted_signer_guard_ancestors:
+      - /etc/ditto-platform
+      - /etc
+      - /
+    platform_coding_hosted_signer_guard_directory: /etc/ditto-platform/coding-hosted-signer
+    platform_coding_hosted_signer_guard_seed: /etc/ditto-platform/coding-hosted-signer/seed
+
+# The switches above are configuration; this checks the live host. Imported
+# after the stat guard so a missing placement is still reported first.
+- name: Refuse the signer while any deploy process can reach the Docker daemon
+  ansible.builtin.import_tasks: deploy_docker_access.yml
+  vars:
+    platform_deploy_docker_probe_group: docker
+    platform_deploy_docker_probe_proc: /proc
+    platform_deploy_docker_probe_socket: /run/docker.sock

@@ -1,0 +1,203 @@
+---
+# Imported from tasks/main.yml when platform_api_service_identity_enabled, after
+# tasks/api_service_accounts.yml created the users. Default off; turning it on
+# is a reviewed activation (infra/docs/coding-hosted-control-signer-v2.md).
+#
+# Prepares ditto-api to run as the locked-down `ditto-api` user from sealed,
+# root-owned releases instead of under the deploy user's pm2:
+#   * `ditto-api` (runs the API and alone may read the control-signer seed) and
+#     `ditto-api-build` (builds release environments, reads no secret) are
+#     system users with no login, no sudo and no privileged group;
+#   * the root installer, launcher, unit, API environment copy and the exact
+#     sudoers rules deploy needs to drive them.
+# Nothing here enables or starts a unit, builds a release or touches the seed.
+# The relays and the image-cleanup job stay on the deploy user's pm2.
+
+- name: Require a supported host and a pinned release interpreter
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Debian'
+      - platform_api_release_python is string
+      - platform_api_release_python is match('^/usr/bin/python3\.[0-9]{1,2}$')
+      - platform_owner is match('^[a-z_][a-z0-9_-]*$')
+      - platform_owner not in ['root', 'ditto-api', 'ditto-api-build']
+      - platform_api_process_user == 'ditto-api'
+      # The installer fetches this literal URL; a different checkout source
+      # would make the sealed release and the deploy checkout disagree.
+      - platform_repo_url == 'git@github.com:ditto-assistant/ditto-subnet.git'
+    fail_msg: >-
+      The dedicated ditto-api identity needs Debian, a pinned
+      /usr/bin/python3.N release interpreter, a non-root deploy user distinct
+      from ditto-api, and the canonical ditto-subnet repository URL.
+    quiet: true
+
+- name: Require the shadow policy file to resolve inside the sealed release
+  vars:
+    platform_checkout_root: /opt/ditto-platform-api/current
+  ansible.builtin.assert:
+    that:
+      - >-
+        not (platform_coding_shadow_enabled | bool) or
+        (platform_coding_shadow_inference_policy_file | trim) is match('^/opt/ditto-platform-api/current/')
+    fail_msg: >-
+      ditto-api cannot see the deploy checkout, so
+      platform_coding_shadow_inference_policy_file must stay derived from
+      platform_checkout_root rather than an absolute checkout path.
+    quiet: true
+
+- name: Inspect the pinned release interpreter without following links
+  ansible.builtin.stat:
+    path: "{{ platform_api_release_python }}"
+    follow: false
+    get_checksum: false
+  register: platform_api_release_python_stat
+
+- name: Require a root-owned release interpreter
+  ansible.builtin.assert:
+    that:
+      - platform_api_release_python_stat.stat.exists
+      - platform_api_release_python_stat.stat.isreg
+      - platform_api_release_python_stat.stat.uid == 0
+      - not platform_api_release_python_stat.stat.wgrp
+      - not platform_api_release_python_stat.stat.woth
+    fail_msg: >-
+      {{ platform_api_release_python }} must be a root-owned regular file that
+      only root can write. Sealed releases link their environment to it.
+    quiet: true
+
+- name: Ensure the root-owned release and configuration directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: /etc/ditto-platform, group: root, mode: "0755"}
+    - {path: /etc/ditto-platform/api, group: ditto-api, mode: "0750"}
+    - {path: /opt/ditto-platform-api, group: root, mode: "0755"}
+    - {path: /opt/ditto-platform-api/releases, group: root, mode: "0755"}
+    - {path: /usr/local/libexec/ditto-platform-api, group: root, mode: "0755"}
+    - {path: /var/lib/ditto-platform-api-release, group: root, mode: "0700"}
+  loop_control:
+    label: "{{ item.path }}"
+
+- name: Ensure the builder's private home and cache
+  ansible.builtin.file:
+    path: /var/lib/ditto-platform-api-build
+    state: directory
+    owner: ditto-api-build
+    group: ditto-api-build
+    mode: "0700"
+
+- name: Install the root release installer
+  ansible.builtin.copy:
+    src: platform-api-release.py
+    dest: /usr/local/sbin/ditto-platform-api-release
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the ditto-api launcher
+  ansible.builtin.copy:
+    src: platform-api-launch
+    dest: /usr/local/libexec/ditto-platform-api/launch
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the live Docker-access probe the installer runs for the signer
+  ansible.builtin.copy:
+    src: deploy-docker-access.py
+    dest: /usr/local/libexec/ditto-platform-api/deploy-docker-access
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Record the installer's host settings
+  ansible.builtin.copy:
+    dest: /etc/ditto-platform/api/release.json
+    owner: root
+    group: root
+    mode: "0644"
+    content: "{{ {'python': platform_api_release_python, 'platform_owner': platform_owner} | to_json }}\n"
+
+# The same read-only GitHub deploy key the checkout uses, as a root-only copy,
+# so the installer never reads a file in the deploy user's home.
+- name: Install a root-only copy of the read-only GitHub deploy key
+  ansible.builtin.copy:
+    content: "{{ platform_deploy_key.stdout }}\n"
+    dest: /etc/ditto-platform/api/github-deploy-key
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Trust github.com for the installer only through a root-owned file
+  ansible.builtin.known_hosts:
+    path: /etc/ditto-platform/api/github-known-hosts
+    name: github.com
+    key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519 github.com') }}"
+    state: present
+
+- name: Keep the installer's known_hosts root-owned
+  ansible.builtin.file:
+    path: /etc/ditto-platform/api/github-known-hosts
+    owner: root
+    group: root
+    mode: "0644"
+
+# Same template and secrets as the deploy-owned .env, rendered root-owned and
+# readable only by ditto-api. Paths that pointed into the deploy checkout point
+# into the sealed release instead.
+- name: Render the root-owned ditto-api environment
+  ansible.builtin.template:
+    src: platform.env.j2
+    dest: /etc/ditto-platform/api/platform.env
+    owner: root
+    group: ditto-api
+    mode: "0640"
+  vars:
+    platform_checkout_root: /opt/ditto-platform-api/current
+  no_log: true
+
+- name: Guard the root-owned ditto-api environment against placeholders
+  ansible.builtin.include_role:
+    name: env_render_guard
+  vars:
+    env_render_guard_path: /etc/ditto-platform/api/platform.env
+    env_render_guard_label: /etc/ditto-platform/api/platform.env on {{ inventory_hostname }}
+    env_render_guard_hint: >-
+      Export the Terraform-derived values first:
+      `source infra/ansible/scripts/platform-app-env.sh`.
+
+- name: Install the ditto-api unit without enabling or starting it
+  ansible.builtin.template:
+    src: ditto-platform-api.service.j2
+    dest: /etc/systemd/system/ditto-platform-api.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: platform_api_unit_file
+
+- name: Reload systemd unit definitions (no unit is started)
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: platform_api_unit_file is changed
+
+- name: Allow the deploy user exactly the four ditto-api release commands
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/ditto-platform-api
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+    content: |
+      # Managed by infra/ansible/roles/platform_app. Edits here are wiped on next run.
+      # Exact argument vectors, no wildcard: sudo refuses any other argument.
+      # The installer reads its request from stdin and validates it; it never
+      # lets deploy choose a path, a user or a command.
+      {{ platform_owner }} ALL=(root) NOPASSWD: /usr/local/sbin/ditto-platform-api-release install
+      {{ platform_owner }} ALL=(root) NOPASSWD: /usr/local/sbin/ditto-platform-api-release activate
+      {{ platform_owner }} ALL=(root) NOPASSWD: /usr/local/sbin/ditto-platform-api-release stop
+      {{ platform_owner }} ALL=(root) NOPASSWD: /usr/local/sbin/ditto-platform-api-release logs

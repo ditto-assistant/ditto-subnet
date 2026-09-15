@@ -1,0 +1,26 @@
+# Managed by Ansible (platform_app role) — do not edit by hand.
+#
+# Brings the Pylon sidecar up from root-owned inputs, so the deploy user needs
+# no docker group membership (which is root-equivalent). Installed only while
+# platform_pylon_root_unit_enabled; Ansible never starts it. scripts/update.sh
+# runs `sudo -n /usr/bin/systemctl restart ditto-platform-pylon.service`, the
+# one command /etc/sudoers.d/ditto-platform-pylon allows, where it used to run
+# `docker compose up -d --wait pylon` as deploy. The container keeps
+# `restart: unless-stopped`, so Docker still restores it after a reboot and
+# this unit is not enabled.
+[Unit]
+Description=Ditto Platform Pylon sidecar (root-owned compose inputs)
+Documentation=https://github.com/ditto-assistant/ditto-subnet/blob/main/infra/docs/coding-hosted-control-signer-v2.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/ditto-platform/pylon/pylon.env
+# An empty client configuration: Pylon's image is public, and no credential
+# from any user's ~/.docker is consulted.
+Environment=DOCKER_CONFIG=/etc/ditto-platform/pylon/docker-client
+ExecStart=/usr/bin/docker compose --project-name {{ platform_compose_project_name }} --project-directory /etc/ditto-platform/pylon --file /etc/ditto-platform/pylon/compose.yml up --detach --wait pylon
+TimeoutStartSec=300

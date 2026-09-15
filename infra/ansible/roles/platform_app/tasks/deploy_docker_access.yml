@@ -1,0 +1,42 @@
+---
+# Imported from tasks/coding_hosted_signer.yml (enabled converges only) with the
+# literal production inputs, and by infra/ansible/tests with synthetic ones.
+# Inputs (import vars, never role defaults or inventory):
+#   platform_deploy_docker_probe_group   the Docker group name
+#   platform_deploy_docker_probe_proc    the process table
+#   platform_deploy_docker_probe_socket  the Docker daemon socket
+#
+# platform_pylon_root_unit_enabled only describes files. Docker access is
+# root-equivalent and outlives a group change in every process that started
+# before it (the deploy user's pm2 daemon and its children), so the signer is
+# refused until the running host proves deploy has no route to the daemon.
+# files/deploy-docker-access.py reads group data, /proc/<pid>/status and socket
+# metadata only.
+
+- name: Check the running host for any deploy route to the Docker daemon
+  ansible.builtin.script:
+    # Relative to this task file, so the role and the test fixture that
+    # imports it both resolve roles/platform_app/files.
+    cmd: >-
+      ../files/deploy-docker-access.py
+      --user={{ platform_owner | quote }}
+      --group={{ platform_deploy_docker_probe_group | quote }}
+      --proc={{ platform_deploy_docker_probe_proc | quote }}
+      --socket={{ platform_deploy_docker_probe_socket | quote }}
+    executable: /usr/bin/python3
+  register: platform_deploy_docker_access
+  changed_when: false
+  failed_when: false
+
+- name: Refuse the control signer while deploy can reach the Docker daemon
+  ansible.builtin.assert:
+    that:
+      - platform_deploy_docker_access.rc == 0
+    fail_msg: >-
+      {{ platform_owner }} can still reach the Docker daemon, which is
+      root-equivalent and would expose the control-signer seed:
+      {{ platform_deploy_docker_access.stdout_lines | default([]) | join('; ') }}.
+      Enable platform_pylon_root_unit_enabled and converge, restart
+      pm2-{{ platform_owner }}.service so no process keeps the old group, then
+      converge again.
+    quiet: true

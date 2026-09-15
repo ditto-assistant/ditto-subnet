@@ -35,6 +35,9 @@
       VALIDATOR_PROD_HOTKEY plus VALIDATOR_PROD_HOTKEY_SECRET_VERSION to the
       generated public SS58 address and its recorded numeric secret version.
 
+- name: Validate hosted-v2 Platform control signer trust before any other validator_stack task
+  ansible.builtin.import_tasks: coding_hosted_trust.yml
+
 - name: Validate the fixed coding executor client identity profile
   ansible.builtin.assert:
     that:

@@ -194,6 +194,42 @@ platform_coding_hippius_evidence_spool_root: /var/lib/ditto-platform/coding-evid
 secret_coding_hippius_evidence_access_key: platform-coding-hippius-evidence-access-key
 secret_coding_hippius_evidence_secret_key: platform-coding-hippius-evidence-secret-key
 
+# --- Deploy access narrowing (reviewed activation, default off) ---------------
+# The docker group is root-equivalent, and the deploy user is in it only so
+# scripts/update.sh can run `docker compose up -d --wait pylon`. True installs
+# a root-owned ditto-platform-pylon.service with root-owned compose inputs,
+# renders DITTO_PLATFORM_PYLON_UNIT so update.sh restarts that unit through one
+# exact sudoers rule, and removes deploy from the docker group
+# (tasks/pylon_root_unit.yml). False keeps today's behaviour. Required before
+# the hosted control signer may be enabled.
+platform_pylon_root_unit_enabled: false
+
+# --- Dedicated ditto-api service identity (reviewed activation, default off) --
+# False: ditto-api runs under the deploy user's pm2 from the deploy checkout,
+# exactly as before. True: ditto-api runs as the locked-down `ditto-api` user
+# from sealed root-owned releases through ditto-platform-api.service; relays and
+# the image-cleanup job stay on deploy's pm2 (tasks/api_service_identity.yml,
+# infra/docs/coding-hosted-control-signer-v2.md). Required before the hosted
+# control signer may be enabled.
+platform_api_service_identity_enabled: false
+# Root-owned system interpreter every sealed release environment links to.
+platform_api_release_python: /usr/bin/python3.13
+
+# Hosted-v2 native control signer: a dedicated ONLINE SR25519 operational key
+# that signs only canonical native-v2 status/result envelopes in the Python API
+# process. It is distinct from the offline curator Ed25519 key, every validator
+# hotkey and the screener hotkey. This role never generates, copies, templates,
+# fetches, reads or checksums the seed: a separate protected ceremony places it
+# (infra/docs/coding-hosted-control-signer-v2.md). Enabled converges assert the
+# public hotkey, the dedicated identity and the narrowed deploy access, then
+# stat-verify the pre-placed file; disabled converges skip those tasks and never
+# inspect the path. The seed path is not a variable: it is a literal in
+# platform.env.j2 and tasks/coding_hosted_signer.yml. The seed and its 0700
+# directory are owned by `ditto-api`, so no deploy process can open them.
+platform_coding_hosted_control_enabled: false
+# Public SS58 address derived from the ceremony seed; reviewed in Git when set.
+platform_coding_hosted_signer_hotkey: ""
+
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118
 platform_subtensor_network: finney

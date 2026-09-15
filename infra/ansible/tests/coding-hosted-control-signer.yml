@@ -1,0 +1,348 @@
+---
+# Rendering and guard fixture only. It never includes a convergence role, never
+# writes outside fresh temporary directories, and never creates, copies or reads
+# a real seed. The only file bodies it writes are 32 ASCII zero digits used to
+# give the synthetic seed its expected size; the guards under test never read
+# them. The entry-point case stat()s the fixed production path, which does not
+# exist on a fixture host. Both hotkeys are public addresses of the public
+# synthetic test seeds 0x11 * 32 (Platform) and 0x22 * 32 (validator).
+- name: Prove hosted-v2 control signer wiring is default-off and fails closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../roles/platform_app/defaults/main.yml
+    - ../roles/validator_stack/defaults/main.yml
+  vars:
+    synthetic_platform_hotkey: 5DtDLm5rQHShDqojQpsvcN8tRXHVFaecfDoRet1SU6BFD9Fi
+    synthetic_validator_hotkey: 5Fpfx4iDtrrY99VGkQnLXASytC2y9Z3o8KUyTtD4w7o5SZcA
+    platform_env_template: "{{ playbook_dir }}/../roles/platform_app/templates/platform.env.j2"
+    validator_env_template: "{{ playbook_dir }}/../roles/validator_stack/templates/validator.env.j2"
+    placeholder_pattern: "TODO_[A-Z0-9_]+|FIXME_[A-Z0-9_]+|CHANGEME|REPLACE_ME"
+    fixed_seed_ancestors: [/etc/ditto-platform, /etc, /]
+    stat_guard_names:
+      - Require safe hosted-v2 control signer seed ancestors
+      - Require the ditto-api-owned 0700 seed directory
+      - Require the pre-placed single-link 0600 32-byte seed owned by ditto-api
+    # Synthetic stand-ins for host_vars, Terraform outputs and Secret Manager.
+    platform_inference_public_base_url: https://platform.invalid
+    platform_pg_host: 192.0.2.10
+    platform_storage_access_key: synthetic-access-id
+    platform_db_name: synthetic_platform
+    platform_bucket: synthetic-bucket
+    platform_embedder_url: ""
+    platform_datapipeline_url: ""
+    platform_secrets:
+      admin_api_token: synthetic-admin-token
+      pylon_token: synthetic-pylon-token
+      openrouter_api_key: synthetic-openrouter-key
+      db_password: synthetic-db-password
+      hmac_secret: synthetic-hmac-secret
+    validator_stack_pylon_token: synthetic-pylon-token
+    validator_stack_broker_token: synthetic-broker-token
+    validator_stack_wandb_api_key: synthetic-wandb-key
+  tasks:
+    - name: Resolve the fixture user once
+      ansible.builtin.set_fact:
+        fixture_user: "{{ lookup('ansible.builtin.pipe', 'id -un') }}"
+        fixture_group: "{{ lookup('ansible.builtin.pipe', 'id -gn') }}"
+        fixture_is_root: "{{ lookup('ansible.builtin.pipe', 'id -u') == '0' }}"
+
+    - name: Bind the synthetic validator identity over the empty role default
+      ansible.builtin.set_fact:
+        validator_stack_hotkey: "{{ synthetic_validator_hotkey }}"
+
+    - name: Prove both roles ship the control path off and empty
+      ansible.builtin.assert:
+        that:
+          - platform_coding_hosted_control_enabled is false
+          - platform_coding_hosted_signer_hotkey == ''
+          # The seed path is not a role variable anywhere.
+          - platform_coding_hosted_signer_seed_file is not defined
+          - platform_coding_hosted_signer_seed_directory is not defined
+          - platform_coding_hosted_signer_seed_ancestors is not defined
+          - platform_coding_hosted_signer_guard_seed is not defined
+          - validator_stack_coding_hosted_control_enabled is false
+          - validator_stack_coding_hosted_platform_hotkey == ''
+        quiet: true
+
+    - name: Prove the default Platform env renders the signer disabled with no path or hotkey
+      vars:
+        rendered_lines: "{{ lookup('ansible.builtin.template', platform_env_template).splitlines() | reject('match', '\\s*#') | list }}"
+      ansible.builtin.assert:
+        that:
+          - rendered_lines | select('match', 'DITTO_CODING_HOSTED_') | list == ['DITTO_CODING_HOSTED_CONTROL_ENABLED=false']
+          - rendered_lines | select('search', 'coding-hosted-signer') | list == []
+          - rendered_lines | select('search', placeholder_pattern) | list == []
+          # Today's supervision: ditto-api under deploy's pm2, Pylon through
+          # deploy's docker compose.
+          - platform_api_service_identity_enabled is false
+          - platform_pylon_root_unit_enabled is false
+          - >-
+            rendered_lines | select('match', 'DITTO_PLATFORM_(API_SUPERVISOR|PYLON_UNIT)=') | list == [
+            'DITTO_PLATFORM_API_SUPERVISOR=pm2', 'DITTO_PLATFORM_PYLON_UNIT=']
+        quiet: true
+
+    - name: Prove the reviewed switches render the dedicated identity and the Pylon unit
+      vars:
+        platform_api_service_identity_enabled: true
+        platform_pylon_root_unit_enabled: true
+        rendered_lines: "{{ lookup('ansible.builtin.template', platform_env_template).splitlines() | reject('match', '\\s*#') | list }}"
+      ansible.builtin.assert:
+        that:
+          - >-
+            rendered_lines | select('match', 'DITTO_PLATFORM_(API_SUPERVISOR|PYLON_UNIT)=') | list == [
+            'DITTO_PLATFORM_API_SUPERVISOR=systemd', 'DITTO_PLATFORM_PYLON_UNIT=ditto-platform-pylon.service']
+          - rendered_lines | select('match', 'DITTO_CODING_HOSTED_') | list == ['DITTO_CODING_HOSTED_CONTROL_ENABLED=false']
+        quiet: true
+
+    - name: Prove the ditto-api environment copy reads the policy from the sealed release
+      vars:
+        platform_checkout_root: /opt/ditto-platform-api/current
+        platform_coding_shadow_enabled: true
+        rendered_lines: "{{ lookup('ansible.builtin.template', platform_env_template).splitlines() | reject('match', '\\s*#') | list }}"
+      ansible.builtin.assert:
+        that:
+          - >-
+            rendered_lines | select('match', 'DITTO_CODING_INFERENCE_POLICY_FILE=') | list == [
+            'DITTO_CODING_INFERENCE_POLICY_FILE=/opt/ditto-platform-api/current/packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json']
+          - rendered_lines | select('search', '/opt/ditto-subnet') | list == []
+        quiet: true
+
+    - name: Render the ditto-api unit with and without the Hippius evidence spool
+      ansible.builtin.set_fact:
+        api_unit_plain: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../roles/platform_app/templates/ditto-platform-api.service.j2').splitlines() }}"
+        api_unit_spool: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../roles/platform_app/templates/ditto-platform-api.service.j2', template_vars={'platform_coding_hippius_evidence_enabled': true}).splitlines() }}"
+
+    - name: Prove the ditto-api unit runs locked down as ditto-api from the sealed release
+      ansible.builtin.assert:
+        that:
+          - item in api_unit_plain
+          - item in api_unit_spool
+        quiet: true
+      loop:
+        - User=ditto-api
+        - Group=ditto-api
+        - SupplementaryGroups=
+        - ExecStart=/usr/local/libexec/ditto-platform-api/launch serve
+        - NoNewPrivileges=yes
+        - CapabilityBoundingSet=
+        - AmbientCapabilities=
+        - ProtectSystem=strict
+        - ReadOnlyPaths=/opt/ditto-platform-api /etc/ditto-platform
+        - InaccessiblePaths=-/opt/ditto-subnet -/opt/ditto-platform -/opt/ditto-platform-relay -/var/lib/ditto-platform-api-release -/var/lib/ditto-platform-api-build -/run/docker.sock
+        - ProtectHome=yes
+        - PrivateTmp=yes
+        - PrivateDevices=yes
+        - RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+        - RestrictSUIDSGID=yes
+        - SystemCallFilter=~@privileged
+
+    - name: Prove only the Hippius-enabled unit may write the evidence spool
+      ansible.builtin.assert:
+        that:
+          - api_unit_plain | select('match', 'ReadWritePaths=') | list == []
+          - api_unit_spool | select('match', 'ReadWritePaths=') | list == ['ReadWritePaths=' ~ platform_coding_hippius_evidence_spool_root]
+        quiet: true
+
+    - name: Prove the Pylon unit and environment carry only root-owned inputs
+      vars:
+        platform_owner: deploy
+        pylon_unit: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../roles/platform_app/templates/ditto-platform-pylon.service.j2').splitlines() }}"
+        pylon_env: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../roles/platform_app/templates/pylon.env.j2').splitlines() | reject('match', '\\s*#') | list }}"
+      ansible.builtin.assert:
+        that:
+          - >-
+            'ExecStart=/usr/bin/docker compose --project-name ditto-platform --project-directory /etc/ditto-platform/pylon --file /etc/ditto-platform/pylon/compose.yml up --detach --wait pylon'
+            in pylon_unit
+          - "'EnvironmentFile=/etc/ditto-platform/pylon/pylon.env' in pylon_unit"
+          - "'Environment=DOCKER_CONFIG=/etc/ditto-platform/pylon/docker-client' in pylon_unit"
+          - pylon_unit | select('match', '\\[Install\\]') | list == []
+          - >-
+            pylon_env == ['SUBTENSOR_NETWORK=finney', 'PYLON_OPEN_ACCESS_TOKEN=synthetic-pylon-token',
+            'BITTENSOR_WALLET_PATH=/etc/ditto-platform/pylon/wallets']
+          - api_unit_plain | select('match', 'ExecStartPre') | list == []
+        quiet: true
+
+    - name: Prove a staged hotkey or path is still not rendered while disabled
+      vars:
+        platform_coding_hosted_signer_hotkey: "{{ synthetic_platform_hotkey }}"
+        platform_coding_hosted_signer_guard_seed: /tmp/staged-elsewhere
+        rendered_lines: "{{ lookup('ansible.builtin.template', platform_env_template).splitlines() | reject('match', '\\s*#') | list }}"
+      ansible.builtin.assert:
+        that:
+          - rendered_lines | select('match', 'DITTO_CODING_HOSTED_') | list == ['DITTO_CODING_HOSTED_CONTROL_ENABLED=false']
+          - rendered_lines | select('search', synthetic_platform_hotkey) | list == []
+        quiet: true
+
+    - name: Prove the enabled Platform env renders only the flag, the fixed path and the public hotkey
+      vars:
+        platform_coding_hosted_control_enabled: true
+        platform_coding_hosted_signer_hotkey: "{{ synthetic_platform_hotkey }}"
+        # An override cannot move the rendered path; the template carries the literal.
+        platform_coding_hosted_signer_guard_seed: /tmp/attacker-chosen
+        platform_coding_hosted_signer_seed_file: /tmp/attacker-chosen
+        rendered_lines: "{{ lookup('ansible.builtin.template', platform_env_template).splitlines() | reject('match', '\\s*#') | list }}"
+      ansible.builtin.assert:
+        that:
+          - >-
+            rendered_lines | select('match', 'DITTO_CODING_HOSTED_') | list == [
+            'DITTO_CODING_HOSTED_CONTROL_ENABLED=true',
+            'DITTO_CODING_HOSTED_SIGNER_SEED_FILE=/etc/ditto-platform/coding-hosted-signer/seed',
+            'DITTO_CODING_HOSTED_SIGNER_HOTKEY=' ~ synthetic_platform_hotkey]
+          - rendered_lines | select('search', 'attacker-chosen') | list == []
+          - rendered_lines | select('search', placeholder_pattern) | list == []
+        quiet: true
+
+    - name: Prove the default validator env renders trust disabled and empty
+      vars:
+        validator_stack_coding_hosted_platform_hotkey: "{{ synthetic_platform_hotkey }}"
+        rendered_lines: "{{ lookup('ansible.builtin.template', validator_env_template).splitlines() | reject('match', '\\s*#') | list }}"
+      ansible.builtin.assert:
+        that:
+          - >-
+            rendered_lines | select('match', 'VALIDATOR_CODING_HOSTED_') | list == [
+            'VALIDATOR_CODING_HOSTED_CONTROL_ENABLED=false',
+            'VALIDATOR_CODING_HOSTED_PLATFORM_HOTKEY=']
+        quiet: true
+
+    - name: Prove the enabled validator env renders only the trusted public address
+      vars:
+        validator_stack_coding_hosted_control_enabled: true
+        validator_stack_coding_hosted_platform_hotkey: "{{ synthetic_platform_hotkey }}"
+        rendered_lines: "{{ lookup('ansible.builtin.template', validator_env_template).splitlines() | reject('match', '\\s*#') | list }}"
+      ansible.builtin.assert:
+        that:
+          - >-
+            rendered_lines | select('match', 'VALIDATOR_CODING_HOSTED_') | list == [
+            'VALIDATOR_CODING_HOSTED_CONTROL_ENABLED=true',
+            'VALIDATOR_CODING_HOSTED_PLATFORM_HOTKEY=' ~ synthetic_platform_hotkey]
+          - "'VALIDATOR_HOTKEY=' ~ synthetic_validator_hotkey in rendered_lines"
+        quiet: true
+
+    - name: Disabled validator trust ignores staged values
+      vars:
+        validator_stack_coding_hosted_platform_hotkey: "{{ synthetic_validator_hotkey }}"
+      ansible.builtin.import_tasks: ../roles/validator_stack/tasks/coding_hosted_trust.yml
+
+    - name: Accept one distinct public Platform control address
+      vars:
+        validator_stack_coding_hosted_control_enabled: true
+        validator_stack_coding_hosted_platform_hotkey: "{{ synthetic_platform_hotkey }}"
+      ansible.builtin.import_tasks: ../roles/validator_stack/tasks/coding_hosted_trust.yml
+
+    - name: Reject invalid, padded or self-referential validator trust through the real guard
+      ansible.builtin.include_tasks: coding-hosted-control-trust-negative.yml
+      vars:
+        validator_stack_hotkey: "{{ trust_case.validator | default(synthetic_validator_hotkey) }}"
+      loop:
+        - {name: empty address, platform: ""}
+        - {name: own hotkey, platform: "{{ synthetic_validator_hotkey }}"}
+        - {name: trailing newline, platform: "{{ synthetic_platform_hotkey }}\n"}
+        - {name: short address, platform: "{{ synthetic_platform_hotkey[:-1] }}"}
+        - {name: wrong alphabet, platform: "{{ '1' * 48 }}"}
+        - {name: wrong prefix, platform: "0{{ synthetic_platform_hotkey[1:] }}"}
+        - {name: null address, platform: null}
+        - {name: integer address, platform: 123}
+        # Equal keys hidden by padding on the validator side, which the
+        # validator preflight regex alone would let through.
+        - {name: newline-padded own hotkey, platform: "{{ synthetic_platform_hotkey }}", validator: "{{ synthetic_platform_hotkey }}\n"}
+        - {name: space-padded own hotkey, platform: "{{ synthetic_platform_hotkey }}", validator: " {{ synthetic_platform_hotkey }}"}
+        - {name: malformed own hotkey, platform: "{{ synthetic_platform_hotkey }}", validator: ""}
+      loop_control:
+        loop_var: trust_case
+        label: "{{ trust_case.name }}"
+
+    - name: Reject an invalid Platform hotkey, the screener hotkey or a missing isolation switch before any stat
+      ansible.builtin.include_tasks: coding-hosted-control-signer-profile-negative.yml
+      loop:
+        - {name: empty hotkey, hotkey: ""}
+        - {name: trailing newline, hotkey: "{{ synthetic_platform_hotkey }}\n"}
+        - {name: screener hotkey, hotkey: "{{ synthetic_platform_hotkey }}", screener: "{{ synthetic_platform_hotkey }}"}
+        - {name: padded screener hotkey, hotkey: "{{ synthetic_platform_hotkey }}", screener: " {{ synthetic_platform_hotkey }}\n"}
+        - {name: root deploy user, hotkey: "{{ synthetic_platform_hotkey }}", owner: root}
+        - {name: empty deploy user, hotkey: "{{ synthetic_platform_hotkey }}", owner: ""}
+        - {name: deploy user named ditto-api, hotkey: "{{ synthetic_platform_hotkey }}", owner: ditto-api}
+        - {name: API still under the deploy user, hotkey: "{{ synthetic_platform_hotkey }}", identity: false, api_user: "{{ fixture_user }}"}
+        - {name: identity switch off, hotkey: "{{ synthetic_platform_hotkey }}", identity: false}
+        - {name: API process user is deploy, hotkey: "{{ synthetic_platform_hotkey }}", api_user: "{{ fixture_user }}"}
+        - {name: deploy still in the docker group, hotkey: "{{ synthetic_platform_hotkey }}", pylon: false}
+      loop_control:
+        loop_var: profile_case
+        label: "{{ profile_case.name }}"
+
+    - name: A disabled Platform converge skips the imported signer guard without a stat
+      vars:
+        platform_coding_hosted_control_enabled: false
+        platform_coding_hosted_signer_hotkey: ""
+      block:
+        - name: Import the real entry point exactly as tasks/main.yml does
+          ansible.builtin.import_tasks: ../roles/platform_app/tasks/coding_hosted_signer.yml
+          when: platform_coding_hosted_control_enabled | bool
+        - name: Verify every stat was skipped
+          ansible.builtin.assert:
+            that:
+              - platform_coding_hosted_signer_ancestor_stats is skipped
+              - platform_coding_hosted_signer_ancestor_stats.results | select('skipped') | map(attribute='item') | list == fixed_seed_ancestors
+              - platform_coding_hosted_signer_directory_stat is skipped
+              - platform_coding_hosted_signer_seed_stat is skipped
+            quiet: true
+
+    - name: An enabled Platform converge reaches the stat guard on the fixed production paths
+      vars:
+        platform_coding_hosted_control_enabled: true
+        platform_coding_hosted_signer_hotkey: "{{ synthetic_platform_hotkey }}"
+        platform_api_service_identity_enabled: true
+        platform_pylon_root_unit_enabled: true
+        platform_api_process_user: ditto-api
+        platform_owner: "{{ 'synthetic-platform-user' if fixture_is_root | bool else fixture_user }}"
+      block:
+        - name: Run the real entry point exactly as tasks/main.yml does
+          ansible.builtin.import_tasks: ../roles/platform_app/tasks/coding_hosted_signer.yml
+          when: platform_coding_hosted_control_enabled | bool
+        - name: Fail if a fixture host accepted the fixed placement
+          ansible.builtin.fail:
+            msg: The fixture host unexpectedly carries a valid control signer placement.
+      rescue:
+        - name: Verify the imported stat guard, not the profile, refused the absent placement
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name in stat_guard_names
+              - platform_coding_hosted_signer_ancestor_stats.results | map(attribute='item') | list == fixed_seed_ancestors
+            fail_msg: "failed_task={{ ansible_failed_task.name }}"
+            quiet: true
+
+    - name: Exercise the live Docker-access guard against synthetic process tables
+      ansible.builtin.include_tasks: coding-hosted-control-signer-docker-case.yml
+      loop:
+        # `root` stands in for the Docker group: the fixture user is not in it
+        # and, unless the case adds GID 0, holds no process with it.
+        - {name: no route to the daemon, group: root, groups: "{{ lookup('ansible.builtin.pipe', 'id -g') }}", accept: true, skip_as_root: true}
+        - {name: primary group opens the daemon, group: "{{ fixture_group }}", groups: "", accept: false}
+        - {name: running process kept the group, group: root, groups: "{{ lookup('ansible.builtin.pipe', 'id -g') }} 0", accept: false}
+        - {name: socket not owned by root, group: root, groups: "", setup: "python3 -c 'import socket; socket.socket(socket.AF_UNIX).bind(\"docker.sock\")'", accept: false, skip_as_root: true}
+      loop_control:
+        loop_var: docker_case
+        label: "{{ docker_case.name }}"
+
+    - name: Exercise the stat-only seed guard against synthetic temporary trees
+      ansible.builtin.include_tasks: coding-hosted-control-signer-seed-case.yml
+      loop:
+        - {name: valid, setup: "true", accept: true}
+        - {name: missing seed, setup: rm signer/seed, accept: false, guard: seed}
+        - {name: group-readable seed, setup: chmod 0640 signer/seed, accept: false, guard: seed}
+        - {name: symlinked seed, setup: mv signer/seed signer/real && ln -s real signer/seed, accept: false, guard: seed}
+        - {name: hard-linked seed, setup: ln signer/seed second-link, accept: false, guard: seed}
+        - {name: hex-text sized seed, setup: printf '%064d' 0 > signer/seed, accept: false, guard: seed}
+        - {name: group-listable directory, setup: chmod 0750 signer, accept: false, guard: directory}
+        - {name: symlinked directory, setup: mv signer real-signer && ln -s real-signer signer, accept: false, guard: directory}
+        - {name: group-writable ancestor, setup: chmod 0770 ., accept: false, guard: ancestor}
+        - {name: foreign directory owner, setup: "true", owner: synthetic-not-the-platform-user, root_ancestor_only: true, accept: false, guard: directory}
+        # The pre-identity placement: seed tree owned by the deploy user (the
+        # fixture user here) while ditto-api must own it.
+        - {name: seed tree still owned by deploy, setup: "true", owner: ditto-api, root_ancestor_only: true, accept: false, guard: directory}
+        - {name: foreign ancestor owner, setup: "true", owner: synthetic-not-the-platform-user, accept: false, guard: ancestor, skip_as_root: true}
+      loop_control:
+        loop_var: seed_case
+        label: "{{ seed_case.name }}"

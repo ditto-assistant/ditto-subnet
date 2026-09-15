@@ -1,0 +1,28 @@
+---
+- name: Mark the stat results so a stat run by this case would be visible
+  ansible.builtin.set_fact:
+    platform_coding_hosted_signer_ancestor_stats:
+      untouched_by_profile_case: true
+
+- name: Require rejection by the Platform signer profile before any stat
+  vars:
+    platform_coding_hosted_control_enabled: true
+    platform_coding_hosted_signer_hotkey: "{{ profile_case.hotkey }}"
+    platform_screener_hotkey: "{{ profile_case.screener | default('') }}"
+    platform_owner: "{{ profile_case.owner | default(fixture_user) }}"
+    platform_api_service_identity_enabled: "{{ profile_case.identity | default(true) }}"
+    platform_pylon_root_unit_enabled: "{{ profile_case.pylon | default(true) }}"
+    platform_api_process_user: "{{ profile_case.api_user | default('ditto-api') }}"
+  block:
+    - ansible.builtin.import_tasks: ../roles/platform_app/tasks/coding_hosted_signer.yml
+    - name: Fail if an invalid signer profile was accepted
+      ansible.builtin.fail:
+        msg: Invalid synthetic hosted-v2 signer profile passed the guard.
+  rescue:
+    - name: Verify the profile guard refused before inspecting any path
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Require the reviewed hosted-v2 control signer profile'
+          - platform_coding_hosted_signer_ancestor_stats.untouched_by_profile_case | default(false)
+        fail_msg: "{{ profile_case.name }}: failed_task={{ ansible_failed_task.name }}"
+        quiet: true

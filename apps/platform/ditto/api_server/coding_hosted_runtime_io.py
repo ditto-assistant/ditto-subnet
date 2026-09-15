@@ -39,21 +39,41 @@ def private_directory(path: Path) -> None:
             raise HostedRuntimeError("hosted runtime directory ancestor is unsafe")
 
 
-def read_private(path: Path, maximum: int) -> bytes:
+def _require_private_file_location(path: Path) -> None:
     private_directory(path.parent)
     if not path.is_absolute() or path.parent.resolve() / path.name != path:
         raise HostedRuntimeError("hosted runtime file is unsafe")
+
+
+def _require_private_file_info(info: os.stat_result, maximum: int) -> None:
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.geteuid()
+        or stat.S_IMODE(info.st_mode) != 0o600
+        or info.st_nlink != 1
+        or not 0 < info.st_size <= maximum
+    ):
+        raise HostedRuntimeError("hosted runtime file is unsafe")
+
+
+def private_file_metadata(path: Path, maximum: int) -> os.stat_result:
+    """Apply read_private's location and file checks from lstat alone.
+
+    Never opens the file, so it cannot see content or rule out a later swap;
+    read_private repeats every check on the descriptor it actually reads.
+    """
+    _require_private_file_location(path)
+    info = path.lstat()
+    _require_private_file_info(info, maximum)
+    return info
+
+
+def read_private(path: Path, maximum: int) -> bytes:
+    _require_private_file_location(path)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     with os.fdopen(fd, "rb") as source:
         info = os.fstat(source.fileno())
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or info.st_uid != os.geteuid()
-            or stat.S_IMODE(info.st_mode) != 0o600
-            or info.st_nlink != 1
-            or not 0 < info.st_size <= maximum
-        ):
-            raise HostedRuntimeError("hosted runtime file is unsafe")
+        _require_private_file_info(info, maximum)
         body = source.read(maximum + 1)
         if len(body) != info.st_size:
             raise HostedRuntimeError("hosted runtime file changed")

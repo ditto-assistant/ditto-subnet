@@ -1,0 +1,66 @@
+---
+# One synthetic process table driven through the real live Docker-access guard
+# (roles/platform_app/tasks/deploy_docker_access.yml). The table has one process
+# running as the fixture user; its supplementary groups come from the case. No
+# real /proc, group change or Docker daemon is involved.
+- name: Decide whether {{ docker_case.name }} can run as this user
+  ansible.builtin.set_fact:
+    docker_case_skipped: "{{ (docker_case.skip_as_root | default(false) | bool) and (fixture_is_root | bool) }}"
+
+- name: Run the real Docker-access guard for {{ docker_case.name }}
+  when: not (docker_case_skipped | bool)
+  block:
+    - name: Create a fresh synthetic tree for {{ docker_case.name }}
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: deploy-docker-fixture-
+      register: docker_case_root
+
+    - name: Write the synthetic process table for {{ docker_case.name }}
+      ansible.builtin.shell: |
+        set -eu
+        mkdir -p proc/4242
+        printf 'Name:\tPM2 God Daemon\nUid:\t%s %s %s %s\nGid:\t%s %s %s %s\nGroups:\t%s\n' \
+          "$(id -u)" "$(id -u)" "$(id -u)" "$(id -u)" \
+          "$(id -g)" "$(id -g)" "$(id -g)" "$(id -g)" \
+          "{{ docker_case.groups }}" > proc/4242/status
+        {{ docker_case.setup | default('true') }}
+      args:
+        chdir: "{{ docker_case_root.path }}"
+        executable: /bin/sh
+      changed_when: false
+
+    - name: Exercise the Docker-access guard
+      ansible.builtin.import_tasks: ../roles/platform_app/tasks/deploy_docker_access.yml
+      vars:
+        platform_owner: "{{ fixture_user }}"
+        platform_deploy_docker_probe_group: "{{ docker_case.group }}"
+        platform_deploy_docker_probe_proc: "{{ docker_case_root.path }}/proc"
+        platform_deploy_docker_probe_socket: "{{ docker_case_root.path }}/docker.sock"
+
+    - name: Record acceptance
+      ansible.builtin.set_fact:
+        docker_case_accepted: true
+        docker_case_failed_task: ""
+  rescue:
+    - name: Record rejection
+      ansible.builtin.set_fact:
+        docker_case_accepted: false
+        docker_case_failed_task: "{{ ansible_failed_task.name }}"
+  always:
+    - name: Remove the synthetic tree
+      ansible.builtin.file:
+        path: "{{ docker_case_root.path }}"
+        state: absent
+      when: docker_case_root.path is defined
+
+- name: Verify the expected Docker-access outcome for {{ docker_case.name }}
+  when: not (docker_case_skipped | bool)
+  ansible.builtin.assert:
+    that:
+      - docker_case_accepted == docker_case.accept
+      - docker_case.accept or docker_case_failed_task == 'Refuse the control signer while deploy can reach the Docker daemon'
+    fail_msg: >-
+      {{ docker_case.name }}: accepted={{ docker_case_accepted }},
+      failed_task={{ docker_case_failed_task }}
+    quiet: true

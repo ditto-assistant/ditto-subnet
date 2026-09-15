@@ -1,0 +1,26 @@
+---
+# Pure-variable guard: no host access. Validators trust only this configured
+# Platform control signer address. It never comes from a command argument, a
+# Platform response, a wallet or a key file, and it is ignored while disabled.
+# Both addresses must be exact 48-character SS58 strings before they are
+# compared, so trailing whitespace cannot make equal keys look distinct
+# (Ansible's `match` alone accepts a trailing newline before `$`).
+- name: Require a distinct public Platform control signer hotkey
+  ansible.builtin.assert:
+    that:
+      - validator_stack_coding_hosted_platform_hotkey is string
+      - validator_stack_coding_hosted_platform_hotkey | length == 48
+      - validator_stack_coding_hosted_platform_hotkey is match('^5[1-9A-HJ-NP-Za-km-z]{47}$')
+      - validator_stack_hotkey is string
+      - validator_stack_hotkey | length == 48
+      - validator_stack_hotkey is match('^5[1-9A-HJ-NP-Za-km-z]{47}$')
+      - validator_stack_coding_hosted_platform_hotkey != validator_stack_hotkey
+    fail_msg: >-
+      Hosted-v2 validator control requires the reviewed public SS58 address of
+      the dedicated Platform control signer in
+      validator_stack_coding_hosted_platform_hotkey, distinct from this
+      validator's own exact 48-character validator_stack_hotkey. Leave
+      validator_stack_coding_hosted_control_enabled false until that trust
+      change has been reviewed.
+    quiet: true
+  when: validator_stack_coding_hosted_control_enabled | bool
