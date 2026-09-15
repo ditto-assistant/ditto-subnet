@@ -3942,6 +3942,7 @@ const sourceReviewInvariantSchema = z.enum([
   'i5_production_engine',
   'i6_tool_execution_fidelity',
   'i7_model_tool_planning',
+  'i8_evaluation_independence',
 ])
 const sourceReviewInvariantDispositionSchema = z.enum([
   'pass', 'breach', 'inconclusive',
@@ -3962,6 +3963,8 @@ const sourceReviewPassClauseSchema = z.enum([
   'no_tool_planning',
   'policy_capability_filter_only',
   'natural_singleton_class',
+  'evaluation_independent_runtime',
+  'no_evaluation_identity_branch',
   'unreachable_nonruntime_code',
 ])
 const passClausesByInvariant: Record<
@@ -3991,6 +3994,10 @@ const passClausesByInvariant: Record<
   ]),
   i7_model_tool_planning: new Set([
     'no_tool_planning', 'policy_capability_filter_only', 'natural_singleton_class',
+    'unreachable_nonruntime_code',
+  ]),
+  i8_evaluation_independence: new Set([
+    'evaluation_independent_runtime', 'no_evaluation_identity_branch',
     'unreachable_nonruntime_code',
   ]),
 }
@@ -4025,13 +4032,21 @@ const sourceReviewInvariantDecisionSchema = z
 
 export const sourceReviewInvariantAssessmentSchema = z
   .strictObject({
-    schema_version: z.literal(1),
-    decisions: z.array(sourceReviewInvariantDecisionSchema).length(7),
+    schema_version: z.union([z.literal(1), z.literal(2)]),
+    decisions: z.array(sourceReviewInvariantDecisionSchema).min(7).max(8),
   } satisfies PlatformResponseShape<GeneratedSourceReviewInvariantAssessment>)
   .superRefine((assessment, context) => {
     const invariants = assessment.decisions.map((decision) => decision.invariant)
-    if (new Set(invariants).size !== 7) {
-      context.addIssue({ code: 'custom', message: 'source review must decide every policy-v10 invariant' })
+    const expected = assessment.schema_version === 1
+      ? sourceReviewInvariantSchema.options.filter((invariant) => invariant !== 'i8_evaluation_independence')
+      : sourceReviewInvariantSchema.options
+    if (invariants.length !== expected.length || new Set(invariants).size !== expected.length
+      || expected.some((invariant) => !invariants.includes(invariant))) {
+      context.addIssue({ code: 'custom', message: `source review must decide every policy-v${assessment.schema_version === 1 ? 10 : 13} invariant` })
+    }
+    if (assessment.schema_version === 2
+      && assessment.decisions.reduce((total, decision) => total + Array.from(decision.summary).length, 0) > 1680) {
+      context.addIssue({ code: 'custom', message: 'policy-v13 invariant summaries exceed bounded size' })
     }
   })
 

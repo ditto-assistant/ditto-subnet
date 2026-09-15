@@ -1803,6 +1803,41 @@ describe('source review causal evidence schema', () => {
     })).toThrow(/out of range/)
   })
 
+  it.each(['evaluation_independent_runtime', 'no_evaluation_identity_branch'] as const)(
+    'retains the complete policy-v13 sweep with %s', (passClause) => {
+      const assessment = {
+        schema_version: 2,
+        decisions: [...invariantAssessment.decisions, {
+          invariant: 'i8_evaluation_independence', disposition: 'pass',
+          pass_clause: passClause, summary: 'Runtime is independent of evaluation identity.',
+          evidence_indices: [],
+        }],
+      } satisfies GeneratedSourceReviewInvariantAssessment
+      const finding = { ...generatedFinding, invariant_assessment: assessment }
+      expect(sourceReviewFindingSchema.parse(finding).invariant_assessment).toEqual(assessment)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: { ...assessment, schema_version: 1 },
+      })).toThrow(/every policy-v10 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: assessment.decisions.slice(0, 7),
+        },
+      })).toThrow(/every policy-v13 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: [...assessment.decisions.slice(0, 7), assessment.decisions[0]],
+        },
+      })).toThrow(/every policy-v13 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: assessment.decisions.map((decision) => ({
+            ...decision, summary: 'x'.repeat(211),
+          })),
+        },
+      })).toThrow(/summaries exceed/)
+    },
+  )
+
   it('accepts the generated legacy shape when optional finding fields are absent', () => {
     const legacyFinding = {
       artifact_sha256: 'a'.repeat(64),
