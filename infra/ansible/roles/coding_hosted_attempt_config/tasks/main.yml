@@ -1,0 +1,228 @@
+---
+- name: Explain dormant hosted attempt config materialization
+  ansible.builtin.debug:
+    msg: Hosted attempt config materialization is disabled; no file is transferred or written.
+  when: not (coding_hosted_attempt_config_enabled | bool)
+
+- name: Materialize one hosted-v2 attempt configuration without starting anything
+  when: coding_hosted_attempt_config_enabled | bool
+  vars:
+    coding_hosted_attempt_config_kinds: [budget_profile, execution_profile, grading_profile, inference_policy, probe_receipt]
+    # Root-owned and worker-group-readable. Root never writes below the
+    # worker-owned home; the worker-run materializer reads staged inputs here.
+    coding_hosted_attempt_config_staging: /var/lib/ditto-coding-hosted-attempt-inputs
+    coding_hosted_attempt_config_python: "/opt/ditto-coding-hosted/{{ coding_hosted_attempt_config_runtime_revision }}/apps/platform/.venv/bin/python"
+  block:
+    - name: Require the dedicated host, exact pins and the attempt-bound confirmation
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in groups.get('role_coding_hosted', [])
+          - ansible_facts['hostname'] == 'ditto-coding-hosted-v2'
+          - ansible_facts['architecture'] == 'x86_64'
+          - ansible_facts['distribution'] == 'Debian'
+          - ansible_facts['distribution_major_version'] == '13'
+          - coding_hosted_attempt_config_runtime_revision is string
+          - coding_hosted_attempt_config_runtime_revision is match('^[0-9a-f]{40}$')
+          - coding_hosted_attempt_config_runtime_revision | length == 40
+          # The worker unit's interpreter, as passed to the connectivity role.
+          - coding_hosted_worker_python | default('') == coding_hosted_attempt_config_python
+          - coding_hosted_attempt_config_evaluation_id is string
+          - coding_hosted_attempt_config_evaluation_id is match('^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$')
+          - coding_hosted_attempt_config_evaluation_id | length == 36
+          - coding_hosted_attempt_config_assignment_sha256 is string
+          - coding_hosted_attempt_config_assignment_sha256 is match('^[0-9a-f]{64}$')
+          - coding_hosted_attempt_config_assignment_sha256 | length == 64
+          - coding_hosted_attempt_config_evidence_wrapping_key_sha256 is string
+          - coding_hosted_attempt_config_evidence_wrapping_key_sha256 is match('^[0-9a-f]{64}$')
+          - coding_hosted_attempt_config_evidence_wrapping_key_sha256 | length == 64
+          - >-
+            coding_hosted_attempt_config_confirmation ==
+            'MATERIALIZE HOSTED CODING ATTEMPT CONFIG ' ~ coding_hosted_attempt_config_evaluation_id
+            ~ ' ' ~ coding_hosted_attempt_config_assignment_sha256
+          - coding_hosted_attempt_config_inputs is mapping
+          - coding_hosted_attempt_config_inputs.keys() | sort == coding_hosted_attempt_config_kinds
+        fail_msg: >-
+          Require the dedicated host, an installed runtime revision equal to the worker unit's
+          coding_hosted_worker_python, the pinned evaluation, assignment and evidence-key digests,
+          the five nonsecret inputs and the exact attempt-bound confirmation.
+        quiet: true
+
+    - name: Require each input to be an absolute controller file and SHA-256
+      ansible.builtin.assert:
+        that:
+          - item.value is mapping
+          - item.value.keys() | sort == ['sha256', 'src']
+          - item.value.src is string
+          - item.value.src is match('^/')
+          - item.value.sha256 is string
+          - item.value.sha256 is match('^[0-9a-f]{64}$')
+          - item.value.sha256 | length == 64
+        fail_msg: Every input needs exactly an absolute controller path and a reviewed SHA-256.
+        quiet: true
+      loop: "{{ coding_hosted_attempt_config_inputs | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Refuse check mode for an enabled materialization
+      ansible.builtin.assert:
+        that:
+          - not ansible_check_mode
+        fail_msg: Enabled materialization must run its host checks for real; the disabled fixture covers check mode.
+        quiet: true
+
+    - name: Hash each input on the controller before transfer
+      ansible.builtin.stat:
+        path: "{{ item.value.src }}"
+        follow: false
+        get_checksum: true
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      loop: "{{ coding_hosted_attempt_config_inputs | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: coding_hosted_attempt_config_sources
+
+    - name: Refuse a controller input that is not the reviewed regular file
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | default(false)
+          - not item.stat.islnk
+          - item.stat.checksum == item.item.value.sha256
+        fail_msg: A controller input differs from its reviewed SHA-256.
+        quiet: true
+      loop: "{{ coding_hosted_attempt_config_sources.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    - name: Inspect the installed runtime interpreter
+      ansible.builtin.stat:
+        path: "{{ coding_hosted_attempt_config_python }}"
+        follow: true
+      register: coding_hosted_attempt_config_python_stat
+
+    - name: Require the protected installed interpreter
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_attempt_config_python_stat.stat.isreg | default(false)
+          - coding_hosted_attempt_config_python_stat.stat.uid == 0
+          - not coding_hosted_attempt_config_python_stat.stat.wgrp
+          - not coding_hosted_attempt_config_python_stat.stat.woth
+          - coding_hosted_attempt_config_python_stat.stat.executable
+        fail_msg: Install and verify the runtime revision before materializing an attempt configuration.
+        quiet: true
+
+    - name: Inspect the root-owned input staging directory without following links
+      ansible.builtin.stat:
+        path: "{{ coding_hosted_attempt_config_staging }}"
+        follow: false
+      register: coding_hosted_attempt_config_staging_stat
+
+    - name: Refuse an unsafe existing staging directory without repairing it
+      ansible.builtin.assert:
+        that:
+          - >-
+            not coding_hosted_attempt_config_staging_stat.stat.exists or
+            (coding_hosted_attempt_config_staging_stat.stat.isdir and
+             not coding_hosted_attempt_config_staging_stat.stat.islnk and
+             coding_hosted_attempt_config_staging_stat.stat.pw_name == 'root' and
+             coding_hosted_attempt_config_staging_stat.stat.gr_name == 'ditto-coding-hosted' and
+             coding_hosted_attempt_config_staging_stat.stat.mode == '0750')
+        fail_msg: An existing input staging directory is not root:ditto-coding-hosted mode 0750; reconcile it explicitly.
+        quiet: true
+
+    - name: Create the root-owned input staging directory
+      ansible.builtin.file:
+        path: "{{ coding_hosted_attempt_config_staging }}"
+        state: directory
+        owner: root
+        group: ditto-coding-hosted
+        mode: "0750"
+      when: not coding_hosted_attempt_config_staging_stat.stat.exists
+
+    - name: Stage each input under its digest name without replacing existing bytes
+      ansible.builtin.copy:
+        src: "{{ item.value.src }}"
+        dest: "{{ coding_hosted_attempt_config_staging }}/{{ item.key | replace('_', '-') }}-{{ item.value.sha256 }}.json"
+        owner: root
+        group: ditto-coding-hosted
+        mode: "0440"
+        force: false
+        follow: false
+        unsafe_writes: false
+      loop: "{{ coding_hosted_attempt_config_inputs | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Reinspect each staged input on the host
+      ansible.builtin.stat:
+        path: "{{ coding_hosted_attempt_config_staging }}/{{ item.key | replace('_', '-') }}-{{ item.value.sha256 }}.json"
+        follow: false
+        get_checksum: true
+        checksum_algorithm: sha256
+      loop: "{{ coding_hosted_attempt_config_inputs | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: coding_hosted_attempt_config_staged
+
+    - name: Require sealed root-owned inputs with their reviewed digest
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | default(false)
+          - not item.stat.islnk
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'ditto-coding-hosted'
+          - item.stat.mode == '0440'
+          - item.stat.nlink == 1
+          - item.stat.checksum == item.item.value.sha256
+        fail_msg: A staged input on the host differs from its reviewed SHA-256 or is not sealed read-only.
+        quiet: true
+      loop: "{{ coding_hosted_attempt_config_staged.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    # The materializer itself refuses live worker or custody units; it is the one
+    # liveness rule. Every pin is passed so a mismatch refuses before any write.
+    - name: Materialize the configuration as the worker with the installed interpreter
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/runuser
+          - -u
+          - ditto-coding-hosted
+          - --
+          - /usr/bin/env
+          - -i
+          - PATH=/usr/bin:/bin
+          - LANG=C.UTF-8
+          - LC_ALL=C.UTF-8
+          - "{{ coding_hosted_attempt_config_python }}"
+          - -B
+          - -I
+          - -m
+          - ditto.coding_hosted_attempt_config
+          - --materialize-attempt-config
+          - --evaluation-id
+          - "{{ coding_hosted_attempt_config_evaluation_id }}"
+          - --runtime-revision
+          - "{{ coding_hosted_attempt_config_runtime_revision }}"
+          - --assignment-sha256
+          - "{{ coding_hosted_attempt_config_assignment_sha256 }}"
+          - --execution-profile-sha256
+          - "{{ coding_hosted_attempt_config_inputs.execution_profile.sha256 }}"
+          - --grading-profile-sha256
+          - "{{ coding_hosted_attempt_config_inputs.grading_profile.sha256 }}"
+          - --inference-policy-sha256
+          - "{{ coding_hosted_attempt_config_inputs.inference_policy.sha256 }}"
+          - --budget-profile-sha256
+          - "{{ coding_hosted_attempt_config_inputs.budget_profile.sha256 }}"
+          - --probe-receipt-sha256
+          - "{{ coding_hosted_attempt_config_inputs.probe_receipt.sha256 }}"
+          - --evidence-wrapping-key-sha256
+          - "{{ coding_hosted_attempt_config_evidence_wrapping_key_sha256 }}"
+        chdir: /
+      register: coding_hosted_attempt_config_result
+      changed_when: true
+
+    - name: Report only the digest and path receipt
+      ansible.builtin.debug:
+        msg: "{{ coding_hosted_attempt_config_result.stdout }}"

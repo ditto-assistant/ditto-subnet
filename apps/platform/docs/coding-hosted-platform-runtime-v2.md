@@ -44,7 +44,9 @@ The configuration is `HostedPlatformRuntimeInput` in
 `dittobench-coding-hosted-platform-runtime-v2`, explicit `shadow_only=true` and
 `weight_eligible=false`. Known fields are validated strictly; unknown fields are
 ignored and cannot override the generated Go authority. No private configuration
-model is exposed through public OpenAPI.
+model is exposed through public OpenAPI. On the native host, the default-off
+[per-attempt config materializer](coding-hosted-attempt-config-v2.md) writes this
+document for one admitted assignment from fixed paths and Platform authority.
 
 | Fields | Required input |
 | --- | --- |

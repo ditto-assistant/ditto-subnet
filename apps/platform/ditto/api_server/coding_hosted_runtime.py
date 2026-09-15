@@ -15,7 +15,10 @@ from ditto.api_models.coding_canonical import coding_canonical_json_bytes
 from ditto.api_models.coding_hosted_grading import HostedTerminalIdentity
 from ditto.api_models.coding_inference import _decode_json_document
 from ditto.api_server.coding_hippius_custody import RsaOaepHippiusEvidenceKeyWrapper
-from ditto.api_server.coding_hippius_probe import load_hippius_probe_receipt
+from ditto.api_server.coding_hippius_probe import (
+    PROBE_RECEIPT_MAX_AGE_SECONDS,
+    load_hippius_probe_receipt,
+)
 from ditto.api_server.coding_hippius_retrieval import AiobotoHippiusPrivateInputReader
 from ditto.api_server.coding_hosted_authoring_evidence import (
     HostedAuthoringEvidencePublisher,
@@ -52,6 +55,11 @@ from ditto.db.models import (
     CodingHostedTerminalFinalization,
     CodingHostedTerminalReservation,
 )
+
+# The Go child may run this long past the assignment deadline, then gets this
+# much SIGTERM grace before the forced process-group stop.
+WORKER_FINALIZATION_SECONDS = 3600
+WORKER_SHUTDOWN_GRACE_SECONDS = 1800
 
 
 @dataclass(repr=False)
@@ -99,7 +107,9 @@ async def build_runtime_services(
     probe, _ = load_hippius_probe_receipt(Path(wire.probe_receipt_file))
     checked = datetime.fromisoformat(probe.checked_at.replace("Z", "+00:00"))
     if (
-        not 0 <= (datetime.now(UTC) - checked).total_seconds() < 86400
+        not 0
+        <= (datetime.now(UTC) - checked).total_seconds()
+        < PROBE_RECEIPT_MAX_AGE_SECONDS
         or probe.private_input_authority_sha256 != config.reader.authority_sha256
         or probe.sealed_evidence_authority_sha256 != config.evidence.authority_sha256
     ):
@@ -354,8 +364,8 @@ async def run_loaded_runtime(config: HostedRuntimeConfig) -> str:
                 str(worker_config),
             ),
             root=root,
-            timeout=remaining + 3600,
-            shutdown_grace=1800,
+            timeout=remaining + WORKER_FINALIZATION_SECONDS,
+            shutdown_grace=WORKER_SHUTDOWN_GRACE_SECONDS,
         )
         return await verify_runtime_result(body, config, sessions)
     finally:

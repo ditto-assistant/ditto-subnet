@@ -1,0 +1,7 @@
+---
+- name: Materialize one hosted-v2 attempt configuration without starting anything
+  hosts: role_coding_hosted
+  become: true
+  gather_facts: true
+  roles:
+    - coding_hosted_attempt_config

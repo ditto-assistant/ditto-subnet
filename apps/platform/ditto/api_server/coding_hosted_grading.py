@@ -16,6 +16,7 @@ from ditto.api_models.coding_hosted_grading import HostedTerminalIdentity
 from ditto.api_models.coding_inference import _decode_json_document
 from ditto.api_models.coding_private_catalog_v2 import CodingPrivateCatalogV2Task
 from ditto.api_server.coding_hippius_evidence import HippiusSealedEvidenceNotFound
+from ditto.api_server.coding_hippius_probe import PROBE_RECEIPT_MAX_AGE_SECONDS
 from ditto.api_server.coding_hosted_authoring_evidence import (
     HostedAuthoringEvidencePublisher,
     canonical,
@@ -462,7 +463,9 @@ class HostedGradingControl:
             self._cipher._probe.checked_at.replace("Z", "+00:00")
         )
         if (
-            not 0 <= (datetime.now(UTC) - checked).total_seconds() < 86400
+            not 0
+            <= (datetime.now(UTC) - checked).total_seconds()
+            < PROBE_RECEIPT_MAX_AGE_SECONDS
             or time.time() >= identity.publication_deadline_unix
             or identity.blob.storage_domain_sha256 != self._cipher._domain
         ):

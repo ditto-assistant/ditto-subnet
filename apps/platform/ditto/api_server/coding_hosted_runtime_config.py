@@ -61,6 +61,19 @@ HIPPIUS_KEYS = frozenset(
         "TIMEOUT_SECONDS",
     )
 )
+# Protected file bounds, shared with the fixed-host attempt config materializer.
+CONFIG_MAX_BYTES = 65536
+POSTGRES_ENVIRONMENT_MAX_BYTES = 128 << 10
+HIPPIUS_ENVIRONMENT_MAX_BYTES = 65536
+IMAGE_STORAGE_MAX_BYTES = 65536
+PROVIDER_KEY_MAX_BYTES = 4096
+EXECUTION_PROFILE_MAX_BYTES = 16384
+GRADING_PROFILE_MAX_BYTES = 65536
+BUDGET_PROFILE_MAX_BYTES = 65536
+POLICY_MAX_BYTES = 16384
+RELEASE_AUTHORITY_MAX_BYTES = 16 << 20
+# Curator public key, evidence public key and probe receipt.
+PUBLIC_AUTHORITY_MAX_BYTES = 65536
 
 
 @dataclass(frozen=True, repr=False)
@@ -118,21 +131,41 @@ def postgres_config(entries: object) -> tuple[PostgresConfig, tuple[str, ...]]:
     return result, tuple(entries)
 
 
+def hippius_configs(
+    document: object,
+) -> tuple[HippiusPrivateInputRetrievalConfig, HippiusSealedEvidenceConfig]:
+    if (
+        not isinstance(document, dict)
+        or set(document) - HIPPIUS_KEYS
+        or any(type(v) is not str or not v for v in document.values())
+    ):
+        raise HostedRuntimeError("runtime storage settings invalid")
+    reader = parse_hippius_private_input_retrieval_config(document)
+    evidence = parse_hippius_sealed_evidence_config(document)
+    if (
+        reader.bucket == evidence.bucket
+        or reader.reader.access_key == evidence.mediator.access_key
+        or reader.curator_access_key_id == evidence.mediator.access_key
+    ):
+        raise HostedRuntimeError("runtime storage identities must be distinct")
+    return reader, evidence
+
+
 def load_runtime_config(
     path: Path, *, expected_sha256: str | None = None
 ) -> HostedRuntimeConfig:
     if expected_sha256 is None:
-        document = read_json(path)
+        document = read_json(path, CONFIG_MAX_BYTES)
     else:
         from ditto.api_models.coding_inference import _decode_json_document
 
-        body = read_private(path, 65536)
+        body = read_private(path, CONFIG_MAX_BYTES)
         if (
             re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
             or hashlib.sha256(body).hexdigest() != expected_sha256
         ):
             raise HostedRuntimeError("runtime configuration commitment differs")
-        document = _decode_json_document(body, maximum_bytes=65536)
+        document = _decode_json_document(body, maximum_bytes=CONFIG_MAX_BYTES)
     wire = HostedPlatformRuntimeInput.model_validate(document)
     private_directory(Path(wire.runtime_root))
     private_directory(Path(wire.unwrap_work_root))
@@ -141,25 +174,13 @@ def load_runtime_config(
     if Path(wire.worker_executable).samefile(wire.unwrap_executable):
         raise HostedRuntimeError("runtime worker and custody executable must differ")
     postgres, entries = postgres_config(
-        read_json(Path(wire.postgres_environment_file), 128 << 10)
+        read_json(Path(wire.postgres_environment_file), POSTGRES_ENVIRONMENT_MAX_BYTES)
     )
-    hippius = read_json(Path(wire.hippius_environment_file))
-    if (
-        not isinstance(hippius, dict)
-        or set(hippius) - HIPPIUS_KEYS
-        or any(type(v) is not str or not v for v in hippius.values())
-    ):
-        raise HostedRuntimeError("runtime storage settings invalid")
-    reader = parse_hippius_private_input_retrieval_config(hippius)
-    evidence = parse_hippius_sealed_evidence_config(hippius)
-    if (
-        reader.bucket == evidence.bucket
-        or reader.reader.access_key == evidence.mediator.access_key
-        or reader.curator_access_key_id == evidence.mediator.access_key
-    ):
-        raise HostedRuntimeError("runtime storage identities must be distinct")
+    reader, evidence = hippius_configs(
+        read_json(Path(wire.hippius_environment_file), HIPPIUS_ENVIRONMENT_MAX_BYTES)
+    )
     image = HostedRuntimeImageStorage.model_validate(
-        read_json(Path(wire.image_storage_file))
+        read_json(Path(wire.image_storage_file), IMAGE_STORAGE_MAX_BYTES)
     )
     endpoint = urlparse(image.endpoint_url)
     if (
@@ -180,13 +201,20 @@ def load_runtime_config(
         region=image.region,
         use_tls=True,
     )
-    provider = read_private(Path(wire.provider_key_file), 4096).decode("ascii")
+    provider = read_private(
+        Path(wire.provider_key_file), PROVIDER_KEY_MAX_BYTES
+    ).decode("ascii")
     if not provider or any(not 33 <= ord(c) <= 126 for c in provider):
         raise HostedRuntimeError("runtime provider credential invalid")
-    execution = read_private(Path(wire.execution_profile_file), 16384)
-    grading = read_private(Path(wire.grading_profile_file), 65536)
-    budget = read_private(Path(wire.budget_profile_file), 65536)
-    for body, maximum in ((execution, 16384), (grading, 65536)):
+    execution = read_private(
+        Path(wire.execution_profile_file), EXECUTION_PROFILE_MAX_BYTES
+    )
+    grading = read_private(Path(wire.grading_profile_file), GRADING_PROFILE_MAX_BYTES)
+    budget = read_private(Path(wire.budget_profile_file), BUDGET_PROFILE_MAX_BYTES)
+    for body, maximum in (
+        (execution, EXECUTION_PROFILE_MAX_BYTES),
+        (grading, GRADING_PROFILE_MAX_BYTES),
+    ):
         from ditto.api_models.coding_inference import _decode_json_document
 
         if (
@@ -195,7 +223,7 @@ def load_runtime_config(
         ):
             raise HostedRuntimeError("runtime profile is not canonical")
     policy = HostedInferencePolicy.model_validate(
-        read_json(Path(wire.policy_file), 16384)
+        read_json(Path(wire.policy_file), POLICY_MAX_BYTES)
     )
     ProfiledBudgetEstimator(profile_bytes=budget, policy=policy)
     for filename in (
@@ -203,13 +231,13 @@ def load_runtime_config(
         wire.payload_authority_file,
         wire.publication_receipt_file,
     ):
-        read_private(Path(filename), 16 << 20)
+        read_private(Path(filename), RELEASE_AUTHORITY_MAX_BYTES)
     for filename in (
         wire.curator_public_key_file,
         wire.evidence_public_key_file,
         wire.probe_receipt_file,
     ):
-        read_private(Path(filename), 65536)
+        read_private(Path(filename), PUBLIC_AUTHORITY_MAX_BYTES)
     return HostedRuntimeConfig(
         wire,
         postgres,

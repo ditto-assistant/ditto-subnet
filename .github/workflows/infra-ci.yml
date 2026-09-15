@@ -114,3 +114,10 @@ jobs:
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i localhost, tests/coding-hosted-custody-key.yml
+
+      # Own step, away from the shared playbook loop, so parallel native-host
+      # changes do not conflict on that line.
+      - name: Prove hosted attempt config materialization stays disabled by default
+        run: |
+          uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml playbooks/gcp-coding-hosted-attempt-config.yml
+          uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/coding-hosted-attempt-config.yml

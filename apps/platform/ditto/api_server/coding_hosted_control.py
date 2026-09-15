@@ -46,6 +46,9 @@ from ditto.db.queries.coding_hosted_private import (
     freeze_hosted_private_patch,
 )
 
+# Each grant boundary (close, then abort) of a bound attempt at shutdown.
+SHUTDOWN_OPERATION_SECONDS = 30
+
 
 @dataclass(repr=False)
 class _Bridge:
@@ -403,7 +406,7 @@ class HostedAuthoringControl:
         for source in tuple(self._bound.values()):
             for operation in (self.close, self.abort):
                 try:
-                    async with asyncio.timeout(30):
+                    async with asyncio.timeout(SHUTDOWN_OPERATION_SECONDS):
                         await operation(source)
                 except Exception:
                     failed = True

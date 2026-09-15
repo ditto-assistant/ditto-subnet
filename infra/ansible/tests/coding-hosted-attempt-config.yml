@@ -1,0 +1,14 @@
+---
+- name: Verify hosted attempt config materialization remains dormant
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - coding_hosted_attempt_config
+  tasks:
+    - name: Verify safe default gates
+      ansible.builtin.assert:
+        that:
+          - not coding_hosted_attempt_config_enabled
+          - coding_hosted_attempt_config_confirmation == ''
+          - coding_hosted_attempt_config_inputs == {}
