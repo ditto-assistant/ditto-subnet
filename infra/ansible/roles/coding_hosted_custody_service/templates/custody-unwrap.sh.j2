@@ -1,0 +1,4 @@
+#!/bin/sh
+# Fixed, argument-free native-v2 unwrap proxy for the hosted worker. It forwards
+# one request to the transient custody instance and verifies the custodian UID.
+exec /usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 /opt/ditto-coding-hosted/{{ coding_hosted_custody_runtime_revision }}/apps/platform/.venv/bin/python -B -I -m ditto.coding_private_v2_custody --proxy-once --socket /run/ditto-coding-custody/custody.sock --custodian-uid {{ coding_hosted_custody_uid }}

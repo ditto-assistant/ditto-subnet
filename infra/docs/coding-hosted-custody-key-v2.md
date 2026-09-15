@@ -51,3 +51,5 @@ The next gates are an independently controlled Ed25519 curator signer, fresh
 transport encryption, external signature, Hippius publication/full readback,
 append-only registration, custody service configuration, recovery drills and a
 single private shadow canary.
+The custody service install and per-run lifecycle are described in
+`coding-hosted-custody-service-v2.md`.

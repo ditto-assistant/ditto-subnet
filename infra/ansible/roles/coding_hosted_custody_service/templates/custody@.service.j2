@@ -1,0 +1,53 @@
+# Locked native-v2 custody template. One transient instance per hosted run:
+# the instance name is the exact assigned worker UUID and must match the
+# owner-only per-run configuration prepared by custody-run.py.
+[Unit]
+Description=Native Coding private-v2 custody for assigned worker %i
+
+[Service]
+Type=exec
+User=ditto-coding-custody
+Group=ditto-coding-custody
+UMask=0077
+WorkingDirectory=/var/lib/ditto-coding-custody
+# The socket directory must be exactly 0755 and custody-owned; systemd removes
+# it on stop, so a crashed instance cannot leave a socket that blocks the next.
+RuntimeDirectory=ditto-coding-custody
+RuntimeDirectoryMode=0755
+ExecStartPre=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-custody/custody-run.py check %i
+ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 /opt/ditto-coding-hosted/{{ coding_hosted_custody_runtime_revision }}/apps/platform/.venv/bin/python -B -I -m ditto.coding_private_v2_custody --serve-custody --config /var/lib/ditto-coding-custody/runs/%i/config.json
+# Remove the per-run configuration however the instance ends.
+ExecStopPost=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-custody/custody-run.py release %i
+Restart=no
+# Backstop only: grants expire within an hour of launch.
+RuntimeMaxSec=2h
+TimeoutStartSec=60
+TimeoutStopSec=60
+KillMode=control-group
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+# No PrivateUsers: SO_PEERCRED must see the real worker UID.
+InaccessiblePaths=-/var/lib/ditto-coding-hosted -/run/ditto-coding-hosted -/opt/ditto-coding-hosted-images
+RestrictAddressFamilies=AF_UNIX AF_INET
+IPAddressDeny=any
+IPAddressAllow={{ coding_hosted_custody_postgres_ip }}/32
+StandardOutput=null
+StandardError=null
+# No Install section: started only for one run, never at boot or automatically.

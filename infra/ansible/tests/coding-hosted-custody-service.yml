@@ -1,0 +1,61 @@
+---
+- name: Prove the native custody service install stays disabled by default
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  roles:
+    - coding_hosted_custody_service
+
+- name: Render the locked custody templates from synthetic authorities without host writes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    templates: ../roles/coding_hosted_custody_service/templates
+    coding_hosted_custody_runtime_revision: 0123456789abcdef0123456789abcdef01234567
+    coding_hosted_custody_postgres_ip: 10.30.0.5
+    coding_hosted_custody_release_id: coding-private-v2-r2
+    coding_hosted_custody_reader_authority_sha256: "{{ 'ab' * 32 }}"
+    coding_hosted_custody_release_dir: /var/lib/ditto-coding-custody/release/coding-private-v2-r2
+    coding_hosted_custody_uid: "1002"
+    coding_hosted_worker_uid: "1001"
+    base: "{{ lookup('ansible.builtin.template', templates ~ '/base.json.j2') | from_json }}"
+    unit: "{{ lookup('ansible.builtin.template', templates ~ '/custody@.service.j2') }}"
+    proxy: "{{ lookup('ansible.builtin.template', templates ~ '/custody-unwrap.sh.j2') }}"
+    live_units: |-
+      ditto-coding-custody@7c9e6679-7425-40de-944b-e07fc1f90ae7.service loaded active running Native Coding private-v2 custody
+    idle_units: |-
+      ditto-coding-custody@7c9e6679-7425-40de-944b-e07fc1f90ae7.service loaded failed failed Native Coding private-v2 custody
+  tasks:
+    - name: Require a worker-free base bound to the release, key, database file and socket
+      ansible.builtin.assert:
+        that:
+          - base.schema == 'ditto-coding-custody-base-v1'
+          - "'worker_id' not in base.config"
+          - base.config.client_uid == 1001
+          - base.config.socket_path == '/run/ditto-coding-custody/custody.sock'
+          - base.config.registration_file == coding_hosted_custody_release_dir ~ '/registration.json'
+          - base.config.postgres_environment_file == '/var/lib/ditto-coding-custody/private/postgres-environment.json'
+          - base.config.shadow_only is true
+          - base.config.weight_eligible is false
+        quiet: true
+
+    - name: Require the instance-bound unit and fixed proxy to agree on runtime, socket and database
+      ansible.builtin.assert:
+        that:
+          - "'--config /var/lib/ditto-coding-custody/runs/%i/config.json' in unit"
+          - "'IPAddressAllow=10.30.0.5/32' in unit"
+          - "'/opt/ditto-coding-hosted/0123456789abcdef0123456789abcdef01234567/apps/platform/.venv/bin/python' in unit"
+          - "'/opt/ditto-coding-hosted/0123456789abcdef0123456789abcdef01234567/apps/platform/.venv/bin/python' in proxy"
+          - "'--socket /run/ditto-coding-custody/custody.sock --custodian-uid 1002' in proxy"
+        quiet: true
+
+    - name: Require live-instance detection to refuse only live custody units
+      ansible.builtin.assert:
+        that:
+          - live_units is search('^\\S+\\s+\\S+\\s+(active|activating|deactivating|reloading)\\s', multiline=True)
+          - idle_units is not search('^\\S+\\s+\\S+\\s+(active|activating|deactivating|reloading)\\s', multiline=True)
+          - "'' is not search('^\\S+\\s+\\S+\\s+(active|activating|deactivating|reloading)\\s', multiline=True)"
+        quiet: true

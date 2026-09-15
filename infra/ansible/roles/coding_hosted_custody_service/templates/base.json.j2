@@ -1,0 +1,20 @@
+{{ {
+  "schema": "ditto-coding-custody-base-v1",
+  "runtime_revision": coding_hosted_custody_runtime_revision,
+  "release_id": coding_hosted_custody_release_id,
+  "config": {
+    "schema": "dittobench-coding-private-v2-custody-config-v1",
+    "shadow_only": true,
+    "weight_eligible": false,
+    "registration_file": coding_hosted_custody_release_dir ~ "/registration.json",
+    "transport_manifest": coding_hosted_custody_release_dir ~ "/transport-manifest.json",
+    "payload_authority": coding_hosted_custody_release_dir ~ "/payload-authority.json",
+    "publication_receipt": coding_hosted_custody_release_dir ~ "/publication-receipt.json",
+    "curator_public_key": coding_hosted_custody_release_dir ~ "/curator-public.pem",
+    "reader_authority_sha256": coding_hosted_custody_reader_authority_sha256,
+    "private_key_file": "/var/lib/ditto-coding-custody/keys/private-input-rsa.pem",
+    "postgres_environment_file": "/var/lib/ditto-coding-custody/private/postgres-environment.json",
+    "socket_path": "/run/ditto-coding-custody/custody.sock",
+    "client_uid": coding_hosted_worker_uid | int
+  }
+} | to_nice_json(sort_keys=true) }}
