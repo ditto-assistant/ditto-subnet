@@ -1,0 +1,9 @@
+---
+coding_hosted_postgres_environment_enabled: false
+coding_hosted_postgres_environment_confirmation: ""
+coding_hosted_postgres_environment_source_revision: ""
+# Exact Platform PostgreSQL private IP from the reviewed coding_hosted_postgres_access output.
+coding_hosted_postgres_environment_host: ""
+# The password is deliberately not a variable. Tasks read DITTO_CODING_PG_PASSWORD
+# only from the controller's local environment, so inventory, Git and
+# command-line extra vars can never carry it.

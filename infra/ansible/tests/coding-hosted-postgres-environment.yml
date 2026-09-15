@@ -1,0 +1,8 @@
+---
+- name: Prove native PostgreSQL environment materialization stays disabled by default
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  roles:
+    - coding_hosted_postgres_environment
