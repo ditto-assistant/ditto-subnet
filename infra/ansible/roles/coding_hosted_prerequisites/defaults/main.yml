@@ -1,0 +1,6 @@
+---
+coding_hosted_prerequisites_enabled: false
+coding_hosted_prerequisites_confirmation: ""
+coding_hosted_prerequisites_source_revision: ""
+# The host's primary private IPv4 from the reviewed coding-hosted-host apply.
+coding_hosted_prerequisites_host_address: ""

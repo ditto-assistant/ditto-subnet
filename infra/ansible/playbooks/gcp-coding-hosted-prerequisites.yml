@@ -1,0 +1,18 @@
+---
+# Converge the fixed native Coding host prerequisites on ditto-coding-hosted-v2:
+# a read-only host check, the fixed host record, and a manual egress proxy unit
+# whose allowlist is empty. It creates no account or Docker network and never
+# enables or starts a service. Operator-run only, after the daemon role.
+#
+#   ansible-playbook -i infra/ansible/inventory/gcp.yml \
+#     infra/ansible/playbooks/gcp-coding-hosted-prerequisites.yml \
+#     --limit ditto-coding-hosted-v2 -e '{"coding_hosted_prerequisites_enabled": true,
+#       "coding_hosted_prerequisites_confirmation": "CONVERGE NATIVE CODING HOST PREREQUISITES",
+#       "coding_hosted_prerequisites_source_revision": "<40-hex reviewed commit>",
+#       "coding_hosted_prerequisites_host_address": "<reviewed 10.33.0.x primary IPv4>"}'
+- name: Converge native Coding host prerequisites without starting a service
+  hosts: role_coding_hosted
+  become: true
+  gather_facts: true
+  roles:
+    - coding_hosted_prerequisites

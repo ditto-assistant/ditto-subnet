@@ -145,6 +145,14 @@ def test_native_worker_network_routes_to_scoped_connectivity():
     assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
 
 
+def test_native_host_prerequisites_route_to_their_role():
+    topic = lookup("native host prerequisites egress proxy router listener")[0]
+    assert topic["id"] == "coding-hosted-prerequisites"
+    assert "infra/ansible/roles/coding_hosted_prerequisites" in topic_list(
+        topic, "owns"
+    )
+
+
 def test_hosted_worker_launcher_routes_to_native_runtime() -> None:
     topic = lookup("hosted worker launcher")[0]
     assert topic["id"] == "coding-hosted-inputs"

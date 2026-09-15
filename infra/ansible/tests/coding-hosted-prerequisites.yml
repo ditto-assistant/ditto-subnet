@@ -1,0 +1,119 @@
+---
+- name: Prove native host prerequisites stay dormant by default
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  roles:
+    - coding_hosted_prerequisites
+  tasks:
+    - name: Verify the safe default gate and empty inputs
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_prerequisites_enabled is false
+          - coding_hosted_prerequisites_confirmation == ''
+          - coding_hosted_prerequisites_source_revision == ''
+          - coding_hosted_prerequisites_host_address == ''
+
+- name: Check rendering and the real guard without host facts or writes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../roles/coding_hosted_prerequisites/vars/main.yml
+  vars:
+    valid:
+      confirmation: CONVERGE NATIVE CODING HOST PREREQUISITES
+      revision: "{{ '0123456789abcdef0123456789abcdef01234567' }}"
+      address: 10.33.0.2
+      facts:
+        hostname: ditto-coding-hosted-v2
+        architecture: x86_64
+        distribution: Debian
+        distribution_major_version: "13"
+        default_ipv4: {address: 10.33.0.2}
+    coding_hosted_prerequisites_host_address: 10.33.0.2
+    record: "{{ lookup('template', '../roles/coding_hosted_prerequisites/templates/host-prerequisites.json.j2') }}"
+    unit: "{{ lookup('template', '../roles/coding_hosted_prerequisites/templates/egress-proxy.service.j2') }}"
+  tasks:
+    - name: Verify the closed host record renders exactly
+      ansible.builtin.assert:
+        that:
+          - record is string
+          - >-
+            record | from_json == {'schema': 'dittobench-coding-hosted-host-prerequisites-v2',
+            'shadow_only': true, 'weight_eligible': false, 'router_listen': '10.33.0.2:18080',
+            'egress_network': 'ditto-coding-restricted', 'egress_proxy': 'http://10.33.0.2:18090',
+            'candidate_uid': 10001, 'candidate_gid': 10001}
+
+    - name: Verify the proxy unit is manual, refusing and IP-confined
+      ansible.builtin.assert:
+        that:
+          - unit is string
+          - "'[Install]' not in unit"
+          - "'Restart=no' in unit"
+          - "'DynamicUser=yes' in unit"
+          - "'ExecStart=/usr/bin/python3 -I -B /usr/local/lib/ditto-coding-hosted/egress-proxy.py 10.33.0.2 18090\n' in unit"
+          - "'IPAddressDeny=any\n' in unit"
+          - "'IPAddressAllow=10.33.0.2/32\n' in unit"
+          - "'SocketBindAllow=ipv4:tcp:18090\n' in unit"
+          - "'RestrictAddressFamilies=AF_INET\n' in unit"
+
+    - name: Place localhost in the exact inventory group in memory only
+      ansible.builtin.add_host:
+        name: localhost
+        groups: role_coding_hosted
+      changed_when: false
+
+    - name: Select the valid synthetic inputs and host facts
+      ansible.builtin.set_fact:
+        coding_hosted_prerequisites_confirmation: "{{ valid.confirmation }}"
+        coding_hosted_prerequisites_source_revision: "{{ valid.revision }}"
+        coding_hosted_prerequisites_host_address: "{{ valid.address }}"
+        ansible_facts: "{{ valid.facts }}"
+
+    - name: Exercise the real guard with valid synthetic inputs
+      ansible.builtin.include_tasks: ../roles/coding_hosted_prerequisites/tasks/guard.yml
+
+    - name: Exercise invalid inputs and hosts through the same guard
+      ansible.builtin.include_tasks: coding-hosted-prerequisites-negative.yml
+      loop:
+        - {confirmation: ''}
+        - {confirmation: converge native coding host prerequisites}
+        - {confirmation: 'CONVERGE NATIVE CODING HOST PREREQUISITES '}
+        - {revision: '0123456789abcdef0123456789abcdef0123456'}
+        - {revision: '0123456789abcdef0123456789abcdef012345678'}
+        - {revision: '0123456789ABCDEF0123456789abcdef01234567'}
+        - {revision: "0123456789abcdef0123456789abcdef01234567\n"}
+        - {address: 10.33.0.1}
+        - {address: 10.33.0.254}
+        - {address: 10.33.0.255}
+        - {address: 10.33.0.02}
+        - {address: 10.33.1.2}
+        - {address: 10.30.0.2}
+        - {address: 127.0.0.1}
+        - {address: 0.0.0.0}
+        - {address: "10.33.0.2\n"}
+        - {address: " 10.33.0.2"}
+        - {address: 10.33.0.3}
+        - {address: 123}
+        - {address: null}
+        - {facts: {hostname: ditto-coding-hosted-v3}}
+        - {facts: {architecture: aarch64}}
+        - {facts: {distribution: Ubuntu}}
+        - {facts: {distribution_major_version: "12"}}
+        - {facts: {default_ipv4: {address: 10.33.0.9}}}
+        - {facts: {default_ipv4: {}}}
+      loop_control:
+        loop_var: invalid
+
+    - name: Restore the valid synthetic inputs and host facts
+      ansible.builtin.set_fact:
+        coding_hosted_prerequisites_confirmation: "{{ valid.confirmation }}"
+        coding_hosted_prerequisites_source_revision: "{{ valid.revision }}"
+        coding_hosted_prerequisites_host_address: "{{ valid.address }}"
+        ansible_facts: "{{ valid.facts }}"
+
+    - name: Prove the negative cases did not leave the guard permanently failing
+      ansible.builtin.include_tasks: ../roles/coding_hosted_prerequisites/tasks/guard.yml

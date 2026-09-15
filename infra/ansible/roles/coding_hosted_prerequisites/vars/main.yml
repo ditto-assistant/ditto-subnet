@@ -1,0 +1,7 @@
+---
+# Reviewed constants, not operator inputs. The record and unit templates and the
+# convergence checks read them; the Python helpers take them from the rendered
+# record and unit. One router port serves one attempt at a time: more router
+# ports are a separately reviewed change.
+coding_hosted_prerequisites_router_port: 18080
+coding_hosted_prerequisites_proxy_port: 18090

@@ -675,6 +675,19 @@
       "related": ["coding-hosted-host", "coding-hosted-inputs", "infra-cloud"]
     },
     {
+      "id": "coding-hosted-prerequisites",
+      "title": "Native host prerequisites for candidate networking and identity",
+      "keywords": ["native host prerequisites", "coding hosted egress proxy", "hosted router listener", "candidate uid gid mapping", "egress_network egress_proxy router_listen"],
+      "summary": "Fix router_listen, egress_proxy, egress_network and candidate UID/GID for the native host, check them read-only and install a manual refusing egress proxy unit.",
+      "skills": ["ditto-subnet-release-ops"],
+      "owns": ["infra/ansible/roles/coding_hosted_prerequisites", "infra/ansible/playbooks/gcp-coding-hosted-prerequisites.yml", "infra/ansible/tests/coding-hosted-prerequisites.yml", "infra/docs/coding-hosted-prerequisites-v2.md", "ditto/tests/test_coding_hosted_prerequisites.py", "services/dittobench-api/internal/codinghostedruntime/prerequisites_test.go"],
+      "read": ["infra/docs/coding-hosted-prerequisites-v2.md", "infra/docs/coding-hosted-connectivity-v2.md", "services/dittobench-api/docs/coding-hosted-runtime-v2.md"],
+      "search": ["rg -n 'RouterListen|EgressProxy|EgressNetwork|identifier' services/dittobench-api/internal/codinghostedruntime/config.go", "rg -n 'ditto-job-|EgressNetwork' services/dittobench-api/internal/sandbox/sandbox.go"],
+      "validate": ["uv run pytest -q ditto/tests/test_coding_hosted_prerequisites.py", "cd services/dittobench-api && go test ./internal/codinghostedruntime -run Prerequisites", "cd infra/ansible && uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/coding-hosted-prerequisites.yml"],
+      "invariants": ["Default-off; exact host, source revision, host address and confirmation; never enables or starts a service.", "No Docker network, account or firewall rule is created: the runtime makes its own ditto-job bridge per start.", "The egress proxy allowlist is empty and not an input; per-attempt authority stays in the connectivity profile."],
+      "related": ["coding-hosted-connectivity", "coding-hosted-host", "coding-hosted-inputs"]
+    },
+    {
       "id": "coding-hosted-host",
       "title": "Platform-owned native-v2 qualification host",
       "keywords": ["native v2 host", "coding hosted host", "coding package bootstrap", "native OCI image import", "host qualification", "Platform-owned host", "coding-hosted-host"],

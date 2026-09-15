@@ -236,10 +236,12 @@ type LocalDocker struct {
 	// host-gateway magic to reach its outer network namespace, so production
 	// normally discovers eth0 and may override it explicitly.
 	HostGatewayIP string
-	// EgressNetwork, when set, attaches the container to this user-defined docker
-	// network — the egress-restricted sandbox network (allowlisting proxy + host
-	// firewall) — instead of the default full-egress bridge. Empty = today's
-	// behavior. Env DITTOBENCH_SANDBOX_EGRESS_NETWORK. See the Sandbox egress
+	// EgressNetwork, when nonempty, switches Run onto a fresh per-run bridge: it
+	// creates an ICC-disabled `ditto-job-<id>` network, attaches only that
+	// container to it and removes it at Stop. The configured name is not
+	// attached or required to exist; it acts as the enable switch (runArgs, a
+	// test-only helper, passes it through as --network). Empty = the default
+	// bridge. Env DITTOBENCH_SANDBOX_EGRESS_NETWORK. See the Sandbox egress
 	// section in docs/model-lock.md.
 	EgressNetwork string
 	// EgressProxy, when set, is injected as HTTPS_PROXY/HTTP_PROXY so the harness's
