@@ -160,8 +160,18 @@ The validator sends one `RunRequest` per case; the harness returns a
 }
 ```
 
-`inference_base_url` is additive-optional and ignored. Harnesses keep the
-process-wide inference URL.
+`inference_base_url` is additive-optional. When present it is a validator-minted
+case-scoped broker URL for THIS case: model calls made through it are attributed
+to the case exactly, even while several `/run` overlap. It carries attribution
+only -- it opens no exclusive case window, and admission, accounting and scoring
+are identical on it and on the process-wide URL.
+
+Its lifetime is this `/run`. The scorer revokes it when the case ends, after
+which it answers `401`. A harness MAY ignore the field entirely and keep the
+process-wide inference URL, which stays supported and is attributed exactly as
+before; a harness that uses it MUST build (or re-point) its client per case and
+MUST NOT keep case A's URL as the shared client that later serves case B, which
+would take 401s once A finishes. When it is absent, use the process-wide URL.
 
 A harness MAY send `X-Ditto-Case-Id: <case_id>` on the inference calls it makes
 while serving a `/run`. The header is advisory and additive: the broker never
@@ -171,8 +181,12 @@ agent, slot, the cases the scorer currently has in flight, and -- when the
 claim names one of those cases -- the verified case id, so the relay's trace
 capture can file the call under its benchmark case under concurrent `/run`.
 Without the header a serial run is still attributed exactly; a concurrent run
-records the candidate set. Harnesses built on `ditto-harness`'s
-`ChatModelConfig::OpenAiCompat` cannot set it today (no per-request headers). The scorer may overlap `/run` up to the operator
+records the candidate set unless the case-scoped `inference_base_url` above is
+used, which attributes it without any harness claim. The header is a weaker
+complement: `ditto-harness`'s `ChatModelConfig::OpenAiCompat` can only set
+headers fixed at client build time, so one client shared across overlapping
+cases cannot re-stamp the claim per case, and URL routing is the mechanism that
+covers that shape. The scorer may overlap `/run` up to the operator
 `benchmark_runtime.case_concurrency` (default 4, max 64). The broker admits
 `max(4, case_concurrency)` in-flight chat calls and tool calls per harness
 source; above that it answers `429` with `Retry-After: 1`, so a harness that

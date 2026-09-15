@@ -287,12 +287,15 @@ type RunRequest struct {
 	BenchVersion int    `json:"bench_version,omitempty"`
 	ToolEndpoint string `json:"tool_endpoint,omitempty"`
 	UserID       string `json:"user_id,omitempty"`
-	// InferenceBaseURL was a validator-minted, case-scoped v10 relay capability.
-	// The scorer no longer mints or sends one: exclusive per-case windows forced
-	// serial /run, so scoring overlaps cases on the process-wide session URL and
-	// leaves this field empty. It stays in the wire contract (harnesses fall back
-	// to their launch-configured base URL when it is absent, and the localstack
-	// model harness still honors it) for a restored per-case relay path.
+	// InferenceBaseURL is a validator-minted, case-scoped relay URL for this
+	// case. Model calls made through it are attributed to the case exactly, even
+	// while several /run overlap; it carries attribution only and opens no
+	// exclusive case window, so admission, accounting and scoring are identical
+	// on it and on the process-wide session URL. It is revoked when the case
+	// ends, so it must not be kept as the shared client for a later case. A
+	// harness may ignore it and keep its launch-configured base URL, which stays
+	// supported and attributed exactly as before; the field is absent when the
+	// scorer has no URL to offer.
 	InferenceBaseURL string `json:"inference_base_url,omitempty"`
 }
 

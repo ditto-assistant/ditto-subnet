@@ -206,7 +206,7 @@ func TestConfirmationCaseSnapshotAttributesReaderCallToActiveGeneration(t *testi
 	response := httptest.NewRecorder()
 	broker.handleChat(response, request, brokerSourceLease{
 		session: session, sourceIP: session.expectedSourceIP, epoch: session.sourceEpoch,
-	})
+	}, "")
 	if response.Code != http.StatusOK {
 		t.Fatalf("response=%d %s", response.Code, response.Body.String())
 	}
@@ -244,7 +244,7 @@ func TestConfirmationCaseSnapshotAttributesAgentReaderRejection(t *testing.T) {
 	response := httptest.NewRecorder()
 	broker.handleChat(response, request, brokerSourceLease{
 		session: session, sourceIP: session.expectedSourceIP, epoch: session.sourceEpoch,
-	})
+	}, "")
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("response=%d %s", response.Code, response.Body.String())
 	}
@@ -297,7 +297,7 @@ func TestConfirmationCaseSnapshotRejectsUntrustedReaderFailureStatuses(t *testin
 			response := httptest.NewRecorder()
 			broker.handleChat(response, request, brokerSourceLease{
 				session: session, sourceIP: session.expectedSourceIP, epoch: session.sourceEpoch,
-			})
+			}, "")
 			snapshot, err := broker.endCaseSnapshot(id, generation)
 			if err != nil {
 				t.Fatal(err)
@@ -332,7 +332,7 @@ func TestConfirmationCaseSnapshotDoesNotAttributeReceiptedUpstreamReaderFailure(
 			request.RemoteAddr = "127.0.0.1:4321"
 			broker.handleChat(httptest.NewRecorder(), request, brokerSourceLease{
 				session: session, sourceIP: session.expectedSourceIP, epoch: session.sourceEpoch,
-			})
+			}, "")
 			snapshot, err := broker.endCaseSnapshot(id, generation)
 			if err != nil {
 				t.Fatal(err)
@@ -377,7 +377,7 @@ func TestConfirmationSourceLeaseRejectsZeroDrainingAndStaleEpochBeforeAttributio
 			`{"model":"ignored","messages":[{"role":"user","content":"query"}]}`))
 		request.RemoteAddr = source + ":4321"
 		response := httptest.NewRecorder()
-		broker.handleChat(response, request, lease)
+		broker.handleChat(response, request, lease, "")
 		return response
 	}
 	embed := func() *httptest.ResponseRecorder {
@@ -3646,7 +3646,7 @@ func TestInferenceBrokerStampsTraceContextForRelayCapture(t *testing.T) {
 	}
 
 	// 1. One case in flight: attributed exactly without any harness claim.
-	if !broker.beginRunCase(sessionID, "web_search-0001") {
+	if _, started := broker.beginRunCase(sessionID, "web_search-0001"); !started {
 		t.Fatal("beginRunCase refused a live session")
 	}
 	call("")

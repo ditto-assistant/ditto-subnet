@@ -13,9 +13,14 @@ import (
 
 // runCaseWithModelAttribution runs one scored case over the run-wide inference
 // session. Exclusive per-case windows (beginCaseSnapshot plus a case-scoped
-// inference URL) forced serial /run; concurrent scoring uses the process-wide
-// session URL instead, so no per-case attribution state is opened or closed
-// here. Ticket-scope model_use carries model-use anti-cheat; v10+ tool credit is
+// inference URL) forced serial /run, and concurrent scoring does not reopen
+// them: no case window, snapshot or generation is opened here. It does hand the
+// harness a case-scoped URL minted under the session's own base, as
+// inference_base_url on this /run. That URL names the case for trace capture
+// and nothing else, and lives only as long as this /run -- the deferred
+// endRunCase revokes it, so a harness that keeps serving one case through
+// another case's URL gets 401 and should fall back to the process-wide URL.
+// Ticket-scope model_use carries model-use anti-cheat; v10+ tool credit is
 // carried by session-scoped tool provenance: the broker forwards a
 // tool_endpoint request only after consuming a matching model-emitted tool call
 // from this session, and the per-case outcome is read here after /run returns.
@@ -29,11 +34,15 @@ func (s *server) runCaseWithModelAttribution(
 	tools []protocol.ToolDefinition,
 	opts runner.CaseOptions,
 ) (protocol.RunResponse, runner.CaseExecution, error) {
-	// Trace attribution only: tell the broker which case this /run serves so
-	// the relay's trace capture can file the calls (exactly when serial,
-	// as a candidate set when concurrent). Never an admission input.
-	if inferenceSessionID != "" && s.broker != nil && s.broker.beginRunCase(inferenceSessionID, caseID) {
-		defer s.broker.endRunCase(inferenceSessionID, caseID)
+	// Trace attribution only: tell the broker which case this /run serves and
+	// hand the harness the URL that names it, so the relay's trace capture can
+	// file concurrent calls exactly instead of as a candidate set. Never an
+	// admission, accounting or scoring input.
+	if inferenceSessionID != "" && s.broker != nil {
+		if caseURL, started := s.broker.beginRunCase(inferenceSessionID, caseID); started {
+			defer s.broker.endRunCase(inferenceSessionID, caseID)
+			opts.InferenceBaseURL = caseURL
+		}
 	}
 	response, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
 	if opts.BenchVersion >= protocol.BenchVersionV10 && inferenceSessionID != "" && s.broker != nil {

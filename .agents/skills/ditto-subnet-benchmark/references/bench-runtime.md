@@ -8,9 +8,13 @@ Source review of a miner harness is `$backroom-review`. The scorer contract is
 
 ## Contract
 
-The scorer POSTs overlapping `/run` against the **one process-wide inference
-URL**. Miners do not route per-question `inference_base_url`.
-`case_scoped_inference_v1` is ignored.
+The scorer POSTs overlapping `/run`. Each carries a case-scoped
+`inference_base_url` minted by the validator; using it attributes that case's
+model calls exactly under concurrency. It is attribution only -- no exclusive
+case window, no admission or scoring change -- and it is revoked when the case
+ends, so it must not become a shared client for the next case. The
+**process-wide inference URL** remains supported for harnesses that ignore the
+field. `case_scoped_inference_v1` is ignored.
 
 Kept: per-case `tool_endpoint`, ticket-scope `model_use`, memory wave barriers
 (seed wave *w*, run those cases, then *w+1*).
