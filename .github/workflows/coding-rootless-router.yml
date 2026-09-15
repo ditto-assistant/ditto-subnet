@@ -1,0 +1,133 @@
+name: Native Coding rootless router source
+
+# Proves, on a real rootless Docker daemon, that the hosted router listener
+# created inside RootlessKit's network namespace sees the candidate container's
+# own address, while a host-namespace listener sees only the host address.
+# No secrets, cloud identity, registry pull or production host is involved.
+
+on:
+  pull_request:
+    paths:
+      - services/dittobench-api/internal/rootlessnetns/**
+      - services/dittobench-api/cmd/dittobench-coding-router-listener/**
+      - services/dittobench-api/internal/codinghostedruntime/**
+      # The integration test and the source router it serves import these.
+      - services/dittobench-api/internal/codingcertifier/**
+      - services/dittobench-api/internal/codinggateway/**
+      - services/dittobench-api/internal/codingsource/**
+      - services/dittobench-api/internal/sandbox/**
+      - services/dittobench-api/go.mod
+      - services/dittobench-api/go.sum
+      - .github/workflows/coding-rootless-router.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coding-rootless-router-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The reviewed native host runs Docker 29.1.3. Its dockerd-rootless.sh does
+  # not use detached-netns mode, which the listener deliberately refuses.
+  DOCKER_VERSION: "29.1.3"
+  DOCKER_SHA256: c019c608ba2bb009dd673f3230e4d743f36a78d36166c6c2444c05d0aa9ff0d9
+  DOCKER_ROOTLESS_EXTRAS_SHA256: 32dc3dd0d8b512ccf30a7efe84d360b5ade65ac4fec92a2a5ad0fe791da6ab0d
+
+jobs:
+  source-binding:
+    name: in-namespace listener preserves container source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.6"
+          cache: true
+          cache-dependency-path: services/dittobench-api/go.sum
+
+      - name: Build the helper, synthetic probe and integration test
+        working-directory: services/dittobench-api
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/rootless-router"
+          mkdir -p "$out"
+          CGO_ENABLED=0 go build -trimpath -o "$out/helper" ./cmd/dittobench-coding-router-listener
+          CGO_ENABLED=0 go build -trimpath -o "$out/probe" ./internal/rootlessnetns/testdata/probe
+          go test -c -tags rootless_router_integration -o "$out/integration.test" ./internal/rootlessnetns/
+
+      - name: Install rootless prerequisites and pinned Docker static binaries
+        run: |
+          set -euo pipefail
+          # Only Ubuntu packages; unrelated third-party runner sources are ignored.
+          sudo apt-get \
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources \
+            -o Dir::Etc::sourceparts=- \
+            update
+          sudo apt-get install -y --no-install-recommends uidmap slirp4netns util-linux
+          dir="$RUNNER_TEMP/docker-rootless"
+          mkdir -p "$dir"
+          base="https://download.docker.com/linux/static/stable/x86_64"
+          curl -fsSL --retry 3 -o "$dir/docker.tgz" "$base/docker-$DOCKER_VERSION.tgz"
+          curl -fsSL --retry 3 -o "$dir/extras.tgz" "$base/docker-rootless-extras-$DOCKER_VERSION.tgz"
+          printf '%s  %s\n' \
+            "$DOCKER_SHA256" "$dir/docker.tgz" \
+            "$DOCKER_ROOTLESS_EXTRAS_SHA256" "$dir/extras.tgz" | sha256sum --check --strict
+          tar -xzf "$dir/docker.tgz" -C "$dir" --strip-components=1
+          tar -xzf "$dir/extras.tgz" -C "$dir" --strip-components=1
+          test -x "$dir/dockerd-rootless.sh" && test -x "$dir/rootlesskit" && test -x /usr/bin/nsenter
+
+      - name: Start a rootless daemon for the runner user (throwaway CI VM only)
+        run: |
+          set -euo pipefail
+          # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor.
+          # This changes only this disposable runner; the native Debian 13 host
+          # needs no such change. ICC-disabled bridges need bridge netfilter.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo modprobe br_netfilter
+          user="$(id -un)"
+          uid="$(id -u)"
+          grep -q "^$user:" /etc/subuid || echo "$user:231072:65536" | sudo tee -a /etc/subuid
+          grep -q "^$user:" /etc/subgid || echo "$user:231072:65536" | sudo tee -a /etc/subgid
+          sudo loginctl enable-linger "$user"
+          for _ in $(seq 1 30); do test -d "/run/user/$uid" && break; sleep 1; done
+          test "$(stat -c '%u %a' "/run/user/$uid")" = "$uid 700"
+          dir="$RUNNER_TEMP/docker-rootless"
+          install -d -m 0700 "$RUNNER_TEMP/rootless-socket" "$RUNNER_TEMP/rootless-data"
+          setsid env -i PATH="$dir:/usr/sbin:/usr/bin:/sbin:/bin" HOME="$HOME" XDG_RUNTIME_DIR="/run/user/$uid" \
+            "$dir/dockerd-rootless.sh" \
+            --host="unix://$RUNNER_TEMP/rootless-socket/docker.sock" \
+            --data-root="$RUNNER_TEMP/rootless-data" \
+            --exec-root="/run/user/$uid/ci-docker-exec" \
+            --pidfile="/run/user/$uid/ci-docker.pid" \
+            </dev/null >"$RUNNER_TEMP/rootless-dockerd.log" 2>&1 &
+          export DOCKER_HOST="unix://$RUNNER_TEMP/rootless-socket/docker.sock"
+          for _ in $(seq 1 90); do "$dir/docker" info >/dev/null 2>&1 && break; sleep 1; done
+          "$dir/docker" info --format '{{json .SecurityOptions}}' | grep -q 'name=rootless'
+          test -r "/run/user/$uid/dockerd-rootless/child_pid"
+
+      - name: Prove source binding inside RootlessKit and the host-address failure mode
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/docker-rootless"
+          out="$RUNNER_TEMP/rootless-router"
+          host_address="$(ip -4 -o route get 1.1.1.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p')"
+          test -n "$host_address"
+          env -i PATH="$dir:/usr/sbin:/usr/bin:/sbin:/bin" HOME="$HOME" \
+            DOCKER_HOST="unix://$RUNNER_TEMP/rootless-socket/docker.sock" \
+            DITTOBENCH_ROOTLESS_IT_DOCKER_SOCKET="$RUNNER_TEMP/rootless-socket/docker.sock" \
+            DITTOBENCH_ROOTLESS_IT_HELPER="$out/helper" \
+            DITTOBENCH_ROOTLESS_IT_PROBE="$out/probe" \
+            DITTOBENCH_ROOTLESS_IT_HOST_ADDRESS="$host_address" \
+            timeout 300 "$out/integration.test" \
+            -test.run '^TestRootlessRouterListenerPreservesContainerSource$' -test.count=1 -test.v
+
+      - name: Show the rootless daemon log on failure
+        if: failure()
+        run: tail -n 200 "$RUNNER_TEMP/rootless-dockerd.log" || true

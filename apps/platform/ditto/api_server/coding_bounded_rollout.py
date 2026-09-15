@@ -204,12 +204,20 @@ def configurations(
             and not proxy.query
             and not proxy.fragment
         )
-        require(
-            (address, int(port)) in destinations
-            and (proxy.hostname, proxy.port) in destinations
-        )
+        require((proxy.hostname, proxy.port) in destinations)
+        if wire.host.router_namespace == "rootless-netns":
+            # The router listens inside RootlessKit's network namespace, so
+            # candidate traffic to it never reaches host nftables. A host grant
+            # for its address would authorize a destination with no router.
+            # The worker enforces the profile expiry for that traffic instead.
+            require((address, int(port)) not in destinations)
+            require(wire.host.router_expires_at_unix == network["expires_at_unix"])
+        else:
+            require((address, int(port)) in destinations)
         if configs:
             require(config.postgres == configs[0].postgres)
+            # One worker unit exposes RootlessKit's child pid or does not.
+            require(wire.host.router_namespace == configs[0].wire.host.router_namespace)
         configs.append(config)
     require(
         len({Path(config.wire.runtime_root).resolve() for config in configs})

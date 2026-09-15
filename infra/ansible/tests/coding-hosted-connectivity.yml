@@ -23,6 +23,61 @@
           - "'--private-shadow-once' in rendered_unit"
           - "'--bounded-shadow-once' not in rendered_unit"
           - "'KillMode=control-group' in rendered_unit"
+          - coding_hosted_router_namespace == 'host'
+          - "'ProtectHome=yes' in rendered_unit"
+          - "'ProtectHome=tmpfs' not in rendered_unit"
+          - "'BindReadOnlyPaths' not in rendered_unit"
+    - name: Check rootless-netns router unit exposes only the RootlessKit child pid
+      vars:
+        coding_hosted_uid: 1001
+        coding_hosted_router_namespace: rootless-netns
+        coding_hosted_worker_python: /opt/ditto-coding-hosted/public/python
+        coding_hosted_worker_config: /var/lib/ditto-coding-hosted/private/single.json
+        rendered_unit: "{{ lookup('template', '../roles/coding_hosted_connectivity/templates/worker.service.j2') }}"
+      ansible.builtin.assert:
+        that:
+          - "'ProtectHome=tmpfs' in rendered_unit"
+          - "'ProtectHome=yes' not in rendered_unit"
+          - "rendered_unit | regex_findall('BindReadOnlyPaths=.*') == ['BindReadOnlyPaths=/run/user/1001/dockerd-rootless/child_pid']"
+          - "'BindPaths' not in rendered_unit"
+          - "'NoNewPrivileges=yes' in rendered_unit"
+
+- name: Verify the unit's router namespace must match every attempt configuration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    router_fixtures: "{{ playbook_dir }}/files/coding-hosted-router"
+    proxy_only:
+      expires_at_unix: 2000000600
+      candidate_tcp: [{address: 10.30.0.4, port: 18090}]
+    router_and_proxy:
+      expires_at_unix: 2000000600
+      candidate_tcp: [{address: 10.30.0.4, port: 18080}, {address: 10.30.0.4, port: 18090}]
+  tasks:
+    - name: Accept matching host and rootless-netns attempts
+      ansible.builtin.include_tasks: ../roles/coding_hosted_connectivity/tasks/router-namespace.yml
+      vars:
+        coding_hosted_router_namespace: "{{ accepted.namespace }}"
+        coding_hosted_attempt_configs: "{{ accepted.configs | map('regex_replace', '^', router_fixtures + '/') | list }}"
+        coding_hosted_connectivity_profile: "{{ accepted.profile }}"
+      loop:
+        - {namespace: host, configs: [host.json, host.json], profile: "{{ router_and_proxy }}"}
+        - {namespace: rootless-netns, configs: [rootless.json], profile: "{{ proxy_only }}"}
+      loop_control:
+        loop_var: accepted
+        label: "{{ accepted.namespace }}"
+    - name: Refuse each router namespace, expiry or grant mismatch
+      ansible.builtin.include_tasks: router-namespace-refusal.yml
+      loop:
+        - {name: rootless unit for a host attempt, namespace: rootless-netns, configs: [host.json], profile: "{{ proxy_only }}"}
+        - {name: host unit for a rootless attempt, namespace: host, configs: [rootless.json], profile: "{{ router_and_proxy }}"}
+        - {name: mixed rollout attempts, namespace: rootless-netns, configs: [rootless.json, host.json], profile: "{{ proxy_only }}"}
+        - {name: host grant for the in-namespace router, namespace: rootless-netns, configs: [rootless.json], profile: {expires_at_unix: 2000000600, candidate_tcp: [{address: 172.17.0.1, port: 18080}, {address: 10.30.0.4, port: 18090}]}}
+        - {name: router expiry differs from the profile, namespace: rootless-netns, configs: [rootless.json], profile: {expires_at_unix: 2000000601, candidate_tcp: [{address: 10.30.0.4, port: 18090}]}}
+      loop_control:
+        loop_var: refusal
+        label: "{{ refusal.name }}"
 
 - name: Verify rollout mode alone cannot install or start anything
   hosts: localhost

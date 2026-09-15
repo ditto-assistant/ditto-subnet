@@ -50,7 +50,7 @@ model is exposed through public OpenAPI.
 | --- | --- |
 | `worker_id`, `evaluation_id`, `attempt_id`, `assignment_sha256` | Exact intended approved execution; no discovery or selection fallback |
 | `runtime_root` | Fresh persistent owner-only directory dedicated to this invocation |
-| `worker_executable`, `python_executable` | Protected installed Go launcher and Platform interpreter; the Go validation step checks the interpreter before execution |
+| `worker_executable`, `python_executable` | Protected installed Go launcher and Platform interpreter; the Go validation step checks the interpreter before execution. An installed worker's SHA-256 must match `bundle-receipt.json`; for a `...-bundle-v3` receipt the `bin/dittobench-coding-router-listener` helper beside it must match `router_listener_sha256` too, before every launch. `router_namespace: rootless-netns` requires such an installed v3 bundle |
 | `unwrap_executable`, `unwrap_work_root` | Separately provisioned, approved native v2 key-custody helper and private working directory |
 | `postgres_environment_file` | JSON array of start-helper `POSTGRES_*=value` entries |
 | `hippius_environment_file` | JSON object with only the supported `DITTO_CODING_HIPPIUS_*` reader/evidence settings |
@@ -61,7 +61,7 @@ model is exposed through public OpenAPI.
 | `transport_manifest_file`, `payload_authority_file`, `publication_receipt_file`, `curator_public_key_file` | Existing verified encrypted-release authorities; no plaintext corpus import |
 | `evidence_public_key_file`, `evidence_wrapping_key_sha256` | RSA public wrapping key and its independently configured fingerprint |
 | `probe_receipt_file` | Matching Hippius reader/evidence authority receipt, less than 24 hours old; checking a receipt is not a new live provider probe |
-| `host` | Existing Go host settings: `docker_executable`, `docker_socket`, `router_listen`, `egress_network`, `egress_proxy`, `executor_repository`, `candidate_uid`, `candidate_gid`, optional `seccomp_profile` and `apparmor_profile` |
+| `host` | Existing Go host settings: `docker_executable`, `docker_socket`, `router_listen`, `egress_network`, `egress_proxy`, `executor_repository`, `candidate_uid`, `candidate_gid`, optional `seccomp_profile` and `apparmor_profile`, and `router_namespace` (`host` by default, or `rootless-netns`; always written to the worker configuration). `router_expires_at_unix` is required exactly with `rootless-netns` and is the connectivity profile's `expires_at_unix`; it is written only in that mode |
 | `spool_max_bytes`, `spool_max_objects` | Per-spool capacity; defaults 2 GiB / 4096 objects, subject to explicit bounds |
 
 All configuration, profile, credential, authority and public-key files are

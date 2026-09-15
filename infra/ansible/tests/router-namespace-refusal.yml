@@ -1,0 +1,23 @@
+---
+# One expected refusal of roles/coding_hosted_connectivity/tasks/router-namespace.yml.
+- name: "Refuse {{ refusal.name }}"
+  block:
+    - name: "Compare {{ refusal.name }}"
+      ansible.builtin.include_tasks: ../roles/coding_hosted_connectivity/tasks/router-namespace.yml
+      vars:
+        coding_hosted_router_namespace: "{{ refusal.namespace }}"
+        coding_hosted_attempt_configs: "{{ refusal.configs | map('regex_replace', '^', router_fixtures + '/') | list }}"
+        coding_hosted_connectivity_profile: "{{ refusal.profile }}"
+    - name: "Mismatch accepted: {{ refusal.name }}"
+      ansible.builtin.set_fact:
+        router_mismatch_accepted: true
+  rescue:
+    - name: "Require the router comparison itself to refuse {{ refusal.name }}"
+      ansible.builtin.assert:
+        that:
+          - router_mismatch_accepted is not defined
+          - ansible_failed_task.name == 'Require each attempt to match the unit\'s router namespace and profile'
+- name: "Require {{ refusal.name }} to be refused"
+  ansible.builtin.assert:
+    that:
+      - router_mismatch_accepted is not defined

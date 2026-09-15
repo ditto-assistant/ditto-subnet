@@ -28,7 +28,17 @@ NoNewPrivileges=yes
 ProtectControlGroups=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
+{% if coding_hosted_router_namespace == 'rootless-netns' %}
+# The in-namespace router listener needs RootlessKit's child pid, which is
+# written below the daemon user's runtime directory. Expose only that file.
+# systemd creates the bind's missing parents as root 0755 with the umask blocked
+# during namespace setup, so UMask=0077 cannot hide them from the worker
+# (verified under systemd 255 and 257).
+ProtectHome=tmpfs
+BindReadOnlyPaths=/run/user/{{ coding_hosted_uid }}/dockerd-rootless/child_pid
+{% else %}
 ProtectHome=yes
+{% endif %}
 PrivateDevices=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
 StandardOutput=null

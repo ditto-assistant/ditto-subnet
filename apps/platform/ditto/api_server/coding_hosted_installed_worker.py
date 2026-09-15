@@ -1,4 +1,4 @@
-"""Admission for the one root-owned worker binary in a sealed runtime bundle."""
+"""Admission for the root-owned worker binaries in a sealed runtime bundle."""
 
 import hashlib
 import json
@@ -11,7 +11,27 @@ from ditto.api_models.coding_inference import _decode_json_document
 
 ROOT = Path("/opt/ditto-coding-hosted")
 NAME = "dittobench-coding-hosted-worker"
-SCHEMA = "dittobench-coding-hosted-runtime-bundle-v2"
+# Started by the worker, from its own bin directory, with full capabilities in
+# RootlessKit's user namespace. Only v3 receipts pin it.
+ROUTER_LISTENER = "dittobench-coding-router-listener"
+SCHEMA_V2 = "dittobench-coding-hosted-runtime-bundle-v2"
+SCHEMA = "dittobench-coding-hosted-runtime-bundle-v3"
+_V2_RECEIPT = frozenset(
+    {
+        "schema",
+        "source_revision",
+        "archive_sha256",
+        "manifest_sha256",
+        "worker_sha256",
+        "shadow_only",
+        "weight_eligible",
+        "worker_started",
+    }
+)
+RECEIPT_KEYS = {
+    SCHEMA_V2: _V2_RECEIPT,
+    SCHEMA: _V2_RECEIPT | {"router_listener_sha256"},
+}
 
 
 def installed_worker_path(path: Path) -> bool:
@@ -49,7 +69,19 @@ def read_root_file(path: Path, maximum: int, mode: int) -> tuple[bytes, str]:
     return prefix, checksum.hexdigest()
 
 
-def require_installed_worker(path: Path) -> None:
+def require_static_elf(path: Path, expected_sha256: str) -> None:
+    header, digest = read_root_file(path, 256 << 20, 0o555)
+    require(
+        header[:6] == b"\x7fELF\x02\x01"
+        and int.from_bytes(header[18:20], "little") == 62
+    )
+    require(digest == expected_sha256)
+
+
+def require_installed_worker(path: Path, *, router_listener: bool = False) -> None:
+    """Pin the worker, and for v3 bundles its router listener helper, to the
+    receipt. ``router_listener`` additionally requires a v3 bundle, the only
+    kind that can serve ``router_namespace: rootless-netns``."""
     require(
         installed_worker_path(path) and path.is_absolute() and path.resolve() == path
     )
@@ -66,19 +98,11 @@ def require_installed_worker(path: Path) -> None:
     receipt = _decode_json_document(raw, maximum_bytes=4096)
     require(
         type(receipt) is dict
-        and set(receipt)
-        == {
-            "schema",
-            "source_revision",
-            "archive_sha256",
-            "manifest_sha256",
-            "worker_sha256",
-            "shadow_only",
-            "weight_eligible",
-            "worker_started",
-        }
+        and receipt.get("schema") in RECEIPT_KEYS
+        and set(receipt) == RECEIPT_KEYS[receipt["schema"]]
     )
-    require(receipt["schema"] == SCHEMA and receipt["source_revision"] == revision)
+    require(receipt["source_revision"] == revision)
+    require(not router_listener or receipt["schema"] == SCHEMA)
     require(
         receipt["shadow_only"] is True
         and receipt["weight_eligible"] is False
@@ -90,14 +114,16 @@ def require_installed_worker(path: Path) -> None:
         ).encode()
         == raw
     )
-    for name in ("archive_sha256", "manifest_sha256", "worker_sha256"):
+    digests = ["archive_sha256", "manifest_sha256", "worker_sha256"]
+    if receipt["schema"] == SCHEMA:
+        digests.append("router_listener_sha256")
+    for name in digests:
         require(
             type(receipt[name]) is str
             and re.fullmatch(r"[0-9a-f]{64}", receipt[name]) is not None
         )
-    header, digest = read_root_file(path, 256 << 20, 0o555)
-    require(
-        header[:6] == b"\x7fELF\x02\x01"
-        and int.from_bytes(header[18:20], "little") == 62
-    )
-    require(digest == receipt["worker_sha256"])
+    require_static_elf(path, receipt["worker_sha256"])
+    if receipt["schema"] == SCHEMA:
+        require_static_elf(
+            path.with_name(ROUTER_LISTENER), receipt["router_listener_sha256"]
+        )
