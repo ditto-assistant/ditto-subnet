@@ -5,7 +5,7 @@ from __future__ import annotations
 import unicodedata
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -24,6 +24,16 @@ _SIGNATURE = r"^[0-9a-fA-F]{128}$"
 _OCI_DIGEST = r"^sha256:[0-9a-f]{64}$"
 _MAX_IMAGE_BYTES = 8 << 30
 _MAX_URL_BYTES = 16 << 10
+
+CODING_CERTIFICATION_RECEIPT_GRACE_SECONDS: Final = 120
+"""Receipt window after a claimed lease deadline, measured on Platform's clock.
+
+Harness launch, inference grants, and relay inference all end at the lease
+deadline itself. Only receipt submission is still accepted until
+``deadline + CODING_CERTIFICATION_RECEIPT_GRACE_SECONDS``, so a certifier run
+bounded by the deadline leaves room to revoke its grant and submit. A claimed
+lease without a receipt expires once this window has passed.
+"""
 
 
 def _opaque(value: str, *, maximum: int = 256) -> str:
@@ -96,8 +106,11 @@ class CodingCertificationLeaseAuthority(CodingCertificationLeaseModel):
 
 
 class CodingCertificationLeaseStatus(StrEnum):
+    """Lease lifecycle. ``completed`` means an accepted receipt; it is terminal."""
+
     ISSUED = "issued"
     CLAIMED = "claimed"
+    COMPLETED = "completed"
     ABORTED = "aborted"
     EXPIRED = "expired"
 
@@ -343,6 +356,7 @@ def coding_certification_harness_launch_signing_message(
 
 
 __all__ = [
+    "CODING_CERTIFICATION_RECEIPT_GRACE_SECONDS",
     "CodingCertificationHarnessLaunchRequest",
     "CodingCertificationHarnessLaunchResponse",
     "CodingCertificationLeaseAbortRequest",

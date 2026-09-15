@@ -29,7 +29,12 @@ The handler accepts only the proof-bound
    medium/excluded reasoning, serial tools, provider route, ZDR and no-fallback
    request;
 5. locks the grant and latest request row;
-6. uses PostgreSQL `clock_timestamp()` for lease and durable event time;
+6. uses PostgreSQL `clock_timestamp()` for lease and durable event time, and
+   for a certification grant requires its lease to be `claimed`, before its
+   deadline, and stamped with the latest Platform allowlist revision
+   (`claim_allowlist_revision`); otherwise it revokes the grant and refuses
+   before any provider activity (see
+   `apps/platform/docs/coding-certification-lease.md`);
 7. enforces logical request/retry ordering, task budgets and concurrency;
 8. commits a `started` coding request on the matching ledger before calling
    OpenRouter. Ticket and canary started rows share one admission lock and

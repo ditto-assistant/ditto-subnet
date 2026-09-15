@@ -85,6 +85,39 @@ phrases, idempotent database authority and permanent `weight_eligible=false`.
 The MCP calls carry the signed-in operator email in `X-Admin-Actor`; no shared
 operator identity is used.
 
+The contract-v1 public-canary certification path adds one write tool and two
+read surfaces on existing tools, so the MCP catalog grows by a single compact
+envelope:
+
+- `set_coding_certification_allowlist` (write) appends one complete, strict
+  allowlist revision. Its catalog schema is an open object; the exact fields
+  are in `get_backroom_tool_help`: `expectedRevision`, `enabled`, 1 to 16 exact
+  `{agent_id, artifact_sha256, screened_image_sha256, validator_hotkey}`
+  entries when enabled (none
+  when `enabled=false`), a reason, and
+  `APPLY CODING CERTIFICATION ALLOWLIST ENABLED <count>` or
+  `APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL`. Shape, duplicate, and
+  confirmation errors are refused before any Platform call. Platform refuses
+  every certification lease issue, claim, harness launch, grant, and receipt
+  unless the latest intact revision lists that exact tuple; no revision, a
+  refuse-all revision, and a corrupt revision refuse everything. The write
+  aborts refused in-flight leases and revokes refused live grants in the same
+  transaction and reports both counts. There is no open revision and no
+  certification bypass.
+- `get_coding_control_plane` also returns `certification_allowlist` (`enabled`,
+  `effective`, `integrity`, current revision where 0 is the built-in refuse-all
+  default, and newest-first history up to `limit`) and `certification_leases`
+  (newest lease rows across agents, up to `limit`).
+- `get_agent_coding_certifications` also returns `certification_leases` for
+  that agent. Lease rows carry status (`completed` means the receipt was
+  accepted and is terminal), deadline, `receipt_window_ends_at`,
+  `deadline_passed`, the admitting and aborting allowlist revisions, and grant
+  and receipt status. They never return grant ids, bearer digests, broker keys,
+  or image locators.
+
+See `apps/platform/docs/coding-certification-lease.md` for receipt-terminal
+leases, the receipt window, deadline expiry, and the claimed-attempt budget.
+
 Shadow admission score floors remain the existing append-only
 `get_core_qualification_policy` / `set_core_qualification_policy` controls.
 They determine qualification only; they never rewrite validator scores. Coding

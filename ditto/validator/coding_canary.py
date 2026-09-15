@@ -18,6 +18,7 @@ from ditto.api_models.coding import (
     SubmitCodingCertificationResponse,
 )
 from ditto.api_models.coding_certification_leases import (
+    CODING_CERTIFICATION_RECEIPT_GRACE_SECONDS,
     CodingCertificationHarnessLaunchResponse,
     CodingCertificationLeaseAuthority,
     CodingCertificationLeaseResponse,
@@ -36,6 +37,29 @@ from ditto.validator.errors import (
 
 logger = logging.getLogger(__name__)
 _MAX_QUEUE = 32
+# Local allowance for host-to-Platform clock skew and request latency, taken out
+# of Platform's receipt window after the lease deadline.
+RECEIPT_SUBMISSION_ALLOWANCE_SECONDS = 15
+
+
+def coding_certification_receipt_submission_open(
+    *, deadline: datetime, now: datetime
+) -> bool:
+    """Whether a receipt for a claimed lease may still be submitted by this host.
+
+    Platform accepts the receipt until ``deadline`` plus its receipt window on
+    its own clock. The validator starts a submission only before that window
+    less its local allowance, so a late submit is never sent; the attempt is a
+    no-receipt infrastructure outcome instead.
+    """
+
+    if deadline.utcoffset() is None or now.utcoffset() is None:
+        raise ValidatorInfrastructureError("coding canary receipt clock is invalid")
+    closes_at = deadline.timestamp() + (
+        CODING_CERTIFICATION_RECEIPT_GRACE_SECONDS
+        - RECEIPT_SUBMISSION_ALLOWANCE_SECONDS
+    )
+    return now.timestamp() < closes_at
 
 
 @dataclass(frozen=True)
@@ -287,6 +311,12 @@ class CodingCanaryWorker:
         ):
             raise PlatformInfrastructureError(
                 "coding canary outcome authority is invalid"
+            )
+        if not coding_certification_receipt_submission_open(
+            deadline=claimed.authority.deadline, now=self._clock()
+        ):
+            raise ValidatorInfrastructureError(
+                "coding certification receipt window has closed"
             )
         submitted = await self._platform.submit_coding_certification(
             claimed.authority.agent_id,

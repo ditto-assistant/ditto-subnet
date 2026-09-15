@@ -200,6 +200,26 @@ SELECT * FROM coding_certification_inference_grants
 WHERE grant_id = sqlc.arg(grant_id)::uuid
 FOR UPDATE;
 
+-- Platform admits a claimed canary lease only while its
+-- claim_allowlist_revision is the latest allowlist revision: a claim stamps
+-- the revision that admitted it and every Platform allowlist write re-stamps
+-- the claimed leases it still admits. Any other latest revision (none, a
+-- refuse-all, or a row appended outside that write) therefore refuses paid
+-- inference here without re-validating the revision. The lease is read, not
+-- locked: Platform locks leases before grants, and this runs under the grant
+-- row lock.
+-- name: GetCodingCertificationLeaseAdmission :one
+SELECT
+    lease.status,
+    lease.deadline,
+    lease.claim_allowlist_revision,
+    COALESCE(
+        (SELECT max(revision) FROM coding_certification_allowlist_revisions),
+        0
+    )::integer AS latest_allowlist_revision
+FROM coding_certification_leases AS lease
+WHERE lease.lease_id = sqlc.arg(lease_id)::uuid;
+
 -- name: GetLatestCodingCertificationInferenceRequestForUpdate :one
 SELECT * FROM coding_certification_inference_requests
 WHERE grant_id = sqlc.arg(grant_id)::uuid

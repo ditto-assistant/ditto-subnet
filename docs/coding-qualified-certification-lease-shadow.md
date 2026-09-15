@@ -36,8 +36,11 @@ Within one Platform transaction, an issuer must require all of the following:
    version, and current policy revision.
 3. The screened image remains complete, content-addressed, and available to
    the validator through its existing short-lived image capability.
-4. No active or terminal certification lease already exists for the same
+4. No in-flight certification lease exists, and no certification result
+   (receipt) is still valid on the Platform database clock, for the same
    `(agent, artifact, screened image, benchmark, coding contract)` identity.
+   A completed lease stays terminal, but after its result expires the same
+   exact identity may renew under the operator allowlist and attempt budget.
 5. A current public canary manifest and public-only resource profile are
    available for the requested coding contract.
 
@@ -95,7 +98,7 @@ repeat a new authoring attempt under the same lease.
 `404` for `/coding/health`. It means normal-only support and has no effect on
 normal scores. A malformed coding advertisement, candidate-attributable canary
 failure, or integrity failure is a terminal certification result for that
-artifact only. Control-plane or sandbox infrastructure failure leaves a typed
+artifact only, for the validity window of its receipt. Control-plane or sandbox infrastructure failure leaves a typed
 retry/recovery record and never de-certifies the normal submission.
 
 ## Certification result

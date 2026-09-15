@@ -494,6 +494,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-certification-allowlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Coding Certification Allowlist
+         * @description Current restriction (revision 0 = built-in refuse-all) and history.
+         */
+        get: operations["get_coding_certification_allowlist_api_v1_admin_coding_certification_allowlist_get"];
+        put?: never;
+        /**
+         * Set Coding Certification Allowlist
+         * @description Append one complete revision, then abort and revoke what it refuses.
+         *
+         *     In the same transaction as the new revision, every issued or claimed lease
+         *     the revision does not admit is aborted (recording the revision) and every
+         *     live certification inference grant it does not admit is revoked.
+         */
+        post: operations["set_coding_certification_allowlist_api_v1_admin_coding_certification_allowlist_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-certification-leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Coding Certification Lease Audit
+         * @description Newest-first certification lease rows without grant ids or bearer data.
+         */
+        get: operations["list_coding_certification_lease_audit_api_v1_admin_coding_certification_leases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/coding-control-plane": {
         parameters: {
             query?: never;
@@ -7135,6 +7183,172 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** AdminCodingCertificationAllowlistApplyResponse */
+        AdminCodingCertificationAllowlistApplyResponse: {
+            /** Aborted Lease Count */
+            aborted_lease_count: number;
+            current: components["schemas"]["CodingCertificationAllowlistRevision"];
+            /**
+             * Effective
+             * @enum {string}
+             */
+            effective: "refuse_all" | "exact_tuples";
+            /** Enabled */
+            enabled: boolean;
+            /** History */
+            history: components["schemas"]["CodingCertificationAllowlistRevision"][];
+            /**
+             * Integrity
+             * @enum {string}
+             */
+            integrity: "valid" | "invalid";
+            /**
+             * Max Entries
+             * @default 16
+             */
+            max_entries: number;
+            /** Revoked Inference Grant Count */
+            revoked_inference_grant_count: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminCodingCertificationAllowlistRequest */
+        AdminCodingCertificationAllowlistRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Entries */
+            entries: components["schemas"]["CodingCertificationAllowlistEntry"][];
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * AdminCodingCertificationAllowlistResponse
+         * @description Current enforcement. ``enabled`` is true only for valid exact tuples.
+         */
+        AdminCodingCertificationAllowlistResponse: {
+            current: components["schemas"]["CodingCertificationAllowlistRevision"];
+            /**
+             * Effective
+             * @enum {string}
+             */
+            effective: "refuse_all" | "exact_tuples";
+            /** Enabled */
+            enabled: boolean;
+            /** History */
+            history: components["schemas"]["CodingCertificationAllowlistRevision"][];
+            /**
+             * Integrity
+             * @enum {string}
+             */
+            integrity: "valid" | "invalid";
+            /**
+             * Max Entries
+             * @default 16
+             */
+            max_entries: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminCodingCertificationLeaseList */
+        AdminCodingCertificationLeaseList: {
+            /** Leases */
+            leases: components["schemas"]["AdminCodingCertificationLeaseRecord"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * AdminCodingCertificationLeaseRecord
+         * @description One lease row. Grant ids, bearer digests, and image locators are omitted.
+         *
+         *     ``completed`` means Platform accepted the lease's receipt; it is terminal
+         *     and never expires. ``claim_allowlist_revision`` is the allowlist revision
+         *     that admitted the claim, and ``aborted_allowlist_revision`` the revision
+         *     whose write aborted the lease.
+         */
+        AdminCodingCertificationLeaseRecord: {
+            /** Aborted Allowlist Revision */
+            aborted_allowlist_revision: number | null;
+            /** Aborted At */
+            aborted_at: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Claim Allowlist Revision */
+            claim_allowlist_revision: number | null;
+            /** Claimed At */
+            claimed_at: string | null;
+            /** Coding Contract Version */
+            coding_contract_version: number;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /** Deadline Passed */
+            deadline_passed: boolean;
+            /** Inference Grant Status */
+            inference_grant_status: ("pending" | "active" | "revoked" | "exhausted") | null;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            receipt_status: components["schemas"]["CodingCertificationStatus"] | null;
+            /**
+             * Receipt Window Ends At
+             * Format: date-time
+             */
+            receipt_window_ends_at: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            status: components["schemas"]["CodingCertificationLeaseStatus"];
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
         /** AdminCodingControlPlaneResponse */
         AdminCodingControlPlaneResponse: {
             /** Contract V1 Reconciliation Enabled */
@@ -12519,6 +12733,59 @@ export interface components {
             /** Test Command Ids */
             test_command_ids: string[];
         };
+        /**
+         * CodingCertificationAllowlistEntry
+         * @description One exact certifiable tuple. Every field must match; nothing is a wildcard.
+         */
+        CodingCertificationAllowlistEntry: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * CodingCertificationAllowlistRevision
+         * @description One stored revision as enforcement sees it.
+         *
+         *     ``enabled`` is the stored flag. ``integrity="invalid"`` means the stored
+         *     entries failed to parse or their checksum does not bind them; such a
+         *     revision reports no entries and ``effective="refuse_all"``.
+         */
+        CodingCertificationAllowlistRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /** Created At */
+            created_at: string | null;
+            /**
+             * Effective
+             * @enum {string}
+             */
+            effective: "refuse_all" | "exact_tuples";
+            /** Enabled */
+            enabled: boolean;
+            /** Entries */
+            entries: components["schemas"]["CodingCertificationAllowlistEntry"][];
+            /**
+             * Integrity
+             * @enum {string}
+             */
+            integrity: "valid" | "invalid";
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+        };
         /** CodingCertificationHarnessLaunchRequest */
         CodingCertificationHarnessLaunchRequest: {
             /**
@@ -13018,9 +13285,10 @@ export interface components {
         };
         /**
          * CodingCertificationLeaseStatus
+         * @description Lease lifecycle. ``completed`` means an accepted receipt; it is terminal.
          * @enum {string}
          */
-        CodingCertificationLeaseStatus: "issued" | "claimed" | "aborted" | "expired";
+        CodingCertificationLeaseStatus: "issued" | "claimed" | "completed" | "aborted" | "expired";
         /** CodingCertificationModelEvidence */
         CodingCertificationModelEvidence: {
             /** Completion Tokens */
@@ -28726,6 +28994,116 @@ export interface operations {
             };
         };
     };
+    get_coding_certification_allowlist_api_v1_admin_coding_certification_allowlist_get: {
+        parameters: {
+            query?: {
+                history_limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCertificationAllowlistResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_coding_certification_allowlist_api_v1_admin_coding_certification_allowlist_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCodingCertificationAllowlistRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCertificationAllowlistApplyResponse"];
+                };
+            };
+            /** @description Stale expected_revision or concurrent write. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Confirmation or entry shape is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_coding_certification_lease_audit_api_v1_admin_coding_certification_leases_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+                validator_hotkey?: string | null;
+                status?: components["schemas"]["CodingCertificationLeaseStatus"] | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCertificationLeaseList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_coding_control_plane_api_v1_admin_coding_control_plane_get: {
         parameters: {
             query?: {
@@ -37671,7 +38049,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Agent not found. */
+            /** @description The certification allowlist refuses the lease. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Agent or live lease not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -37932,6 +38317,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The enabled certification allowlist refuses it. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Agent is not currently eligible. */
             404: {
                 headers: {
@@ -38089,6 +38481,13 @@ export interface operations {
                     "application/json": components["schemas"]["CodingCertificationLeaseResponse"];
                 };
             };
+            /** @description The certification allowlist refuses the lease. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -38126,6 +38525,13 @@ export interface operations {
             };
             /** @description Signature invalid or validator not permitted. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The certification allowlist refuses the lease. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

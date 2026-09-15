@@ -56,6 +56,10 @@ from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_VALIDATOR_CODING_CERTIFICATION_HARNESS,
     record_artifact_fetch,
 )
+from ditto.db.queries.coding_certification_allowlist import (
+    CODING_CERTIFICATION_NOT_ALLOWLISTED,
+    CodingCertificationAllowlistRefusedError,
+)
 from ditto.db.queries.coding_certification_inference_grants import (
     activate_coding_certification_inference_grant,
     ensure_coding_certification_inference_grant,
@@ -69,6 +73,7 @@ from ditto.db.queries.coding_certification_leases import (
     abort_coding_certification_lease,
     authorize_coding_certification_harness_delivery,
     claim_coding_certification_lease,
+    database_now,
     issue_coding_certification_lease,
 )
 from ditto.db.queries.coding_inference_grants import (
@@ -94,6 +99,7 @@ _NO_STORE = {"Cache-Control": "no-store"}
     response_model=CodingCertificationLeaseResponse,
     responses={
         401: {"description": "Signature invalid or validator not permitted."},
+        403: {"description": "The enabled certification allowlist refuses it."},
         404: {"description": "Agent is not currently eligible."},
         409: {"description": "Replay or in-flight lease conflict."},
         503: {"description": "Public canary identity unavailable."},
@@ -148,6 +154,9 @@ async def issue_lease(
 @router.post(
     "/coding-certification-leases/{lease_id}/claim",
     response_model=CodingCertificationLeaseResponse,
+    responses={
+        403: {"description": "The certification allowlist refuses the lease."},
+    },
 )
 async def claim_lease(
     lease_id: UUID,
@@ -252,6 +261,7 @@ async def abort_lease(
     response_model=CodingCertificationHarnessLaunchResponse,
     responses={
         401: {"description": "Signature invalid or validator not permitted."},
+        403: {"description": "The certification allowlist refuses the lease."},
         404: {"description": "Coding certification harness unavailable."},
         409: {"description": "Replay, expiry, or immutable authority conflict."},
     },
@@ -301,6 +311,7 @@ async def request_coding_certification_harness_launch(
         network=request.app.state.config.chain.subtensor_network,
     )
     authority = None
+    issued_at: datetime | None = None
     async with session.begin():
         try:
             await consume_validator_nonce(
@@ -324,19 +335,23 @@ async def request_coding_certification_harness_launch(
                 lease_id=payload.lease_id,
                 validator_hotkey=payload.validator_hotkey,
             )
+        except CodingCertificationAllowlistRefusedError:
+            raise _not_allowlisted() from None
         except CodingCertificationLeaseNotAvailableError:
             raise HTTPException(
                 status_code=404,
                 detail="coding certification harness is unavailable",
                 headers=_NO_STORE,
             ) from None
-    if authority is None:  # pragma: no cover - exhaustive transaction outcome
+        # The URL lifetime is bounded by the lease deadline on the same clock
+        # that authorized it, read while the lease row is still locked.
+        issued_at = await database_now(session)
+    if authority is None or issued_at is None:  # pragma: no cover
         raise HTTPException(
             status_code=404,
             detail="coding certification harness is unavailable",
             headers=_NO_STORE,
         )
-    issued_at = datetime.now(UTC)
     ttl_seconds = min(
         int(_ARTIFACT_URL_TTL.total_seconds()),
         int((authority.deadline - issued_at).total_seconds()),
@@ -362,6 +377,8 @@ async def request_coding_certification_harness_launch(
                 lease_id=payload.lease_id,
                 validator_hotkey=payload.validator_hotkey,
             )
+        except CodingCertificationAllowlistRefusedError:
+            raise _not_allowlisted() from None
         except CodingCertificationLeaseNotAvailableError:
             raise HTTPException(
                 status_code=409,
@@ -370,13 +387,14 @@ async def request_coding_certification_harness_launch(
                 ),
                 headers=_NO_STORE,
             ) from None
+        refreshed_at = await database_now(session)
     if refreshed != authority:
         raise HTTPException(
             status_code=409,
             detail="coding certification harness authority changed after URL minting",
             headers=_NO_STORE,
         )
-    if datetime.now(UTC) >= expires_at:
+    if refreshed_at >= expires_at:
         raise HTTPException(
             status_code=409,
             detail="coding certification harness URL expired",
@@ -522,10 +540,14 @@ async def request_coding_certification_inference_grant(
                 detail="coding certification lease request replayed",
                 headers=_NO_STORE,
             ) from None
+        except CodingCertificationAllowlistRefusedError as error:
+            grant_error = error
         except CodingInferenceGrantNotAvailableError as error:
             grant_error = error
         except CodingInferenceGrantIntegrityError as error:
             grant_error = error
+    if isinstance(grant_error, CodingCertificationAllowlistRefusedError):
+        raise _not_allowlisted()
     if isinstance(grant_error, CodingInferenceGrantNotAvailableError):
         raise HTTPException(
             status_code=404,
@@ -616,10 +638,13 @@ async def exchange_coding_certification_inference_grant(
                 headers=_NO_STORE,
             ) from None
         except (
+            CodingCertificationAllowlistRefusedError,
             CodingInferenceGrantNotAvailableError,
             CodingInferenceGrantIntegrityError,
         ) as error:
             grant_error = error
+    if isinstance(grant_error, CodingCertificationAllowlistRefusedError):
+        raise _not_allowlisted()
     if grant_error is not None:
         raise HTTPException(
             status_code=409,
@@ -741,10 +766,21 @@ async def revoke_coding_certification_inference_grant_endpoint(
     )
 
 
+def _not_allowlisted() -> HTTPException:
+    return HTTPException(
+        status_code=403,
+        detail=CODING_CERTIFICATION_NOT_ALLOWLISTED,
+        headers=_NO_STORE,
+    )
+
+
 def _response(
     result: CodingCertificationLeaseResult,
 ) -> CodingCertificationLeaseResponse:
-    if result.row.status == CodingCertificationLeaseStatus.EXPIRED.value:
+    if result.row.status in (
+        CodingCertificationLeaseStatus.EXPIRED.value,
+        CodingCertificationLeaseStatus.COMPLETED.value,
+    ):
         raise HTTPException(
             status_code=404,
             detail="coding certification lease is not available",
@@ -793,6 +829,14 @@ async def _verify_signed_request(
     return now
 
 
+_LEASE_REFUSALS = (
+    CodingCertificationAllowlistRefusedError,
+    CodingCertificationLeaseNotAvailableError,
+    CodingCertificationLeaseConflictError,
+    CodingCertificationLeaseUnavailableError,
+)
+
+
 async def _run_signed_lease_mutation(
     *,
     session: AsyncSession,
@@ -802,66 +846,25 @@ async def _run_signed_lease_mutation(
     mutate: Callable[[], Awaitable[CodingCertificationLeaseResult]],
     conflict_detail: str,
 ) -> CodingCertificationLeaseResult:
-    try:
-        async with session.begin():
+    """Run one signed lease mutation and consume its nonce in one transaction.
+
+    A domain refusal commits instead of rolling back. The mutations raise every
+    refusal before they mint or transition the requested lease; the only writes
+    that can precede one are deadline expiry and grant revocation, which must
+    stick even when the request is refused (for example an exhausted attempt
+    budget found after expiring the identity's overdue lease). A successful,
+    non-idempotent mutation whose nonce was already used still rolls back.
+    """
+
+    result: CodingCertificationLeaseResult | None = None
+    refusal: Exception | None = None
+    replayed_refusal = False
+    async with session.begin():
+        try:
             result = await mutate()
-            try:
-                await consume_validator_nonce(
-                    session,
-                    nonce=nonce,
-                    validator_hotkey=validator_hotkey,
-                    now=now,
-                    expires_at=now + _REQUEST_MAX_AGE,
-                )
-            except ValidatorRequestReplayError:
-                if not result.idempotent:
-                    raise
-            return result
-    except ValidatorRequestReplayError as error:
-        raise HTTPException(
-            status_code=409,
-            detail="coding certification lease request replayed",
-            headers=_NO_STORE,
-        ) from error
-    except (
-        CodingCertificationLeaseNotAvailableError,
-        CodingCertificationLeaseConflictError,
-        CodingCertificationLeaseUnavailableError,
-    ) as error:
-        await _consume_failed_request_nonce(
-            session=session,
-            validator_hotkey=validator_hotkey,
-            nonce=nonce,
-            now=now,
-        )
-        if isinstance(error, CodingCertificationLeaseNotAvailableError):
-            raise HTTPException(
-                status_code=404,
-                detail="coding certification lease is not available",
-                headers=_NO_STORE,
-            ) from None
-        if isinstance(error, CodingCertificationLeaseConflictError):
-            raise HTTPException(
-                status_code=409,
-                detail=conflict_detail,
-                headers=_NO_STORE,
-            ) from None
-        raise HTTPException(
-            status_code=503,
-            detail="public certification canary is unavailable",
-            headers=_NO_STORE,
-        ) from None
-
-
-async def _consume_failed_request_nonce(
-    *,
-    session: AsyncSession,
-    validator_hotkey: str,
-    nonce: UUID,
-    now: datetime,
-) -> None:
-    try:
-        async with session.begin():
+        except _LEASE_REFUSALS as error:
+            refusal = error
+        try:
             await consume_validator_nonce(
                 session,
                 nonce=nonce,
@@ -869,9 +872,38 @@ async def _consume_failed_request_nonce(
                 now=now,
                 expires_at=now + _REQUEST_MAX_AGE,
             )
-    except ValidatorRequestReplayError as error:
+        except ValidatorRequestReplayError:
+            if result is not None and not result.idempotent:
+                raise _replayed() from None  # roll the new mutation back
+            replayed_refusal = refusal is not None
+    if replayed_refusal:
+        raise _replayed()
+    if isinstance(refusal, CodingCertificationAllowlistRefusedError):
+        raise _not_allowlisted()
+    if isinstance(refusal, CodingCertificationLeaseNotAvailableError):
+        raise HTTPException(
+            status_code=404,
+            detail="coding certification lease is not available",
+            headers=_NO_STORE,
+        )
+    if isinstance(refusal, CodingCertificationLeaseConflictError):
         raise HTTPException(
             status_code=409,
-            detail="coding certification lease request replayed",
+            detail=conflict_detail,
             headers=_NO_STORE,
-        ) from error
+        )
+    if refusal is not None or result is None:
+        raise HTTPException(
+            status_code=503,
+            detail="public certification canary is unavailable",
+            headers=_NO_STORE,
+        )
+    return result
+
+
+def _replayed() -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail="coding certification lease request replayed",
+        headers=_NO_STORE,
+    )
