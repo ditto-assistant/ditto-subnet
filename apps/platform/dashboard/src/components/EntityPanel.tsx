@@ -43,6 +43,8 @@ import {
 import { dashboardHref, entityHref } from "../lib/router";
 import type { EntityKind, EntityRoute } from "../lib/router";
 import type { NameHandle } from "../types/leaderboard";
+import type { PublicChainResponse, PublicNeuron } from "../types/chain";
+import type { ResourceState } from "../data/useEndpoint";
 import {
   COMPOSITE_CALC_NOTE,
   compositeCalculationHeading,
@@ -247,10 +249,31 @@ export interface EntityPanelProps {
   /** Optional display names keyed by validator hotkey — untrusted decoration
    * from a separate feed; the hotkey stays the anchor identity. */
   validatorNames: () => Record<string, string>;
+  /** Optional /public/chain snapshot for on-chain stake chips. */
+  chain?: ResourceState<PublicChainResponse>;
   /** The settled/current bench version, for the miner bench chip. */
   currentBench: () => number | null;
   /** Mid-rollout settled view (affects the displayed composite). */
   settledView?: () => boolean;
+}
+
+function latestChain(
+  resource: ResourceState<PublicChainResponse> | undefined,
+): PublicChainResponse | undefined {
+  if (!resource || resource.error()) return undefined;
+  try {
+    return resource.data();
+  } catch {
+    return undefined;
+  }
+}
+
+function neuronForHotkey(
+  chain: PublicChainResponse | undefined,
+  hotkey: string | null | undefined,
+): PublicNeuron | undefined {
+  if (!chain || !hotkey) return undefined;
+  return chain.metagraph.find((row) => row.hotkey === hotkey);
 }
 
 // The URL half of closing the overlay. Dedicated entity pages (/agent/{id})
@@ -700,11 +723,18 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
                   settled={settled()}
                   total={props.entries().filter(isEligible).length}
                   currentBench={props.currentBench()}
+                  neuron={neuronForHotkey(latestChain(props.chain), entry().miner_hotkey)}
                 />
               )}
             </Match>
             <Match when={validatorView()}>
-              {(v) => <ValidatorSummary entry={v().entry} activeBench={props.currentBench()} />}
+              {(v) => (
+                <ValidatorSummary
+                  entry={v().entry}
+                  activeBench={props.currentBench()}
+                  neuron={neuronForHotkey(latestChain(props.chain), v().hotkey)}
+                />
+              )}
             </Match>
             <Match when={agentView()}>
               {(v) => (
@@ -1079,6 +1109,7 @@ function MinerSummary(props: {
   settled: boolean;
   total: number;
   currentBench: number | null;
+  neuron?: PublicNeuron;
 }): JSX.Element {
   const e = () => props.entry;
   const agg = () => e() as RankedEntry & ContinualAggregate;
@@ -1102,6 +1133,15 @@ function MinerSummary(props: {
                   : "unranked (provisional)"
             }
           />
+          <Show when={props.neuron}>
+            {(neuron) => (
+              <>
+                <Stat k="Chain UID" v={String(neuron().uid)} mono />
+                <Stat k="Neuron stake" v={neuron().stake.toFixed(3) + " τ"} mono />
+                <Stat k="On-chain emission" v={neuron().emission.toFixed(4)} mono />
+              </>
+            )}
+          </Show>
           <Stat
             k="Current leaderboard score"
             v={
@@ -1421,6 +1461,7 @@ function EvictedLease(props: { orphan: OrphanedSlot }): JSX.Element {
 function ValidatorSummary(props: {
   entry: ValidatorEntry;
   activeBench: number | null;
+  neuron?: PublicNeuron;
 }): JSX.Element {
   const e = () => props.entry;
   const status = () => offlineAwareFleetStatus(e());
@@ -1461,6 +1502,16 @@ function ValidatorSummary(props: {
       <Section title="Signed report" open>
         <>
           <Stat k="Fleet status" v={<StatusChip label={status()[0]} tone={status()[1]} />} />
+          <Show when={props.neuron}>
+            {(neuron) => (
+              <>
+                <Stat k="Chain UID" v={String(neuron().uid)} mono />
+                <Stat k="Neuron stake" v={neuron().stake.toFixed(3) + " τ"} mono />
+                <Stat k="Validator permit" v={neuron().validator_permit ? "yes" : "no"} />
+                <Stat k="On-chain emission" v={neuron().emission.toFixed(4)} mono />
+              </>
+            )}
+          </Show>
           <Show when={e().bench_serviceability && e().bench_serviceability !== "serving"}>
             <Stat
               k="Benchmark eligibility"

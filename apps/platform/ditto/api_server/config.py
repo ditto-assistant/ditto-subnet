@@ -47,6 +47,10 @@ from ditto.api_server.validator_names import (
     ValidatorNamesConfig,
     parse_validator_names_config_from_env,
 )
+from ditto.api_server.subnet_market import (
+    SubnetMarketConfig,
+    parse_subnet_market_config_from_env,
+)
 from ditto.chain import ChainConfig, parse_chain_config_from_env
 from ditto.db import PostgresConfig, parse_postgres_config_from_env
 
@@ -346,6 +350,9 @@ class ApiServerConfig:
 
     validator_names: ValidatorNamesConfig
     """Optional, background-only Taostats display-name decoration."""
+
+    subnet_market: SubnetMarketConfig
+    """Optional, background-only Taostats α / pool quote for the public chain page."""
 
     validator_compatibility: ValidatorCompatibilityConfig
     """Validator release and heartbeat requirements for scoring tickets."""
@@ -945,6 +952,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             controller_lease_seconds=screener_controller_lease_seconds,
         ),
         validator_names=parse_validator_names_config_from_env(),
+        subnet_market=parse_subnet_market_config_from_env(),
         validator_compatibility=ValidatorCompatibilityConfig(
             minimum_software_version=minimum_validator_version,
             minimum_protocol_version=minimum_validator_protocol,
@@ -1170,6 +1178,51 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError(
             "DITTO_TAOSTATS_MAX_STALE_SECONDS must be at least the refresh interval"
         )
+    market = config.subnet_market
+    if (market.url is None) != (market.api_key is None):
+        # Market may share DITTO_TAOSTATS_API_KEY with names; require both or neither.
+        raise ApiServerConfigError(
+            "DITTO_TAOSTATS_MARKET_URL and DITTO_TAOSTATS_API_KEY "
+            "must be set together"
+        )
+    if market.url is not None:
+        parsed_market = urlparse(market.url)
+        market_query = parse_qs(parsed_market.query)
+        allowed_paths = {
+            "/api/dtao/pool/latest/v1",
+            "/api/dtao/pool/v1",
+            "/api/price/latest/v1",
+        }
+        if (
+            parsed_market.scheme != "https"
+            or parsed_market.hostname != "api.taostats.io"
+            or parsed_market.port not in {None, 443}
+            or parsed_market.username is not None
+            or parsed_market.password is not None
+            or parsed_market.path not in allowed_paths
+            or market_query.get("netuid") != ["118"]
+        ):
+            raise ApiServerConfigError(
+                "DITTO_TAOSTATS_MARKET_URL must use an allowlisted "
+                "https://api.taostats.io …?netuid=118 market endpoint"
+            )
+    if market.url is not None:
+        if not 0.1 <= market.timeout_seconds <= 5.0:
+            raise ApiServerConfigError(
+                "DITTO_TAOSTATS_MARKET_TIMEOUT_SECONDS must be between 0.1 and 5"
+            )
+        if market.retry_seconds < 60:
+            raise ApiServerConfigError(
+                "DITTO_TAOSTATS_MARKET_RETRY_SECONDS must be at least 60"
+            )
+        if market.refresh_seconds < market.retry_seconds:
+            raise ApiServerConfigError(
+                "DITTO_TAOSTATS_MARKET_REFRESH_SECONDS must be at least the retry interval"
+            )
+        if market.max_stale_seconds < market.refresh_seconds:
+            raise ApiServerConfigError(
+                "DITTO_TAOSTATS_MARKET_MAX_STALE_SECONDS must be at least the refresh interval"
+            )
     compatibility = config.validator_compatibility
     if compatibility.minimum_protocol_version < 1:
         raise ApiServerConfigError(

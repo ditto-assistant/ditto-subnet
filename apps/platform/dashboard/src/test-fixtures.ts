@@ -31,6 +31,8 @@ export function fixtureNameFor(path: string): string | null {
       return "operations";
     case "/public/weights":
       return "weights";
+    case "/public/chain":
+      return "chain";
     case "/public/validator-names":
       return "validator-names";
     case "/public/screeners":

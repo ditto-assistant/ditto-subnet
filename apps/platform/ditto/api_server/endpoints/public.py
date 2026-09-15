@@ -82,6 +82,7 @@ from ditto.api_models import (
     PublicCategoryDoc,
     PublicCategoryStat,
     PublicChainEpoch,
+    PublicChainResponse,
     PublicChainWeight,
     PublicChainWeightsResponse,
     PublicClaimedSlot,
@@ -109,10 +110,15 @@ from ditto.api_models import (
     PublicLedgerEpochRecipient,
     PublicLedgerEpochsResponse,
     PublicLedgerPin,
+    PublicMarketQuote,
     PublicMetricDoc,
     PublicModelUse,
     PublicNameHandle,
     PublicNextPinProjection,
+    PublicNeuron,
+    PublicAxonInfo,
+    PublicChainTotals,
+    PublicRegistrationInfo,
     PublicOperationsResponse,
     PublicOrphanedSlot,
     PublicPinAgreement,
@@ -882,6 +888,259 @@ async def chain_weights(
     if refreshed is not None:
         return _chain_weights_payload(request, refreshed)
     raise HTTPException(status_code=503, detail="chain weights unavailable")
+
+
+_CHAIN_SNAPSHOT_CACHE_TTL_SECONDS = 30.0
+_CHAIN_SNAPSHOT_MAX_STALE_SECONDS = 600.0
+_CHAIN_SNAPSHOT_FAILURE_BACKOFF_SECONDS = 15.0
+_CHAIN_SNAPSHOT_TIMEOUT_SECONDS = 25.0
+
+
+@dataclass(frozen=True)
+class _ChainSnapshotCache:
+    payload: PublicChainResponse
+    read_at: float
+
+
+def _chain_snapshot_lock(request: Request) -> asyncio.Lock:
+    lock = getattr(request.app.state, "public_chain_snapshot_lock", None)
+    if not isinstance(lock, asyncio.Lock):
+        lock = asyncio.Lock()
+        request.app.state.public_chain_snapshot_lock = lock
+    return lock
+
+
+def _cached_chain_snapshot(request: Request) -> _ChainSnapshotCache | None:
+    cached = getattr(request.app.state, "public_chain_snapshot", None)
+    return cached if isinstance(cached, _ChainSnapshotCache) else None
+
+
+def _chain_snapshot_payload(
+    request: Request, snapshot: _ChainSnapshotCache
+) -> PublicChainResponse:
+    failed_at = getattr(request.app.state, "public_chain_snapshot_failed_at", None)
+    return snapshot.payload.model_copy(
+        update={
+            "stale": isinstance(failed_at, float) and failed_at > snapshot.read_at,
+            "age_seconds": round(max(0.0, time.monotonic() - snapshot.read_at), 1),
+        }
+    )
+
+
+def _public_axon(axon_info: dict[str, Any]) -> PublicAxonInfo:
+    ip = axon_info.get("ip")
+    port = axon_info.get("port")
+    version = axon_info.get("version")
+    return PublicAxonInfo(
+        ip=str(ip) if ip not in {None, "", "0.0.0.0"} else None,
+        port=int(port) if isinstance(port, (int, float)) and int(port) > 0 else None,
+        version=int(version) if isinstance(version, (int, float)) else None,
+    )
+
+
+def _project_public_neuron(neuron: Any) -> PublicNeuron:
+    return PublicNeuron(
+        uid=int(neuron.uid),
+        hotkey=str(neuron.hotkey),
+        coldkey=str(getattr(neuron, "coldkey", "") or ""),
+        stake=float(getattr(neuron, "stake", 0.0) or 0.0),
+        validator_permit=bool(getattr(neuron, "validator_permit", False)),
+        is_active=bool(getattr(neuron, "is_active", False)),
+        incentive=float(getattr(neuron, "incentive", 0.0) or 0.0),
+        dividends=float(getattr(neuron, "dividends", 0.0) or 0.0),
+        trust=float(getattr(neuron, "trust", 0.0) or 0.0),
+        consensus=float(getattr(neuron, "consensus", 0.0) or 0.0),
+        emission=float(getattr(neuron, "emission", 0.0) or 0.0),
+        last_update=int(getattr(neuron, "last_update", 0) or 0),
+        validator_trust=float(getattr(neuron, "validator_trust", 0.0) or 0.0),
+        axon=_public_axon(getattr(neuron, "axon_info", {}) or {}),
+    )
+
+
+def _schedule_chain_snapshot_refresh(request: Request) -> None:
+    lock = _chain_snapshot_lock(request)
+    failed_at = getattr(request.app.state, "public_chain_snapshot_failed_at", None)
+    recently_failed = (
+        isinstance(failed_at, float)
+        and time.monotonic() - failed_at < _CHAIN_SNAPSHOT_FAILURE_BACKOFF_SECONDS
+    )
+    if lock.locked() or recently_failed:
+        return
+
+    async def _refresh() -> None:
+        async with lock:
+            await _refresh_chain_snapshot(request)
+
+    task = asyncio.create_task(_refresh())
+    tasks = getattr(request.app.state, "public_chain_snapshot_tasks", None)
+    if not isinstance(tasks, set):
+        tasks = set()
+        request.app.state.public_chain_snapshot_tasks = tasks
+    tasks.add(task)
+    task.add_done_callback(tasks.discard)
+
+
+async def _refresh_chain_snapshot(request: Request) -> _ChainSnapshotCache | None:
+    """Assemble metagraph + economics; fail-soft on optional decoration."""
+    chain = getattr(request.app.state, "chain", None)
+    config = getattr(request.app.state, "config", None)
+    get_recent = getattr(chain, "get_recent_neurons", None)
+    if chain is None or config is None or not callable(get_recent):
+        return None
+    netuid = int(config.chain.netuid)
+    try:
+        neurons = await asyncio.wait_for(
+            get_recent(netuid), timeout=_CHAIN_SNAPSHOT_TIMEOUT_SECONDS
+        )
+    except (ChainError, TimeoutError) as error:
+        request.app.state.public_chain_snapshot_failed_at = time.monotonic()
+        logger.warning(
+            "public chain snapshot metagraph refresh failed: %s",
+            _error_detail(error),
+        )
+        return None
+
+    projected = [_project_public_neuron(neuron) for neuron in neurons]
+    projected.sort(key=lambda row: row.uid)
+    validator_count = sum(1 for row in projected if row.validator_permit)
+    totals = PublicChainTotals(
+        neuron_count=len(projected),
+        validator_count=validator_count,
+        miner_count=max(0, len(projected) - validator_count),
+        total_stake=round(sum(row.stake for row in projected), 6),
+        total_emission=round(sum(row.emission for row in projected), 6),
+    )
+
+    registration = PublicRegistrationInfo()
+    block: int | None = None
+    market = PublicMarketQuote(status="unavailable", source="none")
+    get_reg = getattr(chain, "get_registration_economics", None)
+    if callable(get_reg):
+        try:
+            economics = await asyncio.wait_for(get_reg(netuid), timeout=18.0)
+            registration = PublicRegistrationInfo(
+                recycle_rao=economics.recycle_rao,
+                recycle_tao=economics.recycle_tao,
+                immunity_period=economics.immunity_period,
+                block=economics.block,
+            )
+            block = economics.block
+            alpha_tao = getattr(economics, "alpha_tao", None)
+            market_cap_tao = getattr(economics, "market_cap_tao", None)
+            if alpha_tao is not None or market_cap_tao is not None:
+                market = PublicMarketQuote(
+                    status="fresh",
+                    refreshed_at=datetime.now(UTC),
+                    alpha_tao=alpha_tao,
+                    market_cap_tao=market_cap_tao,
+                    source="chain",
+                )
+        except Exception as error:
+            logger.warning(
+                "public chain registration/market economics unavailable: %s",
+                _error_detail(error),
+            )
+
+    tao_usd: float | None = None
+    oracle = getattr(request.app.state, "price_oracle", None)
+    get_tao = getattr(oracle, "get_tao_usd", None)
+    if callable(get_tao):
+        try:
+            tao_usd = float(await get_tao())
+        except Exception as error:
+            logger.warning(
+                "public chain TAO/USD unavailable: %s", _error_detail(error)
+            )
+
+    # Derive USD legs from the CoinGecko TAO rate when the chain quote landed.
+    if market.alpha_tao is not None and tao_usd is not None:
+        market = market.model_copy(
+            update={
+                "alpha_usd": market.alpha_tao * tao_usd,
+                "market_cap_usd": (
+                    market.market_cap_tao * tao_usd
+                    if market.market_cap_tao is not None
+                    else None
+                ),
+            }
+        )
+
+    # Optional Taostats market remains a silent fallback only when chain had
+    # no α price and the operator explicitly configured a market URL.
+    if market.alpha_tao is None:
+        market_source = getattr(request.app.state, "subnet_market", None)
+        snapshot_fn = getattr(market_source, "snapshot", None)
+        if callable(snapshot_fn):
+            quote = snapshot_fn()
+            if quote.status in {"fresh", "stale"} and quote.alpha_tao is not None:
+                market = PublicMarketQuote(
+                    status=quote.status,
+                    refreshed_at=quote.refreshed_at,
+                    alpha_tao=quote.alpha_tao,
+                    alpha_usd=quote.alpha_usd,
+                    market_cap_tao=quote.market_cap_tao,
+                    market_cap_usd=quote.market_cap_usd,
+                    source="taostats",
+                )
+
+    epoch = None
+    weights = _cached_chain_weights(request)
+    if weights is not None:
+        epoch = weights.payload.epoch
+        if block is None:
+            block = weights.payload.block
+
+    refreshed = _ChainSnapshotCache(
+        payload=PublicChainResponse(
+            generated_at=datetime.now(UTC),
+            netuid=netuid,
+            block=block,
+            tao_usd=tao_usd,
+            registration=registration,
+            market=market,
+            epoch=epoch,
+            totals=totals,
+            metagraph=projected,
+        ),
+        read_at=time.monotonic(),
+    )
+    request.app.state.public_chain_snapshot = refreshed
+    return refreshed
+
+
+@router.get("/chain", response_model=PublicChainResponse)
+async def public_chain(request: Request, response: Response) -> PublicChainResponse:
+    """Return SN118 chain economics and the full metagraph snapshot.
+
+    Metagraph rows come from Pylon recent-neurons (including stake and Yuma
+    fields). TAO/USD comes from the platform CoinGecko oracle; α price and
+    registration recycle come from Subtensor runtime/storage reads. No
+    Taostats key is required for the core payload.
+    """
+    response.headers["Cache-Control"] = _CACHE_CONTROL
+    cached = _cached_chain_snapshot(request)
+    if cached is not None:
+        age = time.monotonic() - cached.read_at
+        if age >= _CHAIN_SNAPSHOT_CACHE_TTL_SECONDS:
+            _schedule_chain_snapshot_refresh(request)
+        if age <= _CHAIN_SNAPSHOT_MAX_STALE_SECONDS:
+            return _chain_snapshot_payload(request, cached)
+
+    lock = _chain_snapshot_lock(request)
+    async with lock:
+        latest = _cached_chain_snapshot(request)
+        if latest is not None and latest is not cached:
+            return _chain_snapshot_payload(request, latest)
+        failed_at = getattr(request.app.state, "public_chain_snapshot_failed_at", None)
+        recently_failed = (
+            isinstance(failed_at, float)
+            and time.monotonic() - failed_at < _CHAIN_SNAPSHOT_FAILURE_BACKOFF_SECONDS
+        )
+        refreshed = None if recently_failed else await _refresh_chain_snapshot(request)
+
+    if refreshed is not None:
+        return _chain_snapshot_payload(request, refreshed)
+    raise HTTPException(status_code=503, detail="chain snapshot unavailable")
 
 
 def screening_dispute_signing_message(agent_id: UUID, message: str) -> bytes:

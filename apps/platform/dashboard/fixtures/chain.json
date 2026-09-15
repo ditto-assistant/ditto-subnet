@@ -1,0 +1,145 @@
+{
+  "generated_at": "2026-09-14T13:40:25.171716Z",
+  "netuid": 118,
+  "block": 9066231,
+  "stale": false,
+  "age_seconds": 0.0,
+  "tao_usd": 233.21,
+  "registration": {
+    "recycle_rao": 500000,
+    "recycle_tao": 0.0005,
+    "immunity_period": null,
+    "block": 9066231
+  },
+  "market": {
+    "status": "fresh",
+    "refreshed_at": "2026-09-14T13:40:25.171731Z",
+    "alpha_tao": 0.008244572,
+    "alpha_usd": 1.92271663612,
+    "market_cap_tao": 18258.16910736048,
+    "market_cap_usd": 4257987.617527538,
+    "source": "chain"
+  },
+  "epoch": {
+    "tempo_blocks": 360,
+    "block_seconds": 12.0,
+    "epoch_seconds": 4320.0,
+    "last_epoch_block": 9066229,
+    "next_epoch_block": 9066589,
+    "blocks_since_last_epoch": 1,
+    "blocks_until_next_epoch": 359,
+    "next_epoch_at": "2026-09-14T13:40:25.171738Z",
+    "commit_reveal_enabled": null,
+    "reveal_period_epochs": null,
+    "weights_rate_limit_blocks": null
+  },
+  "totals": {
+    "neuron_count": 256,
+    "validator_count": 14,
+    "miner_count": 242,
+    "total_stake": 2520939.816305,
+    "total_emission": 295.201643
+  },
+  "metagraph": [
+    {
+      "uid": 0,
+      "hotkey": "5HEouuDaDASnWdqDwYtwQATS5z916W9DyDAtK6WyB2jPRReb",
+      "coldkey": "5HGXqHbQjEmwnQsnnMa8pm13VUv9PP2jB4Vuv9nw7NwUYiAN",
+      "stake": 1453427.125,
+      "validator_permit": true,
+      "is_active": true,
+      "incentive": 0.0,
+      "dividends": 0.623407,
+      "trust": 0.0,
+      "consensus": 0.0,
+      "emission": 92.016754,
+      "last_update": 9066145,
+      "validator_trust": 0.999985,
+      "axon": {
+        "ip": null,
+        "port": 8091,
+        "version": 9012002
+      }
+    },
+    {
+      "uid": 1,
+      "hotkey": "5GWuswKTj2sLm1f4rwZXEP11iUEVaZ1rwN7jy7eN8HhV7t8G",
+      "coldkey": "5HTPYEDYFCwKouFwHZp6VMQqPqKHv7T8rXPBy411Cf4c3N3o",
+      "stake": 0.0,
+      "validator_permit": false,
+      "is_active": false,
+      "incentive": 0.0,
+      "dividends": 0.0,
+      "trust": 0.0,
+      "consensus": 0.0,
+      "emission": 0.0,
+      "last_update": 8837274,
+      "validator_trust": 0.0,
+      "axon": {
+        "ip": null,
+        "port": null,
+        "version": 0
+      }
+    },
+    {
+      "uid": 2,
+      "hotkey": "5CiS89LNDn46rDZvE71ANN3s4sHGUH96LbPn5sKJ58GVAZDf",
+      "coldkey": "5GbyZzvzuGLBM4qmUdyUbhzFqFm6ueJhAffDp8oJ4mg4eudj",
+      "stake": 1e-06,
+      "validator_permit": false,
+      "is_active": false,
+      "incentive": 0.0,
+      "dividends": 0.0,
+      "trust": 0.0,
+      "consensus": 0.0,
+      "emission": 0.0,
+      "last_update": 8883046,
+      "validator_trust": 0.0,
+      "axon": {
+        "ip": null,
+        "port": null,
+        "version": 0
+      }
+    },
+    {
+      "uid": 3,
+      "hotkey": "5CzK81APT3dhPaCzaHiSvvX3A53ELSazNNFuvrg9syTpHJoA",
+      "coldkey": "5EqPBjckV6Kmgz41RLTvT1aZZk5cbDDQAeA4YBpiz8CeaNun",
+      "stake": 0.0,
+      "validator_permit": false,
+      "is_active": false,
+      "incentive": 0.0,
+      "dividends": 0.0,
+      "trust": 0.0,
+      "consensus": 0.0,
+      "emission": 0.0,
+      "last_update": 8696210,
+      "validator_trust": 0.0,
+      "axon": {
+        "ip": null,
+        "port": null,
+        "version": 0
+      }
+    },
+    {
+      "uid": 4,
+      "hotkey": "5CcjJxC2a92GZrnj4ATKBL7CfbWNdRoujXsaWVSCRx9QJDeJ",
+      "coldkey": "5CJfXeppWrZECUZoveXrZ5RaChMwCogvcLKHUkxgoY67bjht",
+      "stake": 0.0,
+      "validator_permit": false,
+      "is_active": false,
+      "incentive": 0.0,
+      "dividends": 0.0,
+      "trust": 0.0,
+      "consensus": 0.0,
+      "emission": 0.0,
+      "last_update": 8813985,
+      "validator_trust": 0.0,
+      "axon": {
+        "ip": null,
+        "port": null,
+        "version": 0
+      }
+    }
+  ]
+}

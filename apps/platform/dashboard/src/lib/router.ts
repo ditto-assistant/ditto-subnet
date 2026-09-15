@@ -12,6 +12,7 @@ import { bootParams } from "./config";
 export type PageName =
   | "overview"
   | "leaderboard"
+  | "metagraph"
   | "pipeline"
   | "operations"
   | "submissions"
@@ -34,6 +35,10 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   leaderboard: {
     title: "Leaderboard",
     sub: "Every scored miner · canonical ranks · sortable by any metric",
+  },
+  metagraph: {
+    title: "Metagraph",
+    sub: "On-chain SN118 neurons · stake, Yuma signals, registration economics",
   },
   pipeline: {
     title: "Submission pipeline",

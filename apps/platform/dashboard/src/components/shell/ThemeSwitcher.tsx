@@ -64,9 +64,9 @@ export function fromHour(hour: number): TimePhase {
 function readMode(): ThemeMode {
   try {
     const saved = localStorage.getItem(THEME_STORAGE_KEY);
-    return saved !== null && MODES[saved] ? (saved as ThemeMode) : "system";
+    return saved !== null && MODES[saved] ? (saved as ThemeMode) : "dark";
   } catch {
-    return "system";
+    return "dark";
   }
 }
 
@@ -124,13 +124,13 @@ export function themeBootstrap(): ThemeBootstrap {
 export function ThemeSwitcher(): JSX.Element {
   const theme = themeBootstrap();
   const root = document.documentElement;
-  const [mode, setMode] = createSignal(root.dataset.theme || "system");
+  const [mode, setMode] = createSignal(root.dataset.theme || "dark");
   const [phase, setPhase] = createSignal(root.dataset.timePhase || "afternoon");
   const [palette, setPalette] = createSignal(root.dataset.dittoTheme || DEFAULT_PALETTE);
   const [resolved, setResolved] = createSignal(root.dataset.dittoMode || "light");
 
   function sync(): void {
-    setMode(root.dataset.theme || "system");
+    setMode(root.dataset.theme || "dark");
     setPhase(root.dataset.timePhase || "afternoon");
     setPalette(root.dataset.dittoTheme || DEFAULT_PALETTE);
     setResolved(root.dataset.dittoMode || "light");

@@ -94,8 +94,8 @@ describe("miner sign-in page", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const first = render(() => <ReviewsPage />);
-    const start = Array.from(document.querySelectorAll("button.btn")).find(
-      (el) => el.textContent === "Start sign-in",
+    const start = Array.from(document.querySelectorAll("button.btn")).find((el) =>
+      (el.textContent ?? "").replace(/\s+/g, " ").trim().startsWith("Start sign-in"),
     );
     expect(start).toBeTruthy();
     fireEvent.click(start as HTMLButtonElement);

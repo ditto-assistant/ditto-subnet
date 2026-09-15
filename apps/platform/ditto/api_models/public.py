@@ -2429,6 +2429,85 @@ class PublicChainWeightsResponse(BaseModel):
     ] = None
 
 
+class PublicAxonInfo(BaseModel):
+    """Public axon endpoint metadata for one metagraph neuron."""
+
+    ip: str | None = None
+    port: Annotated[int, Field(ge=0, le=65535)] | None = None
+    version: Annotated[int, Field(ge=0)] | None = None
+
+
+class PublicNeuron(BaseModel):
+    """One UID on the SN118 metagraph (Pylon recent-neurons projection)."""
+
+    uid: Annotated[int, Field(ge=0)]
+    hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    coldkey: Annotated[str, Field(max_length=64)] = ""
+    stake: Annotated[float, Field(ge=0)]
+    validator_permit: bool = False
+    is_active: bool = False
+    incentive: Annotated[float, Field(ge=0)] = 0.0
+    dividends: Annotated[float, Field(ge=0)] = 0.0
+    trust: Annotated[float, Field(ge=0)] = 0.0
+    consensus: Annotated[float, Field(ge=0)] = 0.0
+    emission: Annotated[float, Field(ge=0)] = 0.0
+    last_update: Annotated[int, Field(ge=0)] = 0
+    validator_trust: Annotated[float, Field(ge=0)] = 0.0
+    axon: PublicAxonInfo = Field(default_factory=PublicAxonInfo)
+
+
+class PublicChainTotals(BaseModel):
+    """Aggregate metagraph economics for the chain snapshot."""
+
+    neuron_count: Annotated[int, Field(ge=0)]
+    validator_count: Annotated[int, Field(ge=0)]
+    miner_count: Annotated[int, Field(ge=0)]
+    total_stake: Annotated[float, Field(ge=0)]
+    total_emission: Annotated[float, Field(ge=0)]
+
+
+class PublicRegistrationInfo(BaseModel):
+    """Live registration recycle cost (Burn) and immunity period."""
+
+    recycle_rao: Annotated[int, Field(ge=0)] | None = None
+    recycle_tao: Annotated[float, Field(ge=0)] | None = None
+    immunity_period: Annotated[int, Field(ge=0)] | None = None
+    block: Annotated[int, Field(ge=0)] | None = None
+
+
+class PublicMarketQuote(BaseModel):
+    """On-chain α / pool quote (Subtensor runtime APIs), fail-soft.
+
+    Sourced from ``SwapRuntimeApi.current_alpha_price`` and
+    ``SubnetInfoRuntimeApi.get_dynamic_info`` — no Taostats key required.
+    ``status`` is ``unavailable`` when the chain read failed; ``fresh`` when
+    at least the α/TAO price landed with this snapshot.
+    """
+
+    status: Literal["disabled", "fresh", "stale", "unavailable"] = "unavailable"
+    refreshed_at: datetime | None = None
+    alpha_tao: Annotated[float, Field(ge=0)] | None = None
+    alpha_usd: Annotated[float, Field(ge=0)] | None = None
+    market_cap_tao: Annotated[float, Field(ge=0)] | None = None
+    market_cap_usd: Annotated[float, Field(ge=0)] | None = None
+    source: Literal["chain", "taostats", "none"] = "none"
+
+class PublicChainResponse(BaseModel):
+    """Public SN118 chain economics + full metagraph snapshot."""
+
+    generated_at: datetime
+    netuid: Annotated[int, Field(ge=0)]
+    block: Annotated[int, Field(ge=0)] | None = None
+    stale: bool = False
+    age_seconds: Annotated[float, Field(ge=0)] = 0.0
+    tao_usd: Annotated[float, Field(ge=0)] | None = None
+    registration: PublicRegistrationInfo = Field(default_factory=PublicRegistrationInfo)
+    market: PublicMarketQuote = Field(default_factory=PublicMarketQuote)
+    epoch: PublicChainEpoch | None = None
+    totals: PublicChainTotals
+    metagraph: list[PublicNeuron] = Field(default_factory=list)
+
+
 class PublicValidatorScore(BaseModel):
     """One validator's score for a submission, published verbatim (public).
 

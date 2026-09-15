@@ -222,14 +222,34 @@ export function AthQueue(): JSX.Element {
       </div>
       <div class="ath-metrics" aria-label="ATH review summary">
         <div class="ath-metric">
+          <span class="ath-metric-icon" aria-hidden="true">
+            <svg class="ic" viewBox="0 0 24 24">
+              <path d="M6 3h8l4 4v14H6Z" />
+              <path d="M14 3v4h4" />
+              <path d="M9 12h6M9 16h6" />
+            </svg>
+          </span>
           <span>Active reviews</span>
           <strong id="ath-count">{state().snapshot ? String(entries().length) : "–"}</strong>
         </div>
         <div class="ath-metric">
+          <span class="ath-metric-icon" aria-hidden="true">
+            <svg class="ic" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 7v5l3 2" />
+            </svg>
+          </span>
           <span>Oldest hold</span>
           <strong id="ath-oldest">{state().snapshot ? oldestHold() : "–"}</strong>
         </div>
         <div class="ath-metric">
+          <span class="ath-metric-icon" aria-hidden="true">
+            <svg class="ic" viewBox="0 0 24 24">
+              <ellipse cx="12" cy="5" rx="8" ry="3" />
+              <path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
+              <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
+            </svg>
+          </span>
           <span>Scores preserved</span>
           <strong id="ath-scores">{state().snapshot ? String(scoreTotal()) : "–"}</strong>
         </div>

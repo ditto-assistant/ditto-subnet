@@ -25,6 +25,7 @@ from ditto.chain.models import (
     EpochSchedule,
     ExtrinsicInfo,
     NeuronInfo,
+    RegistrationEconomics,
 )
 
 if TYPE_CHECKING:
@@ -72,6 +73,10 @@ _BLOCKS_SINCE_STEP_STORAGE = "BlocksSinceLastStep"
 _COMMIT_REVEAL_ENABLED_STORAGE = "CommitRevealWeightsEnabled"
 _REVEAL_PERIOD_STORAGE = "RevealPeriodEpochs"
 _WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
+# Registration recycle cost (bittensor ``Subtensor.recycle`` → Burn hyperparam).
+_BURN_STORAGE = "Burn"
+_IMMUNITY_PERIOD_STORAGE = "ImmunityPeriod"
+_RAO_PER_TAO = 1_000_000_000
 # Stateful epoch scheduler storage, keyed by netuid; the pinned ledger's clock.
 _LAST_EPOCH_BLOCK_STORAGE = "LastEpochBlock"
 _PENDING_EPOCH_AT_STORAGE = "PendingEpochAt"
@@ -203,6 +208,113 @@ class ChainClient:
         # A disconnected request must not cancel the shared Pylon refresh for
         # every other waiter. The Pylon client retains its own request timeout.
         return list(await asyncio.shield(flight))
+
+    async def get_registration_economics(self, netuid: int) -> RegistrationEconomics:
+        """Read registration recycle, immunity, and on-chain α market quote.
+
+        Mirrors bittensor ``Subtensor.recycle`` (Burn) and
+        ``Subtensor.get_subnet_price`` / ``subnet()`` via native substrate
+        runtime calls — no Taostats key required.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        try:
+            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+                block_hash = await substrate.get_chain_head()
+                header = await substrate.get_block_header(block_hash=block_hash)
+                block = _block_number_from_header(header)
+                burn = _as_int(
+                    await substrate.query(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=_BURN_STORAGE,
+                        params=[netuid],
+                        block_hash=block_hash,
+                    )
+                )
+                immunity = _as_int(
+                    await substrate.query(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=_IMMUNITY_PERIOD_STORAGE,
+                        params=[netuid],
+                        block_hash=block_hash,
+                    )
+                )
+                alpha_tao = await self._read_alpha_price(substrate, netuid, block_hash)
+                tao_in, alpha_out = await self._read_pool_balances(
+                    substrate, netuid, block_hash
+                )
+        except TimeoutError as e:
+            raise ChainTimeoutError(
+                f"get_registration_economics(netuid={netuid}) timed out"
+            ) from e
+        except Exception as e:
+            raise ChainConnectionError(
+                f"get_registration_economics(netuid={netuid}) failed: {e}"
+            ) from e
+        if burn is None:
+            raise ChainConnectionError(
+                f"get_registration_economics(netuid={netuid}): Burn unset"
+            )
+        market_cap_tao = None
+        if alpha_tao is not None and alpha_out is not None:
+            market_cap_tao = alpha_out * alpha_tao
+        return RegistrationEconomics(
+            netuid=netuid,
+            block=block,
+            block_hash=str(block_hash),
+            recycle_rao=burn,
+            recycle_tao=burn / _RAO_PER_TAO,
+            immunity_period=immunity,
+            alpha_tao=alpha_tao,
+            tao_in=tao_in,
+            alpha_out=alpha_out,
+            market_cap_tao=market_cap_tao,
+        )
+
+    async def _read_alpha_price(
+        self, substrate: Any, netuid: int, block_hash: str
+    ) -> float | None:
+        """``SwapRuntimeApi.current_alpha_price`` → TAO per α (fail-soft)."""
+        try:
+            raw = await substrate.runtime_call(
+                api="SwapRuntimeApi",
+                method="current_alpha_price",
+                params=[netuid],
+                block_hash=block_hash,
+            )
+            price_rao = _as_int(_unwrap_substrate_value(raw))
+            if price_rao is None or price_rao < 0:
+                return None
+            return price_rao / _RAO_PER_TAO
+        except Exception as error:
+            logger.warning(
+                "alpha price read failed for netuid=%s: %s", netuid, error
+            )
+            return None
+
+    async def _read_pool_balances(
+        self, substrate: Any, netuid: int, block_hash: str
+    ) -> tuple[float | None, float | None]:
+        """``SubnetInfoRuntimeApi.get_dynamic_info`` → (tao_in, alpha_out)."""
+        try:
+            raw = await substrate.runtime_call(
+                api="SubnetInfoRuntimeApi",
+                method="get_dynamic_info",
+                params=[netuid],
+                block_hash=block_hash,
+            )
+            decoded = _unwrap_substrate_value(raw)
+            if not isinstance(decoded, dict):
+                return None, None
+            return (
+                _balance_to_tao(decoded.get("tao_in")),
+                _balance_to_tao(decoded.get("alpha_out")),
+            )
+        except Exception as error:
+            logger.warning(
+                "dynamic subnet info read failed for netuid=%s: %s", netuid, error
+            )
+            return None, None
 
     async def _refresh_recent_neurons(self, netuid: int) -> list[NeuronInfo]:
         """Fetch and translate one shared recent-neurons snapshot."""
@@ -1082,5 +1194,36 @@ def _as_int(result: Any) -> int | None:
         return None
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _balance_to_tao(value: Any) -> float | None:
+    """Coerce a runtime Balance / rao int / nested dict into TAO units."""
+    if value is None:
+        return None
+    # Balance-like objects expose .tao or .rao
+    tao = getattr(value, "tao", None)
+    if isinstance(tao, (int, float)):
+        return float(tao)
+    rao = getattr(value, "rao", None)
+    if isinstance(rao, (int, float)):
+        return float(rao) / _RAO_PER_TAO
+    if isinstance(value, dict):
+        if "tao" in value and isinstance(value["tao"], (int, float)):
+            return float(value["tao"])
+        if "rao" in value and isinstance(value["rao"], (int, float)):
+            return float(value["rao"]) / _RAO_PER_TAO
+        # SCALE often encodes as raw integer under a single key
+        for key in ("value", "bits"):
+            if key in value:
+                return _balance_to_tao(value[key])
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        # Runtime API balances are typically rao integers.
+        return float(value) / _RAO_PER_TAO
+    try:
+        return float(value) / _RAO_PER_TAO
     except (TypeError, ValueError):
         return None

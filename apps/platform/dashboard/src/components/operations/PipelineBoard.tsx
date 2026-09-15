@@ -18,6 +18,9 @@ import type { BenchmarkProgress } from "../../types/pipeline";
 import {
   AdmissionStepTrack,
   BenchmarkProgressView,
+  ElapsedTime,
+  benchmarkProgressText,
+  benchmarkStageLabel,
   PipelineScreenerProgressView,
   ReviewStageLadder,
   admissionSteps,
@@ -96,6 +99,9 @@ export interface PipelineBoardProps {
   loading: boolean;
   screeners: FleetReport | null;
   activeVersion: number | null;
+  /** The Scoring card whose runs the page's detail panel is showing. */
+  selectedScoringKey?: string | null;
+  onSelectScoring?: (key: string) => void;
 }
 
 function cardClick(ev: MouseEvent, agentId: string): void {
@@ -178,11 +184,32 @@ function CodingShadowLane(props: {
   );
 }
 
+/** A plain click on a Scoring card selects it for the run-progress panel and
+ * opens the agent modal. Modified clicks keep the link's native new-tab
+ * behaviour. */
+function selectClick(ev: MouseEvent, onSelect: () => void, agentId: string): void {
+  if (
+    ev.defaultPrevented ||
+    ev.button !== 0 ||
+    ev.metaKey ||
+    ev.ctrlKey ||
+    ev.shiftKey ||
+    ev.altKey
+  )
+    return;
+  ev.preventDefault();
+  onSelect();
+  pushEntityRoute("agent", agentId);
+}
+
 function PipelineCard(props: {
   item: IndexedEntry;
   column: string;
   screeners: FleetReport | null;
   activeVersion: number | null;
+  /** Present only where the page renders the run-progress panel. */
+  onSelect?: () => void;
+  selected?: boolean;
 }): JSX.Element {
   const entry = () => props.item.entry;
   // Rank 1 is not the same as "next". A row in a gated lane holds the top of
@@ -276,8 +303,16 @@ function PipelineCard(props: {
       data-entity-link="agent"
       data-pipeline-i={props.item.index}
       data-admission={admissionState()}
-      aria-label={ariaLabel()}
-      onClick={(ev) => cardClick(ev, String(entry().agent_id || ""))}
+      aria-label={
+        props.onSelect ? "Show run progress and details for " + accessibleName() : ariaLabel()
+      }
+      aria-current={props.selected ? "true" : undefined}
+      onClick={(ev) => {
+        const select = props.onSelect;
+        const agentId = String(entry().agent_id || "");
+        if (select) selectClick(ev, select, agentId);
+        else cardClick(ev, agentId);
+      }}
     >
       <span class="pipeline-item-heading">
         <span class="pipeline-item-identity">
@@ -290,6 +325,9 @@ function PipelineCard(props: {
         </span>
         <span class="pipeline-item-meta">{meta()}</span>
       </span>
+      <Show when={props.selected}>
+        <span class="pipeline-selected-chip">Selected</span>
+      </Show>
       <Show when={props.column === "admission"}>
         <AdmissionStepTrack
           steps={admissionSteps(entry().screening_build_only)}
@@ -520,6 +558,16 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
                   <span class="pipeline-count-detail">{admissionSplit()}</span>
                 </Show>
               </div>
+              <Show
+                when={
+                  column().def.status === "scored" &&
+                  !props.unavailable &&
+                  !props.loading &&
+                  items().length
+                }
+              >
+                <div class="pipeline-items-caption">Recent completions</div>
+              </Show>
               <div class="pipeline-items" id={column().def.bodyId}>
                 <Show when={column().def.status === "evaluating"}>
                   <CodingShadowLane
@@ -564,6 +612,15 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
                               column={column().def.status}
                               screeners={props.screeners}
                               activeVersion={props.activeVersion}
+                              selected={
+                                column().def.status === "evaluating" &&
+                                props.selectedScoringKey === item.key
+                              }
+                              onSelect={
+                                column().def.status === "evaluating" && props.onSelectScoring
+                                  ? () => props.onSelectScoring?.(item.key)
+                                  : undefined
+                              }
                             />
                           </>
                         )}
@@ -605,7 +662,13 @@ export function IntegrityReviewBranch(props: {
   return (
     <details class="pipeline-review-branch" aria-labelledby="pipeline-review-title">
       <summary class="pipeline-review-summary">
-        <span>
+        <span class="pipeline-review-mark" aria-hidden="true">
+          <svg class="ic" viewBox="0 0 24 24">
+            <path d="M12 3 4 6v6c0 4.6 3.3 7.8 8 9 4.7-1.2 8-4.4 8-9V6Z" />
+            <path d="m8.5 12 2.5 2.5 4.5-5" />
+          </svg>
+        </span>
+        <span class="pipeline-review-heading">
           <span class="pipeline-review-eyebrow">Conditional after scoring</span>
           <strong class="pipeline-review-title" id="pipeline-review-title">
             Source integrity review
@@ -613,6 +676,13 @@ export function IntegrityReviewBranch(props: {
         </span>
         <span class="pipeline-review-count" id="pipeline-review-count">
           {props.unavailable || props.loading ? "–" : String(view().count)}
+        </span>
+        <span class="pipeline-review-toggle" aria-hidden="true">
+          <span class="pipeline-review-toggle-open">Expand</span>
+          <span class="pipeline-review-toggle-close">Collapse</span>
+          <svg class="ic" viewBox="0 0 24 24">
+            <path d="m9 6 6 6-6 6" />
+          </svg>
         </span>
       </summary>
       <p class="pipeline-review-copy">
@@ -675,5 +745,122 @@ export function IntegrityReviewBranch(props: {
         </Show>
       </div>
     </details>
+  );
+}
+
+/** The selected Scoring submission's runs, one row per active validator slot.
+ * Runs are numbered, never attributed: validator identity stays off the
+ * public board, exactly as it does in the cards above. */
+export function ScoringDetail(props: {
+  item: IndexedEntry | null;
+  onClose: () => void;
+}): JSX.Element {
+  return (
+    <Show when={props.item}>
+      {(item) => {
+        const entry = () => item().entry;
+        const runs = (): BenchmarkProgress[] => entry().active_benchmarks || [];
+        const lead = () => runs().find((run) => run.stage) ?? runs()[0] ?? null;
+        const bench = () =>
+          runs().find((run) => run.bench_version)?.bench_version ??
+          entry().queue_bench_version ??
+          null;
+        const count = () => Math.max(0, Number(entry().score_count) || 0);
+        const quorum = () => Math.max(1, Number(entry().quorum) || 3);
+        const agentId = () => String(entry().agent_id || "");
+        return (
+          <section class="scoring-detail" aria-labelledby="scoring-detail-title">
+            <header class="scoring-detail-head">
+              <MinerAvatar url={entry().avatar_url} size="lg" />
+              <div class="scoring-detail-identity">
+                <h3 id="scoring-detail-title">{agentName(entry().name)}</h3>
+                <span class="scoring-detail-sub">
+                  {pipelineAgentVersionLabel(entry().version)}
+                  <Show when={bench()}>
+                    <span class="scoring-detail-bench">Bench v{bench()}</span>
+                  </Show>
+                </span>
+              </div>
+              <span class="scoring-detail-stage">{benchmarkStageLabel(lead()?.stage)}</span>
+              <div class="scoring-detail-quorum">
+                <span>Validator quorum</span>
+                <strong>
+                  {count()} of {quorum()}
+                </strong>
+              </div>
+              <a
+                class="scoring-detail-open"
+                href={entityHref("agent", agentId())}
+                data-entity-link="agent"
+                onClick={(ev) => cardClick(ev, agentId())}
+              >
+                Full history
+              </a>
+              <button
+                type="button"
+                class="scoring-detail-close"
+                aria-label="Close run progress"
+                onClick={() => props.onClose()}
+              >
+                <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6 6 18" />
+                </svg>
+              </button>
+            </header>
+            <Show
+              when={runs().length}
+              fallback={<p class="scoring-detail-empty">No run progress reported yet.</p>}
+            >
+              <ol class="scoring-detail-runs">
+                <For each={runs()}>
+                  {(run, index) => {
+                    const determinate = () => run.percent != null && !run.stalled;
+                    const label = () => "Run " + (index() + 1) + ": " + benchmarkProgressText(run);
+                    return (
+                      <li
+                        class="scoring-run"
+                        classList={{
+                          stalled: Boolean(run.stalled),
+                          failed: run.stage === "failed_retrying",
+                        }}
+                      >
+                        <span class="scoring-run-label">Run {index() + 1}</span>
+                        <Show
+                          when={determinate()}
+                          fallback={
+                            <span class="bench-bar indeterminate" role="img" aria-label={label()}>
+                              <i />
+                            </span>
+                          }
+                        >
+                          <progress
+                            max="100"
+                            value={Math.max(0, Math.min(100, Number(run.percent) || 0))}
+                            aria-label={label()}
+                          />
+                        </Show>
+                        <span class="scoring-run-pct">
+                          {run.percent != null ? run.percent + "%" : ""}
+                        </span>
+                        <span class="scoring-run-checks">
+                          {run.completed_checks != null && run.total_checks != null
+                            ? run.completed_checks + " of " + run.total_checks + " checks"
+                            : benchmarkStageLabel(run.stage)}
+                        </span>
+                        <Show when={run.started_at}>
+                          {(startedAt) => (
+                            <ElapsedTime class="scoring-run-elapsed" startedAt={startedAt()} />
+                          )}
+                        </Show>
+                      </li>
+                    );
+                  }}
+                </For>
+              </ol>
+            </Show>
+          </section>
+        );
+      }}
+    </Show>
   );
 }

@@ -163,6 +163,7 @@ from ditto.api_server.screener_policy_activation import (
 )
 from ditto.api_server.storage import create_storage_client
 from ditto.api_server.validator_names import create_validator_names
+from ditto.api_server.subnet_market import create_subnet_market
 from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
 from ditto.api_server.validator_slot_settings import ValidatorSlotSettingsResolver
 from ditto.chain import create_chain_client
@@ -410,6 +411,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await validator_names.start(app.state.session_maker)
 
+            subnet_market = app.state.subnet_market
+            stack.push_async_callback(subnet_market.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await subnet_market.start()
+
             targon_loop = None
             if (
                 _process_role() == PLATFORM_ROLE
@@ -591,6 +597,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # snapshot path is synchronous and disabled by default; production lifespan
     # starts the optional background refresher without blocking API startup.
     app.state.validator_names = create_validator_names(config.validator_names)
+    app.state.subnet_market = create_subnet_market(config.subnet_market)
     # Sign in with Ditto relying party. Inert (every route answers 503) until
     # DITTO_LINK_* names the DittoBench app; tests swap in a mock transport.
     app.state.ditto_link = DittoLinkClient(config.ditto_link)

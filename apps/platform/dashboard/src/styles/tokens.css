@@ -9,33 +9,34 @@
      data-system-theme light | dark
      data-time-phase   dawn | morning | afternoon | dusk | night
 
-   The kit's 170 OKLCH values are verbatim below and scoped exactly as the kit
-   scopes them. The dashboard's role names (--bg, --text, --border, --accent…)
+   The kit palettes are scoped as the kit scopes them; Carbon has a
+   dashboard-specific charcoal canvas and blue action for clearer hierarchy.
+   The dashboard's role names (--bg, --text, --border, --accent…)
    then resolve through the kit roles, so every ported page style recolours
    without edits. Data-encoding colours (tool gold, memory plum, good/warn/
    danger, the benchmark-era ramp) are not brand roles; they stay as one
    validated light pair and one dark pair so their meaning never depends on
-   the chosen palette. Carbon is the default: an achromatic ground keeps those
+   the chosen palette. Carbon is the default: a near-neutral ground keeps those
    encodings unambiguous on a data-dense board.
 
    Note: the monolith references var(--bad) and var(--shadow) without ever
    defining them; they are intentionally left undefined here for parity. */
 
-/* ── Kit palettes (verbatim) ────────────────────────────── */
+/* ── Kit palettes (Carbon dashboard variant) ───────────── */
 [data-ditto-theme="carbon"][data-ditto-mode="light"] {
-  --ditto-canvas: oklch(96% 0.004 270);
-  --ditto-surface: oklch(99% 0.002 270);
-  --ditto-raised: oklch(90% 0.006 270);
-  --ditto-ink: oklch(17% 0.006 270);
-  --ditto-muted: oklch(40% 0.008 270);
-  --ditto-rule: oklch(79% 0.007 270);
-  --ditto-island: oklch(14% 0.006 270);
-  --ditto-island-raised: oklch(23% 0.008 270);
-  --ditto-island-ink: oklch(96% 0.004 270);
-  --ditto-island-muted: oklch(78% 0.006 270);
-  --ditto-action: oklch(20% 0.008 270);
-  --ditto-action-ink: oklch(97% 0.003 270);
-  --ditto-selection: oklch(86% 0.007 270);
+  --ditto-canvas: #eaeef4;
+  --ditto-surface: #ffffff;
+  --ditto-raised: #dfe5ee;
+  --ditto-ink: #12151b;
+  --ditto-muted: #4a5361;
+  --ditto-rule: #bcc6d4;
+  --ditto-island: #141821;
+  --ditto-island-raised: #262c37;
+  --ditto-island-ink: #f6f7f9;
+  --ditto-island-muted: #c2c9d3;
+  --ditto-action: #1d68e0;
+  --ditto-action-ink: #ffffff;
+  --ditto-selection: #d3e5ff;
   --ditto-paper: oklch(99% 0.002 85);
   --ditto-paper-raised: oklch(93% 0.004 85);
   --ditto-paper-ink: oklch(18% 0.008 60);
@@ -43,19 +44,19 @@
 }
 
 [data-ditto-theme="carbon"][data-ditto-mode="dark"] {
-  --ditto-canvas: oklch(14% 0.006 270);
-  --ditto-surface: oklch(19% 0.007 270);
-  --ditto-raised: oklch(24% 0.008 270);
-  --ditto-ink: oklch(96% 0.004 270);
-  --ditto-muted: oklch(78% 0.008 270);
-  --ditto-rule: oklch(31% 0.008 270);
-  --ditto-island: oklch(10% 0.005 270);
-  --ditto-island-raised: oklch(21% 0.008 270);
-  --ditto-island-ink: oklch(96% 0.004 270);
-  --ditto-island-muted: oklch(78% 0.008 270);
-  --ditto-action: oklch(86% 0.006 270);
-  --ditto-action-ink: oklch(16% 0.006 270);
-  --ditto-selection: oklch(30% 0.008 270);
+  --ditto-canvas: #101113;
+  --ditto-surface: #181a1d;
+  --ditto-raised: #22252a;
+  --ditto-ink: #f3f5f8;
+  --ditto-muted: #a8afb9;
+  --ditto-rule: #32363d;
+  --ditto-island: #101113;
+  --ditto-island-raised: #22252a;
+  --ditto-island-ink: #f3f5f8;
+  --ditto-island-muted: #a8afb9;
+  --ditto-action: #3c80f6;
+  --ditto-action-ink: #ffffff;
+  --ditto-selection: #183d73;
   --ditto-paper: oklch(96% 0.006 85);
   --ditto-paper-raised: oklch(90% 0.008 85);
   --ditto-paper-ink: oklch(18% 0.008 60);
@@ -255,7 +256,7 @@
   --display: var(--brand);
   --sans: var(--brand);
   --mono: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  --radius: 8px;
+  --radius: 12px;
   /* Ground-grid rule strength: how much of --text mixes into the body's
      ruled lines (vertical, horizontal). Dark surfaces compress faint light
      rules, so the dark block raises these to stay equally noticeable. */
@@ -311,18 +312,18 @@
 /* ── Data encodings: one light pair, one dark pair ──────────────────────── */
 :root,
 [data-ditto-mode="light"] {
-  --accent-2: #6d5873;
-  --gold: #9a692c;
-  --tool: #9a692c;
-  --memory: #6d5873;
-  --coding: oklch(48% 0.12 225);
-  --good: #356845;
-  --warn: #8a5a1f;
-  --danger: #a33d36;
-  --banner-text: #684215;
-  --banner-strong: #4d3010;
-  --rank-one-text: #754b18;
-  --rank-three-text: #814626;
+  --accent-2: #6a4f8c;
+  --gold: #9c6614;
+  --tool: #9c6614;
+  --memory: #6a4f8c;
+  --coding: oklch(46% 0.14 232);
+  --good: #2c7047;
+  --warn: #915713;
+  --danger: #b23a30;
+  --banner-text: #6d420f;
+  --banner-strong: #4d2d08;
+  --rank-one-text: #7a4b11;
+  --rank-three-text: #8a4522;
   /* Benchmark-generation ramp (ordinal: one hue, monotone lightness, light
      -> dark as contracts advance). The chart interpolates between these two
      ends in OKLCH, so any number of contracts up to six keeps a legible
@@ -335,14 +336,14 @@
   --ref-openclaw: oklch(52% 0.17 270);
 }
 [data-ditto-mode="dark"] {
-  --accent-2: oklch(75% 0.1 340);
-  --gold: oklch(78% 0.12 75);
+  --accent-2: #b593e8;
+  --gold: #f4c24f;
   --tool: var(--gold);
   --memory: var(--accent-2);
-  --coding: oklch(76% 0.11 220);
-  --good: oklch(75% 0.11 145);
-  --warn: oklch(76% 0.15 52);
-  --danger: oklch(72% 0.13 28);
+  --coding: #50bcf5;
+  --good: #34d887;
+  --warn: #f0b955;
+  --danger: #f35b76;
   --banner-text: oklch(86% 0.08 75);
   --banner-strong: oklch(92% 0.08 75);
   --rank-one-text: oklch(84% 0.1 75);

@@ -389,56 +389,85 @@ function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.
 
   return (
     <div class="account-sign">
-      <div class="account-hero">
-        <p class="ath-eyebrow">Miner console</p>
-        <h2>Sign in with your hotkey</h2>
-        <p>
-          Copy the <code>uvx</code> command, run it, and this page becomes your private backroom. No
-          clone required. The CLI will offer to pick your coldkey and hotkey from{" "}
-          <code>~/.bittensor/wallets</code>. No TAO moves.
-        </p>
-      </div>
-      <div class="account-grid">
-        <div class="account-card">
-          <h3>Permissions</h3>
-          <For each={SCOPES}>
-            {(item) => (
-              <label class="account-scope">
-                <input
-                  type="checkbox"
-                  checked={scopes().includes(item.id)}
-                  disabled={item.id === "read" || Boolean(props.presetCode)}
-                  onChange={() => toggleScope(item.id)}
-                />
-                <span>
-                  <strong>{item.label}</strong>
-                  <em>{item.hint}</em>
-                </span>
-              </label>
-            )}
-          </For>
+      <div class="account-sign-card">
+        <div class="account-hero">
+          <div class="account-hero-head">
+            <span class="account-hero-mark" aria-hidden="true">
+              <svg class="ic" viewBox="0 0 24 24">
+                <circle cx="8" cy="15" r="4" />
+                <path d="m10.8 12.2 9.2-9.2" />
+                <path d="m17 6 3 3" />
+                <path d="m14 9 2 2" />
+              </svg>
+            </span>
+            <p class="ath-eyebrow">Miner console</p>
+          </div>
+          <h2>Sign in with your hotkey</h2>
+          <p>
+            Copy the <code>uvx</code> command, run it, and this page becomes your private backroom.
+            No clone required. The CLI will offer to pick your coldkey and hotkey from{" "}
+            <code>~/.bittensor/wallets</code>. No TAO moves.
+          </p>
+          <div class="account-hero-stage" aria-hidden="true">
+            <span class="account-hero-stage-beam" />
+            <span class="account-hero-stage-rail" />
+            <span class="account-hero-stage-rail" />
+            <span class="account-hero-stage-rail" />
+            <span class="account-hero-stage-mark" />
+          </div>
+          <p class="account-hero-tagline">Local wallet. Private session.</p>
         </div>
-        <div class="account-card">
-          <h3>Session length</h3>
-          <div class="account-hours">
-            <For each={HOURS}>
+        <div class="account-sign-form">
+          <div class="account-card">
+            <h3>Permissions</h3>
+            <For each={SCOPES}>
               {(item) => (
-                <button
-                  class="btn ghost"
-                  classList={{ active: hours() === item.hours }}
-                  disabled={Boolean(props.presetCode)}
-                  onClick={() => setHours(item.hours)}
-                >
-                  {item.label}
-                </button>
+                <label class="account-scope">
+                  <input
+                    type="checkbox"
+                    checked={scopes().includes(item.id)}
+                    disabled={item.id === "read" || Boolean(props.presetCode)}
+                    onChange={() => toggleScope(item.id)}
+                  />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <em>{item.hint}</em>
+                  </span>
+                </label>
               )}
             </For>
           </div>
-          <Show when={!pending()}>
-            <button class="btn" onClick={() => void start()} disabled={!scopes().length}>
-              Start sign-in
-            </button>
-          </Show>
+          <div class="account-card">
+            <h3>Session length</h3>
+            <div class="account-hours">
+              <For each={HOURS}>
+                {(item) => (
+                  <button
+                    class="btn ghost"
+                    classList={{ active: hours() === item.hours }}
+                    aria-pressed={hours() === item.hours ? "true" : "false"}
+                    disabled={Boolean(props.presetCode)}
+                    onClick={() => setHours(item.hours)}
+                  >
+                    {item.label}
+                  </button>
+                )}
+              </For>
+            </div>
+            <Show when={!pending()}>
+              <button
+                class="btn account-start"
+                onClick={() => void start()}
+                disabled={!scopes().length}
+              >
+                Start sign-in
+                <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 12h14" />
+                  <path d="m13 6 6 6-6 6" />
+                </svg>
+              </button>
+            </Show>
+          </div>
         </div>
       </div>
       <Show when={command()}>

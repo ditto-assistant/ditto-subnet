@@ -144,15 +144,31 @@ def parse_chain_config_from_env() -> ChainConfig:
     )
 
 
+def _neuron_as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _neuron_as_int(value: Any, default: int = 0) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass(frozen=True)
 class NeuronInfo:
     """A neuron registered on the subnet at a point in time.
 
     Mirrors the subset of Pylon's :class:`pylon_client.artanis.Neuron` that
-    Ditto's validator and platform code actually use. Extra Pylon fields
-    (``rank``, ``trust``, ``consensus``, ``emission``, ``last_update``,
-    ``pruning_score``, etc.) are deliberately omitted until a consumer
-    needs them.
+    Ditto's platform and validators need, including Yuma metagraph fields for
+    the public chain surface.
     """
 
     hotkey: str
@@ -176,6 +192,14 @@ class NeuronInfo:
     validator_permit: bool = False
     """Whether this hotkey holds a validator permit and may call ``put_weights``."""
 
+    incentive: float = 0.0
+    dividends: float = 0.0
+    trust: float = 0.0
+    consensus: float = 0.0
+    emission: float = 0.0
+    last_update: int = 0
+    validator_trust: float = 0.0
+
     @classmethod
     def from_pylon(cls, raw: Any, hotkey: str | None = None) -> NeuronInfo:
         """Build a :class:`NeuronInfo` from a Pylon ``Neuron``.
@@ -190,11 +214,18 @@ class NeuronInfo:
         return cls(
             hotkey=str(hotkey if hotkey is not None else getattr(raw, "hotkey", "")),
             coldkey=str(getattr(raw, "coldkey", "") or ""),
-            uid=int(getattr(raw, "uid", 0) or 0),
-            stake=float(getattr(raw, "stake", 0.0) or 0.0),
+            uid=_neuron_as_int(getattr(raw, "uid", 0)),
+            stake=_neuron_as_float(getattr(raw, "stake", 0.0)),
             axon_info=_axon_info_to_dict(getattr(raw, "axon_info", None)),
             is_active=bool(getattr(raw, "active", False)),
             validator_permit=bool(getattr(raw, "validator_permit", False)),
+            incentive=_neuron_as_float(getattr(raw, "incentive", 0.0)),
+            dividends=_neuron_as_float(getattr(raw, "dividends", 0.0)),
+            trust=_neuron_as_float(getattr(raw, "trust", 0.0)),
+            consensus=_neuron_as_float(getattr(raw, "consensus", 0.0)),
+            emission=_neuron_as_float(getattr(raw, "emission", 0.0)),
+            last_update=_neuron_as_int(getattr(raw, "last_update", 0)),
+            validator_trust=_neuron_as_float(getattr(raw, "validator_trust", 0.0)),
         )
 
 

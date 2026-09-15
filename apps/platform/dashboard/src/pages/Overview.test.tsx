@@ -106,28 +106,29 @@ async function waitForBoard(): Promise<void> {
 // Who reigns, what state the subnet is in, when the next payout lands — one
 // ruled band above the split, so none of it sits below the fold or behind
 // the chart, and the clock appears once per screen.
-describe("overview masthead", () => {
-  it("leads the page with one band — champion, vitals ledger, payout clock — above the split", async () => {
+describe("overview composition", () => {
+  it("leads with vitals, then economics, then chart|KOTH split, then full-width board", async () => {
     renderOverview();
     await waitForBoard();
     const section = document.querySelector('section.page[data-page="overview"]') as HTMLElement;
-    const masthead = section.querySelector(".overview-masthead") as HTMLElement;
-    expect(masthead).toBeTruthy();
-    // The band is the page's first reading line; the two-pane split follows.
-    expect(section.firstElementChild).toBe(masthead);
-    expect(masthead.nextElementSibling?.classList.contains("overview-split")).toBe(true);
-    // Three instruments, in reading order, inside the one frame.
-    const cells = Array.from(masthead.children).map((el) => el.className.split(" ")[0]);
-    expect(cells).toEqual(["champion-box", "snapshot", "overview-clock"]);
-    // The clock is a second mount of the rail's instrument under its own id,
-    // so the page never carries two #epoch-clock.
-    expect(masthead.querySelector("#overview-epoch-clock.epoch-clock")).toBeTruthy();
+    const vitals = section.querySelector(".overview-vitals") as HTMLElement;
+    expect(vitals).toBeTruthy();
+    expect(section.firstElementChild).toBe(vitals);
+    expect(vitals.nextElementSibling?.classList.contains("chain-economics")).toBe(true);
+    const split = section.querySelector(".overview-split") as HTMLElement;
+    expect(split).toBeTruthy();
+    expect(split.querySelector(".overview-rail")).toBeTruthy();
+    expect(split.querySelector(".overview-side .champion-box")).toBeTruthy();
+    expect(split.querySelector("#overview-epoch-clock.epoch-clock")).toBeTruthy();
     expect(document.querySelectorAll("#epoch-clock")).toHaveLength(0);
-    expect(masthead.querySelector("#overview-epoch-clock")?.textContent).toContain(
-      "Next payout in",
-    );
-    // The rail's copy folds away while this page is on at rail widths, so
-    // the reading appears once per screen; the phone top bar keeps its own.
+    expect(split.querySelector("#overview-epoch-clock")?.textContent).toContain("Next payout in");
+    // Board is full-width below the split, not inside it.
+    expect(split.querySelector(".overview-main")).toBeNull();
+    expect(section.querySelector(".overview-main")).toBeTruthy();
+    expect(
+      split.compareDocumentPosition(section.querySelector(".overview-main") as Node) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
     const shellCss = readFileSync(join(HERE, "..", "styles", "shell.css"), "utf-8").replace(
       /\s+/g,
       " ",
@@ -136,39 +137,41 @@ describe("overview masthead", () => {
       '@media (min-width: 961px) { .layout:has(.page.active[data-page="overview"]) .sidebar > .epoch-clock { display: none; } }',
     );
     expect(cssNorm).toContain(
-      "@media (max-width: 960px) { .overview-masthead > .overview-clock { display: none; } }",
+      "@media (max-width: 960px) { .overview-side > .overview-clock { display: none; } }",
     );
   });
 
-  it("lays the vitals ledger out as three ruled rows: population, scores, machine", async () => {
+  it("lays vitals as four population cards over a five-reading score strip", async () => {
     renderOverview();
     await waitForBoard();
-    const lines = Array.from(document.querySelectorAll(".stat-ledger .ledger-line"));
-    expect(lines.map((line) => line.getAttribute("data-ledger"))).toEqual([
+    const cards = Array.from(document.querySelectorAll(".stat-cards .ledger-line"));
+    const strip = Array.from(document.querySelectorAll(".stat-strip .ledger-line"));
+    expect(cards.map((line) => line.getAttribute("data-ledger"))).toEqual([
       "population",
       "population",
       "population",
-      "scores",
-      "scores",
-      "scores",
-      "machine",
-      "machine",
-      "machine",
+      "population",
     ]);
-    expect(lines.map((line) => line.querySelector("dd")?.id)).toEqual([
+    expect(strip.map((line) => line.getAttribute("data-ledger"))).toEqual([
+      "scores",
+      "scores",
+      "scores",
+      "scores",
+      "scores",
+    ]);
+    expect(cards.map((line) => line.querySelector("dd")?.id)).toEqual([
       "h-miners",
       "c-miners",
       "h-agents",
+      "h-validators",
+    ]);
+    expect(strip.map((line) => line.querySelector("dd")?.id)).toEqual([
       "c-top",
       "c-median",
       "c-spread",
-      "h-validators",
       "h-scores",
       "h-last",
     ]);
-    expect(cssNorm).toContain(
-      ".stat-ledger { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));",
-    );
   });
 });
 

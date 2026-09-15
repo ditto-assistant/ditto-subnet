@@ -39,6 +39,7 @@ import { installScrollMemory } from "./lib/scroll";
 import { benchmarkDisplayVersion, leaderboardBenchState } from "./lib/bench-state";
 import { isFinalized, isOlderRun, rankEntries, rolloutSettledView } from "./lib/scoring";
 import { currentPage, initRouteListeners, syncFromLocation } from "./stores/routeStore";
+import type { PublicChainResponse } from "./types/chain";
 import type { BenchConfigPayload, GlossaryPayload, TimelinePayload } from "./types/bench";
 import type { FleetReport, HealthPayload, ValidatorNamesPayload } from "./types/fleet";
 import type {
@@ -51,6 +52,7 @@ import type { PipelineEntry } from "./types/pipeline";
 
 import { BenchmarkPage } from "./pages/BenchmarkPage";
 import { LeaderboardPage } from "./pages/LeaderboardPage";
+import { MetagraphPage } from "./pages/MetagraphPage";
 import { OperationsPage } from "./pages/OperationsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { PipelinePage } from "./pages/PipelinePage";
@@ -82,6 +84,7 @@ export default function App(): JSX.Element {
   // ── App-level endpoint resources ──────────────────────────────────────────
   const leaderboard = useEndpoint<LeaderboardPayload>("/public/leaderboard");
   const weights = weightsResource();
+  const chain = useEndpoint<PublicChainResponse>("/public/chain");
   const rollout = useEndpoint<RolloutState>("/public/bench/rollout");
   const health = useEndpoint<HealthPayload>("/public/health");
   const operations = operationsResource();
@@ -99,6 +102,7 @@ export default function App(): JSX.Element {
   function refreshTick(manual: boolean): void {
     leaderboard.refresh();
     weights.refresh();
+    chain.refresh();
     rollout.refresh();
     health.refresh();
     timeline.refresh();
@@ -113,6 +117,7 @@ export default function App(): JSX.Element {
       manual ||
       currentPage() === "operations" ||
       currentPage() === "pipeline" ||
+      currentPage() === "metagraph" ||
       Boolean(validatorNames.error()) ||
       Boolean(screeners.error())
     ) {
@@ -358,16 +363,19 @@ export default function App(): JSX.Element {
             <UnavailableBanner show={status().mode === "error"} />
             <Switch>
               <Match when={currentPage() === "overview"}>
-                <OverviewPage operations={operations} />
+                <OverviewPage operations={operations} chain={chain} />
               </Match>
               <Match when={currentPage() === "leaderboard"}>
-                <LeaderboardPage />
+                <LeaderboardPage chain={chain} />
+              </Match>
+              <Match when={currentPage() === "metagraph"}>
+                <MetagraphPage chain={chain} leaderboard={leaderboard} />
               </Match>
               <Match when={currentPage() === "pipeline"}>
                 <PipelinePage operations={operations} />
               </Match>
               <Match when={currentPage() === "operations"}>
-                <OperationsPage operations={operations} />
+                <OperationsPage operations={operations} chain={chain} />
               </Match>
               <Match when={currentPage() === "submissions"}>
                 <SubmissionsPage />
@@ -389,6 +397,7 @@ export default function App(): JSX.Element {
         entries={entries}
         operations={ops}
         validatorNames={names}
+        chain={chain}
         currentBench={() => bench().current}
         settledView={settledView}
       />

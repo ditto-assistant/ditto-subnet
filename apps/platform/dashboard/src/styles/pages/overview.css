@@ -517,97 +517,42 @@
   }
 }
 
-/* ── Overview masthead + split ──────────────────────────────
-   The page is a masthead band over two independently scrolling columns.
-   The band is one ruled frame of three instruments — champion, vitals
-   ledger, payout clock — joined by hairlines (1px gaps over the border
-   colour), so they read as one reading line rather than three cards. */
-.overview-masthead {
+/* ── Overview: vitals → (chart | KOTH+payout) → full-width board ──
+   Matches the concept reading order. Economics (chain strip) is inserted
+   between vitals and the split by OverviewPage. The phone sticky top bar
+   already carries a compact clock, so the side clock steps aside there. */
+.overview-vitals {
+  margin: 0 0 18px;
+}
+.overview-split {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 1px;
+  gap: 18px;
   margin: 0 0 18px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--border);
-  /* Tooltips are portaled to <body>, so clipping costs nothing and the
-     cells inherit the frame's corners without rounding themselves. */
-  overflow: clip;
+  align-items: stretch;
 }
-.overview-masthead > * {
+.overview-side {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 18px;
   min-width: 0;
-  background: var(--bg-elev);
 }
-/* Intermediate widths (rail still a rail, band too narrow for three
-   cells): champion and clock share the first row, the ledger takes the
-   second at full width. */
-@media (min-width: 961px) and (max-width: 1180px) {
-  .overview-masthead {
-    grid-template-columns: minmax(0, 1fr) minmax(210px, auto);
-  }
-  .overview-masthead > .champion-box {
-    grid-row: 1;
-    grid-column: 1;
-  }
-  .overview-masthead > .overview-clock {
-    grid-row: 1;
-    grid-column: 2;
-  }
-  .overview-masthead > .snapshot {
-    grid-row: 2;
-    grid-column: 1 / -1;
-  }
+.overview-main {
+  margin: 0;
+  min-width: 0;
 }
-/* Phone and tablet: the sticky top bar already carries the compact clock
-   above this band, so the band's full instrument steps aside. */
+.overview-rail .harness-comparison {
+  margin-top: 0;
+}
 @media (max-width: 960px) {
-  .overview-masthead > .overview-clock {
+  .overview-side > .overview-clock {
     display: none;
   }
 }
-@media (min-width: 1181px) {
-  .overview-masthead {
-    grid-template-columns: minmax(320px, 1.05fr) minmax(0, 1.6fr) minmax(196px, auto);
-  }
-  /* The page is a fixed two-pane shell under the band: the page itself has
-     nothing to scroll, each column scrolls internally. The chrome budget is
-     the wrap's top padding, the page header, and a trimmed bottom padding;
-     `--overview-chrome` is the one number to retune if the header grows. */
-  .page.active[data-page="overview"] {
-    --overview-chrome: 124px;
-    display: flex;
-    flex-direction: column;
-    height: calc(100vh - var(--overview-chrome));
-    min-height: 420px;
-  }
-  .wrap:has(.page.active[data-page="overview"]) {
-    padding-bottom: 20px;
-  }
-  .overview-masthead {
-    flex: none;
-  }
+@media (min-width: 961px) {
   .overview-split {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-    gap: 26px;
-    align-items: stretch;
-  }
-  .overview-rail,
-  .overview-main {
-    min-height: 0;
-    max-height: 100%;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
-    padding-right: 6px;
-  }
-  .overview-rail .harness-comparison {
-    margin-top: 0;
-  }
-  .overview-main > :first-child {
-    margin-top: 0;
+    grid-template-columns: minmax(0, 1.45fr) minmax(280px, 0.72fr);
+    gap: 22px;
   }
 }
 /* The overview board is deliberately compact — ranked agent, emissions,

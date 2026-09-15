@@ -51,6 +51,7 @@ from ditto.chain.models import (
     ChainWeightVector,
     ExtrinsicInfo,
     NeuronInfo,
+    RegistrationEconomics,
     parse_chain_config_from_env,
 )
 
@@ -68,6 +69,7 @@ __all__ = [
     "ChainWeightVector",
     "ExtrinsicInfo",
     "NeuronInfo",
+    "RegistrationEconomics",
     # Errors
     "ChainError",
     "ChainAuthError",

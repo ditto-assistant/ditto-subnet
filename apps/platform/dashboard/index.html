@@ -124,9 +124,9 @@
         function readMode() {
           try {
             var saved = localStorage.getItem(STORAGE_KEY);
-            return MODES[saved] ? saved : "system";
+            return MODES[saved] ? saved : "dark";
           } catch (e) {
-            return "system";
+            return "dark";
           }
         }
 

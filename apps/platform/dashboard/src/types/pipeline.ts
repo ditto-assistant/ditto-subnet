@@ -21,6 +21,8 @@ export interface ActivityEntry {
   status?: string;
   submitted_at?: string;
   score_count?: number | null;
+  /** True when this waiting row predates the active benchmark era. */
+  previous_generation?: boolean | null;
   /** Exact-artifact aggregate only; parallel shadow work never gates this lifecycle. */
   coding_shadow?: CodingShadowScore | null;
   quorum?: number | null;

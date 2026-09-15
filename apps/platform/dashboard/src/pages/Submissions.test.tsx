@@ -188,6 +188,7 @@ describe("server-backed quick filters (row 10)", () => {
     const last = activityRequests().pop() as URLSearchParams;
     expect(last.get("downloadable")).toBe("true");
     expect(last.get("page")).toBe("1");
+    expect(last.getAll("status")).toEqual([]);
     expect(location.pathname + location.search).toBe("/submissions?downloadable=true");
   });
 

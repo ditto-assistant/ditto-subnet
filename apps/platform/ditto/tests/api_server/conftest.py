@@ -26,6 +26,7 @@ from ditto.api_server import (
     ValidatorNamesConfig,
     create_api_server,
 )
+from ditto.api_server.subnet_market import SubnetMarketConfig
 from ditto.api_server.datapipeline import DataPipelineConfig, NullGenerator
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -98,6 +99,7 @@ def make_api_server_config(**overrides: Any) -> ApiServerConfig:
             api_token="test-screener-token-at-least-32-characters",
         ),
         validator_names=ValidatorNamesConfig(),
+        subnet_market=SubnetMarketConfig(),
         validator_compatibility=ValidatorCompatibilityConfig(
             minimum_software_version=None,
             minimum_protocol_version=1,

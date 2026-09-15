@@ -194,6 +194,9 @@ interface HeaderSpec {
   key: BoardSortKey | null;
   label: string;
   tip: string;
+  /** Compact overview hierarchy; the full label remains the accessible name. */
+  kicker?: string;
+  caption?: string;
   class?: string;
   width?: string;
 }
@@ -203,18 +206,24 @@ const HEADERS: HeaderSpec[] = [
     key: "rank",
     label: "Ranked agent",
     width: "300px",
+    kicker: "Identity",
+    caption: "Rank · UID · hotkey",
     tip: "Score rank and the miner's best-scoring agent. Open either identity for details, or copy the hotkey. Provisional runs remain unranked (–).",
   },
   {
     key: null,
     label: "Emissions",
     width: "128px",
+    kicker: "KOTH allocation",
+    caption: "Current pool share",
     tip: "Current KOTH role. The incumbent champion takes a fixed share of the miner pool; a participation tail splits the remainder.",
   },
   {
     key: "composite",
     label: "Scores",
     width: "280px",
+    kicker: "Measured lanes",
+    caption: "KOTH · tool · memory",
     tip: "Current quality score with tool and memory subscores beneath it. Coding shadow is display-only and never ranks. Quality is the primary rank key; when active, efficiency breaks only exact-quality ties.",
   },
   {
@@ -1255,7 +1264,15 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
                     role={header.key ? "button" : undefined}
                     text={header.key ? header.tip : emissionsColTip(store)}
                   >
-                    {header.label}
+                    <span class="board-header-copy">
+                      {header.kicker ? (
+                        <span class="board-header-kicker">{header.kicker}</span>
+                      ) : null}
+                      <span class="board-header-label">{header.label}</span>
+                      {header.caption ? (
+                        <span class="board-header-caption">{header.caption}</span>
+                      ) : null}
+                    </span>
                   </TipTarget>
                   <Show when={header.key}>
                     <span class="sarrow" aria-hidden="true">

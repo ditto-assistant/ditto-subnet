@@ -126,6 +126,8 @@ export function createActivityStore(): ActivityStore {
       leftoverHash ||
       valid.length !== values.length ||
       (source.has("downloadable") && !nextDownloadable) ||
+      // Drop a leftover Current bench query if an older preview linked it.
+      source.has("bench") ||
       nextQuery !== (source.get("q") || "") ||
       pageNeedsSanitizing
     );
@@ -138,6 +140,7 @@ export function createActivityStore(): ActivityStore {
     if (/^\/(agent|miner)s?\//.test(location.pathname)) return;
     const urlQuery = spaQuery();
     urlQuery.delete("status");
+    urlQuery.delete("bench");
     statuses().forEach((status) => urlQuery.append("status", status));
     if (downloadable()) urlQuery.set("downloadable", "true");
     else urlQuery.delete("downloadable");

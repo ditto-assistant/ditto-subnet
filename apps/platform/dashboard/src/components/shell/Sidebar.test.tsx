@@ -27,6 +27,7 @@ describe("Sidebar routes every section (row 28)", () => {
     const pages: PageName[] = [
       "overview",
       "leaderboard",
+      "metagraph",
       "pipeline",
       "operations",
       "submissions",
@@ -68,6 +69,7 @@ describe("Sidebar routes every section (row 28)", () => {
     expect(labels).toEqual([
       "Overview",
       "Leaderboard",
+      "Metagraph",
       "Pipeline",
       "Fleet",
       "Submissions",

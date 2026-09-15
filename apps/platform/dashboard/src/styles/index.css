@@ -20,5 +20,5 @@
 @import "./pages/reviews.css";
 @import "./pages/account.css";
 
-/* the calm layer sits last so it wins every tie */
-@import "./calm.css";
+/* Atelier: luxury-dark fashion system (replaces Forge) */
+@import "./atelier.css";

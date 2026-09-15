@@ -52,6 +52,10 @@ describe("PAGES registry", () => {
       title: "Leaderboard",
       sub: "Every scored miner · canonical ranks · sortable by any metric",
     });
+    expect(PAGES.metagraph).toEqual({
+      title: "Metagraph",
+      sub: "On-chain SN118 neurons · stake, Yuma signals, registration economics",
+    });
     expect(PAGES.pipeline).toEqual({
       title: "Submission pipeline",
       sub: "Every submission from upload to scored · admission, validation, and integrity review",

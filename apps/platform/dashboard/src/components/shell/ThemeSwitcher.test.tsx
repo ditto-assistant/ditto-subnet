@@ -47,11 +47,11 @@ describe("ThemeSwitcher (row 27)", () => {
     expect(group).toHaveAttribute("aria-label", "Color theme");
   });
 
-  it("defaults to system and reflects it via aria-pressed", () => {
+  it("defaults to dark and reflects it via aria-pressed", () => {
     render(() => <ThemeSwitcher />);
-    expect(choice("system")).toHaveAttribute("aria-pressed", "true");
-    expect(choice("dark")).toHaveAttribute("aria-pressed", "false");
-    expect(document.documentElement.dataset.theme).toBe("system");
+    expect(choice("system")).toHaveAttribute("aria-pressed", "false");
+    expect(choice("dark")).toHaveAttribute("aria-pressed", "true");
+    expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
   it("persists a chosen mode to localStorage and stamps the root attributes", () => {
@@ -70,14 +70,14 @@ describe("ThemeSwitcher (row 27)", () => {
     expect(document.documentElement.dataset.dittoMode).toBe("light");
   });
 
-  it("falls back to system for junk in storage (and for storage throws)", () => {
+  it("falls back to dark for junk in storage (and for storage throws)", () => {
     localStorage.setItem(THEME_STORAGE_KEY, "sparkle");
-    expect(themeBootstrap().readMode()).toBe("system");
+    expect(themeBootstrap().readMode()).toBe("dark");
     delete window.__dittoDashboardTheme;
     vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
       throw new Error("storage disabled");
     });
-    expect(themeBootstrap().readMode()).toBe("system");
+    expect(themeBootstrap().readMode()).toBe("dark");
   });
 
   it("maps hours onto the five landing-page phases", () => {
@@ -141,7 +141,7 @@ describe("brand-kit palette picker", () => {
     );
     expect(paletteChoice("carbon")).toHaveAttribute("aria-pressed", "true");
     expect(document.documentElement.dataset.dittoTheme).toBe("carbon");
-    expect(document.documentElement.dataset.dittoMode).toBe("light");
+    expect(document.documentElement.dataset.dittoMode).toBe("dark");
   });
 
   it("persists a chosen palette and stamps data-ditto-theme on the root", () => {
@@ -157,9 +157,9 @@ describe("brand-kit palette picker", () => {
     render(() => <ThemeSwitcher />);
     const swatch = () => paletteChoice("signal").querySelector(".palette-swatch");
     expect(swatch()).toHaveAttribute("data-ditto-theme", "signal");
-    expect(swatch()).toHaveAttribute("data-ditto-mode", "light");
-    fireEvent.click(choice("dark"));
     expect(swatch()).toHaveAttribute("data-ditto-mode", "dark");
+    fireEvent.click(choice("light"));
+    expect(swatch()).toHaveAttribute("data-ditto-mode", "light");
   });
 
   it("restores a saved palette and falls back to Carbon for junk", () => {

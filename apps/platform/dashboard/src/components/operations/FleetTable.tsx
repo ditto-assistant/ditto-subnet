@@ -183,6 +183,7 @@ function FleetIdentity(props: {
   entry: FleetEntryExt;
   singular: FleetSingular;
   names: Record<string, string>;
+  stakes?: Record<string, number>;
   status: [string, string];
   screenerHostId?: string;
   /** Retired screeners name themselves "Unknown screener" (8890). */
@@ -190,6 +191,7 @@ function FleetIdentity(props: {
 }): JSX.Element {
   const hotkey = () => hotkeyOf(props.entry, props.singular);
   const reportedAt = () => props.entry.seen_at || props.entry.reported_at;
+  const stakeAlpha = () => (props.singular === "validator" ? props.stakes?.[hotkey()] : undefined);
   // Validators are keyed by a distinct hotkey; the screener fleet shares one
   // hotkey, so each worker is distinguished by its instance_id.
   const displayName = () =>
@@ -230,6 +232,14 @@ function FleetIdentity(props: {
         <span class="fleet-node fleet-node-key copyable" title={hotkey()}>
           {keyNode()}
         </span>
+        <Show when={stakeAlpha() != null}>
+          <span
+            class="fleet-stake tip-chip"
+            title="Neuron stake from the on-chain metagraph (Pylon)"
+          >
+            τ {stakeAlpha()!.toFixed(2)}
+          </span>
+        </Show>
         <span class="fleet-node-state">
           <span class={"fleet-node-status " + tone()}>{props.status[0]}</span>
           <span class="fleet-node-state-sep" aria-hidden="true">
@@ -1020,6 +1030,7 @@ export interface FleetRowProps {
   entry: FleetEntryExt;
   singular: FleetSingular;
   names: Record<string, string>;
+  stakes?: Record<string, number>;
   slotPolicy: SlotPolicy | null;
   benchVersion: number | null;
   highlightId: string | null;
@@ -1065,6 +1076,7 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
           entry={props.entry}
           singular={props.singular}
           names={props.names}
+          stakes={props.stakes}
           status={status()}
           screenerHostId={props.groupedScreenerHostId}
         />
@@ -1135,6 +1147,7 @@ export interface RetiredFleetRowProps {
   entry: FleetEntryExt;
   singular: FleetSingular;
   names: Record<string, string>;
+  stakes?: Record<string, number>;
   benchVersion: number | null;
   highlightId: string | null;
 }
@@ -1161,6 +1174,7 @@ export function RetiredFleetRow(props: RetiredFleetRowProps): JSX.Element {
           entry={props.entry}
           singular={props.singular}
           names={props.names}
+          stakes={props.stakes}
           status={status()}
           screenerFallback="Unknown screener"
         />

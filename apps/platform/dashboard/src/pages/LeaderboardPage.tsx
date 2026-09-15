@@ -10,8 +10,12 @@ import type { JSX } from "solid-js";
 
 import { CrownHistory } from "../components/board/CrownHistory";
 import { LeaderboardBlock } from "../components/board/LeaderboardBlock";
+import type { ResourceState } from "../data/useEndpoint";
+import type { PublicChainResponse } from "../types/chain";
 
-export function LeaderboardPage(): JSX.Element {
+export function LeaderboardPage(
+  _props: { chain?: ResourceState<PublicChainResponse> } = {},
+): JSX.Element {
   return (
     <section class="page active" data-page="leaderboard">
       <div id="leaderboard-page-host">

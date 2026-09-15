@@ -45,6 +45,7 @@ import type { OperationsView } from "../lib/router";
 import { validatorWeightViews } from "../lib/scoring";
 import type { ValidatorWeightView } from "../lib/scoring";
 import { entityRoute, navigateToOperationsView, operationsViewRoute } from "../stores/routeStore";
+import type { PublicChainResponse } from "../types/chain";
 import type { FleetReport, OperationsPayload, ValidatorNamesPayload } from "../types/fleet";
 import { latest, useOperationsSnapshot } from "./operations-shared";
 
@@ -88,6 +89,7 @@ function fleetKey(entry: FleetEntryExt, index: number): string {
 export function OperationsPage(
   props: {
     operations?: ResourceState<OperationsPayload>;
+    chain?: ResourceState<PublicChainResponse>;
   } = {},
 ): JSX.Element {
   const operations = props.operations ?? operationsResource();
@@ -97,6 +99,10 @@ export function OperationsPage(
   });
   const screeners = useEndpoint<FleetReport>("/public/screeners", { pollMs: REFRESH_MS });
   const weights = weightsResource();
+  const localChain = props.chain
+    ? null
+    : useEndpoint<PublicChainResponse>("/public/chain", { pollMs: REFRESH_MS });
+  const chain = () => props.chain ?? localChain!;
 
   // Revealed on-chain weight vectors, keyed by validator hotkey. A failed
   // weights tick keeps the previous matrix (the leaderboard store's
@@ -135,16 +141,23 @@ export function OperationsPage(
     return preserveTransientValidatorTelemetry(report, Date.now()) as FleetReportExt;
   });
 
-  // Display names / stake weights: rebuilt from scratch on every payload —
-  // decoration resets on refetch, and a failed feed clears rather than
-  // freezes it (loadValidatorNames 9464–9484).
+  // Display names / stake weights: Taostats names are optional decoration.
+  // Neuron stake always comes from the on-chain metagraph (/public/chain) so
+  // Fleet stake chips work with no Taostats key.
   const nameData = createMemo(() => {
     const names: Record<string, string> = {};
     const stakes: Record<string, number> = {};
+    const chainSnap = latest(chain());
+    for (const neuron of chainSnap?.metagraph ?? []) {
+      if (neuron.validator_permit && Number.isFinite(neuron.stake)) {
+        stakes[neuron.hotkey] = neuron.stake;
+      }
+    }
     (latest(validatorNames)?.validators ?? []).forEach((entry) => {
       if (!entry || typeof entry.validator_hotkey !== "string") return;
       if (typeof entry.display_name === "string")
         names[entry.validator_hotkey] = entry.display_name;
+      // Prefer Taostats α weight when present; otherwise keep chain stake.
       if (Number.isFinite(entry.stake_weight)) {
         stakes[entry.validator_hotkey] = entry.stake_weight as number;
       }
@@ -485,6 +498,7 @@ export function OperationsPage(
                             entry={entry}
                             singular={fleet().singular}
                             names={nameData().names}
+                            stakes={nameData().stakes}
                             slotPolicy={fleet().slotPolicy}
                             benchVersion={benchVersion()}
                             highlightId={highlightId()}
@@ -539,6 +553,7 @@ export function OperationsPage(
                             entry={entry}
                             singular={fleet().singular}
                             names={nameData().names}
+                            stakes={nameData().stakes}
                             benchVersion={benchVersion()}
                             highlightId={highlightId()}
                           />
