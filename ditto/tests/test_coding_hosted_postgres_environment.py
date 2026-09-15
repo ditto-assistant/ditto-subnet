@@ -861,31 +861,36 @@ def test_guard_logic_follows_the_role_template() -> None:
     reason="the coding_hosted_postgres_environment_cleanup role is not on this tree",
 )
 def test_unit_listing_and_allow_list_match_the_cleanup_role() -> None:
-    # The two roles have diverged (this one adds a dynamic-include gate, capture
-    # once and template-error guards the cleanup branch still lacks), so only the
-    # parts that must stay byte-identical are compared: the unit listing and the
-    # allow-list regex both roles use to decide a copy is safe to touch.
-    cleanup = yaml.safe_load((CLEANUP_ROLE / "tasks/main.yml").read_text())
+    # The two roles keep separate guards (the removal role freezes its gate into
+    # a fact and unlinks through a pinned directory), so only the parts that must
+    # stay byte-identical are compared: every unit listing and the allow-list
+    # regex both roles use to decide a copy is safe to touch. The removal role's
+    # guarded tasks live in its dynamically included tasks/remove.yml.
+    cleanup = yaml.safe_load((CLEANUP_ROLE / "tasks/remove.yml").read_text())
     cleanup_prefix = "coding_hosted_postgres_environment_cleanup_"
-    (cleanup_listing,) = [
+    cleanup_listings = [
         t
         for t in _walk(cleanup)
         if t.get("ansible.builtin.command", {}).get("argv", [""])[0]
         == "/usr/bin/systemctl"
     ]
-    assert cleanup_listing["ansible.builtin.command"]["argv"] == LISTING_ARGV
-    (cleanup_live,) = [
-        t
-        for t in _walk(cleanup)
-        if "ansible.builtin.assert" in t
-        and f"{cleanup_prefix}units.stdout_lines"
-        in json.dumps(t["ansible.builtin.assert"]["that"])
-    ]
-    (cleanup_that,) = cleanup_live["ansible.builtin.assert"]["that"]
-    # Normalise the prefix and compare the allow-list logic verbatim.
-    assert _flat(cleanup_that).replace(cleanup_prefix, PFX) == _expected_live_check(
-        f"{PFX}units"
-    )
+    # Before removal and again after the unlink.
+    assert len(cleanup_listings) == 2
+    for listing in cleanup_listings:
+        assert listing["ansible.builtin.command"]["argv"] == LISTING_ARGV
+        (cleanup_live,) = [
+            t
+            for t in _walk(cleanup)
+            if "ansible.builtin.assert" in t
+            and f"{listing['register']}.stdout_lines"
+            in json.dumps(t["ansible.builtin.assert"]["that"])
+        ]
+        (cleanup_that,) = cleanup_live["ansible.builtin.assert"]["that"]
+        # Normalise the prefix and compare the allow-list logic verbatim.
+        register = listing["register"].replace(cleanup_prefix, PFX)
+        assert _flat(cleanup_that).replace(cleanup_prefix, PFX) == (
+            _expected_live_check(register)
+        )
 
 
 # --------------------------------------------------------------------------- #
