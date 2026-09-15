@@ -1108,3 +1108,27 @@ describe("review-event evidence in the table (#622/#636)", () => {
     expect(cell.textContent).not.toContain("Initial comparison");
   });
 });
+
+describe("quorum seat dots", () => {
+  it("fills one dot per accepted score and draws none for work not yet started", async () => {
+    await renderPage();
+    const rows = Array.from(document.querySelectorAll("#activity-rows tr[data-activity-i]"));
+    const scored = rows.find((row) =>
+      row.querySelector(".validation-progress")?.textContent?.startsWith("3 of 3"),
+    );
+    const held = rows.find(
+      (row) => row.querySelector(".validation-progress")?.textContent === "0 of 3",
+    );
+    const unstarted = rows.find(
+      (row) => row.querySelector(".validation-progress")?.textContent === "Not started",
+    );
+    expect(scored?.querySelectorAll(".quorum-dots i").length).toBe(3);
+    expect(scored?.querySelectorAll(".quorum-dots i.filled").length).toBe(3);
+    expect(held?.querySelectorAll(".quorum-dots i").length).toBe(3);
+    expect(held?.querySelectorAll(".quorum-dots i.filled").length).toBe(0);
+    // The dots restate the text beside them, so they stay out of the
+    // accessibility tree; an absent quorum draws nothing at all.
+    expect(scored?.querySelector(".quorum-dots")).toHaveAttribute("aria-hidden", "true");
+    expect(unstarted?.querySelector(".quorum-dots")).toBeNull();
+  });
+});

@@ -33,10 +33,9 @@ const NAV_ITEMS: NavItem[] = [
     desc: () => "Snapshot & leaderboard",
     icon: () => (
       <svg class="ic" viewBox="0 0 24 24">
-        <rect x="3" y="3" width="7" height="9" rx="1" />
-        <rect x="14" y="3" width="7" height="5" rx="1" />
-        <rect x="14" y="12" width="7" height="9" rx="1" />
-        <rect x="3" y="16" width="7" height="5" rx="1" />
+        <path d="M3 10.5 12 3l9 7.5" />
+        <path d="M5 9.5V21h14V9.5" />
+        <path d="M10 21v-6h4v6" />
       </svg>
     ),
   },
@@ -46,11 +45,11 @@ const NAV_ITEMS: NavItem[] = [
     desc: () => "Full ranked table",
     icon: () => (
       <svg class="ic" viewBox="0 0 24 24">
-        <path d="M8 21V9" />
-        <path d="M16 21v-5" />
-        <path d="M4 21v-3" />
-        <path d="M20 21v-8" />
-        <path d="M4 3h16" />
+        <path d="M8 21h8" />
+        <path d="M12 17v4" />
+        <path d="M7 4h10v5a5 5 0 0 1-10 0Z" />
+        <path d="M17 5h3v2a3 3 0 0 1-3 3" />
+        <path d="M7 5H4v2a3 3 0 0 0 3 3" />
       </svg>
     ),
   },
@@ -60,9 +59,9 @@ const NAV_ITEMS: NavItem[] = [
     desc: () => "Submission flow & screening",
     icon: () => (
       <svg class="ic" viewBox="0 0 24 24">
-        <rect width="8" height="8" x="3" y="3" rx="2" />
-        <path d="M7 11v4a2 2 0 0 0 2 2h4" />
-        <rect width="8" height="8" x="13" y="13" rx="2" />
+        <ellipse cx="12" cy="5" rx="8" ry="3" />
+        <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
+        <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" />
       </svg>
     ),
   },
@@ -72,10 +71,11 @@ const NAV_ITEMS: NavItem[] = [
     desc: () => "Validators, screeners & builds",
     icon: () => (
       <svg class="ic" viewBox="0 0 24 24">
-        <rect width="20" height="8" x="2" y="2" rx="2" />
-        <rect width="20" height="8" x="2" y="14" rx="2" />
-        <path d="M6 6h.01" />
-        <path d="M6 18h.01" />
+        <circle cx="12" cy="5" r="2.5" />
+        <circle cx="5" cy="18" r="2.5" />
+        <circle cx="19" cy="18" r="2.5" />
+        <path d="M10.8 7.2 6.2 15.8" />
+        <path d="m13.2 7.2 4.6 8.6" />
       </svg>
     ),
   },
@@ -85,8 +85,9 @@ const NAV_ITEMS: NavItem[] = [
     desc: () => "Recent uploads",
     icon: () => (
       <svg class="ic" viewBox="0 0 24 24">
-        <path d="M22 12h-6l-2 3h-4l-2-3H2" />
-        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+        <path d="M6 3h8l4 4v14H6Z" />
+        <path d="M14 3v4h4" />
+        <path d="M9 12h6M9 16h6" />
       </svg>
     ),
   },
@@ -96,8 +97,8 @@ const NAV_ITEMS: NavItem[] = [
     desc: () => (minerSession() ? "Your miner console" : "Miner profile & MCP"),
     icon: () => (
       <svg class="ic" viewBox="0 0 24 24">
-        <path d="M12 3 3.6 7.2v5.6c0 4.7 3.6 7.2 8.4 8.2 4.8-1 8.4-3.5 8.4-8.2V7.2Z" />
-        <path d="M9 12h6M12 9v6" />
+        <circle cx="12" cy="8" r="4" />
+        <path d="M4 21a8 8 0 0 1 16 0" />
       </svg>
     ),
   },
@@ -107,8 +108,10 @@ const NAV_ITEMS: NavItem[] = [
     desc: () => "Active public holds",
     icon: () => (
       <svg class="ic" viewBox="0 0 24 24">
-        <path d="M12 3 3.6 7.2v5.6c0 4.7 3.6 7.2 8.4 8.2 4.8-1 8.4-3.5 8.4-8.2V7.2Z" />
-        <path d="M9 12h6M12 9v6" />
+        <path d="M4 20v-4" />
+        <path d="M9 20v-8" />
+        <path d="M14 20V8" />
+        <path d="M19 20V4" />
       </svg>
     ),
   },
@@ -120,11 +123,9 @@ const NAV_ITEMS: NavItem[] = [
     desc: (v) => (v ? "What v" + v + " measures" : "Scoring benchmark"),
     icon: () => (
       <svg class="ic" viewBox="0 0 24 24">
-        <path d="M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z" />
-        <path d="m14.5 12.5 2-2" />
-        <path d="m11.5 9.5 2-2" />
-        <path d="m8.5 6.5 2-2" />
-        <path d="m17.5 15.5 2-2" />
+        <path d="M12 2 21 7v10l-9 5-9-5V7Z" />
+        <path d="m3 7 9 5 9-5" />
+        <path d="M12 12v10" />
       </svg>
     ),
   },
@@ -285,6 +286,12 @@ export function SiteFooter(): JSX.Element {
       <div class="foot-links" aria-label="Open-source Ditto repositories">
         <span class="foot-label">Open-source stack</span>
         <a id="foot-wandb" href={WANDB_URL} target="_blank" rel="noopener">
+          <svg class="ic foot-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 20v-4" />
+            <path d="M9 20v-8" />
+            <path d="M14 20V8" />
+            <path d="M19 20V4" />
+          </svg>
           Full per-epoch telemetry (wandb) ↗
         </a>
         <a
@@ -292,9 +299,17 @@ export function SiteFooter(): JSX.Element {
           target="_blank"
           rel="noopener"
         >
+          <svg class="ic foot-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21" />
+          </svg>
           Platform source ↗
         </a>
         <a href="https://github.com/ditto-assistant/ditto-subnet" target="_blank" rel="noopener">
+          <svg class="ic foot-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 2 21 7v10l-9 5-9-5V7Z" />
+            <path d="m3 7 9 5 9-5" />
+            <path d="M12 12v10" />
+          </svg>
           Subnet &amp; validator ↗
         </a>
         <a
@@ -302,6 +317,10 @@ export function SiteFooter(): JSX.Element {
           target="_blank"
           rel="noopener"
         >
+          <svg class="ic foot-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
+          </svg>
           Screening worker ↗
         </a>
         <a
@@ -309,6 +328,10 @@ export function SiteFooter(): JSX.Element {
           target="_blank"
           rel="noopener"
         >
+          <svg class="ic foot-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m8 6-6 6 6 6" />
+            <path d="m16 6 6 6-6 6" />
+          </svg>
           Scoring engine ↗
         </a>
         <a
@@ -316,6 +339,11 @@ export function SiteFooter(): JSX.Element {
           target="_blank"
           rel="noopener"
         >
+          <svg class="ic foot-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <ellipse cx="12" cy="5" rx="8" ry="3" />
+            <path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
+            <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
+          </svg>
           Dataset &amp; grader ↗
         </a>
         <a
@@ -323,9 +351,18 @@ export function SiteFooter(): JSX.Element {
           target="_blank"
           rel="noopener"
         >
+          <svg class="ic foot-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 3h8l4 4v14H6Z" />
+            <path d="M14 3v4h4" />
+            <path d="M9 12h6M9 16h6" />
+          </svg>
           Miner starter kit ↗
         </a>
         <a href="https://github.com/ditto-assistant/ditto-harness" target="_blank" rel="noopener">
+          <svg class="ic foot-ic" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2Z" />
+            <path d="M4 19.5A2 2 0 0 1 6 18h14" />
+          </svg>
           Memory harness ↗
         </a>
       </div>

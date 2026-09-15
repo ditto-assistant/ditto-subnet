@@ -389,56 +389,108 @@ function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.
 
   return (
     <div class="account-sign">
-      <div class="account-hero">
-        <p class="ath-eyebrow">Miner console</p>
-        <h2>Sign in with your hotkey</h2>
-        <p>
-          Copy the <code>uvx</code> command, run it, and this page becomes your private backroom. No
-          clone required. The CLI will offer to pick your coldkey and hotkey from{" "}
-          <code>~/.bittensor/wallets</code>. No TAO moves.
-        </p>
-      </div>
-      <div class="account-grid">
-        <div class="account-card">
-          <h3>Permissions</h3>
-          <For each={SCOPES}>
-            {(item) => (
-              <label class="account-scope">
-                <input
-                  type="checkbox"
-                  checked={scopes().includes(item.id)}
-                  disabled={item.id === "read" || Boolean(props.presetCode)}
-                  onChange={() => toggleScope(item.id)}
-                />
-                <span>
-                  <strong>{item.label}</strong>
-                  <em>{item.hint}</em>
-                </span>
-              </label>
-            )}
-          </For>
+      <div class="account-sign-card">
+        <div class="account-hero">
+          <div class="account-hero-head">
+            <span class="account-hero-mark" aria-hidden="true">
+              <svg class="ic" viewBox="0 0 24 24">
+                <circle cx="8" cy="15" r="4" />
+                <path d="m10.8 12.2 9.2-9.2" />
+                <path d="m17 6 3 3" />
+                <path d="m14 9 2 2" />
+              </svg>
+            </span>
+            <p class="ath-eyebrow">Miner console</p>
+          </div>
+          <h2>Sign in with your hotkey</h2>
+          <p>
+            Copy the <code>uvx</code> command, run it, and this page becomes your private backroom.
+            No clone required. The CLI will offer to pick your coldkey and hotkey from{" "}
+            <code>~/.bittensor/wallets</code>. No TAO moves.
+          </p>
+          <svg
+            class="account-hero-art"
+            viewBox="0 0 440 280"
+            preserveAspectRatio="xMinYMid slice"
+            aria-hidden="true"
+          >
+            <defs>
+              <pattern id="account-art-dots" width="18" height="18" patternUnits="userSpaceOnUse">
+                <circle cx="2" cy="2" r="1.1" />
+              </pattern>
+              <linearGradient id="account-art-wave" x1="0" x2="1" y1="0" y2="0">
+                <stop offset="0" stop-color="currentColor" stop-opacity="0" />
+                <stop offset="0.5" stop-color="currentColor" stop-opacity="0.85" />
+                <stop offset="1" stop-color="currentColor" stop-opacity="0.1" />
+              </linearGradient>
+            </defs>
+            <rect class="account-hero-art-dots" x="230" y="10" width="200" height="190" />
+            <g class="account-hero-art-waves" stroke="url(#account-art-wave)">
+              <path d="M-10 58 C 110 36, 190 96, 270 176 S 400 252, 450 236" />
+              <path d="M-10 71 C 110 49, 190 111, 270 183 S 400 249, 450 231" />
+              <path d="M-10 84 C 110 62, 190 126, 270 190 S 400 246, 450 226" />
+              <path d="M-10 97 C 110 75, 190 141, 270 197 S 400 243, 450 221" />
+              <path d="M-10 110 C 110 88, 190 156, 270 204 S 400 240, 450 216" />
+              <path d="M-10 123 C 110 101, 190 171, 270 211 S 400 237, 450 211" />
+              <path d="M-10 136 C 110 114, 190 186, 270 218 S 400 234, 450 206" />
+              <path d="M-10 149 C 110 127, 190 201, 270 225 S 400 231, 450 201" />
+              <path d="M-10 162 C 110 140, 190 216, 270 232 S 400 228, 450 196" />
+              <path d="M-10 175 C 110 153, 190 231, 270 239 S 400 225, 450 191" />
+            </g>
+          </svg>
+          <p class="account-hero-tagline">Same miners. A higher standard.</p>
         </div>
-        <div class="account-card">
-          <h3>Session length</h3>
-          <div class="account-hours">
-            <For each={HOURS}>
+        <div class="account-sign-form">
+          <div class="account-card">
+            <h3>Permissions</h3>
+            <For each={SCOPES}>
               {(item) => (
-                <button
-                  class="btn ghost"
-                  classList={{ active: hours() === item.hours }}
-                  disabled={Boolean(props.presetCode)}
-                  onClick={() => setHours(item.hours)}
-                >
-                  {item.label}
-                </button>
+                <label class="account-scope">
+                  <input
+                    type="checkbox"
+                    checked={scopes().includes(item.id)}
+                    disabled={item.id === "read" || Boolean(props.presetCode)}
+                    onChange={() => toggleScope(item.id)}
+                  />
+                  <span>
+                    <strong>{item.label}</strong>
+                    <em>{item.hint}</em>
+                  </span>
+                </label>
               )}
             </For>
           </div>
-          <Show when={!pending()}>
-            <button class="btn" onClick={() => void start()} disabled={!scopes().length}>
-              Start sign-in
-            </button>
-          </Show>
+          <div class="account-card">
+            <h3>Session length</h3>
+            <div class="account-hours">
+              <For each={HOURS}>
+                {(item) => (
+                  <button
+                    class="btn ghost"
+                    classList={{ active: hours() === item.hours }}
+                    aria-pressed={hours() === item.hours ? "true" : "false"}
+                    disabled={Boolean(props.presetCode)}
+                    onClick={() => setHours(item.hours)}
+                  >
+                    {item.label}
+                  </button>
+                )}
+              </For>
+            </div>
+            <Show when={!pending()}>
+              <button
+                class="btn account-start"
+                onClick={() => void start()}
+                disabled={!scopes().length}
+              >
+                Start sign-in
+                <svg class="ic" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5 12h14" />
+                  <path d="m13 6 6 6-6 6" />
+                </svg>
+              </button>
+            </Show>
+          </div>
         </div>
       </div>
       <Show when={command()}>

@@ -111,6 +111,13 @@ export function BenchmarkPage(): JSX.Element {
         <div class="pillars">
           <div class="pillar mem">
             <h2>
+              <span class="pillar-icon" aria-hidden="true">
+                <svg class="ic" viewBox="0 0 24 24">
+                  <ellipse cx="12" cy="5" rx="8" ry="3" />
+                  <path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5" />
+                  <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
+                </svg>
+              </span>
               Agentic memory{" "}
               <span
                 class="tag tip"
@@ -131,6 +138,11 @@ export function BenchmarkPage(): JSX.Element {
           </div>
           <div class="pillar tool">
             <h2>
+              <span class="pillar-icon" aria-hidden="true">
+                <svg class="ic" viewBox="0 0 24 24">
+                  <path d="M14.7 6.3a4 4 0 0 0-5.4 5.2L3 17.8V21h3.2l6.3-6.3a4 4 0 0 0 5.2-5.4l-2.6 2.6-2.4-.6-.6-2.4Z" />
+                </svg>
+              </span>
               Tool-use judgment{" "}
               <span
                 class="tag tip"
@@ -152,6 +164,13 @@ export function BenchmarkPage(): JSX.Element {
         <div class="benchmark-reference" aria-label="Benchmark reference material">
           <details class="bench-disclosure" id="scoring-explainer">
             <summary>
+              <span class="bench-disclosure-glyph" aria-hidden="true">
+                <svg class="ic" viewBox="0 0 24 24">
+                  <path d="M6 3h8l4 4v14H6Z" />
+                  <path d="M14 3v4h4" />
+                  <path d="M9 12h6M9 16h6" />
+                </svg>
+              </span>
               <span class="bench-disclosure-title">
                 <strong>How a score becomes emissions</strong>
                 <span>Scoring, eligibility, versioning, and KOTH rules</span>
@@ -264,6 +283,12 @@ export function BenchmarkPage(): JSX.Element {
           </details>
           <details class="bench-disclosure" id="bench-setup">
             <summary>
+              <span class="bench-disclosure-glyph" aria-hidden="true">
+                <svg class="ic" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M4.9 19.1 7 17M17 7l2.1-2.1" />
+                </svg>
+              </span>
               <span class="bench-disclosure-title">
                 <strong>Frozen setup</strong>
                 <span>Model pinning, deterministic grading, and audit trail</span>
@@ -355,6 +380,12 @@ export function BenchmarkPage(): JSX.Element {
           </details>
           <details class="bench-disclosure" id="bench-versions">
             <summary>
+              <span class="bench-disclosure-glyph" aria-hidden="true">
+                <svg class="ic" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M12 7v5l3 2" />
+                </svg>
+              </span>
               <span class="bench-disclosure-title">
                 <strong>Version history</strong>
                 <span>What changed in each immutable benchmark contract</span>
@@ -372,6 +403,12 @@ export function BenchmarkPage(): JSX.Element {
           </details>
           <details class="bench-disclosure" id="bench-glossary">
             <summary>
+              <span class="bench-disclosure-glyph" aria-hidden="true">
+                <svg class="ic" viewBox="0 0 24 24">
+                  <path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2Z" />
+                  <path d="M4 19.5A2 2 0 0 1 6 18h14" />
+                </svg>
+              </span>
               <span class="bench-disclosure-title">
                 <strong>Glossary</strong>
                 <span>Metrics, gate factors, and scored test categories</span>

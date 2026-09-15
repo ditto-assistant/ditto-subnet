@@ -63,10 +63,10 @@ export function SnapshotLedger(props: {
       <h2 class="visually-hidden" id="snapshot-title">
         Subnet snapshot
       </h2>
-      {/* Nine readings in three ruled rows: who is here (population), where
-          the scores stand, and whether the machine is turning. Reading order
-          is left-to-right, top-to-bottom; the ids are the public contract. */}
-      <dl class="stat-ledger">
+      {/* Two tiers. Four cards count who is here and what is running;
+          the strip beneath carries the five readings of where scores
+          stand and when they last moved. The ids are the public contract. */}
+      <dl class="stat-ledger stat-cards">
         <div class="ledger-line" data-ledger="population">
           <dt class="ledger-label">
             <Tip text="Distinct miners who have submitted to Subnet 118.">Miners total</Tip>
@@ -91,6 +91,18 @@ export function SnapshotLedger(props: {
             {h()?.scored_agents ?? "–"}
           </dd>
         </div>
+        <div class="ledger-line" data-ledger="population">
+          <dt class="ledger-label">
+            <Tip text="Validators currently reporting heartbeat-capable software to the platform.">
+              Validators
+            </Tip>
+          </dt>
+          <dd class="ledger-value" id="h-validators">
+            {latest(operations)?.validators?.reported_count ?? "–"}
+          </dd>
+        </div>
+      </dl>
+      <dl class="stat-ledger stat-strip">
         <div class="ledger-line" data-ledger="scores">
           <dt class="ledger-label">
             <Tip text="The highest composite among ranked full-benchmark runs. Start with 0.5 × tool mean + 0.5 × memory mean, apply the benchmark quality gates, then apply the v5 token-efficiency multiplier. Token efficiency can remove at most 10%. Provisional runs are excluded.">
@@ -133,17 +145,7 @@ export function SnapshotLedger(props: {
             </Show>
           </dd>
         </div>
-        <div class="ledger-line" data-ledger="machine">
-          <dt class="ledger-label">
-            <Tip text="Validators currently reporting heartbeat-capable software to the platform.">
-              Validators
-            </Tip>
-          </dt>
-          <dd class="ledger-value" id="h-validators">
-            {latest(operations)?.validators?.reported_count ?? "–"}
-          </dd>
-        </div>
-        <div class="ledger-line" data-ledger="machine">
+        <div class="ledger-line" data-ledger="scores">
           <dt class="ledger-label">
             <Tip text="All validator score records stored by the platform, including the independent scores that make up each finalized result.">
               Total scores
@@ -153,7 +155,7 @@ export function SnapshotLedger(props: {
             {h()?.total_scores ?? "–"}
           </dd>
         </div>
-        <div class="ledger-line" data-ledger="machine">
+        <div class="ledger-line" data-ledger="scores">
           <dt class="ledger-label">Last scored</dt>
           <dd class="ledger-value" id="h-last">
             {h()?.last_scored_at ? relTime(h()?.last_scored_at) : "–"}

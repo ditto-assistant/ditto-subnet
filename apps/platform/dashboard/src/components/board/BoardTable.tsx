@@ -197,6 +197,8 @@ interface HeaderSpec {
   tip: string;
   class?: string;
   width?: string;
+  /** The emissions column, whose tip is rewritten from the live fold. */
+  emissions?: true;
 }
 
 const HEADERS: HeaderSpec[] = [
@@ -209,6 +211,7 @@ const HEADERS: HeaderSpec[] = [
   {
     key: null,
     label: "Emissions",
+    emissions: true,
     width: "128px",
     tip: "Current KOTH role. The incumbent champion takes a fixed share of the miner pool; a participation tail splits the remainder.",
   },
@@ -240,6 +243,37 @@ const HEADERS: HeaderSpec[] = [
     tip: "When the KOTH fold treats this miner as having arrived: the earliest same-score family upload, not this tarball and not screen-complete.",
   },
 ];
+
+/** The overview's own Coding column. On the full Leaderboard page Coding
+ * stays a row of the score stack (six compact columns); the overview board
+ * is wide enough to give the display-only result a column of its own, sat
+ * after Scores and before the metrics the overview hides. */
+const CODING_HEADER: HeaderSpec = {
+  key: null,
+  label: "Coding status",
+  class: "coding-col",
+  width: "150px",
+  tip: "Coding shadow result for the exact current artifact, screened image, and benchmark version. Display only: it never changes composite, rank, validator weights, or emissions.",
+};
+
+function boardHeaders(codingColumn: boolean): HeaderSpec[] {
+  if (!codingColumn) return HEADERS;
+  const scoresAt = HEADERS.findIndex((header) => header.key === "composite");
+  return [...HEADERS.slice(0, scoresAt + 1), CODING_HEADER, ...HEADERS.slice(scoresAt + 1)];
+}
+
+/** One Coding shadow state as a chip, with the same tip vocabulary as the
+ * score-stack row it stands in for. */
+function CodingStatusCell(props: { entry: BoardEntry }): JSX.Element {
+  const copy = () => codingShadowCopy(props.entry);
+  return (
+    <td class="coding-status-cell" data-coding-status={props.entry.coding_shadow?.status ?? "none"}>
+      <TipTarget class="coding-status tip-chip" text={copy().tip}>
+        {copy().label}
+      </TipTarget>
+    </td>
+  );
+}
 
 /** The emissions column tooltip, rewritten from the fold once it arrives
  * (applyEmissionsCopy 3666–3686) — consensus constants are read from the
@@ -570,6 +604,8 @@ function BoardRow(props: {
   entry: BoardEntry;
   index: number;
   store: LeaderboardStore;
+  /** Render Coding as its own column (overview board). */
+  codingColumn?: boolean;
   chainRegistrationUnknown: boolean;
   /** The reigning champion's display rank, or null when there is no ranked
    * champion. Rows ranked above it outscore the incumbent without having
@@ -908,6 +944,9 @@ function BoardRow(props: {
           </Show>
         </td>
         <ScoreStackCell entry={e()} store={props.store} />
+        <Show when={props.codingColumn}>
+          <CodingStatusCell entry={e()} />
+        </Show>
         <td class="num run-cost-cell">
           <Show
             when={e().average_run_cost_microusd != null && (e().inference_run_count || 0) > 0}
@@ -950,7 +989,7 @@ function BoardRow(props: {
             <td class="family-branch" aria-hidden="true">
               ↳
             </td>
-            <td colspan="5">
+            <td colspan={props.codingColumn ? 6 : 5}>
               <div class="family-member">
                 <span class="family-member-name">
                   <MinerAvatar url={e().avatar_url} />
@@ -985,8 +1024,13 @@ function BoardRow(props: {
   );
 }
 
-export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
+export function BoardTable(props: {
+  store: LeaderboardStore;
+  /** Give Coding shadow its own column instead of a score-stack row. */
+  codingColumn?: boolean;
+}): JSX.Element {
   const store = props.store;
+  const headers = (): HeaderSpec[] => boardHeaders(Boolean(props.codingColumn));
   const needle = (): string => boardQuery().trim().toLowerCase();
   const all = createMemo(() => store.entries().filter((e) => boardMatches(e, needle())));
   const scored = createMemo(() => all().filter((e) => isFinalized(e)));
@@ -1244,7 +1288,7 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
       >
         <thead>
           <tr>
-            <For each={HEADERS}>
+            <For each={headers()}>
               {(header) => (
                 <th
                   scope="col"
@@ -1276,10 +1320,10 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
                 >
                   <TipTarget
                     class="tip"
-                    id={header.key ? undefined : "emissions-col-tip"}
+                    id={header.emissions ? "emissions-col-tip" : undefined}
                     tabindex={0}
                     role={header.key ? "button" : undefined}
-                    text={header.key ? header.tip : emissionsColTip(store)}
+                    text={header.emissions ? emissionsColTip(store) : header.tip}
                   >
                     {header.label}
                   </TipTarget>
@@ -1297,19 +1341,19 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
           <Show
             when={!store.unavailable()}
             fallback={
-              <EmptyRow colspan={6}>
+              <EmptyRow colspan={headers().length}>
                 Could not load live leaderboard data. Try refreshing in a moment.
               </EmptyRow>
             }
           >
             <Show
               when={store.payload()}
-              fallback={<EmptyRow colspan={6}>Loading leaderboard…</EmptyRow>}
+              fallback={<EmptyRow colspan={headers().length}>Loading leaderboard…</EmptyRow>}
             >
               <Show
                 when={pageRows().length}
                 fallback={
-                  <EmptyRow colspan={6}>
+                  <EmptyRow colspan={headers().length}>
                     {needle()
                       ? "No miner matches that filter."
                       : boardCodingFilter() !== "all"
@@ -1328,6 +1372,7 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
                       store={store}
                       chainRegistrationUnknown={chainRegistrationUnknown()}
                       championRank={championRank()}
+                      codingColumn={props.codingColumn}
                     />
                   )}
                 </For>

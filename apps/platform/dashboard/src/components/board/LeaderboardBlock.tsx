@@ -1263,7 +1263,7 @@ export function LeaderboardBlock(props: { mode: "overview" | "page" }): JSX.Elem
       <VersionSwitch store={store} />
       <KothStandingCallout store={store} />
       <CodingShadowSummary store={store} />
-      <BoardTable store={store} />
+      <BoardTable store={store} codingColumn={props.mode === "overview"} />
       {/* Post-table context: emissions, rollout, and standing notices sit
           below the board so the table starts at the top of the Leaderboard
           page. Hidden entirely on the overview (see .overview-main rules). */}
