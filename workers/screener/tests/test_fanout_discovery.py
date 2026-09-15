@@ -169,8 +169,7 @@ def test_failed_decode_and_tokenization_are_not_scanned(tmp_path):
 def test_late_answer_replacement_survives_early_generic_sinks(tmp_path):
     early = "if condition {\nanswer = value;\n}\n" + "\n" * 30
     source = (
-        early * 8
-        + "if available {\nfinal_text = final_text.replace(marker, chosen);\n"
+        early * 8 + "if available {\nfinal_text = final_text.replace(marker, chosen);\n"
         "answer = Some(chosen);\n}\n"
     )
     archive = _archive_files(tmp_path, {"z.rs": source.encode()})
