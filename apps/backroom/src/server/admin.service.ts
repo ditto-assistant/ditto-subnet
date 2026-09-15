@@ -319,6 +319,14 @@ export async function fetchMinerFeeSummary() {
   return minerFeeSummarySchema.parse(payload)
 }
 
+export async function fetchMinerFeeCsv() {
+  const payload = await platformAdminRequest('/api/v1/admin/miner-fees/export.csv', { responseFormat: 'text' })
+  if (typeof payload !== 'string' || !payload.startsWith('timestamp_utc,')) {
+    throw new Error('The platform returned an invalid miner fee export')
+  }
+  return payload
+}
+
 const SUBMISSION_DEPOSIT_ADDRESS_PATH = '/api/v1/admin/submission-deposit-address'
 
 export async function fetchSubmissionDepositAddressControl() {

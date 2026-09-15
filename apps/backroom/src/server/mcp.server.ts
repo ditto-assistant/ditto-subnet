@@ -1,3 +1,4 @@
+import { fetchMinerFeeSummary } from './admin.service'
 import '@tanstack/react-start/server-only'
 
 import {
@@ -617,7 +618,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   reject_screening_submission:
     'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
   get_queue_policy_settings:
-    'Read effective queue policy, rollout-locked fields, defaults, and optionally paged newest-first revision history. Open-rollout targets are snapshots: settings do not resize an in-flight rollout. historyLimit defaults to 0.',
+    'Read queue policy, locked fields, defaults, and newest-first history (historyLimit=0). Settings do not resize an in-flight rollout.',
   get_screener_policy_activation:
     'Read the scheduled screening-policy activation and its revision history; latest is null when none was ever scheduled.',
   schedule_screener_policy_activation:
@@ -626,6 +627,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Atomically restore a scored cohort displaced by one scored-rescreen activation. Confirmation: "RESTORE SCORED SCREENING SNAPSHOT". Requires exact activation revisions, policy versions, benchmark version, and cohort count.',
   get_continual_retest_settings:
     'Read effective continual-retest policy, fleet readiness, compatibility field_support, defaults, and optionally paged newest-first revision history. historyLimit defaults to 0.',
+  get_miner_fee_summary: 'All-time miner fees and collection address history.',
   get_agent_scores:
     'Read accepted validator scores for one agent and benchmark version, with exact seeds and aggregates. Defaults to the current applicable benchmark.',
   get_validator_slot_settings:
@@ -1650,6 +1652,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => refreshAgentCoreQualification(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_miner_fee_summary',
+    {
+      title: 'Get miner submission fee accounting',
+      description: 'Read all-time accepted fee totals, recorded collection address history and trailing 30-day revenue. Previous-address fees are already included in gross totals. Ledger receipts are not wallet balances; unrecorded transfers are excluded. Requires backroom:read.',
+      inputSchema: z.object({}),
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchMinerFeeSummary()),
   )
 
   registerTool(

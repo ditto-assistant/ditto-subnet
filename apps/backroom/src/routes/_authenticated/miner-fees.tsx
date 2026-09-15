@@ -5,6 +5,7 @@ import { SubmissionDepositAddressControl } from '../../components/SubmissionDepo
 import { PageHeader } from '../../components/PageHeader'
 import {
   getMinerFeeSummary,
+  exportMinerFeeCsv,
   getSubmissionDepositAddressControl,
 } from '../../server/admin.functions'
 
@@ -24,7 +25,7 @@ export const Route = createFileRoute('/_authenticated/miner-fees')({
 function MinerFeesPage() {
   const { summary, depositAddress } = Route.useLoaderData()
   const { user } = Route.useRouteContext()
-  return <div><PageHeader label="SN118 accounting" title="Miner submission fees" description="Track gross TAO received for accepted submissions and historical USD value captured when each payment was verified. Validator stake and unrelated wallet activity are excluded." aside={<div className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted-strong)]"><Database className="h-3.5 w-3.5 text-[var(--acid)]" />Database backed</div>} /><div className="mt-6 space-y-6"><SubmissionDepositAddressControl initialState={depositAddress} readOnly={user.accessLevel === 'read'} /><MinerFeePanel summary={summary} /></div></div>
+  return <div><PageHeader label="SN118 accounting" title="Miner submission fees" description="Track gross TAO received for accepted submissions and historical USD value captured when each payment was verified. Validator stake and unrelated wallet activity are excluded." aside={<div className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted-strong)]"><Database className="h-3.5 w-3.5 text-[var(--acid)]" />Database backed</div>} /><div className="mt-6 space-y-6"><SubmissionDepositAddressControl initialState={depositAddress} readOnly={user.accessLevel === 'read'} /><MinerFeePanel summary={summary} onExport={() => exportMinerFeeCsv()} /></div></div>
 }
 
 function MinerFeesPending() {

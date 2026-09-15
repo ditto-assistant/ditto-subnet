@@ -1,3 +1,4 @@
+import { fetchMinerFeeCsv } from './admin.service'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   startBenchmarkRollout,
@@ -4922,5 +4923,24 @@ describe('lease revocation ledger', () => {
       total: 0,
       revocations: [],
     })
+  })
+})
+
+
+describe('miner fee CSV export', () => {
+  it('keeps the admin token server-side and preserves the complete CSV', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const csv = 'timestamp_utc,amount_rao\r\n2026-07-01T00:00:00+00:00,21000000001\r\n'
+    const fetchMock = vi.fn().mockResolvedValue(new Response(csv, {
+      headers: { 'Content-Type': 'text/csv' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchMinerFeeCsv()).resolves.toBe(csv)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/miner-fees/export.csv',
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer secret' }) }),
+    )
+    fetchMock.mockResolvedValue(Response.json({ detail: 'not deployed' }, { status: 404 }))
+    await expect(fetchMinerFeeCsv()).rejects.toThrow()
   })
 })

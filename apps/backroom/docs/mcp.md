@@ -1,5 +1,16 @@
 # SN118 Backroom MCP
 
+`get_miner_fee_summary` returns accepted miner-fee totals across all collection
+addresses, observed per-address payment history, and the trailing 30-day chart.
+It requires `backroom:read`. Historical-address receipts are already included in
+gross totals; wallet balances and unrecorded chain transfers are not revenue in
+this ledger. Configuration-only addresses have no observed payment dates. The
+Miner submission fees page exports the complete ledger as CSV, including exact
+rao/TAO, UTC timestamps, destination addresses, proof identifiers, and captured
+TAO/USD rates (blank when unknown). Neither surface reconstructs boot-time
+address changes that have no retained configuration or payment records.
+
+
 `get_validator_weight_diagnostics` reads revealed weights, last Yuma vTrust,
 consensus, epoch counters, and pending timelock rounds at one chain block/hash.
 It requires `backroom:read`, accepts an optional `validatorUid`, and never submits

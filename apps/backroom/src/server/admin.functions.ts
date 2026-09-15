@@ -78,6 +78,7 @@ import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
   fetchMinerFeeSummary,
+  fetchMinerFeeCsv,
   fetchSubmissionDepositAddressControl,
   fetchQuarantineBaselineDiff,
   fetchQuarantineBaselineDiffFile,
@@ -331,6 +332,14 @@ export const getMinerFeeSummary = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return fetchMinerFeeSummary()
+  })
+
+export const exportMinerFeeCsv = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchMinerFeeCsv()
   })
 
 export const getSubmissionDepositAddressControl = createServerFn({ method: 'GET' })

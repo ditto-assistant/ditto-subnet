@@ -1,4 +1,5 @@
-import { CalendarDays, CircleDollarSign, Coins, Users } from 'lucide-react'
+import { useState } from 'react'
+import { CalendarDays, CircleDollarSign, Coins, Users, Download } from 'lucide-react'
 import type { MinerFeeSummary } from '../lib/miner-fees'
 import { MetricCard } from './MetricCard'
 
@@ -18,7 +19,32 @@ const dateTime = (value: string | null) =>
       }).format(new Date(value))} UTC`
     : 'No payments yet'
 
-export function MinerFeePanel({ summary }: { summary: MinerFeeSummary }) {
+export function MinerFeePanel({ summary, onExport }: {
+  summary: MinerFeeSummary
+  onExport?: () => Promise<string>
+}) {
+  const [exporting, setExporting] = useState(false)
+  const [exportError, setExportError] = useState('')
+  async function downloadCsv() {
+    if (!onExport || exporting) return
+    setExporting(true)
+    setExportError('')
+    try {
+      const csv = await onExport()
+      const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = 'miner-submission-fees.csv'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : 'Export failed. Try again.')
+    } finally {
+      setExporting(false)
+    }
+  }
   const averageRao = summary.paid_submissions
     ? summary.gross_amount_rao / summary.paid_submissions
     : 0
@@ -28,6 +54,11 @@ export function MinerFeePanel({ summary }: { summary: MinerFeeSummary }) {
 
   return (
     <div className="space-y-6">
+      {onExport ? <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-[var(--muted)]">Export every recorded payment, across all dates and collection addresses.</p>
+        <button type="button" onClick={() => void downloadCsv()} disabled={exporting} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-[var(--line)] px-4 text-sm disabled:opacity-50"><Download className="h-4 w-4" />{exporting ? 'Exporting…' : 'Export all payments CSV'}</button>
+      </div> : null}
+      {exportError ? <p role="alert" className="text-sm text-[var(--red)]">{exportError}</p> : null}
       <section className="summary-strip overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
         <MetricCard label="Gross submission fees" value={`${tao(summary.gross_amount_rao, 9)} TAO`} note="Canonical total from accepted payment records" icon={Coins} tone="acid" />
         <MetricCard label="Paid submissions" value={summary.paid_submissions.toLocaleString()} note={`${tao(averageRao)} TAO average accepted payment`} icon={CircleDollarSign} tone="cyan" />
@@ -63,6 +94,27 @@ export function MinerFeePanel({ summary }: { summary: MinerFeeSummary }) {
             </div>
           ))}
         </dl>
+      </section>
+
+      <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
+        <div className="border-b border-[var(--line)] px-5 py-4">
+          <h2 className="text-sm font-semibold">Collection address history</h2>
+          <p className="mt-1 text-xs leading-5 text-[var(--muted)]">These fees are already included in gross submission fees above. They are not current wallet balances. First and latest payments are observed ledger dates, not address activation dates.</p>
+        </div>
+        {summary.address_history ? <div className="overflow-x-auto"><table className="w-full min-w-[52rem] text-left text-xs">
+          <thead className="bg-[var(--panel-soft)] text-[var(--muted)]"><tr>
+            <th className="px-5 py-3">Collection address</th><th className="px-5 py-3">Status</th><th className="px-5 py-3">Payments</th><th className="px-5 py-3">Gross TAO</th><th className="px-5 py-3">First payment</th><th className="px-5 py-3">Latest payment</th>
+          </tr></thead>
+          <tbody className="divide-y divide-[var(--line)]">{summary.address_history.map(address => <tr key={address.payment_address}>
+            <td className="max-w-sm break-all px-5 py-3 font-mono select-all">{address.payment_address}</td>
+            <td className="px-5 py-3">{address.is_current ? 'Current' : 'Previous / configured'}</td>
+            <td className="px-5 py-3 tabular-nums">{address.paid_submissions.toLocaleString()}</td>
+            <td className="px-5 py-3 font-mono tabular-nums">{tao(address.gross_amount_rao, 9)}</td>
+            <td className="px-5 py-3">{dateTime(address.first_payment_at)}</td>
+            <td className="px-5 py-3">{dateTime(address.last_payment_at)}</td>
+          </tr>)}</tbody>
+        </table></div> : <p className="px-5 py-4 text-sm text-[var(--amber)]">Address history is unavailable from this Platform version. The gross total still includes all recorded destinations.</p>}
+        <p className="px-5 py-4 text-xs text-[var(--muted)]">Includes ledger destinations and saved configuration. Unrecorded on-chain transfers and older configuration without payment records cannot be reconstructed here.</p>
       </section>
 
       <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
