@@ -513,7 +513,7 @@ function AcceptedScores(props: {
 
 // ── Continual top-five retests (renderConfirmationScores 7381–7459) ─────────
 
-function ConfirmationScores(props: {
+export function ConfirmationScores(props: {
   pipeline: PipelineDetailPayload;
   entries: () => RankedEntry[];
 }): JSX.Element {
@@ -587,6 +587,18 @@ function ConfirmationScores(props: {
       ? samples.reduce((sum, sample) => sum + sample, 0) / samples.length
       : null;
   };
+  // `official_composite` is nullable and only set once continual aggregation
+  // folds, so reading it bare printed "Current score: NaN" on every row that
+  // had not folded yet — including bench v12 rank 1. `displayComposite` is the
+  // shared fallback to `composite`; the finite check covers the entry that
+  // carries neither, which would otherwise throw inside `fx` and take the whole
+  // drawer down rather than merely printing wrong.
+  const currentScore = () => {
+    const entry = boardEntry();
+    if (!entry) return null;
+    const value = displayComposite(entry as RankedEntry);
+    return Number.isFinite(value) ? value : null;
+  };
   return (
     <Show when={visible()}>
       <section class="pipeline-section" aria-labelledby="pipeline-confirmation-scores">
@@ -599,7 +611,7 @@ function ConfirmationScores(props: {
         <div class="retest-summary">
           <div>
             <span>Current score</span>
-            <strong>{fx(Number(boardEntry()?.official_composite))}</strong>
+            <strong>{currentScore() != null ? fx(currentScore() as number) : "—"}</strong>
           </div>
           <div>
             <span>Initial quorum</span>
@@ -611,7 +623,12 @@ function ConfirmationScores(props: {
           </div>
           <Show when={sampleMean() != null}>
             <div>
-              <span>Retest mean</span>
+              {/* The count above is completed waves only, so a mean taken over
+                  pending seeds must not borrow the same noun: "0 samples" next
+                  to "Retest mean 0.439" reads as a score, and a top-five miner
+                  reported it as one. Tracks the retained/pending switch the
+                  samples summary already makes. */}
+              <span>{completedWaves().length ? "Retest mean" : "Pending mean"}</span>
               <strong>{fx(sampleMean() as number)}</strong>
             </div>
           </Show>
