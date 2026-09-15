@@ -191,16 +191,37 @@ func (u *Uploader) ship(ctx context.Context, rf *readyFile) error {
 	if err != nil {
 		return err
 	}
-	if side == nil || !fileExists(zstPath) {
-		sum, size, err := compressFile(rf.path, zstPath)
-		if err != nil {
-			return fmt.Errorf("compress: %w", err)
+	if side != nil && fileExists(zstPath) {
+		if verr := validCompressed(zstPath, side); verr != nil {
+			u.opts.Logger.Error("trace artifact unusable; rebuilding from the retained source",
+				slog.String("file", filepath.Base(zstPath)), slog.String("error", verr.Error()))
+			side = nil
 		}
+	}
+	if side == nil || !fileExists(zstPath) {
+		rebuilt := zstPath + rebuildExt
+		sum, size, err := compressFile(rf.path, rebuilt)
+		if err != nil {
+			_ = os.Remove(rebuilt)
+			return fmt.Errorf("rebuild %s: %w", filepath.Base(zstPath), err)
+		}
+		var replaced int64
+		if info, serr := os.Stat(zstPath); serr == nil {
+			replaced = info.Size()
+		}
+		if err := os.Rename(rebuilt, zstPath); err != nil {
+			_ = os.Remove(rebuilt)
+			return fmt.Errorf("replace %s: %w", filepath.Base(zstPath), err)
+		}
+		u.spool.releaseBytes(replaced)
 		u.spool.addBytes(size)
 		side = &sidecar{Key: objectKey(u.opts.KeyPrefix, rf), SHA256: sum, Bytes: size, Completed: map[string]string{}}
 		if err := writeSidecar(sidePath, side); err != nil {
 			return err
 		}
+	}
+	if err := validCompressed(zstPath, side); err != nil {
+		return fmt.Errorf("refusing to upload %s: %w", side.Key, err)
 	}
 	var missingRequired []string
 	var firstErr error
@@ -252,6 +273,44 @@ func (u *Uploader) ship(ctx context.Context, rf *readyFile) error {
 //
 // dt/hour come from the FIRST record in the file, so a file never straddles
 // the partition its name claims by more than one rotation interval.
+const (
+	minZstdFrameBytes = 13
+	rebuildExt        = ".rebuild"
+	decodeProbeMemory = 64 << 20
+)
+
+func validFrame(path string, size int64) error {
+	if size < minZstdFrameBytes {
+		return fmt.Errorf("artifact is %d bytes, shorter than the smallest zstd frame", size)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	dec, err := zstd.NewReader(f,
+		zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(decodeProbeMemory))
+	if err != nil {
+		return fmt.Errorf("open artifact for verification: %w", err)
+	}
+	defer dec.Close()
+	if _, err := io.Copy(io.Discard, dec); err != nil {
+		return fmt.Errorf("artifact does not decode: %w", err)
+	}
+	return nil
+}
+
+func validCompressed(path string, side *sidecar) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.Size() != side.Bytes {
+		return fmt.Errorf("artifact is %d bytes, sidecar says %d", info.Size(), side.Bytes)
+	}
+	return validFrame(path, info.Size())
+}
+
 func objectKey(prefix string, rf *readyFile) string {
 	first := rf.firstAt.UTC()
 	name := fmt.Sprintf("%s-%s-%s-%s.jsonl.zst", rf.instance,
@@ -300,6 +359,10 @@ func compressFile(src, dst string) (string, int64, error) {
 	info, err := os.Stat(tmp)
 	if err != nil {
 		return "", 0, err
+	}
+	if err := validFrame(tmp, info.Size()); err != nil {
+		_ = os.Remove(tmp)
+		return "", 0, fmt.Errorf("compressing %s produced an unusable artifact: %w", src, err)
 	}
 	if err := os.Rename(tmp, dst); err != nil {
 		return "", 0, err
