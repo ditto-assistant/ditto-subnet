@@ -355,8 +355,25 @@ def _normalize_obligation_resolutions(
             and any(_is_generator_runtime_source(path) for path, _ in locations)
         )
         if disposition == "resolved" and not verified:
+            requirement = (
+                "cite and read at least one original anchor: "
+                + json.dumps(
+                    [
+                        {"path": path[:180], "line": line}
+                        for path, line in sorted(anchors)[:8]
+                    ],
+                    ensure_ascii=True,
+                )
+                + f" (showing {min(len(anchors), 8)} of {len(anchors)})"
+                if anchors
+                else (
+                    "cite and read at least two distinct locations, "
+                    "including one runtime source location"
+                )
+            )
             raise ValueError(
-                f"fanout obligation {oid} lacks relevant source-read evidence"
+                f"fanout obligation {oid} lacks relevant source-read evidence; "
+                f"{requirement}; submitted distinct locations={len(locations)}"
             )
         normalized.append({"obligation_id": oid, **row})
     return normalized
@@ -1960,7 +1977,9 @@ async def review_archive(
     )
     begin = time.monotonic()
     critic_budget_exhaustion_reason = None
+    retained_obligations: list[dict] = []
     try:
+        retained_obligations = _review_obligations(all_pass_summaries, repository)
         async with asyncio.timeout(min(timeout_seconds, max(remaining, 0.001))):
             adjudication = await reviewer.adjudicate_review(
                 str(archive),
@@ -1985,6 +2004,9 @@ async def review_archive(
             "final_review": None,
             "clearance_certified": False,
             "evidence_verified": False,
+            "review_obligations": retained_obligations,
+            "obligation_resolutions": [],
+            "obligation_evidence_verified": False,
             "candidate_assessments": [
                 {
                     "candidate_id": candidate["candidate_id"],

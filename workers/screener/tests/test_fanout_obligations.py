@@ -1,5 +1,7 @@
 """Uncertainty handoff must survive malformed provisional policy assessments."""
 
+import hashlib
+
 import pytest
 
 from ditto_screener.fanout_review import (
@@ -149,3 +151,73 @@ def test_low_risk_cannot_bypass_obligation_or_shape_gate(tmp_path, failure):
         assert isinstance(
             result["final_review"]["invariant_assessment"]["decisions"], list
         )
+
+
+def test_missing_anchor_feedback_names_required_locations(tmp_path):
+    repo = TarSourceRepository(
+        str(_archive_files(tmp_path, {"src/main.rs": b"one\ntwo\n"}))
+    )
+    obligation = {
+        "obligation_id": "obligation-004",
+        "locations": [{"path": "src/main.rs", "line": 1}],
+    }
+    payload = {
+        "obligation_resolutions": {
+            "obligation-004": {
+                "disposition": "resolved",
+                "summary": "private narrative",
+                "source_evidence": [{"path": "src/main.rs", "line": 2}],
+            }
+        }
+    }
+    with pytest.raises(ValueError) as exc:
+        _normalize_obligation_resolutions(
+            payload, [obligation], repo, {("src/main.rs", 2)}
+        )
+    assert '"line": 1' in str(exc.value)
+    assert "src/main.rs" in str(exc.value)
+    assert "submitted distinct locations=1" in str(exc.value)
+    assert "private narrative" not in str(exc.value)
+
+
+async def test_failed_adjudicator_retains_obligations(tmp_path):
+    from ditto_screener.fanout_review import review_archive
+
+    class Reviewer:
+        def __init__(self, **_kwargs):
+            self.usage = {}
+            self.response_models = set()
+            self.opened_paths = set()
+
+        async def review_provisional(self, *_args, **_kwargs):
+            return {
+                "raw_review": {
+                    "risk_level": "low",
+                    "invariants": [
+                        {
+                            "invariant": "i4_derived_value_authority",
+                            "disposition": "inconclusive",
+                            "summary": "Trace writer",
+                            "evidence_indices": [],
+                        }
+                    ],
+                },
+                "notes": [],
+            }
+
+        async def adjudicate_review(self, *_args, **_kwargs):
+            raise TimeoutError()
+
+    archive = _archive_files(tmp_path, {"src/main.rs": b"one\ntwo\n"})
+    result = await review_archive(
+        archive,
+        artifact_sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+        api_key_file="unused",
+        partition="specialists",
+        reviewer_factory=Reviewer,
+    )
+    assert result["outcome"] == "incomplete"
+    assert len(result["review_obligations"]) == 5
+    assert result["critic"]["review_obligations"] == result["review_obligations"]
+    assert result["critic"]["obligation_evidence_verified"] is False
+    assert result["critic"]["final_review"] is None
