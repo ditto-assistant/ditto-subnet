@@ -200,7 +200,7 @@ func TestV9StudyRunReportsFinalFamilyMix(t *testing.T) {
 	if testing.Short() {
 		t.Skip("generates several full datasets")
 	}
-	result := runVersion(protocol.BenchVersionV9, "full", 1, 3, "")
+	result := runVersion(protocol.BenchVersionV9, "full", 1, 3, "", false)
 	tool := summarizeFamilyMix(result.ToolMixes)
 	memory := summarizeFamilyMix(result.MemoryMixes)
 	if tool.Runs != 3 || len(tool.Families) != 53 || tool.DistinctHistograms < 2 {
@@ -235,7 +235,7 @@ func TestV9StudyRunReportsFinalFamilyMix(t *testing.T) {
 
 func TestV9StudyDoesNotWriteUncalibratedGStudyInput(t *testing.T) {
 	dir := t.TempDir()
-	result := runVersion(protocol.BenchVersionV9, "small", 1, 2, dir)
+	result := runVersion(protocol.BenchVersionV9, "small", 1, 2, dir, false)
 	if len(result.Runs) != 0 || len(result.Cases) != 0 {
 		t.Fatalf("v9 populated uncalibrated score runs: runs=%d cases=%d", len(result.Runs), len(result.Cases))
 	}

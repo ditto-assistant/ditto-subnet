@@ -146,6 +146,19 @@ than keeping their own copies.
   per-answer-kind counts, so the grader's measured false-negative rate can be
   published per bench version.
 
+- `cmd/mixaudit`: the Bench v13 memory-mix histogram and envelope gate. Per seed
+  it classifies every memory case by family, semantic domain, answer kind, head
+  operation, monetary exposure (direct kinds AND typed list items weighted by
+  their fraction of credit), arithmetic, computed-vs-verbatim, language,
+  twin/metamorphic relation, and gate exposure; JSON or the study table format.
+  `-bench-version 12 -seed 123456789` reproduces issue #1529's 117/143/50.9%.
+- `cmd/parserprobe`: the generator-inverse harness (GIH) and seed-trained router,
+  the model-free adversaries every v13 surface claim is measured against. It
+  parses the /seed records and questions with the repository's own frames,
+  evaluates the public oracle semantics, launders the value through one
+  completion, and reports family-id rate, answer rate, and composite under the
+  real grader per seed and slice. Near-oracle on a pass-off artifact is the
+  published baseline; `-artifact` probes a surface-passed artifact.
 - `cmd/gstudy`: the offline reliability analyzer. Given a JSONL of scored runs
   it reports a G-study variance decomposition (seed vs. item vs. residual) and
   per-category difficulty/discrimination estimates, flagging saturated and floor

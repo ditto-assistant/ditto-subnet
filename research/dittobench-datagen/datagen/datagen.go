@@ -1335,7 +1335,7 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 		projectIndex++
 		pairID := protocol.OpaqueCaseID(seed, "v10-tool-route", i)
 		planningPrompt := fmt.Sprintf("Planning decision for dependency-risk work on %q at %s.", project.Alias, project.Client)
-		prompt := fmt.Sprintf("Handle the dependency-risk review for %q using the operating choice I approved in our planning note. Start that work now.", project.Alias)
+		prompt := fmt.Sprintf(v10StateDependentRoutingFrame, project.Alias)
 		routePrefix := "Approved route: "
 		if benchVersion >= protocol.BenchVersionV12 {
 			// v12 COMPOSES every routing cue from independent component banks, so
@@ -1343,22 +1343,12 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 			// enumerable list a rule engine could match. The decision's semantics
 			// and the expected tool outcome are untouched.
 			planningPrompt = fmt.Sprintf(
-				v12ToolPick(seed, i, "plan",
-					[]string{"Decision log", "Where we landed", "Outcome of our scoping chat", "Notes from planning"},
-					[]string{" for the risk review on", " about the dependency work for", " covering the review of"},
-				)+" %q"+v12ToolPick(seed, i, "plantail",
-					[]string{" at %s.", " (%s).", " for %s."},
-				), project.Alias, project.Client)
+				v12ToolPick(seed, i, "plan", v12RoutingPlanLeads, v12RoutingPlanMids)+" %q"+
+					v12ToolPick(seed, i, "plantail", v12RoutingPlanTails), project.Alias, project.Client)
 			prompt = fmt.Sprintf(
-				v12ToolPick(seed, i, "asklead",
-					[]string{"Kick off", "Time to start", "Please begin", "Go ahead and start"},
-				)+" the dependency-risk review for %q "+v12ToolPick(seed, i, "asktail",
-					[]string{"the way we already agreed. Start now.", "exactly as we settled earlier. Begin.", "following what we decided together. Proceed."},
-				), project.Alias)
-			routePrefix = v12ToolPick(seed, i, "route",
-				[]string{"What we settled on", "Agreed path", "Our decision", "The plan we set"},
-				[]string{": ", " — ", " is: ", ", "},
-			)
+				v12ToolPick(seed, i, "asklead", v12RoutingAskLeads)+" the dependency-risk review for %q "+
+					v12ToolPick(seed, i, "asktail", v12RoutingAskTails), project.Alias)
+			routePrefix = v12ToolPick(seed, i, "route", v12RoutingRouteLeads, v12RoutingRouteSeps)
 		} else if benchVersion >= protocol.BenchVersionV11 {
 			// v11 rotates every literal cue the measured rule engines matched
 			// ("planning note", "operating choice", "Approved route:"). The
@@ -1494,11 +1484,11 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 			tc = v8WorldMemoryUpdate(caseID, world, updateTarget)
 			updateTarget++
 		case 3: // capability discovery + fuzzy/case-insensitive setting
-			tc = fuzzyWorldTool(caseID, "world_theme_discover_set", fmt.Sprintf("Make Ditto use my usual %s-ish accent — the personal app preference, not one of the client brand colors. If I mangled the spelling, check the available appearance options first.", misspellAlias(world.Accent, converted)), []protocol.ToolSpec{{Name: "discover_capabilities"}, {Name: "set_accent_color", RequiredArgs: map[string]string{"color": world.Accent}}}, "discover the available appearance setting and apply the user's personal accent")
+			tc = fuzzyWorldTool(caseID, "world_theme_discover_set", fmt.Sprintf(worldThemeDiscoverSetFrame, misspellAlias(world.Accent, converted)), []protocol.ToolSpec{{Name: "discover_capabilities"}, {Name: "set_accent_color", RequiredArgs: map[string]string{"color": world.Accent}}}, "discover the available appearance setting and apply the user's personal accent")
 		case 4: // messy business context -> reusable workflow outcome
 			p := world.Projects[(converted+i)%len(world.Projects)]
 			lead := world.People[p.Lead]
-			tc = fuzzyWorldTool(caseID, "world_business_workflow", fmt.Sprintf("Check whether I already have a workflow for %q, the project for %s. If not, create one under the project's formal name and put the current contact address for internal reviewer %s in its review step.", p.Alias, p.Client, lead.Nickname), []protocol.ToolSpec{{Name: "list_workflows"}, {Name: "create_workflow", RequiredArgs: map[string]string{"name": p.Name, "steps": lead.Email}}}, "resolve the project, its formal name, and current reviewer contact; then check existing workflows and create the requested reusable workflow")
+			tc = fuzzyWorldTool(caseID, "world_business_workflow", fmt.Sprintf(worldBusinessWorkflowFrame, p.Alias, p.Client, lead.Nickname), []protocol.ToolSpec{{Name: "list_workflows"}, {Name: "create_workflow", RequiredArgs: map[string]string{"name": p.Name, "steps": lead.Email}}}, "resolve the project, its formal name, and current reviewer contact; then check existing workflows and create the requested reusable workflow")
 		case 6: // outcome proves a search -> dynamic-link -> read chain
 			tc = v8WorldLinkRead(seed, caseID)
 		case 7: // Ditto App presents approval and owns the async job lifecycle
@@ -1621,10 +1611,12 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 	}
 }
 
-func v8WorldContactEmail(seed int64, caseID string, world universe.World, index int) protocol.ToolCase {
-	p := world.People[index%len(world.People)]
-	needle := toolexec.NeedleForV8World(seed, caseID)
-	prompts := []string{
+// World-family prompt frames and the v12 routing-cue component banks. They are
+// package-level so WorldToolSurfaces and V12RoutingCueBanks (surfaces_export.go)
+// return the generator's own banks rather than copies that could drift.
+// Hoisting the literals out of the render sites changes no generated bytes.
+var (
+	worldContactEmailFrames = []string{
 		"What is %s at right now? Forward the figure to %s — the %s in %s from the %s.",
 		"Could you check the latest figure for %s and send it to %s? I mean my %s in %s, the one from the %s.",
 		"Please look up %s and pass the current number along to %s, my %s in %s from the %s.",
@@ -1634,23 +1626,44 @@ func v8WorldContactEmail(seed int64, caseID string, world universe.World, index 
 		"Find the live value for %s, then get it over to %s — my %s in %s from the %s.",
 		"What's the latest on %s? Email the number to %s, my %s in %s from the %s.",
 	}
+	worldMemoryDeleteFrame     = "You can bin that temporary note about fixing %s's email after the %s — they're my %s at %s. Just don't lose their actual contact history."
+	worldMemoryUpdateFrame     = "Add to the handoff note for %q at %s that we're doing the handoff Friday. It's the %s project; update the scratchpad, not the project history."
+	worldThemeDiscoverSetFrame = "Make Ditto use my usual %s-ish accent — the personal app preference, not one of the client brand colors. If I mangled the spelling, check the available appearance options first."
+	worldBusinessWorkflowFrame = "Check whether I already have a workflow for %q, the project for %s. If not, create one under the project's formal name and put the current contact address for internal reviewer %s in its review step."
+	worldLinkChainFrame        = "See what %s is at right now, and open the actual page rather than relying on the search blurb."
+	// v10StateDependentRoutingFrame is the fixed v10 ask; v11 rotates it and v12
+	// composes it from the banks below (applyV10StateDependentActions).
+	v10StateDependentRoutingFrame = "Handle the dependency-risk review for %q using the operating choice I approved in our planning note. Start that work now."
+	v12RoutingAskLeads            = []string{"Kick off", "Time to start", "Please begin", "Go ahead and start"}
+	v12RoutingAskTails            = []string{"the way we already agreed. Start now.", "exactly as we settled earlier. Begin.", "following what we decided together. Proceed."}
+	v12RoutingPlanLeads           = []string{"Decision log", "Where we landed", "Outcome of our scoping chat", "Notes from planning"}
+	v12RoutingPlanMids            = []string{" for the risk review on", " about the dependency work for", " covering the review of"}
+	v12RoutingPlanTails           = []string{" at %s.", " (%s).", " for %s."}
+	v12RoutingRouteLeads          = []string{"What we settled on", "Agreed path", "Our decision", "The plan we set"}
+	v12RoutingRouteSeps           = []string{": ", " — ", " is: ", ", "}
+)
+
+func v8WorldContactEmail(seed int64, caseID string, world universe.World, index int) protocol.ToolCase {
+	p := world.People[index%len(world.People)]
+	needle := toolexec.NeedleForV8World(seed, caseID)
+	prompts := worldContactEmailFrames
 	prompt := fmt.Sprintf(prompts[index%len(prompts)], needle.Subject, p.Nickname, p.Relation, p.City, p.Context)
 	return fuzzyWorldTool(caseID, "world_contact_research_email_result_usage", prompt, []protocol.ToolSpec{{Name: "search_web"}, {Name: "gmail_send", RequiredArgs: map[string]string{"to": p.Email, "body": needle.Value}}}, "resolve the person and current email, research the live value, and send that value to the right person")
 }
 
 func v8WorldMemoryDelete(caseID string, world universe.World, index int) protocol.ToolCase {
 	p := world.People[index%len(world.People)]
-	return fuzzyWorldTool(caseID, "world_memory_delete", fmt.Sprintf("You can bin that temporary note about fixing %s's email after the %s — they're my %s at %s. Just don't lose their actual contact history.", p.Nickname, p.Context, p.Relation, p.Employer), []protocol.ToolSpec{{Name: "delete_memory", RequiredArgs: map[string]string{"pair_id": p.ToolNotePairID}}}, "resolve the uniquely described disposable note and delete that pair without removing canonical contact facts")
+	return fuzzyWorldTool(caseID, "world_memory_delete", fmt.Sprintf(worldMemoryDeleteFrame, p.Nickname, p.Context, p.Relation, p.Employer), []protocol.ToolSpec{{Name: "delete_memory", RequiredArgs: map[string]string{"pair_id": p.ToolNotePairID}}}, "resolve the uniquely described disposable note and delete that pair without removing canonical contact facts")
 }
 
 func v8WorldMemoryUpdate(caseID string, world universe.World, index int) protocol.ToolCase {
 	p := world.Projects[index%len(world.Projects)]
-	return fuzzyWorldTool(caseID, "world_memory_update", fmt.Sprintf("Add to the handoff note for %q at %s that we're doing the handoff Friday. It's the %s project; update the scratchpad, not the project history.", p.Alias, p.Client, p.Purpose), []protocol.ToolSpec{{Name: "update_memory", RequiredArgs: map[string]string{"pair_id": p.ToolNotePairID, "content": "handoff is Friday"}}}, "resolve the project's mutable handoff note and update it without overwriting canonical project evidence")
+	return fuzzyWorldTool(caseID, "world_memory_update", fmt.Sprintf(worldMemoryUpdateFrame, p.Alias, p.Client, p.Purpose), []protocol.ToolSpec{{Name: "update_memory", RequiredArgs: map[string]string{"pair_id": p.ToolNotePairID, "content": "handoff is Friday"}}}, "resolve the project's mutable handoff note and update it without overwriting canonical project evidence")
 }
 
 func v8WorldLinkRead(seed int64, caseID string) protocol.ToolCase {
 	needle := toolexec.NeedleForV8World(seed, caseID)
-	return fuzzyWorldTool(caseID, "world_link_chain_result_usage", fmt.Sprintf("See what %s is at right now, and open the actual page rather than relying on the search blurb.", needle.Subject), []protocol.ToolSpec{{Name: "search_web"}, {Name: "read_links"}}, "find and read the live source, then report the served value")
+	return fuzzyWorldTool(caseID, "world_link_chain_result_usage", fmt.Sprintf(worldLinkChainFrame, needle.Subject), []protocol.ToolSpec{{Name: "search_web"}, {Name: "read_links"}}, "find and read the live source, then report the served value")
 }
 
 func v8WorldAgentJob(caseID string, world universe.World, index int) protocol.ToolCase {
