@@ -1,5 +1,6 @@
 """Synthetic software-bundle tests; no root, Docker or private material."""
 
+import copy
 import hashlib
 import importlib.util
 import io
@@ -35,6 +36,10 @@ def bundle(tmp_path, monkeypatch):
         + bytes(12)
         + b"\x3e\x00"
         + b"synthetic",
+        "bin/dittobench-coding-enforcement-probe": b"\x7fELF\x02\x01"
+        + bytes(12)
+        + b"\x3e\x00"
+        + b"synthetic probe",
         "apps/platform/ditto/coding_hosted_worker.py": b"# synthetic source\n",
         "apps/platform/uv.lock": b"synthetic lock\n",
     }
@@ -42,7 +47,8 @@ def bundle(tmp_path, monkeypatch):
         path = source / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(body)
-    (source / "bin/dittobench-coding-hosted-worker").chmod(0o755)
+    for binary in BUNDLE.BINARIES:
+        (source / binary).chmod(0o755)
     python = source / "apps/platform/.venv/bin/python"
     python.parent.mkdir(parents=True)
     python.symlink_to(BUNDLE.PYTHON)
@@ -164,6 +170,31 @@ def test_untrusted_archive_structure_refused(bundle, change):
     )
     with pytest.raises((ValueError, tarfile.TarError)):
         inspect(archive)
+
+
+def test_probe_runner_binary_is_a_required_executable_elf(bundle, tmp_path):
+    source, archive = bundle
+    value, _records = inspect(archive)
+    probe = value["files"]["bin/dittobench-coding-enforcement-probe"]
+    assert probe["executable"] is True
+    assert probe["sha256"] == BUNDLE.file_hash(
+        source / "bin/dittobench-coding-enforcement-probe"
+    )
+    changed = copy.deepcopy(value)
+    del changed["files"]["bin/dittobench-coding-enforcement-probe"]
+    with pytest.raises(ValueError):
+        BUNDLE.metadata(changed, REVISION)
+    changed = copy.deepcopy(value)
+    changed["files"]["bin/dittobench-coding-enforcement-probe"]["executable"] = False
+    with pytest.raises(ValueError):
+        BUNDLE.metadata(changed, REVISION)
+    probe_path = source / "bin/dittobench-coding-enforcement-probe"
+    probe_path.chmod(0o755)
+    probe_path.write_bytes(b"#!/bin/sh\nnot an ELF probe\n")
+    other = tmp_path / "not-elf.tar"
+    BUNDLE.pack(source, other, REVISION)
+    with pytest.raises(ValueError):
+        inspect(other)
 
 
 def test_duplicate_manifest_keys_and_link_escape_refused(bundle):

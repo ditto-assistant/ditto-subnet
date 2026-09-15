@@ -45,6 +45,7 @@ CURATOR_SIGNING_KEY_SHA256 = (
 )
 PROFILE_PINS = {
     "connectivity_endpoint_set_sha256",
+    "enforcement_images_sha256",
     "execution_profile_sha256",
     "grading_profile_sha256",
 }
@@ -433,7 +434,7 @@ def native_environment():
 
 
 def release_policy(release, approval):
-    require(release.get("schema") == "dittobench-coding-native-release-set-v2")
+    require(release.get("schema") == "dittobench-coding-native-release-set-v3")
     require(release.get("source_revision") == approval["source_revision"])
     require(
         release.get("shadow_only") is True and release.get("weight_eligible") is False

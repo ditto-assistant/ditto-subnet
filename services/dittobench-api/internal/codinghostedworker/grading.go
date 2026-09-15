@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"time"
 
@@ -79,20 +80,47 @@ func (p GradingProfile) manifest(source codingsource.HostedBinding, sub codingru
 	return m, nil
 }
 
+// EnforcementProbeImage is one language's pinned probe image and its own
+// explicitly recorded build and test commands.
+type EnforcementProbeImage struct {
+	ImageDigest string
+	BuildArgv   []string
+	TestArgv    map[string][]string
+}
+
 // EnforcementProbeManifest converts this approved grading profile into a hosted
 // manifest through the same conversion Grade uses, for the native enforcement
-// probe runner. imageDigest selects the approved language image the probe
-// targets. The case, snapshot and bundle identities are fixed probe-only
-// digests: no attempt, patch or protected grader is bound, so the manifest can
-// launch and inspect an executor container but can never grade a submission.
-func (p GradingProfile) EnforcementProbeManifest(imageDigest string, deadline time.Time) (codinggrader.HostedManifest, error) {
-	p.ImageDigest = imageDigest
+// probe runner. The profile's limits, timeouts, command IDs and expected totals
+// are kept. The image digest and every command argv come from the pinned
+// language entry, so no command is shared across languages by default. The
+// case, snapshot and bundle identities are fixed probe-only digests: no
+// attempt, patch or protected grader is bound, so the manifest can launch and
+// inspect an executor container but can never grade a submission.
+func (p GradingProfile) EnforcementProbeManifest(image EnforcementProbeImage, deadline time.Time) (codinggrader.HostedManifest, error) {
+	if len(image.TestArgv) != len(p.TestGroups) || len(image.BuildArgv) == 0 {
+		return codinggrader.HostedManifest{}, ErrAttempt
+	}
+	// The receiver is a copy, but its slices share the caller's arrays.
+	p.ImageDigest = image.ImageDigest
+	p.Build.Command.Argv = slices.Clone(image.BuildArgv)
+	p.TestGroups = slices.Clone(p.TestGroups)
+	for index, group := range p.TestGroups {
+		argv, ok := image.TestArgv[group.Group]
+		if !ok || len(argv) == 0 {
+			return codinggrader.HostedManifest{}, ErrAttempt
+		}
+		p.TestGroups[index].Command.Argv = slices.Clone(argv)
+	}
 	source := codingsource.HostedBinding{AttemptID: "native-enforcement-probe", Deadline: deadline}
 	submission := codingrunner.FrozenSubmission{
 		VisibleBundleSHA256: probeIdentity("visible-bundle"),
 		BaseTreeSHA256:      probeIdentity("base-tree"),
 	}
-	return p.manifest(source, submission)
+	manifest, err := p.manifest(source, submission)
+	if err != nil || manifest.GraderImageDigest != image.ImageDigest {
+		return codinggrader.HostedManifest{}, ErrAttempt
+	}
+	return manifest, nil
 }
 
 func probeIdentity(label string) string {

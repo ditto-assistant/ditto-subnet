@@ -110,7 +110,7 @@ def describe(directory, revision):
         checksum = RUNTIME.digest(stream, os.fstat(stream.fileno()).st_size)
         manifest, _ = RUNTIME.inspect(stream, checksum, revision)
     return {
-        "schema": "dittobench-coding-native-release-set-v2",
+        "schema": "dittobench-coding-native-release-set-v3",
         "source_revision": revision,
         "images": images,
         "runtime": {
@@ -120,6 +120,11 @@ def describe(directory, revision):
             "worker_sha256": manifest["files"]["bin/dittobench-coding-hosted-worker"][
                 "sha256"
             ],
+            # Evidence records bind the probe runner binary that actually ran
+            # to this release-recorded digest.
+            "probe_runner_sha256": manifest["files"][
+                "bin/dittobench-coding-enforcement-probe"
+            ]["sha256"],
             "python_sha256": manifest["python_sha256"],
             "debian_packages": manifest["debian_packages"],
         },

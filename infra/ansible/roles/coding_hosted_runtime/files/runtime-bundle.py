@@ -29,6 +29,12 @@ PACKAGES = (
     "libc6",
 )
 ROOTS = ("bin/", "apps/platform/", "packages/ditto-screening-protocol/")
+# Static linux/amd64 executables: the hosted worker and the B5 enforcement
+# probe runner, whose digest the release index records for evidence binding.
+BINARIES = (
+    "bin/dittobench-coding-hosted-worker",
+    "bin/dittobench-coding-enforcement-probe",
+)
 
 
 class Parser(argparse.ArgumentParser):
@@ -133,12 +139,14 @@ def metadata(value, revision):
             require(re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is not None)
     required = {
         "bin/dittobench-coding-hosted-worker",
+        "bin/dittobench-coding-enforcement-probe",
         "apps/platform/ditto/coding_hosted_worker.py",
         "apps/platform/.venv/bin/python",
         "apps/platform/uv.lock",
     }
     require(required <= entries.keys())
-    require(entries["bin/dittobench-coding-hosted-worker"].get("executable") is True)
+    for name in BINARIES:
+        require(entries[name].get("executable") is True)
     return value
 
 
@@ -304,7 +312,7 @@ def inspect(stream, expected_sha, revision):
                 )
                 require(header.mode == (0o555 if item["executable"] else 0o444))
                 offset = stream.tell()
-                if name == "bin/dittobench-coding-hosted-worker":
+                if name in BINARIES:
                     elf = stream.read(20)
                     require(
                         elf[:6] == b"\x7fELF\x02\x01"

@@ -13,7 +13,7 @@ import (
 // goldenRecordSHA256 is pinned identically in catalog/canonical_test.go and the
 // Python evidence tests. Reassembling it here proves the runner's record
 // assembly is byte-for-byte the canonical evidence form both sides hash.
-const goldenRecordSHA256 = "ff6acb22aab1b6241f3d6790ec6f0fda0c5deeed8fd11a7207745167457c5360"
+const goldenRecordSHA256 = "b079646d740892d2db3eb5ab0599c8e40e3a81d730e863b8d790af1ddff2a8fa"
 
 func goldenEnv() Env {
 	return Env{
@@ -27,7 +27,7 @@ func goldenEnv() Env {
 		},
 		Release: ReleaseBinding{
 			SourceRevision:        "0123456789abcdef0123456789abcdef01234567",
-			ReleaseManifestSHA256: "707a400adad19b9fba18e0645815bf9e8516e3b12823789b387b033e211bbe1e",
+			ReleaseManifestSHA256: "48661de7aaf954fc0eb83293c6b84d27a3f6c8b8a5c029312d9505f6f6912ac6",
 			RuntimeArchiveSHA256:  "21b0e33f316915551cca77e617b073b99b53ac813b450f6ae0ff26025a086029",
 			ImageApprovalSHA256: map[string]string{
 				"go":     "637ca05baaaef19a322b67dcf2bd14e682b7d47b952b86fe0046a00ad9e8e23d",
@@ -37,11 +37,12 @@ func goldenEnv() Env {
 			},
 		},
 		Tools: map[string]string{
-			"catalog_sha256":       "652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af57",
-			"collector_sha256":     "0736fd5b7cc7ab7dfe821d3a17f93f2634497770232486155c9c881321c4d22c",
-			"evidence_tool_sha256": "49e460f2f099b092db8e060bf175d3f49eac8431d8be669bd35e91c08727edf5",
-			"fixtures_sha256":      "5b4818f81c7256e686ba2e0537258c852c6f5c3e646e84f9625f8744ede6a8f8",
-			"runner_sha256":        "527aa9f431539da8e151d5434d1d5e611d973f601d8e970790882624554146b0",
+			"catalog_sha256":             "652f55016243bf1b9f1bbea46d5749ef892dbe394e46de9d66ab1aacf0b4af57",
+			"collector_sha256":           "0736fd5b7cc7ab7dfe821d3a17f93f2634497770232486155c9c881321c4d22c",
+			"evidence_tool_sha256":       "49e460f2f099b092db8e060bf175d3f49eac8431d8be669bd35e91c08727edf5",
+			"fixtures_sha256":            "5b4818f81c7256e686ba2e0537258c852c6f5c3e646e84f9625f8744ede6a8f8",
+			"probe_runner_binary_sha256": "52246e6eadf42e15447fd5db8ad71fa7419af916c841133e11ec7b51d60adfc4",
+			"probe_runner_source_sha256": "b4989619d8c5a2d6fa900bfd100a6ab9534f9e7dd7c8620526824a3dfa848dce",
 		},
 		ProfileInputs:                map[string]string{"execution_profile_sha256": "f94c52f808d5df347becd9fd4cc184a15d5b6c181140c897467405d769c50bae"},
 		PreCollectionPreflightSHA256: "82998cdb86201643e69090056ad333315285b557d7fb3447ca040a525f977027",

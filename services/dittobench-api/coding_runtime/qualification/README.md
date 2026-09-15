@@ -138,7 +138,7 @@ The closed approval record uses schema
 | `curator_signing_key_sha256` | The pinned offline curator key identity (sha256 of the raw 32-byte Ed25519 key) |
 | `machine_id_sha256`, `boot_id` | Intended host's stripped machine-ID hash and current boot UUID |
 | `daemon_identity` | The dedicated rootless dockerd, `dittobench-coding-native-daemon-identity-v1` (below); its canonical digest equals every evidence record's `host.daemon_identity_sha256` |
-| `profile_pins` | `connectivity_endpoint_set_sha256`, `execution_profile_sha256`, `grading_profile_sha256`, equal to the reviewed pins `check-approval` requires |
+| `profile_pins` | `connectivity_endpoint_set_sha256`, `enforcement_images_sha256` (per-language probe images and commands), `execution_profile_sha256`, `grading_profile_sha256`, equal to the reviewed pins `check-approval` requires |
 | `issued_at_unix`, `expires_at_unix` | Current validity window, at most 24 hours |
 | `controls`, `max_jobs` | Exact plan case count times two; at most 1024 controls and 1, 2 or 4 parallel jobs |
 | `images` | Exactly `python`, `node`, `go`, `rust`, each with approved `image_ref`, `config_digest`, `approval_sha256`, `driver_profile` matching the release index |

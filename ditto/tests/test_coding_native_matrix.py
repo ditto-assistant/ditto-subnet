@@ -123,7 +123,7 @@ def test_native_approval_is_exact_bounded_and_not_an_activation(field, value):
 def test_release_index_and_each_image_pin_must_match():
     value = approval()
     release = {
-        "schema": "dittobench-coding-native-release-set-v2",
+        "schema": "dittobench-coding-native-release-set-v3",
         "source_revision": SOURCE,
         "images": copy.deepcopy(value["images"]),
         "independent_approval_required": True,
@@ -1056,7 +1056,7 @@ def test_private_read_refuses_a_file_changed_while_read(monkeypatch, tmp_path):
 CATALOG_DIR = ROOT / "services/dittobench-api/internal/codingenforcement/catalog"
 # Pinned identically in catalog/approval_test.go.
 APPROVAL_VECTOR_SHA256 = (
-    "45f741a12547a8d79cc659abc63217b4f045729e4bf009cffd18251615fa7e19"
+    "c5d49e2f49dede8b95ebe6fd8e9253dd86b1be80e401ac68887cdeff8c2f7ed7"
 )
 
 

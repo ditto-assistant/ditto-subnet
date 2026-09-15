@@ -64,9 +64,32 @@ COVERAGE = "same_boot"
 NOT_COVERED = ("daemon_restart_recovery", "reboot_recovery")
 PROFILE_INPUTS = (
     "connectivity_profile_sha256",
+    "enforcement_images_sha256",
     "execution_profile_sha256",
     "grading_profile_sha256",
 )
+# Peyton, 2026-09-15: every language image the approval names runs with the
+# approved grading profile's limits and timeouts, but each with its own
+# explicitly recorded build and test commands (no forced common argv).
+ENFORCEMENT_IMAGES_SCHEMA = "dittobench-coding-native-enforcement-images-v1"
+MAX_ENFORCEMENT_IMAGES = 64 << 10
+ARGV_TEXT = re.compile(r"[\x21-\x7e]{1,256}")
+ARGV_EXECUTABLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+GENERAL_SHELLS = (
+    "bash",
+    "cmd",
+    "dash",
+    "env",
+    "fish",
+    "powershell",
+    "pwsh",
+    "sh",
+    "zsh",
+)
+TRUSTED_TEST_DRIVER = "dittobench-test-driver"
+# codingexecutor.rustCommand: the Rust driver runs only this exact authority argv.
+RUST_TEST_FLAGS = ("--authority", "--authority-sha256", "--group")
+RUST_AUTHORITY_PART = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]*")
 # Peyton, 2026-09-15: every collection record falls within six hours of the
 # approval's issued_at, on one machine and one boot.
 FRESHNESS_SECONDS = 21600
@@ -157,6 +180,7 @@ NETWORK_PRE_EXPIRY_PHASES = ("active", "stop_rollback")
 NETWORK_EXPIRY_PHASE = "expiry"
 PIN_NAMES = (
     "connectivity_endpoint_set_sha256",
+    "enforcement_images_sha256",
     "execution_profile_sha256",
     "grading_profile_sha256",
 )
@@ -167,7 +191,10 @@ CATALOG_FILE = (
 FIXTURE_ROOT = "services/dittobench-api/internal/codingenforcement/fixtures"
 # The Go probe runner that measures evidence: its command, library and the
 # catalog package whose canonical encoding and matched rules it uses. Records
-# bind the reviewed checkout's hash of these trees, never a caller-supplied one.
+# carry the reviewed checkout's hash of these trees as supporting provenance
+# (tools.probe_runner_source_sha256). Acceptance pins the binary that actually
+# ran (tools.probe_runner_binary_sha256, measured on the host) to the
+# release-recorded runtime.probe_runner_sha256 (Peyton, 2026-09-15).
 RUNNER_ROOTS = (
     "services/dittobench-api/cmd/dittobench-coding-enforcement-probe",
     "services/dittobench-api/internal/codingenforcement/catalog",
@@ -268,7 +295,44 @@ RELEASE_KEYS = {
     "runtime_archive_sha256",
     "image_approval_sha256",
 }
-TOOL_KEYS = {*TOOL_FILES, "fixtures_sha256", "runner_sha256"}
+TOOL_KEYS = {
+    *TOOL_FILES,
+    "fixtures_sha256",
+    "probe_runner_source_sha256",
+    "probe_runner_binary_sha256",
+}
+RELEASE_INDEX_SCHEMA = "dittobench-coding-native-release-set-v3"
+MAX_RELEASE_INDEX = 64 << 10
+RELEASE_INDEX_KEYS = {
+    "schema",
+    "source_revision",
+    "images",
+    "runtime",
+    "independent_approval_required",
+    "native_imported",
+    "runtime_qualification",
+    "canary_completed",
+    "shadow_only",
+    "weight_eligible",
+}
+RELEASE_IMAGE_KEYS = {
+    "archive",
+    "approval",
+    "approval_sha256",
+    "archive_sha256",
+    "image_ref",
+    "config_digest",
+    "driver_profile",
+}
+RELEASE_RUNTIME_KEYS = {
+    "archive",
+    "archive_sha256",
+    "manifest_sha256",
+    "worker_sha256",
+    "probe_runner_sha256",
+    "python_sha256",
+    "debian_packages",
+}
 PHASE_KEYS = {"name", "started_at_unix", "completed_at_unix", "probes"}
 PROBE_KEYS = {"id", "language", "endpoint_sha256", "expect", "observed", "matched"}
 ENDPOINT_KEYS = {"role", "endpoint_sha256"}
@@ -867,7 +931,7 @@ class Checkout:
     def tools(self) -> dict[str, str]:
         result = {name: self.file_sha256(path) for name, path in TOOL_FILES.items()}
         result["fixtures_sha256"] = self.tree_sha256(FIXTURE_ROOT)
-        result["runner_sha256"] = canonical_sha256(
+        result["probe_runner_source_sha256"] = canonical_sha256(
             [{"root": root, "sha256": self.tree_sha256(root)} for root in RUNNER_ROOTS]
         )
         return result
@@ -990,7 +1054,7 @@ def parse_grading_profile(raw: bytes) -> dict[str, Any]:
         type(groups) is list and len(groups) == len(HOSTED_TEST_GROUPS),
         "grading profile test groups are malformed",
     )
-    timeouts = {}
+    timeouts, test_argv = {}, {}
     for group, name in zip(groups, HOSTED_TEST_GROUPS, strict=True):
         group = closed(group, {"Group", "Command", "ExpectedTotal"}, "test group")
         require(
@@ -998,7 +1062,119 @@ def parse_grading_profile(raw: bytes) -> dict[str, Any]:
             "grading profile test groups are malformed",
         )
         timeouts[name] = _command_timeout_ms(group["Command"], "grading test group")
-    return {"sha256": sha256(raw), "policy": policy, "group_timeouts_ms": timeouts}
+        test_argv[name] = group["Command"]["Argv"]
+    return {
+        "sha256": sha256(raw),
+        "policy": policy,
+        "group_timeouts_ms": timeouts,
+        "image_digest": value["image_digest"],
+        "build_argv": build["Command"]["Argv"],
+        "test_argv": test_argv,
+    }
+
+
+def _argv(value: object, label: str, *, test: bool) -> list[str]:
+    """Bounded argv: a bare non-shell executable; tests use the trusted driver."""
+
+    require(
+        type(value) is list
+        and 0 < len(value) <= 64
+        and all(type(item) is str and ARGV_TEXT.fullmatch(item) for item in value)
+        and sum(len(item) for item in value) <= 8192,
+        f"{label} argv is malformed",
+    )
+    assert isinstance(value, list)
+    executable = value[0]
+    require(
+        ARGV_EXECUTABLE.fullmatch(executable) is not None
+        and executable.lower() not in GENERAL_SHELLS
+        and (not test or executable == TRUSTED_TEST_DRIVER),
+        f"{label} argv executable is not allowed",
+    )
+    return value
+
+
+def _rust_test_argv(argv: list[str], group: str, label: str) -> list[str]:
+    """The production Rust driver's authority argv, naming its own test group.
+
+    Mirrors ``codingexecutor.rustCommand``: the Rust executor refuses any other
+    test command, so a Rust entry that differs is never the command that ran.
+    """
+
+    flags, values = argv[1::2], argv[2::2]
+    fields = dict(zip(flags, values, strict=False))
+    authority = fields.get("--authority", "")
+    parts = authority.split("/")
+    require(
+        len(argv) == 7
+        and sorted(flags) == list(RUST_TEST_FLAGS)
+        and fields["--group"] == group
+        and 0 < len(authority) <= 240
+        and authority.endswith(".json")
+        and len(parts) <= 8
+        and all(RUST_AUTHORITY_PART.fullmatch(part) for part in parts)
+        and SHA256.fullmatch(fields["--authority-sha256"]) is not None,
+        f"{label} argv is not the Rust driver authority command",
+    )
+    return argv
+
+
+def parse_enforcement_images(raw: bytes) -> dict[str, Any]:
+    """The pinned per-language probe image set; Go parses the same vector."""
+
+    value = closed(
+        parse_canonical(raw, "enforcement images"),
+        {"schema", "grading_profile_sha256", "images"},
+        "enforcement images",
+    )
+    require(
+        same(value["schema"], ENFORCEMENT_IMAGES_SCHEMA)
+        and is_digest(value["grading_profile_sha256"]),
+        "enforcement images identity is malformed",
+    )
+    images = value["images"]
+    require(
+        type(images) is dict and set(images) == set(LANGUAGES),
+        "enforcement images must name every language exactly once",
+    )
+    parsed: dict[str, dict[str, Any]] = {}
+    for language in LANGUAGES:
+        entry = closed(
+            images[language],
+            {"image_digest", "build_argv", "test_argv"},
+            f"{language} enforcement image",
+        )
+        digest = entry["image_digest"]
+        require(
+            type(digest) is str
+            and digest.startswith("sha256:")
+            and is_digest(digest[7:]),
+            f"{language} enforcement image digest is malformed",
+        )
+        tests = closed(
+            entry["test_argv"], set(HOSTED_TEST_GROUPS), f"{language} test commands"
+        )
+        test_argv = {
+            group: _argv(tests[group], f"{language} {group} test", test=True)
+            for group in HOSTED_TEST_GROUPS
+        }
+        if language == "rust":
+            for group, argv in test_argv.items():
+                _rust_test_argv(argv, group, f"rust {group} test")
+        parsed[language] = {
+            "image_digest": digest,
+            "build_argv": _argv(entry["build_argv"], f"{language} build", test=False),
+            "test_argv": test_argv,
+        }
+    digests = [item["image_digest"] for item in parsed.values()]
+    require(
+        len(set(digests)) == len(digests), "enforcement images repeat an image digest"
+    )
+    return {
+        "sha256": sha256(raw),
+        "grading_profile_sha256": value["grading_profile_sha256"],
+        "images": parsed,
+    }
 
 
 def _endpoint_sha256(endpoint_set: str, label: str, address: str, port: int) -> str:
@@ -1128,6 +1304,10 @@ def load_profiles(paths: dict[str, Path | None]) -> dict[str, dict[str, Any]]:
         "connectivity_profile_sha256": (parse_connectivity_profile, MAX_CONNECTIVITY),
         "execution_profile_sha256": (parse_execution_profile, MAX_PROFILE),
         "grading_profile_sha256": (parse_grading_profile, MAX_PROFILE),
+        "enforcement_images_sha256": (
+            parse_enforcement_images,
+            MAX_ENFORCEMENT_IMAGES,
+        ),
     }
     result = {}
     for name, path in paths.items():
@@ -1654,6 +1834,102 @@ def parse_preflight(raw: bytes, checkout: Checkout | None) -> dict[str, Any]:
     return value
 
 
+def parse_release_index(raw: bytes) -> dict[str, Any]:
+    """The release set index (``build-coding-native-release.py``), by digest.
+
+    Only its digests are used: the release-recorded probe runner binary, the
+    runtime archive and each image approval.
+    """
+
+    value = closed(
+        parse_canonical(raw, "release index"), RELEASE_INDEX_KEYS, "release index"
+    )
+    require(
+        same(value["schema"], RELEASE_INDEX_SCHEMA)
+        and value["independent_approval_required"] is True
+        and value["native_imported"] is False
+        and value["runtime_qualification"] is False
+        and value["canary_completed"] is False
+        and value["shadow_only"] is True
+        and value["weight_eligible"] is False
+        and type(value["source_revision"]) is str
+        and REVISION.fullmatch(value["source_revision"]) is not None,
+        "release index identity is malformed",
+    )
+    runtime = closed(value["runtime"], RELEASE_RUNTIME_KEYS, "release index runtime")
+    require(
+        all(
+            is_digest(runtime[name])
+            for name in (
+                "archive_sha256",
+                "manifest_sha256",
+                "worker_sha256",
+                "probe_runner_sha256",
+                "python_sha256",
+            )
+        )
+        and runtime["probe_runner_sha256"] != runtime["worker_sha256"],
+        "release index runtime digests are malformed",
+    )
+    images = value["images"]
+    require(
+        type(images) is dict and set(images) == set(LANGUAGES),
+        "release index images are malformed",
+    )
+    for language in LANGUAGES:
+        image = closed(images[language], RELEASE_IMAGE_KEYS, "release index image")
+        require(
+            is_digest(image["approval_sha256"]) and is_digest(image["archive_sha256"]),
+            "release index image digests are malformed",
+        )
+    return {
+        "sha256": sha256(raw),
+        "source_revision": value["source_revision"],
+        "runtime_archive_sha256": runtime["archive_sha256"],
+        "probe_runner_sha256": runtime["probe_runner_sha256"],
+        "image_approval_sha256": {
+            language: images[language]["approval_sha256"] for language in LANGUAGES
+        },
+        "image_manifest_digest": {
+            language: _manifest_digest(images[language]["image_ref"], language)
+            for language in LANGUAGES
+        },
+        # The fields native.release_policy requires the approval's images to
+        # equal on the host.
+        "approval_images": {
+            language: {
+                name: images[language][name]
+                for name in (
+                    "approval_sha256",
+                    "config_digest",
+                    "driver_profile",
+                    "image_ref",
+                )
+            }
+            for language in LANGUAGES
+        },
+    }
+
+
+def _manifest_digest(reference: object, language: str) -> str:
+    prefix = f"coding-runtime.invalid/{language}/runtime@"
+    require(
+        type(reference) is str
+        and reference.startswith(prefix)
+        and reference[len(prefix) :].startswith("sha256:")
+        and is_digest(reference[len(prefix) + 7 :]),
+        "release index image reference is malformed",
+    )
+    assert isinstance(reference, str)
+    return reference[len(prefix) :]
+
+
+def load_release_index(path: Path | None) -> dict[str, Any]:
+    require(path is not None, "the release index is required")
+    assert path is not None
+    return parse_release_index(read_input(path, MAX_RELEASE_INDEX, "release index"))
+
+
 def parse_custody_binding(raw: bytes) -> dict[str, Any]:
     value = closed(
         parse_canonical(raw, "custody binding"), CUSTODY_KEYS, "custody binding"
@@ -1846,6 +2122,43 @@ def _connectivity_window(
     )
 
 
+def _enforcement_images(
+    profiles: dict[str, dict[str, Any]], release_index: dict[str, Any]
+) -> None:
+    """Every released language image, with its own commands, for this profile."""
+
+    images = profiles["enforcement_images_sha256"]
+    grading = profiles.get("grading_profile_sha256")
+    require(grading is not None, "enforcement images need the grading profile")
+    assert grading is not None
+    require(
+        same(images["grading_profile_sha256"], grading["sha256"]),
+        "enforcement images name another grading profile",
+    )
+    for language in LANGUAGES:
+        require(
+            same(
+                images["images"][language]["image_digest"],
+                release_index["image_manifest_digest"][language],
+            ),
+            f"{language} enforcement image is not the released image",
+        )
+    # The profile's own image runs its own approved commands exactly; the other
+    # languages keep their explicitly recorded ones.
+    own = [
+        language
+        for language in LANGUAGES
+        if images["images"][language]["image_digest"] == grading["image_digest"]
+    ]
+    require(len(own) == 1, "the grading profile image is not a released language")
+    entry = images["images"][own[0]]
+    require(
+        same(entry["build_argv"], grading["build_argv"])
+        and same(entry["test_argv"], grading["test_argv"]),
+        f"{own[0]} enforcement commands differ from the approved grading profile",
+    )
+
+
 def verify_record(
     raw: bytes,
     *,
@@ -1854,6 +2167,7 @@ def verify_record(
     store: Store,
     checkout: Checkout,
     profiles: dict[str, dict[str, Any]],
+    release_index: dict[str, Any],
     host_preflight: dict[str, Any],
     host_preflight_sha256: str,
 ) -> dict[str, Any]:
@@ -1873,6 +2187,15 @@ def verify_record(
     )
     host = _host(record["host"], catalog)
     release = _release(record["release"])
+    require(
+        same(release["release_manifest_sha256"], release_index["sha256"]),
+        "record release manifest differs from the release index",
+    )
+    for name in ("source_revision", "runtime_archive_sha256", "image_approval_sha256"):
+        require(
+            same(release[name], release_index[name]),
+            f"record {name} differs from the release index",
+        )
     inputs = closed(record["inputs"], set(entry["inputs"]), "record inputs")
     for name, value in inputs.items():
         require(is_digest(value), "record input malformed")
@@ -1881,10 +2204,29 @@ def verify_record(
             same(value, profiles[name]["sha256"]),
             f"record {name} differs from the supplied document",
         )
+    if "enforcement_images_sha256" in inputs:
+        _enforcement_images(profiles, release_index)
     endpoints = _endpoints(record["endpoints"], entry, profiles)
+    record_tools = closed(record["tools"], TOOL_KEYS, "record tools")
     require(
-        same(closed(record["tools"], TOOL_KEYS, "record tools"), tools),
+        same(
+            {
+                name: value
+                for name, value in record_tools.items()
+                if name != "probe_runner_binary_sha256"
+            },
+            tools,
+        ),
         "record tool hashes differ from the reviewed checkout",
+    )
+    # Runtime acceptance: the probe runner binary measured on the host must be
+    # the release-recorded one; its source-tree hash above is provenance only.
+    require(
+        same(
+            record_tools["probe_runner_binary_sha256"],
+            release_index["probe_runner_sha256"],
+        ),
+        "record probe runner binary differs from the release-recorded binary",
     )
     require(same(record["preconditions"], PRECONDITIONS), "record preconditions failed")
     require(same(record["residue"], RESIDUE), "record residue is not empty")
@@ -2125,6 +2467,7 @@ def verify(
     preflight_sha: str,
     record_shas: list[str],
     profiles: dict[str, dict[str, Any]],
+    release_index: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
     catalog, tools = _context(checkout)
     host_preflight = parse_preflight(store.get(preflight_sha), checkout)
@@ -2139,6 +2482,7 @@ def verify(
                 store=store,
                 checkout=checkout,
                 profiles=profiles,
+                release_index=release_index,
                 host_preflight=host_preflight,
                 host_preflight_sha256=preflight_sha,
             )
@@ -2177,11 +2521,12 @@ def review(
     checkout: Checkout,
     selection: dict[str, str],
     profiles: dict[str, dict[str, Any]],
+    release_index: dict[str, Any],
 ) -> tuple[dict[str, Any], bool]:
     """Assemble the review. It carries no digest map unless everything verified."""
 
     require(set(selection) == set(EVIDENCE), "review needs all six evidence digests")
-    require(set(profiles) == set(PROFILE_INPUTS), "review needs all three profiles")
+    require(set(profiles) == set(PROFILE_INPUTS), "review needs every profile document")
     catalog, tools = _context(checkout)
     verification: dict[str, dict[str, Any]] = {}
     summaries: dict[str, dict[str, Any]] = {}
@@ -2210,6 +2555,7 @@ def review(
                 store=store,
                 checkout=checkout,
                 profiles=profiles,
+                release_index=release_index,
                 host_preflight=host_preflight,
                 host_preflight_sha256=selection["host_preflight"],
             )
@@ -2495,6 +2841,7 @@ def check_approval(
     store: Store,
     checkout: Checkout,
     profiles: dict[str, dict[str, Any]],
+    release_index: dict[str, Any],
     profile_pins: dict[str, str],
     review_raw: bytes,
     approval_raw: bytes,
@@ -2513,7 +2860,9 @@ def check_approval(
     verify_ed25519(openssl, key, approval_raw, signature)
 
     claimed = parse_review(review_raw)
-    rebuilt, ok = review(store, checkout, claimed["evidence_sha256"], profiles)
+    rebuilt, ok = review(
+        store, checkout, claimed["evidence_sha256"], profiles, release_index
+    )
     require(ok, "review evidence no longer verifies")
     require(
         canonical_bytes(rebuilt) == review_raw,
@@ -2536,7 +2885,11 @@ def check_approval(
         ),
         "review connectivity endpoint set differs from the reviewed pin",
     )
-    for name in ("execution_profile_sha256", "grading_profile_sha256"):
+    for name in (
+        "enforcement_images_sha256",
+        "execution_profile_sha256",
+        "grading_profile_sha256",
+    ):
         require(
             same(rebuilt["inputs"][name], profile_pins[name]),
             f"review {name} differs from the reviewed pin",
@@ -2623,6 +2976,14 @@ def check_approval(
             ),
             f"approval {language} image approval differs",
         )
+        # native.release_policy refuses any other image on the host.
+        require(
+            same(
+                approval["images"][language],
+                release_index["approval_images"][language],
+            ),
+            f"approval {language} image differs from the release index",
+        )
     window = rebuilt["window"]
     require(
         issued >= window["latest_completed_at_unix"]
@@ -2674,22 +3035,32 @@ def _retain(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
 
 def _verify(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     profiles = load_profiles(_profile_paths(args))
+    release_index = load_release_index(args.release_index)
     with Store(args.store) as store:
         return verify(
-            store, Checkout(args.checkout), args.host_preflight, args.record, profiles
+            store,
+            Checkout(args.checkout),
+            args.host_preflight,
+            args.record,
+            profiles,
+            release_index,
         )
 
 
 def _review(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     selection = {name: getattr(args, name) for name in EVIDENCE}
     profiles = load_profiles(_profile_paths(args))
+    release_index = load_release_index(args.release_index)
     with Store(args.store) as store:
-        return review(store, Checkout(args.checkout), selection, profiles)
+        return review(
+            store, Checkout(args.checkout), selection, profiles, release_index
+        )
 
 
 def _check(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
     signature = read_input(args.signature, SIGNATURE_BYTES, "curator signature")
     profiles = load_profiles(_profile_paths(args))
+    release_index = load_release_index(args.release_index)
     pins = {name: getattr(args, name) for name in PIN_NAMES}
     with Store(args.store) as store:
         return (
@@ -2697,6 +3068,7 @@ def _check(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
                 store=store,
                 checkout=Checkout(args.checkout),
                 profiles=profiles,
+                release_index=release_index,
                 profile_pins=pins,
                 review_raw=read_input(args.review, MAX_OBJECT, "review"),
                 approval_raw=read_input(args.approval, MAX_APPROVAL, "approval"),
@@ -2726,6 +3098,8 @@ def _endpoint_set(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
 
 
 def _profile_arguments(command: argparse.ArgumentParser, *, required: bool) -> None:
+    # The release index always binds records; profiles are optional for verify.
+    command.add_argument("--release-index", type=Path, required=True)
     for name in PROFILE_INPUTS:
         flag = "--" + name.removesuffix("_sha256").replace("_", "-")
         command.add_argument(

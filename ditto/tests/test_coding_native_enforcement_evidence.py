@@ -47,7 +47,7 @@ DAEMON_IDENTITY_VECTOR = json.loads(
 )
 # Pinned identically in catalog/canonical_test.go.
 GOLDEN_RECORD_SHA256 = (
-    "ff6acb22aab1b6241f3d6790ec6f0fda0c5deeed8fd11a7207745167457c5360"
+    "b079646d740892d2db3eb5ab0599c8e40e3a81d730e863b8d790af1ddff2a8fa"
 )
 CANONICAL_VECTOR_SHA256 = (
     "1948b8f75bd3f0c25825ed268d2390e89ffe1993a37790ee740c19e5cd491a74"
@@ -65,11 +65,58 @@ KERNEL = "6.12.43+deb13-cloud-amd64"
 DAEMON_IDENTITY = DAEMON_IDENTITY_VECTOR["identity"]
 DAEMON = DAEMON_IDENTITY_VECTOR["identity_sha256"]
 REVISION = "0123456789abcdef0123456789abcdef01234567"
-MANIFEST = digest("release-manifest")
 RUNTIME = digest("runtime-archive")
+PROBE_RUNNER_BINARY = digest("release-recorded probe runner binary")
 IMAGES = {
     language: digest(f"{language}-image-approval") for language in EVIDENCE.LANGUAGES
 }
+RELEASE_PROFILES = {
+    "python": "python-call-ast-v2",
+    "node": "node-call-ast-v2",
+    "go": "go-call-ast-v1",
+    "rust": "rust-call-ast-v1",
+}
+
+
+def release_index_value() -> dict:
+    """Shape of build-coding-native-release.py describe() for a v3 release set."""
+
+    return {
+        "schema": "dittobench-coding-native-release-set-v3",
+        "source_revision": REVISION,
+        "images": {
+            language: {
+                "archive": f"{language}/runtime.oci.tar",
+                "approval": f"{language}/approval.json",
+                "approval_sha256": IMAGES[language],
+                "archive_sha256": digest(f"{language}-oci-archive"),
+                "image_ref": f"coding-runtime.invalid/{language}/runtime@sha256:"
+                + digest(language + "-manifest"),
+                "config_digest": "sha256:" + digest(language + "-config"),
+                "driver_profile": RELEASE_PROFILES[language],
+            }
+            for language in EVIDENCE.LANGUAGES
+        },
+        "runtime": {
+            "archive": "native/runtime.tar",
+            "archive_sha256": RUNTIME,
+            "manifest_sha256": digest("runtime-manifest"),
+            "worker_sha256": digest("hosted worker binary"),
+            "probe_runner_sha256": PROBE_RUNNER_BINARY,
+            "python_sha256": digest("python"),
+            "debian_packages": {"libc6": "2.41-12"},
+        },
+        "independent_approval_required": True,
+        "native_imported": False,
+        "runtime_qualification": False,
+        "canary_completed": False,
+        "shadow_only": True,
+        "weight_eligible": False,
+    }
+
+
+RELEASE_INDEX_RAW = EVIDENCE.canonical_bytes(release_index_value())
+MANIFEST = hashlib.sha256(RELEASE_INDEX_RAW).hexdigest()
 SUBORDINATE = {
     "gid_count": 65536,
     "gid_start": 100000,
@@ -82,7 +129,8 @@ FIXED_TOOLS = {
     "collector_sha256": digest("collector"),
     "evidence_tool_sha256": digest("evidence-tool"),
     "fixtures_sha256": digest("fixtures"),
-    "runner_sha256": digest("runner"),
+    "probe_runner_source_sha256": digest("probe runner sources"),
+    "probe_runner_binary_sha256": PROBE_RUNNER_BINARY,
 }
 FORBIDDEN_KEY = re.compile(r"(^|_)(approved|ready|readiness|qualified)(_|$)|^approval$")
 TOOL_NAMES = (
@@ -139,7 +187,8 @@ EXECUTION_PROFILE: dict[str, Any] = {
 GROUP_TIMEOUTS_MS = {"hidden": 300000, "visible": 60000}
 GRADING_PROFILE: dict[str, Any] = {
     "schema": EVIDENCE.GRADING_PROFILE_SCHEMA,
-    "image_digest": "sha256:" + digest("grading-image"),
+    # The approved grading profile belongs to the released python image.
+    "image_digest": "sha256:" + digest("python-manifest"),
     "grader_contract_sha256": digest("grader-contract"),
     "grader_bundle_sha256": digest("grader-bundle"),
     "resource_policy": GRADING_POLICY,
@@ -195,8 +244,69 @@ GRADING_SHA256 = hashlib.sha256(go_canonical(GRADING_PROFILE)).hexdigest()
 CONNECTIVITY_SHA256 = hashlib.sha256(
     json.dumps(CONNECTIVITY_PROFILE, sort_keys=True, separators=(",", ":")).encode()
 ).hexdigest()
+
+
+def rust_test_argv(group: str, authority: str = "") -> list[str]:
+    """The Rust driver's authority command (codingexecutor.rustCommand)."""
+
+    return [
+        "dittobench-test-driver",
+        "--group",
+        group,
+        "--authority",
+        authority or f"rust/{group}-authority.json",
+        "--authority-sha256",
+        digest(f"rust {group} authority"),
+    ]
+
+
+def enforcement_images_value() -> dict:
+    """Every released image; python is the profile's own, with its commands."""
+
+    commands = {
+        "go": (
+            ["go", "build", "./..."],
+            ["--package-path", "example.invalid/subject"],
+        ),
+        "node": (["node", "--check", "subject.js"], ["--module", "subject.js"]),
+        "rust": (["cargo", "build", "--offline"], None),
+    }
+    images = {
+        language: {
+            "image_digest": "sha256:" + digest(language + "-manifest"),
+            "build_argv": build,
+            "test_argv": {
+                group: (
+                    rust_test_argv(group)
+                    if extra is None
+                    else ["dittobench-test-driver", "--group", group, *extra]
+                )
+                for group in ("hidden", "visible")
+            },
+        }
+        for language, (build, extra) in commands.items()
+    }
+    images["python"] = {
+        "image_digest": GRADING_PROFILE["image_digest"],
+        "build_argv": GRADING_PROFILE["build"]["Command"]["Argv"],
+        "test_argv": {
+            group["Group"]: group["Command"]["Argv"]
+            for group in GRADING_PROFILE["test_groups"]
+        },
+    }
+    return {
+        "schema": "dittobench-coding-native-enforcement-images-v1",
+        "grading_profile_sha256": GRADING_SHA256,
+        "images": images,
+    }
+
+
+ENFORCEMENT_IMAGES_SHA256 = hashlib.sha256(
+    EVIDENCE.canonical_bytes(enforcement_images_value())
+).hexdigest()
 INPUTS = {
     "connectivity_profile_sha256": CONNECTIVITY_SHA256,
+    "enforcement_images_sha256": ENFORCEMENT_IMAGES_SHA256,
     "execution_profile_sha256": EXECUTION_SHA256,
     "grading_profile_sha256": GRADING_SHA256,
 }
@@ -223,6 +333,7 @@ def endpoint_set_sha256(profile: dict) -> str:
 ENDPOINT_SET_SHA256 = endpoint_set_sha256(CONNECTIVITY_PROFILE)
 PINS = {
     "connectivity_endpoint_set_sha256": ENDPOINT_SET_SHA256,
+    "enforcement_images_sha256": ENFORCEMENT_IMAGES_SHA256,
     "execution_profile_sha256": EXECUTION_SHA256,
     "grading_profile_sha256": GRADING_SHA256,
 }
@@ -509,7 +620,11 @@ class World:
             "connectivity_profile_sha256": profiles / "connectivity.json",
             "execution_profile_sha256": profiles / "execution-profile.json",
             "grading_profile_sha256": profiles / "grading-profile.json",
+            "enforcement_images_sha256": profiles / "enforcement-images.json",
         }
+        self.profile_paths["enforcement_images_sha256"].write_bytes(
+            EVIDENCE.canonical_bytes(enforcement_images_value())
+        )
         self.profile_paths["connectivity_profile_sha256"].write_text(
             json.dumps(CONNECTIVITY_PROFILE, indent=2)
         )
@@ -526,7 +641,12 @@ class World:
         self.store = tmp_path / "store"
         self.store.mkdir()
         self.store.chmod(0o700)
-        self.tools = EVIDENCE.Checkout(self.checkout).tools()
+        self.tools = {
+            **EVIDENCE.Checkout(self.checkout).tools(),
+            "probe_runner_binary_sha256": PROBE_RUNNER_BINARY,
+        }
+        self.release_index = tmp_path / "release.json"
+        self.release_index.write_bytes(RELEASE_INDEX_RAW)
         self.pre_raw = stdout_bytes(preflight_value(self.preflight_tools, T0))
         self.pre_sha = self.put(self.pre_raw)
         self.records = {
@@ -547,8 +667,11 @@ class World:
     def profiles(self) -> dict:
         return EVIDENCE.load_profiles(self.profile_paths)
 
+    def release(self) -> dict:
+        return EVIDENCE.load_release_index(self.release_index)
+
     def profile_arguments(self) -> list[str]:
-        arguments = []
+        arguments = ["--release-index", str(self.release_index)]
         for name, path in self.profile_paths.items():
             arguments += [
                 "--" + name.removesuffix("_sha256").replace("_", "-"),
@@ -581,7 +704,11 @@ class World:
         store, checkout = self.open()
         with store:
             return EVIDENCE.review(
-                store, checkout, self.selection(**overrides), self.profiles()
+                store,
+                checkout,
+                self.selection(**overrides),
+                self.profiles(),
+                self.release(),
             )
 
     def verify(self, record_shas, preflight_sha=None):
@@ -589,7 +716,7 @@ class World:
         preflight = preflight_sha or self.selection()["host_preflight"]
         with store:
             return EVIDENCE.verify(
-                store, checkout, preflight, record_shas, self.profiles()
+                store, checkout, preflight, record_shas, self.profiles(), self.release()
             )
 
     def verify_record(self, record: dict) -> str | None:
@@ -1554,7 +1681,7 @@ RECORD_REFUSALS = [
     ),
     (
         network(set_path("release", "release_manifest_sha256", value=digest("x"))),
-        "release_manifest_sha256 differs",
+        "release manifest differs from the release index",
     ),
     (
         network(set_path("release", "runtime_archive_sha256", value=digest("x"))),
@@ -2048,6 +2175,7 @@ def test_records_need_their_profile_documents(world):
             world.selection()["host_preflight"],
             [sha],
             world.profiles(),
+            world.release(),
         )
     assert not ok
     assert (
@@ -2190,8 +2318,8 @@ def test_reviewed_checkout_tool_drift_fails_the_record(world):
 def test_records_bind_the_reviewed_go_runner_sources(world, root):
     record_sha = world.selection()["cleanup_recovery"]
     assert (
-        world.tools["runner_sha256"]
-        == EVIDENCE.Checkout(world.checkout).tools()["runner_sha256"]
+        world.tools["probe_runner_source_sha256"]
+        == EVIDENCE.Checkout(world.checkout).tools()["probe_runner_source_sha256"]
     )
     # A runner changed after review, even by one source file, no longer matches
     # the runner hash the record carries.
@@ -2200,6 +2328,301 @@ def test_records_bind_the_reviewed_go_runner_sources(world, root):
     added.chmod(0o644)
     result, ok = world.verify([record_sha])
     assert not ok and "tool hashes differ" in result["records"][0]["failure"]
+
+
+# B5 PR 3b: the probe runner binary that ran is bound to the release record.
+
+
+def test_records_accept_only_the_release_recorded_probe_runner_binary(world):
+    record = copy.deepcopy(world.records["cleanup_recovery"])
+    assert record["tools"]["probe_runner_binary_sha256"] == PROBE_RUNNER_BINARY
+    assert world.verify_record(record) is None
+    for value in (
+        digest("an operator-built probe runner"),
+        # Source provenance is not an accepted substitute for the binary.
+        record["tools"]["probe_runner_source_sha256"],
+        world.release()["runtime_archive_sha256"],
+    ):
+        changed = copy.deepcopy(record)
+        changed["tools"]["probe_runner_binary_sha256"] = value
+        failure = world.verify_record(changed)
+        assert failure is not None and "differs from the release-recorded binary" in (
+            failure
+        )
+
+
+def test_the_ambiguous_runner_hash_name_is_gone(world):
+    record = copy.deepcopy(world.records["cleanup_recovery"])
+    record["tools"]["runner_sha256"] = record["tools"].pop("probe_runner_source_sha256")
+    failure = world.verify_record(record)
+    assert failure is not None and "keys are not the closed set" in failure
+    assert "runner_sha256" not in EVIDENCE.TOOL_KEYS
+    # approval.runner_sha256 keeps naming run.py only.
+    assert "runner_sha256" in EVIDENCE.APPROVAL_KEYS
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        (
+            lambda v: v["runtime"].update(probe_runner_sha256=digest("other build")),
+            "release manifest differs from the release index",
+        ),
+        (
+            lambda v: v["runtime"].update(archive_sha256=digest("other runtime")),
+            "release manifest differs from the release index",
+        ),
+    ],
+)
+def test_records_bind_the_exact_release_index(world, change, reason):
+    value = release_index_value()
+    change(value)
+    world.release_index.write_bytes(EVIDENCE.canonical_bytes(value))
+    failure = world.verify_record(copy.deepcopy(world.records["cleanup_recovery"]))
+    assert failure is not None and reason in failure
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("runtime_archive_sha256", digest("x"), "runtime_archive_sha256"),
+        ("source_revision", "f" * 40, "source_revision"),
+    ],
+)
+def test_record_release_fields_must_equal_the_release_index(
+    world, field, value, reason
+):
+    # The exact index refusal: the preflight comparison would also name the
+    # field, so a substring match would pass without the index check.
+    record = copy.deepcopy(world.records["cleanup_recovery"])
+    record["release"][field] = value
+    failure = world.verify_record(record)
+    assert failure == f"record {reason} differs from the release index"
+    record = copy.deepcopy(world.records["cleanup_recovery"])
+    record["release"]["image_approval_sha256"]["rust"] = digest("x")
+    failure = world.verify_record(record)
+    assert failure == "record image_approval_sha256 differs from the release index"
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        (
+            lambda v: v.update(schema="dittobench-coding-native-release-set-v2"),
+            "identity is malformed",
+        ),
+        (lambda v: v["runtime"].pop("probe_runner_sha256"), "closed set"),
+        (
+            lambda v: v["runtime"].update(
+                probe_runner_sha256=v["runtime"]["worker_sha256"]
+            ),
+            "runtime digests are malformed",
+        ),
+        (lambda v: v["runtime"].update(probe_runner_sha256="0" * 64), "malformed"),
+        (lambda v: v.update(native_imported=True), "identity is malformed"),
+        (lambda v: v["images"].pop("go"), "images are malformed"),
+    ],
+)
+def test_release_index_refusals(change, reason):
+    value = release_index_value()
+    change(value)
+    with pytest.raises(EVIDENCE.Refusal, match=reason):
+        EVIDENCE.parse_release_index(EVIDENCE.canonical_bytes(value))
+
+
+def test_release_index_must_be_canonical_and_is_required(world, capsys):
+    with pytest.raises(EVIDENCE.Refusal, match="not canonical"):
+        EVIDENCE.parse_release_index(
+            json.dumps(release_index_value(), indent=2).encode()
+        )
+    arguments = [
+        "verify",
+        "--store",
+        str(world.store),
+        "--checkout",
+        str(world.checkout),
+        "--host-preflight",
+        world.selection()["host_preflight"],
+        "--record",
+        world.selection()["cleanup_recovery"],
+    ]
+    with pytest.raises(SystemExit):
+        EVIDENCE.main(arguments)
+    assert "--release-index" in capsys.readouterr().err
+
+
+def test_release_builder_records_what_the_verifier_reads():
+    builder = (ROOT / "infra/scripts/build-coding-native-release.py").read_text()
+    assert f'"schema": "{EVIDENCE.RELEASE_INDEX_SCHEMA}"' in builder
+    assert '"probe_runner_sha256": manifest["files"]' in builder
+    assert '"bin/dittobench-coding-enforcement-probe"' in builder
+
+
+# B5 PR 3b: every released language image, each with its own recorded commands.
+
+ENFORCEMENT_VECTOR = json.loads(
+    (CATALOG_DIR / "testdata/enforcement-images-vector-v1.json").read_bytes()
+)
+
+
+def test_enforcement_images_vector_agrees_with_go():
+    valid = ENFORCEMENT_VECTOR["valid"].encode()
+    parsed = EVIDENCE.parse_enforcement_images(valid)
+    assert parsed["sha256"] == ENFORCEMENT_VECTOR["valid_sha256"]
+    assert parsed["images"]["rust"]["test_argv"] == ENFORCEMENT_VECTOR["rust_test_argv"]
+    with pytest.raises(EVIDENCE.Refusal, match="not canonical"):
+        EVIDENCE.parse_enforcement_images(ENFORCEMENT_VECTOR["noncanonical"].encode())
+    assert len(ENFORCEMENT_VECTOR["refused"]) >= 10
+    for name, document in ENFORCEMENT_VECTOR["refused"].items():
+        with pytest.raises(EVIDENCE.Refusal):
+            EVIDENCE.parse_enforcement_images(document.encode())
+            pytest.fail(name)
+    go_test = (CATALOG_DIR / "enforcement_images_test.go").read_text()
+    assert "enforcementImagesVectorFile" in go_test
+
+
+def write_images(world, value):
+    world.profile_paths["enforcement_images_sha256"].write_bytes(
+        EVIDENCE.canonical_bytes(value)
+    )
+    record = copy.deepcopy(world.records["resource_enforcement"])
+    record["inputs"]["enforcement_images_sha256"] = hashlib.sha256(
+        EVIDENCE.canonical_bytes(value)
+    ).hexdigest()
+    return world.verify_record(record)
+
+
+def test_each_language_keeps_its_own_recorded_commands(world):
+    value = enforcement_images_value()
+    argvs = [tuple(image["test_argv"]["hidden"]) for image in value["images"].values()]
+    assert len(set(argvs)) == len(argvs), "no argv is forced to be common"
+    assert write_images(world, value) is None
+    # Rust-specific arguments are fine when they are pinned in the image set
+    # and are the Rust driver's own authority command.
+    value["images"]["rust"]["test_argv"]["visible"] = rust_test_argv(
+        "visible", "rust/fixtures/visible-authority.json"
+    )
+    assert write_images(world, value) is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # A command the production Rust executor refuses is never what ran.
+        ["dittobench-test-driver", "--group", "visible", "--crate", "subject"],
+        ["dittobench-test-driver", "visible"],
+        [*rust_test_argv("visible"), "--out-dir", "/out"],
+        rust_test_argv("hidden"),
+        rust_test_argv("visible", "/rust/visible-authority.json"),
+        rust_test_argv("visible", "rust/../visible-authority.json"),
+        rust_test_argv("visible", ".rust/visible-authority.json"),
+        rust_test_argv("visible", "rust/visible-authority.txt"),
+        rust_test_argv("visible", "/".join(["d"] * 8) + "/a.json"),
+        [*rust_test_argv("visible")[:3], "--group", *rust_test_argv("visible")[4:]],
+        [*rust_test_argv("visible")[:6], digest("x").upper()],
+    ],
+)
+def test_rust_test_commands_must_be_the_driver_authority_command(argv):
+    value = enforcement_images_value()
+    EVIDENCE.parse_enforcement_images(EVIDENCE.canonical_bytes(value))
+    value["images"]["rust"]["test_argv"]["visible"] = argv
+    with pytest.raises(EVIDENCE.Refusal, match="not the Rust driver authority command"):
+        EVIDENCE.parse_enforcement_images(EVIDENCE.canonical_bytes(value))
+
+
+def test_rust_test_command_vector_agrees_with_go():
+    for group, argv in ENFORCEMENT_VECTOR["rust_test_argv"].items():
+        EVIDENCE._rust_test_argv(argv, group, "vector")
+    for name, document in ENFORCEMENT_VECTOR["refused"].items():
+        if name.startswith("rust "):
+            with pytest.raises(EVIDENCE.Refusal, match="Rust driver authority"):
+                EVIDENCE.parse_enforcement_images(document.encode())
+    go_test = (
+        ROOT / "services/dittobench-api/internal/codingexecutor/"
+        "rust_enforcement_vector_test.go"
+    ).read_text()
+    assert "rustCommand" in go_test and "RustTestArgv" in go_test
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        (
+            lambda v: v.update(grading_profile_sha256=digest("another profile")),
+            "name another grading profile",
+        ),
+        (
+            lambda v: v["images"]["go"].update(image_digest="sha256:" + digest("x")),
+            "go enforcement image is not the released image",
+        ),
+        (
+            lambda v: v["images"]["python"]["test_argv"].update(
+                hidden=["dittobench-test-driver", "--group", "hidden", "--forced"]
+            ),
+            "python enforcement commands differ from the approved grading profile",
+        ),
+        (
+            lambda v: v["images"]["python"].update(build_argv=["go", "build"]),
+            "python enforcement commands differ from the approved grading profile",
+        ),
+        (
+            # Identical argv passes only because each language records it.
+            # Rust is excluded: its driver runs only its authority command.
+            lambda v: (
+                [
+                    image.update(
+                        test_argv={
+                            group: ["dittobench-test-driver", group]
+                            for group in ("hidden", "visible")
+                        }
+                    )
+                    for language, image in v["images"].items()
+                    if language != "rust"
+                ]
+                and None
+            ),
+            None,
+        ),
+    ],
+)
+def test_enforcement_images_bind_release_profile_and_commands(world, change, reason):
+    value = enforcement_images_value()
+    change(value)
+    failure = write_images(world, value)
+    if reason is None:
+        assert failure is None
+    else:
+        assert failure is not None and reason in failure
+
+
+def test_the_grading_profile_image_must_be_a_released_language(world):
+    profile = {**GRADING_PROFILE, "image_digest": "sha256:" + digest("unreleased")}
+    world.profile_paths["grading_profile_sha256"].write_bytes(go_canonical(profile))
+    value = enforcement_images_value()
+    value["grading_profile_sha256"] = hashlib.sha256(go_canonical(profile)).hexdigest()
+    record = copy.deepcopy(world.records["resource_enforcement"])
+    record["inputs"]["grading_profile_sha256"] = value["grading_profile_sha256"]
+    world.profile_paths["enforcement_images_sha256"].write_bytes(
+        EVIDENCE.canonical_bytes(value)
+    )
+    record["inputs"]["enforcement_images_sha256"] = hashlib.sha256(
+        EVIDENCE.canonical_bytes(value)
+    ).hexdigest()
+    failure = world.verify_record(record)
+    assert failure is not None and "not a released language" in failure
+
+
+def test_resource_and_preexec_records_need_the_image_set(world):
+    catalog_value = catalog()
+    for kind in ("resource_enforcement", "preexec_confinement"):
+        assert "enforcement_images_sha256" in catalog_value["kinds"][kind]["inputs"]
+    world.profile_paths["enforcement_images_sha256"] = None
+    failure = world.verify_record(copy.deepcopy(world.records["resource_enforcement"]))
+    assert failure is not None and "needs the enforcement_images_sha256 document" in (
+        failure
+    )
+    with pytest.raises(EVIDENCE.Refusal, match="every profile document"):
+        world.review()
 
 
 def test_runner_hash_covers_the_real_runner_command_and_library():
@@ -2701,6 +3124,7 @@ class Approval:
                 store=store,
                 checkout=checkout,
                 profiles=self.world.profiles(),
+                release_index=self.world.release(),
                 profile_pins=dict(PINS) if pins is None else pins,
                 review_raw=(review or self.review).read_bytes(),
                 approval_raw=approval.read_bytes(),
@@ -3009,6 +3433,7 @@ def test_check_approval_refuses_inconsistent_approvals(signed, change, reason):
     ("name", "reason"),
     [
         ("connectivity_endpoint_set_sha256", "connectivity endpoint set differs"),
+        ("enforcement_images_sha256", "review enforcement_images_sha256 differs"),
         ("execution_profile_sha256", "review execution_profile_sha256 differs"),
         ("grading_profile_sha256", "review grading_profile_sha256 differs"),
     ],
@@ -3052,6 +3477,31 @@ def test_check_approval_ignores_a_planted_native_pyc(signed, monkeypatch):
     spec_native.loader.exec_module(planted)
     assert planted.policy(value) is value  # a loader would run the planted pyc
     with pytest.raises(EVIDENCE.Refusal, match="rejected by native.policy"):
+        signed.check(approval=approval, signature=signature)
+
+
+@needs_openssl
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (
+            "image_ref",
+            "coding-runtime.invalid/go/runtime@sha256:" + digest("other manifest"),
+        ),
+        ("config_digest", "sha256:" + digest("other config")),
+    ],
+)
+def test_check_approval_refuses_an_image_the_release_index_does_not_name(
+    signed, field, value
+):
+    # native.release_policy compares every approval image field with the
+    # release index, so the offline check must refuse what the host refuses.
+    changed = copy.deepcopy(signed.value)
+    changed["images"]["go"][field] = value
+    approval, signature = signed.write(changed)
+    with pytest.raises(
+        EVIDENCE.Refusal, match="approval go image differs from the release index"
+    ):
         signed.check(approval=approval, signature=signature)
 
 
