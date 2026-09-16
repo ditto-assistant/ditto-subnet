@@ -66,7 +66,7 @@ var (
 	NotCovered       = []string{"daemon_restart_recovery", "reboot_recovery"}
 	// Kinds is also the fixed collection order; records never overlap.
 	Kinds         = []string{"network_enforcement", "resource_enforcement", "preexec_confinement", "cleanup_recovery"}
-	ProfileInputs = []string{"connectivity_profile_sha256", "execution_profile_sha256", "grading_profile_sha256"}
+	ProfileInputs = []string{"connectivity_profile_sha256", "enforcement_images_sha256", "execution_profile_sha256", "grading_profile_sha256"}
 	BindSources   = []string{"memory_limit_bytes", "cpu_quota_millis", "pids_limit", "scratch_limit_bytes", "nofile_limit", "log_limit_bytes", "hidden_command_timeout_ms", "visible_command_timeout_ms"}
 	// CommandTimeoutSources evidences every hosted grading test group timeout.
 	CommandTimeoutSources = map[string]string{"hidden_command_timeout_ms": "hidden", "visible_command_timeout_ms": "visible"}

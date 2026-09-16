@@ -8,9 +8,11 @@ profile, not with values taken from the report. No host, custody path or
 credential is touched.
 """
 
+import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -135,6 +137,33 @@ def test_live_requested_config_equals_the_approved_profile():
     report = _live_report()
     assert report["schema"] == REPORT_SCHEMA
     assert report["enforcement_measured"] is False
+    # The runner reports the digest of its own running image (/proc/self/exe);
+    # the job measures the built binary independently.
+    measured = os.environ.get("DITTOBENCH_NATIVE_PROBE_BINARY_SHA256")
+    if os.environ.get(REQUIRE_LIVE) == "1":
+        assert measured and re.fullmatch(r"[0-9a-f]{64}", measured)
+    if measured:
+        assert report["probe_runner_binary_sha256"] == measured
+    assert re.fullmatch(r"[0-9a-f]{64}", report["probe_runner_binary_sha256"])
+    # Images and commands are the pinned set's, checked against the file itself.
+    pinned_path = os.environ.get("DITTOBENCH_NATIVE_PROBE_ENFORCEMENT_IMAGES")
+    if os.environ.get(REQUIRE_LIVE) == "1":
+        assert pinned_path
+    assert (
+        report["grading_profile_sha256"]
+        == hashlib.sha256(CI_PROFILE.read_bytes()).hexdigest()
+    )
+    if pinned_path:
+        raw = Path(pinned_path).read_bytes()
+        pinned = json.loads(raw)
+        assert report["enforcement_images_sha256"] == hashlib.sha256(raw).hexdigest()
+        assert pinned["grading_profile_sha256"] == report["grading_profile_sha256"]
+        for entry in report["entries"]:
+            image = pinned["images"][entry["language"]]
+            assert entry["image_digest"] == image["image_digest"]
+            assert entry["image_repo_digest"].endswith("@" + image["image_digest"])
+            assert entry["build_argv"] == image["build_argv"]
+            assert entry["test_argv"] == image["test_argv"]
     assert report["entries"]
     for entry in report["entries"]:
         assert entry["container_class"] == "executor_grading"

@@ -595,6 +595,7 @@
     "preexec_confinement": {
       "endpoint_roles": {},
       "inputs": [
+        "enforcement_images_sha256",
         "execution_profile_sha256",
         "grading_profile_sha256"
       ],
@@ -871,6 +872,7 @@
     "resource_enforcement": {
       "endpoint_roles": {},
       "inputs": [
+        "enforcement_images_sha256",
         "execution_profile_sha256",
         "grading_profile_sha256"
       ],

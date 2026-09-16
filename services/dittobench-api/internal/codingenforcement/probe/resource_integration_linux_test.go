@@ -36,8 +36,12 @@ func TestHostedGradingRequestedConfigMatchesTheApprovedProfile(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 	defer cancel()
 	docker := ExecDocker{}
+	images, err := ciEnforcementImages(digest)
+	if err != nil {
+		t.Fatal(err)
+	}
 	report, err := ObserveHostedGradingRequestedConfig(ctx, docker, HostedGradingRequest{
-		GradingProfile: raw, Repository: repository, Images: map[string]string{"python": digest},
+		GradingProfile: raw, EnforcementImages: images, Languages: []string{"python"}, Repository: repository,
 	})
 	if err != nil {
 		t.Fatalf("observe requested configuration: %v", err)
@@ -48,6 +52,9 @@ func TestHostedGradingRequestedConfigMatchesTheApprovedProfile(t *testing.T) {
 	entries := report["entries"].([]any)
 	if len(entries) != 1 {
 		t.Fatalf("entries = %v", entries)
+	}
+	if entries[0].(map[string]any)["image_digest"] != digest {
+		t.Fatalf("entry image = %v, pinned %s", entries[0].(map[string]any)["image_digest"], digest)
 	}
 	requested := entries[0].(map[string]any)["requested_config"].(map[string]any)
 	policy := profile.ResourcePolicy

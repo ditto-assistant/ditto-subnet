@@ -176,6 +176,10 @@ jobs:
           repo_digest="$("$dir/docker" image inspect dittobench-native-probe-fixture:ci --format '{{index .RepoDigests 0}}')"
           repository="${repo_digest%@*}"
           digest="${repo_digest#*@}"
+          # Images and commands come only from the pinned set; the job fills in
+          # its synthetic python digest and observes python alone.
+          sed "s/sha256:0\{64\}/$digest/" testdata/ci-enforcement-images.template.json \
+            > "$out/enforcement-images.json"
           env -i PATH="$dir:/usr/sbin:/usr/bin:/sbin:/bin" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \
             DOCKER_HOST="$DOCKER_HOST" \
             DITTOBENCH_NATIVE_PROBE_REPOSITORY="$repository" \
@@ -186,9 +190,12 @@ jobs:
             DOCKER_HOST="$DOCKER_HOST" \
             timeout 300 "$out/dittobench-coding-enforcement-probe" observe-requested-config \
             --grading-profile testdata/ci-grading-profile.json \
-            --executor-repository "$repository" --image "python=$digest" \
+            --enforcement-images "$out/enforcement-images.json" \
+            --executor-repository "$repository" --language python \
             > "$out/requested-config-report.json"
           test -z "$("$dir/docker" ps -aq --filter label=io.heyditto.dittobench.coding-executor)"
+          # The digest of the binary that ran, measured independently of its report.
+          sha256sum "$out/dittobench-coding-enforcement-probe" | cut -d' ' -f1 > "$out/probe-runner.sha256"
 
       - name: Offline verifier compares the report with the approved profile
         env:
@@ -196,6 +203,8 @@ jobs:
           DITTOBENCH_REQUIRE_LIVE_PROBE_REPORT: "1"
         run: |
           set -euo pipefail
+          DITTOBENCH_NATIVE_PROBE_BINARY_SHA256="$(cat "$RUNNER_TEMP/native-probe/probe-runner.sha256")" \
+          DITTOBENCH_NATIVE_PROBE_ENFORCEMENT_IMAGES="$RUNNER_TEMP/native-probe/enforcement-images.json" \
           DITTOBENCH_NATIVE_PROBE_REPORT="$RUNNER_TEMP/native-probe/requested-config-report.json" \
             uv run --frozen pytest -q ditto/tests/test_coding_native_probe_runner.py \
             ditto/tests/test_coding_native_enforcement_probe_workflow.py

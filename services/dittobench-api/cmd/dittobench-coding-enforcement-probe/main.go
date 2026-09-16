@@ -8,7 +8,9 @@
 //
 //	resolve-images REF...            pin approved repository@sha256 images; never pull
 //	observe-requested-config ...     requested resource configuration of hosted
-//	                                 grading executor containers (created, never started)
+//	                                 grading executor containers (created, never started),
+//	                                 for images and commands taken only from the
+//	                                 pinned --enforcement-images set
 //
 // Nothing invokes it from a host workflow. It mints no approval, reads no
 // custody path and reaches only the daemon selected by DOCKER_HOST.
@@ -49,42 +51,40 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 	}
 }
 
-type imageFlags map[string]string
+type languageFlags []string
 
-func (f imageFlags) String() string { return "" }
+func (f *languageFlags) String() string { return strings.Join(*f, ",") }
 
-func (f imageFlags) Set(value string) error {
-	language, digest, ok := strings.Cut(value, "=")
-	if !ok || language == "" || digest == "" {
-		return errors.New("--image must be language=sha256:digest")
-	}
-	if _, repeated := f[language]; repeated {
-		return fmt.Errorf("--image %s is repeated", language)
-	}
-	f[language] = digest
+func (f *languageFlags) Set(value string) error {
+	*f = append(*f, value)
 	return nil
 }
 
 func observeRequestedConfig(ctx context.Context, args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("observe-requested-config", flag.ContinueOnError)
 	profilePath := flags.String("grading-profile", "", "exact canonical approved hosted grading profile")
+	imagesPath := flags.String("enforcement-images", "", "pinned per-language image digests and commands for that profile")
 	repository := flags.String("executor-repository", "", "approved executor image repository")
-	images := imageFlags{}
-	flags.Var(images, "image", "language=sha256:digest of an approved image (repeatable)")
+	var languages languageFlags
+	flags.Var(&languages, "language", "observe only this language from the pinned image set (repeatable)")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
-	if *profilePath == "" || *repository == "" || len(images) == 0 || flags.NArg() != 0 {
-		return errors.New("--grading-profile, --executor-repository and at least one --image are required")
+	if *profilePath == "" || *imagesPath == "" || *repository == "" || flags.NArg() != 0 {
+		return errors.New("--grading-profile, --enforcement-images and --executor-repository are required")
 	}
 	profile, err := os.ReadFile(*profilePath)
+	if err != nil {
+		return err
+	}
+	images, err := os.ReadFile(*imagesPath)
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	report, err := probe.ObserveHostedGradingRequestedConfig(ctx, probe.ExecDocker{}, probe.HostedGradingRequest{
-		GradingProfile: profile, Repository: *repository, Images: images,
+		GradingProfile: profile, EnforcementImages: images, Languages: languages, Repository: *repository,
 	})
 	if err != nil {
 		return err

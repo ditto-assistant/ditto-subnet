@@ -35,7 +35,7 @@ there is no approval or readiness key. One record covers one `kind`:
 | `pre_collection_preflight_sha256` | The preflight stdout taken before collection, retained in the store |
 | `inputs` | Per kind: the connectivity profile digest (network) or the execution/grading profile digests. Each must equal the document supplied to the verifier |
 | `endpoints` | Network only. Roles `router` and `refusing_proxy` (one each, distinct), `trusted` (1 to 32) and `trusted_dns` (0 to 2), each as `endpoint_sha256`. The set must equal the hashes derived from the connectivity profile |
-| `tools` | `catalog_sha256`, `collector_sha256`, `evidence_tool_sha256`, `fixtures_sha256`, `runner_sha256` (the canonical hash of the Go runner command, probe library and catalog package trees in the reviewed checkout) |
+| `tools` | `catalog_sha256`, `collector_sha256`, `evidence_tool_sha256`, `fixtures_sha256`, `probe_runner_source_sha256` (supporting provenance: the canonical hash of the Go runner command, probe library and catalog package trees in the reviewed checkout) and `probe_runner_binary_sha256` (the probe runner binary that actually ran, measured on the host; it must equal the release index's `runtime.probe_runner_sha256`) |
 | `preconditions`, `residue` | Worker and custody inactive, no custody socket, zero containers, job networks, volumes and processes |
 | `phases` | Catalog phases in order, each with timestamps and its probes |
 | `coverage`, `not_covered` | `same_boot`, and exactly `daemon_restart_recovery`, `reboot_recovery` |
@@ -74,7 +74,52 @@ counts for any profile, never its addresses.
 ## Approved profiles
 
 `verify`, `review` and `check-approval` read the exact profile documents with
-`--execution-profile`, `--grading-profile` and `--connectivity-profile`.
+`--execution-profile`, `--grading-profile`, `--connectivity-profile` and
+`--enforcement-images`, plus the release index with `--release-index`.
+
+### Per-language probe images (B5 PR 3b)
+
+Peyton (2026-09-15): "every language image" means every image the approved
+profile names, using the same approved limits and timeouts, but each with that
+language's canonical, explicitly recorded test command. A common argv is never
+forced.
+
+`dittobench-coding-native-enforcement-images-v1` is canonical JSON with closed
+keys:
+
+- `grading_profile_sha256`: the approved grading profile whose limits, timeouts,
+  command IDs and expected totals every language uses.
+- `images`: exactly `go`, `node`, `python` and `rust`. Each has a distinct
+  `image_digest` (OCI manifest digest), its own `build_argv`, and its own
+  `test_argv` for `hidden` and `visible`.
+  - Every argv is 1 to 64 printable arguments with a bare non-shell executable.
+  - Test commands must use `dittobench-test-driver`.
+  - Rust-specific arguments are allowed only because they are recorded here,
+    and they are verified: each Rust test command must be the Rust driver's
+    authority command, `dittobench-test-driver --group <its own group>
+    --authority <relative .json path> --authority-sha256 <hex>`. This mirrors
+    `codingexecutor.rustCommand`, which refuses any other Rust test command,
+    so a Rust entry the executor could never run is refused offline. A Go test
+    checks the offline check against `rustCommand` on the shared vector.
+
+Resource and pre-exec records carry the set's digest as
+`inputs.enforcement_images_sha256`. The verifier requires:
+
+- the set names the supplied grading profile;
+- each language's `image_digest` is that language's released image (the
+  release index's `image_ref` digest);
+- the grading profile's own image is exactly one released language, whose
+  recorded build and test commands equal the profile's.
+
+The signed approval pins the set in `profile_pins.enforcement_images_sha256`.
+
+The probe runner takes image digests and commands only from this set
+(`--enforcement-images`; `--image` is gone). It builds each language's hosted
+grading manifest from the approved profile with that language's commands, and
+refuses a set for another profile. It also refuses a manifest or resolved
+repository digest other than the pinned one. `--language` narrows which
+pinned languages it observes. Go and Python parse one shared vector
+(`catalog/testdata/enforcement-images-vector-v1.json`).
 
 - The execution and grading profiles must be their exact Go canonical bytes
   (sorted, compact, newline), and their sha256 must equal the record's
@@ -196,7 +241,7 @@ in both the Go and Python tests.
     and made mode 0400. Existing objects are never replaced.
   - The host preflight is kept verbatim: the exact stdout of
     `inspect-coding-native-host.py`.
-- `verify --store DIR --checkout DIR --host-preflight SHA --record SHA...`
+- `verify --store DIR --checkout DIR --release-index FILE --host-preflight SHA --record SHA...`
   verifies records against a post-collection preflight. It needs the profile
   documents that the records name.
 - `review --store DIR --checkout DIR` with all six evidence digests assembles
@@ -281,14 +326,16 @@ tool never handles a private key. It then checks:
 - The approval's `runner_sha256` matches the checkout's `run.py`.
 - The review's digests equal independently reviewed pins
   (`--execution-profile-sha256`, `--grading-profile-sha256`,
-  `--connectivity-endpoint-set-sha256`), for example from the signed profile
-  approval and the canary's own connectivity profile.
-  - `native.policy`'s closed approval shape cannot carry these digests. The
-    approval binds them through the record digests it names, and the pins
-    make that binding visible.
+  `--enforcement-images-sha256`, `--connectivity-endpoint-set-sha256`), for
+  example from the signed profile approval and the canary's own connectivity
+  profile.
+  - The signed approval also carries the same pins in `profile_pins` (PR 3a).
   - The probe profile's full digest stays in the review; it is not a pin.
 - The approval's `evidence_sha256`, machine, boot, source revision, release
   manifest and image approvals equal the review.
+- Each approval image (`image_ref`, `config_digest`, `approval_sha256`,
+  `driver_profile`) equals the release index entry, as `native.release_policy`
+  requires on the host.
 - `issued_at_unix` is no earlier than every record end, the post-collection
   preflight and the custody binding, and at most six hours after the earliest
   record start and the custody binding.
@@ -307,8 +354,8 @@ record.
   a record:
   - `resolve-images REF...` pins approved `repository@sha256` images to local
     content ids and refuses a missing image instead of pulling it.
-  - `observe-requested-config --grading-profile FILE --executor-repository REPO
-    --image LANGUAGE=sha256:...` emits a
+  - `observe-requested-config --grading-profile FILE --enforcement-images FILE
+    --executor-repository REPO [--language LANGUAGE]...` emits a
     `dittobench-coding-native-probe-observations-v1` report with
     `"enforcement_measured": false`. The verifier refuses that schema as a
     record, and a test proves it.
@@ -376,12 +423,37 @@ them with the labels production containers carry:
 
 ### Tool binding
 
-Records carry `tools.runner_sha256`: the canonical hash of the reviewed
-checkout's `cmd/dittobench-coding-enforcement-probe`,
-`internal/codingenforcement/catalog` and `internal/codingenforcement/probe`
-trees (`RUNNER_ROOTS` in the evidence tool). Like every tool hash it is
-computed from the checkout, never taken from a record or its caller. A runner
-source change after review fails the record.
+Peyton (2026-09-15): runtime acceptance pins the binary that actually ran. The
+source tree and revision remain as supporting provenance.
+
+- **Binary (acceptance).** `tools.probe_runner_binary_sha256` is measured on
+  the host from the running process. The runner hashes `/proc/self/exe` and
+  reports `probe_runner_binary_sha256`. It must equal
+  `runtime.probe_runner_sha256` in the release index (`--release-index`, schema
+  `dittobench-coding-native-release-set-v3`).
+  - The native runtime bundle builds and smoke-checks
+    `bin/dittobench-coding-enforcement-probe` and requires it as an executable
+    amd64 ELF. The release builder copies its manifest digest into the index.
+  - A record must name that exact index: `release_manifest_sha256` is the
+    index's digest. Its `source_revision`, `runtime_archive_sha256` and image
+    approvals must equal the index.
+  - The rootless CI job checks that the reported digest equals an independent
+    `sha256sum` of the binary it built.
+  - The runner's own `/proc/self/exe` digest is a self-report: a modified
+    binary can print the released digest. The record field is therefore only
+    as trustworthy as the collector that writes it. The collector (PR4/PR5)
+    must measure the file it executes from outside the runner, for example by
+    hashing an open descriptor and executing that same descriptor, or by
+    hashing `/proc/<pid>/exe` of the child. It must refuse a runner whose
+    self-report differs. The verifier cannot tell the two apart.
+- **Sources (provenance).** `tools.probe_runner_source_sha256` is the canonical
+  hash of the reviewed checkout's `cmd/dittobench-coding-enforcement-probe`,
+  `internal/codingenforcement/catalog` and `internal/codingenforcement/probe`
+  trees (`RUNNER_ROOTS`). It is still computed from the checkout, so a source
+  change after review fails the record. It is never accepted in place of the
+  binary digest.
+- **Naming.** The old `tools.runner_sha256` is refused. `approval.runner_sha256`
+  names only `run.py`.
 
 ### CI job
 
@@ -451,10 +523,11 @@ with a doubled pids limit failed the comparison.
 2. Harness swap: set `--memory-swap` equal to memory only in the hosted-v2
    harness constructor, leaving the shared v8 sandbox unchanged?
 3. Should the hosted harness launch add `--pull never`?
-4. Is "every language image" the approved profile's limits and group timeouts
-   with each language's own fixture test argv?
-5. Is `runner_sha256` over the source trees the right binding, or should the
-   release record the built runner binary's digest instead (PR3)?
+4. ~~Every language image?~~ Answered: every image the approved profile names,
+   with the same limits and timeouts, each with its own recorded commands
+   (PR 3b).
+5. ~~Source trees or binary?~~ Answered: the release-recorded binary digest is
+   binding, and the source trees are provenance (PR 3b).
 
 ## Custody binding
 

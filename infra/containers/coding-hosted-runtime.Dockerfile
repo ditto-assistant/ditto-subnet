@@ -9,6 +9,12 @@ RUN --mount=type=cache,id=ditto-native-runtime-go-build,target=/root/.cache/go-b
     CGO_ENABLED=1 GOTOOLCHAIN=local go build -p 2 -mod=readonly -trimpath -buildvcs=false \
     -ldflags="-s -w -linkmode external -extldflags '-static'" \
     -o /out/dittobench-coding-hosted-worker ./cmd/dittobench-coding-hosted-worker
+# The B5 native enforcement probe runner ships in the same bundle. Records bind
+# the digest of exactly this binary through the release index.
+RUN --mount=type=cache,id=ditto-native-runtime-go-build,target=/root/.cache/go-build \
+    CGO_ENABLED=1 GOTOOLCHAIN=local go build -p 2 -mod=readonly -trimpath -buildvcs=false \
+    -ldflags="-s -w -linkmode external -extldflags '-static'" \
+    -o /out/dittobench-coding-enforcement-probe ./cmd/dittobench-coding-enforcement-probe
 
 FROM ghcr.io/astral-sh/uv:0.11.28@sha256:0f36cb9361a3346885ca3677e3767016687b5a170c1a6b88465ec14aefec90aa AS uv
 FROM python:3.13.14-slim@sha256:69e18bd8d831d88e0ef70239dc7771ab7c28bc296ae78ac75cde71e60aa4434f AS base
@@ -28,6 +34,7 @@ COPY apps/platform/ ./
 COPY packages/ditto-screening-protocol/ /opt/ditto-coding-hosted/${SOURCE_REVISION}/packages/ditto-screening-protocol/
 RUN --mount=type=cache,target=/root/.cache/uv UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never uv sync --frozen --no-dev --python /usr/bin/python3.13
 COPY --from=go-build --chmod=0555 /out/dittobench-coding-hosted-worker /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker
+COPY --from=go-build --chmod=0555 /out/dittobench-coding-enforcement-probe /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-enforcement-probe
 RUN mkdir /out && /usr/bin/python3.13 -I /runtime-bundle.py pack \
     --revision "$SOURCE_REVISION" --archive /out/runtime.tar
 
@@ -51,6 +58,10 @@ RUN --network=none setpriv --reuid=10001 --regid=10001 --clear-groups env -i PAT
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
     -c 'import subprocess,sys; p=subprocess.run([sys.argv[1]],capture_output=True); assert p.returncode == 2 and not p.stdout and p.stderr == b"requires --private-shadow-once --config <protected-file>\n"' \
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker
+RUN --network=none setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
+    /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
+    -c 'import subprocess,sys; p=subprocess.run([sys.argv[1]],capture_output=True); assert p.returncode == 1 and not p.stdout and p.stderr == b"dittobench-coding-enforcement-probe: a subcommand is required: resolve-images | observe-requested-config\n"' \
+    /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-enforcement-probe
 RUN --network=none printf X >> /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker && \
     if setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
       /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
