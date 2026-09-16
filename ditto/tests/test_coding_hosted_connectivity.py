@@ -288,6 +288,23 @@ def test_role_and_service_are_manual_default_off_and_nondelegated():
     assert "--private-shadow-once" in unit and "Restart=no" in unit
     assert "ProtectControlGroups=yes" in unit and "TimeoutStopSec=35min" in unit
     assert "[Install]" not in unit
+    # B5 PR4 network enforcement mode: the release probe runner in this exact
+    # cgroup, and a gated stop probe that runs only after revoke.
+    assert "coding_hosted_worker_mode == 'network_enforcement'" in unit
+    assert "net-agent --unix /run/ditto-coding-hosted-enforcement/agent.sock" in unit
+    revoke = unit.index("connectivity-policy.py revoke")
+    stop_probe = unit.index("net-once --gate /run/ditto-coding-hosted-enforcement/gate")
+    assert revoke < stop_probe
+    assert "ExecStopPost=+{{ coding_hosted_probe_runner }}" not in unit
+    assert defaults["coding_hosted_probe_runner"] == ""
+    guard = next(
+        task
+        for task in tasks[1]["block"]
+        if task["name"]
+        == "Require the dedicated host and explicit protected runtime paths"
+    )["ansible.builtin.assert"]["that"]
+    assert any("dittobench-coding-enforcement-probe$" in item for item in guard)
+    assert any("<= 280" in item for item in guard)
     assert (
         "playbooks/gcp-coding-hosted-connectivity.yml"
         in (ROOT / ".github/workflows/infra-ci.yml").read_text()

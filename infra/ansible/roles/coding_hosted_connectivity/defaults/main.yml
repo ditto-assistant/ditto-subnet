@@ -6,3 +6,5 @@ coding_hosted_worker_config: ""
 coding_hosted_worker_mode: single
 coding_hosted_rollout_approval_sha256: ""
 coding_hosted_rollout_connectivity_sha256: ""
+# network_enforcement mode only: the release runtime's probe runner binary.
+coding_hosted_probe_runner: ""

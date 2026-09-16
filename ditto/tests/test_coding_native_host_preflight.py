@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from ditto.tests.test_coding_hosted_image_import import configuration
+from ditto.tests.test_coding_native_enforcement_evidence import EVIDENCE
 from ditto.tests.test_coding_native_release import (
     RELEASE,
     REVISION,
@@ -19,6 +20,8 @@ from ditto.tests.test_coding_native_release import (
 )
 
 ROOT = Path(__file__).parents[2]
+NFT_FIXTURES = Path(__file__).parent / "fixtures/coding_native_network"
+TABLE = "ditto_coding_hosted"
 SCRIPT = ROOT / "infra/scripts/inspect-coding-native-host.py"
 DAEMON_VECTOR = json.loads(
     (
@@ -175,7 +178,15 @@ def test_post_import_inspects_all_pins_but_does_not_claim_qualification(context)
         if args[0].endswith("systemctl")
     )
     assert str(context.config["release_directory"]) not in json.dumps(result)
-    assert result["schema"] == "dittobench-coding-native-host-preflight-v3"
+    assert result["schema"] == "dittobench-coding-native-host-preflight-v4"
+    assert result["schema"] == EVIDENCE.PREFLIGHT_SCHEMA
+    assert set(result) == EVIDENCE.PREFLIGHT_KEYS
+    listing = json.dumps(
+        {"nftables": [{"table": {"family": "inet", "name": "ditto_coding_hosted"}}]}
+    ).encode()
+    assert result["nft_ruleset_semantic_sha256"] == HOST.nft_ruleset_semantic_sha256(
+        listing, "ditto_coding_hosted"
+    )
     assert result["daemon_identity"] == DAEMON_VECTOR["identity"]
     assert result["daemon_identity_sha256"] == DAEMON_VECTOR["identity_sha256"]
 
@@ -421,3 +432,244 @@ def test_host_binding_refuses_wrong_host_platform_machine_and_boot(
     monkeypatch.setattr(real.platform, "node", lambda: "another-host")
     with pytest.raises(ValueError):
         real.host_binding(config)
+
+
+# ---------------------------------------------------------------------------
+# Semantic nft ruleset digest (preflight v4) on recorded kernel listings
+
+
+def nft_fixture(name):
+    return (NFT_FIXTURES / name).read_bytes()
+
+
+def nft_digest(value):
+    raw = value if isinstance(value, bytes) else json.dumps(value).encode()
+    return HOST.nft_ruleset_semantic_sha256(raw, TABLE)
+
+
+def nft_listing(name):
+    return json.loads(nft_fixture(name))
+
+
+def entries_of(listing, kind):
+    return [entry[kind] for entry in listing["nftables"] if kind in entry]
+
+
+def one(listing, kind, name):
+    (body,) = [
+        body
+        for body in entries_of(listing, kind)
+        if body.get("name", body.get("chain")) == name
+    ]
+    return body
+
+
+def deny_rule(listing):
+    (rule,) = [
+        rule for rule in entries_of(listing, "rule") if rule["chain"] == "output"
+    ]
+    return rule
+
+
+def append(listing, kind, body):
+    listing["nftables"].append({kind: body})
+    return listing
+
+
+def chain(name, **base):
+    return {"family": "inet", "table": TABLE, "name": name, "handle": 90, **base}
+
+
+def empty_set(name, **extra):
+    return {
+        "family": "inet",
+        "name": name,
+        "table": TABLE,
+        "type": "ipv4_addr",
+        "handle": 91,
+        **extra,
+    }
+
+
+def rule(chain_name, expr):
+    return {"family": "inet", "table": TABLE, "chain": chain_name, "expr": expr}
+
+
+ACCEPT = [
+    {"match": {"op": "==", "left": {"meta": {"key": "skuid"}}, "right": 1001}},
+    {"counter": {"packets": 0, "bytes": 0}},
+    {"accept": None},
+]
+
+
+def test_semantic_digest_is_stable_across_a_recorded_worker_cycle():
+    initial = nft_fixture("nft-deny-initial.json")
+    # Deny guard, scoped policy, deny guard, element expiry; recorded in a
+    # throwaway namespace. Handles differ and the scoped base chains and sets
+    # survive the flush, so the raw listings differ.
+    after = nft_fixture("nft-deny-after-expiry.json")
+    assert initial != after
+    assert HOST.checksum(initial) != HOST.checksum(after)
+    assert nft_digest(initial) == nft_digest(after)
+    # Before expiry the unreferenced sets still hold elements; they are kept,
+    # so a preflight taken then (the verifier requires it after the expiry
+    # phase) refuses rather than passes.
+    assert nft_digest(nft_fixture("nft-deny-after-scoped.json")) != nft_digest(initial)
+    assert nft_digest(nft_fixture("nft-scoped.json")) != nft_digest(initial)
+
+
+def test_semantic_digest_ignores_only_non_semantic_listing_data():
+    base = nft_listing("nft-deny-after-expiry.json")
+    expected = nft_digest(base)
+
+    def same(change, name="nft-deny-after-expiry.json"):
+        listing = nft_listing(name)
+        change(listing)
+        assert nft_digest(listing) == nft_digest(nft_listing(name))
+
+    same(lambda v: v["nftables"].pop(0))  # metainfo
+    same(lambda v: deny_rule(v).update(handle=7))
+    same(lambda v: one(v, "table", TABLE).update(handle=9))
+    same(lambda v: deny_rule(v)["expr"][1]["counter"].update(packets=5, bytes=900))
+    same(lambda v: v["nftables"].reverse())
+    same(lambda v: append(v, "chain", chain("unused")))
+    same(lambda v: append(v, "set", empty_set("unused")))
+    same(
+        lambda v: one(v, "set", "worker")["elem"][0]["elem"].update(
+            timeout=60, expires=1
+        ),
+        "nft-scoped.json",
+    )
+    same(
+        lambda v: one(v, "set", "lease")["elem"][0]["elem"].pop("expires"),
+        "nft-scoped.json",
+    )
+    assert nft_digest(base) == expected
+
+
+def test_semantic_digest_changes_on_any_enforcement_difference():
+    initial = nft_digest(nft_fixture("nft-deny-after-expiry.json"))
+    scoped = nft_digest(nft_fixture("nft-scoped.json"))
+
+    def differs(change, name="nft-deny-after-expiry.json", reference=None):
+        listing = nft_listing(name)
+        change(listing)
+        assert nft_digest(listing) != (reference or nft_digest(nft_fixture(name)))
+
+    # A changed rule, verdict or rule order.
+    differs(lambda v: deny_rule(v)["expr"][0]["match"].update(right=1002))
+    differs(lambda v: deny_rule(v)["expr"].__setitem__(2, {"drop": None}))
+    differs(
+        lambda v: v["nftables"].__setitem__(
+            slice(None),
+            [e for e in v["nftables"] if "rule" not in e]
+            + list(reversed([e for e in v["nftables"] if "rule" in e])),
+        ),
+        "nft-scoped.json",
+    )
+    # A changed base-chain policy, with and without rules.
+    differs(lambda v: one(v, "chain", "output").update(policy="drop"))
+    differs(lambda v: one(v, "chain", "scoped_input").update(policy="drop"))
+    differs(lambda v: one(v, "chain", "scoped_input").update(prio=-400, type="nat"))
+    differs(lambda v: one(v, "chain", "scoped_output").update(dev="lo"))
+    # A new element in a referenced set, or a changed element.
+    differs(
+        lambda v: one(v, "set", "lease")["elem"].append(
+            {"elem": {"val": 1002, "timeout": 240, "expires": 239}}
+        ),
+        "nft-scoped.json",
+    )
+    differs(
+        lambda v: one(v, "set", "worker")["elem"][0]["elem"].update(
+            val="system.slice/other.service"
+        ),
+        "nft-scoped.json",
+    )
+    # A removed deny rule, or an added accept rule in any chain.
+    differs(lambda v: v["nftables"].remove({"rule": deny_rule(v)}))
+    differs(lambda v: append(v, "rule", rule("output", ACCEPT)))
+    differs(lambda v: append(v, "rule", rule("scoped_output", ACCEPT)))
+    differs(
+        lambda v: v["nftables"].insert(
+            [i for i, e in enumerate(v["nftables"]) if "rule" in e][0],
+            {"rule": rule("output", ACCEPT)},
+        )
+    )
+    # A new drop base chain, even with no rules.
+    differs(
+        lambda v: append(
+            v,
+            "chain",
+            chain("late", type="filter", hook="input", prio=0, policy="drop"),
+        )
+    )
+    assert scoped != initial
+
+
+def test_referenced_empty_chains_and_sets_are_kept():
+    def with_reference(expr_target, objects):
+        listing = nft_listing("nft-deny-after-expiry.json")
+        for kind, body in objects:
+            append(listing, kind, body)
+        append(listing, "rule", rule("output", expr_target))
+        return listing
+
+    lookup = [
+        {"match": {"op": "==", "left": {"meta": {"key": "skuid"}}, "right": "@spare"}},
+        {"accept": None},
+    ]
+    referenced = with_reference(lookup, [("set", empty_set("spare", type="uid"))])
+    entries = HOST.nft_semantic_entries(HOST.nft_entries(referenced))
+    assert {"set": HOST.nft_strip(empty_set("spare", type="uid"))} in entries
+    other = with_reference(
+        lookup, [("set", empty_set("spare", type="uid", flags=["interval"]))]
+    )
+    assert nft_digest(referenced) != nft_digest(other)
+    missing = with_reference(lookup, [])
+    assert nft_digest(referenced) != nft_digest(missing)
+
+    jump = [{"jump": {"target": "sub"}}]
+    jumped = with_reference(jump, [("chain", chain("sub"))])
+    entries = HOST.nft_semantic_entries(HOST.nft_entries(jumped))
+    assert {"chain": HOST.nft_strip(chain("sub"))} in entries
+    assert nft_digest(jumped) != nft_digest(with_reference(jump, []))
+    # A set that a map's verdict element names keeps its target chain too.
+    vmap = with_reference(
+        [{"vmap": {"key": {"meta": {"key": "skuid"}}, "data": "@verdicts"}}],
+        [
+            ("chain", chain("sub")),
+            (
+                "map",
+                {
+                    **empty_set("verdicts", type="uid", map="verdict"),
+                    "elem": [[1001, {"goto": {"target": "sub"}}]],
+                },
+            ),
+        ],
+    )
+    entries = HOST.nft_semantic_entries(HOST.nft_entries(vmap))
+    assert {"chain": HOST.nft_strip(chain("sub"))} in entries
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b"[]",
+        b'{"nftables": {}}',
+        b'{"nftables": [], "extra": 1}',
+        b'{"nftables": [{"table": {"family": "inet", "name": "x"}}]}',
+        b'{"nftables": [{"table": {"family": "ip", "name": "ditto_coding_hosted"}}]}',
+        b'{"nftables": []}',
+        b'{"nftables": [{"table": 1}]}',
+        b'{"nftables": [{"table": {}, "chain": {}}]}',
+        b'{"nftables": [{"set": {"elem": {}}}, '
+        b'{"table": {"family": "inet", "name": "ditto_coding_hosted"}}]}',
+        b'{"nftables": [{"table": {"family": "inet", "name": "ditto_coding_hosted"}},'
+        b' {"table": {"family": "inet", "name": "ditto_coding_hosted"}}]}',
+        b'{"nftables": [{"table": {"family": "inet", "name": "ditto_coding_hosted",'
+        b' "name": "x"}}]}',
+    ],
+)
+def test_semantic_digest_refuses_malformed_listings(raw):
+    with pytest.raises(ValueError):
+        HOST.nft_ruleset_semantic_sha256(raw, TABLE)

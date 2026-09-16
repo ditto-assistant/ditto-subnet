@@ -53,3 +53,34 @@
           - "'--approval-sha256 ' + ('a' * 64) in rendered_unit"
           - "'KillMode=mixed' in rendered_unit"
           - "'Restart=no' in rendered_unit"
+
+- name: Verify network enforcement mode alone cannot install or start anything
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    coding_hosted_worker_mode: network_enforcement
+  roles:
+    - coding_hosted_connectivity
+  tasks:
+    - name: Verify explicit provisioning is still required
+      ansible.builtin.assert:
+        that:
+          - not coding_hosted_connectivity_enabled
+          - coding_hosted_probe_runner == ''
+    - name: Check network enforcement unit rendering without writing a file
+      vars:
+        coding_hosted_uid: 1001
+        coding_hosted_probe_runner: "/opt/ditto-coding-hosted/{{ 'a' * 40 }}/bin/dittobench-coding-enforcement-probe"
+        rendered_unit: "{{ lookup('template', '../roles/coding_hosted_connectivity/templates/worker.service.j2') }}"
+      ansible.builtin.assert:
+        that:
+          - "'net-agent --unix /run/ditto-coding-hosted-enforcement/agent.sock' in rendered_unit"
+          - "'net-once --gate /run/ditto-coding-hosted-enforcement/gate' in rendered_unit"
+          - "'connectivity-policy.py install\n' in rendered_unit"
+          - "'--private-shadow-once' not in rendered_unit"
+          - "'--bounded-shadow-once' not in rendered_unit"
+          - "'KillMode=control-group' in rendered_unit"
+          - "'Restart=no' in rendered_unit"
+          - "'[Install]' not in rendered_unit"
+          - rendered_unit.index('connectivity-policy.py revoke') < rendered_unit.index(' net-once ')

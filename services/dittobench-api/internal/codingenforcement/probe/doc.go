@@ -15,9 +15,13 @@
 // The report uses its own schema, ObservationReportSchema, which the offline
 // verifier refuses as a record. Requested configuration satisfies no catalog
 // enforcement probe. Started-container cgroup reads, write attempts, limit
-// events, pre-exec fixtures, cleanup scenarios and network rules are deferred
+// events, pre-exec fixtures and cleanup scenarios are deferred
 // to later PRs.
 //
-// Nothing here runs from a host workflow, mints approval, reads a custody path
-// or reaches anything but the Docker daemon selected by DOCKER_HOST.
+// NetAgent (B5 PR4) performs single network attempts for the root network
+// collector and reports catalog outcome names; it never decides a match or
+// writes a record. Positive checks are handshake-only.
+//
+// Nothing here runs from a host workflow, mints approval or reads a custody
+// path.
 package probe

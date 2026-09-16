@@ -11,6 +11,16 @@
 //	                                 grading executor containers (created, never started),
 //	                                 for images and commands taken only from the
 //	                                 pinned --enforcement-images set
+//	net-agent [--unix PATH]          network observation agent (B5 PR4): single
+//	                                 handshake-only attempts, one JSON line per
+//	                                 request, on stdin/stdout or one Unix socket
+//	net-once --plan F --report F     one-shot attempts from a fixed plan, after
+//	         [--gate FIFO]           an optional collector gate
+//
+// The network agent reports catalog outcome names to the root collector
+// (infra/scripts/collect-coding-native-enforcement.py), which measures this
+// binary from outside and assembles the record. The agent never decides a
+// matched value.
 //
 // Nothing invokes it from a host workflow. It mints no approval, reads no
 // custody path and reaches only the daemon selected by DOCKER_HOST.
@@ -39,13 +49,17 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("a subcommand is required: resolve-images | observe-requested-config")
+		return errors.New("a subcommand is required: resolve-images | observe-requested-config | net-agent | net-once")
 	}
 	switch args[0] {
 	case "resolve-images":
 		return resolveImages(ctx, args[1:], stdout)
 	case "observe-requested-config":
 		return observeRequestedConfig(ctx, args[1:], stdout)
+	case "net-agent":
+		return netAgent(ctx, args[1:], os.Stdin, stdout)
+	case "net-once":
+		return netOnce(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown subcommand %q", args[0])
 	}

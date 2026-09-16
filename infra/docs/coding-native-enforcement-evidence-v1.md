@@ -10,11 +10,13 @@ network, resource, pre-exec and cleanup. This layer has three parts:
 
 The verifier runs no probe, reaches no host or daemon, reads no custody path
 and creates no approval. The PR2 probe runner (below) writes no evidence
-record either: it only reports requested configuration. Enforcement
-measurement, bundle shipping and host collection come in later PRs.
+record either: it only reports requested configuration. The PR4 network
+collector (below) is the only collector: it writes `network_enforcement`
+records only. Resource, pre-exec and cleanup collection come in PR5.
 Collectors never run from `coding-hosted-operate`, and a test checks that only
 the offline regression job and the disposable rootless probe-runner CI job name
-these tools.
+these tools. The collector may appear there only as a path filter and a lint
+target; no workflow step executes it.
 
 `native.py` still checks the six evidence values only as nonzero digests. Their
 content is guaranteed only by this verifier plus Peyton's own review and
@@ -40,6 +42,7 @@ there is no approval or readiness key. One record covers one `kind`:
 | `phases` | Catalog phases in order, each with timestamps and its probes |
 | `coverage`, `not_covered` | `same_boot`, and exactly `daemon_restart_recovery`, `reboot_recovery` |
 | `tolerances_version`, `started_at_unix`, `completed_at_unix` | |
+| `network_binding` | Network records only, and required there. `worker_cgroup` (`system.slice/ditto-coding-hosted-worker.service`), `nft_table` (`inet ditto_coding_hosted`), `scoped_ruleset_sha256` and `deny_ruleset_sha256` (normalized loaded rulesets, see PR4), `scoped_output_rules` and `scoped_input_rules`, `refusing_proxy_unit` and `refusing_proxy_sha256` (the proxy script the unit runs) |
 
 A probe entry is `id`, `language` (or null), `endpoint_sha256` (or null),
 `expect` (copied from the catalog), `observed` and `matched`. Trusted-endpoint
@@ -289,7 +292,8 @@ A record is refused unless all of these hold:
    suite per language.
 8. The pre-collection preflight and the post-collection `host_preflight` are
    separate objects. Both match the record's machine, boot, kernel, daemon and
-   release, and they have the same nft snapshot and config digests.
+   release, and they have the same semantic nft ruleset
+   (`nft_ruleset_semantic_sha256`) and config digests.
 9. Timestamps are in order: the pre-collection preflight (at most 15 minutes
    old), then the record start, the phases and the record end, then the
    post-collection preflight.
@@ -415,10 +419,12 @@ Nothing yet satisfies any catalog enforcement probe.
 | `*.memory_oom`, `cpu_throttle`, `pids_cap`, `scratch_enospc`, `nofile_cap`, `log_bound`, `executor_grading.supervisor_timeout.*` | Not measured. These need the in-container workload helper and a host cgroup sampler. Deferred to PR3/PR5 |
 | `preexec_confinement` (all) | Not implemented. Per-language hostile fixtures are needed. Deferred to PR5 |
 | `cleanup_recovery` (all) | Not implemented. Needs the orchestrator's live scenarios, journal, sentinel network and consumed marker. Deferred to PR5 |
-| `network_enforcement` (all) | Not implemented. Needs nft and the worker cgroup. Deferred to PR4 |
+| `network_enforcement` (all) | Collected by the PR4 network collector below, on the host only. Nothing has been collected: no host run exists yet |
 
-Preconditions and residue are not measured. A later collector must measure
-them with the labels production containers carry:
+The PR4 network collector measures preconditions and residue for network
+records (worker and custody state, custody socket, all daemon containers,
+`ditto-job-` networks, volumes and worker-cgroup processes). The PR5 collectors
+must measure them with the labels production containers carry:
 `io.heyditto.dittobench.coding-executor` and `io.heyditto.dittobench.run`.
 
 ### Tool binding
@@ -529,6 +535,171 @@ with a doubled pids limit failed the comparison.
 5. ~~Source trees or binary?~~ Answered: the release-recorded binary digest is
    binding, and the source trees are provenance (PR 3b).
 
+## Network collector (B5 PR4)
+
+`infra/scripts/collect-coding-native-enforcement.py network --config FILE
+--confirm "COLLECT NATIVE NETWORK ENFORCEMENT EVIDENCE"` is default-off and
+root-only on `ditto-coding-hosted-v2`. `resource`, `preexec` and `cleanup`
+exit 2 (PR5). It retains one record in the store and prints
+`approval_generated: false`; it exits 3 if any probe did not match or residue
+remains, so a failing record is kept for review but the verifier refuses it.
+Nothing in this PR has run on a host.
+
+### Host setup it requires (operator steps, not automated)
+
+- The `coding_hosted_connectivity` role with
+  `coding_hosted_worker_mode: network_enforcement` and
+  `coding_hosted_probe_runner: /opt/ditto-coding-hosted/<revision>/bin/dittobench-coding-enforcement-probe`.
+  The unit then runs `net-agent --unix /run/ditto-coding-hosted-enforcement/agent.sock`
+  in the exact worker cgroup, and after `revoke` a second `ExecStopPost` runs
+  `net-once` as the worker user in the same cgroup. This replaces the canary
+  worker unit; reinstall `single` mode afterwards. The mode needs a v2 probe
+  profile whose window is at most 280 seconds.
+- A probe connectivity profile installed by that role: v2, `candidate_tcp`
+  exactly the #1899 router listener and refusing proxy, issued at most 60 seconds
+  before collection starts, expiring 120 to 280 seconds after issuance. It is
+  never the canary profile.
+- The #1899 refusing proxy started (`ditto-coding-hosted-egress-proxy.service`),
+  the deny guard active, worker and custody stopped, zero containers and job
+  networks, and a retained pre-collection preflight at most 15 minutes old.
+
+### Binding
+
+- **Probe runner.** The collector hashes
+  `/opt/ditto-coding-hosted/<revision>/bin/dittobench-coding-enforcement-probe`
+  and refuses unless it equals the release index `probe_runner_sha256`. It then
+  hashes `/proc/<pid>/exe` of every agent it drives, from outside: the worker
+  unit's main process, the daemon-cgroup agent, the agent inside each container
+  (the child of `docker-init`), and each `net-once` stop probe before opening
+  its gate. It measures again after each `hello` and refuses any self-reported
+  digest, PID or identity that differs.
+- **Docker.** Every Docker call uses `/usr/bin/docker` as the daemon user with
+  `DOCKER_HOST=unix:///run/ditto-coding-hosted/docker.sock` and the empty
+  `DOCKER_CONFIG`. The daemon identity digest (the preflight's
+  `daemon_identity`) must equal the pre-collection preflight's before and after
+  collection. Containers run the approved release image with `--pull never`,
+  the hosted harness hardening, one read-only bind mount (the measured runner)
+  and no other mount.
+- **nft.** `nft -j list table inet ditto_coding_hosted` (TZ=UTC) is normalized
+  by the preflight's own `nft_entries` (the collector loads
+  `inspect-coding-native-host.py` from the same reviewed checkout, so there is
+  one implementation): metainfo, handles and counter values dropped, and named
+  set elements lose their kernel `timeout` and `expires`. While the worker runs, the listing must equal, entry for entry, what
+  `connectivity-policy.py policy` compiles for the installed profile and the
+  daemon UID (the collector's `compiled_rules`; a test loads the real policy
+  into a kernel namespace and compares). Its digest is
+  `scoped_ruleset_sha256`, and the expiry phase's reload must reproduce it.
+  After stop and after the failed start, the listing must be the deny guard:
+  one UID reject in `output` and no rule in any other chain. That digest
+  (chains and rules only) is `deny_ruleset_sha256`, identical for both.
+- **Worker cgroup.** The agent's `/proc/<pid>/cgroup` must be
+  `system.slice/ditto-coding-hosted-worker.service`, and the stop probes must
+  run there as the worker user.
+- **Refusing proxy.** The unit must be active, its main process in its own
+  cgroup and running exactly `/usr/bin/python3 -I -B egress-proxy.py <address>
+  <port>` for the listed proxy endpoint. The record carries the script digest.
+- **Endpoints.** Addresses, source addresses and container addresses stay in the
+  collector. The record carries only the verifier's endpoint hashes.
+- **Targets.** Public, IPv6, metadata, DNS name, proxy CONNECT authority and
+  ports come from `internal/codingenforcement/fixtures/network/targets.json`,
+  covered by `fixtures_sha256`.
+
+### Phases
+
+1. **active** (worker started): `candidate.router.connect` counts only if the
+   worker-cgroup router listener accepted it; `candidate.router.source` is the
+   listener's view of the source address (`container_address` only when it is
+   the candidate container's address). Proxy connect and CONNECT forward, DNS
+   (one question to the container's resolver), metadata, public, IPv6, trusted
+   endpoints, Docker API port, host loopback alias and a sibling container on
+   its own ICC-disabled bridge. Host loopback and sibling denials count only if
+   their outside listeners (worker agent, sibling agent) saw nothing.
+   `candidate.identity` and `candidate.host_ids` come from
+   `/proc/<pid>/status` and the subordinate range; `executor.interfaces` from
+   `/proc/<pid>/net/dev` of a `--network none` container as uid 10001.
+   Worker trusted checks are `handshake` (TCP connect and close, no byte sent);
+   worker public/metadata and daemon checks are connect attempts.
+2. **stop_rollback**: `systemctl stop`; after `revoke`, the gated `net-once`
+   attempts every trusted endpoint from the worker cgroup; the candidate
+   attempts the router.
+3. **expiry**: the worker is started again before expiry; the candidate
+   establishes a router flow and the worker establishes one flow per trusted
+   endpoint (handshake only). After `expires_at_unix` + 3 s each flow is checked
+   with TCP keepalive and `TCP_USER_TIMEOUT` (no payload). The router flow is
+   checked on the listener side, outside the candidate. New worker and candidate
+   attempts follow.
+4. **failed_start**: with the profile expired, `systemctl start` must fail
+   (`Result=exit-code`); the gated stop probe attempts every trusted endpoint.
+
+Any refusal kills a waiting stop probe, removes the containers and networks by
+name, stops the worker and removes the agent directory before exiting.
+
+### What it does not show
+
+- **Router namespace `host` only.** `rootless-netns` (the in-namespace router
+  fd hand-off) is not supported. With slirp4netns the router sees the host
+  address, so `candidate.router.source` records `host_address` and the verifier
+  refuses the record, until the router source fix lands.
+- **Candidate-side denials are self-reports** of the measured binary running as
+  the candidate. Only the router, host loopback and sibling probes have an
+  outside listener. DNS, metadata, public, IPv6, trusted and Docker API denials
+  are not corroborated by nft counters.
+- **Not the production harness launch.** The candidate container mirrors
+  `sandbox.runArgsForNetwork` hardening but is started by the collector, not by
+  `sandbox.LocalDocker`, and uses a released language image rather than a
+  screened miner image.
+- **`closed` is ambiguous** for `established_after_expiry`: a trusted server
+  closing an idle unauthenticated connection within the few seconds after expiry
+  looks the same as a cut flow.
+- **Host loopback** is tested through the slirp4netns alias `10.0.2.2` only.
+- **The verifier cannot recompute the ruleset digests.** It checks their form,
+  that scoped and deny differ, and that the scoped rule counts equal what the
+  profile compiles to.
+- **Pre-/post-collection preflight nft digests.** Preflight v3's
+  `nft_snapshot_sha256` hashed the raw listing, which a worker start and stop
+  always changes (new handles, leftover scoped chains and sets), so rule 8
+  refused every real network record. Preflight v4 instead records
+  `nft_ruleset_semantic_sha256`, and the verifier refuses v3. See
+  [the semantic ruleset digest](#semantic-nft-ruleset-digest-preflight-v4).
+- Reboot and daemon-restart recovery, as for every record.
+
+## Semantic nft ruleset digest (preflight v4)
+
+`inspect-coding-native-host.py` records `nft_ruleset_semantic_sha256`: the
+SHA-256 of the compact sorted-key JSON of `nft_semantic_entries` over the
+stripped `inet ditto_coding_hosted` listing. It must be stable across a clean
+worker start, stop and profile expiry, and change on any difference that can
+affect a packet verdict.
+
+- **Stripped** (`nft_entries`): `metainfo`; every `handle`; counter `packets`
+  and `bytes` (set to 0, the counter statement stays); `timeout` and `expires`
+  of named set and map elements. The listing must hold exactly one table,
+  `inet ditto_coding_hosted`, and no duplicate keys.
+- **Pruned**, only where no verdict can depend on the object:
+  - a regular chain with no rules that no `jump` or `goto` (in a rule or a map
+    element) names;
+  - a named set or map with no elements that nothing references as `@name`;
+  - a base chain with exactly `family`, `table`, `name`, `type`, `hook`, `prio`
+    and `policy`, `type` `filter`, policy `accept`, and no rules. An accept
+    verdict from one base chain does not end evaluation of the hook's other
+    base chains, so such a chain is a no-op. A rule-less base chain with policy
+    `drop`, another type or any other attribute is kept.
+- **Kept:** every rule, every referenced or rule-bearing chain, every set or map
+  that has elements or is referenced (even when empty), and every other object.
+- **Order:** tables, chains, sets, maps, then other objects, each sorted by
+  canonical JSON; rules last, grouped by chain with their kernel order preserved,
+  since the first match decides. Element lists of named and anonymous sets are
+  sorted.
+
+The recorded listings `nft-deny-initial.json` (before any worker start) and
+`nft-deny-after-expiry.json` (deny guard, scoped policy, deny guard, element
+expiry) have different raw bytes and the same semantic digest. Before expiry
+(`nft-deny-after-scoped.json`) the unreferenced sets still hold elements and
+are kept, so the digest differs; the post-collection preflight is taken after
+the expiry phase, so an early one refuses rather than passes. The verifier
+cannot recompute either digest; it requires both preflights to carry the same
+one.
+
 ## Custody binding
 
 Custody keeps its own digest, and this tool never opens custody paths. To bind
@@ -604,9 +775,10 @@ identity is bound into the signed approval and the evidence.
 - **Daemon identity.** `dittobench-coding-native-daemon-identity-v1` is a
   closed object; see the qualification README for its fields and why each is
   included.
-  - The host preflight (schema `dittobench-coding-native-host-preflight-v3`)
+  - The host preflight (schema `dittobench-coding-native-host-preflight-v4`)
     records it and its canonical digest. The verifier refuses a digest that
-    does not match the object, a non-rootless identity, or a preflight v2.
+    does not match the object, a non-rootless identity, or a preflight v2 or
+    v3.
   - Records carry that digest as `host.daemon_identity_sha256`, and every record
     and both preflights must agree.
   - `check-approval` requires `sha256(canonical(approval.daemon_identity))` to

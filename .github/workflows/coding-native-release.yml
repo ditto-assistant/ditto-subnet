@@ -6,6 +6,13 @@ on:
       - infra/scripts/build-coding-native-release.py
       - infra/scripts/inspect-coding-native-host.py
       - infra/scripts/coding-native-evidence.py
+      # The network collector is only tested here against a simulated host and
+      # recorded kernel listings; no workflow ever runs it.
+      - infra/scripts/collect-coding-native-enforcement.py
+      - ditto/tests/test_coding_native_network_collector.py
+      - ditto/tests/fixtures/coding_native_network/**
+      - infra/ansible/roles/coding_hosted_connectivity/**
+      - ditto/tests/test_coding_hosted_connectivity.py
       - services/dittobench-api/internal/codingenforcement/**
       - services/dittobench-api/internal/sandbox/sandbox.go
       - services/dittobench-api/internal/codingexecutor/**
@@ -44,7 +51,21 @@ jobs:
           ref: ${{ inputs.sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+      - name: Allow a throwaway user and network namespace for nft listings
+        run: |
+          set -euo pipefail
+          # Only this disposable runner: the live listing test loads the
+          # reviewed policies into an unprivileged namespace, never the host.
+          sudo apt-get \
+            -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/ubuntu.sources \
+            -o Dir::Etc::sourceparts=- \
+            update
+          sudo apt-get install -y --no-install-recommends nftables
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          unshare -rn /usr/sbin/nft list ruleset
       - name: Public artifact and refusal regressions
+        env:
+          DITTOBENCH_REQUIRE_LIVE_NFT: "1"
         run: >-
           uv run --frozen pytest -q ditto/tests/test_coding_native_release.py
           ditto/tests/test_coding_native_host_preflight.py
@@ -52,6 +73,8 @@ jobs:
           ditto/tests/test_coding_native_matrix.py ditto/tests/test_coding_qualification.py
           ditto/tests/test_coding_hosted_image_import.py
           ditto/tests/test_coding_hosted_runtime_bundle.py
+          ditto/tests/test_coding_native_network_collector.py
+          ditto/tests/test_coding_hosted_connectivity.py
       - name: Lint release-set tooling
         run: |
           uv run --frozen ruff check infra/scripts/build-coding-native-release.py ditto/tests/test_coding_native_release.py
@@ -61,6 +84,9 @@ jobs:
           uv run --frozen ruff check infra/scripts/coding-native-evidence.py ditto/tests/test_coding_native_enforcement_evidence.py
           uv run --frozen ruff format --check infra/scripts/coding-native-evidence.py ditto/tests/test_coding_native_enforcement_evidence.py
           uv run --frozen mypy infra/scripts/coding-native-evidence.py
+          uv run --frozen ruff check infra/scripts/collect-coding-native-enforcement.py ditto/tests/test_coding_native_network_collector.py
+          uv run --frozen ruff format --check infra/scripts/collect-coding-native-enforcement.py ditto/tests/test_coding_native_network_collector.py
+          uv run --frozen mypy infra/scripts/collect-coding-native-enforcement.py
           uv run --frozen ruff check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
           uv run --frozen ruff format --check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
   public-build:
