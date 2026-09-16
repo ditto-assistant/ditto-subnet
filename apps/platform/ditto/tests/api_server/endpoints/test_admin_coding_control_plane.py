@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_coding_control_plane import _state
 from ditto.db.models import CodingHostedAssignment, CodingHostedPrivateTask
+from ditto.db.queries.coding_hosted_operations import cancel_hosted_assignment
 from ditto.tests.db.queries.test_coding_hosted_admission import _admit, _request, _seed
 
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
@@ -39,6 +40,30 @@ def test_control_plane_expiry_precedes_nonterminal_durable_markers() -> None:
         SimpleNamespace(closed_at=now, close_reason="completed"),
     )
     assert _state(expired, closed, now=now) == "completed"
+    # Cancellation never widens the published states; the record's flag does.
+    assert _state(expired, closed, now=now, cancelled=True) == "aborted"
+    pending = cast(
+        CodingHostedAssignment,
+        SimpleNamespace(
+            expires_at=now + timedelta(minutes=5), admitted_at=None, started_at=None
+        ),
+    )
+    assert _state(pending, None, now=now, cancelled=True) == "aborted"
+
+
+def test_control_plane_state_enum_stays_published(app: FastAPI) -> None:
+    record = app.openapi()["components"]["schemas"]["CodingHostedOperationRecord"]
+    # A deployed Backroom parses exactly these; adding one fails its whole read.
+    assert record["properties"]["state"]["enum"] == [
+        "pending_admission",
+        "admitted",
+        "running",
+        "completed",
+        "failed",
+        "aborted",
+        "expired",
+    ]
+    assert record["properties"]["cancelled"]["type"] == "boolean"
 
 
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
@@ -87,6 +112,7 @@ async def test_control_plane_reports_redacted_native_progress_and_feature_gates(
     assert operation["registered_reason"] == "synthetic shadow approval"
     assert operation["frozen"] is False
     assert operation["closed_at"] is None
+    assert operation["cancelled"] is False
     serialized = pending.text
     for forbidden in (
         "catalog_index",
@@ -101,6 +127,18 @@ async def test_control_plane_reports_redacted_native_progress_and_feature_gates(
     admitted = await client.get(url, headers=_HEADERS)
     assert admitted.status_code == 200
     assert admitted.json()["native_operations"][0]["state"] == "admitted"
+
+    async with session_maker() as session, session.begin():
+        await cancel_hosted_assignment(
+            session,
+            evaluation_id=authority.evaluation_id,
+            expected_assignment_sha256=authority.digest(),
+            actor="peyton@omniaura.ai",
+            reason="operator cancelled the unbound assignment",
+        )
+    cancelled = (await client.get(url, headers=_HEADERS)).json()["native_operations"]
+    assert (cancelled[0]["state"], cancelled[0]["cancelled"]) == ("aborted", True)
+    assert cancelled[0]["close_reason"] is None
 
 
 @pytest.mark.asyncio

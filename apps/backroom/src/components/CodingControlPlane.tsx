@@ -397,7 +397,7 @@ export function CodingControlPlane({ initialState, readOnly }: {
           {state.native.native_operations.length ? state.native.native_operations.map((operation) => (
             <div key={operation.evaluation_id} className="grid gap-2 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 py-3 text-xs sm:grid-cols-[1fr_auto]">
               <div>
-                <p className="font-semibold">{operation.state} · agent {shortDigest(operation.agent_id)}</p>
+                <p className="font-semibold">{operation.cancelled ? 'cancelled' : operation.state} · agent {shortDigest(operation.agent_id)}</p>
                 <p className="mt-1 font-mono text-[10px] text-[var(--muted)]">evaluation {shortDigest(operation.evaluation_id)} · assignment {shortDigest(operation.assignment_sha256)} · registration {shortDigest(operation.registration_sha256)}</p>
               </div>
               <div className="text-[var(--muted-strong)]">{operation.frozen ? 'frozen' : 'not frozen'} · expires {new Date(operation.expires_at).toLocaleString()}</div>

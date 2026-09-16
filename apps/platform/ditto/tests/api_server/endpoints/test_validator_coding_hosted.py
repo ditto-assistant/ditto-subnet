@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -17,6 +18,7 @@ from ditto.api_server.coding_hosted_verification import (
 )
 from ditto.api_server.endpoints.validator_coding_hosted import HostedCodingControl
 from ditto.db.models import CodingHostedAssignment
+from ditto.db.queries.coding_hosted_operations import cancel_hosted_assignment
 from ditto.tests.db.queries.test_coding_hosted_admission import (
     VALIDATOR,
     _request,
@@ -92,6 +94,42 @@ async def test_http_admission_returns_only_signed_status(hosted_client, session_
         assert (
             row is not None and row.admitted_at is not None and row.started_at is None
         )
+
+
+async def test_cancelled_assignment_is_a_generic_conflict_with_a_logged_reason(
+    hosted_client, session_maker, caplog
+):
+    authority = await _seed(session_maker)
+    async with session_maker() as session, session.begin():
+        await cancel_hosted_assignment(
+            session,
+            evaluation_id=authority.evaluation_id,
+            expected_assignment_sha256=authority.digest(),
+            actor="peyton@omniaura.ai",
+            reason="operator cancelled the unstarted canary",
+        )
+    caplog.set_level(
+        logging.WARNING, logger="ditto.api_server.endpoints.validator_coding_hosted"
+    )
+    for operation in ("evaluate", "status"):
+        response = await hosted_client.post(
+            PATH,
+            json=_request(authority, operation=operation).model_dump(
+                mode="json", by_alias=True
+            ),
+        )
+        # The signed contract is unchanged: no cancelled state reaches validators.
+        assert response.status_code == 409
+        assert response.json() == {"detail": "hosted Coding request refused"}
+        assert response.headers["cache-control"] == "no-store"
+    refusals = [
+        record.getMessage()
+        for record in caplog.records
+        if "hosted validator request refused" in record.getMessage()
+    ]
+    assert len(refusals) == 2
+    assert all("reason=hosted assignment is cancelled" in line for line in refusals)
+    assert all(str(authority.evaluation_id) in line for line in refusals)
 
 
 async def test_disabled_and_malformed_requests_do_not_echo_inputs(app, hosted_client):

@@ -5,6 +5,11 @@ approved profile digests). The artifact digest, screened image digest, registrat
 digest, bench version, schedule commitment and selection are derived here from locked
 Platform state, never accepted from the request. Preview returns the exact authority;
 create re-derives it and requires the operator to confirm that digest.
+
+Cancel appends one immutable cancellation for an assignment whose attempt never
+started; a started attempt is stopped only by its worker's abort path. The list and
+detail reads return lifecycle, digests, terminal outcome, inference accounting and
+result delivery status without private task, grading or settlement contents.
 """
 
 from __future__ import annotations
@@ -13,17 +18,24 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import SCOREABLE_AGENT_STATUSES
 from ditto.api_models.coding_canonical import coding_canonical_sha256
 from ditto.api_models.coding_hosted_assignment_admin import (
+    AdminHostedAssignmentCancellationRecord,
+    AdminHostedAssignmentCancelled,
+    AdminHostedAssignmentCancelRequest,
     AdminHostedAssignmentCreated,
     AdminHostedAssignmentCreateRequest,
+    AdminHostedAssignmentDetail,
+    AdminHostedAssignmentList,
     AdminHostedAssignmentPlan,
     AdminHostedAssignmentPreviewRequest,
     AdminHostedAssignmentSubject,
+    AdminHostedAssignmentSummary,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -36,6 +48,13 @@ from ditto.db.queries.coding_hosted_admission import (
     HostedAssignmentAuthority,
     _now,
     create_hosted_assignment,
+)
+from ditto.db.queries.coding_hosted_operations import (
+    HostedAssignmentNotFoundError,
+    HostedCancellationError,
+    cancel_hosted_assignment,
+    get_hosted_assignment_detail,
+    list_hosted_assignment_summaries,
 )
 from ditto.db.queries.coding_hosted_private import (
     HostedPrivateTaskError,
@@ -80,6 +99,10 @@ def canary_schedule_sha256(
 
 def _confirmation(evaluation_id: UUID, assignment_sha256: str) -> str:
     return f"CREATE SHADOW CODING HOSTED ASSIGNMENT {evaluation_id} {assignment_sha256}"
+
+
+def _cancel_confirmation(evaluation_id: UUID, assignment_sha256: str) -> str:
+    return f"CANCEL SHADOW CODING HOSTED ASSIGNMENT {evaluation_id} {assignment_sha256}"
 
 
 async def _plan(
@@ -238,4 +261,97 @@ async def create_hosted_assignment_endpoint(
         **plan.model_dump(),
         authoring_grant_id=grants.authoring_grant_id,
         grading_grant_id=grants.grading_grant_id,
+    )
+
+
+@router.get("", response_model=AdminHostedAssignmentList)
+async def list_hosted_assignments(
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminHostedAssignmentList:
+    """Page redacted hosted assignment lifecycles, newest first."""
+
+    response.headers["Cache-Control"] = "no-store"
+    summaries, total, now = await list_hosted_assignment_summaries(
+        session, limit=limit, offset=offset
+    )
+    return AdminHostedAssignmentList(
+        total=total,
+        limit=limit,
+        offset=offset,
+        observed_at=now,
+        assignments=[
+            AdminHostedAssignmentSummary.model_validate(summary, from_attributes=True)
+            for summary in summaries
+        ],
+    )
+
+
+@router.get("/{evaluation_id}", response_model=AdminHostedAssignmentDetail)
+async def get_hosted_assignment(
+    evaluation_id: UUID,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> AdminHostedAssignmentDetail:
+    """Read one lifecycle, terminal outcome, accounting and delivery status."""
+
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        detail = await get_hosted_assignment_detail(
+            session, evaluation_id=evaluation_id
+        )
+    except HostedAssignmentNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    return AdminHostedAssignmentDetail.model_validate(detail, from_attributes=True)
+
+
+@router.post("/{evaluation_id}/cancel", response_model=AdminHostedAssignmentCancelled)
+async def cancel_hosted_assignment_endpoint(
+    evaluation_id: UUID,
+    payload: AdminHostedAssignmentCancelRequest,
+    response: Response,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> AdminHostedAssignmentCancelled:
+    """Append one cancellation for an assignment whose attempt never started."""
+
+    response.headers["Cache-Control"] = "no-store"
+    expected = _cancel_confirmation(evaluation_id, payload.expected_assignment_sha256)
+    if payload.confirmation != expected:
+        raise HTTPException(
+            status_code=422, detail=f'confirmation must equal "{expected}"'
+        )
+    try:
+        async with session.begin():
+            result = await cancel_hosted_assignment(
+                session,
+                evaluation_id=evaluation_id,
+                expected_assignment_sha256=payload.expected_assignment_sha256,
+                actor=payload.actor,
+                reason=payload.reason,
+            )
+            cancellation = AdminHostedAssignmentCancellationRecord.model_validate(
+                result.row, from_attributes=True
+            )
+    except HostedAssignmentNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except HostedCancellationError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SAIntegrityError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="hosted assignment changed concurrently; re-read before cancelling",
+        ) from error
+    detail = await get_hosted_assignment_detail(session, evaluation_id=evaluation_id)
+    return AdminHostedAssignmentCancelled(
+        idempotent=result.idempotent,
+        private_task_closed=result.private_task_closed,
+        cancellation=cancellation,
+        assignment=AdminHostedAssignmentDetail.model_validate(
+            detail, from_attributes=True
+        ),
     )
