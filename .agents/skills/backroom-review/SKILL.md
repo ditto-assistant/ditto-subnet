@@ -20,6 +20,12 @@ Two courts, one control plane:
 
 ## Authority
 
+Before either court, read the
+[policy-version routing](references/review-bar.md#policy-version-routing).
+For a policy-v13 submission, use the complete published v13 checklist and
+opaque-verification companion linked there. The historical v10-v12 examples
+below are not a substitute for v13 and cannot override its safe harbors.
+
 1. Call `get_backroom_access` first.
 2. Require `backroom:read` to inspect, `backroom:artifact:read` for source,
    and `backroom:write` before any mutation.
@@ -121,9 +127,10 @@ the observed-tool path. Runtime/concurrency diagnosis is
 
 ## ATH board
 
-Search **both** reporters, then apply the same holding to the same pattern.
+Search **both** reporters, then apply the same holding to the same pattern
+under the same applicable policy.
 
-Live production holdings (authoritative when they exist):
+Live production holdings (for the same applicable policy and mechanism):
 
 ```
 search_ath_precedents  query="<pattern>"  [resolution=clear|reject]
@@ -138,8 +145,9 @@ python3 .agents/skills/backroom-review/scripts/search-precedents.py --resolution
 ```
 
 Cite the matching file or live `agent_id` in the miner-visible reason. If
-live and local disagree, the live holding wins for that exact pattern; say
-so.
+live and local disagree under the same policy, the live holding wins for that
+exact pattern; say so. Historical precedent cannot override the applicable
+published policy or transfer a finding to another artifact.
 
 1. Call `get_leaderboard` (current bench) and `get_screening_review_queue`.
 2. Resolve every target. Include every emission recipient and every scored
@@ -147,8 +155,12 @@ so.
    A same-hotkey ancestor keep, or a prior keep of this UUID, is not a skip.
    Re-apply the same bar to every new high-score row. Fairness is identical
    criteria, not identical outcome.
-3. Apply the exact submission's policy version. Fail either historical limb or
-   the production-engine test and the row is emulation. For policy v10, score
+3. Apply the exact submission's policy version using the
+   [policy-version routing](references/review-bar.md#policy-version-routing).
+   For v13, evaluate I1–I8, S1–S3, and all applicable verification requirements
+   and safe harbors in the published checklist. For historical policies,
+   failing either historical limb or the production-engine test is emulation.
+   For policy v10, score
    I1–I7 independently (I3 dissent, I4 derived-value authority, I5 production
    engine, I7 tool planning). A real model call, two-limb pass, I4/I7 pass,
    `cfg(measure)` off, or `screening_policy_version=10` stamp does not clear
@@ -237,6 +249,10 @@ A loop fire may resolve rows (release/reject/clear) with the same bar as an
 interactive fire, but it never rescreens, and miner-requested holds,
 family-dedupe holds, and stranded holds (409 "agent is no longer held") are
 always left for a human.
+
+The loop prompt is a scheduled-run entry point, not the screener's Python
+prompt. Interactive reviews enter through this skill and the same court
+references; both routes must select the submission's applicable policy first.
 
 ## Report
 

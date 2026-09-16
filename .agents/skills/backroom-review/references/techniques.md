@@ -1,5 +1,11 @@
 # Source inspection techniques
 
+Select the applicable policy through
+[Policy-version routing](review-bar.md#policy-version-routing) first.
+The patterns and historical class labels below are search leads, not
+independent v13 rejection or clearance rules. Apply the complete published
+v13 checklist, including I8 and its compatibility boundary, to v13 artifacts.
+
 ## Resolve identity first
 
 - Prefer a full agent UUID from the user, leaderboard, or queue.
