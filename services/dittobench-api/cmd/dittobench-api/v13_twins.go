@@ -17,7 +17,7 @@ import (
 // memoryTwinEvidence reads the staged case's generator provenance. A
 // metamorphic program member pairs through V10CaseProvenance.MetamorphicGroup
 // (the counterfactual member deliberately carries no TwinGroup); a v13
-// decision/as-of twin pairs through its own TwinGroup. The two identities are
+// decision/as-of twin pairs through its grader-only TwinPairID. The two identities are
 // carried separately -- a case can be both, and its program group is never its
 // twin group.
 func memoryTwinEvidence(benchVersion int, sc gen.StagedCase, graded protocol.RunResponse, observed []protocol.ObservedToolCall) scorer.TwinEvidence {
@@ -32,8 +32,8 @@ func memoryTwinEvidence(benchVersion int, sc gen.StagedCase, graded protocol.Run
 		ev.MetamorphicGroup = sc.V10Provenance.MetamorphicGroup
 		ev.Relation = sc.V10Provenance.Relation
 	}
-	if sc.Case.TwinRelation != "" && sc.Case.TwinGroup != "" {
-		ev.TwinGroup = sc.Case.TwinGroup
+	if sc.Case.TwinRelation != "" && sc.Case.TwinPairID != "" {
+		ev.TwinGroup = sc.Case.TwinPairID
 		ev.TwinRelation = sc.Case.TwinRelation
 	}
 	if !ev.Paired() {

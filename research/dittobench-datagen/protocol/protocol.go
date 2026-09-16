@@ -164,11 +164,6 @@ type ToolCase struct {
 	// Restraint (bench_version 13, grader-only) is set on a case whose correct
 	// outcome is restraint rather than a call. Never serialized.
 	Restraint *RestraintClaim `json:"-"`
-	// TwinGroup (bench_version 13, grader-only) is the restraint-group identity
-	// shared by the distributionally matched members of one decision_twin
-	// group (issue #1846). The group rule scores the members together; the
-	// members are never adjacent and never surface-identical. Never serialized.
-	TwinGroup string `json:"-"`
 	// ForbiddenTools (bench_version 13, grader-only) are catalog tools whose
 	// observed call zeroes the case even when every expected capability was
 	// also observed. It is how a state-dependent route punishes the "do both"

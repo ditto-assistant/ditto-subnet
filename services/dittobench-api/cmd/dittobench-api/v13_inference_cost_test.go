@@ -183,7 +183,7 @@ func TestTwinEvidenceBuildersAreVersionGated(t *testing.T) {
 	// the twin lookup files the case under its program group (its real twin is
 	// orphaned, its program siblings are mis-collected as twin members).
 	staged := gen.StagedCase{
-		Case:          protocol.MemoryCase{ID: "m1", TwinGroup: "tg", TwinRelation: protocol.TwinRelationAsOf},
+		Case:          protocol.MemoryCase{ID: "m1", TwinGroup: "legacy-phrasing", TwinPairID: "tg", TwinRelation: protocol.TwinRelationAsOf},
 		V10Provenance: &universe.V10CaseProvenance{MetamorphicGroup: "mg", Relation: scorer.RelationCausalCounterfactual},
 	}
 	resp := protocol.RunResponse{Answer: "  1200 ", FinalText: "The balance is 1200."}
@@ -211,7 +211,7 @@ func TestTwinEvidenceBuildersAreVersionGated(t *testing.T) {
 		t.Fatalf("program-only evidence = %+v", ev)
 	}
 	// Twin-only member: twin identity set, metamorphic identity empty.
-	twinOnly := gen.StagedCase{Case: protocol.MemoryCase{ID: "m2", TwinGroup: "tg", TwinRelation: protocol.TwinRelationDecision}}
+	twinOnly := gen.StagedCase{Case: protocol.MemoryCase{ID: "m2", TwinPairID: "tg", TwinRelation: protocol.TwinRelationDecision}}
 	if ev := memoryTwinEvidence(protocol.BenchVersionV13, twinOnly, protocol.RunResponse{Abstain: true}, nil); ev.TwinGroup != "tg" || ev.MetamorphicGroup != "" || ev.Decision != scorer.DecisionAbstain {
 		t.Fatalf("twin-only evidence = %+v", ev)
 	}

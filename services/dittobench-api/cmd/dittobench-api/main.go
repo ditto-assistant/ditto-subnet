@@ -2018,10 +2018,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		s.store.Fail(runID, "v9 tool capability reverse mapping failed")
 		return
 	}
-	// v13 restraint groups are scored together after every member has landed;
-	// the rule ships in shadow (annotation only) unless the operator posture
-	// says enforce.
-	toolResults = scorer.ApplyV13RestraintGroupRule(req.BenchVersion, toolResults, v13RestraintGroupPosture())
+	// The unified v13 twin post-pass below owns all decision groups. Do not
+	// also run the earlier any-member-wrong group rule: it charges an honest
+	// miss to correct siblings even when their decisions are not concordant.
 	for i, cs := range toolResults {
 		perCase = append(perCase, cs)
 		if toolTwins[i].Paired() {

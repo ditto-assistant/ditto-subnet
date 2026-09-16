@@ -8,6 +8,7 @@ import (
 
 	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 // Anti-family-compiler cases, v2 (Bench v13).
@@ -352,6 +353,9 @@ func BuildFamilyCompilerV13(seed int64, count int) []FamilyV2Case {
 				// Register the variant's answer on the base member.
 				base := &out[len(out)-2]
 				base.Linked = fc.Correct
+				group := protocol.OpaqueCaseID(seed, "v13-quantity-counterfactual", i-1)
+				base.Staged.V10Provenance = &universe.V10CaseProvenance{MetamorphicGroup: group, Relation: protocol.RelationBase}
+				out[len(out)-1].Staged.V10Provenance = &universe.V10CaseProvenance{MetamorphicGroup: group, Relation: protocol.RelationCausalCounterfactual}
 				base.Staged.Case.DistractorAnswers = familyV2Distractors(base.Unit, base.Correct, append(familyV2DistractorInts(base), fc.Correct))
 				pending = nil
 			} else {
