@@ -634,31 +634,27 @@ def test_supervisor_remains_unmounted_and_unconstructed() -> None:
         ("http://127.0.0.1:not-a-port", False),
     ],
 )
-async def test_local_supervisor_and_canary_share_one_scorer_origin_rule(
+async def test_local_supervisor_uses_the_shared_scorer_origin_rule(
     url: str, accepted: bool
 ) -> None:
-    from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
+    # The certification canary no longer uses a scorer origin at all; it reaches
+    # the host certification service only over its verified Unix socket.
     from ditto.validator.coding_executor_transport import scorer_control_origin
 
     config: Any = SimpleNamespace(
         dittobench_api_url=url,
         dittobench_control_token="coding-supervisor-control-token-000000000000",
     )
-    outcomes: list[bool] = []
     async with httpx.AsyncClient(trust_env=False) as client:
-        for construct in (
-            lambda: CodingSupervisorRuntime(
+        try:
+            CodingSupervisorRuntime(
                 config,
                 client,
                 object(),  # type: ignore[arg-type]
-            ),
-            lambda: CodingCanaryRuntime(config, client),
-        ):
-            try:
-                construct()
-            except ValueError:
-                outcomes.append(False)
-            else:
-                outcomes.append(True)
-    assert outcomes == [accepted, accepted]
+            )
+        except ValueError:
+            outcome = False
+        else:
+            outcome = True
+    assert outcome is accepted
     assert scorer_control_origin(url) is accepted

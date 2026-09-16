@@ -24,6 +24,7 @@ from ditto.api_server.coding_hippius_retrieval import (
 )
 from ditto.api_server.coding_hosted_authoring_evidence import canonical
 from ditto.api_server.coding_hosted_budget import ProfiledBudgetEstimator
+from ditto.api_server.coding_hosted_installed_worker import require_installed_worker
 from ditto.api_server.coding_hosted_runtime_io import (
     HostedRuntimeError,
     private_directory,
@@ -138,6 +139,15 @@ def load_runtime_config(
     private_directory(Path(wire.unwrap_work_root))
     protected_helper(Path(wire.worker_executable))
     protected_helper(Path(wire.unwrap_executable))
+    if wire.host.router_namespace == "rootless-netns":
+        # The worker starts the helper beside itself inside RootlessKit's user
+        # namespace. Only an installed v3 bundle pins that helper's bytes.
+        try:
+            require_installed_worker(Path(wire.worker_executable), router_listener=True)
+        except Exception:
+            raise HostedRuntimeError(
+                "rootless router requires an installed router listener"
+            ) from None
     if Path(wire.worker_executable).samefile(wire.unwrap_executable):
         raise HostedRuntimeError("runtime worker and custody executable must differ")
     postgres, entries = postgres_config(

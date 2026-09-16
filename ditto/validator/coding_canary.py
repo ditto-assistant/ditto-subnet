@@ -268,8 +268,10 @@ class CodingCanaryWorker:
         if self._queue.empty():
             return False
         # Both refusals happen before the irreversible issue and claim: the
-        # scorer must prove its executor, daemon, runtime image, and pack are
-        # ready, and the queued agent must be an exact allowlisted target.
+        # certification service must prove its pack, rootless topology,
+        # listener namespace, control socket, executor daemon and pinned runtime
+        # image are ready, and the queued agent must be an exact allowlisted
+        # target. Readiness is proven again after issue, before claim.
         try:
             readiness = await self._runtime.require_ready()
         except PlatformInfrastructureError as error:
@@ -308,6 +310,20 @@ class CodingCanaryWorker:
             await self._abort_issued(issued.authority.lease_id)
             raise PlatformInfrastructureError(
                 "coding certification lease does not match the scorer pack"
+            )
+        # Re-prove readiness immediately before the irreversible claim, so a
+        # daemon restart, socket swap or pack change after issue aborts the
+        # issued lease instead of stranding a claimed one. Any failure of the
+        # probe, not only a reported refusal, aborts the still-issued lease.
+        try:
+            confirmed = await self._runtime.require_ready()
+        except Exception:
+            await self._abort_issued(issued.authority.lease_id)
+            raise
+        if confirmed != readiness:
+            await self._abort_issued(issued.authority.lease_id)
+            raise PlatformInfrastructureError(
+                "coding canary runtime readiness changed before claim"
             )
         claimed: CodingCertificationLeaseResponse | None = None
         offer: CodingCertificationInferenceGrantOffer | None = None

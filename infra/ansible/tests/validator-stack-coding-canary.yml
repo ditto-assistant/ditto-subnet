@@ -110,7 +110,18 @@
               - "'DITTOBENCH_CODING_EGRESS_PROXY=' + valid_egress_proxy in rendered"
               - "'DITTOBENCH_CODING_HOST_GATEWAY_IP=' + valid_host_gateway_ip in rendered"
 
-    - name: Accept and render the complete canary profile
+    - name: Refuse a complete validator profile until the socket route is rendered
+      ansible.builtin.include_tasks: validator-stack-coding-canary-reject.yml
+      vars:
+        case:
+          name: complete validator profile without the certification socket route
+          validator: true
+          poll: 30
+          targets: "{{ valid_targets }}"
+
+    # The template still renders the validator worker for the later socket route;
+    # validation refuses the switch above, so this checks rendering alone.
+    - name: Render the complete canary profile template
       vars:
         validator_stack_coding_canary_enabled: true
         validator_stack_dittobench_coding_canary_enabled: true
@@ -131,9 +142,6 @@
         validator_stack_coding_canary_validator_hotkey: "{{ valid_hotkey }}"
         validator_stack_hotkey: "{{ valid_hotkey }}"
       block:
-        - name: Validate the complete canary profile
-          ansible.builtin.include_tasks: ../roles/validator_stack/tasks/validate_coding_canary.yml
-
         - name: Render the complete canary profile
           vars:
             rendered: "{{ lookup('template', canary_template).splitlines() }}"

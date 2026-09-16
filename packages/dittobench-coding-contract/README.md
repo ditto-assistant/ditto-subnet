@@ -30,12 +30,15 @@ receipts. The Rust miner verifies only miner-facing seed/run and memory vectors;
 it must never receive grader plans or receipts. A contract change is incomplete
 until every affected consumer passes the same relevant vectors and boundaries.
 
-`coding_certification_canary_readiness_v1.json` freezes the scorer's ready
-answer to `GET /v1/coding/certifier/canary/readiness` for the committed
-`certification/v1` pack, along with its not-ready failure codes. The Go
-handler must encode exactly this answer, and the validator's
-`CodingCanaryRuntime.require_ready` must accept only answers of this shape. It
-carries public pack digests only.
+`coding_certification_canary_readiness_v2.json` freezes the host
+certification service's ready answer to
+`GET /v1/coding/certifier/canary/readiness` for the committed
+`certification/v1` pack, along with its ordered not-ready failure codes
+(pack, rootless topology, listener namespace, control socket, executor daemon,
+runtime image). The Go handler must encode exactly this answer, and the
+validator's `CodingCanaryRuntime.require_ready` must accept only answers of
+this shape. It carries public pack digests and a synthetic runtime image digest
+only.
 
 `coding_catalog_v1.json` freezes the public known-field catalog commitment,
 signing-message digest, and a synthetic private-exposure projection. The

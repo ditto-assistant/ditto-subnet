@@ -12,7 +12,7 @@ import (
 const (
 	RequestSchema   = "dittobench-coding-certification-canary-request-v1"
 	ResponseSchema  = "dittobench-coding-certification-canary-response-v1"
-	ReadinessSchema = "dittobench-coding-certification-canary-readiness-v1"
+	ReadinessSchema = "dittobench-coding-certification-canary-readiness-v2"
 	CanaryPath      = "/v1/coding/certifier/canary"
 	ReadinessPath   = CanaryPath + "/readiness"
 
@@ -103,6 +103,20 @@ type Backend interface {
 	Certify(ctx context.Context, request Request) (Outcome, error)
 }
 
+// TopologyCheck is the host certification service's live placement proof.
+// RootlessTopology means the dedicated daemon behind the fixed Docker socket is
+// rootless for the expected user, in RootlessKit's non-detached topology, with
+// its default bridge gateway equal to the router address. ListenerNamespace
+// means the served router listener is still bound to that address inside the
+// current RootlessKit network namespace. ControlSocket means the validator
+// control socket is still the served inode at its fixed path with the pinned
+// owner, group and mode. A host without this proof is never ready.
+type TopologyCheck struct {
+	RootlessTopology  bool
+	ListenerNamespace bool
+	ControlSocket     bool
+}
+
 // ReadinessCheck is the host's live executor eligibility. ExecutorDaemon means
 // the dedicated Docker endpoint is rootless and carries the isolated-daemon
 // label; RuntimeImage means the exact runtime image digest is present there.
@@ -115,17 +129,21 @@ type ReadinessCheck struct {
 // issues or claims a certification lease. It carries the loaded pack identity
 // so the validator can compare it with the issued lease before claiming.
 type ReadinessResponse struct {
-	Schema                string `json:"schema"`
-	CodingContractVersion int    `json:"coding_contract_version"`
-	WeightEligible        bool   `json:"weight_eligible"`
-	Ready                 bool   `json:"ready"`
-	Failure               string `json:"failure"`
-	PackLoaded            bool   `json:"pack_loaded"`
-	ExecutorDaemonReady   bool   `json:"executor_daemon_ready"`
-	RuntimeImageReady     bool   `json:"runtime_image_ready"`
-	CanaryManifestSHA256  string `json:"canary_manifest_sha256"`
-	RunnerPlanSHA256      string `json:"runner_plan_sha256"`
-	GraderPlanSHA256      string `json:"grader_plan_sha256"`
-	ResourceProfileSHA256 string `json:"resource_profile_sha256"`
-	InferencePolicySHA256 string `json:"inference_policy_sha256"`
+	Schema                 string `json:"schema"`
+	CodingContractVersion  int    `json:"coding_contract_version"`
+	WeightEligible         bool   `json:"weight_eligible"`
+	Ready                  bool   `json:"ready"`
+	Failure                string `json:"failure"`
+	PackLoaded             bool   `json:"pack_loaded"`
+	RootlessTopologyReady  bool   `json:"rootless_topology_ready"`
+	ListenerNamespaceReady bool   `json:"listener_namespace_ready"`
+	ControlSocketReady     bool   `json:"control_socket_ready"`
+	ExecutorDaemonReady    bool   `json:"executor_daemon_ready"`
+	RuntimeImageReady      bool   `json:"runtime_image_ready"`
+	RuntimeImageDigest     string `json:"runtime_image_digest"`
+	CanaryManifestSHA256   string `json:"canary_manifest_sha256"`
+	RunnerPlanSHA256       string `json:"runner_plan_sha256"`
+	GraderPlanSHA256       string `json:"grader_plan_sha256"`
+	ResourceProfileSHA256  string `json:"resource_profile_sha256"`
+	InferencePolicySHA256  string `json:"inference_policy_sha256"`
 }

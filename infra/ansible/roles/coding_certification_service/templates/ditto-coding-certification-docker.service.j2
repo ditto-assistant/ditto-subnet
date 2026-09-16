@@ -1,0 +1,30 @@
+# Rendered for review only. Do not install without explicit approval.
+[Unit]
+Description=Coding certification dedicated rootless Docker (review render)
+Requires=user@{{ coding_certification_service_uid }}.service
+After=user@{{ coding_certification_service_uid }}.service
+
+[Service]
+Type=notify
+NotifyAccess=all
+User={{ coding_certification_service_user }}
+Group={{ coding_certification_service_user }}
+UMask=0077
+# The socket directory is private to the service user.
+RuntimeDirectory=ditto-coding-certification-docker
+RuntimeDirectoryMode=0700
+# RootlessKit must keep the daemon in the child network namespace: the router
+# listener and readiness refuse detached-netns mode.
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false
+ExecStart=/usr/bin/env -i PATH=/usr/sbin:/usr/bin:/bin HOME=/var/lib/ditto-coding-certification XDG_RUNTIME_DIR=/run/user/{{ coding_certification_service_uid }} DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false NOTIFY_SOCKET=${NOTIFY_SOCKET} /usr/bin/dockerd-rootless.sh --host=unix:///run/ditto-coding-certification-docker/docker.sock --data-root=/var/lib/ditto-coding-certification/docker --exec-root=/run/user/{{ coding_certification_service_uid }}/ditto-coding-certification-exec --pidfile=/run/user/{{ coding_certification_service_uid }}/ditto-coding-certification-docker.pid --config-file=/usr/local/lib/ditto-coding-certification/daemon.json
+# The certification service requires exactly mode 0600 on this socket.
+ExecStartPost=/usr/bin/chmod 0600 /run/ditto-coding-certification-docker/docker.sock
+Restart=no
+TimeoutStartSec=120
+TimeoutStopSec=1800
+KillMode=mixed
+Delegate=cpu cpuset io memory pids
+TasksMax=8192
+MemoryMax=24G
+LimitNOFILE=1048576
+# No Install section: operator start only, never at boot.
