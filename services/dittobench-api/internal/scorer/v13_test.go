@@ -536,8 +536,8 @@ func TestV13FollowUpReadRejectsStaleHedge(t *testing.T) {
 		ExpectedTools: []protocol.ToolSpec{{Name: "search_memories"}}, MaxToolCalls: 2,
 		EffectAnswer: "kes.arden@northgate.example", EffectForbidden: []string{"kes@oldmail.example"},
 	}
-	if got := v13Score(t, del, protocol.RunResponse{FinalText: "Kes is at kes.arden@northgate.example (previously kes@oldmail.example)."}); got.Score != 0 {
-		t.Errorf("stale address listed beside the current one scored %v", got.Score)
+	if got := v13Score(t, del, protocol.RunResponse{FinalText: "Kes is at kes.arden@northgate.example (previously kes@oldmail.example)."}); got.Score != 1 {
+		t.Errorf("honest historical address correction scored %v", got.Score)
 	}
 	if got := v13Score(t, del, protocol.RunResponse{FinalText: "kes.arden@northgate.example"}); got.Score != 1 {
 		t.Errorf("current address alone scored %v: %v", got.Score, got.Notes)

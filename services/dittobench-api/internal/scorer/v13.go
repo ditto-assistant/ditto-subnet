@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -241,15 +242,8 @@ func gradeV13MemoryEffect(c protocol.ToolCase, resp protocol.RunResponse, notes 
 	if actions := v13NonMemoryActions(resp.ToolCalls); len(actions) > 0 {
 		return 0, append(notes, "v13: misrouted a memory request to a non-memory tool: "+strings.Join(actions, ", ")+" — case scored 0")
 	}
-	if !v13AnswerCarries(resp.Answer, c.EffectAnswer) && !v13AnswerCarries(resp.FinalText, c.EffectAnswer) {
-		return 0, append(notes, "v13: answer does not carry the planted value — no routing-only credit")
-	}
-	for _, stale := range c.EffectForbidden {
-		if v13AnswerCarries(resp.Answer, stale) || v13AnswerCarries(resp.FinalText, stale) {
-			return 0, append(notes, fmt.Sprintf("v13: answer also asserts the stale pre-mutation value %q — end state not discriminated — case scored 0", stale))
-		}
-	}
-	return 1, append(notes, "v13: answer carries the planted value (effect verified)")
+	verdict := grade.MemoryEffectV13(c.EffectAnswer, c.EffectForbidden, resp)
+	return verdict.Score, append(notes, verdict.Notes...)
 }
 
 // deterministicToolScoreV13 is the v7 strict trajectory rule with claim-aware
