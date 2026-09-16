@@ -1034,6 +1034,7 @@ func materializeV13Case(
 ) V10GeneratedCase {
 	seed := d.seed
 	prefix := fmt.Sprintf("v13-%d-%d", group, variant)
+	scope := v13ProgramRecordScope(seed, "business", group, relation)
 	pairIDs := []string{
 		protocol.OpaqueCaseID(seed, prefix+"-glossary-a", 0),
 		protocol.OpaqueCaseID(seed, prefix+"-glossary-b", 0),
@@ -1055,6 +1056,7 @@ func materializeV13Case(
 	}
 	pairs := make([]protocol.MemoryPair, 0, len(rows))
 	for i, row := range rows {
+		row = "Case file " + scope + ": " + row
 		prompt, response := renderV13Record(seed, group, renderer, i, row, g.Alias)
 		pairs = append(pairs, protocol.MemoryPair{
 			PairID:    pairIDs[i],
@@ -1070,7 +1072,7 @@ func materializeV13Case(
 		ID:                caseID,
 		QuestionID:        caseID,
 		QuestionType:      V13ProgramQuestionType,
-		Question:          m.Question,
+		Question:          "Use only case file " + scope + ". " + m.Question,
 		ExpectedAnswer:    m.Expected,
 		AnswerKind:        m.Kind,
 		AcceptAny:         append([]string(nil), m.AcceptAny...),
@@ -1080,6 +1082,7 @@ func materializeV13Case(
 		WritingProtected:  append([]string(nil), m.Protected...),
 		Claims:            append([]protocol.Claim(nil), m.Claims...),
 	}
+	caseValue.WritingProtected = append(caseValue.WritingProtected, scope)
 	if len(m.ItemAccept) > 0 {
 		caseValue.AnswerItemAcceptAny = make([][]string, len(m.ItemAccept))
 		for i, alts := range m.ItemAccept {
@@ -1108,6 +1111,17 @@ func materializeV13Case(
 		EvidencePairIDs:  append([]string(nil), pairIDs...),
 	}
 	return V10GeneratedCase{Plan: plan, Pairs: pairs, Provenance: provenance}
+}
+
+// Each counterfactual shares a memory pool with its base. Scope every record
+// and query explicitly so contradictory worlds are not competing updates to
+// one entity. The opaque label identifies evidence, not an answer or relation.
+func v13ProgramRecordScope(seed int64, domain string, group int, relation string) string {
+	world := 0
+	if relation == protocol.RelationCausalCounterfactual {
+		world = 1
+	}
+	return protocol.OpaqueCaseID(seed, fmt.Sprintf("v13-record-scope-%s-%d", domain, group), world)
 }
 
 // V13FamilyOf returns the family a generated v13 case belongs to, derived from

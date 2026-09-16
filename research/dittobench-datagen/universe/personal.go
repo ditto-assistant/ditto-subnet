@@ -556,6 +556,7 @@ func GenerateV13PersonalPrograms(seed int64, count int) ([]V10GeneratedCase, err
 
 func materializeV13PersonalCase(seed int64, group, variant int, groupID string, renderer V13PersonalRenderer, g v13PersonalGroup, m v13Member, relation, answerRelation string, includeDistractor bool) V10GeneratedCase {
 	prefix := fmt.Sprintf("v13p-%d-%d", group, variant)
+	scope := v13ProgramRecordScope(seed, "personal", group, relation)
 	rows := []string{m.Records[0], m.Records[1], m.Records[2]}
 	if includeDistractor {
 		rows = append(rows, m.DecoyClause)
@@ -568,7 +569,7 @@ func materializeV13PersonalCase(seed int64, group, variant int, groupID string, 
 	pairIDs := make([]string, 0, len(ordered))
 	pairs := make([]protocol.MemoryPair, 0, len(ordered))
 	for i, row := range ordered {
-		row = v13Capitalize(row)
+		row = "Case file " + scope + ": " + v13Capitalize(row)
 		id := protocol.OpaqueCaseID(seed, fmt.Sprintf("%s-record", prefix), i)
 		pairIDs = append(pairIDs, id)
 		prompt, response := renderV13PersonalRecord(seed, group, renderer, i, row)
@@ -585,7 +586,7 @@ func materializeV13PersonalCase(seed int64, group, variant int, groupID string, 
 		ID:                caseID,
 		QuestionID:        caseID,
 		QuestionType:      V13PersonalQuestionType,
-		Question:          m.Question,
+		Question:          "Use only case file " + scope + ". " + m.Question,
 		ExpectedAnswer:    m.Expected,
 		AnswerKind:        m.Kind,
 		AcceptAny:         append([]string(nil), m.AcceptAny...),
@@ -595,6 +596,7 @@ func materializeV13PersonalCase(seed int64, group, variant int, groupID string, 
 		WritingProtected:  append([]string(nil), m.Protected...),
 		Claims:            append([]protocol.Claim(nil), m.Claims...),
 	}
+	caseValue.WritingProtected = append(caseValue.WritingProtected, scope)
 	if relation != protocol.RelationCausalCounterfactual {
 		caseValue.TwinGroup = groupID
 	}
