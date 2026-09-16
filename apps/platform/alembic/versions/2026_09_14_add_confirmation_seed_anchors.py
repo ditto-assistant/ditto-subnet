@@ -6,7 +6,7 @@ continual-retest claim with the hash still null (the finality wait for
 no row and keep the unbound champion-anchored derivation byte-for-byte.
 
 Revision ID: 9e4b2f7c1a53
-Revises: 5e1f7a9c2b04
+Revises: e6f4a9c2d781
 """
 
 import sqlalchemy as sa
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "9e4b2f7c1a53"
-down_revision = "5e1f7a9c2b04"
+down_revision = "e6f4a9c2d781"
 branch_labels = None
 depends_on = None
 

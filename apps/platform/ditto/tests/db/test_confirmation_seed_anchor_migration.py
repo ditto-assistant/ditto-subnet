@@ -8,7 +8,7 @@ import subprocess
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-_PARENT = "3c8f0a1d9b27"
+_PARENT = "e6f4a9c2d781"
 _HEAD = "9e4b2f7c1a53"
 _TABLE = "confirmation_seed_anchors"
 

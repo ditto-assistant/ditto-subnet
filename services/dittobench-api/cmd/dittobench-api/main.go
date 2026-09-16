@@ -441,7 +441,7 @@ type capabilitiesResponse struct {
 // MAX_SUPPORTED_BENCH_VERSION, so the version never strands at one layer.
 const (
 	advertisedMinBenchVersion = protocol.BenchVersionV8
-	advertisedMaxBenchVersion = protocol.BenchVersionV12
+	advertisedMaxBenchVersion = protocol.BenchVersionV13
 )
 
 // supportedBenchVersions is the capability set this build can administer. It is
