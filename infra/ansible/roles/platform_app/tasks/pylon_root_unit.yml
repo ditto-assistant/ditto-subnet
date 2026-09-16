@@ -1,0 +1,149 @@
+---
+# Imported from tasks/main.yml when platform_pylon_root_unit_enabled. Default
+# off; turning it on is a reviewed activation (see
+# infra/docs/coding-hosted-control-signer-v2.md, "Deploy access").
+#
+# The docker group is root-equivalent, and update.sh's
+# `docker compose up -d --wait pylon` was the deploy user's only use of it. This
+# moves that one operation behind a root-owned unit whose compose file,
+# environment and Docker client configuration deploy cannot edit, then takes
+# deploy out of the docker group. A pm2 daemon that is already running keeps
+# its old supplementary groups until it restarts.
+
+- name: Require Pylon inputs that systemd, bash and compose read identically
+  ansible.builtin.assert:
+    that:
+      - platform_owner is match('^[a-z_][a-z0-9_-]*$')
+      - platform_owner != 'root'
+      - platform_subtensor_network | string is match('^[A-Za-z0-9._:/-]+$')
+      - platform_secrets.pylon_token | default('') is match('^[A-Za-z0-9+/=._-]+$')
+    fail_msg: >-
+      The root-owned Pylon unit needs a non-root deploy user, and a subtensor
+      network and Pylon token without quotes, spaces or `$`, so that the
+      systemd environment file yields the same values `set -a; . ./.env` did.
+    quiet: true
+  no_log: true
+
+- name: Ensure the root-owned Platform configuration parent
+  ansible.builtin.file:
+    path: /etc/ditto-platform
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure the root-only Pylon unit directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - /etc/ditto-platform/pylon
+    - /etc/ditto-platform/pylon/docker-client
+    # Bind-mounted read-only as Pylon's wallet directory. Empty: the Platform's
+    # Pylon has no signing identity (PYLON_IDENTITY_TOKEN is empty in .env).
+    - /etc/ditto-platform/pylon/wallets
+
+# The old mount source was deploy's ~/.bittensor/wallets. Keep parity, and never
+# resolve a deploy-controlled path as root: refuse a link, a non-directory or any
+# entry there instead of mounting or copying it.
+- name: Inspect the deploy wallet directory Pylon used to mount, without following links
+  ansible.builtin.stat:
+    path: "/home/{{ platform_owner }}/.bittensor/wallets"
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: platform_pylon_deploy_wallets
+
+- name: List the deploy wallet directory without following links
+  ansible.builtin.find:
+    paths: "/home/{{ platform_owner }}/.bittensor/wallets"
+    file_type: any
+    hidden: true
+    recurse: false
+    follow: false
+  register: platform_pylon_deploy_wallet_entries
+  when:
+    - platform_pylon_deploy_wallets.stat.exists
+    - platform_pylon_deploy_wallets.stat.isdir
+    - not platform_pylon_deploy_wallets.stat.islnk
+
+- name: Refuse a Pylon signing identity or a redirected wallet path
+  ansible.builtin.assert:
+    that:
+      - >-
+        not platform_pylon_deploy_wallets.stat.exists or
+        (platform_pylon_deploy_wallets.stat.isdir and
+         not platform_pylon_deploy_wallets.stat.islnk and
+         platform_pylon_deploy_wallet_entries.matched == 0)
+    fail_msg: >-
+      /home/{{ platform_owner }}/.bittensor/wallets is a link, not a directory,
+      or not empty. The root Pylon unit mounts an empty root-owned wallet
+      directory instead; a Platform Pylon signing identity would need its own
+      reviewed root-owned placement.
+    quiet: true
+
+- name: Install the root-owned Pylon compose file
+  ansible.builtin.copy:
+    src: pylon-compose.yml
+    dest: /etc/ditto-platform/pylon/compose.yml
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Render the root-owned Pylon environment
+  ansible.builtin.template:
+    src: pylon.env.j2
+    dest: /etc/ditto-platform/pylon/pylon.env
+    owner: root
+    group: root
+    mode: "0600"
+  no_log: true
+
+- name: Install the Pylon unit without enabling or starting it
+  ansible.builtin.template:
+    src: ditto-platform-pylon.service.j2
+    dest: /etc/systemd/system/ditto-platform-pylon.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: platform_pylon_unit_file
+
+- name: Reload systemd unit definitions (no unit is started)
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: platform_pylon_unit_file is changed
+
+- name: Allow the deploy user to re-run and read only the Pylon unit
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/ditto-platform-pylon
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+    content: |
+      # Managed by infra/ansible/roles/platform_app. Edits here are wiped on next run.
+      # Exact argument vectors, no wildcard: sudo refuses any other argument.
+      # The journal read is fixed to this unit, a line count and --no-pager.
+      {{ platform_owner }} ALL=(root) NOPASSWD: /usr/bin/systemctl restart ditto-platform-pylon.service
+      {{ platform_owner }} ALL=(root) NOPASSWD: /usr/bin/journalctl --no-pager --quiet --output=short-iso --lines=80 --unit=ditto-platform-pylon.service
+
+- name: Read the docker group
+  ansible.builtin.getent:
+    database: group
+    key: docker
+
+- name: Take the deploy user out of the root-equivalent docker group
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/gpasswd
+      - --delete
+      - "{{ platform_owner }}"
+      - docker
+  when: >-
+    platform_owner in
+    (ansible_facts['getent_group']['docker'][2] | default('') | split(','))
+  changed_when: true

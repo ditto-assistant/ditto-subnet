@@ -210,6 +210,7 @@ paths = [
   "apps/platform/alembic.ini",
   "apps/platform/docker-compose.yml",
   "apps/platform/pyproject.toml",
+  "apps/platform/release-build-requirements.txt",
   "apps/platform/skills-lock.json",
   "apps/platform/uv.lock",
   ".github/workflows/platform-ci.yml",

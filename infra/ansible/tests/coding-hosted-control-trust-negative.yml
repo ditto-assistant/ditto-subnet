@@ -1,0 +1,19 @@
+---
+# validator_stack_hotkey arrives as an include parameter from the caller: it
+# must outrank the play's set_fact binding of the synthetic validator identity.
+- name: Require rejection by the real validator trust guard
+  vars:
+    validator_stack_coding_hosted_control_enabled: true
+    validator_stack_coding_hosted_platform_hotkey: "{{ trust_case.platform }}"
+  block:
+    - ansible.builtin.import_tasks: ../roles/validator_stack/tasks/coding_hosted_trust.yml
+    - name: Fail if invalid validator trust was accepted
+      ansible.builtin.fail:
+        msg: Invalid synthetic validator trust passed the validator trust guard.
+  rescue:
+    - name: Verify the intended validator trust guard refused
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Require a distinct public Platform control signer hotkey'
+        fail_msg: "{{ trust_case.name }}: failed_task={{ ansible_failed_task.name }}"
+        quiet: true

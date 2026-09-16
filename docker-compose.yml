@@ -295,6 +295,11 @@ services:
       VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS: ${VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS:-}
       VALIDATOR_CODING_CANARY_ENABLED: ${VALIDATOR_CODING_CANARY_ENABLED:-false}
       VALIDATOR_CODING_CANARY_POLL_SECONDS: ${VALIDATOR_CODING_CANARY_POLL_SECONDS:-10}
+      # Read only by `python -m ditto.validator.coding_hosted_control`, never by
+      # the worker. Off and empty unless the operator configures the public
+      # address of the Platform control signer through independent trust config.
+      VALIDATOR_CODING_HOSTED_CONTROL_ENABLED: ${VALIDATOR_CODING_HOSTED_CONTROL_ENABLED:-false}
+      VALIDATOR_CODING_HOSTED_PLATFORM_HOTKEY: ${VALIDATOR_CODING_HOSTED_PLATFORM_HOTKEY:-}
       # The PINNED scorer revision links its identity into the binary, so the
       # only acceptable answer from /v1/capabilities is a binary-derived
       # revision. An environment-asserted revision from this pin means the

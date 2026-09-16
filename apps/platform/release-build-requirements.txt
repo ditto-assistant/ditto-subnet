@@ -1,0 +1,59 @@
+# Hash-pinned build backends for sealed ditto-api releases
+# (infra/ansible/roles/platform_app/files/platform-api-release.py). The release
+# builder installs exactly these wheels with --require-hashes --no-build, then
+# runs `uv sync --frozen --no-dev --no-build-isolation`, so building the project
+# (hatchling + editables), packages/ditto-screening-protocol (hatchling) and the
+# pinned bittensor-pylon-client Git dependency (hatchling + hatch-vcs) resolves
+# nothing from an index. Regenerate in a reviewed change with:
+#   printf 'hatchling\nhatch-vcs\neditables\n' |
+#     uv pip compile --generate-hashes --python-version 3.13 --no-header - \
+#     -o apps/platform/release-build-requirements.txt
+editables==0.6 \
+    --hash=sha256:1163834902381c4613787951c5914800fdf155ae08848a373b8ea5006780977c \
+    --hash=sha256:d70e4698078a1d033e7786d9c64e5be070d058a67c21417024d38a58ac20aa43
+    # via -r -
+hatch-vcs==0.5.0 \
+    --hash=sha256:0395fa126940340215090c344a2bf4e2a77bcbe7daab16f41b37b98c95809ff9 \
+    --hash=sha256:b49677dbdc597460cc22d01b27ab3696f5e16a21ecf2700fb01bc28e1f2a04a7
+    # via -r -
+hatchling==1.32.0 \
+    --hash=sha256:0bdbde4a52b06c37e3eca395f85a762bf0ef06fe374fd8ae429dc6be10230f5f \
+    --hash=sha256:0e17c9c3b9aa7c625acc8d0f5b622f107d5049af9ecf5ada4de1aada5be7cdbc
+    # via
+    #   -r -
+    #   hatch-vcs
+packaging==26.3 \
+    --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
+    --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
+    # via
+    #   hatchling
+    #   setuptools-scm
+    #   vcs-versioning
+pathspec==1.1.1 \
+    --hash=sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a \
+    --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
+    # via hatchling
+pluggy==1.6.0 \
+    --hash=sha256:7dcc130b76258d33b90f61b658791dede3486c3e6bfb003ee5c9bfb396dd22f3 \
+    --hash=sha256:e920276dd6813095e9377c0bc5566d94c932c33b27a3e3945d8389c374dd4746
+    # via hatchling
+setuptools==84.0.0 \
+    --hash=sha256:51a52592b3b99e102b609654876bd65f19f999935166d1352678931132b0c670 \
+    --hash=sha256:f4695c21257f0d9b537ec2692c941d02ee143b7cc1276941349a546573b2ef73
+    # via setuptools-scm
+setuptools-scm==10.2.1 \
+    --hash=sha256:4fa7dd82cf8c800df59c9a288c90299b1657ff1ecfc3f5cc00287c5dbf5e27a9 \
+    --hash=sha256:b7c82f4102d389ee57dc66ccdb4f9b4bca3c40ba83b43f1f63d68ccd72db2580
+    # via hatch-vcs
+tomlkit==0.15.1 \
+    --hash=sha256:177a05aece5a8ca5266fd3c448abb47b8d352f09d477d3ca8332db4d89b24304 \
+    --hash=sha256:e25bbf38843005246210a12982776f27f99cb9be67160e14434d0c0d21ee1e97
+    # via hatchling
+trove-classifiers==2026.6.1.19 \
+    --hash=sha256:ab4c4ec93cc4a4e7815fa759906e05e6bb3f2fbd92ea0f897288c6a43efd15b3 \
+    --hash=sha256:c5132b4b61a829d11cfbd2d72e97f20a45ed6edb95e45c5efdeb5e00836b2745
+    # via hatchling
+vcs-versioning==2.2.3 \
+    --hash=sha256:4f7873af76f5cc24e701608354f376f5eb70b317d663787ace57a7edd7a27506 \
+    --hash=sha256:c21e284aa98c8269996791a19d6173baf953cf9996ef42ec3ebcbdc151e18b9b
+    # via setuptools-scm

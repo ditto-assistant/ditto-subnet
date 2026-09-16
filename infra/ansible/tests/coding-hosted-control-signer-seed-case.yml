@@ -1,0 +1,80 @@
+---
+# One synthetic seed placement driven through the real stat-only guard. Every
+# step that creates or arranges the tree is inside the block, so the `always`
+# cleanup runs however far the case got, and a setup failure is reported as a
+# wrong failed task rather than mistaken for a guard rejection.
+- name: Decide whether {{ seed_case.name }} can run as this user
+  ansible.builtin.set_fact:
+    seed_case_skipped: "{{ (seed_case.skip_as_root | default(false) | bool) and (fixture_is_root | bool) }}"
+
+- name: Skip {{ seed_case.name }} explicitly when running as root
+  ansible.builtin.debug:
+    msg: >-
+      SKIPPED {{ seed_case.name }}: with euid 0 every synthetic tree is owned
+      by root, which the guard always accepts as an ancestor owner, so this
+      case cannot produce a foreign ancestor. Run the fixture as a non-root
+      user (as Infrastructure CI does) to exercise it.
+  when: seed_case_skipped | bool
+
+- name: Run the real stat-only seed guard for {{ seed_case.name }}
+  when: not (seed_case_skipped | bool)
+  block:
+    - name: Create a fresh owner-only synthetic tree for {{ seed_case.name }}
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: coding-hosted-signer-fixture-
+      register: seed_case_root
+
+    - name: Arrange the synthetic tree for {{ seed_case.name }}
+      ansible.builtin.shell: |
+        set -eu
+        umask 077
+        mkdir signer
+        printf '%032d' 0 > signer/seed
+        chmod 0600 signer/seed
+        {{ seed_case.setup }}
+      args:
+        chdir: "{{ seed_case_root.path }}"
+        executable: /bin/sh
+      changed_when: false
+
+    - name: Exercise the seed guard
+      ansible.builtin.import_tasks: ../roles/platform_app/tasks/coding_hosted_signer_seed_stat.yml
+      vars:
+        platform_api_process_user: "{{ seed_case.owner | default(fixture_user) }}"
+        platform_coding_hosted_signer_guard_ancestors: >-
+          {{ ['/'] if seed_case.root_ancestor_only | default(false) else [seed_case_root.path] }}
+        platform_coding_hosted_signer_guard_directory: "{{ seed_case_root.path }}/signer"
+        platform_coding_hosted_signer_guard_seed: "{{ seed_case_root.path }}/signer/seed"
+
+    - name: Record acceptance
+      ansible.builtin.set_fact:
+        seed_case_accepted: true
+        seed_case_failed_task: ""
+  rescue:
+    - name: Record rejection
+      ansible.builtin.set_fact:
+        seed_case_accepted: false
+        seed_case_failed_task: "{{ ansible_failed_task.name }}"
+  always:
+    - name: Remove the synthetic tree
+      ansible.builtin.file:
+        path: "{{ seed_case_root.path }}"
+        state: absent
+      when: seed_case_root.path is defined
+
+- name: Verify the expected guard outcome for {{ seed_case.name }}
+  when: not (seed_case_skipped | bool)
+  vars:
+    expected_guard:
+      ancestor: Require safe hosted-v2 control signer seed ancestors
+      directory: Require the ditto-api-owned 0700 seed directory
+      seed: Require the pre-placed single-link 0600 32-byte seed owned by ditto-api
+  ansible.builtin.assert:
+    that:
+      - seed_case_accepted == seed_case.accept
+      - seed_case.accept or seed_case_failed_task == expected_guard[seed_case.guard]
+    fail_msg: >-
+      {{ seed_case.name }}: accepted={{ seed_case_accepted }},
+      failed_task={{ seed_case_failed_task }}
+    quiet: true

@@ -47,6 +47,13 @@ worker, and it is off unless the validator environment sets both:
 | `VALIDATOR_CODING_HOSTED_CONTROL_ENABLED` | `true` to allow the command |
 | `VALIDATOR_CODING_HOSTED_PLATFORM_HOTKEY` | The trusted Platform control signer address. It is a separate online key, never the offline curator key, and never taken from a command argument. |
 
+`docker-compose.yml` passes both into the `ditto-subnet` container, defaulting
+to `false` and empty. The `validator_stack` Ansible role renders them from
+`validator_stack_coding_hosted_control_enabled` and
+`validator_stack_coding_hosted_platform_hotkey`, and refuses an address that is
+malformed or equal to the validator's own hotkey. Enabling order, rotation and
+revocation are in `infra/docs/coding-hosted-control-signer-v2.md`.
+
 Run it inside the validator container, so the configured hotkey wallet is used
 in place through `load_validator_keypair`. The command touches only the key's
 public address and `sign`. It never reads, prints or exports seed material.
@@ -65,16 +72,14 @@ mismatch, unknown or missing fields, duplicate keys, symlinks, or
 
 ```text
 docker compose run --rm --no-deps \
-  -e VALIDATOR_CODING_HOSTED_CONTROL_ENABLED \
-  -e VALIDATOR_CODING_HOSTED_PLATFORM_HOTKEY \
   -v /var/lib/ditto-validator-hosted-control:/hosted \
   ditto-subnet uv run --no-sync python -m ditto.validator.coding_hosted_control \
   evaluate --validator-hotkey <pinned> \
   --assignment /hosted/assignment.json --assignment-sha256 <digest>
 ```
 
-`docker compose run` passes only the service's declared environment, so both
-variables need `-e` until the service environment declares them. The host
+The `ditto-subnet` service declares both variables, so they come from the
+validator's `.env` (rendered by `validator_stack`); don't pass them with `-e`. The host
 directory is root-owned mode `0700`.
 
 Clocks: requests are backdated 30 s and expire 60 s after signing, keeping the

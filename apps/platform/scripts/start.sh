@@ -40,13 +40,28 @@ uv sync
 
 # Which compose services to run. Named explicitly so profiled (local-only)
 # services still start when requested; a deployed host narrows this to "pylon".
-compose_services="${DITTO_COMPOSE_SERVICES:-postgres minio pylon}"
-echo "==> bringing up infra ($compose_services)"
-# shellcheck disable=SC2086
-docker compose up -d --wait $compose_services
-if printf '%s' " $compose_services " | grep -q ' minio '; then
-  docker compose up -d minio-create-bucket
-fi
+# DITTO_PLATFORM_PYLON_UNIT=ditto-platform-pylon.service (rendered by the
+# platform_app role) means this user has no docker group: Pylon runs from a
+# root-owned unit this user may only restart, exactly as scripts/update.sh does.
+case "${DITTO_PLATFORM_PYLON_UNIT:-}" in
+  "")
+    compose_services="${DITTO_COMPOSE_SERVICES:-postgres minio pylon}"
+    echo "==> bringing up infra ($compose_services)"
+    # shellcheck disable=SC2086
+    docker compose up -d --wait $compose_services
+    if printf '%s' " $compose_services " | grep -q ' minio '; then
+      docker compose up -d minio-create-bucket
+    fi
+    ;;
+  ditto-platform-pylon.service)
+    echo "==> bringing up Pylon through ditto-platform-pylon.service"
+    sudo -n /usr/bin/systemctl restart ditto-platform-pylon.service
+    ;;
+  *)
+    echo "ERROR: DITTO_PLATFORM_PYLON_UNIT must be empty or ditto-platform-pylon.service" >&2
+    exit 1
+    ;;
+esac
 
 echo "==> applying migrations"
 uv run alembic upgrade head
@@ -59,10 +74,15 @@ echo "==> starting API under pm2"
 # checkout. Starting them from here would crash-loop both slots, so this
 # script — like update.sh — starts every app EXCEPT the relay slots; relays
 # are rolled exclusively by deploy-relay-release.sh.
+# With DITTO_PLATFORM_API_SUPERVISOR=systemd, ditto-api runs as the dedicated
+# ditto-api user through ditto-platform-api.service and scripts/update.sh; a pm2
+# copy here would run as this user and contend for the API port.
 non_relay_apps="$(node -e '
+  const systemd = process.env.DITTO_PLATFORM_API_SUPERVISOR === "systemd";
   const names = require("./scripts/ecosystem.config.js").apps
     .map((app) => app.name)
-    .filter((name) => !name.startsWith("ditto-api-relay-"));
+    .filter((name) => !name.startsWith("ditto-api-relay-"))
+    .filter((name) => !(systemd && name === "ditto-api"));
   if (names.length === 0) {
     console.error("ERROR: no non-relay apps found in ecosystem.config.js");
     process.exit(1);
