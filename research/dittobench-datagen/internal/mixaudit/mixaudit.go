@@ -167,6 +167,9 @@ type SeedReport struct {
 // unclassified answer kind, list-item kind, or family so a new family cannot
 // silently land in an unaudited bucket.
 func Audit(artifact gen.DatasetArtifact, runSize string, keepCases bool) (SeedReport, error) {
+	if artifact.BenchVersion >= protocol.BenchVersionV13 {
+		return auditCurrent(artifact, runSize, keepCases)
+	}
 	pairs := map[string]string{}
 	for _, tc := range artifact.ToolCases {
 		for _, p := range tc.PrerequisitePairs {
