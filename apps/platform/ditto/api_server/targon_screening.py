@@ -23,6 +23,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.attestation import expected_netuid
+from ditto.api_server.deferred_source_review import INCONCLUSIVE_REASON_CODE
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
 from ditto.db.models import (
@@ -747,7 +748,10 @@ async def _quarantine(
         and observation.failure_disposition in ("inconclusive", "pass_inconclusive")
     )
     if inconclusive_budget:
-        reason_code = "source-review-inconclusive"
+        # A v13 processing state, not a finding: the deadline finalizer
+        # terminates it as a no-fault review_timed_out once the published
+        # verification window passes (ditto.api_server.review_timeout_finalizer).
+        reason_code = INCONCLUSIVE_REASON_CODE
         public_reason = "Bounded source review was inconclusive; held for review"
     else:
         reason_code = "agentic-source-review-tripwire"

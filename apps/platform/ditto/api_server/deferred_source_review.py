@@ -9,6 +9,10 @@ from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
+from ditto_screening_protocol import (
+    NON_DECISIVE_REASON_CODES,
+    failure_domain_for_reason_code,
+)
 
 if TYPE_CHECKING:
     from ditto.db.queries.scores import LedgerRow
@@ -17,6 +21,11 @@ DEFERRED_REVIEW_KIND = "deferred_source_review"
 DEFERRED_REVIEW_REASON = "Score qualified this submission for deferred source review"
 DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
 INCONCLUSIVE_REASON_CODE = "source-review-inconclusive"
+# A bounded review that ran out of budget is a v13 processing state: the
+# deadline finalizer (``review_timeout_finalizer``) terminates it as a no-fault
+# ``review_timed_out`` with the failure domain below, never as a finding.
+assert INCONCLUSIVE_REASON_CODE in NON_DECISIVE_REASON_CODES
+INCONCLUSIVE_FAILURE_DOMAIN = failure_domain_for_reason_code(INCONCLUSIVE_REASON_CODE)
 TOP_FIVE_SIZE = 5
 
 

@@ -177,7 +177,11 @@ async def test_conflicting_concurrent_resolution_has_one_winner() -> None:
                 return await resolve_copy_review(
                     held_id,
                     AdminCopyReviewResolveRequest(
-                        resolution=action, reason=f"Operator chose {action}"
+                        resolution=action,
+                        reason=f"Operator chose {action}",
+                        # Policy v13 refuses an uncited clear before the
+                        # row lock is ever contended.
+                        evidence_references=["src/baseline.rs:1"],
                     ),
                     None,
                     session,

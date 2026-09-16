@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import get_args
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -41,6 +42,7 @@ from sqlalchemy.types import TIMESTAMP
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto_screening_protocol import FailureDomain, ScreeningDecisionOutcome
 
 # Per-case detail is a JSON blob: JSONB on Postgres (indexable, compact),
 # plain JSON on the SQLite unit-test fallback. The variant keeps one model
@@ -933,6 +935,146 @@ class ScreeningQuarantineResolution(Base):
             "screening_quarantine_resolutions_quarantine_created_idx",
             "quarantine_id",
             "created_at",
+        ),
+    )
+
+
+def _sql_enum(values: tuple[str, ...]) -> str:
+    """Render a Literal's members as a quoted SQL IN-list."""
+    return ", ".join(f"'{value}'" for value in values)
+
+
+class ScreeningDecisionRecord(Base):
+    """Append-only policy v13 decision record for one screening review cycle.
+
+    One row per terminal decision: an operator ``clear`` / ``reject`` written
+    through ``resolve_ath_review``, or the Platform finalizer's no-fault
+    ``review_timed_out``. The shape follows policy-v13.md "Required decision
+    record": exact reason codes, whether a violation was proven, every bound
+    identity, the checks that completed and failed, file:line evidence
+    references, and the retry evidence (failure domain, retry count,
+    independent workers). ``precedent_weight`` is false for every timeout so a
+    capacity outage can never be cited against a miner, sibling or hotkey.
+    """
+
+    __tablename__ = "screening_decision_records"
+
+    decision_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    quarantine_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    review_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_codes: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    violation_proven: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    failure_domain: Mapped[str] = mapped_column(Text, nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    independent_workers: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    identities: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    """submission_uuid, artifact_sha256, image_digest, build_configuration,
+    served_entrypoint, permitted_runtime_configuration, benchmark_version,
+    applied_policy_version, policy_digest, verification_profile_digest."""
+
+    review_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    completed_checks: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    failed_checks: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    opaque_components: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    evidence_references: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    evidence_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    limitations: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    public_reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    supersedes_decision: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    operator_override: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    precedent_weight: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    retry_grant_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """The no-fault ``screening_retry_overrides`` grant a timeout minted."""
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="SET NULL",
+            name="screening_decision_records_attempt_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["quarantine_id"],
+            ["screening_quarantines.quarantine_id"],
+            ondelete="SET NULL",
+            name="screening_decision_records_quarantine_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["review_id"],
+            ["ath_reviews.review_id"],
+            ondelete="SET NULL",
+            name="screening_decision_records_review_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["supersedes_decision"],
+            ["screening_decision_records.decision_id"],
+            ondelete="SET NULL",
+            name="screening_decision_records_supersedes_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["retry_grant_id"],
+            ["screening_retry_overrides.override_id"],
+            ondelete="SET NULL",
+            name="screening_decision_records_retry_grant_fkey",
+        ),
+        # Enumerations derived from the protocol Literals (one source); the
+        # migration carries the frozen snapshot and a test pins them equal.
+        CheckConstraint(
+            f"outcome IN ({_sql_enum(get_args(ScreeningDecisionOutcome))})",
+            name="screening_decision_records_outcome_check",
+        ),
+        CheckConstraint(
+            f"failure_domain IN ({_sql_enum(get_args(FailureDomain))})",
+            name="screening_decision_records_failure_domain_check",
+        ),
+        CheckConstraint(
+            "retry_count >= 0 AND independent_workers >= 0",
+            name="screening_decision_records_retry_evidence_check",
+        ),
+        CheckConstraint(
+            "policy_version > 0",
+            name="screening_decision_records_policy_version_check",
+        ),
+        # A timeout is never a finding: it cannot prove a violation and can
+        # never carry precedent weight.
+        CheckConstraint(
+            "outcome <> 'review_timed_out' OR "
+            "(violation_proven = false AND precedent_weight = false)",
+            name="screening_decision_records_timeout_no_fault_check",
+        ),
+        CheckConstraint(
+            "length(trim(reviewer)) BETWEEN 1 AND 120",
+            name="screening_decision_records_reviewer_check",
+        ),
+        Index(
+            "screening_decision_records_agent_decided_idx",
+            "agent_id",
+            "decided_at",
+            "decision_id",
+        ),
+        Index(
+            "screening_decision_records_outcome_decided_idx",
+            "outcome",
+            "decided_at",
         ),
     )
 

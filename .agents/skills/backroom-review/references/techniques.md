@@ -6,6 +6,11 @@
 - `get_screening_submission` + `get_miner_owner_footprint` for lineage.
 - `get_ath_review` when any hold exists; a pending row whose `agent_status`
   is not `ath_pending_review` is stranded (409 on resolve).
+- `get_screening_decision_record` for the policy-v13 decision history: a
+  `review_timed_out` row is the Platform deadline finalizer's no-fault
+  terminal (V2/V3 failure domain, retry evidence, no-fault retry grant), never
+  a REJECT and never precedent. `resolve_ath_review` clear now requires at
+  least one `file:line` `evidenceReferences` citation.
 - Do not treat a hybrid v10 board row as the v11 artifact you just banned.
 
 ## Search the served path, do not read blind

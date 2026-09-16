@@ -30,7 +30,8 @@ Sha256Hex = Annotated[
     str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-f]{64}$")
 ]
 # ``path:line`` or ``path:line-line`` -- the citation shape every miner-visible
-# reject in the review bar already carries.
+# reject in the review bar already carries, and that policy v13 requires of a
+# clear too (``AdminCopyReviewResolveRequest`` refuses an uncited clear).
 EvidenceReference = Annotated[
     str,
     StringConstraints(

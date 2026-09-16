@@ -54,9 +54,15 @@ from ditto.api_models.screener_policy_activation import (
     ScreenerPolicyActivationView,
 )
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.screening_decision import (
+    activation_ceiling_view,
+    review_capacity_thresholds_view,
+    review_timeout_policy_view,
+)
 from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.review_timeout_finalizer import configured_finalizer_mode
 from ditto.api_server.screener_policy_activation import (
     EffectiveScreenerPolicy,
     resolve_screener_policy_activation,
@@ -175,6 +181,11 @@ def _view(
         latest=_revision_view(latest, now=now) if latest is not None else None,
         revisions=[_revision_view(row, now=now) for row in history],
         fleet=fleet,
+        activation_ceiling=activation_ceiling_view(
+            finalizer_mode=configured_finalizer_mode()
+        ),
+        review_timeout_policy=review_timeout_policy_view(),
+        review_capacity_thresholds=review_capacity_thresholds_view(),
     )
 
 

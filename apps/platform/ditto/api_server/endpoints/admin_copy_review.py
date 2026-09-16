@@ -79,6 +79,7 @@ from ditto.db.queries.scores import (
     LedgerRow,
     list_scores_for_agent,
 )
+from ditto.db.queries.screening_decisions import record_screening_decision
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -232,10 +233,20 @@ def _audit(
                 previous_status=action.evidence.get("previous_status"),
                 artifact_sha256=action.evidence.get("sha256"),
                 score_count=action.evidence.get("score_count"),
+                evidence_references=_string_list(
+                    action.evidence.get("evidence_references")
+                ),
+                reason_codes=_string_list(action.evidence.get("reason_codes")),
             )
             for action in actions or []
         ],
     )
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
 
 
 async def _review_actions(
@@ -1084,9 +1095,43 @@ async def resolve_copy_review(
                 action=canonical,
                 reason=payload.reason,
                 actor=actor,
-                evidence={"previous_status": previous_status},
+                evidence={
+                    "previous_status": previous_status,
+                    "evidence_references": list(payload.evidence_references),
+                    "reason_codes": list(payload.reason_codes),
+                },
                 created_at=review.resolved_at,
             )
+        )
+        # The policy-v13 decision record: an operator clear/reject is one of
+        # the two review outcomes, proven only when the operator says so
+        # through a published reason code, and cited by the file:line
+        # references the request carried.
+        await record_screening_decision(
+            session,
+            agent=agent,
+            outcome=canonical,
+            reason_codes=list(payload.reason_codes),
+            violation_proven=canonical == "reject",
+            failure_domain="artifact" if canonical == "reject" else "none",
+            retry_count=0,
+            independent_workers=0,
+            policy_version=max(
+                1, agent.screening_policy_version, review.original_policy_version
+            ),
+            public_reason=payload.reason,
+            reviewer=actor,
+            decided_at=now,
+            evidence_references=list(payload.evidence_references),
+            completed_checks=["operator-ath-review"],
+            failed_checks=[] if canonical == "clear" else ["operator-ath-review"],
+            limitations=[],
+            review_id=review.review_id,
+            review_scope=str(
+                review.algorithm_provenance.get("review_kind") or "ath_review"
+            ),
+            evidence_type="operator-source-review",
+            precedent_weight=True,
         )
         await session.flush()
     candidate_coldkey, reference_coldkey = await _review_coldkeys(

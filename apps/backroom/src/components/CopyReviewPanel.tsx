@@ -1,6 +1,7 @@
 import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, Gavel, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { EVIDENCE_REFERENCE_PATTERN } from '../lib/admin.schemas'
 import type { AthReviewKind, CopyReviewConsoleItem, CopyReviewGeneration, CopyReviewResolution } from '../lib/admin.schemas'
 import { decideCopyReview, listCopyReviews, openAthReview } from '../server/admin.functions'
 import { CopyReviewSourceDiff } from './CopyReviewSourceDiff'
@@ -147,6 +148,9 @@ export function CopyReviewPanel({
   const [rolloutBenchVersion, setRolloutBenchVersion] = useState(initialRolloutBenchVersion)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [reason, setReason] = useState('')
+  // Policy v13: a clear must cite where in the source it was decided, one
+  // file:line per line. The platform refuses an uncited clear.
+  const [evidenceText, setEvidenceText] = useState('')
   const [resolution, setResolution] = useState<CopyReviewResolution>('clear')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -166,6 +170,15 @@ export function CopyReviewPanel({
     () => items.filter((item) => item.current_comparison.bulk_eligible),
     [items],
   )
+  const evidenceReferences = useMemo(
+    () => evidenceText.split(/\r?\n|,/).map((line) => line.trim()).filter(Boolean),
+    [evidenceText],
+  )
+  const evidenceValid = evidenceReferences.every((ref) => EVIDENCE_REFERENCE_PATTERN.test(ref))
+  const decisionReady =
+    reason.trim().length >= 3 &&
+    evidenceValid &&
+    (resolution !== 'clear' || evidenceReferences.length > 0)
 
   async function refresh(nextGeneration: CopyReviewGeneration = generation) {
     const data = await listFn({ data: { generation: nextGeneration } })
@@ -186,7 +199,12 @@ export function CopyReviewPanel({
     setNotice(null)
     try {
       const result = await decideFn({
-        data: { agentId: selected.agent_id, resolution, reason },
+        data: {
+          agentId: selected.agent_id,
+          resolution,
+          reason,
+          evidenceReferences,
+        },
       })
       setNotice(
         `${result.review.agent_name} was ${
@@ -196,6 +214,7 @@ export function CopyReviewPanel({
         }${result.idempotent ? ' (already recorded)' : ''}.`,
       )
       setReason('')
+      setEvidenceText('')
       await refresh()
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -241,7 +260,17 @@ export function CopyReviewPanel({
     setBulk({ ...progress })
     for (const item of bulkEligible) {
       try {
-        await decideFn({ data: { agentId: item.agent_id, resolution: 'clear', reason } })
+        // A calibrated comparison clear cites the comparison record it rests
+        // on; the platform accepts `anti-copy-comparison:<agent uuid>` as the
+        // evidence reference for that machine-produced decision.
+        await decideFn({
+          data: {
+            agentId: item.agent_id,
+            resolution: 'clear',
+            reason,
+            evidenceReferences: [`anti-copy-comparison:${item.agent_id}`],
+          },
+        })
       } catch (cause) {
         progress.failures.push({
           agentId: item.agent_id,
@@ -675,7 +704,9 @@ export function CopyReviewPanel({
                 <label className="flex items-center gap-2"><input type="radio" name="copy-review-resolution" checked={resolution === 'reject'} onChange={() => setResolution('reject')} />Reject submission</label>
               </div>
               <textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Miner-visible reason recorded with your operator identity (min 3 characters)" rows={2} className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm" />
-              <button type="button" onClick={() => setConfirmation('decision')} disabled={reason.trim().length < 3} className={`rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 ${resolution === 'clear' ? 'bg-[var(--acid-dim)] text-[var(--acid)]' : 'bg-[var(--red-dim)] text-[var(--red)]'}`}>
+              <textarea value={evidenceText} onChange={(event) => setEvidenceText(event.target.value)} aria-label="Evidence references" placeholder={resolution === 'clear' ? 'Evidence references, one file:line per line (required to clear, e.g. src/main.rs:120-131)' : 'Evidence references, one file:line per line (optional for a reject)'} rows={2} className={`w-full rounded-lg border bg-transparent px-3 py-2 font-mono text-xs ${evidenceValid ? 'border-white/10' : 'border-[var(--red)]'}`} />
+              {!evidenceValid ? <p className="text-xs text-[var(--red)]">Each reference must be file:line or file:line-line.</p> : null}
+              <button type="button" onClick={() => setConfirmation('decision')} disabled={!decisionReady} className={`rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 ${resolution === 'clear' ? 'bg-[var(--acid-dim)] text-[var(--acid)]' : 'bg-[var(--red-dim)] text-[var(--red)]'}`}>
                 Preview {resolution}
               </button>
             </fieldset>
@@ -718,6 +749,14 @@ export function CopyReviewPanel({
                 {confirmation === 'hold' ? holdReason : reason}
               </dd>
             </div>
+            {confirmation === 'decision' ? (
+              <div>
+                <dt className="text-[var(--muted)]">Evidence references</dt>
+                <dd className="mt-1 font-mono text-[var(--muted-strong)]">
+                  {evidenceReferences.length > 0 ? evidenceReferences.join(' · ') : 'none cited'}
+                </dd>
+              </div>
+            ) : null}
             {confirmation === 'hold' ? (
               <div>
                 <dt className="text-[var(--muted)]">Concurrency guards</dt>

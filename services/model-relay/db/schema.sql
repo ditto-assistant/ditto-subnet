@@ -3827,6 +3827,47 @@ CREATE TABLE public.screening_attempts (
 
 
 --
+-- Name: screening_decision_records; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_decision_records (
+    decision_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    attempt_id uuid,
+    quarantine_id uuid,
+    review_id uuid,
+    outcome text NOT NULL,
+    reason_codes jsonb NOT NULL,
+    violation_proven boolean NOT NULL,
+    failure_domain text NOT NULL,
+    retry_count integer NOT NULL,
+    independent_workers integer NOT NULL,
+    policy_version integer NOT NULL,
+    identities jsonb NOT NULL,
+    review_scope text,
+    completed_checks jsonb NOT NULL,
+    failed_checks jsonb NOT NULL,
+    opaque_components jsonb NOT NULL,
+    evidence_references jsonb NOT NULL,
+    evidence_type text,
+    limitations jsonb NOT NULL,
+    public_reason text NOT NULL,
+    reviewer text NOT NULL,
+    decided_at timestamp with time zone DEFAULT now() NOT NULL,
+    supersedes_decision uuid,
+    operator_override jsonb,
+    precedent_weight boolean DEFAULT false NOT NULL,
+    retry_grant_id uuid,
+    CONSTRAINT ck_screening_decision_records_screening_decision_record_0306 CHECK ((outcome = ANY (ARRAY['clear'::text, 'reject'::text, 'review_timed_out'::text]))),
+    CONSTRAINT ck_screening_decision_records_screening_decision_record_1f20 CHECK ((failure_domain = ANY (ARRAY['artifact'::text, 'submission'::text, 'platform'::text, 'provider'::text, 'none'::text]))),
+    CONSTRAINT ck_screening_decision_records_screening_decision_record_68e2 CHECK (((outcome <> 'review_timed_out'::text) OR ((violation_proven = false) AND (precedent_weight = false)))),
+    CONSTRAINT ck_screening_decision_records_screening_decision_record_9031 CHECK ((policy_version > 0)),
+    CONSTRAINT ck_screening_decision_records_screening_decision_record_9c85 CHECK (((retry_count >= 0) AND (independent_workers >= 0))),
+    CONSTRAINT ck_screening_decision_records_screening_decision_record_e501 CHECK (((length(TRIM(BOTH FROM reviewer)) >= 1) AND (length(TRIM(BOTH FROM reviewer)) <= 120)))
+);
+
+
+--
 -- Name: screening_disputes; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6054,6 +6095,14 @@ ALTER TABLE ONLY public.screener_shadow_reviews
 
 
 --
+-- Name: screening_decision_records pk_screening_decision_records; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_decision_records
+    ADD CONSTRAINT pk_screening_decision_records PRIMARY KEY (decision_id);
+
+
+--
 -- Name: submission_deposit_address_revisions pk_submission_deposit_address_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7353,6 +7402,20 @@ CREATE UNIQUE INDEX screening_attempts_one_running_idx ON public.screening_attem
 
 
 --
+-- Name: screening_decision_records_agent_decided_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screening_decision_records_agent_decided_idx ON public.screening_decision_records USING btree (agent_id, decided_at, decision_id);
+
+
+--
+-- Name: screening_decision_records_outcome_decided_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screening_decision_records_outcome_decided_idx ON public.screening_decision_records USING btree (outcome, decided_at);
+
+
+--
 -- Name: screening_disputes_status_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8478,6 +8541,14 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 
 --
+-- Name: screening_decision_records fk_screening_decision_records_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_decision_records
+    ADD CONSTRAINT fk_screening_decision_records_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
 -- Name: miner_device_grants miner_device_grants_client_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8667,6 +8738,46 @@ ALTER TABLE ONLY public.screening_attempts
 
 ALTER TABLE ONLY public.screening_attempts
     ADD CONSTRAINT screening_attempts_duplicate_of_fkey FOREIGN KEY (duplicate_of) REFERENCES public.agents(agent_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screening_decision_records screening_decision_records_attempt_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_decision_records
+    ADD CONSTRAINT screening_decision_records_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screening_decision_records screening_decision_records_quarantine_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_decision_records
+    ADD CONSTRAINT screening_decision_records_quarantine_id_fkey FOREIGN KEY (quarantine_id) REFERENCES public.screening_quarantines(quarantine_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screening_decision_records screening_decision_records_retry_grant_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_decision_records
+    ADD CONSTRAINT screening_decision_records_retry_grant_fkey FOREIGN KEY (retry_grant_id) REFERENCES public.screening_retry_overrides(override_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screening_decision_records screening_decision_records_review_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_decision_records
+    ADD CONSTRAINT screening_decision_records_review_id_fkey FOREIGN KEY (review_id) REFERENCES public.ath_reviews(review_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screening_decision_records screening_decision_records_supersedes_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_decision_records
+    ADD CONSTRAINT screening_decision_records_supersedes_fkey FOREIGN KEY (supersedes_decision) REFERENCES public.screening_decision_records(decision_id) ON DELETE SET NULL;
 
 
 --

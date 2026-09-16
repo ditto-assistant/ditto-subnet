@@ -27,6 +27,12 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ditto.api_models.screening_decision import (
+    ActivationCeilingView,
+    ReviewCapacityThresholdsView,
+    ReviewTimeoutPolicyView,
+)
+
 CONFIRMATION = "SCHEDULE SCREENER POLICY ACTIVATION"
 RESTORE_SCORED_CONFIRMATION = "RESTORE SCORED SCREENING SNAPSHOT"
 ADVANCE_SCORED_RESCREEN_CONFIRMATION = "ADVANCE SCORED POLICY RESCREEN"
@@ -111,6 +117,13 @@ class ScreenerPolicyActivationView(BaseModel):
     latest: ScreenerPolicyActivationRevision | None
     revisions: list[ScreenerPolicyActivationRevision]
     fleet: ScreenerFleetPolicyReadinessView | None = None
+    # Why the activation ceiling sits where it does (policy-v13.md
+    # "Activation prerequisites"), and the published treatment a v13
+    # processing state receives at the deadline. Optional so older Platform
+    # builds still parse.
+    activation_ceiling: ActivationCeilingView | None = None
+    review_timeout_policy: ReviewTimeoutPolicyView | None = None
+    review_capacity_thresholds: ReviewCapacityThresholdsView | None = None
 
 
 ScoredRescreenState = Literal["pending", "running", "paused", "terminal"]
