@@ -1,0 +1,25 @@
+---
+# Remove only the native Coding host's two PostgreSQL environment copies. This is
+# a separate protected operation for rollback, or step 3 of the ordered rotation
+# in infra/docs/coding-hosted-postgres-v2.md. Removal is not revocation: the ditto
+# password stays valid, including in retained runtime roots, until it is rotated.
+# It needs no secret: do not export DITTO_CODING_PG_PASSWORD for it.
+# It stops nothing, so stop the worker and every custody instance first.
+#
+# Run it only through the guarded entry point, from a clean checkout of the
+# reviewed revision, with DITTO_CODING_PG_PASSWORD unset (the guard refuses it).
+# The guard builds the enabled flag, confirmation and revision itself and fixes
+# the inventory, --limit and ansible settings. Direct ansible-playbook runs are
+# unsupported; the role refuses one that lacks the guard's marker, which is an
+# accident guard only (see infra/docs/coding-hosted-postgres-v2.md).
+#
+#   GCP_OSLOGIN_USER=… uv run --locked --script infra/scripts/coding-hosted-guarded-run.py \
+#     postgres-environment-remove <reviewed 40-hex revision>
+- name: Remove native Coding PostgreSQL environment copies without stopping a service
+  hosts: role_coding_hosted
+  become: true
+  # Identity comes from the role's registered probe, which extra vars cannot
+  # preset; gathered facts would be replaced by a -e ansible_facts value.
+  gather_facts: false
+  roles:
+    - coding_hosted_postgres_environment_cleanup

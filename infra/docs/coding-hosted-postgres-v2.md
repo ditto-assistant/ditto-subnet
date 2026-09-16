@@ -146,7 +146,7 @@ unset DITTO_CODING_PG_PASSWORD DITTO_CODING_PG_HOST
 ### Guarded entry point
 
 `infra/scripts/coding-hosted-guarded-run.py` is the only supported way to run
-this playbook. Direct `ansible-playbook`
+this playbook and the removal playbook below. Direct `ansible-playbook`
 invocation is unsupported. The script is shared byte for byte with the worker
 credential roles; each operation is a data file under
 `infra/ansible/guarded-runs/` (here `postgres-environment-materialize.json`),
@@ -423,3 +423,266 @@ package and `-e`/`-vvv` arguments are refused before Ansible starts.
 The `role_coding_hosted` group connects through IAP only
 (`group_vars/role_coding_hosted.yml`). Every native host role therefore reaches
 the private address the same way the Platform PostgreSQL VM is reached.
+
+## Removal and rotation
+
+The default-off `coding_hosted_postgres_environment_cleanup` role removes the
+two copies above. Run it only through the guarded entry point described under
+[Guarded entry point](#guarded-entry-point), with the reviewed revision:
+
+```bash
+# From a fresh, clean checkout of the reviewed revision, with no password exported.
+GCP_OSLOGIN_USER=… uv run --locked --script infra/scripts/coding-hosted-guarded-run.py \
+  postgres-environment-remove <reviewed 40-hex revision>
+```
+
+The guard's `postgres-environment-remove.json` spec builds the JSON boolean
+`coding_hosted_postgres_environment_cleanup_enabled: true`, the exact
+confirmation `REMOVE NATIVE CODING POSTGRES ENVIRONMENT` and the revision
+itself, and refuses to run while `DITTO_CODING_PG_PASSWORD` or
+`DITTO_CODING_PG_HOST` is exported. The role needs no secret and never reads
+`DITTO_CODING_PG_PASSWORD`. Direct `ansible-playbook` invocation is unsupported;
+the role's second included task requires the guard's
+`DITTO_CODING_HOSTED_GUARDED_RUN=postgres-environment-remove` marker, which is
+an accident guard only, since anyone able to run `ansible-playbook` can set it.
+
+It unlinks only the two literal file paths. It never removes, creates or
+changes a directory, sibling file, custody key, receipt or evidence record, and
+has no path input, glob or recursion.
+
+The gate and the inputs are frozen once:
+- `tasks/main.yml` renders the `enabled` flag a single time into a `no_log`
+  fact and hands the work to a dynamic `include_tasks`, evaluated once with no
+  loop item in scope. A block-level `when:` is re-evaluated for every task and
+  loop item, so a flag such as `{{ item is defined }}` used to be false for
+  every guard and true inside the removal loops. `--start-at-task` cannot jump
+  into the not-yet-included `tasks/remove.yml` to skip the guards, and starting
+  at the include itself fails on the missing frozen fact.
+- The gate opens only for a real boolean true (`is sameas true`), after
+  `default(false, true)`. The `bool` filter is avoided: on ansible-core 2.21 it
+  prints any non-boolean string it coerces, such as a flag templated to a
+  secret, in a deprecation warning that `no_log` does not suppress.
+- `confirmation` and `source_revision` are frozen once, under `no_log`, with
+  `default(..., true)`, which turns an undefined result, including one produced
+  while reading a secret (for example `{{ {}[lookup('env', …)] }}`), into an
+  empty value that fails validation. Every later task reads only the frozen
+  values. The role never renders an input into a message: every refusal is
+  fixed text, and only the partial-removal failure and the final report render
+  the frozen revision, after the host check has proved it is exactly 40
+  lowercase hex characters, and paths from registered results.
+
+Before removing anything it refuses when:
+- any variable named `coding_hosted_postgres_environment_cleanup_*` other than
+  the `enabled`, `confirmation` and `source_revision` inputs and the frozen gate
+  is set, from extra vars, inventory or vars files. The check lists names
+  without rendering values and runs before any fact is frozen or result
+  registered. Extra vars outrank registered results and facts, so a preset
+  result such as `coding_hosted_postgres_environment_cleanup_units` would
+  otherwise replace the unit listing and disable its guard. Presetting the
+  frozen gate only enables removal, which every guard still decides. The
+  materialization role's `coding_hosted_postgres_environment_*` names never
+  match this prefix, and that role excludes these names in turn. A preset loop
+  `item` is refused too. Every other variable the role reads is a magic variable
+  extra vars cannot override;
+- the machine is not the dedicated Debian 13 x86_64 host
+  `ditto-coding-hosted-v2`, any host in the play is outside `role_coding_hosted`,
+  or the play targets more than the reviewed host. The playbook gathers no
+  facts: identity comes from a registered `setup` probe, because an
+  `ansible_facts` extra var replaces gathered facts. Membership is read from
+  `groups` and `ansible_play_hosts_all`, and the target is pinned with both
+  `ansible_play_hosts_all == ['ditto-coding-hosted-v2']` and
+  `ansible_play_batch == ['ditto-coding-hosted-v2']`, because
+  `inventory_hostname` and `group_names` are host variables an extra var
+  replaces while the play, batch and group lists are not: a labelled rogue VM
+  run without `--limit` is refused, including under `serial: 1`, where the batch
+  alone would be the reviewed host;
+- the enabled flag, re-asserted raw inside the include, is not a boolean true.
+  The frozen gate could be preset while `--start-at-task` skips the freeze, so
+  the include re-checks the raw flag;
+- the source revision is not exactly 40 lowercase hex characters (a trailing
+  newline is refused) or the confirmation differs;
+- any worker or custody unit in the materialization listing has an ACTIVE state
+  other than `inactive` or `failed`. This is an allow-list, so `active`,
+  `activating`, `deactivating`, `reloading`, `refreshing` (systemd 256 and
+  later), `maintenance`, a future state or an unparseable line all refuse. An
+  empty listing means no such unit is loaded and is allowed. The role stops
+  nothing;
+- a reader home or `private` directory is a symlink, not a directory, not owned
+  by its reader, or writable by group or others;
+- a copy path, inspected without following links, is anything except absent
+  or a regular, single-link file owned by its reader. A symlink, directory,
+  hard link or another account's file needs manual reconciliation.
+
+The unlink cannot follow a link or remove a directory. Each reader home and
+`private` directory is created `0700` and owned by its reader (`coding_hosted`,
+`coding_hosted_custody_key` and the materialization role), so the unprivileged
+reader could swap a path component for a symlink after the inspection, and a
+path-based unlink run as root would follow it. The role-local
+`coding_hosted_postgres_environment_unlink` module therefore never resolves the
+path as a string. It opens every component from `/` with `O_NOFOLLOW` and
+`O_DIRECTORY`, re-checks that the home and `private` directory are owned by its
+reader and not group- or other-writable and that the copy is a regular
+single-link file owned by its reader, and removes the entry with `unlinkat`
+relative to the pinned `private` directory. `unlinkat` without `AT_REMOVEDIR`
+cannot remove a directory and never follows a symlink, so a later swap can at
+most remove the reader's own directory entry. Directories above the homes are
+not trusted for this: a swapped ancestor can only lead to a directory the reader
+itself owns.
+
+The unit state is re-checked after the unlink. A unit could start between the
+first listing and the unlink and read a copy mid-removal; if any unit is then no
+longer `inactive` or `failed`, the role fails loudly and does not restore the
+copy.
+
+No task handles the password, and the module's only arguments are a literal
+path and owner, so no module invocation written to the target's journal, and
+nothing `ansible_inject_invocation` returns, can carry it.
+
+It inspects metadata only: no checksum, slurp or fetch. It attempts both
+unlinks; if either fails, it fails with the source revision and the exact paths
+removed and not removed, so a partial removal is never silent. The report's
+`removed=` and the partial-failure message are built from the module's returned
+state, never the pre-unlink stat, so a copy that survived under a parent renamed
+between the inspection and the unlink is never claimed removed; such a vanished
+copy fails the run loudly. It then verifies that both paths are absent. A re-run
+reports both as already absent. `--check` runs the same descriptor checks and
+lists what would be removed.
+
+One residual is accepted for unsupported direct runs only. `default(..., true)`
+neutralises a template that renders undefined, not one that raises. A template
+that raises with a secret in its message, for example
+`{{ lookup('file', lookup('env', 'DITTO_CODING_PG_PASSWORD')) }}` as `enabled`
+or `source_revision`, fails the run closed at the freeze, but ansible-core
+2.21.2 prints the raised message through the task result's `exception` field,
+which `no_log` deliberately preserves, on the console and in any
+`ANSIBLE_LOG_PATH` log. Core Jinja offers no construct that swallows a raised
+lookup or filter error, and there is no way to read a variable without rendering
+it. The guarded entry point closes this for the supported path: it accepts no
+`-e`, builds every extra var itself, refuses `ANSIBLE_LOG_PATH` and every other
+`ANSIBLE_*` override, and refuses an exported password outright. A direct run
+still needs the template written into the operator's own command line or a
+reviewed inventory, with the secret already readable on the controller. The
+rehearsal pins this residual exactly.
+
+Root tests check the role structure and exercise the unlink module directly,
+including a parent swapped for a symlink after pinning and a copy swapped for a
+directory or symlink between inspection and removal. With
+`DITTO_ANSIBLE_REHEARSAL=1` they also run the real role and module through
+ansible-core 2.21.2 against temporary trees, under the repo's `ansible.cfg` and
+`-v --diff`, with a stand-in password exported and planted in the copies. The
+rehearsal covers lazily templated and lookup-based gates and inputs, extra vars
+that preset a result, forge identity, the gate or a loop `item`, an
+`inventory_hostname` and `group_names` forged for a host outside the group,
+`--start-at-task` at the unlink, the copy inspection, a guard and the include,
+any `main.yml` task with the frozen gate and registers preset, a rogue inventory
+host, `-vvv` with `ansible_inject_invocation`, a unit that starts during removal,
+and every refusal above. It searches the console and log for the stand-in in raw, JSON-,
+YAML- and repr-escaped forms and for the SHA-1, MD5 and SHA-256 digests of the
+password and of the copy document. The infra CI Ansible job runs it.
+
+### Removal is not revocation
+
+Removing the two copies does not revoke any credential. The `ditto` password
+stays valid wherever it is held, including retained runtime roots, and the HBA,
+UFW and network rules follow the rollback steps above. Services configured to
+read these copies fail closed until the files are materialized again. Treat a
+suspected exposure of any holder below as a leak of the shared `ditto` role
+password: rotate that password as described below. Running cleanup alone is
+never a leak response.
+
+### Holders of the `ditto` password
+
+On the Coding host, the complete `POSTGRES_*` list, including
+`POSTGRES_PASSWORD`, is held in:
+- `/var/lib/ditto-coding-custody/private/postgres-environment.json`, owned by
+  `ditto-coding-custody`, mode `0600`, read by the custody service through its
+  `postgres_environment_file`;
+- `/var/lib/ditto-coding-hosted/private/postgres-environment.json`, owned by
+  `ditto-coding-hosted`, mode `0600`, read by the hosted runtime through its
+  protected configuration's `postgres_environment_file`;
+- `<runtime_root>/postgres.json` for every hosted runtime invocation, including
+  each attempt of a bounded rollout. `write_worker_config` in
+  `apps/platform/ditto/api_server/coding_hosted_runtime.py` writes it as an
+  exclusive mode-`0600` file owned by `ditto-coding-hosted` for the Go worker's
+  start helper. Runtime roots are retained evidence and reconciliation state:
+  nothing deletes them automatically, including after a failure. This role
+  neither finds nor removes them, and must not be extended to;
+- any other protected configuration whose `postgres_environment_file` names a
+  separate copy, for example one written for the evidence recovery or canary
+  acceptance commands. This role does not find those either;
+- `~/.ansible/tmp/ansible-tmp-*` of the ssh user, only for a materialization
+  run made without pipelining or with `keep_remote_files` on, which uploads the
+  module and its password argument there and can leave it behind on an
+  interrupted connection. The materialization role now refuses both before the
+  password is read, and the playbook enables pipelining, so a current run writes
+  nothing there; check for leftovers from older or modified runs. This role does
+  not remove them.
+
+While services run, the Go worker also passes the entries to the Python start
+helper as process environment, and each running Platform process holds the
+password in memory. Stopping the services ends both.
+
+Outside the Coding host:
+- the GitHub Actions secret `PLATFORM_DB_PASSWORD` in the `infra-plan`
+  environment. `.github/workflows/infra-plan-apply.yml` passes it to the
+  `gcp-platform` plan as `TF_VAR_db_password`;
+- the Secret Manager secret `platform-db-password`, whose version
+  `infra/terraform/stacks/gcp-platform` writes from `var.db_password`. The value
+  is also stored in that root's Terraform state
+  (`gs://ditto-app-dev-tfstate/gcp-platform`) and in each sealed plan under
+  `gs://ditto-app-dev-tfstate/ci-plans/gcp-platform/` until apply removes it. A
+  plan that is never applied stays there;
+- the Platform PostgreSQL VM: the `ditto` role, which serves both
+  `ditto_platform_dev` and `ditto_platform_prod`, and
+  `/opt/ditto/secrets/postgres-ditto.password` (`postgres:postgres`, `0640`),
+  both set by `gcp-platform-pg.yml` and `roles/postgres`. A converge without
+  `DITTO_PG_PASSWORD` keeps the existing password; exporting a new value there
+  changes it;
+- each Platform app VM's `apps/platform/.env` (`POSTGRES_PASSWORD`), which
+  `roles/platform_app` renders from `platform-db-password` for both Platform
+  environments;
+- an operator controller, only while `TF_VAR_db_password`, `DITTO_PG_PASSWORD`
+  or `DITTO_CODING_PG_PASSWORD` is exported for a protected run.
+
+### Rotation
+
+The cleanup role does not rotate the shared `ditto` PostgreSQL role password.
+Rotation is this ordered procedure, and it is not complete without step 2:
+steps 3 to 5 alone only replace two files with the same, still-valid password.
+
+1. **Stop.** Stop the Coding worker and every custody instance through their
+   own reviewed procedure, after reconciling unfinished attempts and evidence.
+   Nothing here stops or starts them. The cleanup listing must show only
+   `inactive` or `failed` units.
+2. **Rotate the `ditto` password.** This is a separate protected change that
+   is not implemented here. It must move every off-host holder above to one
+   new value: the `PLATFORM_DB_PASSWORD` GitHub secret; `platform-db-password`
+   through a reviewed `gcp-platform` plan and apply; the PostgreSQL role and
+   protected password file through `gcp-platform-pg.yml` with the new
+   `DITTO_PG_PASSWORD`; and the Platform app `.env` for both environments
+   through `gcp-platform-app.yml`, followed by a reviewed app restart.
+   Platform impact: once the role password changes, new database connections
+   from both the dev and prod Platform APIs fail until their `.env` is
+   re-rendered and the apps restart. Existing sessions stay authenticated.
+   Schedule it as a maintenance window for both environments. Its own
+   verification must show that the previous password no longer authenticates.
+3. **Clean up.** Run the guarded `postgres-environment-remove` operation with
+   the reviewed source revision, without exporting any password (the guard
+   refuses one).
+4. **Re-materialize.** Export the new value from `platform-db-password` only in
+   the controller environment as `DITTO_CODING_PG_PASSWORD`, with
+   `DITTO_CODING_PG_HOST`, run the guarded `postgres-environment-materialize`
+   operation and unset both.
+5. **Verify.** Before starting anything, confirm that the materialization's
+   owner, mode and digest checks passed, that the cleanup report names the
+   reviewed source revision, that both Platform APIs connect, and that a
+   bounded native-service database query from the Coding host succeeds with
+   the new copies. Then start services through their own
+   reviewed procedure.
+
+Runtime roots written before step 2 still contain the previous password. After
+step 2 it no longer authenticates, but the files stay retained evidence. Decide
+their retention or disposal as a separate evidence change, never through this
+role.
+
+No automated database password rotation exists for this path.

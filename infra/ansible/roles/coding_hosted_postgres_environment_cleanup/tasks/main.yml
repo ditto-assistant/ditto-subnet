@@ -1,0 +1,31 @@
+---
+# The gate is decided exactly once, here, and never again. Operator inputs are
+# templates that ansible-core renders on every reference, and a block-level
+# when: is re-evaluated for each task and loop item, so a flag such as
+# '{{ item is defined }}' was false for every guard and true inside the removal
+# loops. Freezing it into a fact renders it a single time with no loop item in
+# scope:
+#   * default(false, true) turns an undefined result, including one produced
+#     while reading a secret, into false;
+#   * 'is sameas true' opens the gate only for a real boolean true. The bool
+#     filter is avoided deliberately: on ansible-core 2.21 it prints any
+#     non-boolean string it coerces in a deprecation warning, even under no_log;
+#   * no_log keeps whatever the flag rendered to off the wire.
+- name: Freeze the removal gate once, neutralising templates and loops
+  ansible.builtin.set_fact:
+    coding_hosted_postgres_environment_cleanup_frozen_enabled: "{{ (coding_hosted_postgres_environment_cleanup_enabled | default(false, true)) is sameas true }}"
+  no_log: true
+
+# include_tasks is a dynamic include, so its when: is evaluated a single time,
+# and --start-at-task cannot jump into remove.yml, which the runtime has not yet
+# included, to skip the guards and reach the unlink. Starting at this task
+# skips the freeze and fails on the undefined fact. The frozen value is
+# compared with sameas, which always yields a plain boolean and prints nothing.
+- name: Remove the native PostgreSQL environment copies only when explicitly enabled
+  ansible.builtin.include_tasks: remove.yml
+  when: coding_hosted_postgres_environment_cleanup_frozen_enabled is sameas true
+
+- name: Explain dormant native PostgreSQL environment removal
+  ansible.builtin.debug:
+    msg: Native Coding PostgreSQL environment removal is disabled; no credential file is removed.
+  when: not (coding_hosted_postgres_environment_cleanup_frozen_enabled is sameas true)
