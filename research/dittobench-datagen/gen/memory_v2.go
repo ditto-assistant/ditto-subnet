@@ -687,7 +687,17 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 	}
 	var v10Programs []universe.V10GeneratedCase
 	if v10Count > 0 {
-		if benchVersion >= protocol.BenchVersionV12 {
+		if benchVersion >= protocol.BenchVersionV13 {
+			// v13 keeps the whole v12 program contract and repairs the two
+			// v12 answerability defects: the closing sentence now asks for the
+			// decimal amount the grader actually accepts, and the causal
+			// counterfactual is filed on its own named docket so the question's
+			// relational selector resolves to exactly one record set.
+			v10Programs, err = universe.GenerateV13Programs(seed, v10Count)
+			if err != nil {
+				return MemorySuite{}, fmt.Errorf("v13 open programs: %w", err)
+			}
+		} else if benchVersion >= protocol.BenchVersionV12 {
 			// The v12 contract keeps the v11 program semantics but carries every
 			// amount in shuffled prose (no positionally-bindable KV ledger),
 			// binds the subject relationally for every group, and removes the

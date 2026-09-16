@@ -267,6 +267,19 @@ func v12OperationClause(seed int64, group int, shape v11ProgramShape, schema v11
 // counterfactual), like the v10/v11 contracts. Count must be a positive
 // multiple of four.
 func GenerateV12Programs(seed int64, count int) ([]V10GeneratedCase, error) {
+	return generateV12FamilyPrograms(seed, count, protocol.BenchVersionV12)
+}
+
+// GenerateV13Programs is GenerateV12Programs under the v13 contract. The
+// scenario draw, program shapes, schema labels, renderer classes, record
+// shuffle and metamorphic-group structure are bit-for-bit the v12 ones; v13
+// changes only the two answerability defects the v12 surface carries. See
+// v13_contract.go.
+func GenerateV13Programs(seed int64, count int) ([]V10GeneratedCase, error) {
+	return generateV12FamilyPrograms(seed, count, protocol.BenchVersionV13)
+}
+
+func generateV12FamilyPrograms(seed int64, count int, benchVersion int) ([]V10GeneratedCase, error) {
 	if count <= 0 || count%4 != 0 {
 		return nil, fmt.Errorf("v12 program count must be a positive multiple of four, got %d", count)
 	}
@@ -353,7 +366,7 @@ func GenerateV12Programs(seed int64, count int) ([]V10GeneratedCase, error) {
 		}
 		for variant, spec := range variants {
 			renderer := v10Renderers[(group+variant)%len(v10Renderers)]
-			generated, err := materializeV12Case(seed, group, variant, groupID, schemaDigest, ontology, schema, shape, renderer, spec.scenario, spec.relation, spec.answer, spec.distract)
+			generated, err := materializeV12Case(seed, group, variant, groupID, schemaDigest, ontology, schema, shape, renderer, spec.scenario, spec.relation, spec.answer, spec.distract, benchVersion)
 			if err != nil {
 				return nil, err
 			}
@@ -377,6 +390,7 @@ func materializeV12Case(
 	relation string,
 	answerRelation string,
 	includeDistractor bool,
+	benchVersion int,
 ) (V10GeneratedCase, error) {
 	prefix := fmt.Sprintf("v12-%d-%d", group, variant)
 	pairIDs := []string{
@@ -387,7 +401,8 @@ func materializeV12Case(
 		protocol.OpaqueCaseID(seed, prefix+"-state-b", 0),
 		protocol.OpaqueCaseID(seed, prefix+"-state-c", 0),
 	}
-	pairs := renderV12Scenario(seed, group, renderer, schema, shape, scenario, pairIDs, includeDistractor)
+	docket := v13DocketFor(relation)
+	pairs := renderV12Scenario(seed, group, renderer, schema, shape, scenario, pairIDs, includeDistractor, benchVersion, docket)
 	answer := v11Answer(shape, scenario)
 	if answer <= 0 {
 		return V10GeneratedCase{}, fmt.Errorf("v12 group %d shape %d produced non-positive answer %d", group, shape, answer)
@@ -397,11 +412,16 @@ func materializeV12Case(
 	// by a relational role resolved through the glossary — never by its alias
 	// and never by a value printed in the records.
 	subject := v12Pick(seed, fmt.Sprintf("subj-%d", group), v12SubjectForms)
+	if benchVersion >= protocol.BenchVersionV13 {
+		// Defect 2: disambiguate which of the group's two record sets the
+		// question selects (see v13_contract.go).
+		subject += v13DocketQualifiers[docket]
+	}
 
 	opClause := v12OperationClause(seed, group, shape, schema, subject)
 	question := v12Pick(seed, fmt.Sprintf("qopen-%d-%d", group, variant), v12QuestionOpeners) +
 		" " + strings.ToUpper(opClause[:1]) + opClause[1:] + ". " +
-		fmt.Sprintf(v12Pick(seed, fmt.Sprintf("qunit-%d-%d", group, variant), v12UnitFrames), scenario.base.Unit)
+		v13UnitFrame(seed, group, variant, scenario.base.Unit, benchVersion)
 
 	// Distractors: plant the plain-subtract result (draft-paid), the v10/v11
 	// formula (approved-paid), the raw approved figure, and the unrelated decoy.
@@ -411,7 +431,7 @@ func materializeV12Case(
 
 	caseID := protocol.OpaqueCaseID(seed, "v12-program-case", group*4+variant)
 	caseValue := protocol.MemoryCase{
-		BenchVersion:      protocol.BenchVersionV12,
+		BenchVersion:      benchVersion,
 		ID:                caseID,
 		QuestionID:        caseID,
 		QuestionType:      "v12-open-program",
@@ -441,7 +461,7 @@ func materializeV12Case(
 		},
 	}
 	provenance := V10CaseProvenance{
-		Revision:         V12ProvenanceRevision,
+		Revision:         v12FamilyProvenanceRevision(benchVersion),
 		SchemaSHA256:     schemaDigest,
 		Ontology:         append([]V10OntologyTerm(nil), ontology...),
 		Program:          v11Program(shape, schema),
@@ -479,13 +499,18 @@ func v12Distractors(answer int, scenario v11Scenario) []string {
 // clauses — are emitted in a seeded permutation so no role is bindable by row
 // position. No record carries a `label=amount` pair; the only `=` binds the
 // entity to its alias.
-func renderV12Scenario(seed int64, group int, renderer V10Renderer, schema v11Schema, shape v11ProgramShape, scenario v11Scenario, pairIDs []string, includeDistractor bool) []protocol.MemoryPair {
+func renderV12Scenario(seed int64, group int, renderer V10Renderer, schema v11Schema, shape v11ProgramShape, scenario v11Scenario, pairIDs []string, includeDistractor bool, benchVersion int, docket int) []protocol.MemoryPair {
 	b := schema.base
 	glossary := v11Glossary(seed, group, schema)
 	alias := scenario.base.Alias
 	unit := scenario.base.Unit
 
 	binding := fmt.Sprintf("%s=%s; %s=%s", b.Entity, alias, b.Alias, alias)
+	if benchVersion >= protocol.BenchVersionV13 {
+		// Defect 2: state which docket this record set belongs to, so the
+		// question's relational selector resolves to exactly one of them.
+		binding += " " + v13DocketMarkers[docket]
+	}
 	if includeDistractor {
 		// The unrelated workstream carries only an approved figure and NO settled
 		// payment, so the relational subject descriptor still resolves uniquely.

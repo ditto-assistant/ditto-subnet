@@ -536,8 +536,58 @@ extends it when its lever lands.
   visible in the probe output and a v13 family regression cannot hide behind
   the classification.
 - `TestV13KnownVector` is a **placeholder** pin (seed `123456789`, full):
-  `b9bfb611f4509599fb6c79579114244178ca09077737a0313b6db9c5b6f1966c`. It is
-  re-pinned when the envelope lands, after the `/seed` label-leak fix.
+  `f6d65b1b2e0560eb01b0b9b5bf855c46cf6f560b1a6fcb9cb3675ba25691c8fd`. It is
+  re-pinned when the envelope lands, after the `/seed` label-leak fix. It last
+  moved for the open-program correctness fix below; the v2..v12 vectors did not
+  move with it.
+
+#### v13 open-program correctness (`universe/v13_contract.go`)
+
+v13 inherits the v12 open-program contract unchanged — same scenario draw, same
+four program shapes, same per-seed schema labels, same renderer classes, same
+shuffled prose records, same distractors, same metamorphic groups, produced by
+the same code path — and repairs two v12 defects that cost a CORRECT reader
+points for reasons unrelated to memory:
+
+1. **The instructed answer was the one the grader rejects.** Every v12 open
+   program closes by asking for the result "as minor units", which is the
+   internal representation the expected answer is stored in. `grade.moneyHit`
+   deliberately accepts the decimal renderings of a currency amount and
+   *intentionally rejects* a bare integer equal to the minor-unit value. A
+   reader that followed the instruction exactly scored 0. v13 asks for a decimal
+   amount in the currency's major unit, to two places. The stored expected
+   answer is still the minor-unit integer, so nothing downstream changed.
+2. **The counterfactual selector named two record sets.** A metamorphic group
+   renders the base scenario (three variants) and its causal counterfactual —
+   different operands, deliberately different graded answer — into the same
+   haystack, both carrying a settled payment under the same schema labels, and
+   all four variants selected the subject with the same relational descriptor.
+   v13 files each record set on a named docket (original / reissued), states it
+   in the binding record, and has the question name the docket it wants. No
+   alias is echoed and no printed amount is looked up, so v12 Gap 3 is intact.
+
+Both are gated on `benchVersion`, so v10/v11/v12 bytes are untouched;
+`TestV13ProgramsRegenerateExactlyAndKeepV12Frozen` and
+`TestV13DatasetKeepsV11AndV12Bytes` pin that, and
+`TestV12OpenProgramInstructsAnAnswerItsOwnGraderRejects` /
+`TestV12CounterfactualSelectorIsAmbiguous` pin the defects so the repair cannot
+be reverted silently. v13 programs carry `V13ProvenanceRevision`.
+
+Scorer side, `scorer.memoryWriteCategory` repairs a third defect in the same
+family: `MemoryOverCallFactor` excluded `gen.QTLifecycleWrite` from the over-call
+numerator and denominator because a memory write is that category's own work —
+but `QTLifecycleWrite` is unreachable from v8 on (the lifecycle suite is not
+built, the cross-user lifecycle probe is gated `< V8`, and
+`removeV8LegacyWriteCases` strips the residue), while the live category with the
+same property, `gen.QTDeclarativeAck`, was counted. A harness that saved a value
+the user had just stated was charged the bounded penalty for doing the case's own
+work. The exemption is added **at v13 only**: widening it to v8..v12 would give
+one dataset+transcript two different scores depending on when it was scored,
+which the frozen-contract rule forbids. Whether to repair v8..v12
+retrospectively is a separate fairness/backfill decision and a rescore; making
+it is a one-line change to the version bound in `memoryWriteCategory`, pinned by
+`TestMemoryWriteCategoryScope`. `gen.TestLifecycleWriteCategoryUnreachableFromV8`
+proves the unreachability the old exclusion assumed.
 
 Scorer side: `scoregates.SupportedBenchVersion` accepts v13 (inheriting the v12
 gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
