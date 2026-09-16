@@ -234,6 +234,21 @@ async def issue_benchmark_canary(
             is not None
         ):
             raise HTTPException(409, "another canary is already in flight")
+        # Match normal dispatch's lock order: provider gate -> slot -> agent.
+        # Taking the provider lock after a slot can deadlock a concurrent poll
+        # that already holds the gate and is waiting for that same slot.
+        gate = await lock_provider_work_gate(
+            session,
+            now=now,
+            kind="scoring",
+            key=scoring_probe_key(
+                validator_hotkey=payload.validator_hotkey, slot_id=payload.slot_id
+            ),
+        )
+        if not gate.admitted or (
+            gate.circuit is not None and gate.circuit.state == "open"
+        ):
+            raise HTTPException(409, "provider work gate is not healthy")
         await lock_validator_slot(
             session, validator_hotkey=payload.validator_hotkey, slot_id=payload.slot_id
         )
@@ -330,18 +345,6 @@ async def issue_benchmark_canary(
             raise HTTPException(
                 409, "agent is not an eligible immutable screened canary target"
             )
-        gate = await lock_provider_work_gate(
-            session,
-            now=now,
-            kind="scoring",
-            key=scoring_probe_key(
-                validator_hotkey=payload.validator_hotkey, slot_id=payload.slot_id
-            ),
-        )
-        if not gate.admitted or (
-            gate.circuit is not None and gate.circuit.state == "open"
-        ):
-            raise HTTPException(409, "provider work gate is not healthy")
         seed = derive_validator_seed(
             agent.dataset_seed_block_hash, agent.agent_id, payload.validator_hotkey
         )

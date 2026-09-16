@@ -163,6 +163,25 @@ async def test_wrong_report_pin_cannot_finish(
         assert await counts(session) == (3, 0)
 
 
+async def test_issue_uses_dispatch_lock_order(client, ready, monkeypatch):
+    calls = []
+    gate = admin_benchmark_canary.lock_provider_work_gate
+    slot = admin_benchmark_canary.lock_validator_slot
+
+    async def record_gate(*args, **kwargs):
+        calls.append("provider")
+        return await gate(*args, **kwargs)
+
+    async def record_slot(*args, **kwargs):
+        calls.append("slot")
+        return await slot(*args, **kwargs)
+
+    monkeypatch.setattr(admin_benchmark_canary, "lock_provider_work_gate", record_gate)
+    monkeypatch.setattr(admin_benchmark_canary, "lock_validator_slot", record_slot)
+    await issue(client, ready)
+    assert calls == ["provider", "slot"]
+
+
 async def counts(session):
     return tuple(
         [
