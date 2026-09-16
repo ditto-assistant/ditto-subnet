@@ -548,6 +548,16 @@ gate stack) and `efficiency.ProductionReadyForVersion` treats v13 as
 technically ready; the runtime's advertised `supported_bench_versions` does
 **not** include 13 until the last v13 PR.
 
+### Case families (#1520, #1836, #1837, #1838)
+
+The four opt-in case-family generators — semantic business-event programs,
+personal-life programs, family compiler v2, and the injection tail — are
+documented in [v13-case-families.md](v13-case-families.md). Every case they
+emit is stamped `bench_version 13` and carries grader-only `Claims` (exactly
+one `Critical` claim at weight 1, or partial-weight non-critical claims summing
+to 1); none is wired into the suite budget until the envelope PR, so the
+placeholder known vector above is untouched by them.
+
 ### Surface levers (#1828 grammars + typo v2, #1832 salted surface pass)
 
 v13 keeps every v12 program semantic, oracle, run size, grader rule and the v9
@@ -819,6 +829,125 @@ by the #1521 calibration PR against real cleared agents and synthetic S/N
 carriers, not by CI alone. Activation is a separate owner gate after shadow
 calibration: `CurrentBenchVersion` stays v8, the runtime advertises v13 only
 when the contract is complete, and Platform rollout state activates it.
+## Bench v13 grader (typed claims, requested-unit quantities, multilingual-safe)
+
+The v13 grader is reachable only through
+`gradingPolicyForVersion(v >= 13)` (`grade/v13.go`);
+every v2..v12 grading function is untouched and
+`TestV2ThroughV12RegradeGolden` pins the v9..v12 verdict bytes over a fixture
+corpus that exercises exactly the rules v13 changes. Generation already admits
+v13, but runtime advertisement and live activation remain separate gates.
+Generator-owned `Claims` are authoritative when present: the grader scores
+each typed claim, applies its weight (zero means one equal-share unit), and
+requires every critical claim. Unknown claim kinds and invalid weights fail
+closed. Cases without claim sets retain the v13 scalar/list policy.
+
+The v13 memory grading order: observed bait call -> empty -> case language
+without a lexicon (fail closed) -> question echo (persistence, reversal,
+acknowledge, clarify, and the declarative-acknowledgement case) -> forbidden
+value (injection/canary refuse-and-answer excusal unchanged; isolation never
+excused) -> answer dump -> abstain on an answerable kind -> the **typed claim
+matcher** over the reply's *asserted* candidates -> partial credit for list
+claims.
+
+- **Asserted vs. cited.** The claim engine (`grade/v13_claims.go`) segments
+  `final_text` structurally: a span opened by a rejection connective ("not",
+  "rather than", "isn't") is *cited*, not claimed; a clause with a strong past
+  marker ("used to", "previously", "I first thought") is *superseded*; a
+  weak-past clause ("was") is superseded only when another clause asserts a
+  current value; a sentence opened by a correction marker ("Actually, ...")
+  rejects the one before it; an interrogative or echo clause asserts nothing.
+  "Lisbon, not Oslo", "I first thought Oslo, but it is Lisbon", "was X, now Y",
+  and "You live in Oslo. Actually, your home is Lisbon." all assert one value.
+- **Claim-scoped distractor scan.** A distractor zeroes the case only when it is
+  *asserted*: in the structured slot, or in the answer clause(s). With a slot
+  populated the scope is the slot plus every sentence that asserts a
+  slot-equivalent value (the v12 rationale — shown reasoning in another
+  sentence is protected — is retained). Without a slot, every asserted clause
+  is in scope.
+- **Stuffing quantifier.** More than two distinct asserted candidates for one
+  scalar claim -> 0 (candidate stuffing); two -> 0 (inconsistent assertions).
+  Within a sentence, cue-positioned values ("= 3800", "leaves $3,800", "$3,800
+  remaining", "the balance is") are the claim; an enumeration ("3800 or 4200",
+  "maybe X") asserts everything it lists; a lone value is asserted; a
+  multi-value sentence with neither cue nor enumeration is exposition and
+  asserts nothing. Temporal qualification counts once, as the current value.
+  Two refinements keep natural concise answers out of the exposition rule: a
+  calendar-year token (1900..2100) beside a count or amount is a qualifier, not
+  a candidate, unless the case's own expected or distractor value is year-like
+  ("You took 3 trips in 2026" asserts 3; "In 2026 you saved $3,800" asserts
+  one amount), and an uncued bare integer beside an explicitly marked amount is
+  exposition ("$3,800 across 4 trips"). A colon that closes a clause cues the
+  value after it ("$5,000 minus $1,200: $3,800"), and verb-object counts
+  ("took 3", "booked 3") are weak claim cues.
+- **Quantities in the requested unit.** `AnswerMoney` reads a bare integer in
+  the unit the question asked for (`MemoryCase.AnswerUnit`, inferred from
+  "minor unit(s)" / "cents" in the public question when unset): expected
+  `411067` USD cents accepts `411067`, `411,067 cents`, `$4,110.67`,
+  `USD 4,110.67`, `4.110,67`, `4 110,67`, fullwidth digits; rejects `$411,067`,
+  off-by-one values, a different explicit currency (`AnswerCurrency`, inferred
+  from the question), and ambiguous fractions. The v12 minor-unit inversion
+  (`411067` -> 0, `$4,110.67` -> 1 on a minor-unit question) is frozen at v12.
+- **Slot tie-break.** The prose is graded; a populated slot is one asserted
+  candidate whose value must be *equivalent* to a value asserted in
+  `final_text` (typed equivalence, never string containment; a canonical
+  minor-unit slot beside `$4,110.67` is one candidate). `slot_not_in_prose`
+  zeroes a slot that alone would pass but has no equivalent asserted in the
+  prose; an empty `final_text` grades the slot alone.
+- **Three-valued direction.** `increase | decrease | unchanged` with a reviewed
+  synonym closure including the questions' own vocabulary (raise/lower,
+  gaining/losing, up/down, climbed/shrank, net gain/net loss), negation windows,
+  and "neither ... nor" -> unchanged. `directionHit` is unchanged for v <= 12.
+- **New kinds.** `AnswerDate` (ISO expected value at day/month/year
+  granularity; any unambiguous rendering at that granularity passes, including
+  "March 4", "the 4th", and question-language month names; ambiguous
+  `04/03/2026` never matches), `AnswerAbsence` (a decline **plus** a grounding
+  claim citing a `GroundingTokens` value; generic refusal and templated
+  grounding naming an absent entity score 0; the tempting value cited as
+  insufficient evidence is excused, asserted as the answer it is not),
+  `AnswerClarify` (a clarifying question that names a `SlotLexicon` entry;
+  "what would you like?" scores 0). The declarative-acknowledgement case scores
+  **0.25** for a canned acknowledgement without the stated value — below the
+  scorer's 0.5 correctness line, so "Got it." alone no longer clears the
+  declarative sanity slice.
+- **Unicode and reply language.** `foldV13` is a stdlib-only NFKC-style
+  compatibility fold (fullwidth forms, Unicode spaces, ligatures,
+  super/subscript digits, typographic quotes) plus Unicode case folding
+  (ß -> ss), with rune-based boundaries; diacritics are preserved so graded
+  values stay canonical. A case carries `MemoryCase.Language`; the grader
+  accepts the answer in that language or English through the lexicons in
+  `internal/multilingual` (es, pt, fr, it, de, nl: decline, acknowledgement,
+  direction, number words, months, minor-unit words, and the claim-structure
+  markers) and **fails closed** (score 0 with a note) for a language it holds
+  no lexicon for. Translation itself is the private surface pass
+  (`multilingual.TranslationPass`, stubbed; `multilingual.Config` draws the
+  seed-scoped language with `Fraction` 0 by default for v13.0), and
+  `ValuesStayCanonical` is the value-protection rule it must satisfy.
+- **Notes never quote hidden values.** Grader notes name the matched, missing,
+  or contradictory claim by kind.
+
+The public grader audit is versioned per grading-policy floor:
+
+```sh
+go run ./cmd/graderaudit -bench-version 13 -seeds 40 -run-size full
+go run ./cmd/graderaudit -release-gate
+```
+
+`cmd/graderaudit` resolves the bank for a version's policy floor (`v9-2` for
+v9..v11, `v12-1` for v12, `v13-1` in `grade/audit_v13_bank.go` for v13) and the
+release gate fails closed when a supported version or a grading-policy floor
+owns no bank. Until the v13 generation contract lands, the generated-corpus
+gate regrades the newest generatable corpus under the v13 policy and reports
+`corpus_bench_version`; it adds a **per-claim-kind** gate (public-question-only
+passable share strictly below 5% for every non-interaction kind). On the pinned
+40-seed full run the v12 corpus (the newest generatable version, reported as
+`corpus_bench_version: 12`) regraded at v13 has 0 passable value, list, money,
+and number cases (v9's 120 passable declarative acknowledgements are gone), the
+v13-1 bank's 59 hard negatives all score 0, and its 54 reviewed positives all
+score. `datagen-ci.yml` runs `-release-gate` on every datagen pull request;
+`TestReleaseGateCoversEverySupportedVersionAndPolicyFloor` runs the same check
+under `go test ./...` in the release workflow's datagen gate. The GIH transcript negative (answer present, derivation absent from
+completions) needs completion spans and lands with the provenance gate.
 
 ## Auditing an old score
 

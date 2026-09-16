@@ -151,7 +151,10 @@ than keeping their own copies.
   JSONL transcript dump it emits a labeling sheet of every memory case that
   survived the disqualifying scans but failed the typed answer check, plus
   per-answer-kind counts, so the grader's measured false-negative rate can be
-  published per bench version.
+  published per bench version. `-bench-version N -seeds 40` runs the public
+  generated-corpus and per-policy-floor robustness banks (`v9-2`, `v12-1`,
+  `v13-1`); `-release-gate` fails closed when a supported version or grading
+  policy floor owns no bank.
 
 - `cmd/gstudy`: the offline reliability analyzer. Given a JSONL of scored runs
   it reports a G-study variance decomposition (seed vs. item vs. residual) and

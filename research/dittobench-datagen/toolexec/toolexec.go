@@ -705,6 +705,20 @@ func (s *Server) Observed(caseID string) []protocol.ObservedToolCall {
 	return out
 }
 
+// ObservedAction reports whether the harness executed the named tool for a
+// case, returning the first such call. It is the mock-side observation a
+// memory case's forbidden action (MemoryCase.BaitTool) is graded on: the call
+// reached the validator's endpoint, so it cannot be scrubbed from the harness
+// text. Name matching is case-insensitive like the grader's bait check.
+func (s *Server) ObservedAction(caseID, name string) (protocol.ObservedToolCall, bool) {
+	for _, call := range s.Observed(caseID) {
+		if strings.EqualFold(strings.TrimSpace(call.Name), name) {
+			return call, true
+		}
+	}
+	return protocol.ObservedToolCall{}, false
+}
+
 // maxToolBody caps a tool-exec request body (args are tiny).
 const maxToolBody = 64 << 10
 

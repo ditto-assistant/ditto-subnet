@@ -138,6 +138,16 @@ import (
 // The deterministic grader, run sizes, inference boundary, LongMemEval
 // deep-history floors, and the v9 signed-evidence/score-gate/curve-v3
 // efficiency stack all carry forward unchanged.
+//
+// v13 is the TYPED-CLAIM GRADER release (docs/bench-versions.md "Bench v13
+// grader"): quantities graded in the unit the question requested, claim-scoped
+// forbidden/distractor scans with a cited-and-rejected excusal, a stuffing
+// quantifier, three-valued direction, date claims, grounded abstention and
+// clarification kinds, and Unicode/multilingual-safe normalization. The
+// constant exists so the grader's `>= BenchVersionV13` policy branch, the v13
+// audit bank, and the multilingual lexicons can be pinned independently of the
+// v13 generation contract; SupportedBenchVersion and DatasetEpochForVersion
+// admit v13 only once that contract lands.
 const (
 	BenchVersionV2      = 2
 	BenchVersionV3      = 3
