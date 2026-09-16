@@ -163,6 +163,14 @@ CATALOG_FILE = (
     "services/dittobench-api/internal/codingenforcement/catalog/catalog-v1.json"
 )
 FIXTURE_ROOT = "services/dittobench-api/internal/codingenforcement/fixtures"
+# The Go probe runner that measures evidence: its command, library and the
+# catalog package whose canonical encoding and matched rules it uses. Records
+# bind the reviewed checkout's hash of these trees, never a caller-supplied one.
+RUNNER_ROOTS = (
+    "services/dittobench-api/cmd/dittobench-coding-enforcement-probe",
+    "services/dittobench-api/internal/codingenforcement/catalog",
+    "services/dittobench-api/internal/codingenforcement/probe",
+)
 TOOL_FILES = {
     "catalog_sha256": CATALOG_FILE,
     "collector_sha256": "infra/scripts/collect-coding-native-enforcement.py",
@@ -258,7 +266,7 @@ RELEASE_KEYS = {
     "runtime_archive_sha256",
     "image_approval_sha256",
 }
-TOOL_KEYS = {*TOOL_FILES, "fixtures_sha256"}
+TOOL_KEYS = {*TOOL_FILES, "fixtures_sha256", "runner_sha256"}
 PHASE_KEYS = {"name", "started_at_unix", "completed_at_unix", "probes"}
 PROBE_KEYS = {"id", "language", "endpoint_sha256", "expect", "observed", "matched"}
 ENDPOINT_KEYS = {"role", "endpoint_sha256"}
@@ -795,22 +803,27 @@ class Checkout:
                 name = f"{prefix}{entry.name}"
                 info = entry.stat(follow_symlinks=False)
                 if stat.S_ISDIR(info.st_mode):
-                    _not_writable(info, f"fixture {name}")
+                    _not_writable(info, f"tree entry {name}")
                     walk(Path(entry.path), name + "/")
                 else:
-                    require(stat.S_ISREG(info.st_mode), f"fixture {name} is not a file")
+                    require(
+                        stat.S_ISREG(info.st_mode), f"tree entry {name} is not a file"
+                    )
                     entries.append(
                         {"path": name, "sha256": self.file_sha256(f"{relative}/{name}")}
                     )
 
         walk(root, "")
-        require(bool(entries), "fixture tree is empty")
+        require(bool(entries), "tool tree is empty")
         entries.sort(key=lambda entry: entry["path"])
         return canonical_sha256(entries)
 
     def tools(self) -> dict[str, str]:
         result = {name: self.file_sha256(path) for name, path in TOOL_FILES.items()}
         result["fixtures_sha256"] = self.tree_sha256(FIXTURE_ROOT)
+        result["runner_sha256"] = canonical_sha256(
+            [{"root": root, "sha256": self.tree_sha256(root)} for root in RUNNER_ROOTS]
+        )
         return result
 
 

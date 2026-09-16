@@ -44,7 +44,7 @@ CANONICAL_VECTOR = CATALOG_DIR / "testdata/canonical-vector-v1.json"
 EXPECTATION_VECTORS = CATALOG_DIR / "testdata/expectation-vectors-v1.json"
 # Pinned identically in catalog/canonical_test.go.
 GOLDEN_RECORD_SHA256 = (
-    "ff14852904db79f180ddacec1f1c1350fe9beea6bf97bbe300771b6a1206cc88"
+    "8ed4ce9e831a20ae9bee4c60a865c44a3340c6098d4074615938c7446d8aff6c"
 )
 CANONICAL_VECTOR_SHA256 = (
     "1948b8f75bd3f0c25825ed268d2390e89ffe1993a37790ee740c19e5cd491a74"
@@ -78,6 +78,7 @@ FIXED_TOOLS = {
     "collector_sha256": digest("collector"),
     "evidence_tool_sha256": digest("evidence-tool"),
     "fixtures_sha256": digest("fixtures"),
+    "runner_sha256": digest("runner"),
 }
 FORBIDDEN_KEY = re.compile(r"(^|_)(approved|ready|readiness|qualified)(_|$)|^approval$")
 TOOL_NAMES = (
@@ -483,6 +484,8 @@ class World:
             shutil.copyfile(ROOT / relative, target)
         collector = self.checkout / EVIDENCE.TOOL_FILES["collector_sha256"]
         collector.write_bytes(b"# synthetic collector for tests\n")
+        for root in EVIDENCE.RUNNER_ROOTS:
+            shutil.copytree(ROOT / root, self.checkout / root, dirs_exist_ok=True)
         fixtures = self.checkout / EVIDENCE.FIXTURE_ROOT
         (fixtures / "python").mkdir(parents=True)
         (fixtures / "python/fork_exec.py").write_bytes(b"# synthetic\n")
@@ -2149,6 +2152,30 @@ def test_reviewed_checkout_tool_drift_fails_the_record(world):
     assert not ok and "tool hashes differ" in result["records"][0]["failure"]
 
 
+@pytest.mark.parametrize("root", EVIDENCE.RUNNER_ROOTS)
+def test_records_bind_the_reviewed_go_runner_sources(world, root):
+    record_sha = world.selection()["cleanup_recovery"]
+    assert (
+        world.tools["runner_sha256"]
+        == EVIDENCE.Checkout(world.checkout).tools()["runner_sha256"]
+    )
+    # A runner changed after review, even by one source file, no longer matches
+    # the runner hash the record carries.
+    added = world.checkout / root / "later_edit.go"
+    added.write_bytes(b"package later\n")
+    added.chmod(0o644)
+    result, ok = world.verify([record_sha])
+    assert not ok and "tool hashes differ" in result["records"][0]["failure"]
+
+
+def test_runner_hash_covers_the_real_runner_command_and_library():
+    for root in EVIDENCE.RUNNER_ROOTS:
+        assert any((ROOT / root).glob("*.go")), root
+    assert "services/dittobench-api/cmd/dittobench-coding-enforcement-probe" in (
+        EVIDENCE.RUNNER_ROOTS
+    )
+
+
 @pytest.mark.parametrize(
     ("change", "reason"),
     [
@@ -3050,19 +3077,25 @@ def test_collectors_never_enter_the_operate_workflow():
         for path in workflows.glob("*.y*ml")
         if any(name in path.read_text() for name in TOOL_NAMES)
     )
-    # Only the offline regression job may name the tool, and it has no host,
-    # secret or deployment authority.
-    assert referencing == ["coding-native-release.yml"]
-    ci = (workflows / "coding-native-release.yml").read_text()
-    for forbidden in (
-        "secrets.",
-        "environment:",
-        "id-token",
-        "ssh",
-        "gcloud",
-        "collect-coding-native-enforcement",
-    ):
-        assert forbidden not in ci
+    # Only the offline regression job and the disposable rootless probe-runner
+    # job may name the tools, and neither has host, secret or deployment
+    # authority.
+    assert referencing == [
+        "coding-native-enforcement-probe.yml",
+        "coding-native-release.yml",
+    ]
+    for name in referencing:
+        ci = (workflows / name).read_text()
+        for forbidden in (
+            "secrets.",
+            "environment:",
+            "id-token",
+            "ssh",
+            "gcloud",
+            "self-hosted",
+            "collect-coding-native-enforcement",
+        ):
+            assert forbidden not in ci, (name, forbidden)
 
 
 def test_script_runs_isolated_from_the_checkout(world):
