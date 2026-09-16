@@ -289,22 +289,23 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"%[1]s's %[2]s was booked for %[3]s.",
 			"Booked %[1]s in for the %[2]s on %[3]s.",
 			"The %[2]s for %[1]s: %[3]s.",
-		}), relation, g.Subject, v13DateProse(seed, fmt.Sprintf("p-appt-a-%d", group), g.Dates[0].Month, g.Dates[0].Day))
+		}), relation, g.Subject, v13CalendarProse(seed, "personal", group, fmt.Sprintf("p-appt-a-%d", group), g.Dates[0], false))
 		m.Records[1] = fmt.Sprintf(v13Pick(seed, fmt.Sprintf("p-appt-b-%d", group), []string{
 			"The clinic moved %[1]s's %[2]s to %[3]s; the old slot is gone.",
 			"Rescheduled: %[1]s's %[2]s is now %[3]s instead.",
 			"Update on the %[2]s for %[1]s — new date %[3]s, replacing the earlier booking.",
-		}), relation, g.Subject, v13DateProse(seed, fmt.Sprintf("p-appt-b-%d-%v", group, counter), date.Month, date.Day))
-		m.DecoyClause = fmt.Sprintf("Unrelated: %s's %s is on %s.", g.People[3], g.Decoy, v13DateProse(seed, fmt.Sprintf("p-appt-decoy-%d", group), g.Dates[3].Month, g.Dates[3].Day))
+		}), relation, g.Subject, v13CalendarProse(seed, "personal", group, fmt.Sprintf("p-appt-b-%d-%v", group, counter), date, false))
+		m.DecoyClause = fmt.Sprintf("Unrelated: %s's %s is on %s.", g.People[3], g.Decoy, v13CalendarProse(seed, "personal", group, fmt.Sprintf("p-appt-decoy-%d", group), g.Dates[3], false))
 		m.Question = v13PersonalQuestion(seed, group, variant, []string{
 			"when is %[1]s's %[2]s now?",
 			"what date did %[1]s's %[2]s end up on after the change?",
 			"which day is %[1]s's %[2]s, as it stands?",
 		}, []string{"The day is enough.", "Just the date.", "Any clear date format is fine."}, relation, g.Subject)
-		m.Expected = fmt.Sprintf("2026-%02d-%02d", date.Month, date.Day)
-		m.AcceptAny = V13DateAccept(2026, date.Month, date.Day)
-		m.Distractors = []string{fmt.Sprintf("2026-%02d-%02d", g.Dates[3].Month, g.Dates[3].Day)}
-		m.Distractors = append(m.Distractors, V13DateAccept(2026, g.Dates[3].Month, g.Dates[3].Day)[1:]...)
+		at := v13CalendarDate(seed, "personal", group, date, false)
+		decoyDate := v13CalendarDate(seed, "personal", group, g.Dates[3], false)
+		m.Expected = at.Format("2006-01-02")
+		m.AcceptAny = V13DateAccept(at.Year(), int(at.Month()), at.Day())
+		m.Distractors = V13DateAccept(decoyDate.Year(), int(decoyDate.Month()), decoyDate.Day())
 		m.Claims = []protocol.Claim{{Kind: protocol.ClaimKindDate, Expected: m.Expected, Accept: m.AcceptAny, Unit: "day", Critical: true, Weight: 1}}
 		m.Program = V10QueryNode{Op: "latest", Field: "appointment_date", Children: []V10QueryNode{{Op: "resolve_entity", Field: "appointment"}}}
 		m.Protected = []string{relation, g.Subject, g.Decoy, g.People[3]}
@@ -364,7 +365,7 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"%[1]s's %[2]s is %[3]s for %[4]s.",
 			"The %[2]s for %[1]s: %[3]s, %[4]s.",
 			"%[1]s has the %[2]s down as %[3]s on %[4]s.",
-		}), relation, g.Subject, cls[g.Classes[0]].Canonical, v13DateProse(seed, fmt.Sprintf("p-mile-%d", group), g.Dates[0].Month, g.Dates[0].Day))
+		}), relation, g.Subject, cls[g.Classes[0]].Canonical, v13CalendarProse(seed, "personal", group, fmt.Sprintf("p-mile-%d", group), g.Dates[0], false))
 		m.Records[1] = fmt.Sprintf(v13Pick(seed, fmt.Sprintf("p-mile-b-%d", group), []string{
 			"Heard from %[1]s: the %[2]s is now %[3]s — that replaces what I said before.",
 			"Update — %[1]s's %[2]s has gone from what it was to %[3]s.",
@@ -396,7 +397,7 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"%[1]s renews on %[2]s; the plan was to %[3]s before then.",
 			"Renewal for %[1]s lands %[2]s — I'd decided to %[3]s.",
 			"%[1]s: renewal %[2]s, decision so far is to %[3]s.",
-		}), g.Subject, v13DateProse(seed, fmt.Sprintf("p-sub-%d", group), g.Dates[0].Month, g.Dates[0].Day), cls[g.Classes[0]].Canonical)
+		}), g.Subject, v13CalendarProse(seed, "personal", group, fmt.Sprintf("p-sub-%d", group), g.Dates[0], false), cls[g.Classes[0]].Canonical)
 		m.Records[1] = fmt.Sprintf(v13Pick(seed, fmt.Sprintf("p-sub-b-%d", group), []string{
 			"Changed my mind on %[1]s: the plan now is to %[2]s instead.",
 			"Scrap the earlier plan for %[1]s — we'll %[2]s.",
@@ -576,7 +577,7 @@ func materializeV13PersonalCase(seed int64, group, variant int, groupID string, 
 		pairs = append(pairs, protocol.MemoryPair{
 			PairID:    id,
 			SessionID: protocol.OpaqueCaseID(seed, fmt.Sprintf("v13p-session-%d", group), i),
-			Timestamp: V13Timestamp(seed, prefix, i),
+			Timestamp: v13CalendarTimestamp(seed, "personal", group, i),
 			Prompt:    prompt, Response: response,
 		})
 	}

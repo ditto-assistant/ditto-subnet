@@ -175,7 +175,7 @@ var V13FullEnvelope = V13MemoryEnvelope{
 // v13MediumEnvelope keeps the v12 medium memory total (95) at v13 proportions.
 // Six story arcs x six oracles, program counts stay multiples of four.
 var v13MediumEnvelope = V13MemoryEnvelope{
-	Story: 36, OrdinaryWorld: 8, BusinessPrograms: 4, PersonalPrograms: 8, Abstention: 8,
+	Story: 36, OrdinaryWorld: 12, BusinessPrograms: 4, PersonalPrograms: 4, Abstention: 8,
 	RecordQuantity: 4, Divergence: 4, PointInTime: 4, Integrity: 14, Isolation: 5,
 }
 
@@ -254,6 +254,8 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	}
 	selection := envelope.worldPlanSelection()
 	selection.Exclude = allocation.ExcludeKeys()
+	selection.Require = allocation.StagedQuestionKeys()
+	staged := world.StagedCorrectionWaves(allocation, nWaves)
 	// Answerable decision twins occupy the ordinary-world slot, not an
 	// unreported extra case budget.
 	selection.Ordinary -= len(decision)
@@ -299,6 +301,7 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	}
 	for i := range suite.Waves {
 		suite.Waves[i] = protocol.SeedRequest{UserID: PrimaryUser, Wave: i}
+		suite.Waves[i].Pairs = world.StagedPairs(staged, i)
 	}
 	for _, plan := range plans {
 		plan.Case.BenchVersion = benchVersion
@@ -330,6 +333,18 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	}
 	suite.V13Slots[V13SlotRecordQuantity] = suite.FamilyCompilerCases
 	suite.Cases = placeV13TwinPairs(seed, suite.Cases, append(decision, temporal...))
+	for i := range suite.Cases {
+		for _, id := range suite.Cases[i].RequiredPairIDs {
+			if wave, ok := staged[id]; ok {
+				if wave > suite.Cases[i].RunAfterWave {
+					suite.Cases[i].RunAfterWave = wave
+				}
+			}
+		}
+		if suite.Cases[i].RunAfterWave > 0 {
+			suite.StagedCorrectionCases++
+		}
+	}
 	suite.WorldCases = len(suite.Cases) - suite.ConversationalCases
 	if len(suite.Cases)+envelope.Isolation != envelope.Total() {
 		return MemorySuite{}, fmt.Errorf("v13 memory budget: %d plus %d isolation, want %d", len(suite.Cases), envelope.Isolation, envelope.Total())

@@ -349,7 +349,7 @@ func applyV13ToolBench(seed int64, cases []protocol.ToolCase) {
 	// before the replacement) so writing noise cannot touch it.
 	for i := range cases {
 		if IsDecoyCorrect(cases[i].Category) || v13DiscoveryFamily(cases[i].Category) || v13IsUnexpectedFamily(cases[i].Category) {
-			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleFor(seed, cases[i].ID).Subject)
+			cases[i].WritingProtected = append(cases[i].WritingProtected, toolexec.NeedleForVersion(seed, cases[i].ID, protocol.BenchVersionV13).Subject)
 		}
 	}
 }
@@ -357,7 +357,7 @@ func applyV13ToolBench(seed int64, cases []protocol.ToolCase) {
 // v13DecoyCase builds one decoy-correct result-usage case: the seed's coined
 // decoy is the right tool and bears the case's needle.
 func v13DecoyCase(seed int64, prior protocol.ToolCase, decoy catalog.Decoy, index int) protocol.ToolCase {
-	needle := toolexec.NeedleFor(seed, prior.ID)
+	needle := toolexec.NeedleForVersion(seed, prior.ID, protocol.BenchVersionV13)
 	return protocol.ToolCase{
 		ID:               prior.ID,
 		Category:         "decoy_" + decoy.Shape.Key + "_result_usage",
@@ -397,7 +397,7 @@ func v13ConversionOrder(seed int64, cases []protocol.ToolCase) []int {
 		scale = 2
 	}
 	worldPairs := map[string]bool{}
-	for _, pair := range universe.Generate(seed, scale).Pairs {
+	for _, pair := range universe.GenerateForVersion(seed, scale, protocol.BenchVersionV13).Pairs {
 		worldPairs[pair.PairID] = true
 	}
 	counts := map[string]int{}

@@ -170,7 +170,7 @@ func applyV13ToolSemantics(seed int64, benchVersion int, cases []protocol.ToolCa
 	} else if len(cases) >= 30 {
 		scale = 2
 	}
-	world := universe.Generate(seed, scale)
+	world := universe.GenerateForVersion(seed, scale, protocol.BenchVersionV13)
 	worldCarrier := v13WorldCarrier(world, cases)
 	applyV13RestraintGroups(seed, world, worldCarrier, cases)
 	applyV13MutationsAndEffectReads(seed, world, worldCarrier, cases)
@@ -187,7 +187,7 @@ func v13WorldCarrier(world universe.World, cases []protocol.ToolCase) int {
 		return -1
 	}
 	for i, tc := range cases {
-		if len(tc.PrerequisitePairs) >= len(world.Pairs) {
+		if len(tc.PrerequisitePairs) >= len(world.InitialPairs(world.StagedCorrectionMembership(world.V13Allocation(0)))) {
 			return i
 		}
 	}
@@ -220,6 +220,9 @@ func v13MemoryRoutingSplit(cases []protocol.ToolCase, worldCarrier int) (kept, s
 // v13MemoryRoutingCase reports whether a case is graded on memory routing
 // only (every expected tool is a harness-internal memory tool).
 func v13MemoryRoutingCase(tc protocol.ToolCase) bool {
+	if IsDecoyCorrect(tc.Category) {
+		return false
+	}
 	if len(tc.ExpectedTools) == 0 {
 		return false
 	}
@@ -243,6 +246,9 @@ func v13WorldDerived(category string) bool {
 // world pairs), never a state-dependent route (routing weight is unchanged),
 // never a retired source family, and never the last member of its family.
 func v13Convertible(tc protocol.ToolCase, remaining map[string]int, worldCarrier int, index int) bool {
+	if IsDecoyCorrect(tc.Category) || v13DiscoveryFamily(tc.Category) || v13IsUnexpectedFamily(tc.Category) {
+		return false
+	}
 	if index == worldCarrier {
 		return false
 	}
@@ -299,6 +305,9 @@ func applyV13RestraintGroups(seed int64, world universe.World, worldCarrier int,
 	// planted-context families (stale_context_web, memory_fetch) whose compact
 	// local record is replaced by the restraint record.
 	for _, withPrerequisites := range []bool{false, true} {
+		if withPrerequisites && len(cases) < V9FullToolCaseCount {
+			continue
+		}
 		for i, tc := range cases {
 			if len(candidates) >= want {
 				break
@@ -325,7 +334,7 @@ func applyV13RestraintGroups(seed int64, world universe.World, worldCarrier int,
 			}
 			if seen[i] || i == worldCarrier || len(tc.PrerequisitePairs) != 0 ||
 				v13WorldDerived(tc.Category) || IsResultUsage(tc.Category) ||
-				v13MemoryRoutingCase(tc) || v9RetiredSourceFamily(tc.Category) || IsV13Restraint(tc.Category) {
+				v13MemoryRoutingCase(tc) || v9RetiredSourceFamily(tc.Category) || IsV13Restraint(tc.Category) || v13DiscoveryFamily(tc.Category) {
 				continue
 			}
 			take(i)
@@ -353,7 +362,42 @@ func applyV13RestraintGroups(seed int64, world universe.World, worldCarrier int,
 		take(i)
 		worldCount--
 	}
-	// 4. remaining memory-routing duplicates when the run is still short.
+	// 4. The combined v13 catalog adds twenty discovery/decoy/fixture cases.
+	// Preserve their quotas and the world floor; retire redundant singleton
+	// routing *surfaces* only when every capability they exercise remains in
+	// another case. This does not remove tool coverage or evidence-bound cases.
+	if len(cases) >= V9FullToolCaseCount && len(candidates) < want {
+		coverage := map[string]int{}
+		for i, tc := range cases {
+			if !seen[i] {
+				for _, spec := range tc.ExpectedTools {
+					coverage[spec.Name]++
+				}
+			}
+		}
+		protected := map[string]bool{"stale_context_web": true, "v10_state_dependent_routing": true, "settings": true, "recipe_apply": true, "capability_discovery": true, "automation_list": true, "agent_read_not_run": true, "tool_discovery": true}
+		for _, i := range v13ToolRNG(seed, len(cases), "restraint-redundant-coverage").Perm(len(cases)) {
+			if len(candidates) >= want {
+				break
+			}
+			tc := cases[i]
+			if seen[i] || i == worldCarrier || protected[tc.Category] || len(tc.PrerequisitePairs) != 0 || v13WorldDerived(tc.Category) || IsResultUsage(tc.Category) || v13DiscoveryFamily(tc.Category) || v13MemoryRoutingCase(tc) {
+				continue
+			}
+			redundant := len(tc.ExpectedTools) > 0
+			for _, spec := range tc.ExpectedTools {
+				redundant = redundant && coverage[spec.Name] > 1
+			}
+			if !redundant {
+				continue
+			}
+			take(i)
+			for _, spec := range tc.ExpectedTools {
+				coverage[spec.Name]--
+			}
+		}
+	}
+	// 5. remaining memory-routing duplicates when the run is still short.
 	for i, tc := range cases {
 		if len(candidates) >= want {
 			break
@@ -540,11 +584,11 @@ func v13Sentence(s string) string {
 func v13BuildRestraintMember(seed int64, world universe.World, family v13RestraintFamily, group, member int, ask bool, caseID string) protocol.ToolCase {
 	salt := fmt.Sprintf("%s:g%d:m%d", family, group, member)
 	pairID := protocol.OpaqueCaseID(seed, "v13-restraint-record:"+string(family), group*256+member)
-	sessionID := fmt.Sprintf("v13-restraint-%02d-%d", group, member)
+	sessionID := protocol.OpaqueCaseID(seed, "v13-restraint-session", group*256+member)
 	category := V13RestraintCategoryPrefix + string(family)
 	record := func(prompt, response string) []protocol.MemoryPair {
 		return []protocol.MemoryPair{{
-			PairID: pairID, SessionID: sessionID, Timestamp: "2026-02-03T09:30:00Z",
+			PairID: pairID, SessionID: sessionID, Timestamp: protocol.NewOpaqueTimeline(seed, "v13-restraint-"+salt).Next(),
 			Prompt: prompt, Response: response,
 		}}
 	}
@@ -886,7 +930,7 @@ func applyV13MutationsAndEffectReads(seed int64, world universe.World, worldCarr
 		tc.ExpectedBehavior = "retrieve the planted fact from your own memory (any internal trajectory) and answer with its value; any non-memory tool call is misrouting"
 		tc.PrerequisitePairs = append([]protocol.MemoryPair(nil), tc.PrerequisitePairs...)
 		tc.PrerequisitePairs = append(tc.PrerequisitePairs, protocol.MemoryPair{
-			PairID: pairID, SessionID: fmt.Sprintf("v13-effect-%02d", k), Timestamp: "2026-01-21T18:10:00Z",
+			PairID: pairID, SessionID: protocol.OpaqueCaseID(seed, "v13-effect-session", k), Timestamp: protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-effect-%d", k)).Next(),
 			Prompt: fmt.Sprintf(fact.record, value), Response: fmt.Sprintf(fact.response, value),
 		})
 		tc.WritingProtected = append(append([]string(nil), tc.WritingProtected...), value, fact.subject)
@@ -1066,7 +1110,7 @@ func v13StaleEmail(person universe.Person) []string {
 func v13StateDependentRoute(seed int64, index int, world universe.World, project universe.Project, route int) (record protocol.MemoryPair, prompt string, expected []protocol.ToolSpec, forbidden []string, behavior, category string, protected []string) {
 	exists := v13Pick(seed, fmt.Sprintf("v13-route-state:%d", index), []string{"exists", "absent"}) == "exists"
 	pairID := protocol.OpaqueCaseID(seed, "v13-tool-route", index)
-	record = protocol.MemoryPair{PairID: pairID, SessionID: fmt.Sprintf("v13-tool-route-%02d", index), Timestamp: "2026-01-16T11:00:00Z"}
+	record = protocol.MemoryPair{PairID: pairID, SessionID: protocol.OpaqueCaseID(seed, "v13-tool-route-session", index), Timestamp: protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-tool-route-%d", index)).Next()}
 	switch route {
 	case 3:
 		category = V13StateDependentCalendarCategory

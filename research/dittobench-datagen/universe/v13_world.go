@@ -78,6 +78,28 @@ func appendV13Probes(w *World) {
 	probes := buildV13Probes(w.Seed, w)
 	w.Probes = &probes
 	w.Pairs = append(w.Pairs, probes.Pairs...)
+	index := map[string]int{}
+	for i := range w.Pairs {
+		index[w.Pairs[i].PairID] = i
+	}
+	var chains [][]string
+	for _, p := range probes.Handles {
+		if p.Removed {
+			chains = append(chains, []string{p.HandlePairID, p.RemovalPairID})
+		}
+	}
+	for _, p := range probes.Threads {
+		chains = append(chains, []string{p.ApprovalPairID, p.PaymentPairID})
+	}
+	for k, chain := range chains {
+		timeline := protocol.NewOpaqueTimeline(w.Seed, fmt.Sprintf("v13-probe-chain-%d", k))
+		for _, id := range chain {
+			w.Pairs[index[id]].Timestamp = timeline.Next()
+		}
+	}
+	for i := range w.Probes.Pairs {
+		w.Probes.Pairs[i] = w.Pairs[index[w.Probes.Pairs[i].PairID]]
+	}
 }
 
 // V13AbsenceFamilies are the six absence-proof families of the v13 grounded
@@ -307,6 +329,16 @@ func (a V13Allocation) ExcludeKeys() map[string]bool {
 	return out
 }
 
+// StagedQuestionKeys reserves an ordinary current-itinerary query for each
+// correction withheld from the initial seed.
+func (a V13Allocation) StagedQuestionKeys() map[string]bool {
+	out := map[string]bool{}
+	for _, i := range a.StagedTrips {
+		out[excludeKey(oracleTripCurrent, i)] = true
+	}
+	return out
+}
+
 func excludeKey(kind string, index int) string { return fmt.Sprintf("%s:%d", kind, index) }
 
 // StagedCorrectionWaves maps each staged trip correction pair to the /seed wave
@@ -421,12 +453,11 @@ func buildV13Probes(seed int64, w *World) V13Probes {
 	}
 	r := v13ProbeRand(seed)
 	a := w.V13Allocation(0)
-	base := time.Date(2024, 1, 8, 9, 0, 0, 0, time.UTC)
 	add := func(id, session, prompt, response string) {
 		index := len(w.Pairs) + len(probes.Pairs)
 		probes.Pairs = append(probes.Pairs, protocol.MemoryPair{
-			PairID: id, SessionID: session,
-			Timestamp: base.Add(time.Duration(index*137) * time.Hour).Format(time.RFC3339),
+			PairID: id, SessionID: protocol.OpaqueCaseID(seed, "v13-probe-session", index),
+			Timestamp: protocol.OpaqueBusinessInstant(seed, fmt.Sprintf("v13-probe-stamp-%d", index)).Format(time.RFC3339),
 			Prompt:    prompt, Response: response,
 		})
 	}

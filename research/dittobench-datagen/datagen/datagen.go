@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/internal/appearance"
 	"github.com/ditto-assistant/dittobench-datagen/internal/assistantvoice"
 	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
@@ -1510,6 +1511,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 	}
 	world := universe.GenerateForVersion(seed, scale, benchVersion)
 	storyPairs := make(map[string]bool, len(world.Stories))
+	initialPairs := world.InitialPairs(world.StagedCorrectionMembership(world.V13Allocation(0)))
 	for _, story := range world.Stories {
 		storyPairs[story.PairID] = true
 	}
@@ -1574,7 +1576,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 			tc = prompts.agentJob(caseID, world, converted+i)
 		}
 		if !attachedWorld {
-			tc.PrerequisitePairs = append([]protocol.MemoryPair(nil), world.Pairs...)
+			tc.PrerequisitePairs = append([]protocol.MemoryPair(nil), initialPairs...)
 			attachedWorld = true
 			worldCarrier = i
 		}
@@ -1674,7 +1676,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 		if worldCarrier < 0 {
 			worldCarrier = 0
 		}
-		cases[worldCarrier].PrerequisitePairs = append(cases[worldCarrier].PrerequisitePairs, world.Pairs...)
+		cases[worldCarrier].PrerequisitePairs = append(cases[worldCarrier].PrerequisitePairs, initialPairs...)
 		attachedWorld = true
 	}
 	protected := world.ProtectedTerms()
@@ -1756,7 +1758,10 @@ func misspellAliasV13(s string, seed int64, salt int) string {
 			return projected
 		}
 	}
-	return s
+	if alias, ok := catalog.AliasFor(s, []string{s}, seed, fmt.Sprintf("short-alias-%d", salt)); ok {
+		return alias.Text
+	}
+	panic(fmt.Sprintf("v13 alias could not obscure %q", s))
 }
 
 // worldPrompts renders the seven shared-world tool families. The v8 renderer

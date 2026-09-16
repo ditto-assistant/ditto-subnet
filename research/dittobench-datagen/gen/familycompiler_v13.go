@@ -504,7 +504,7 @@ func stageFamilyV2Case(seed int64, i int, questionType, subject, record string, 
 	pair := protocol.MemoryPair{
 		PairID:    pairID,
 		SessionID: protocol.OpaqueCaseID(seed, "v13-family-compiler-session", i),
-		Timestamp: fmt.Sprintf("2026-03-%02dT%02d:%02d:00Z", 2+int(v13FamilyHash(seed, fmt.Sprintf("ts-day-%d", i))%25), 8+int(v13FamilyHash(seed, fmt.Sprintf("ts-hour-%d", i))%10), int(v13FamilyHash(seed, fmt.Sprintf("ts-min-%d", i))%60)),
+		Timestamp: protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-family-compiler-%d", i)).Next(),
 		Prompt:    record,
 		Response:  v13FamilyPick(seed, fmt.Sprintf("ack-%d", i), []string{"Noted — I've filed those account details.", "Got it; I'll read the convention off the record itself.", "Saved with the stated convention."}),
 	}

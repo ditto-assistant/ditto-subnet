@@ -32,8 +32,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/ditto-assistant/dittobench-datagen/internal/publicdata"
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
+	"github.com/ditto-assistant/dittobench-datagen/internal/publicdata"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -149,9 +149,9 @@ type Fixture struct {
 	linkDep      bool   // a dependent link chain: read_links gates the needle on pageURL
 	pageURL      string // the stable URL search_web serves for a link chain
 	inventory    catalog.Inventory
-	category string
-	decoys map[string]catalog.Decoy
-	coined Coined
+	category     string
+	decoys       map[string]catalog.Decoy
+	coined       Coined
 }
 
 // v13 reports whether the fixture serves under the public-corpora contract.

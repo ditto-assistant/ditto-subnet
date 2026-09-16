@@ -2027,20 +2027,16 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		defer endEmbeddingPhase()
 	}
 
-	// 5. memory cases — staged Tier-C ingestion: seed a wave,
-	//    then run the cases it unlocks (all their evidence is now seeded), then
-	//    the next wave. A single-wave run degrades to seed-then-run-all.
-	casesByWave := make([][]gen.StagedCase, memSuite.SeedingWaves)
-	for _, sc := range memSuite.Cases {
-		w := sc.RunAfterWave
-		if w < 0 {
-			w = 0
-		}
-		if w >= memSuite.SeedingWaves {
-			w = memSuite.SeedingWaves - 1
-		}
-		casesByWave[w] = append(casesByWave[w], sc)
-	}
+	// 5. memory cases — staged Tier-C ingestion: seed a wave, wait for the
+	//    harness's 2xx ingest acknowledgement, then run the cases it unlocks
+	//    (all their evidence is now seeded), then the next wave. A single-wave
+	//    run degrades to seed-then-run-all. runner.RunStagedWaves owns the
+	//    barrier so the ordering is testable in isolation; Bench v13 stages real
+	//    corrections into waves 1-2, so a case dispatched before the ack would
+	//    zero an honest harness on the evidence it has not yet embedded.
+	casesByWave := runner.StageCasesByWave(memSuite.SeedingWaves, len(memSuite.Cases), func(i int) int {
+		return memSuite.Cases[i].RunAfterWave
+	})
 	// Seed the secondary isolation graph up front (a distinct user_id), so cross-
 	// user isolation cases can run in any wave.
 	if len(iso.SecondaryWave.Pairs) > 0 {
@@ -2054,25 +2050,23 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			return
 		}
 	}
-	for w, wave := range memSuite.Waves {
-		if len(wave.Pairs) > 0 {
-			s.store.SetStage(runID, store.StatusSeeding, len(perCase), total)
-			if _, err := runner.SeedForVersion(ctx, harnessURL, wave, req.BenchVersion); err != nil {
-				if req.BenchVersion >= protocol.BenchVersionV7 {
-					s.failV7Seeding(runID, fmt.Sprintf("seeding haystack wave %d failed: ", w), err)
-				} else {
-					s.store.Fail(runID, fmt.Sprintf("seeding haystack wave %d failed: %s", w, err.Error()))
-				}
-				return
-			}
-		}
+	errMemoryProjection := errors.New("v9 memory capability reverse mapping failed")
+	waveErr := runner.RunStagedWaves(ctx, memSuite.Waves, casesByWave, func(ctx context.Context, w int, wave protocol.SeedRequest) error {
+		s.store.SetStage(runID, store.StatusSeeding, len(perCase), total)
+		_, err := runner.SeedForVersion(ctx, harnessURL, wave, req.BenchVersion)
+		return err
+	}, func(ctx context.Context, w int, bucket []int) error {
+		wave := memSuite.Waves[w]
 		s.store.SetStage(runID, store.StatusRunning, len(perCase), total)
 		// Cases within one wave are independent: their evidence is fully seeded
 		// (this wave and all prior waves), lifecycle WRITE cases live only in wave
 		// 0 and their READ cases in a later wave, and same-wave writes target
 		// distinct keys — so they run with bounded concurrency. The wave boundary
 		// stays a barrier: seed wave w, run its cases, then seed wave w+1.
-		waveCases := casesByWave[w]
+		waveCases := make([]gen.StagedCase, 0, len(bucket))
+		for _, index := range bucket {
+			waveCases = append(waveCases, memSuite.Cases[index])
+		}
 		waveResults := make([]protocol.CaseScore, len(waveCases))
 		waveTranscripts := make([]transcriptCase, len(waveCases))
 		runBounded(ctx, len(waveCases), effectiveCaseConcurrency, func(i int) {
@@ -2139,16 +2133,32 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		})
 		// Same zero-value guard as the tool loop: a cancellation mid-wave must
 		// not fold half-empty results into a report.
-		if ctx.Err() != nil {
+		if err := ctx.Err(); err != nil {
 			log.Printf("run %s: cancelled during memory wave %d; abandoning without a report", runID, w)
-			return
+			return err
 		}
 		if projectionFailure != nil {
-			s.store.Fail(runID, "v9 memory capability reverse mapping failed")
-			return
+			return errMemoryProjection
 		}
 		perCase = append(perCase, waveResults...)
 		transcripts = append(transcripts, waveTranscripts...)
+		return nil
+	})
+	if waveErr != nil {
+		var seedErr *runner.WaveSeedError
+		switch {
+		case errors.As(waveErr, &seedErr):
+			if req.BenchVersion >= protocol.BenchVersionV7 {
+				s.failV7Seeding(runID, fmt.Sprintf("seeding haystack wave %d failed: ", seedErr.Wave), seedErr.Err)
+			} else {
+				s.store.Fail(runID, fmt.Sprintf("seeding haystack wave %d failed: %s", seedErr.Wave, seedErr.Err.Error()))
+			}
+		case errors.Is(waveErr, errMemoryProjection):
+			s.store.Fail(runID, errMemoryProjection.Error())
+		default:
+			// Cancellation: the cancel handler already failed the run.
+		}
+		return
 	}
 	// Close broker access before scoring/accounting. The once-guarded deferred
 	// cleanup still handles every early return, cancel, and panic above.

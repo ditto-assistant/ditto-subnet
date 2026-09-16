@@ -89,6 +89,7 @@ func GenerateDatasetReview(seed int64, prof Profile, benchVersion int) (DatasetR
 		selection := envelope.worldPlanSelection()
 		selection.Ordinary -= envelope.Abstention // answerable decision twins
 		selection.Exclude = world.V13Allocation(envelope.Isolation).ExcludeKeys()
+		selection.Require = world.V13Allocation(envelope.Isolation).StagedQuestionKeys()
 		plans, _, err = world.SelectQuestionPlans(selection)
 	} else {
 		primaryCount := v8PrimaryCaseBudget(prof.Mem)

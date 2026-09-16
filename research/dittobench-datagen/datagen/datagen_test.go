@@ -231,7 +231,7 @@ func TestV13AppearanceIntentsAreServedByTheInventory(t *testing.T) {
 	for seed := int64(1); seed <= 40; seed++ {
 		cases, _ := GenerateCasesWithFillersForVersion(rand.New(rand.NewSource(seed)), seed, n, protocol.BenchVersionV13)
 		for _, c := range cases {
-			if c.Category != "set_accent" && c.Category != "set_font" {
+			if c.Category != "discovery_accent_set" && c.Category != "discovery_font_set" {
 				continue
 			}
 			inventory, ok := toolexec.BuildFixtureForVersion(seed, c, protocol.BenchVersionV13).Result("discover_capabilities", nil)
@@ -261,7 +261,7 @@ func TestV13AppearanceIntentsAreServedByTheInventory(t *testing.T) {
 			checked[c.Category]++
 		}
 	}
-	if checked["set_accent"] < 20 || checked["set_font"] < 20 {
+	if checked["discovery_accent_set"] < 20 || checked["discovery_font_set"] < 20 {
 		t.Fatalf("too few appearance cases checked: %v", checked)
 	}
 }

@@ -336,7 +336,12 @@ const v13DefaultRecordMonth = 2
 // (one to three days, a fresh hour and minute each), so no constant step
 // identifies a slot.
 func V13Timestamp(seed int64, salt string, i int) string {
-	return v13TimestampFrom(seed, salt, i, time.Date(v13RecordYear, v13DefaultRecordMonth, 1, 0, 0, 0, 0, time.UTC))
+	timeline := protocol.NewOpaqueTimeline(seed, salt)
+	var stamp string
+	for slot := 0; slot <= i; slot++ {
+		stamp = timeline.Next()
+	}
+	return stamp
 }
 
 // V13TimestampAfter renders the slot-i timestamp for a record set that asserts
@@ -637,7 +642,7 @@ func v13Claim(kind, expected string, accept []string, weight float64) protocol.C
 func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Group, counter bool) v13Member {
 	seed := d.seed
 	subject := v13Subject(seed, group, g.Purpose)
-	milestone := v13DateProse(seed, fmt.Sprintf("milestone-%d", group), g.Milestone.Month, g.Milestone.Day)
+	milestone := v13CalendarProse(seed, "business", group, fmt.Sprintf("milestone-%d", group), g.Milestone, false)
 	neutral := fmt.Sprintf(v13Pick(seed, fmt.Sprintf("neutral-%d", group), []string{
 		"The first milestone review for %[1]s is pencilled in for %[2]s.",
 		"%[1]s has its next checkpoint on %[2]s.",
@@ -732,7 +737,7 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		}
 		for i := 0; i < 3; i++ {
 			ev := V13EventClasses[events[i].Class]
-			m.Records[i] = fmt.Sprintf(v13Pick(seed, fmt.Sprintf("event-%d-%d", group, i), forms), g.Alias, schema.Event, v13DateProse(seed, fmt.Sprintf("event-%d-%d", group, i), events[i].Date.Month, events[i].Date.Day), ev.Canonical)
+			m.Records[i] = fmt.Sprintf(v13Pick(seed, fmt.Sprintf("event-%d-%d", group, i), forms), g.Alias, schema.Event, v13CalendarProse(seed, "business", group, fmt.Sprintf("event-%d-%d", group, i), events[i].Date, true), ev.Canonical)
 		}
 		latestIdx := v13LatestEventIndex(events)
 		cls := V13EventClasses[events[latestIdx].Class]
@@ -1061,7 +1066,7 @@ func materializeV13Case(
 		pairs = append(pairs, protocol.MemoryPair{
 			PairID:    pairIDs[i],
 			SessionID: protocol.OpaqueCaseID(seed, fmt.Sprintf("v13-session-%d", group), i),
-			Timestamp: v13GroupTimestamp(seed, fmt.Sprintf("v13-%d-%d", group, variant), i, g),
+			Timestamp: v13CalendarTimestamp(seed, "business", group, i),
 			Prompt:    prompt, Response: response,
 		})
 	}

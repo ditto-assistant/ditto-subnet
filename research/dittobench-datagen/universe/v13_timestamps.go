@@ -44,7 +44,11 @@ func (w World) assignV13Timestamps(pairs []protocol.MemoryPair) {
 		chains = append(chains, []string{trip.PlanPairID, trip.CorrectionPairID})
 	}
 	for _, arc := range w.StoryArcs {
-		chains = append(chains, arc.StoryPairIDs[:])
+		if arc.V2 != nil {
+			chains = append(chains, arc.V2.PairIDs[:arc.V2.Memories])
+		} else {
+			chains = append(chains, arc.StoryPairIDs[:])
+		}
 	}
 	for k, chain := range chains {
 		at := protocol.OpaqueBusinessInstant(w.Seed, fmt.Sprintf("v13-world-chain-%d", k))
@@ -54,11 +58,28 @@ func (w World) assignV13Timestamps(pairs []protocol.MemoryPair) {
 				continue
 			}
 			if j > 0 {
-				days := 1 + int(v13ChainDraw(w.Seed, k, j, "days")%4)
+				// Leave a complete calendar date between adjacent corrections for
+				// date-granular as-of questions, not just an intra-day boundary.
+				days := 2 + int(v13ChainDraw(w.Seed, k, j, "days")%4)
 				minute := int(v13ChainDraw(w.Seed, k, j, "minute") % 600)
 				at = protocol.ShiftBusinessDays(at, days, minute)
 			}
 			pairs[i].Timestamp = at.Format(time.RFC3339)
+		}
+	}
+	for _, arc := range w.StoryArcs {
+		if arc.V2 == nil {
+			continue
+		}
+		// A disputed outcome has the same date as the first outcome, so time
+		// alone cannot resolve a contradiction whose oracle requires both.
+		for _, id := range arc.V2.PairIDs[arc.V2.Memories:] {
+			pairs[index[id]].Timestamp = pairs[index[arc.V2.PairIDs[arc.V2.Memories-1]]].Timestamp
+		}
+	}
+	for i := range w.Stories {
+		if at, ok := index[w.Stories[i].PairID]; ok {
+			w.Stories[i].Timestamp = pairs[at].Timestamp
 		}
 	}
 }

@@ -279,7 +279,7 @@ func TestV13MutationGrammarIsCueUnreliable(t *testing.T) {
 	}
 	mutations, hits := 0, 0
 	for seed := int64(1); seed <= 40; seed++ {
-		world := universe.Generate(seed, 3)
+		world := universe.GenerateForVersion(seed, 3, protocol.BenchVersionV13)
 		byNote := map[string]universe.Person{}
 		for _, p := range world.People {
 			byNote[p.ToolNotePairID] = p
@@ -389,7 +389,7 @@ func TestV13StateDependentRoutingCoversCalendarAndEmail(t *testing.T) {
 func TestV13BusinessWorkflowClaimsForbidOnlyTheDistractor(t *testing.T) {
 	seen := 0
 	for seed := int64(1); seed <= 20; seed++ {
-		world := universe.Generate(seed, 3)
+		world := universe.GenerateForVersion(seed, 3, protocol.BenchVersionV13)
 		for _, tc := range v13FullCases(t, seed) {
 			if tc.Category != "world_business_workflow" {
 				continue

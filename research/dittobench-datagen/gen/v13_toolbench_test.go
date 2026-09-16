@@ -57,7 +57,7 @@ func TestV13ArtifactPinsSeededCatalog(t *testing.T) {
 		if needles[tc.ID] == "" {
 			t.Errorf("decoy-correct case %s has no fixture needle in the artifact", tc.ID)
 		}
-		f := toolexec.BuildFixtureForVersion(seed, protocol.BenchVersionV13, tc)
+		f := toolexec.BuildFixtureForVersion(seed, tc, protocol.BenchVersionV13)
 		if f.Bearer() != tc.ExpectedTools[0].Name {
 			t.Errorf("decoy-correct case %s bearer=%q", tc.ID, f.Bearer())
 		}

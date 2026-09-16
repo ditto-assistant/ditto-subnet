@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/ditto-assistant/dittobench-datagen/internal/appearance"
 )
 
 // Bench v13 discovery inventories (issue #1842). A seed configures the
@@ -89,6 +91,23 @@ func InventoryForSeed(seed int64) Inventory {
 
 	inv.Accents = append(append(append([]string(nil), legacyAccents...), inv.accentTargets...), inv.AccentNearMiss.Base, inv.AccentNearMiss.Partner)
 	inv.Fonts = append(append([]string(nil), inv.fontTargets...), inv.FontNearMiss.Base, inv.FontNearMiss.Partner)
+	// The ordinary world's preferences and tool discovery share one served
+	// inventory. Preserve both producers' near-misses without duplicate names.
+	choice := appearance.ForSeed(seed)
+	merge := func(options, extra []string) []string {
+		for _, value := range extra {
+			found := false
+			for _, option := range options {
+				found = found || strings.EqualFold(option, value)
+			}
+			if !found {
+				options = append(options, value)
+			}
+		}
+		return options
+	}
+	inv.Accents = merge(inv.Accents, choice.AccentOptions)
+	inv.Fonts = merge(inv.Fonts, choice.FontOptions)
 	sortFold(inv.Accents)
 	sortFold(inv.Fonts)
 	return inv

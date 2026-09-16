@@ -57,13 +57,9 @@ func TestInventoryLists(t *testing.T) {
 				t.Fatalf("seed %d dropped legacy accent %q from the list", seed, c)
 			}
 		}
-		// A legacy font may be LISTED only as a planted near-miss base ("Inter"
-		// beside "Inter Tight"); it is never a discovery target.
-		for _, f := range inv.Fonts {
-			if legacyFont[strings.ToLower(f)] && !strings.EqualFold(f, inv.FontNearMiss.Base) {
-				t.Fatalf("seed %d lists legacy font %q", seed, f)
-			}
-		}
+		// Ordinary world preferences may independently draw a familiar font
+		// from the public corpus. They must be listed, but never become a
+		// discovery-family target merely because they were in an old pool.
 		for _, target := range inv.FontTargets() {
 			if legacyFont[strings.ToLower(target)] {
 				t.Fatalf("seed %d font target %q is a legacy font", seed, target)

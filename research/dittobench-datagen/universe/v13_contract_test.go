@@ -231,9 +231,6 @@ func TestV13ContractRecordTimestampsRespectAssertedDates(t *testing.T) {
 		}
 		return at
 	}
-	dayStart := func(d v13Date) time.Time {
-		return time.Date(v13RecordYear, time.Month(d.Month), d.Day, 0, 0, 0, 0, time.UTC)
-	}
 	for seed := int64(1); seed <= 40; seed++ {
 		generated, err := GenerateV13Programs(seed, 28)
 		if err != nil {
@@ -252,13 +249,13 @@ func TestV13ContractRecordTimestampsRespectAssertedDates(t *testing.T) {
 					at := parse(pair.Timestamp)
 					if asserted {
 						for _, past := range append([]v13Date{g.CounterDate}, g.Events[0].Date, g.Events[1].Date, g.Events[2].Date) {
-							if !at.After(dayStart(past).AddDate(0, 0, 1)) {
+							if !at.After(v13CalendarDate(seed, "business", group, past, true).AddDate(0, 0, 1)) {
 								t.Fatalf("seed %d %s: record at %s precedes asserted event day %v (latest %v)", seed, g.Family, pair.Timestamp, past, latest)
 							}
 						}
 						continue
 					}
-					if !at.Before(dayStart(g.Milestone)) {
+					if !at.Before(v13CalendarDate(seed, "business", group, g.Milestone, false)) {
 						t.Fatalf("seed %d %s: record at %s is not before the planned milestone %v", seed, g.Family, pair.Timestamp, g.Milestone)
 					}
 				}
@@ -276,7 +273,7 @@ func TestV13ContractRecordTimestampsRespectAssertedDates(t *testing.T) {
 				for _, pair := range m.Pairs {
 					at := parse(pair.Timestamp)
 					for _, plan := range g.Dates {
-						if !at.Before(dayStart(plan)) {
+						if !at.Before(v13CalendarDate(seed, "personal", group, plan, false)) {
 							t.Fatalf("seed %d %s: household note at %s is not before the plan date %v", seed, g.Domain, pair.Timestamp, plan)
 						}
 					}

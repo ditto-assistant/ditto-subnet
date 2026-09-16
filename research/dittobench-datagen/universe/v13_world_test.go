@@ -199,13 +199,17 @@ func TestV13WorldSessionIDsAndTimestampsCarryNoLabels(t *testing.T) {
 		w := GenerateForVersion(seed, 3, protocol.BenchVersionV13)
 		byID := map[string]protocol.MemoryPair{}
 		sessions := map[string]bool{}
+		storySessions := map[string]bool{}
+		for _, story := range w.Stories {
+			storySessions[story.SessionID] = true
+		}
 		deltas := map[time.Duration]int{}
 		var stamps []time.Time
 		for _, pair := range w.Pairs {
 			if !opaqueSessionID.MatchString(pair.SessionID) {
 				t.Fatalf("seed %d pair %s session %q is not opaque", seed, pair.PairID, pair.SessionID)
 			}
-			if sessions[pair.SessionID] {
+			if sessions[pair.SessionID] && !storySessions[pair.SessionID] {
 				t.Fatalf("seed %d repeats session %q", seed, pair.SessionID)
 			}
 			sessions[pair.SessionID] = true
@@ -248,8 +252,9 @@ func TestV13WorldSessionIDsAndTimestampsCarryNoLabels(t *testing.T) {
 			before(trip.PlanPairID, trip.CorrectionPairID)
 		}
 		for _, arc := range w.StoryArcs {
-			before(arc.StoryPairIDs[0], arc.StoryPairIDs[1])
-			before(arc.StoryPairIDs[1], arc.StoryPairIDs[2])
+			for i := 1; i < arc.V2.Memories; i++ {
+				before(arc.V2.PairIDs[i-1], arc.V2.PairIDs[i])
+			}
 		}
 	}
 	// The frozen contract must still carry its labelled ids and stride.

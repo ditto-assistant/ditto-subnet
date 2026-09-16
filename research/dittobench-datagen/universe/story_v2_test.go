@@ -620,6 +620,7 @@ func TestStoryClaimMirrorsPlannedProtocolClaim(t *testing.T) {
 		{"Unit", "string", `json:"unit,omitempty"`},
 		{"Critical", "bool", `json:"critical,omitempty"`},
 		{"Weight", "float64", `json:"weight,omitempty"`},
+		{"Forbidden", "[]string", `json:"forbidden,omitempty"`},
 	}
 	typ := reflect.TypeOf(Claim{})
 	if typ.NumField() != len(want) {

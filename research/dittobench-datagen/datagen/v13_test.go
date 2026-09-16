@@ -203,7 +203,7 @@ func TestV13ToolSurfacesVaryAndKeepAnchors(t *testing.T) {
 	for _, category := range []string{
 		"world_contact_research_email_result_usage", "world_memory_delete", "world_memory_update",
 		"world_theme_discover_set", "world_business_workflow", "world_link_chain_result_usage",
-		"v10_state_dependent_routing", "set_model", "set_font", "set_accent",
+		"v10_state_dependent_routing", "discovery_font_set", "discovery_accent_set",
 	} {
 		if len(frames[category]) < 3 {
 			t.Errorf("v13 %s rendered only %d distinct frames across 30 seeds", category, len(frames[category]))
@@ -279,7 +279,7 @@ func TestV13CapabilityAliasesNeverRenderTheCanonicalValue(t *testing.T) {
 		}
 		for _, tc := range ds.ToolCases {
 			switch tc.Category {
-			case "set_font", "set_accent", "settings":
+			case "discovery_font_set", "discovery_accent_set":
 			default:
 				continue
 			}
@@ -300,7 +300,7 @@ func TestV13CapabilityAliasesNeverRenderTheCanonicalValue(t *testing.T) {
 			}
 		}
 	}
-	for _, category := range []string{"set_font", "set_accent", "settings"} {
+	for _, category := range []string{"discovery_font_set", "discovery_accent_set"} {
 		if checked[category] == 0 {
 			t.Fatalf("v13 never rendered a %s discover-then-set case across 30 seeds", category)
 		}

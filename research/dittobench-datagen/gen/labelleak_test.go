@@ -82,7 +82,11 @@ func labeledArtifactPairs(t *testing.T, seed int64, version int) []labeledPair {
 		}
 	}
 	for _, arc := range world.StoryArcs {
-		for part, id := range arc.StoryPairIDs {
+		ids := arc.StoryPairIDs[:]
+		if arc.V2 != nil {
+			ids = arc.V2.PairIDs
+		}
+		for part, id := range ids {
 			family[id] = familyWorldStory
 			slot[id] = part
 		}
@@ -364,7 +368,7 @@ func TestV13SeedWireCarriesNoFamilyArcOrSlotLabel(t *testing.T) {
 	for seed := int64(1); seed <= 5; seed++ {
 		world := universe.GenerateForVersion(seed, 3, protocol.BenchVersionV13)
 		for _, arc := range world.StoryArcs {
-			if arc.StoryPairIDs[0] == "" {
+			if arc.V2 == nil || len(arc.V2.PairIDs) == 0 || arc.V2.PairIDs[0] == "" {
 				t.Fatalf("seed %d arc %s has no story pairs", seed, arc.ID)
 			}
 		}

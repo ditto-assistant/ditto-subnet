@@ -104,12 +104,17 @@ func TestV13ToolBenchContractAcrossFortySeeds(t *testing.T) {
 					t.Fatalf("seed %d non-decoy case %s expects decoy %s", seed, tc.Category, spec.Name)
 				}
 			}
+			// Stored-preference restraint turns may legitimately name a value
+			// from the public corpus. Only discovery prompts must hide it.
 			for _, re := range bakedPoolValues {
+				if !v13DiscoveryFamily(tc.Category) {
+					continue
+				}
 				if re.MatchString(tc.Prompt) {
 					t.Fatalf("seed %d %s prompt carries a baked pool value (%s): %q", seed, tc.Category, re, tc.Prompt)
 				}
 			}
-			if setsAccent(tc) {
+			if setsAccent(tc) && v13DiscoveryFamily(tc.Category) {
 				for _, re := range bakedAccentValues {
 					if re.MatchString(tc.Prompt) {
 						t.Fatalf("seed %d %s prompt carries a baked accent value (%s): %q", seed, tc.Category, re, tc.Prompt)
@@ -129,7 +134,7 @@ func TestV13ToolBenchContractAcrossFortySeeds(t *testing.T) {
 				if strings.Contains(tc.Prompt, d.Name) || !strings.Contains(tc.Prompt, d.Brand) {
 					t.Fatalf("seed %d decoy prompt must name the brand, never the tool: %q", seed, tc.Prompt)
 				}
-				if !strings.Contains(tc.Prompt, toolexec.NeedleFor(seed, tc.ID).Subject) {
+				if !strings.Contains(tc.Prompt, toolexec.NeedleForVersion(seed, tc.ID, protocol.BenchVersionV13).Subject) {
 					t.Fatalf("seed %d decoy prompt lost its needle subject: %q", seed, tc.Prompt)
 				}
 			case v13IsUnexpectedFamily(tc.Category):
@@ -247,7 +252,9 @@ func TestV13ToolBenchContractAcrossFortySeeds(t *testing.T) {
 		if counts["set_effort"] > 0 {
 			setEffortRuns++
 		}
-		for _, family := range []string{"stale_context_web", "memory_fetch", "v10_state_dependent_routing", "world_contact_research_email_result_usage", "settings", "recipe_apply", "capability_discovery", "automation_list", "agent_read_not_run", "tool_discovery"} {
+		// Memory-routing families share the capped, effect-graded read slice;
+		// a legacy memory_fetch label is no longer a separate quota.
+		for _, family := range []string{"stale_context_web", "v10_state_dependent_routing", "world_contact_research_email_result_usage", "settings", "recipe_apply", "capability_discovery", "automation_list", "agent_read_not_run", "tool_discovery"} {
 			if counts[family] < 1 {
 				t.Errorf("seed %d omitted family %q", seed, family)
 			}

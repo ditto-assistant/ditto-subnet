@@ -39,6 +39,8 @@ type WorldPlanSelection struct {
 	OrdinaryCaps map[string]int
 	// Exclude removes ordinary facts already consumed by a relation twin.
 	Exclude map[string]bool
+	// Require reserves ordinary slots for corrections arriving in later waves.
+	Require map[string]bool
 	Interim int
 	// Salt names the shuffle stream. Distinct contracts pass distinct salts so a
 	// later budget change never re-orders an earlier version's candidates.
@@ -135,11 +137,29 @@ func (w World) SelectQuestionPlans(sel WorldPlanSelection) ([]QuestionPlan, Worl
 
 	taken := make([]bool, len(ordinary))
 	perKind := map[string]int{}
+	for i, plan := range ordinary {
+		if !sel.Require[excludeKey(plan.oracleKind, plan.oracleIndex)] {
+			continue
+		}
+		if counts.Ordinary >= sel.Ordinary {
+			return nil, WorldPlanCounts{}, fmt.Errorf("required corrections exceed ordinary slot budget")
+		}
+		taken[i] = true
+		selected = append(selected, plan)
+		counts.Ordinary++
+		perKind[plan.oracleKind]++
+	}
+	if counts.Ordinary != len(sel.Require) {
+		return nil, WorldPlanCounts{}, fmt.Errorf("only %d of %d required corrections are answerable", counts.Ordinary, len(sel.Require))
+	}
 	for i := range ordinary {
 		if counts.Ordinary == sel.Ordinary {
 			break
 		}
 		kind := ordinary[i].oracleKind
+		if taken[i] {
+			continue
+		}
 		if cap, ok := sel.OrdinaryCaps[kind]; ok && perKind[kind] >= cap {
 			continue
 		}
