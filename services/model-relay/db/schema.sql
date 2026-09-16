@@ -797,6 +797,26 @@ CREATE FUNCTION public.guard_validator_ticket_purpose() RETURNS trigger
         $$;
 
 
+--
+-- Name: reject_benchmark_canary_score(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_benchmark_canary_score() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM validator_tickets t
+              WHERE t.agent_id = NEW.agent_id
+                AND t.bench_version = NEW.bench_version
+                AND t.validator_hotkey = NEW.validator_hotkey
+                AND t.purpose = 'benchmark_canary') THEN
+            RAISE EXCEPTION 'benchmark canary cannot write authoritative scores';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -1021,6 +1041,35 @@ CREATE TABLE public.banned_hotkeys (
     hotkey text NOT NULL,
     reason text,
     banned_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: benchmark_canaries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.benchmark_canaries (
+    canary_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    slot_id text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    screened_image_sha256 text NOT NULL,
+    seed bigint NOT NULL,
+    dataset_sha256 text NOT NULL,
+    run_size text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    deadline timestamp with time zone NOT NULL,
+    status text NOT NULL,
+    finished_at timestamp with time zone,
+    result jsonb,
+    signature text,
+    failure_detail text,
+    CONSTRAINT ck_benchmark_canaries_benchmark_canaries_status CHECK ((status = ANY (ARRAY['issued'::text, 'completed'::text, 'failed'::text, 'cancelled'::text]))),
+    CONSTRAINT ck_benchmark_canaries_benchmark_canaries_version_seed CHECK (((bench_version > 0) AND (seed >= 0)))
 );
 
 
@@ -4425,7 +4474,7 @@ CREATE TABLE public.validator_tickets (
     CONSTRAINT ck_validator_tickets_validator_tickets_failure_reason CHECK (((failure_reason IS NULL) OR (failure_reason = ANY (ARRAY['infrastructure'::text, 'scoring_error'::text, 'sandbox_oom'::text])))),
     CONSTRAINT ck_validator_tickets_validator_tickets_infra_retry_gran_aa85 CHECK ((infra_retry_grants >= 0)),
     CONSTRAINT ck_validator_tickets_validator_tickets_purpose_revision_df08 CHECK ((purpose_revision >= 0)),
-    CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text]))),
+    CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text, 'benchmark_canary'::text]))),
     CONSTRAINT ck_validator_tickets_validator_tickets_seed_nonnegative CHECK (((seed IS NULL) OR (seed >= 0))),
     CONSTRAINT ck_validator_tickets_validator_tickets_slot_id CHECK ((slot_id = ANY (ARRAY['slot-0'::text, 'slot-1'::text, 'slot-2'::text, 'slot-3'::text, 'slot-4'::text, 'slot-5'::text, 'slot-6'::text, 'slot-7'::text]))),
     CONSTRAINT validator_tickets_attempt_count_positive CHECK ((attempt_count > 0)),
@@ -4645,6 +4694,14 @@ ALTER TABLE ONLY public.ath_reviews
 
 ALTER TABLE ONLY public.banned_hotkeys
     ADD CONSTRAINT banned_hotkeys_pkey PRIMARY KEY (hotkey);
+
+
+--
+-- Name: benchmark_canaries benchmark_canaries_lease_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.benchmark_canaries
+    ADD CONSTRAINT benchmark_canaries_lease_key UNIQUE (agent_id, bench_version, validator_hotkey, deadline);
 
 
 --
@@ -5629,6 +5686,14 @@ ALTER TABLE ONLY public.artifact_release_settings_revisions
 
 ALTER TABLE ONLY public.ath_copy_court_recommendations
     ADD CONSTRAINT pk_ath_copy_court_recommendations PRIMARY KEY (recommendation_id);
+
+
+--
+-- Name: benchmark_canaries pk_benchmark_canaries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.benchmark_canaries
+    ADD CONSTRAINT pk_benchmark_canaries PRIMARY KEY (canary_id);
 
 
 --
@@ -7828,6 +7893,13 @@ CREATE TRIGGER confirmation_dimension_evidence_append_only_guard BEFORE DELETE O
 
 
 --
+-- Name: confirmation_scores confirmation_scores_reject_benchmark_canary; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER confirmation_scores_reject_benchmark_canary BEFORE INSERT OR UPDATE ON public.confirmation_scores FOR EACH ROW EXECUTE FUNCTION public.reject_benchmark_canary_score();
+
+
+--
 -- Name: confirmation_bundle_subjects confirmation_subject_authority_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -7846,6 +7918,13 @@ CREATE TRIGGER efficiency_bonuses_curve_guard BEFORE INSERT OR UPDATE OF agent_i
 --
 
 CREATE TRIGGER efficiency_cohort_snapshots_curve_guard BEFORE INSERT OR UPDATE ON public.efficiency_cohort_snapshots FOR EACH ROW EXECUTE FUNCTION public.guard_efficiency_snapshot_curve();
+
+
+--
+-- Name: scores scores_reject_benchmark_canary; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER scores_reject_benchmark_canary BEFORE INSERT OR UPDATE ON public.scores FOR EACH ROW EXECUTE FUNCTION public.reject_benchmark_canary_score();
 
 
 --
@@ -8324,6 +8403,14 @@ ALTER TABLE ONLY public.ath_copy_court_recommendations
 
 ALTER TABLE ONLY public.ath_copy_court_recommendations
     ADD CONSTRAINT fk_ath_copy_court_recommendations_settings_revision_cop_511a FOREIGN KEY (settings_revision) REFERENCES public.copy_court_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: benchmark_canaries fk_benchmark_canaries_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.benchmark_canaries
+    ADD CONSTRAINT fk_benchmark_canaries_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id);
 
 
 --
