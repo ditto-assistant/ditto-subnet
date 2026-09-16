@@ -755,7 +755,7 @@ func TransformAuditFactor(perCase []protocol.CaseScore, enforced bool) float64 {
 // historical constants byte-for-byte.
 func CompositeGateForVersion(perCase []protocol.CaseScore, benchVersion int) float64 {
 	if benchVersion >= protocol.BenchVersionV7 {
-		return compositeGateV7(perCase)
+		return compositeGateV7(perCase, benchVersion)
 	}
 	gate := CompositeGate(perCase)
 	if benchVersion >= protocol.BenchVersionV5 {
@@ -793,7 +793,10 @@ func CompositeGateForVersion(perCase []protocol.CaseScore, benchVersion int) flo
 // over-called, so an isolated stray call is nearly free while a harness that acts
 // on every recall question takes the full bounded hit.
 func MemoryOverCallFactor(perCase []protocol.CaseScore) float64 {
-	return memoryOverCallFactorWith(perCase, memoryOverCallMaxPenalty)
+	// The pre-v7 gate. Its contract predates the declarative-acknowledgement
+	// category entirely, so it keeps the lifecycle-only exclusion (see
+	// memoryWriteCategory).
+	return memoryOverCallFactorWith(perCase, memoryOverCallMaxPenalty, protocol.BenchVersionV3)
 }
 
 // metamorphicMaxPenalty is the deepest the metamorphic-consistency factor can
