@@ -14,7 +14,8 @@ import (
 // artifact, on /seed, or on /run.
 var v13GraderOnlyWireKeys = []string{
 	"claims", "twin_relation", "required_arg_claims", "restraint", "restraint_claim",
-	"forbidden_tools", "critical", "weight", "unit",
+	"forbidden_tools", "critical", "weight", "unit", "forbidden", "grounding",
+	"effect_answer", "effect_forbidden", "alternative_expected_tools", "run_after_case_id",
 }
 
 func v13PopulatedMemoryCase() protocol.MemoryCase {
@@ -47,12 +48,22 @@ func v13PopulatedToolCase() protocol.ToolCase {
 				"theme": {Kind: "enum", Expected: "dark", Accept: []string{"Dark", "night"}},
 			},
 		}},
-		MaxToolCalls: 1,
-		TwinRelation: protocol.TwinRelationDecision,
+		MaxToolCalls:    1,
+		TwinRelation:    protocol.TwinRelationDecision,
+		TwinGroup:       "restraint-group-v13",
+		ForbiddenTools:  []string{"set_accent_color"},
+		EffectAnswer:    "LFU-229",
+		EffectForbidden: []string{"QRZ-880"},
+		RunAfterCaseID:  "case-v13-mutation",
+		AlternativeExpectedTools: [][]protocol.ToolSpec{{
+			{Name: "delete_memory", RequiredArgs: map[string]string{"pair_id": "cnote"}},
+			{Name: "save_memory", RequiredArgClaims: map[string]protocol.Claim{"content": {Kind: "fact_update", Expected: "handoff is Monday", Forbidden: []string{"Friday"}}}},
+		}},
 		Restraint: &protocol.RestraintClaim{
 			Kind:           protocol.RestraintClarifyFirst,
 			ForbiddenTools: []string{"set_theme"},
 			Accept:         []string{"which theme"},
+			Grounding:      []string{"midnight"},
 		},
 	}
 }
@@ -84,7 +95,7 @@ func assertNoGraderOnlyKeys(t *testing.T, surface string, body []byte) {
 	}
 	walk("$", generic)
 	lower := strings.ToLower(string(body))
-	for _, leak := range []string{"decision_twin", "as_of_twin", "clarify_first", "d. whitfield", "which theme"} {
+	for _, leak := range []string{"decision_twin", "as_of_twin", "clarify_first", "d. whitfield", "which theme", "lfu-229", "qrz-880", "restraint-group-v13", "case-v13-mutation", "handoff is monday"} {
 		if strings.Contains(lower, leak) {
 			t.Fatalf("%s: grader-only value %q reached the wire", surface, leak)
 		}
@@ -121,7 +132,8 @@ func TestV13GraderOnlyFieldsNeverReachHarnessWire(t *testing.T) {
 			t.Fatalf("v%d: grader-only memory fields did not survive assembly: %+v", version, got.MemoryCase)
 		}
 		gotTool := artifact.ToolCases[0]
-		if gotTool.Restraint == nil || gotTool.TwinRelation != protocol.TwinRelationDecision || gotTool.ExpectedTools[0].RequiredArgClaims["theme"].Expected != "dark" {
+		if gotTool.Restraint == nil || gotTool.TwinRelation != protocol.TwinRelationDecision || gotTool.ExpectedTools[0].RequiredArgClaims["theme"].Expected != "dark" ||
+			gotTool.TwinGroup == "" || gotTool.EffectAnswer == "" || len(gotTool.EffectForbidden) == 0 || gotTool.RunAfterCaseID == "" || len(gotTool.ForbiddenTools) == 0 || len(gotTool.AlternativeExpectedTools) != 1 || len(gotTool.Restraint.Grounding) == 0 {
 			t.Fatalf("v%d: grader-only tool fields did not survive assembly: %+v", version, gotTool)
 		}
 	}
@@ -132,6 +144,12 @@ func TestV13GraderOnlyFieldsNeverReachHarnessWire(t *testing.T) {
 	bare.Case.TwinRelation = ""
 	bareTool := tc
 	bareTool.TwinRelation = ""
+	bareTool.TwinGroup = ""
+	bareTool.ForbiddenTools = nil
+	bareTool.EffectAnswer = ""
+	bareTool.EffectForbidden = nil
+	bareTool.RunAfterCaseID = ""
+	bareTool.AlternativeExpectedTools = nil
 	bareTool.Restraint = nil
 	bareTool.ExpectedTools = []protocol.ToolSpec{{Name: "set_theme", RequiredArgs: map[string]string{"theme": "dark"}}}
 	for _, version := range []int{protocol.BenchVersionV12, protocol.BenchVersionV13} {
