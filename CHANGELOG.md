@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.272.0 (2026-09-16)
+
+### Features
+
+- **bench**: Integrate v13 tool semantics and assertion-aware effects
+  ([#1872](https://github.com/ditto-assistant/ditto-subnet/pull/1872),
+  [`554a90a`](https://github.com/ditto-assistant/ditto-subnet/commit/554a90aa88079e54752ca84fa5b7e55accfd8e20))
+
+
 ## v0.271.0 (2026-09-16)
 
 ### Features
