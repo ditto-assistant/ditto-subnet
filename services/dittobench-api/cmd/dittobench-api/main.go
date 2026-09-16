@@ -1179,14 +1179,14 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 
 func requestedBenchVersion(requested int) (int, string) {
 	if requested == 0 {
-		return 0, "bench_version is required (supported: 8, 9, 10, 11, 12)"
+		return 0, fmt.Sprintf("bench_version is required (supported: %v)", supportedBenchVersions())
 	}
 	for _, version := range supportedBenchVersions() {
 		if requested == version {
 			return requested, ""
 		}
 	}
-	return 0, "unsupported bench_version (supported: 8, 9, 10, 11, 12)"
+	return 0, fmt.Sprintf("unsupported bench_version (supported: %v)", supportedBenchVersions())
 }
 
 func toolPrerequisiteWave(toolCases []protocol.ToolCase) (protocol.SeedRequest, error) {

@@ -590,18 +590,18 @@ synthetic S/N carriers, not by CI alone.
 
 `gen/v13_envelope.go` replaces `v8PrimaryCaseBudget` with a slot table per run
 size (#1848); `cmd/mixaudit` (#1830) audits it per seed and fails closed on any
-question type or answer kind it cannot classify. Full = 224 primary + 9
-isolation + the fixed integrity tail:
+question type or answer kind it cannot classify. Full = 227 primary + 9
+isolation + the 14-case integrity tail:
 
 | Slot | Count | Generator | Issue |
 | --- | ---: | --- | --- |
 | story | 78 | story v2 typed event DAG, six typed oracles per arc, 13 arcs (7 business / 6 personal) | #1839 #1841 |
-| ordinary world | 32 | ordinary person / project / trip oracles, `project-outstanding` ≤ 4 | #1848 |
+| ordinary world | 32 | ordinary person / project / trip oracles, `project-outstanding` ≤ 1 | #1848 |
 | business programs | 28 | `GenerateV13Programs`, 7 metamorphic groups × 4, zero monetary | #1520 |
 | personal programs | 24 | `GenerateV13PersonalPrograms`, 6 groups × 4, zero monetary | #1838 |
 | abstention | 25 | six grounded-absence families with `decision_twin` pairs | #1530 |
 | record-determined quantity | 16 | family compiler v2: 10 money in the record's currency, 6 non-monetary, record-stated sign convention | #1837 |
-| divergence | 12 | parser divergence, ≤ 3 money | #1837 |
+| divergence | 12 | parser divergence, zero monetary | #1837 |
 | point-in-time | 12 | 6 `as_of_twin` pairs with the anchor inside the `/run` turn | #1844 |
 | integrity | 14 | 3 chitchat, 3 declarative ack (0.25 credit), 3 declarative behaviour, 1 canary, 4 injection (2 data-inside-envelope, 1 envelope-free, 1 classic) | #1836 |
 | isolation | 9 | `GenerateIsolationForVersion` | — |
@@ -624,7 +624,7 @@ as the interim generators are replaced (`gen.V13InterimSlots`,
 with a violation report and only the structural bounds and the pinned interim
 ceilings — money ≤ 37% of weight, ≤ 110 money-bearing cases, arithmetic ≤ 45%
 — are asserted, so interim exposure cannot creep upward). Medium is 95 memory
-cases (36 · 10 · 8 · 6 · 6 · 4 · 4 · 2 · 14 · 5) and small 27 (6 · 4 · 4 · 13);
+cases (36 · 12 · 4 · 4 · 8 · 4 · 4 · 4 · 14 · 5) and small 27 (6 · 4 · 4 · 13);
 only the three public run sizes have a table, any other size fails closed.
 
 ```sh
@@ -726,7 +726,7 @@ technically ready.
   about a tenth of ordinary corrections behind a synchronous `/seed` whose 2xx
   is the ingest acknowledgement, proven under `case_concurrency` 1–64
   (`TestWaveDispatchHonorsIngestAckUnderCaseConcurrency` (#1844),
-  `TestV13EveryDeclaredMemoryCaseAnswerableAfterItsWave` (#1844)).
+  `TestV13EveryDeclaredEvidencePairIsSeeded` (#1844)).
 - *Grounded abstention.* Six absence-proof families (≥ 50% misleading
   evidence, ≤ 25% pure absence) graded as `AnswerAbsence`: a decline that cites
   a grounding token present in the searched records scores 1; the tempting
@@ -734,9 +734,9 @@ technically ready.
   insufficient evidence; a generic refusal or a templated grounding naming an
   absent entity scores 0. Each is paired with a distributionally matched
   answerable `decision_twin` ≥ 20 cases away
-  (`TestV13GroundedAbstentionScoresOne` (#1530),
-  `TestV13AbstentionZerosAssertionsAndGenericRefusals` (#1530),
-  `TestV13DecisionTwinBaselines` (#1530)).
+  (`TestV13AbstentionOracleAndBaselinesThroughTheArtifact` (#1530),
+  `TestV13AbsenceAndClarifyKinds` (#1530),
+  `TestTwinPostPassBaselinesZeroAndOracleFull` (#1530)).
 
 **Tool bench (issues #1843 #1842 #1580 #1840 #1846 #1845 #1847).**
 

@@ -35,26 +35,6 @@ it must not silently advance to the current version. Version 3 has its own
 seed-domain and pinned deterministic vectors, while version 2 retains its
 existing byte goldens and scoring behavior.
 
-### Harness wire version for Bench v10 and later (recorded decision)
-
-The `bench_version` a harness sees on `/seed` and `/run` is the newest
-PUBLISHED harness contract, `publicWireBenchVersion = 9`
-(`internal/runner/runner.go`), not the validator-owned scorer revision that
-generated the dataset. Bench v10, v11, v12, and v13 change the dataset,
-projection, grader, and gates; none of them changes what a harness must
-advertise or branch on. **Bench v13 wire-version decision (issue #1519, option
-A — owner decision, default taken): the wire stays at 9.** Every
-harness-visible v13 addition (enum schemas, coined decoys, wave-0 corrections,
-`tools_offered`) ships as an additive optional field on the existing shapes, and
-every grader-only v13 field (`claims`, `twin_relation`, `required_arg_claims`,
-`restraint`, and the tool case's `twin_group` pair identity) is stripped before
-the wire. The alternative — sending 13 with a
-compatibility window — fails every deployed harness closed, because the starter
-kit range-checks `MIN..=MAX_SUPPORTED_BENCH_VERSION`
-(`miners/dittobench-starter-kit/src/protocol.rs`) and would 400 the first
-`/run`, turning version negotiation into a difficulty signal. Revisit only with
-a starter-kit release at least two weeks ahead of activation.
-
 ### V9 hostile-harness projection
 
 For `bench_version` 9 and every later contract (v10–v13 reach the harness as
@@ -118,7 +98,7 @@ reviewed identity, `openrouter-route-6a097486af3c178d-v1`; a v9 scorer rejects
 the fixed-medium v7/v8 profile `openrouter-route-a471cd87ae7df5b9-v1` even
 though both serve the same model.
 
-## Bench v13 tool catalog: seeded descriptions, enums, coined decoys, discovery inventories
+### Seeded tool catalog (v13)
 
 From `bench_version: 13` the `tools` array on every `RunRequest` is a
 **per-seed surface** (`catalog.CatalogForSeed`), not a fixed list. Production
@@ -1177,7 +1157,7 @@ must carry:
   (`abstain: true`, a decline phrase, or an absence phrase) that cites a
   grounding token present in the records; the tempting value may be cited as
   insufficient evidence but not asserted as the answer; a generic refusal
-  scores 0 (`TestV13GroundedAbstentionScoresOne` (#1530)).
+  scores 0 (`TestV13AbstentionOracleAndBaselinesThroughTheArtifact` (#1530)).
 - **Declarative acknowledgement credit is 0.25** for a canned acknowledgement
   without the stated value — below the scorer's 0.5 correctness line, so
   "Got it." alone no longer clears the declarative sanity slice

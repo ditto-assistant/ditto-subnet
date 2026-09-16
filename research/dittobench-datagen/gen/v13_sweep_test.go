@@ -3,6 +3,7 @@ package gen
 import (
 	"fmt"
 	"math/rand"
+	"strings"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -34,21 +35,17 @@ func TestV13RandomSeedSweepGeneratesEveryDataset(t *testing.T) {
 	}
 }
 
-// TestV13NonPublicRunSizeGenerates covers the analysis path (vstudy/gstudy):
-// a memory count outside the three public profiles still builds the whole
-// abstention budget, including the cross-user family, from the world scale.
-func TestV13NonPublicRunSizeGenerates(t *testing.T) {
+// Only published profiles own a v13 slot table. Analysis callers must select
+// one of those envelopes instead of silently sampling a different contract.
+func TestV13NonPublicRunSizeFailsClosed(t *testing.T) {
 	for _, n := range []int{45, 120} {
 		rng, err := NewRNGForVersion(7, protocol.BenchVersionV13)
 		if err != nil {
 			t.Fatal(err)
 		}
-		suite, err := GenerateMemorySuiteForVersion(rng, 7, n, 5, 0.5, protocol.BenchVersionV13)
-		if err != nil {
-			t.Fatalf("n=%d: %v", n, err)
-		}
-		if suite.AbstentionCases != v13AbstentionCaseCount(n) {
-			t.Fatalf("n=%d: %d abstention pairs, want %d", n, suite.AbstentionCases, v13AbstentionCaseCount(n))
+		_, err = GenerateMemorySuiteForVersion(rng, 7, n, 5, 0.5, protocol.BenchVersionV13)
+		if err == nil || !strings.Contains(err.Error(), "no slot table") {
+			t.Fatalf("n=%d: expected unsupported envelope, got %v", n, err)
 		}
 	}
 }

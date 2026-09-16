@@ -12029,8 +12029,6 @@ export interface components {
              * @default 0
              */
             tools_offered: number;
-        } & {
-            [key: string]: unknown;
         };
         /**
          * CatalogEvidence
@@ -12103,8 +12101,6 @@ export interface components {
             tool_choice_suppressed_completions: number;
             /** Tools Offered */
             tools_offered?: components["schemas"]["OfferedTool"][];
-        } & {
-            [key: string]: unknown;
         };
         /**
          * CatalogGateSummary
@@ -12248,8 +12244,11 @@ export interface components {
              * @default 0
              */
             tool_results: number;
-        } & {
-            [key: string]: unknown;
+            /**
+             * Unattributed Calls
+             * @default 0
+             */
+            unattributed_calls: number;
         };
         /**
          * ClaimProvenanceSummary
@@ -17120,7 +17119,6 @@ export interface components {
         InferenceCostEvidence: {
             /**
              * Attributed
-
              * @default false
              */
             attributed: boolean;
@@ -17131,13 +17129,11 @@ export interface components {
             attribution: string;
             /**
              * Budget Tokens
-
              * @default 0
              */
             budget_tokens: number;
             /**
              * Choices Total
-
              * @default 0
              */
             choices_total: number;
@@ -17148,34 +17144,34 @@ export interface components {
             class: string;
             /**
              * Completions
-
              * @default 0
              */
             completions: number;
             /**
              * Excess Tokens
-
              * @default 0
              */
             excess_tokens: number;
             /**
              * Factor Bps
-             * @default 0
+             * @default 10000
              */
             factor_bps: number;
             /**
              * Output Tokens
-
              * @default 0
              */
             output_tokens: number;
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
             /**
              * Usage Unavailable
              * @default 0
              */
             usage_unavailable: number;
-        } & {
-            [key: string]: unknown;
         };
         /**
          * InferenceCostSummary
@@ -18851,8 +18847,6 @@ export interface components {
              * @default
              */
             schema_sha256: string;
-        } & {
-            [key: string]: unknown;
         };
         /**
          * OwnerLinkProof
@@ -27114,8 +27108,6 @@ export interface components {
              * @default 0
              */
             unmatched: number;
-        } & {
-            [key: string]: unknown;
         };
         /**
          * Top5ConfirmationJobRequest

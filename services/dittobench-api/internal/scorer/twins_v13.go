@@ -219,15 +219,11 @@ func AssertedAnswer(resp protocol.RunResponse) string {
 }
 
 // ClassifyDecision names the decision class of a response: act when a
-// non-memory tool was called (the validator-observed trajectory when available,
-// else the self-report), abstain when the response declines by the grader's own
+// non-memory tool was observed by the validator. Self-reported calls never
+// prove an action, including when no call was observed. Abstain uses the grader's
 // rule (grade.Declines), answer otherwise.
 func ClassifyDecision(resp protocol.RunResponse, observed []protocol.ObservedToolCall) string {
-	calls := observed
-	if len(calls) == 0 {
-		calls = resp.ToolCalls
-	}
-	for _, call := range calls {
+	for _, call := range observed {
 		if call.Name != "" && !memoryTools[call.Name] {
 			return DecisionAct
 		}

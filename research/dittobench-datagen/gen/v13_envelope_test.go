@@ -227,23 +227,25 @@ func TestV13EveryDeclaredEvidencePairIsSeeded(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s seed %d: %v", runSize, seed, err)
 			}
-			available := map[string]map[string]bool{}
-			add := func(user string, pairs []protocol.MemoryPair) {
+			available := map[string]map[string]int{}
+			add := func(user string, pairs []protocol.MemoryPair, wave int) {
 				if user == "" {
 					user = PrimaryUser
 				}
 				if available[user] == nil {
-					available[user] = map[string]bool{}
+					available[user] = map[string]int{}
 				}
 				for _, pair := range pairs {
-					available[user][pair.PairID] = true
+					if old, ok := available[user][pair.PairID]; !ok || wave < old {
+						available[user][pair.PairID] = wave
+					}
 				}
 			}
 			for _, tc := range artifact.ToolCases {
-				add(PrimaryUser, tc.PrerequisitePairs)
+				add(PrimaryUser, tc.PrerequisitePairs, -1)
 			}
 			for _, wave := range artifact.MemoryWaves {
-				add(wave.UserID, wave.Pairs)
+				add(wave.UserID, wave.Pairs, wave.Wave)
 			}
 			declared := 0
 			for _, c := range artifact.MemoryCases {
@@ -253,8 +255,8 @@ func TestV13EveryDeclaredEvidencePairIsSeeded(t *testing.T) {
 				}
 				for _, pairID := range c.V10EvidencePairIDs {
 					declared++
-					if !available[user][pairID] {
-						t.Fatalf("%s seed %d case %s requires unseeded pair %s for user %s", runSize, seed, c.ID, pairID, user)
+					if wave, ok := available[user][pairID]; !ok || wave > c.RunAfterWave {
+						t.Fatalf("%s seed %d case %s unlocks at %d but pair %s for user %s is present=%t at wave %d", runSize, seed, c.ID, c.RunAfterWave, pairID, user, ok, wave)
 					}
 				}
 			}

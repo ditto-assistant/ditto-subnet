@@ -349,7 +349,7 @@ func TestV13FreeFormArgumentsDoNotRequireMagicStrings(t *testing.T) {
 	freeForm := map[string]bool{
 		"agent_job": true, "workflow_not_job": true, "agent_workflow": true,
 		"feedback": true, "set_tool_prefs": true, "automation_not_job": true,
-		"recipe_create": true, "recipe_apply": true, "calendar_create": true,
+		"recipe_create": true, "calendar_create": true,
 		"calendar_search": true,
 	}
 	seen := map[string]bool{}

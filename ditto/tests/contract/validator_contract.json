@@ -111,7 +111,6 @@
   "CaseScore": {
     "$defs": {
       "CatalogCompletion": {
-        "additionalProperties": true,
         "properties": {
           "after_last_tool_result": {
             "default": false,
@@ -155,7 +154,6 @@
         "type": "object"
       },
       "CatalogEvidence": {
-        "additionalProperties": true,
         "properties": {
           "catalog_present": {
             "default": false,
@@ -242,7 +240,6 @@
         "type": "object"
       },
       "ClaimProvenanceEvidence": {
-        "additionalProperties": true,
         "properties": {
           "answer_in_prompt": {
             "anyOf": [
@@ -257,6 +254,7 @@
           },
           "claim_tokens": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "complete": {
@@ -266,6 +264,7 @@
           "completions": {
             "anyOf": [
               {
+                "minimum": 0,
                 "type": "integer"
               },
               {
@@ -297,13 +296,18 @@
           },
           "tool_results": {
             "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unattributed_calls": {
+            "default": 0,
+            "minimum": 0,
             "type": "integer"
           }
         },
         "type": "object"
       },
       "InferenceCostEvidence": {
-        "additionalProperties": true,
         "properties": {
           "attributed": {
             "default": false,
@@ -315,11 +319,12 @@
           },
           "budget_tokens": {
             "default": 0,
-
+            "minimum": 0,
             "type": "integer"
           },
           "choices_total": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "class": {
@@ -328,31 +333,39 @@
           },
           "completions": {
             "default": 0,
-
+            "minimum": 0,
             "type": "integer"
           },
           "excess_tokens": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "factor_bps": {
-            "default": 0,
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 6000,
             "type": "integer"
           },
           "output_tokens": {
             "default": 0,
-
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "usage_unavailable": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           }
         },
         "type": "object"
       },
       "OfferedTool": {
-        "additionalProperties": true,
         "properties": {
           "name": {
             "type": "string"
@@ -368,7 +381,6 @@
         "type": "object"
       },
       "ToolProvenanceEvidence": {
-        "additionalProperties": true,
         "properties": {
           "complete": {
             "default": false,
@@ -5274,7 +5286,6 @@
         "type": "object"
       },
       "CatalogCompletion": {
-        "additionalProperties": true,
         "properties": {
           "after_last_tool_result": {
             "default": false,
@@ -5318,7 +5329,6 @@
         "type": "object"
       },
       "CatalogEvidence": {
-        "additionalProperties": true,
         "properties": {
           "catalog_present": {
             "default": false,
@@ -5432,7 +5442,6 @@
         "type": "object"
       },
       "ClaimProvenanceEvidence": {
-        "additionalProperties": true,
         "properties": {
           "answer_in_prompt": {
             "anyOf": [
@@ -5447,6 +5456,7 @@
           },
           "claim_tokens": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "complete": {
@@ -5456,6 +5466,7 @@
           "completions": {
             "anyOf": [
               {
+                "minimum": 0,
                 "type": "integer"
               },
               {
@@ -5487,6 +5498,12 @@
           },
           "tool_results": {
             "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unattributed_calls": {
+            "default": 0,
+            "minimum": 0,
             "type": "integer"
           }
         },
@@ -5521,7 +5538,6 @@
         "type": "object"
       },
       "InferenceCostEvidence": {
-        "additionalProperties": true,
         "properties": {
           "attributed": {
             "default": false,
@@ -5533,11 +5549,12 @@
           },
           "budget_tokens": {
             "default": 0,
-
+            "minimum": 0,
             "type": "integer"
           },
           "choices_total": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "class": {
@@ -5546,31 +5563,39 @@
           },
           "completions": {
             "default": 0,
-
+            "minimum": 0,
             "type": "integer"
           },
           "excess_tokens": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "factor_bps": {
-            "default": 0,
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 6000,
             "type": "integer"
           },
           "output_tokens": {
             "default": 0,
-
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "usage_unavailable": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           }
         },
         "type": "object"
       },
       "OfferedTool": {
-        "additionalProperties": true,
         "properties": {
           "name": {
             "type": "string"
@@ -5586,7 +5611,6 @@
         "type": "object"
       },
       "ToolProvenanceEvidence": {
-        "additionalProperties": true,
         "properties": {
           "complete": {
             "default": false,
@@ -5953,7 +5977,6 @@
         "type": "object"
       },
       "CatalogCompletion": {
-        "additionalProperties": true,
         "properties": {
           "after_last_tool_result": {
             "default": false,
@@ -5997,7 +6020,6 @@
         "type": "object"
       },
       "CatalogEvidence": {
-        "additionalProperties": true,
         "properties": {
           "catalog_present": {
             "default": false,
@@ -6111,7 +6133,6 @@
         "type": "object"
       },
       "ClaimProvenanceEvidence": {
-        "additionalProperties": true,
         "properties": {
           "answer_in_prompt": {
             "anyOf": [
@@ -6126,6 +6147,7 @@
           },
           "claim_tokens": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "complete": {
@@ -6135,6 +6157,7 @@
           "completions": {
             "anyOf": [
               {
+                "minimum": 0,
                 "type": "integer"
               },
               {
@@ -6166,6 +6189,12 @@
           },
           "tool_results": {
             "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unattributed_calls": {
+            "default": 0,
+            "minimum": 0,
             "type": "integer"
           }
         },
@@ -6200,7 +6229,6 @@
         "type": "object"
       },
       "InferenceCostEvidence": {
-        "additionalProperties": true,
         "properties": {
           "attributed": {
             "default": false,
@@ -6212,11 +6240,12 @@
           },
           "budget_tokens": {
             "default": 0,
-
+            "minimum": 0,
             "type": "integer"
           },
           "choices_total": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "class": {
@@ -6225,31 +6254,39 @@
           },
           "completions": {
             "default": 0,
-
+            "minimum": 0,
             "type": "integer"
           },
           "excess_tokens": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "factor_bps": {
-            "default": 0,
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 6000,
             "type": "integer"
           },
           "output_tokens": {
             "default": 0,
-
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
             "type": "integer"
           },
           "usage_unavailable": {
             "default": 0,
+            "minimum": 0,
             "type": "integer"
           }
         },
         "type": "object"
       },
       "OfferedTool": {
-        "additionalProperties": true,
         "properties": {
           "name": {
             "type": "string"
@@ -6435,7 +6472,6 @@
         "type": "object"
       },
       "ToolProvenanceEvidence": {
-        "additionalProperties": true,
         "properties": {
           "complete": {
             "default": false,

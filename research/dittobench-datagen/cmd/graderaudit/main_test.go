@@ -367,10 +367,10 @@ func TestSyntheticRobustnessV12BankIsClean(t *testing.T) {
 	}
 }
 
-// TestCannedAuditV13RegradesTheNewestGeneratableCorpus: until the v13
-// generation contract lands, the v13 grading policy is audited over the v12
-// corpus regraded at v13, with the per-claim-kind gate applied. The declarative
-// acknowledgement exposure that made 120 v9 value cases passable is gone.
+// TestCannedAuditV13RegradesTheNewestGeneratableCorpus audits the generated v13
+// corpus against the published <5% per-claim-kind ceiling. A status such as
+// "closed" legitimately accepts "Done"; that is measured exposure, unlike the
+// old declarative acknowledgement bug that credited unrelated value answers.
 func TestCannedAuditV13RegradesTheNewestGeneratableCorpus(t *testing.T) {
 	report, err := cannedAudit(protocol.BenchVersionV13, "small", 3)
 	if err != nil {
@@ -391,9 +391,19 @@ func TestCannedAuditV13RegradesTheNewestGeneratableCorpus(t *testing.T) {
 			t.Fatalf("claim kind gate failed: %+v", gate)
 		}
 	}
-	for _, stat := range report.Kinds {
-		if stat.Kind == protocol.AnswerValue && stat.Passable != 0 {
-			t.Fatalf("v13 value kind still passable by a canned strategy: %+v", stat)
+	bank, _ := bankForVersion(protocol.BenchVersionV13)
+	prof, _ := gen.ProfileForVersion("small", protocol.BenchVersionV13)
+	for seed := int64(1); seed <= 3; seed++ {
+		a, err := gen.GenerateDataset(seed, prof, protocol.BenchVersionV13)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range a.MemoryCases {
+			if c.QuestionType == gen.QTDeclarativeBehavior {
+				if score, probe := bestCannedScore(c.MemoryCase, bank); score >= cannedPassScore {
+					t.Fatalf("declarative value received acknowledgement credit: seed=%d probe=%s score=%g", seed, probe, score)
+				}
+			}
 		}
 	}
 	// Full-profile v9 exposure is frozen: the v9 corpus keeps its pinned table

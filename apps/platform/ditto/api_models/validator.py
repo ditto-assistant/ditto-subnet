@@ -951,14 +951,13 @@ class ValidatorHeartbeatResponse(BaseModel):
 class _WireEvidence(BaseModel):
     """Base for the nested per-case evidence records mirrored from Go.
 
-    Two properties keep the persisted breakdown byte-faithful to the wire:
-    ``extra="allow"`` so a field the Go engine grows is kept rather than
-    silently dropped at ingest, and a serializer that emits only the keys the
-    report actually carried -- the Go structs use ``omitempty`` / nil pointers,
+    Known fields are mirrored explicitly; unknown additions are ignored during
+    rolling upgrades and never become authoritative. The serializer emits only
+    the keys the report actually carried -- Go uses ``omitempty`` / nil pointers,
     so a zero the engine omitted must not reappear as a Python default.
     """
 
-    model_config = ConfigDict(extra="allow", populate_by_name=True)
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     @model_serializer(mode="wrap")
     def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -1045,9 +1044,10 @@ class ClaimProvenanceEvidence(_WireEvidence):
     ``findings`` names the settled gate outcomes for the case.
     """
 
-    completions: int | None = None
-    tool_results: int = 0
-    claim_tokens: int = 0
+    completions: int | None = Field(default=None, ge=0)
+    unattributed_calls: int = Field(default=0, ge=0)
+    tool_results: int = Field(default=0, ge=0)
+    claim_tokens: int = Field(default=0, ge=0)
     complete: bool = False
     model_emitted: bool | None = None
     answer_in_prompt: bool | None = None
@@ -1066,19 +1066,20 @@ class InferenceCostEvidence(_WireEvidence):
     """
 
     model_config = ConfigDict(
-        extra="allow", populate_by_name=True, serialize_by_alias=True
+        extra="ignore", populate_by_name=True, serialize_by_alias=True
     )
 
     case_class: str = Field(default="", alias="class")
-    completions: int = 0
-    choices_total: int = 0
-    output_tokens: int = 0
-    usage_unavailable: int = 0
+    completions: int = Field(default=0, ge=0)
+    choices_total: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    usage_unavailable: int = Field(default=0, ge=0)
     attributed: bool = False
     attribution: str = ""
-    budget_tokens: int = 0
-    excess_tokens: int = 0
-    factor_bps: int = 0
+    budget_tokens: int = Field(default=0, ge=0)
+    excess_tokens: int = Field(default=0, ge=0)
+    factor_bps: int = Field(default=10000, ge=6000, le=10000)
 
 
 class CaseScore(BaseModel):

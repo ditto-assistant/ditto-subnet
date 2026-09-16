@@ -2105,6 +2105,22 @@ def _done_zero_inference_job(bench_version: int) -> dict[str, object]:
             "result": "passed",
             "factor_bps": 10000,
         }
+    if bench_version >= 13:
+        evidence["score_gates"]["claim_provenance"] = {
+            "administered_cases": 0,
+            "eligible_cases": 0,
+            "not_model_emitted_cases": 0,
+            "answer_in_prompt_cases": 0,
+            "flagged_cases": 0,
+            "unattributed_call_cases": 0,
+            "unsettled_cases": 0,
+            "zeroed_cases": 0,
+            "attribution_complete": True,
+            "posture": "shadow",
+            "flagged_bps": 0,
+            "result": "not_applicable",
+            "factor_bps": 10000,
+        }
     model_use = evidence["score_gates"]["model_use"]
     model_use.update(
         successful_inference_cases=0,

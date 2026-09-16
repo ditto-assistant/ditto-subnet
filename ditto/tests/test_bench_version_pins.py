@@ -142,24 +142,28 @@ def test_scoregates_upper_bound_is_the_supported_ceiling() -> None:
     )
 
 
-def test_efficiency_readiness_lists_the_supported_ceiling() -> None:
+def test_efficiency_readiness_uses_the_shared_supported_versions() -> None:
     source = EFFICIENCY.read_text()
-    ceiling = _golden()["max_supported_bench_version"]
     start = source.index("func ProductionReadyForVersion(")
     body = source[start : source.index("\n}\n", start)]
-    assert f"protocol.BenchVersionV{ceiling}" in body, (
-        "efficiency.ProductionReadyForVersion does not list the newest supported "
-        "version, so the scorer would never advertise it"
-    )
+    assert "protocol.SupportedBenchVersion(benchVersion)" in body
+    assert "benchVersion >= protocol.BenchVersionV8" in body
 
 
 def _scorer_advertised_versions() -> set[int]:
     source = SCORER_MAIN.read_text()
     start = source.index("func supportedBenchVersions(")
     body = source[start : source.index("\n}\n", start)]
-    literal = re.search(r"\[\]int\{([^}]*)\}", body)
-    assert literal is not None, "supportedBenchVersions() has no []int literal"
-    return {int(v) for v in re.findall(r"BenchVersionV(\d+)", literal.group(1))}
+    assert "protocol.SupportedBenchVersions()" in body
+    assert "version < advertisedMinBenchVersion || version > advertisedMaxBenchVersion" in body
+    bounds = dict(re.findall(
+        r"advertised(Min|Max)BenchVersion\s*=\s*protocol.BenchVersionV(\d+)", source
+    ))
+    assert set(bounds) == {"Min", "Max"}
+    return {
+        version for version in _golden()["supported_bench_versions"]
+        if int(bounds["Min"]) <= version <= int(bounds["Max"])
+    }
 
 
 def test_scorer_advertises_within_the_validator_executable_set() -> None:
@@ -188,19 +192,12 @@ def test_release_identity_gate_matches_the_scorer_advertisement() -> None:
 
 
 def test_scorer_error_strings_name_the_advertised_set() -> None:
-    """``requestedBenchVersion`` hard-codes the advertised set into its two
-    ``(supported: ...)`` error strings; a bump that grows ``supportedBenchVersions``
-    and forgets them tells a validator the wrong negotiation set."""
+    """Negotiation errors must derive the same capability set, never duplicate it."""
     source = SCORER_MAIN.read_text()
     start = source.index("func requestedBenchVersion(")
     body = source[start : source.index("\n}\n", start)]
-    strings = re.findall(r"\(supported: ([\d, ]+)\)", body)
-    assert len(strings) == 2, "requestedBenchVersion lost a (supported: ...) string"
-    for text in strings:
-        assert _int_set(text) == _scorer_advertised_versions(), (
-            f"main.go error string names {text!r} but the scorer advertises "
-            f"{sorted(_scorer_advertised_versions())}"
-        )
+    assert body.count('supported: %v)", supportedBenchVersions()') == 2
+    assert not re.search(r"supported: [\d, ]+", body)
 
 
 def test_confirmation_subject_epoch_is_a_floor_over_the_scorer_ceiling() -> None:

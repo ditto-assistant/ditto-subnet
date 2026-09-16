@@ -427,8 +427,8 @@ func TestClassifyDecisionAndAssertedAnswer(t *testing.T) {
 		t.Fatalf("observed action = %s", got)
 	}
 	// The self-report is the fallback when nothing was observed.
-	if got := ClassifyDecision(protocol.RunResponse{ToolCalls: act}, nil); got != DecisionAct {
-		t.Fatalf("self-reported action = %s", got)
+	if got := ClassifyDecision(protocol.RunResponse{ToolCalls: act}, nil); got != DecisionAnswer {
+		t.Fatalf("forged self-reported action changed decision class: %s", got)
 	}
 	if got := AssertedAnswer(protocol.RunResponse{Answer: "  Lisbon. ", FinalText: "You live in Porto."}); got != "lisbon" {
 		t.Fatalf("slot not authoritative: %q", got)

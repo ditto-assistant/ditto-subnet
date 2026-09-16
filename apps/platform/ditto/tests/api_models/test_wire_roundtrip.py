@@ -96,7 +96,7 @@ def test_v13_inference_cost_round_trips() -> None:
     assert len(costed) == 1
     cost = costed[0].inference_cost
     assert cost is not None
-    assert cost.class_ == "memory"
+    assert cost.case_class == "memory"
     assert cost.attribution == "verified_claim"
     assert cost.completions == 3 and cost.usage_unavailable == 1
     assert cost.output_tokens == 700
@@ -104,7 +104,30 @@ def test_v13_inference_cost_round_trips() -> None:
     assert cost.factor_bps == 10_000
     # Alias round-trips as the Go wire key, not the Python attribute name.
     dumped = cost.model_dump(by_alias=True)
-    assert dumped["class"] == "memory" and "class_" not in dumped
+    assert dumped["class"] == "memory" and "case_class" not in dumped
+
+
+def test_v13_unknown_evidence_is_not_persisted() -> None:
+    raw = _fixture_v13()
+    raw["per_case"][0]["inference_cost"]["future_field"] = {"authoritative": True}
+    raw["per_case"][1]["claim_provenance"]["unattributed_calls"] = 2
+    raw["per_case"][1]["claim_provenance"]["future_field"] = True
+    dumped = ScoreReport.model_validate(raw).model_dump(mode="json")
+    assert "future_field" not in dumped["per_case"][0]["inference_cost"]
+    provenance = dumped["per_case"][1]["claim_provenance"]
+    assert provenance["unattributed_calls"] == 2
+    assert "future_field" not in provenance
+
+
+@pytest.mark.parametrize("field,value", [
+    ("output_tokens", -1), ("reasoning_tokens", -1),
+    ("completions", -1), ("factor_bps", 5999), ("factor_bps", 10001),
+])
+def test_v13_known_cost_fields_are_bounded(field: str, value: int) -> None:
+    raw = _fixture_v13()
+    raw["per_case"][0]["inference_cost"][field] = value
+    with pytest.raises(ValidationError):
+        ScoreReport.model_validate(raw)
 
 
 def test_v3_audit_fields_round_trip() -> None:

@@ -1181,8 +1181,8 @@ func TestConfirmationExecutorDoesNotControlOrdinaryV9Capability(t *testing.T) {
 	if err := json.Unmarshal(qualifiedRecorder.Body.Bytes(), &capabilities); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(capabilities.SupportedBenchVersions, []int{8, 9, 10, 11, 12}) {
-		t.Fatalf("supported versions = %v, want ordinary v8 through v12", capabilities.SupportedBenchVersions)
+	if !reflect.DeepEqual(capabilities.SupportedBenchVersions, supportedBenchVersions()) {
+		t.Fatalf("supported versions = %v, want ordinary capabilities %v", capabilities.SupportedBenchVersions, supportedBenchVersions())
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(qualifiedRecorder.Body.Bytes(), &raw); err != nil {
