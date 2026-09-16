@@ -48,6 +48,7 @@ PROFILE_PINS = {
     "enforcement_images_sha256",
     "execution_profile_sha256",
     "grading_profile_sha256",
+    "preexec_fixtures_sha256",
 }
 DAEMON_IDENTITY_SCHEMA = "dittobench-coding-native-daemon-identity-v1"
 DAEMON_IMAGE_STORE = "io.containerd.snapshotter.v1"

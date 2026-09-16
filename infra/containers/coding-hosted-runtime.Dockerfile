@@ -60,7 +60,7 @@ RUN --network=none setpriv --reuid=10001 --regid=10001 --clear-groups env -i PAT
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker
 RUN --network=none setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/apps/platform/.venv/bin/python -I -B \
-    -c 'import subprocess,sys; p=subprocess.run([sys.argv[1]],capture_output=True); assert p.returncode == 1 and not p.stdout and p.stderr == b"dittobench-coding-enforcement-probe: a subcommand is required: resolve-images | observe-requested-config | net-agent | net-once\n"' \
+    -c 'import subprocess,sys; p=subprocess.run([sys.argv[1]],capture_output=True); assert p.returncode == 1 and not p.stdout and p.stderr == b"dittobench-coding-enforcement-probe: a subcommand is required: resolve-images | observe-requested-config | net-agent | net-once | workload | resource-agent | reconcile-launch-journal\n"' \
     /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-enforcement-probe
 RUN --network=none printf X >> /opt/ditto-coding-hosted/${SOURCE_REVISION}/bin/dittobench-coding-hosted-worker && \
     if setpriv --reuid=10001 --regid=10001 --clear-groups env -i PATH=/usr/bin:/bin \

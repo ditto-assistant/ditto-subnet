@@ -364,6 +364,13 @@ func (executor *Executor) createContainer(
 	protected string,
 	control string,
 ) (string, error) {
+	// The container carries io.heyditto.dittobench.run=<name>; the journal
+	// names it before it can exist.
+	if executor.config.LaunchIntent != nil {
+		if err := executor.config.LaunchIntent(ctx, name, []string{name}, nil); err != nil {
+			return "", fmt.Errorf("record coding sandbox launch intent: %w", err)
+		}
+	}
 	output, err := executor.docker.Output(ctx, executor.createArgs(name, mode, workspace, protected, control)...)
 	if err != nil {
 		return "", fmt.Errorf("create coding sandbox container: %w", err)

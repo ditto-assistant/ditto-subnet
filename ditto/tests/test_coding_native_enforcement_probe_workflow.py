@@ -113,6 +113,12 @@ def test_probe_job_pins_docker_delegates_cgroups_and_runs_the_exact_tests():
     ):
         assert variable in text
     assert "ditto/tests/test_coding_native_probe_runner.py" in text
+    # The kernel sampler step runs without a pull, cannot skip, and leaves no
+    # container behind.
+    assert "DITTOBENCH_REQUIRE_LOCAL_WORKLOADS" in text
+    assert "ditto/tests/test_coding_native_resource_kernel.py" in text
+    assert "docker import" in text
+    assert "--filter name=dittobench-pr5-kernel-" in text
     integration = (PROBE / "resource_integration_linux_test.go").read_text()
     assert integration.startswith("//go:build native_probe_integration\n")
     assert "t.Skip" not in integration

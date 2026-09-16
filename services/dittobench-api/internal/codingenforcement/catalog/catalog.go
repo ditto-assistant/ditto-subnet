@@ -41,9 +41,13 @@ const (
 	SubordinateMinStart = 100000
 	SubordinateMinCount = 65536
 
-	TolerancesVersion                   = "dittobench-coding-native-enforcement-tolerances-v1"
-	CPUUsageMaxPermilleOfQuota          = 1150
-	MemoryPeakMaxPermilleOfLimit        = 1000
+	TolerancesVersion            = "dittobench-coding-native-enforcement-tolerances-v2"
+	CPUUsageMaxPermilleOfQuota   = 1150
+	MemoryPeakMaxPermilleOfLimit = 1000
+	// MemoryPeakOvershootMaxPages (tolerances v2, Peyton 2026-09-16): after a
+	// genuine cgroup OOM kill memory.peak may pass memory.max by forced kernel
+	// charges of at most this many pages of the recorded host page size.
+	MemoryPeakOvershootMaxPages         = 1
 	PidsMaxPermilleOfLimit              = 1000
 	NofileMaxPermilleOfLimit            = 1000
 	ScratchMaxPermilleOfLimit           = 1000
@@ -66,7 +70,7 @@ var (
 	NotCovered       = []string{"daemon_restart_recovery", "reboot_recovery"}
 	// Kinds is also the fixed collection order; records never overlap.
 	Kinds         = []string{"network_enforcement", "resource_enforcement", "preexec_confinement", "cleanup_recovery"}
-	ProfileInputs = []string{"connectivity_profile_sha256", "enforcement_images_sha256", "execution_profile_sha256", "grading_profile_sha256"}
+	ProfileInputs = []string{"connectivity_profile_sha256", "enforcement_images_sha256", "execution_profile_sha256", "grading_profile_sha256", "preexec_fixtures_sha256"}
 	BindSources   = []string{"memory_limit_bytes", "cpu_quota_millis", "pids_limit", "scratch_limit_bytes", "nofile_limit", "log_limit_bytes", "hidden_command_timeout_ms", "visible_command_timeout_ms"}
 	// CommandTimeoutSources evidences every hosted grading test group timeout.
 	CommandTimeoutSources = map[string]string{"hidden_command_timeout_ms": "hidden", "visible_command_timeout_ms": "visible"}
@@ -119,6 +123,7 @@ type Tolerances struct {
 	Version                             string `json:"version"`
 	CPUUsageMaxPermilleOfQuota          int64  `json:"cpu_usage_max_permille_of_quota"`
 	MemoryPeakMaxPermilleOfLimit        int64  `json:"memory_peak_max_permille_of_limit"`
+	MemoryPeakOvershootMaxPages         int64  `json:"memory_peak_overshoot_max_pages"`
 	PidsMaxPermilleOfLimit              int64  `json:"pids_max_permille_of_limit"`
 	NofileMaxPermilleOfLimit            int64  `json:"nofile_max_permille_of_limit"`
 	ScratchMaxPermilleOfLimit           int64  `json:"scratch_max_permille_of_limit"`
@@ -170,6 +175,7 @@ var VersionedTolerances = Tolerances{
 	Version:                             TolerancesVersion,
 	CPUUsageMaxPermilleOfQuota:          CPUUsageMaxPermilleOfQuota,
 	MemoryPeakMaxPermilleOfLimit:        MemoryPeakMaxPermilleOfLimit,
+	MemoryPeakOvershootMaxPages:         MemoryPeakOvershootMaxPages,
 	PidsMaxPermilleOfLimit:              PidsMaxPermilleOfLimit,
 	NofileMaxPermilleOfLimit:            NofileMaxPermilleOfLimit,
 	ScratchMaxPermilleOfLimit:           ScratchMaxPermilleOfLimit,
@@ -525,7 +531,7 @@ func (c *Catalog) RequiredInstances(kindName string, endpoints Endpoints) ([]Ins
 
 var (
 	catalogKeys   = []string{"coverage", "freshness_max_seconds", "kinds", "languages", "not_covered", "outcomes", "pre_collection_preflight_max_age_seconds", "record_schema", "resource_containers", "review_schema", "router_namespaces", "schema", "tolerances"}
-	toleranceKeys = []string{"cpu_usage_max_permille_of_quota", "cpu_usage_min_permille_of_quota", "log_max_permille_of_limit", "log_min_permille_of_limit", "memory_peak_max_permille_of_limit", "memory_peak_min_permille_of_limit", "nofile_max_permille_of_limit", "nofile_min_permille_of_limit", "pids_max_permille_of_limit", "pids_min_permille_of_limit", "scratch_max_permille_of_limit", "scratch_min_permille_of_limit", "timeout_elapsed_max_permille_of_deadline", "version"}
+	toleranceKeys = []string{"cpu_usage_max_permille_of_quota", "cpu_usage_min_permille_of_quota", "log_max_permille_of_limit", "log_min_permille_of_limit", "memory_peak_max_permille_of_limit", "memory_peak_min_permille_of_limit", "memory_peak_overshoot_max_pages", "nofile_max_permille_of_limit", "nofile_min_permille_of_limit", "pids_max_permille_of_limit", "pids_min_permille_of_limit", "scratch_max_permille_of_limit", "scratch_min_permille_of_limit", "timeout_elapsed_max_permille_of_deadline", "version"}
 	containerKeys = []string{"log_limit_bytes", "nofile_limit", "profile", "scratch"}
 	kindKeys      = []string{"endpoint_roles", "inputs", "phases", "probes"}
 	boundsKeys    = []string{"max", "min"}

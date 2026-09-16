@@ -40,6 +40,15 @@ NATIVE = importlib.util.module_from_spec(native_spec)
 native_spec.loader.exec_module(NATIVE)
 
 CATALOG_DIR = ROOT / "services/dittobench-api/internal/codingenforcement/catalog"
+PREEXEC_FIXTURES_ROOT = (
+    ROOT / "services/dittobench-api/internal/codingenforcement/fixtures/preexec"
+)
+PREEXEC_FIXTURES_RAW = (PREEXEC_FIXTURES_ROOT / "fixtures.json").read_bytes()
+PREEXEC_FIXTURES = json.loads(PREEXEC_FIXTURES_RAW)
+PREEXEC_FIXTURES_SHA256 = hashlib.sha256(PREEXEC_FIXTURES_RAW).hexdigest()
+RUST_FIXTURE_AUTHORITY_SHA256 = PREEXEC_FIXTURES["languages"]["rust"]["authority"][
+    "sha256"
+]
 GOLDEN_RECORD = CATALOG_DIR / "testdata/golden-record-v1.json"
 CANONICAL_VECTOR = CATALOG_DIR / "testdata/canonical-vector-v1.json"
 EXPECTATION_VECTORS = CATALOG_DIR / "testdata/expectation-vectors-v1.json"
@@ -48,7 +57,7 @@ DAEMON_IDENTITY_VECTOR = json.loads(
 )
 # Pinned identically in catalog/canonical_test.go.
 GOLDEN_RECORD_SHA256 = (
-    "b079646d740892d2db3eb5ab0599c8e40e3a81d730e863b8d790af1ddff2a8fa"
+    "a01d418ea0da074f7e3e94add42316abefb64612b94001d5b6939c49bd3fedea"
 )
 CANONICAL_VECTOR_SHA256 = (
     "1948b8f75bd3f0c25825ed268d2390e89ffe1993a37790ee740c19e5cd491a74"
@@ -261,6 +270,22 @@ def rust_test_argv(group: str, authority: str = "") -> list[str]:
     ]
 
 
+def _rust_argv_for(_language: str, group: str) -> list[str]:
+    """The Rust command; hidden binds the public pre-exec fixture authority."""
+
+    if group == "hidden":
+        return [
+            "dittobench-test-driver",
+            "--group",
+            "hidden",
+            "--authority",
+            "rust/hidden-authority.json",
+            "--authority-sha256",
+            RUST_FIXTURE_AUTHORITY_SHA256,
+        ]
+    return rust_test_argv(group)
+
+
 def enforcement_images_value() -> dict:
     """Every released image; python is the profile's own, with its commands."""
 
@@ -278,7 +303,7 @@ def enforcement_images_value() -> dict:
             "build_argv": build,
             "test_argv": {
                 group: (
-                    rust_test_argv(group)
+                    _rust_argv_for(language, group)
                     if extra is None
                     else ["dittobench-test-driver", "--group", group, *extra]
                 )
@@ -310,6 +335,7 @@ INPUTS = {
     "enforcement_images_sha256": ENFORCEMENT_IMAGES_SHA256,
     "execution_profile_sha256": EXECUTION_SHA256,
     "grading_profile_sha256": GRADING_SHA256,
+    "preexec_fixtures_sha256": PREEXEC_FIXTURES_SHA256,
 }
 
 
@@ -337,6 +363,7 @@ PINS = {
     "enforcement_images_sha256": ENFORCEMENT_IMAGES_SHA256,
     "execution_profile_sha256": EXECUTION_SHA256,
     "grading_profile_sha256": GRADING_SHA256,
+    "preexec_fixtures_sha256": PREEXEC_FIXTURES_SHA256,
 }
 
 
@@ -410,6 +437,13 @@ def observed_for(probe: dict, language: str | None) -> dict:
         return {"cgroup": value, "profile": value}
     if kind == "bounded":
         value = expected_limit(probe["bind"]["limit"], container, language)
+        if probe["id"].endswith(".memory_oom"):
+            return {
+                "enforced": True,
+                "limit": value,
+                "measured": value,
+                "page_bytes": 4096,
+            }
         return {"enforced": True, "limit": value, "measured": value}
     if kind == "zero_retained":
         value = expected_limit(probe["bind"]["limit"], container, language)
@@ -425,7 +459,7 @@ def observed_for(probe: dict, language: str | None) -> dict:
             "test_group": group,
         }
     if kind == "control":
-        suite = digest(f"{language}-control-suite")
+        suite = PREEXEC_FIXTURES["languages"][language]["controls_suite_sha256"]
         passed, timed_out = {
             "all_pass": (3, False),
             "some_fail": (1, False),
@@ -630,6 +664,7 @@ class World:
         (fixtures / "python").mkdir(parents=True)
         (fixtures / "python/fork_exec.py").write_bytes(b"# synthetic\n")
         (fixtures / "README.md").write_bytes(b"synthetic fixtures\n")
+        shutil.copytree(PREEXEC_FIXTURES_ROOT, fixtures / "preexec", dirs_exist_ok=True)
         self.preflight_tools = {}
         for relative in EVIDENCE.PREFLIGHT_TOOL_FILES:
             target = self.checkout / relative
@@ -645,10 +680,12 @@ class World:
             "execution_profile_sha256": profiles / "execution-profile.json",
             "grading_profile_sha256": profiles / "grading-profile.json",
             "enforcement_images_sha256": profiles / "enforcement-images.json",
+            "preexec_fixtures_sha256": profiles / "preexec-fixtures.json",
         }
         self.profile_paths["enforcement_images_sha256"].write_bytes(
             EVIDENCE.canonical_bytes(enforcement_images_value())
         )
+        self.profile_paths["preexec_fixtures_sha256"].write_bytes(PREEXEC_FIXTURES_RAW)
         self.profile_paths["connectivity_profile_sha256"].write_text(
             json.dumps(CONNECTIVITY_PROFILE, indent=2)
         )
@@ -852,6 +889,7 @@ GO_TOLERANCES = {
     "version": "TolerancesVersion",
     "cpu_usage_max_permille_of_quota": "CPUUsageMaxPermilleOfQuota",
     "memory_peak_max_permille_of_limit": "MemoryPeakMaxPermilleOfLimit",
+    "memory_peak_overshoot_max_pages": "MemoryPeakOvershootMaxPages",
     "pids_max_permille_of_limit": "PidsMaxPermilleOfLimit",
     "nofile_max_permille_of_limit": "NofileMaxPermilleOfLimit",
     "scratch_max_permille_of_limit": "ScratchMaxPermilleOfLimit",
@@ -2526,6 +2564,180 @@ def write_images(world, value):
     return world.verify_record(record)
 
 
+# B5 PR6: the recorded public pre-exec fixtures the collector runs.
+
+
+def _alt_preexec_paths(world, *, fixtures=None, images=None):
+    paths = dict(world.profile_paths)
+    if fixtures is not None:
+        path = world.tmp / "alt-fixtures.json"
+        path.write_bytes(fixtures)
+        paths["preexec_fixtures_sha256"] = path
+    if images is not None:
+        path = world.tmp / "alt-images.json"
+        path.write_bytes(EVIDENCE.canonical_bytes(images))
+        paths["enforcement_images_sha256"] = path
+    return paths
+
+
+def _verify_preexec(world, paths):
+    record = copy.deepcopy(world.records["preexec_confinement"])
+    for name in ("preexec_fixtures_sha256", "enforcement_images_sha256"):
+        record["inputs"][name] = hashlib.sha256(paths[name].read_bytes()).hexdigest()
+    store, checkout = world.open()
+    with store:
+        result, _ = EVIDENCE.verify(
+            store,
+            checkout,
+            world.selection()["host_preflight"],
+            [world.put(canonical(record))],
+            EVIDENCE.load_profiles(paths),
+            world.release(),
+        )
+    return result["records"][0]["failure"]
+
+
+def test_preexec_fixtures_verify_and_bind(world):
+    assert _verify_preexec(world, _alt_preexec_paths(world)) is None
+
+
+def _preexec_hostile_subjects(language):
+    hostile = PREEXEC_FIXTURES["languages"][language]["hostile"]
+    return {name: ROOT / entry["subject"]["path"] for name, entry in hostile.items()}
+
+
+@pytest.mark.parametrize("language", sorted(EVIDENCE.LANGUAGES))
+def test_preexec_hostile_fixtures_are_distinct_and_pinned(language):
+    """Each hostile probe has its own operation: no fixture is a copy of another."""
+
+    subjects = _preexec_hostile_subjects(language)
+    digests = {}
+    for name, path in subjects.items():
+        raw = path.read_bytes()
+        pinned = PREEXEC_FIXTURES["languages"][language]["hostile"][name]
+        assert hashlib.sha256(raw).hexdigest() == pinned["subject"]["sha256"], name
+        digests.setdefault(hashlib.sha256(raw).hexdigest(), []).append(name)
+    assert [names for names in digests.values() if len(names) > 1] == []
+
+
+def _python_unbound_names(tree: ast.Module) -> set[str]:
+    import builtins
+
+    bound = set(dir(builtins))
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            bound.update(
+                (alias.asname or alias.name).split(".")[0] for alias in node.names
+            )
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.arg):
+            bound.add(node.arg)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bound.add(node.name)
+    return {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    } - bound
+
+
+def test_preexec_python_fixtures_compile_and_bind_every_name():
+    """A fixture that raises NameError fails its suite under correct confinement."""
+
+    for name, path in _preexec_hostile_subjects("python").items():
+        tree = ast.parse(path.read_text(), str(path))
+        compile(tree, str(path), "exec")
+        assert _python_unbound_names(tree) == set(), name
+
+
+@pytest.mark.parametrize(
+    ("language", "probe", "operation"),
+    [
+        ("python", "ptrace", "libc.syscall("),
+        ("go", "ptrace", "syscall.PtraceAttach("),
+        ("rust", "ptrace", "PTRACE_ATTACH"),
+        ("node", "ptrace", "/mem`"),
+        ("python", "scratch_exec", "mmap.PROT_EXEC"),
+        ("go", "scratch_exec", "syscall.PROT_EXEC"),
+        ("rust", "scratch_exec", "PROT_EXEC"),
+        ("node", "scratch_exec", "process.dlopen("),
+        ("python", "mount", "libc.mount("),
+        ("go", "mount", "syscall.Mount("),
+        ("rust", "mount", "mount(b"),
+        ("python", "network", ".connect(("),
+        ("go", "network", "net.DialTimeout("),
+        ("rust", "network", "TcpStream::connect_timeout("),
+        ("node", "network", "net.connect("),
+        ("go", "capability_use", "CapEff"),
+        ("rust", "capability_use", "CapEff"),
+        ("node", "process_group_escape", "detached: true"),
+        ("node", "unshare", "'--user'"),
+    ],
+)
+def test_preexec_hostile_fixture_attempts_its_own_operation(language, probe, operation):
+    assert operation in _preexec_hostile_subjects(language)[probe].read_text()
+
+
+def test_preexec_load_time_fixtures_act_before_the_api_is_called():
+    subjects = {
+        language: _preexec_hostile_subjects(language)["load_time_escape"].read_text()
+        for language in EVIDENCE.LANGUAGES
+    }
+    assert subjects["python"].index("os.fork()") < subjects["python"].index(
+        "class Counter"
+    )
+    assert subjects["node"].index("spawnSync") < subjects["node"].index("class Counter")
+    assert "func init() {\n\tif err := exec.Command" in subjects["go"]
+    assert '#[link_section = ".init_array"]' in subjects["rust"]
+
+
+def test_preexec_fixture_file_digest_must_match_the_checkout(world):
+    tampered = copy.deepcopy(PREEXEC_FIXTURES)
+    tampered["languages"]["python"]["hostile"]["fork_exec"]["subject"]["sha256"] = (
+        digest("a different fixture")
+    )
+    paths = _alt_preexec_paths(world, fixtures=EVIDENCE.canonical_bytes(tampered))
+    assert "differs from the reviewed checkout" in _verify_preexec(world, paths)
+
+
+def test_preexec_fixtures_must_cover_every_hostile_probe(world):
+    tampered = copy.deepcopy(PREEXEC_FIXTURES)
+    del tampered["languages"]["go"]["hostile"]["mount"]
+    paths = _alt_preexec_paths(world, fixtures=EVIDENCE.canonical_bytes(tampered))
+    assert "do not cover every hostile probe" in _verify_preexec(world, paths)
+
+
+def test_preexec_rust_authority_must_match_its_recorded_command(world):
+    images = enforcement_images_value()
+    images["images"]["rust"]["test_argv"]["hidden"][-1] = digest("another authority")
+    paths = _alt_preexec_paths(world, images=images)
+    assert "rust fixture authority differs" in _verify_preexec(world, paths)
+
+
+def test_preexec_hostile_fixture_succeeding_is_unmatched(world):
+    record = copy.deepcopy(world.records["preexec_confinement"])
+    find_probe(record, "hostile.network", "python")["observed"] = {
+        "outcome": "connected"
+    }
+    find_probe(record, "hostile.network", "python")["matched"] = False
+    assert "did not match" in world.verify_record(record)
+
+
+def test_preexec_rust_cannot_be_the_grading_language(world):
+    profiles = world.profiles()
+    images = profiles["enforcement_images_sha256"]["images"]
+    grading_image = profiles["grading_profile_sha256"]["image_digest"]
+    images["python"]["image_digest"] = "sha256:" + digest("python is not own")
+    images["rust"]["image_digest"] = grading_image
+    with pytest.raises(EVIDENCE.Refusal, match="grading language"):
+        EVIDENCE._preexec_fixtures(
+            profiles, EVIDENCE.Checkout(world.checkout), catalog(), {}
+        )
+
+
 def test_each_language_keeps_its_own_recorded_commands(world):
     value = enforcement_images_value()
     argvs = [tuple(image["test_argv"]["hidden"]) for image in value["images"].values()]
@@ -3758,8 +3970,9 @@ def test_collectors_never_enter_the_operate_workflow():
         ):
             assert forbidden not in ci, (name, forbidden)
         # The collector may be named only as a path filter and a lint target of
-        # the offline regression job (B5 PR4); no step ever executes it, and the
-        # rootless probe-runner job never names it.
+        # the offline regression job (B5 PR4), and as a path filter of the
+        # probe-runner job, whose kernel step imports its samplers (B5 PR5); no
+        # step ever executes it.
         workflow = yaml.safe_load(ci)
         commands = [
             step.get("run", "")
@@ -3774,7 +3987,18 @@ def test_collectors_never_enter_the_operate_workflow():
                         ("uv run --frozen ruff ", "uv run --frozen mypy ")
                     ), line
         if name != "coding-native-release.yml":
-            assert "collect-coding-native-enforcement" not in ci
+            named = [
+                line.strip()
+                for line in ci.splitlines()
+                if "collect-coding-native-enforcement" in line
+            ]
+            # YAML 1.1 reads the `on` key as true.
+            triggers = workflow.get(True) or workflow["on"]
+            assert named == ["- infra/scripts/collect-coding-native-enforcement.py"]
+            assert (
+                "infra/scripts/collect-coding-native-enforcement.py"
+                in triggers["pull_request"]["paths"]
+            )
 
 
 def test_script_runs_isolated_from_the_checkout(world):

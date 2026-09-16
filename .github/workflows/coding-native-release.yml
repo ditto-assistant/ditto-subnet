@@ -10,6 +10,7 @@ on:
       # recorded kernel listings; no workflow ever runs it.
       - infra/scripts/collect-coding-native-enforcement.py
       - ditto/tests/test_coding_native_network_collector.py
+      - ditto/tests/test_coding_native_resource_collector.py
       - ditto/tests/fixtures/coding_native_network/**
       - infra/ansible/roles/coding_hosted_connectivity/**
       - ditto/tests/test_coding_hosted_connectivity.py
@@ -74,6 +75,7 @@ jobs:
           ditto/tests/test_coding_hosted_image_import.py
           ditto/tests/test_coding_hosted_runtime_bundle.py
           ditto/tests/test_coding_native_network_collector.py
+          ditto/tests/test_coding_native_resource_collector.py
           ditto/tests/test_coding_hosted_connectivity.py
       - name: Lint release-set tooling
         run: |
@@ -84,8 +86,8 @@ jobs:
           uv run --frozen ruff check infra/scripts/coding-native-evidence.py ditto/tests/test_coding_native_enforcement_evidence.py
           uv run --frozen ruff format --check infra/scripts/coding-native-evidence.py ditto/tests/test_coding_native_enforcement_evidence.py
           uv run --frozen mypy infra/scripts/coding-native-evidence.py
-          uv run --frozen ruff check infra/scripts/collect-coding-native-enforcement.py ditto/tests/test_coding_native_network_collector.py
-          uv run --frozen ruff format --check infra/scripts/collect-coding-native-enforcement.py ditto/tests/test_coding_native_network_collector.py
+          uv run --frozen ruff check infra/scripts/collect-coding-native-enforcement.py ditto/tests/test_coding_native_network_collector.py ditto/tests/test_coding_native_resource_collector.py ditto/tests/test_coding_native_resource_kernel.py
+          uv run --frozen ruff format --check infra/scripts/collect-coding-native-enforcement.py ditto/tests/test_coding_native_network_collector.py ditto/tests/test_coding_native_resource_collector.py ditto/tests/test_coding_native_resource_kernel.py
           uv run --frozen mypy infra/scripts/collect-coding-native-enforcement.py
           uv run --frozen ruff check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py
           uv run --frozen ruff format --check services/dittobench-api/coding_runtime/qualification/native.py services/dittobench-api/coding_runtime/qualification/run.py ditto/tests/test_coding_native_matrix.py

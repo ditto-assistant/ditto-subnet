@@ -283,6 +283,21 @@ func withinPermille(measured, limit, permille int64) bool {
 	return left.Cmp(right) <= 0
 }
 
+// withinPermilleAndBytes reports measured*1000 <= limit*permille + extra*1000
+// without overflow.
+func withinPermilleAndBytes(measured, limit, permille, extra int64) bool {
+	left := new(big.Int).Mul(big.NewInt(measured), big.NewInt(1000))
+	right := new(big.Int).Mul(big.NewInt(limit), big.NewInt(permille))
+	right.Add(right, new(big.Int).Mul(big.NewInt(extra), big.NewInt(1000)))
+	return left.Cmp(right) <= 0
+}
+
+// MemoryPeakTolerance names the bounded tolerance whose observation carries
+// the host page size, and MemoryPageBytes are the page sizes it accepts.
+const MemoryPeakTolerance = "memory_peak_max_permille_of_limit"
+
+var MemoryPageBytes = []int64{4096, 16384, 65536}
+
 // Evaluate recomputes matched for one observation decoded by Decode. A shape
 // the expectation refuses returns an error wrapping ErrObservedShape.
 func Evaluate(expect Expectation, observed any, subordinate SubordinateIDs, outcomes map[string]bool, tolerances Tolerances) (bool, error) {
@@ -356,7 +371,12 @@ func Evaluate(expect Expectation, observed any, subordinate SubordinateIDs, outc
 		emitted, limit, retained := values[0], values[1], values[2]
 		return limit >= 1 && emitted >= limit && retained == 0, nil
 	case ExpectBounded:
-		object, err := observedObject(observed, "enforced", "limit", "measured")
+		memory := expect.Tolerance == MemoryPeakTolerance
+		keys := []string{"enforced", "limit", "measured"}
+		if memory {
+			keys = append(keys, "page_bytes")
+		}
+		object, err := observedObject(observed, keys...)
 		if err != nil {
 			return false, err
 		}
@@ -374,7 +394,15 @@ func Evaluate(expect Expectation, observed any, subordinate SubordinateIDs, outc
 			return false, errors.New("tolerance is unknown")
 		}
 		limit, measured := values[0], values[1]
-		return enforced && limit >= 1 && measured >= 1 && withinPermille(measured, limit, permille) &&
+		overshoot := int64(0)
+		if memory {
+			page, ok := nonNegative(object["page_bytes"])
+			if !ok || !slices.Contains(MemoryPageBytes, page) {
+				return false, fmt.Errorf("%w: page size is not an accepted page size", ErrObservedShape)
+			}
+			overshoot = page * tolerances.MemoryPeakOvershootMaxPages
+		}
+		return enforced && limit >= 1 && measured >= 1 && withinPermilleAndBytes(measured, limit, permille, overshoot) &&
 			atLeastPermille(measured, limit, floor), nil
 	case ExpectSupervisorTimeout:
 		object, err := observedObject(observed, "deadline_ms", "elapsed_ms", "exit_code", "live_processes", "test_group")

@@ -739,3 +739,54 @@ func TestWorkspaceAndProtectedPathsMustBeDistinctRealDirectories(t *testing.T) {
 		t.Fatal("filesystem root was accepted as a coding workspace")
 	}
 }
+
+func TestLaunchIntentNamesEveryContainerBeforeCreateAndRefusalPreventsIt(t *testing.T) {
+	config := testConfig(t)
+	docker := newFakeDocker(config)
+	var recorded []string
+	config.LaunchIntent = func(_ context.Context, run string, containers, networks []string) error {
+		if len(containers) != 1 || containers[0] != run || len(networks) != 0 {
+			t.Errorf("intent run=%s containers=%v networks=%v", run, containers, networks)
+		}
+		docker.mu.Lock()
+		_, exists := docker.names[run]
+		docker.mu.Unlock()
+		if exists {
+			t.Errorf("container %s existed before its intent", run)
+		}
+		recorded = append(recorded, run)
+		return nil
+	}
+	executor, err := newWithDocker(config, docker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.Preflight(t.Context(), config.Manifest.GraderPlanSHA256); err != nil {
+		t.Fatal(err)
+	}
+	// The preflight policy probe container is journaled too.
+	if len(recorded) != 1 || !strings.HasPrefix(recorded[0], "dittobench-coding-probe-") {
+		t.Fatalf("recorded = %v", recorded)
+	}
+	for _, call := range docker.runs {
+		if len(call) > 2 && call[0] == "create" && !slices.Contains(recorded, call[2]) {
+			t.Fatalf("created unjournaled container %v", call[2])
+		}
+	}
+
+	refused := testConfig(t)
+	refusedDocker := newFakeDocker(refused)
+	refused.LaunchIntent = func(context.Context, string, []string, []string) error { return errors.New("journal full") }
+	executor, err = newWithDocker(refused, refusedDocker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.Preflight(t.Context(), refused.Manifest.GraderPlanSHA256); err == nil {
+		t.Fatal("launch proceeded without a recorded intent")
+	}
+	for _, call := range refusedDocker.runs {
+		if len(call) > 0 && call[0] == "create" {
+			t.Fatal("container created after the intent was refused")
+		}
+	}
+}

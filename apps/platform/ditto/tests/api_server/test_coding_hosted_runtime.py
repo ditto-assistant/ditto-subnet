@@ -217,6 +217,7 @@ print(json.dumps({{"schema": "dittobench-coding-private-v2-unwrap-result-v1",
     root = Path(external.name)
     runtime_root = root / "runtime"
     runtime_root.mkdir(mode=0o700)
+    (root / "launch-journal").mkdir(mode=0o700)
     docker_listener = await asyncio.start_unix_server(
         lambda _r, w: w.close(), path=root / "docker.sock"
     )
@@ -288,6 +289,7 @@ print(json.dumps({{"schema": "dittobench-coding-private-v2-unwrap-result-v1",
         "host": {
             "docker_executable": shutil.which("docker"),
             "docker_socket": str(root / "docker.sock"),
+            "launch_journal_dir": str(root / "launch-journal"),
             "router_listen": "172.21.0.1:19010",
             "egress_network": "coding-restricted",
             "egress_proxy": "http://172.21.0.2:3128",

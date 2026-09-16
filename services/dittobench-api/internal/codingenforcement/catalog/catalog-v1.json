@@ -597,7 +597,8 @@
       "inputs": [
         "enforcement_images_sha256",
         "execution_profile_sha256",
-        "grading_profile_sha256"
+        "grading_profile_sha256",
+        "preexec_fixtures_sha256"
       ],
       "phases": [
         "controls",
@@ -1382,6 +1383,7 @@
     "log_min_permille_of_limit": 500,
     "memory_peak_max_permille_of_limit": 1000,
     "memory_peak_min_permille_of_limit": 900,
+    "memory_peak_overshoot_max_pages": 1,
     "nofile_max_permille_of_limit": 1000,
     "nofile_min_permille_of_limit": 990,
     "pids_max_permille_of_limit": 1000,
@@ -1389,6 +1391,6 @@
     "scratch_max_permille_of_limit": 1000,
     "scratch_min_permille_of_limit": 950,
     "timeout_elapsed_max_permille_of_deadline": 1100,
-    "version": "dittobench-coding-native-enforcement-tolerances-v1"
+    "version": "dittobench-coding-native-enforcement-tolerances-v2"
   }
 }

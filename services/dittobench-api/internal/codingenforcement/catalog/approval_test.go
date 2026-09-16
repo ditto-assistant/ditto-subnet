@@ -8,7 +8,7 @@ import (
 )
 
 // Pinned identically in ditto/tests/test_coding_native_matrix.py.
-const approvalVectorSHA256 = "c5d49e2f49dede8b95ebe6fd8e9253dd86b1be80e401ac68887cdeff8c2f7ed7"
+const approvalVectorSHA256 = "ce8830672afe8a3daea3c10361968a671a60abf1faea3eebcb71e7f887b3749a"
 
 func TestApprovalVectorMatchesPythonBytes(t *testing.T) {
 	raw, err := os.ReadFile("testdata/approval-vector-v3.json")

@@ -13,7 +13,7 @@ import (
 // goldenRecordSHA256 is pinned identically in catalog/canonical_test.go and the
 // Python evidence tests. Reassembling it here proves the runner's record
 // assembly is byte-for-byte the canonical evidence form both sides hash.
-const goldenRecordSHA256 = "b079646d740892d2db3eb5ab0599c8e40e3a81d730e863b8d790af1ddff2a8fa"
+const goldenRecordSHA256 = "a01d418ea0da074f7e3e94add42316abefb64612b94001d5b6939c49bd3fedea"
 
 func goldenEnv() Env {
 	return Env{

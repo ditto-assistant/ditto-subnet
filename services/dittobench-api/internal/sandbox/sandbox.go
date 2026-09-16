@@ -252,6 +252,17 @@ type LocalDocker struct {
 	// validator-local certificate mounted from this path. The corresponding TLS
 	// listener remains source-bound by the inference broker.
 	OpenRouterShimCABundleHostPath string
+	// MemorySwapEqualsMemory passes --memory-swap equal to MemoryLimit, so the
+	// container cgroup has no swap allowance (memory.swap.max 0). The hosted-v2
+	// harness sets it (Peyton, 2026-09-15); the shared v8 sandbox does not.
+	MemorySwapEqualsMemory bool
+	// PullNever passes --pull never, so a locally missing image fails the start
+	// instead of falling back to a registry pull. The hosted-v2 harness sets it.
+	PullNever bool
+	// LaunchIntent, when set, durably records the run identity, container name
+	// and job network name before either is created (the hosted runtime's
+	// launch journal). A failure prevents the launch.
+	LaunchIntent func(ctx context.Context, run string, containers, networks []string) error
 	// dockerCommand is injectable only for deterministic command/parse tests.
 	dockerCommand func(context.Context, ...string) ([]byte, error)
 }
@@ -593,17 +604,31 @@ func (d *LocalDocker) runArgs(image string, env map[string]string) []string {
 }
 
 func (d *LocalDocker) runArgsForNetwork(image string, env map[string]string, network string, identity string) []string {
+	return d.runArgsForWorkload(image, env, network, identity, nil)
+}
+
+func (d *LocalDocker) runArgsForWorkload(image string, env map[string]string, network string, identity string, workload *enforcementWorkload) []string {
 	args := []string{
 		// Do not use --rm: Docker would erase an OOM-killed container before the
 		// scorer can inspect State.OOMKilled/ExitCode. Every successful Run path
 		// owns a deferred Stop, which removes it immediately after diagnostics.
 		"run", "-d",
+	}
+	if d.PullNever {
+		args = append(args, "--pull", "never")
+	}
+	args = append(args,
 		"--init",
 		"--user", "65532:65532",
 		"--read-only",
 		"--ipc", "none",
-		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=" + d.tmpfsLimit(),
+		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size="+d.tmpfsLimit(),
 		"--memory", d.MemoryLimit,
+	)
+	if d.MemorySwapEqualsMemory {
+		args = append(args, "--memory-swap", d.MemoryLimit)
+	}
+	args = append(args,
 		"--cpus", d.CPULimit,
 		"--pids-limit", strconv.Itoa(d.pidsLimit()),
 		"--ulimit", "nofile=1024:1024",
@@ -616,7 +641,7 @@ func (d *LocalDocker) runArgsForNetwork(image string, env map[string]string, net
 		// the tighter single-file/8 MiB bound and disable unusable rotation
 		// compression explicitly so rootless executors fail closed consistently.
 		"--log-opt", "compress=false",
-	}
+	)
 	if identity != "" {
 		args = append(args,
 			"--name", "dittobench-"+identity,
@@ -696,6 +721,14 @@ func (d *LocalDocker) runArgsForNetwork(image string, env map[string]string, net
 			"-e", "HTTP_PROXY="+d.EgressProxy,
 			"-e", "NO_PROXY="+noProxy,
 		)
+	}
+	if workload != nil {
+		args = append(args,
+			"--mount", "type=bind,src="+workload.runner+",dst="+EnforcementRunnerPath+",readonly",
+			"--entrypoint", EnforcementRunnerPath,
+			image,
+		)
+		return append(args, workload.argv...)
 	}
 	return append(args, image)
 }
@@ -1002,7 +1035,7 @@ func parseRuntimeMetrics(diagnostics *RuntimeDiagnostics, output string) {
 // Run starts the image detached with resource caps and a random host port, then
 // resolves the mapped host port.
 func (d *LocalDocker) Run(ctx context.Context, image string, env map[string]string) (*Handle, error) {
-	return d.run(ctx, image, env, false)
+	return d.run(ctx, image, env, false, nil)
 }
 
 // RunRetainingFailedHandle preserves exact container/network cleanup authority
@@ -1010,10 +1043,10 @@ func (d *LocalDocker) Run(ctx context.Context, image string, env map[string]stri
 // with StopRetainingImage even when err is nonnil. It performs no best-effort
 // cleanup that could discard an ambiguous container. Legacy Run is unchanged.
 func (d *LocalDocker) RunRetainingFailedHandle(ctx context.Context, image string, env map[string]string) (*Handle, error) {
-	return d.run(ctx, image, env, true)
+	return d.run(ctx, image, env, true, nil)
 }
 
-func (d *LocalDocker) run(ctx context.Context, image string, env map[string]string, retainFailure bool) (*Handle, error) {
+func (d *LocalDocker) run(ctx context.Context, image string, env map[string]string, retainFailure bool, workload *enforcementWorkload) (*Handle, error) {
 	runCtx, cancel := context.WithTimeout(ctx, d.startTimeout())
 	defer cancel()
 	if _, err := brokerCapabilityHostFromEnv(env); err != nil {
@@ -1025,6 +1058,15 @@ func (d *LocalDocker) run(ctx context.Context, image string, env map[string]stri
 		return nil, err
 	}
 	containerName := "dittobench-" + identity
+	if d.LaunchIntent != nil {
+		networks := []string{}
+		if d.EgressNetwork != "" {
+			networks = append(networks, "ditto-job-"+identity)
+		}
+		if err := d.LaunchIntent(runCtx, identity, []string{containerName}, networks); err != nil {
+			return nil, fmt.Errorf("record sandbox launch intent: %w", err)
+		}
+	}
 	network := ""
 	if d.EgressNetwork != "" {
 		network, err = d.createIsolatedNetwork(runCtx, identity)
@@ -1040,7 +1082,7 @@ func (d *LocalDocker) run(ctx context.Context, image string, env map[string]stri
 			_, _ = d.dockerOutput(context.Background(), "network", "rm", network)
 		}
 	}
-	out, err := d.dockerOutput(runCtx, d.runArgsForNetwork(image, env, network, identity)...)
+	out, err := d.dockerOutput(runCtx, d.runArgsForWorkload(image, env, network, identity, workload)...)
 	if err != nil {
 		if retainFailure {
 			return &Handle{ContainerID: containerName, ImageRef: image, NetworkName: network}, fmt.Errorf("sandbox start requires cleanup: %w", err)

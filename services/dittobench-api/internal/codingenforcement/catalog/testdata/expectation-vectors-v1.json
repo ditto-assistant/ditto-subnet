@@ -947,7 +947,8 @@
       "observed": {
         "enforced": true,
         "limit": 1073741824,
-        "measured": 1
+        "measured": 1,
+        "page_bytes": 4096
       },
       "result": "unmatched"
     },
@@ -961,7 +962,8 @@
       "observed": {
         "enforced": true,
         "limit": 1000,
-        "measured": 900
+        "measured": 900,
+        "page_bytes": 4096
       },
       "result": "matched"
     },
@@ -975,9 +977,129 @@
       "observed": {
         "enforced": true,
         "limit": 1000,
-        "measured": 899
+        "measured": 899,
+        "page_bytes": 4096
       },
       "result": "unmatched"
+    },
+    {
+      "expect": {
+        "floor": "memory_peak_min_permille_of_limit",
+        "tolerance": "memory_peak_max_permille_of_limit",
+        "type": "bounded"
+      },
+      "name": "memory peak one page over the limit",
+      "observed": {
+        "enforced": true,
+        "limit": 67108864,
+        "measured": 67112960,
+        "page_bytes": 4096
+      },
+      "result": "matched"
+    },
+    {
+      "expect": {
+        "floor": "memory_peak_min_permille_of_limit",
+        "tolerance": "memory_peak_max_permille_of_limit",
+        "type": "bounded"
+      },
+      "name": "memory peak one page and a byte over the limit",
+      "observed": {
+        "enforced": true,
+        "limit": 67108864,
+        "measured": 67112961,
+        "page_bytes": 4096
+      },
+      "result": "unmatched"
+    },
+    {
+      "expect": {
+        "floor": "memory_peak_min_permille_of_limit",
+        "tolerance": "memory_peak_max_permille_of_limit",
+        "type": "bounded"
+      },
+      "name": "memory peak one large page over the limit",
+      "observed": {
+        "enforced": true,
+        "limit": 67108864,
+        "measured": 67174400,
+        "page_bytes": 65536
+      },
+      "result": "matched"
+    },
+    {
+      "expect": {
+        "floor": "memory_peak_min_permille_of_limit",
+        "tolerance": "memory_peak_max_permille_of_limit",
+        "type": "bounded"
+      },
+      "name": "memory peak two pages over the limit",
+      "observed": {
+        "enforced": true,
+        "limit": 67108864,
+        "measured": 67117056,
+        "page_bytes": 4096
+      },
+      "result": "unmatched"
+    },
+    {
+      "expect": {
+        "floor": "memory_peak_min_permille_of_limit",
+        "tolerance": "memory_peak_max_permille_of_limit",
+        "type": "bounded"
+      },
+      "name": "memory page size outside the accepted set",
+      "observed": {
+        "enforced": true,
+        "limit": 67108864,
+        "measured": 67108864,
+        "page_bytes": 8192
+      },
+      "result": "invalid"
+    },
+    {
+      "expect": {
+        "floor": "memory_peak_min_permille_of_limit",
+        "tolerance": "memory_peak_max_permille_of_limit",
+        "type": "bounded"
+      },
+      "name": "memory page size huge page",
+      "observed": {
+        "enforced": true,
+        "limit": 67108864,
+        "measured": 67108864,
+        "page_bytes": 2097152
+      },
+      "result": "invalid"
+    },
+    {
+      "expect": {
+        "floor": "memory_peak_min_permille_of_limit",
+        "tolerance": "memory_peak_max_permille_of_limit",
+        "type": "bounded"
+      },
+      "name": "memory observation without page size",
+      "observed": {
+        "enforced": true,
+        "limit": 67108864,
+        "measured": 67108864
+      },
+      "result": "invalid"
+    },
+    {
+      "expect": {
+        "floor": "pids_min_permille_of_limit",
+        "tolerance": "pids_max_permille_of_limit",
+        "type": "bounded"
+      },
+      "name": "page size only on memory",
+      "observed": {
+        "enforced": true,
+        "limit": 64,
+        "measured": 64,
+        "page_bytes": 4096
+      },
+      "result": "invalid"
     },
     {
       "expect": {

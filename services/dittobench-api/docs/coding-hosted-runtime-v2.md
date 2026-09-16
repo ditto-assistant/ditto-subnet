@@ -47,6 +47,7 @@ same-UID/root compromise is outside these file-permission checks.
 | `control_socket`, `control_token_file` | Already-running Platform control service's owner-only Unix socket and raw 32-byte nonzero token (not base64 or newline-terminated) |
 | `python_executable`, `postgres_environment_file` | Approved installed Platform interpreter; JSON array containing only the start helper's allowed `POSTGRES_*=value` entries |
 | `state_root` | New pre-provisioned mode-0700 persistent directory dedicated to this invocation; never recycle it for recovery |
+| `launch_journal_dir` | Pre-provisioned mode-0700 persistent directory for the launch intent journal, shared by successive invocations of this worker; never the `state_root`, inside it or above it |
 | `docker_executable`, `docker_socket` | Protected absolute executable named `docker`; explicit owner-only local Unix socket in a private directory |
 | `router_listen` | Explicit private IPv4 host-gateway address and port 1024–65535; wildcard, loopback and public binds fail |
 | `egress_network`, `egress_proxy` | Provisioned restricted Docker network and credential-free `http://<private-IP>:<port>` allowlisting proxy |
@@ -137,6 +138,46 @@ Process loss before durable evidence, or after a grading claim but before result
 capture, remains non-rerunnable. This launcher provides refusal, not automatic
 host-crash reconciliation or an encrypted evidence recovery reader. On restart
 it does not turn an ambiguous attempt into a fresh run or a successful terminal.
+
+## Launch intent journal and SIGKILL recovery (B5)
+
+After `consumed` and the environment are in place, the launcher opens
+`launch_journal_dir` (owner-only, no symlinks, exclusive `flock`) and reconciles
+whatever an earlier invocation journaled. It refuses the attempt (cleanup
+diagnostic) while that fails or another live invocation holds the directory.
+
+- **Journal.** Before the harness sandbox creates its job network or container,
+  and before the executor creates any container (including the preflight policy
+  probe), the launch path appends one line and fsyncs the file and then the
+  directory. The line (`dittobench-coding-launch-journal-entry-v1`) has exactly
+  `schema`, `attempt`, `worker`, `run` (the `io.heyditto.dittobench.run` label
+  value), `containers` and `networks`. Every value must match a closed
+  identifier pattern, so no environment, path, image, command, output or
+  credential can be written. The file is mode 0600, single-link, opened with
+  `O_NOFOLLOW` and bounded to 1 MiB and 4096 entries; an append past either
+  bound is refused and the launch does not happen. Until the journal is open,
+  and after the attempt ends, the launch hook refuses every launch.
+- **Sentinel.** Each attempt journals and creates one internal bridge network,
+  `ditto-job-sentinel-<16 hex>`, with no container. Only reconciliation removes
+  it, so after a SIGKILL its removal shows the journal was reconciled.
+- **Reconcile.** For every journaled name, the reconciler inspects the object.
+  If any object that exists lacks the journaled ownership label value, it
+  removes nothing and fails. Otherwise it force-removes each present object by
+  exact id (containers first), confirms by id and by name that it is gone, then
+  renames the journal to `launch-journal.reconciled` and fsyncs the directory.
+  It never lists, filters or prunes, so an unjournaled object is never
+  inspected. A torn final append, whose launch never ran, is ignored; any other
+  malformed line fails closed. Repeating a reconcile is harmless.
+- **When it runs.** At start, and after an attempt whose cleanup was confirmed
+  (removing the sentinel). After unconfirmed cleanup the journal stays pending.
+  The explicit command is
+  `dittobench-coding-hosted-worker --reconcile-launch-journal
+  --launch-journal-dir DIR --docker-executable /usr/bin/docker --docker-socket
+  SOCKET`. It uses an empty private Docker client configuration and prints only
+  counts.
+
+SIGKILL still loses the in-memory attempt: the journal recovers Docker objects,
+not evidence, routes or the consumed attempt.
 
 ## Verification and remaining deployment work
 

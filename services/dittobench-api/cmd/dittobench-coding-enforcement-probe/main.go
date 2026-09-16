@@ -16,6 +16,14 @@
 //	                                 request, on stdin/stdout or one Unix socket
 //	net-once --plan F --report F     one-shot attempts from a fixed plan, after
 //	         [--gate FIFO]           an optional collector gate
+//	workload MODE --nonce HEX ...    in-container helper (B5 PR5): drives one
+//	                                 resource to its limit and holds, so the
+//	                                 collector can measure it from outside
+//	resource-agent ...               host-side launcher (B5 PR5): starts
+//	                                 workloads through the production executor
+//	                                 and hosted harness launch paths
+//	reconcile-launch-journal ...     the hosted runtime's launch journal
+//	                                 reconciler (B5 PR5 cleanup_recovery)
 //
 // The network agent reports catalog outcome names to the root collector
 // (infra/scripts/collect-coding-native-enforcement.py), which measures this
@@ -49,7 +57,7 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("a subcommand is required: resolve-images | observe-requested-config | net-agent | net-once")
+		return errors.New("a subcommand is required: resolve-images | observe-requested-config | net-agent | net-once | workload | resource-agent | reconcile-launch-journal")
 	}
 	switch args[0] {
 	case "resolve-images":
@@ -60,6 +68,16 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return netAgent(ctx, args[1:], os.Stdin, stdout)
 	case "net-once":
 		return netOnce(ctx, args[1:])
+	case "resource-agent":
+		return resourceAgent(ctx, args[1:], os.Stdin, stdout)
+	case "reconcile-launch-journal":
+		return reconcileLaunchJournal(ctx, args[1:], stdout)
+	case probe.WorkloadSubcommand:
+		options, err := probe.ParseWorkloadArgs(args[1:])
+		if err != nil {
+			return err
+		}
+		return probe.RunWorkload(ctx, options, stdout)
 	default:
 		return fmt.Errorf("unknown subcommand %q", args[0])
 	}

@@ -67,12 +67,16 @@ PROFILE_INPUTS = (
     "enforcement_images_sha256",
     "execution_profile_sha256",
     "grading_profile_sha256",
+    "preexec_fixtures_sha256",
 )
 # Peyton, 2026-09-15: every language image the approval names runs with the
 # approved grading profile's limits and timeouts, but each with its own
 # explicitly recorded build and test commands (no forced common argv).
 ENFORCEMENT_IMAGES_SCHEMA = "dittobench-coding-native-enforcement-images-v1"
 MAX_ENFORCEMENT_IMAGES = 64 << 10
+PREEXEC_FIXTURES_SCHEMA = "dittobench-coding-native-preexec-fixtures-v1"
+MAX_PREEXEC_FIXTURES = 256 << 10
+PREEXEC_CONTROLS = ("hang", "pass", "wrong")
 ARGV_TEXT = re.compile(r"[\x21-\x7e]{1,256}")
 ARGV_EXECUTABLE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 GENERAL_SHELLS = (
@@ -97,9 +101,13 @@ FRESHNESS_SECONDS = 21600
 PRE_COLLECTION_PREFLIGHT_MAX_AGE_SECONDS = 900
 # Versioned tolerances. A change is a new version in both the catalog and here.
 TOLERANCES = {
-    "version": "dittobench-coding-native-enforcement-tolerances-v1",
+    "version": "dittobench-coding-native-enforcement-tolerances-v2",
     "cpu_usage_max_permille_of_quota": 1150,
     "memory_peak_max_permille_of_limit": 1000,
+    # Peyton, 2026-09-16 (tolerances v2): after a genuine cgroup OOM kill,
+    # memory.peak may pass memory.max by forced kernel charges of at most this
+    # many pages of the host page size the collector recorded.
+    "memory_peak_overshoot_max_pages": 1,
     "pids_max_permille_of_limit": 1000,
     "nofile_max_permille_of_limit": 1000,
     "scratch_max_permille_of_limit": 1000,
@@ -168,6 +176,11 @@ ZERO_RETAINED_PROBE = "executor_grading.log_bound"
 SUBORDINATE_MIN_START = 100000
 SUBORDINATE_MIN_COUNT = 65536
 ENDPOINT_DOMAIN = b"dittobench-coding-native-endpoint-v1"
+# The memory OOM observation carries the host page size (os.sysconf
+# SC_PAGE_SIZE) the overshoot page is measured in; only these Linux page sizes
+# are accepted.
+MEMORY_PEAK_TOLERANCE = "memory_peak_max_permille_of_limit"
+MEMORY_PAGE_BYTES = (4096, 16384, 65536)
 # The endpoint set is the connectivity profile without its per-issue fields
 # (schema, issued/expiry times and the fixed shadow flags), so a probe profile
 # and the canary's own later profile reproduce the same digest.
@@ -183,6 +196,7 @@ PIN_NAMES = (
     "enforcement_images_sha256",
     "execution_profile_sha256",
     "grading_profile_sha256",
+    "preexec_fixtures_sha256",
 )
 
 CATALOG_FILE = (
@@ -1207,6 +1221,121 @@ def parse_enforcement_images(raw: bytes) -> dict[str, Any]:
     }
 
 
+def _fixture_ref(value: object, label: str) -> dict[str, str]:
+    entry = closed(value, {"path", "sha256"}, label)
+    path = entry["path"]
+    require(
+        type(path) is str
+        and path.startswith(FIXTURE_ROOT + "/preexec/")
+        and RELATIVE_PATH.fullmatch(path) is not None
+        and ".." not in path.split("/")
+        and is_digest(entry["sha256"]),
+        f"{label} is malformed",
+    )
+    return {"path": path, "sha256": entry["sha256"]}
+
+
+def parse_preexec_fixtures(raw: bytes) -> dict[str, Any]:
+    """The recorded public pre-exec fixtures; the collector runs these, never a
+    private task, through each language's own recorded test command.
+
+    The manifest pins each fixture file by path and sha256, the per-language test
+    command and expected total, the shared controls suite digest, and the public
+    Rust authority. It is canonical JSON, closed, and covers every language.
+    """
+
+    value = closed(
+        parse_canonical(raw, "preexec fixtures"),
+        {"schema", "languages"},
+        "preexec fixtures",
+    )
+    require(
+        same(value["schema"], PREEXEC_FIXTURES_SCHEMA)
+        and type(value["languages"]) is dict
+        and set(value["languages"]) == set(LANGUAGES),
+        "preexec fixtures identity is malformed",
+    )
+    parsed: dict[str, Any] = {}
+    files: list[dict[str, str]] = []
+    for language in LANGUAGES:
+        keys = {
+            "test_group",
+            "test_argv",
+            "expected_total",
+            "controls_suite",
+            "controls_suite_sha256",
+            "controls",
+            "hostile",
+        }
+        if language == "go":
+            keys.add("module")
+        if language == "rust":
+            keys.add("authority")
+        entry = closed(value["languages"][language], keys, f"{language} fixtures")
+        require(
+            entry["test_group"] in HOSTED_TEST_GROUPS
+            and is_int(entry["expected_total"], 2, 1024)
+            and is_digest(entry["controls_suite_sha256"]),
+            f"{language} fixtures identity is malformed",
+        )
+        argv = _argv(entry["test_argv"], f"{language} fixtures test", test=True)
+        controls_suite = _fixture_ref(entry["controls_suite"], f"{language} suite")
+        require(
+            same(controls_suite["sha256"], entry["controls_suite_sha256"]),
+            f"{language} controls suite digest differs from the recorded file",
+        )
+        files.append(controls_suite)
+        controls = closed(
+            entry["controls"], set(PREEXEC_CONTROLS), f"{language} controls"
+        )
+        control_refs = {}
+        for name in PREEXEC_CONTROLS:
+            ref = closed(controls[name], {"subject"}, f"{language} control {name}")
+            control_refs[name] = _fixture_ref(
+                ref["subject"], f"{language} control {name} subject"
+            )
+            files.append(control_refs[name])
+        require(
+            type(entry["hostile"]) is dict and 1 <= len(entry["hostile"]) <= 64,
+            f"{language} hostile fixtures are malformed",
+        )
+        hostile = {}
+        for name, hvalue in entry["hostile"].items():
+            require(
+                type(name) is str and PROBE_ID.fullmatch("hostile." + name) is not None,
+                f"{language} hostile fixture name is malformed",
+            )
+            href = closed(hvalue, {"subject", "outcome"}, f"{language} hostile {name}")
+            require(
+                type(href["outcome"]) is str
+                and href["outcome"] in ("absent", "denied"),
+                f"{language} hostile {name} outcome is malformed",
+            )
+            hostile[name] = {
+                "subject": _fixture_ref(
+                    href["subject"], f"{language} hostile {name} subject"
+                ),
+                "outcome": href["outcome"],
+            }
+            files.append(hostile[name]["subject"])
+        parsed[language] = {
+            "test_group": entry["test_group"],
+            "test_argv": argv,
+            "expected_total": entry["expected_total"],
+            "controls_suite_sha256": entry["controls_suite_sha256"],
+            "controls": control_refs,
+            "hostile": hostile,
+        }
+        if language == "go":
+            module = _fixture_ref(entry["module"], "go module")
+            files.append(module)
+        if language == "rust":
+            authority = _fixture_ref(entry["authority"], "rust authority")
+            parsed[language]["authority_sha256"] = authority["sha256"]
+            files.append(authority)
+    return {"sha256": sha256(raw), "languages": parsed, "files": files}
+
+
 def _endpoint_sha256(endpoint_set: str, label: str, address: str, port: int) -> str:
     return sha256(
         b"\x00".join(
@@ -1349,6 +1478,7 @@ def load_profiles(paths: dict[str, Path | None]) -> dict[str, dict[str, Any]]:
             parse_enforcement_images,
             MAX_ENFORCEMENT_IMAGES,
         ),
+        "preexec_fixtures_sha256": (parse_preexec_fixtures, MAX_PREEXEC_FIXTURES),
     }
     result = {}
     for name, path in paths.items():
@@ -1655,7 +1785,9 @@ def evaluate(
             and value["retained_bytes"] == 0
         )
     if kind == "bounded":
-        value = closed(observed, {"enforced", "limit", "measured"}, "observed")
+        memory = expect["tolerance"] == MEMORY_PEAK_TOLERANCE
+        keys = {"enforced", "limit", "measured"} | ({"page_bytes"} if memory else set())
+        value = closed(observed, keys, "observed")
         require(
             type(value["enforced"]) is bool
             and is_int(value["limit"])
@@ -1664,11 +1796,21 @@ def evaluate(
         )
         permille, floor = TOLERANCES[expect["tolerance"]], TOLERANCES[expect["floor"]]
         assert isinstance(permille, int) and isinstance(floor, int)
+        overshoot = 0
+        if memory:
+            require(
+                is_int(value["page_bytes"])
+                and value["page_bytes"] in MEMORY_PAGE_BYTES,
+                "observed page size is not an accepted page size",
+            )
+            pages = TOLERANCES["memory_peak_overshoot_max_pages"]
+            assert isinstance(pages, int)
+            overshoot = value["page_bytes"] * pages
         return (
             value["enforced"] is True
             and value["limit"] >= 1
             and value["measured"] >= 1
-            and value["measured"] * 1000 <= value["limit"] * permille
+            and value["measured"] * 1000 <= value["limit"] * permille + overshoot * 1000
             and value["measured"] * 1000 >= value["limit"] * floor
         )
     if kind == "supervisor_timeout":
@@ -2241,6 +2383,71 @@ def _enforcement_images(
     )
 
 
+def _rust_authority_of(argv: list[str]) -> str:
+    fields = {argv[index]: argv[index + 1] for index in range(1, len(argv), 2)}
+    return fields.get("--authority-sha256", "")
+
+
+def _preexec_fixtures(
+    profiles: dict[str, dict[str, Any]],
+    checkout: Checkout,
+    catalog: dict[str, Any],
+    observations: dict[Instance, Any],
+) -> None:
+    """The public pre-exec fixtures the collector ran, bound to the approval.
+
+    Each language's recorded fixture command must be its own enforcement-image
+    test command; each fixture file must be the reviewed checkout's bytes; each
+    control observation must carry the recorded public suite digest; and Rust is
+    public only when it is not the grading profile's own language, so its pinned
+    authority can never be private grading material.
+    """
+
+    fixtures = profiles["preexec_fixtures_sha256"]
+    images = profiles["enforcement_images_sha256"]
+    grading_image = profiles["grading_profile_sha256"]["image_digest"]
+    own_language = [
+        language
+        for language in LANGUAGES
+        if images["images"][language]["image_digest"] == grading_image
+    ]
+    require(
+        bool(own_language) and own_language[0] != "rust",
+        "a public pre-exec rust fixture needs rust to not be the grading language",
+    )
+    probes = catalog["kinds"]["preexec_confinement"]["probes"]
+    hostile_names = {
+        probe["id"].split(".", 1)[1]
+        for probe in probes
+        if probe["id"].startswith("hostile.")
+    }
+    for language in LANGUAGES:
+        entry = fixtures["languages"][language]
+        image = images["images"][language]
+        group = entry["test_group"]
+        require(
+            set(entry["hostile"]) == hostile_names,
+            f"{language} fixtures do not cover every hostile probe",
+        )
+        for name in PREEXEC_CONTROLS:
+            observed = observations[(f"control.{name}", language, None)]
+            require(
+                same(observed["suite_sha256"], entry["controls_suite_sha256"]),
+                f"{language} control {name} ran a suite other than the fixture",
+            )
+        if language == "rust":
+            recorded = _rust_authority_of(image["test_argv"][group])
+            require(
+                same(entry["authority_sha256"], recorded),
+                "rust fixture authority differs from its recorded rust command",
+            )
+    for reference in fixtures["files"]:
+        require(
+            same(checkout.file_sha256(reference["path"]), reference["sha256"]),
+            f"pre-exec fixture {reference['path']} differs from the reviewed checkout",
+        )
+
+
 def verify_record(
     raw: bytes,
     *,
@@ -2416,6 +2623,7 @@ def verify_record(
     require(not unmatched, f"probe {unmatched[0] if unmatched else ''} did not match")
     if kind == "preexec_confinement":
         _controls(observations)
+        _preexec_fixtures(profiles, checkout, catalog, observations)
     if kind == "network_enforcement":
         _connectivity_window(phases, started, profiles["connectivity_profile_sha256"])
         _network_binding(
@@ -2979,6 +3187,7 @@ def check_approval(
         "enforcement_images_sha256",
         "execution_profile_sha256",
         "grading_profile_sha256",
+        "preexec_fixtures_sha256",
     ):
         require(
             same(rebuilt["inputs"][name], profile_pins[name]),

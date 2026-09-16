@@ -22,6 +22,12 @@
 // collector and reports catalog outcome names; it never decides a match or
 // writes a record. Positive checks are handshake-only.
 //
+// RunWorkload and ResourceAgent (B5 PR5) serve resource and cleanup
+// collection. A workload runs inside a probe container as the candidate
+// identity, drives one resource to its limit and holds; the agent starts
+// workloads only through the production launch paths and reports production
+// receipts. The root collector measures every limit itself, from outside.
+//
 // Nothing here runs from a host workflow, mints approval or reads a custody
 // path.
 package probe

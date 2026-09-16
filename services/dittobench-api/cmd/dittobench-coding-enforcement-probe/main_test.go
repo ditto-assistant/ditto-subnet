@@ -79,3 +79,37 @@ func TestNetOnceWaitsForTheGateAndWritesAnExclusiveReport(t *testing.T) {
 		t.Fatal("an existing report was replaced")
 	}
 }
+
+func TestResourceAgentRefusesAConsumedAttemptBeforeAnything(t *testing.T) {
+	// Not t.TempDir: its intermediate directory follows the umask, and the
+	// runtime refuses group-writable ancestors.
+	root, err := os.MkdirTemp("", "probe-attempt-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	state := filepath.Join(root, "attempt")
+	if err := os.Mkdir(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--execution-profile", "/missing/e", "--grading-profile", "/missing/g", "--enforcement-images", "/missing/i",
+		"--runner", "/missing/runner", "--work-dir", "/missing/work", "--launch-journal", "/missing/journal", "--attempt-state", state}
+	var first bytes.Buffer
+	// The first start consumes the attempt, then fails on the missing journal.
+	if err := resourceAgent(t.Context(), args, strings.NewReader(""), &first); err == nil || first.Len() != 0 {
+		t.Fatalf("first start: %v %q", err, first.String())
+	}
+	if _, err := os.Stat(filepath.Join(state, "consumed")); err != nil {
+		t.Fatal("the attempt was not consumed")
+	}
+	var rerun bytes.Buffer
+	if err := resourceAgent(t.Context(), args, strings.NewReader(""), &rerun); err == nil {
+		t.Fatal("a consumed attempt started again")
+	}
+	if strings.TrimSpace(rerun.String()) != `{"schema":"dittobench-coding-native-resource-agent-v1","op":"attempt","error":"probe: attempt state consumed"}` {
+		t.Fatalf("rerun answer = %q", rerun.String())
+	}
+	if err := resourceAgent(t.Context(), args[:len(args)-2], strings.NewReader(""), &rerun); err == nil || !strings.Contains(err.Error(), "together") {
+		t.Fatalf("journal without attempt state: %v", err)
+	}
+}

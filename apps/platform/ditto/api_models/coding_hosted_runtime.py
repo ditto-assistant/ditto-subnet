@@ -18,6 +18,10 @@ class HostedRuntimeHostSettings(BaseModel):
 
     docker_executable: PrivatePath
     docker_socket: PrivatePath
+    # Persistent private directory for the runtime's launch intent journal.
+    # It outlives every invocation's runtime_root; the worker refuses to start
+    # an attempt until the journal there is reconciled.
+    launch_journal_dir: PrivatePath
     router_listen: Name
     egress_network: Name
     egress_proxy: Name

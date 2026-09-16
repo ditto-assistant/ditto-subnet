@@ -2,14 +2,17 @@ package codinghostedruntime
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingharness"
 	"github.com/ditto-assistant/dittobench-api/internal/codinghostedworker"
+	"github.com/ditto-assistant/dittobench-api/internal/codinglaunchjournal"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 	"github.com/ditto-assistant/dittobench-api/internal/codingsource"
 )
@@ -43,10 +46,25 @@ func Run(ctx context.Context, path string) (string, error) {
 	if installEnvironment(config) != nil {
 		return "", ErrConfig
 	}
+	// Reconcile whatever an earlier killed invocation journaled before this
+	// attempt may launch anything; an unreconciled journal refuses the attempt.
+	journal, err := codinglaunchjournal.Open(config.wire.LaunchJournalDir, config.wire.Expected.AttemptID, config.wire.Expected.WorkerID)
+	if err != nil {
+		return "", ErrCleanup
+	}
+	defer journal.Close()
+	docker := codinglaunchjournal.ExecDocker{}
+	if _, err := journal.Reconcile(ctx, docker); err != nil {
+		return "", ErrCleanup
+	}
 	runtime, err := codingharness.NewHostedSandboxRuntime(config.docker)
 	if err != nil || runtime.Available(ctx) != nil {
 		return "", ErrExecution
 	}
+	if _, err := journal.Sentinel(ctx, docker); err != nil {
+		return "", ErrExecution
+	}
+	config.launch.set(journal)
 	registry := codingsource.NewRegistry(nil)
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp4", config.wire.RouterListen)
 	if err != nil {
@@ -84,7 +102,89 @@ func Run(ctx context.Context, path string) (string, error) {
 	if closeRouter() != nil {
 		return "", ErrCleanup
 	}
+	// Unconfirmed attempt cleanup keeps the journal pending for operator
+	// recovery (the explicit reconcile, or the next start); nothing more is
+	// removed automatically here.
+	if runErr == ErrCleanup {
+		config.launch.set(nil)
+		return "", ErrCleanup
+	}
+	if err := finishJournal(config.launch, journal, docker); err != nil {
+		return "", err
+	}
 	return result, runErr
+}
+
+// launchSlot is the launch hook both launch paths hold from configuration
+// time. It refuses every launch until Run has reconciled and opened the
+// journal, and again once the attempt is finished.
+type launchSlot struct {
+	mu      sync.Mutex
+	journal *codinglaunchjournal.Journal
+}
+
+func (s *launchSlot) set(journal *codinglaunchjournal.Journal) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.journal = journal
+}
+
+func (s *launchSlot) intent(ctx context.Context, run string, containers, networks []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.journal == nil {
+		return codinglaunchjournal.ErrJournal
+	}
+	return s.journal.Intent(ctx, run, containers, networks)
+}
+
+type reconciler interface {
+	Reconcile(context.Context, codinglaunchjournal.Docker) (codinglaunchjournal.Report, error)
+}
+
+// finishJournal closes the launch hook, then reconciles: the attempt's own
+// cleanup has already removed its objects, so this removes the sentinel and
+// confirms every other journaled object is absent before rotating.
+func finishJournal(slot *launchSlot, journal reconciler, docker codinglaunchjournal.Docker) error {
+	slot.set(nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if _, err := journal.Reconcile(ctx, docker); err != nil {
+		return ErrCleanup
+	}
+	return nil
+}
+
+// ReconcileLaunchJournal is the explicit operator reconcile: it removes the
+// objects a killed invocation journaled, through the given Docker executable
+// and socket with an empty private client configuration, and rotates the
+// journal. It refuses while another process owns the journal directory.
+func ReconcileLaunchJournal(ctx context.Context, directory, dockerExecutable, dockerSocket string) (codinglaunchjournal.Report, error) {
+	return reconcileLaunchJournal(ctx, directory, dockerExecutable, dockerSocket, protectedExecutable)
+}
+
+func reconcileLaunchJournal(ctx context.Context, directory, dockerExecutable, dockerSocket string, executable func(string) bool) (codinglaunchjournal.Report, error) {
+	if ctx == nil || !privateDirectory(directory) || !executable(dockerExecutable) || filepath.Base(dockerExecutable) != "docker" || !privateSocket(dockerSocket) {
+		return codinglaunchjournal.Report{}, ErrConfig
+	}
+	journal, err := codinglaunchjournal.Open(directory, "reconciler", "reconciler")
+	if err != nil {
+		return codinglaunchjournal.Report{}, err
+	}
+	defer journal.Close()
+	clientConfig, err := os.MkdirTemp(directory, "docker-config-")
+	if err != nil {
+		return codinglaunchjournal.Report{}, ErrConfig
+	}
+	defer os.RemoveAll(clientConfig)
+	docker := codinglaunchjournal.ExecDocker{Executable: dockerExecutable, Env: []string{
+		"PATH=" + filepath.Dir(dockerExecutable), "DOCKER_HOST=unix://" + dockerSocket, "DOCKER_CONFIG=" + clientConfig,
+	}}
+	report, err := journal.Reconcile(ctx, docker)
+	if err != nil {
+		return report, errors.Join(ErrCleanup, err)
+	}
+	return report, nil
 }
 
 func installEnvironment(config *runtimeConfig) error {

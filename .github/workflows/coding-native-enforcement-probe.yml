@@ -1,12 +1,15 @@
 name: Native Coding enforcement probe runner
 
 # On a real rootless Docker daemon with delegated cgroups, runs the native
-# enforcement probe runner's only live path: requested resource configuration
-# of a created, never-started hosted grading executor container, built through
-# the production launch code from a committed approved grading profile. It
-# measures no enforcement and writes no evidence record; the offline verifier
-# tests compare the report with the profile and refuse it as a record. No
-# secrets, cloud identity, registry pull, host or production is involved.
+# enforcement probe runner's requested-config path: requested resource
+# configuration of a created, never-started hosted grading executor container,
+# built through the production launch code from a committed approved grading
+# profile; the offline verifier tests compare the report with the profile and
+# refuse it as a record. A second step drives the runner's workload helper on
+# the VM's own Docker daemon with small limits and checks the resource
+# collector's outside samplers against the kernel (B5 PR5). Neither writes an
+# evidence record. No secrets, cloud identity, registry pull, host or
+# production is involved.
 
 on:
   pull_request:
@@ -28,7 +31,9 @@ on:
       - services/dittobench-api/internal/codingharness/**
       - services/dittobench-api/internal/codinghostedinput/**
       - services/dittobench-api/internal/codinghostedrelay/**
+      - services/dittobench-api/internal/codinghostedruntime/**
       - services/dittobench-api/internal/codinghostedworker/**
+      - services/dittobench-api/internal/codinglaunchjournal/**
       - services/dittobench-api/internal/codingoutbox/**
       - services/dittobench-api/internal/codingphase/**
       - services/dittobench-api/internal/codingplatform/**
@@ -47,6 +52,11 @@ on:
       - ditto/tests/test_coding_native_probe_runner.py
       - ditto/tests/test_coding_native_enforcement_evidence.py
       - ditto/tests/test_coding_native_enforcement_probe_workflow.py
+      # The resource samplers the kernel step drives live in the collector; it
+      # is named here only as a path filter, never executed.
+      - infra/scripts/collect-coding-native-enforcement.py
+      - ditto/tests/test_coding_native_resource_kernel.py
+      - ditto/tests/test_coding_native_network_collector.py
       - pyproject.toml
       - uv.lock
       - .github/workflows/coding-native-enforcement-probe.yml
@@ -90,7 +100,7 @@ jobs:
           set -euo pipefail
           go vet ./internal/codingenforcement/... ./cmd/dittobench-coding-enforcement-probe/
           go vet -tags native_probe_integration ./internal/codingenforcement/probe/
-          go test -p 2 ./internal/codingenforcement/... ./internal/codingexecutor/ ./internal/codinghostedworker/ ./internal/sandbox/ ./cmd/dittobench-coding-enforcement-probe/
+          go test -p 2 ./internal/codingenforcement/... ./internal/codingexecutor/ ./internal/codinghostedworker/ ./internal/codinghostedruntime/ ./internal/codinglaunchjournal/ ./internal/sandbox/ ./cmd/dittobench-coding-enforcement-probe/
           out="$RUNNER_TEMP/native-probe"
           mkdir -p "$out"
           go test -c -tags native_probe_integration -o "$out/integration.test" ./internal/codingenforcement/probe/
@@ -186,6 +196,17 @@ jobs:
             DITTOBENCH_NATIVE_PROBE_IMAGE_DIGEST="$digest" \
             timeout 300 "$out/integration.test" \
             -test.run '^TestHostedGradingRequestedConfigMatchesTheApprovedProfile$' -test.count=1 -test.v
+          # The hosted runtime's launch journal: a child journals a sentinel
+          # network and a created (never started) container, is SIGKILLed, and
+          # reconciliation removes exactly those while an unjournaled labelled
+          # container survives.
+          env -i PATH="$dir:/usr/sbin:/usr/bin:/sbin:/bin" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \
+            DOCKER_HOST="$DOCKER_HOST" \
+            DITTOBENCH_NATIVE_PROBE_REPOSITORY="$repository" \
+            DITTOBENCH_NATIVE_PROBE_IMAGE_DIGEST="$digest" \
+            timeout 300 "$out/integration.test" \
+            -test.run '^TestLaunchJournalReconcilesAKilledOwnerOnRealDocker$' -test.count=1 -test.v
+          test -z "$("$dir/docker" network ls -q --filter name=ditto-job-sentinel-)"
           env -i PATH="$dir:/usr/sbin:/usr/bin:/sbin:/bin" HOME="$HOME" TMPDIR="$RUNNER_TEMP" \
             DOCKER_HOST="$DOCKER_HOST" \
             timeout 300 "$out/dittobench-coding-enforcement-probe" observe-requested-config \
@@ -208,6 +229,32 @@ jobs:
           DITTOBENCH_NATIVE_PROBE_REPORT="$RUNNER_TEMP/native-probe/requested-config-report.json" \
             uv run --frozen pytest -q ditto/tests/test_coding_native_probe_runner.py \
             ditto/tests/test_coding_native_enforcement_probe_workflow.py
+
+      - name: Resource samplers against the VM's own Docker daemon (small limits)
+        env:
+          DITTOBENCH_REQUIRE_LOCAL_WORKLOADS: "1"
+        run: |
+          set -euo pipefail
+          # The measured runner's workload helper drives memory, cpu, pids,
+          # scratch, nofile, rootfs and log limits in throwaway containers on the
+          # VM's rootful daemon (the test user's own uid, so /proc is readable
+          # without root). The collector's samplers read them from outside.
+          # Mechanics only: no production launch, no record.
+          out="$RUNNER_TEMP/native-probe"
+          runner="$out/dittobench-coding-enforcement-probe"
+          root="$out/workload-root"
+          mkdir -p "$root"
+          # An image holding only the runner's shared libraries, imported from
+          # this VM; the runner itself is bind-mounted read-only. No pull.
+          for library in $(ldd "$runner" | grep -o '/[^ ]*'); do
+            install -D "$library" "$root$library"
+          done
+          tar -C "$root" -cf "$out/workload-root.tar" .
+          image="$(docker import "$out/workload-root.tar")"
+          DITTOBENCH_LOCAL_WORKLOAD_RUNNER="$runner" DITTOBENCH_LOCAL_WORKLOAD_IMAGE="$image" \
+            uv run --frozen pytest -q ditto/tests/test_coding_native_resource_kernel.py
+          test -z "$(docker ps -aq --filter name=dittobench-pr5-kernel-)"
+          docker image rm "$image"
 
       - name: Show the rootless daemon log on failure
         if: failure()
