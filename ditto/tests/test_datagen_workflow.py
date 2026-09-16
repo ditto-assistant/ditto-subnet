@@ -5,6 +5,31 @@ import yaml
 ROOT = Path(__file__).parents[2]
 
 
+def test_datagen_full_suite_has_same_bounded_timeout_everywhere() -> None:
+    command = "go test -timeout 20m ./..."
+    ci = yaml.safe_load((ROOT / ".github/workflows/datagen-ci.yml").read_text())
+    assert (
+        next(s for s in ci["jobs"]["build-test"]["steps"] if s.get("name") == "Test")[
+            "run"
+        ]
+        == command
+    )
+    release = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
+    steps = release["jobs"]["verify-dittobench-datagen"]["steps"]
+    assert (
+        next(
+            s
+            for s in steps
+            if s.get("name") == "Gate DittoBench datagen release on exact merge source"
+        )["run"]
+        == command
+    )
+    script = (
+        ROOT / "research/dittobench-datagen/scripts/verify-generate-service-release.sh"
+    ).read_text()
+    assert command in script
+
+
 def _triggers(workflow: dict) -> dict:
     return workflow.get("on", workflow[True])
 

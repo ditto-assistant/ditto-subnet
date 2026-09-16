@@ -443,6 +443,9 @@ tr:hover .copy,
 .bar.longmem {
   background: var(--good);
 }
+.bar.router {
+  background: var(--router);
+}
 .bar.coding {
   background: var(--coding);
 }

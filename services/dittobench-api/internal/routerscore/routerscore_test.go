@@ -177,11 +177,26 @@ func TestCombineRangeAndBuildEntry(t *testing.T) {
 	if entry.WeightEligible {
 		t.Fatal("shadow entry must not be weight-eligible")
 	}
-	if math.Abs(entry.CombinedScore-want) > 1e-9 {
-		t.Fatalf("entry combined score = %v, want %v", entry.CombinedScore, want)
+	// Shadow invariant: the measured aggregate rides ShadowComposite while the
+	// validator-folded CombinedScore stays 0 (no emission impact).
+	if entry.CombinedScore != 0 {
+		t.Fatalf("shadow entry combined score = %v, want 0 (never folded to weight)", entry.CombinedScore)
+	}
+	if math.Abs(entry.ShadowComposite-want) > 1e-9 {
+		t.Fatalf("entry shadow composite = %v, want %v", entry.ShadowComposite, want)
 	}
 	if len(entry.Harnesses) != 4 {
 		t.Fatalf("entry has %d harness results, want 4", len(entry.Harnesses))
+	}
+
+	// At promotion (weight-eligible) the same measured aggregate is adopted into
+	// CombinedScore and both fields agree.
+	promoted := BuildEntry("5Fhotkey", "0f7e3d2c-1111-4222-8333-444455556666", DefaultHarnessWeights, true, first, outcomes)
+	if math.Abs(promoted.CombinedScore-want) > 1e-9 {
+		t.Fatalf("promoted combined score = %v, want %v", promoted.CombinedScore, want)
+	}
+	if math.Abs(promoted.ShadowComposite-promoted.CombinedScore) > 1e-9 {
+		t.Fatalf("promoted composite/combined disagree: %v vs %v", promoted.ShadowComposite, promoted.CombinedScore)
 	}
 }
 
@@ -215,7 +230,7 @@ func TestLedgerJSONTagsMatchPythonKeys(t *testing.T) {
 	}
 	entries := decoded["entries"].([]any)
 	e0 := entries[0].(map[string]any)
-	for _, key := range []string{"miner_hotkey", "agent_id", "router_contract_version", "weight_eligible", "combined_score", "harnesses", "first_seen"} {
+	for _, key := range []string{"miner_hotkey", "agent_id", "router_contract_version", "weight_eligible", "combined_score", "shadow_composite", "harnesses", "first_seen"} {
 		if _, ok := e0[key]; !ok {
 			t.Errorf("entry JSON missing Python key %q", key)
 		}

@@ -31,6 +31,7 @@ from ditto.db.queries.benchmark_admission import (
     benchmark_admission_predicate,
     validator_queue_admission_predicate,
 )
+from ditto.db.queries.screening_retry import failed_screening_retry_authorized
 from ditto.screener_policy_state import effective_screening_policy_version
 
 if TYPE_CHECKING:
@@ -437,6 +438,7 @@ async def query_public_activity_page(
         & (Agent.screening_policy_version < effective_screening_policy_version())
         & admitted
     )
+    failed_retry_authorized = failed_screening_retry_authorized()
     below_floor = (
         (Agent.status == AgentStatus.EVALUATING)
         & ~live_assignment
@@ -457,9 +459,14 @@ async def query_public_activity_page(
             literal(AgentStatus.SCREENING.value),
         ),
         (
-            Agent.status.in_((AgentStatus.UPLOADED, AgentStatus.SCREENING_FAILED))
+            (Agent.status == AgentStatus.UPLOADED)
+            | ((Agent.status == AgentStatus.SCREENING_FAILED) & failed_retry_authorized)
             | needs_rescreen,
             literal("waiting_screening"),
+        ),
+        (
+            Agent.status == AgentStatus.SCREENING_FAILED,
+            literal("not_queued"),
         ),
         (waiting_state & retired, literal("retired")),
         (

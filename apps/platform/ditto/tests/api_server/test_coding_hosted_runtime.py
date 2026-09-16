@@ -143,7 +143,6 @@ async def runtime_fixture(
             "image_digest": profile["profile"]["image_digest"],
             "grader_contract_sha256": grader_contract,
             "grader_bundle_sha256": artifacts["grader_bundle"],
-            "test_manifest_sha256": "8" * 64,
             "resource_policy": profile["profile"]["resource_policy"],
             "build": {"Required": False, "Command": command("build")},
             "test_groups": [

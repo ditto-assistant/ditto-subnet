@@ -1618,3 +1618,183 @@ class TestLedgerBurnShare:
         assert stale.status_code == 200
         assert stale.json()["stale"] is True
         assert stale.json()["burn_share"] == 0.5
+
+
+class TestLedgerConfirmationSeedAnchors:
+    """Bench v13+ pinned reign anchors ride the ledger to the whole fleet.
+
+    Every validator's ``reign_seed_planning`` / ``version_seed_planning`` keys
+    off this field, so a bug here (an unpinned row leaking, the snapshot
+    dropping the tuple) would silently defer every validator-derived lane.
+    """
+
+    @staticmethod
+    async def _seed_anchor(
+        maker: async_sessionmaker[AsyncSession],
+        *,
+        name: str,
+        bench_version: int,
+        ready_block: int,
+        block_hash: str | None,
+    ) -> UUID:
+        from ditto.api_server.crn import CRN_ANCHOR_BLOCK_DELTA
+        from ditto.db.models import ConfirmationSeedAnchor
+
+        agent_id = uuid4()
+        async with maker() as s, s.begin():
+            s.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=f"5Anchor{name}",
+                    name=name,
+                    sha256=f"{len(name):02d}" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=datetime.now(UTC),
+                )
+            )
+            await s.flush()
+            s.add(
+                ConfirmationSeedAnchor(
+                    champion_agent_id=agent_id,
+                    bench_version=bench_version,
+                    ready_block=ready_block,
+                    anchor_block=ready_block + CRN_ANCHOR_BLOCK_DELTA,
+                    anchor_block_hash=block_hash,
+                    pinned_at=datetime.now(UTC) if block_hash else None,
+                )
+            )
+        return agent_id
+
+    async def _seed_reigns(
+        self, maker: async_sessionmaker[AsyncSession]
+    ) -> tuple[UUID, UUID]:
+        """Two pinned reigns of the active version (younger first, to prove the
+        order is by anchor block), one waiting reign, one other-version reign."""
+        later = await self._seed_anchor(
+            maker,
+            name="later",
+            bench_version=_BENCH_VERSION,
+            ready_block=500,
+            block_hash="0x" + "cd" * 32,
+        )
+        earlier = await self._seed_anchor(
+            maker,
+            name="earlier",
+            bench_version=_BENCH_VERSION,
+            ready_block=100,
+            block_hash="0x" + "ab" * 32,
+        )
+        await self._seed_anchor(
+            maker,
+            name="waiting",
+            bench_version=_BENCH_VERSION,
+            ready_block=1,
+            block_hash=None,
+        )
+        await self._seed_anchor(
+            maker,
+            name="other",
+            bench_version=_BENCH_VERSION + 1,
+            ready_block=2,
+            block_hash="0x" + "ef" * 32,
+        )
+        return earlier, later
+
+    async def test_pinned_anchors_of_the_active_version_are_served_oldest_first(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server import crn as crn_mod
+        from ditto.api_server.crn import CRN_ANCHOR_BLOCK_DELTA
+
+        # The fixture era is v7; the floor is read at call time.
+        monkeypatch.setattr(
+            crn_mod, "CRN_BLOCK_BINDING_MIN_BENCH_VERSION", _BENCH_VERSION
+        )
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        earlier, later = await self._seed_reigns(session_maker)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert resp.status_code == 200, resp.text
+        # Pinned rows of the active version only, oldest anchor block first: no
+        # waiting row (it would carry an empty hash), no other-version row.
+        assert resp.json()["confirmation_seed_anchors"] == [
+            {
+                "champion_agent_id": str(earlier),
+                "bench_version": _BENCH_VERSION,
+                "anchor_block": 100 + CRN_ANCHOR_BLOCK_DELTA,
+                "anchor_block_hash": "0x" + "ab" * 32,
+            },
+            {
+                "champion_agent_id": str(later),
+                "bench_version": _BENCH_VERSION,
+                "anchor_block": 500 + CRN_ANCHOR_BLOCK_DELTA,
+                "anchor_block_hash": "0x" + "cd" * 32,
+            },
+        ]
+
+    async def test_stale_snapshot_replays_the_pinned_anchors(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Pins are chain facts fixed once per reign: the last-known-good path
+        must replay them, or an outage would defer every bound lane fleet-wide."""
+        from ditto.api_server import crn as crn_mod
+
+        monkeypatch.setattr(
+            crn_mod, "CRN_BLOCK_BINDING_MIN_BENCH_VERSION", _BENCH_VERSION
+        )
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        earlier, later = await self._seed_reigns(session_maker)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        ok = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ok.status_code == 200, ok.text
+        fresh_anchors = ok.json()["confirmation_seed_anchors"]
+        assert [a["champion_agent_id"] for a in fresh_anchors] == [
+            str(earlier),
+            str(later),
+        ]
+
+        app.state.ledger_snapshot.generated_at -= timedelta(
+            seconds=scoring_mod._FRESH_SNAPSHOT_SECONDS + 1
+        )
+
+        async def _boom(_session: object, **_kwargs: object) -> list:
+            raise OperationalError("SELECT ...", {}, Exception("db down"))
+
+        monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _boom)
+        stale = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert stale.status_code == 200, stale.text
+        assert stale.json()["stale"] is True
+        assert stale.json()["confirmation_seed_anchors"] == fresh_anchors
+
+    async def test_below_the_binding_floor_no_anchor_is_served(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Legacy versions plan the unbound family; a pinned row (which the lane
+        never creates below the floor) must not reach them either."""
+        from ditto.api_server import crn as crn_mod
+
+        assert _BENCH_VERSION < crn_mod.CRN_BLOCK_BINDING_MIN_BENCH_VERSION
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        await self._seed_reigns(session_maker)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["confirmation_seed_anchors"] == []

@@ -71,6 +71,7 @@ import {
   RankMove,
   RetestSeedChip,
   RolloutChip,
+  RouterShadowChip,
   TokenPenaltyChip,
   V9ConfirmationChip,
 } from "./chips";
@@ -281,7 +282,7 @@ function emissionsColTip(store: LeaderboardStore): string {
 }
 
 function Bar(props: {
-  kind: "tool" | "memory" | "longmem" | "coding";
+  kind: "tool" | "memory" | "longmem" | "coding" | "router";
   value: number;
 }): JSX.Element {
   return (
@@ -379,6 +380,19 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
     }
   };
   const showsEfficiencyTieBreak = (): boolean => props.entry.efficiency_factor != null;
+  const routerScore = (): number | null | undefined => props.entry.router_shadow_composite;
+  const routerPlaceholder = (): string | null => {
+    if (routerScore() != null) return null;
+    if (props.store.payload()?.router_shadow_mode !== "shadow") return null;
+    switch (props.entry.router_shadow_status) {
+      case "running":
+        return "running";
+      case "queued":
+        return "queued";
+      default:
+        return null;
+    }
+  };
   const coding = (): ReturnType<typeof codingShadowCopy> => codingShadowCopy(props.entry);
   const codingDetailsId = (): string =>
     "coding-shadow-details-" + (props.entry.agent_id || props.entry.miner_hotkey);
@@ -515,6 +529,17 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
             </Show>
           </div>
         </Show>
+        <Show when={routerScore() != null || routerPlaceholder() != null}>
+          <div class="score-stack-row">
+            <span class="score-stack-label">Router</span>
+            <Show
+              when={routerScore() != null}
+              fallback={<span class="mval muted">{routerPlaceholder()}</span>}
+            >
+              <Bar kind="router" value={routerScore() as number} />
+            </Show>
+          </div>
+        </Show>
         <div class="cline2 score-stack-context">
           <RolloutChip
             entry={props.entry}
@@ -525,6 +550,7 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
             entry={props.entry}
             mode={props.store.payload()?.v9_confirmation_mode}
           />
+          <RouterShadowChip entry={props.entry} mode={props.store.payload()?.router_shadow_mode} />
           <ContinualScoreChip entry={props.entry} />
           <EfficiencyBonusChip entry={props.entry} />
           <QualityGateChip entry={props.entry} />

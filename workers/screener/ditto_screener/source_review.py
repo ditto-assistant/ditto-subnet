@@ -8,6 +8,7 @@ import fnmatch
 import hashlib
 import json
 import logging
+import math
 import posixpath
 import re
 import tarfile
@@ -72,6 +73,8 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
+    if policy_version == 13:
+        return "source-review-v25-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -276,6 +279,9 @@ _SOURCE_REVIEW_FAILURE_CODES: Mapping[str, str] = {
     "source archive contains a duplicate path": "archive-invalid",
     "provenance file could not be read": "archive-invalid",
     "static preflight mode must be off, shadow, or enforce": "detector-config-invalid",
+    "max_completion_request_seconds must be finite and positive": (
+        "request-timeout-config-invalid"
+    ),
     # The reviewer exhausted a budget we set. Not infrastructure: the submission
     # was too large or too deep to review within the configured bounds.
     "source reviewer exceeded lease budget": "lease-budget-exhausted",
@@ -1890,6 +1896,14 @@ source causality remains unresolved. Tests, diagnostics, and helpers require
 effective build/startup/runtime reachability; refuting one dormant lead does
 not clear the rest of the artifact.
 
+Merge submission evidence with exact path-and-digest starter-kit provenance
+supplied by the platform. A matched official component satisfies only the
+fields and role recorded there, but its README, metadata sidecar, or duplicate
+self-report need not be present in the archive. Recheck changed configuration,
+loaders, candidate boundaries, inputs, outputs, and downstream authority. A
+null score or leaderboard field does not prove that an artifact-bound
+screening package is absent.
+
 Security review covers unauthorized cross-user access, credential access,
 secret emission, private-data exfiltration, host-resource access, hidden
 runtime replacement, and screening-only behavior changes. Attribute
@@ -3345,6 +3359,7 @@ class OpenRouterSourceReviewAgent:
             _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS
         ),
         inference_provider: str = "openrouter",
+        max_completion_request_seconds: float | None = None,
     ) -> None:
         self._inference_provider = inference_provider
         # Gradient thresholds for a budget-terminated review: this many
@@ -3362,6 +3377,21 @@ class OpenRouterSourceReviewAgent:
             _MIN_MAX_COMPLETION_TOKENS, int(max_completion_tokens)
         )
         self._reasoning_effort = reasoning_effort
+        request_timeout = (
+            _MAX_COMPLETION_REQUEST_SECONDS
+            if max_completion_request_seconds is None
+            else max_completion_request_seconds
+        )
+        if (
+            not isinstance(request_timeout, (int, float))
+            or isinstance(request_timeout, bool)
+            or not math.isfinite(request_timeout)
+            or request_timeout <= 0
+        ):
+            raise ValueError(
+                "max_completion_request_seconds must be finite and positive"
+            )
+        self._max_completion_request_seconds = float(request_timeout)
         self._transport_retry_delays = tuple(
             max(0.0, float(delay)) for delay in transport_retry_delays
         )
@@ -3773,6 +3803,15 @@ class OpenRouterSourceReviewAgent:
 
         raise AssertionError("model retry loop exhausted without a result")
 
+    def _completion_request_headers(
+        self, api_key: str, _effective_timeout: float
+    ) -> dict[str, str]:
+        """Gateway headers; subclasses can communicate an already bounded deadline."""
+        return {
+            "Authorization": f"Bearer {api_key}",
+            **review_gateway_headers(self._inference_provider),
+        }
+
     async def _post_completion(
         self,
         client: httpx.AsyncClient,
@@ -3809,15 +3848,12 @@ class OpenRouterSourceReviewAgent:
         }
         effective_timeout = min(
             timeout if timeout is not None else self._timeout_seconds,
-            _MAX_COMPLETION_REQUEST_SECONDS,
+            self._max_completion_request_seconds,
         )
         async with asyncio.timeout(effective_timeout):
             response = await client.post(
                 f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    **review_gateway_headers(self._inference_provider),
-                },
+                headers=self._completion_request_headers(api_key, effective_timeout),
                 json=request,
                 timeout=effective_timeout,
             )

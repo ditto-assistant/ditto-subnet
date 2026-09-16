@@ -19,7 +19,7 @@ restore() {
   runuser -u ditto-builder -- env DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock \
     docker run --rm --pull never --network none --memory 128m --pids-limit 32 \
     --entrypoint /bin/true ditto-screener-l2-analyzer:active || return 1
-  systemctl start ditto-screener-fleet-agent.service ditto-screener-worker@{1..2}.service
+  systemctl start ditto-screener-fleet-agent.service ditto-screener-worker@{1..4}.service
 }
 trap restore EXIT
 # Workers drain first while the lane agent can still finish their build/review.
@@ -43,15 +43,14 @@ if [ -n "$rootless" ]; then
   echo 'Rootless workload remains active after drain' >&2; exit 1
 fi
 systemctl stop user@1005.service
-systemctl disable ditto-screener-worker@{3..4}.service
-systemctl enable ditto-screener-worker@{1..2}.service
+systemctl enable ditto-screener-worker@{1..4}.service
 systemctl start dittoscreener.slice
 restore
 trap - EXIT
 # Verify every service and descendant subtree enters the aggregate partition.
 path=$(systemctl show user@1005.service -p ControlGroup --value)
 [[ "$path" == /user.slice/user-1005.slice/user@1005.service ]] || { echo 'Wrong rootless user hierarchy' >&2; exit 1; }
-for unit in ditto-screener-fleet-agent.service ditto-screener-worker@{1..2}.service; do
+for unit in ditto-screener-fleet-agent.service ditto-screener-worker@{1..4}.service; do
   path=$(systemctl show "$unit" -p ControlGroup --value)
   [[ "$path" == /dittoscreener.slice/* ]] || { echo "Wrong partition for $unit" >&2; exit 1; }
 done

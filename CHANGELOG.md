@@ -2,6 +2,205 @@
 
 <!-- version list -->
 
+## v0.273.1 (2026-09-16)
+
+### Bug Fixes
+
+- Preserve v13 claim evidence in signed report wire format
+  ([#1944](https://github.com/ditto-assistant/ditto-subnet/pull/1944),
+  [`bcd7337`](https://github.com/ditto-assistant/ditto-subnet/commit/bcd733721d50012f5cca3f20d50c1d536b2675b5))
+
+
+## v0.273.0 (2026-09-16)
+
+### Documentation
+
+- Route Backroom reviews to the applicable v13 policy
+  ([#1942](https://github.com/ditto-assistant/ditto-subnet/pull/1942),
+  [`e4efec3`](https://github.com/ditto-assistant/ditto-subnet/commit/e4efec389ec03341ef3d71665dd36352d4d2ddb5))
+
+### Features
+
+- **bench**: Integrate the v13 pre-activation contract
+  ([#1937](https://github.com/ditto-assistant/ditto-subnet/pull/1937),
+  [`e1a8fa2`](https://github.com/ditto-assistant/ditto-subnet/commit/e1a8fa2b786143d4c74c57277d75a1cb57a9d4fb))
+
+- **platform**: Add isolated singleton benchmark canary leases
+  ([#1943](https://github.com/ditto-assistant/ditto-subnet/pull/1943),
+  [`f1e067d`](https://github.com/ditto-assistant/ditto-subnet/commit/f1e067d4f6084a5b963cc2b46a476faea87db4d4))
+
+
+## v0.272.0 (2026-09-16)
+
+### Features
+
+- **bench**: Integrate v13 tool semantics and assertion-aware effects
+  ([#1872](https://github.com/ditto-assistant/ditto-subnet/pull/1872),
+  [`554a90a`](https://github.com/ditto-assistant/ditto-subnet/commit/554a90aa88079e54752ca84fa5b7e55accfd8e20))
+
+
+## v0.271.0 (2026-09-16)
+
+### Features
+
+- **datagen**: Integrate v13 typed claims and assertion-aware grading
+  ([#1936](https://github.com/ditto-assistant/ditto-subnet/pull/1936),
+  [`52b48f2`](https://github.com/ditto-assistant/ditto-subnet/commit/52b48f28d37522a10c09d3f3ba494dc13591794a))
+
+
+## v0.270.0 (2026-09-16)
+
+### Features
+
+- **datagen**: V13 event programs, family compiler v2, injection cases
+  ([#1862](https://github.com/ditto-assistant/ditto-subnet/pull/1862),
+  [`eccbb6e`](https://github.com/ditto-assistant/ditto-subnet/commit/eccbb6e1cd6a6489dff010498860cdd22454b3bc))
+
+
+## v0.269.0 (2026-09-16)
+
+### Features
+
+- **datagen**: Add bench v13 plumbing and grader-only protocol types
+  ([#1861](https://github.com/ditto-assistant/ditto-subnet/pull/1861),
+  [`7124d13`](https://github.com/ditto-assistant/ditto-subnet/commit/7124d136ec20b9f1e0afee74e84f369399f2d56b))
+
+- **datagen**: V13 grammars, typo projector v2, and salted surface pass
+  ([#1863](https://github.com/ditto-assistant/ditto-subnet/pull/1863),
+  [`b3d7d92`](https://github.com/ditto-assistant/ditto-subnet/commit/b3d7d92b31d5e1d35a6c3a6a8134f19bf0d929a7))
+
+
+## v0.268.1 (2026-09-15)
+
+### Bug Fixes
+
+- **backroom**: Accept policy v13 invariant assessments
+  ([#1931](https://github.com/ditto-assistant/ditto-subnet/pull/1931),
+  [`6f6e9e6`](https://github.com/ditto-assistant/ditto-subnet/commit/6f6e9e6f35e39082d3607ca7d79b2acca4452931))
+
+
+## v0.268.0 (2026-09-15)
+
+### Features
+
+- Make the SN118 router shadow track score LIVE end-to-end (replay default + offload seam, published
+  ledger, leaderboard shadow badge)
+  ([#1917](https://github.com/ditto-assistant/ditto-subnet/pull/1917),
+  [`f88f259`](https://github.com/ditto-assistant/ditto-subnet/commit/f88f259f3fcedad7a40c4b9c50922d4a64374c49))
+
+
+## v0.267.7 (2026-09-15)
+
+### Bug Fixes
+
+- **screener**: Communicate remaining shadow request deadline
+  ([#1922](https://github.com/ditto-assistant/ditto-subnet/pull/1922),
+  [`e5aad9f`](https://github.com/ditto-assistant/ditto-subnet/commit/e5aad9f233767f11849da8d351f6541b9adc9880))
+
+
+## v0.267.6 (2026-09-15)
+
+### Bug Fixes
+
+- **screener**: Tighten shadow fan-out discovery and adjudication
+  ([#1918](https://github.com/ditto-assistant/ditto-subnet/pull/1918),
+  [`ada9d60`](https://github.com/ditto-assistant/ditto-subnet/commit/ada9d604872a4492a16523b9efc94ee8e9fdfead))
+
+
+## v0.267.5 (2026-09-14)
+
+### Bug Fixes
+
+- **screener**: Keep malformed adjudication out of tool replay
+  ([#1916](https://github.com/ditto-assistant/ditto-subnet/pull/1916),
+  [`910bc9f`](https://github.com/ditto-assistant/ditto-subnet/commit/910bc9fcab5bca268c75674949072bb968179154))
+
+
+## v0.267.4 (2026-09-14)
+
+### Bug Fixes
+
+- **screener**: Honor official opaque provenance in v13
+  ([#1914](https://github.com/ditto-assistant/ditto-subnet/pull/1914),
+  [`f99f528`](https://github.com/ditto-assistant/ditto-subnet/commit/f99f52840da18059a69b10ae26c5ce96488fe4fa))
+
+
+## v0.267.3 (2026-09-14)
+
+### Bug Fixes
+
+- **screener**: Bound shadow invariant summaries for policy 13
+  ([#1910](https://github.com/ditto-assistant/ditto-subnet/pull/1910),
+  [`f5512ac`](https://github.com/ditto-assistant/ditto-subnet/commit/f5512ac417e3cbcdc0f09e078cb9058ad29cd11d))
+
+
+## v0.267.2 (2026-09-14)
+
+### Bug Fixes
+
+- **screener**: Recover malformed shadow adjudication arguments
+  ([#1907](https://github.com/ditto-assistant/ditto-subnet/pull/1907),
+  [`5f84f37`](https://github.com/ditto-assistant/ditto-subnet/commit/5f84f37742c1bf29e89ea4e2a8172625eb74db9c))
+
+
+## v0.267.1 (2026-09-14)
+
+### Bug Fixes
+
+- **screener**: Honor bounded shadow request deadlines
+  ([#1906](https://github.com/ditto-assistant/ditto-subnet/pull/1906),
+  [`62d4b60`](https://github.com/ditto-assistant/ditto-subnet/commit/62d4b60635b08b895c5631eab5e39681444a663c))
+
+- **screener**: Require final adjudication for every shadow review
+  ([#1903](https://github.com/ditto-assistant/ditto-subnet/pull/1903),
+  [`2dc361b`](https://github.com/ditto-assistant/ditto-subnet/commit/2dc361b8a57deffb4deb4d02bd60cb10e1569f51))
+
+- **screener**: Restore four persistent workers
+  ([#1890](https://github.com/ditto-assistant/ditto-subnet/pull/1890),
+  [`17e4d1e`](https://github.com/ditto-assistant/ditto-subnet/commit/17e4d1ea69c878e8a639e1842addef88e929469c))
+
+### Documentation
+
+- Correct the miner evaluation fee to the live 0.1 TAO
+  ([#1894](https://github.com/ditto-assistant/ditto-subnet/pull/1894),
+  [`cbb43fd`](https://github.com/ditto-assistant/ditto-subnet/commit/cbb43fdd672384e2777a6e732ed33f4969ef2f09))
+
+
+## v0.267.0 (2026-09-14)
+
+### Features
+
+- **platform**: Publish screening policy v13 as activation-ready
+  ([#1891](https://github.com/ditto-assistant/ditto-subnet/pull/1891),
+  [`6377491`](https://github.com/ditto-assistant/ditto-subnet/commit/6377491812e792f7d02c64eae5f5eef972793ef6))
+
+
+## v0.266.1 (2026-09-14)
+
+### Bug Fixes
+
+- **screener**: Unblock bounded fanout shadow rollout
+  ([#1900](https://github.com/ditto-assistant/ditto-subnet/pull/1900),
+  [`b8f8846`](https://github.com/ditto-assistant/ditto-subnet/commit/b8f8846c5979fe8f2f696efc853908a7a469d9ae))
+
+
+## v0.266.0 (2026-09-14)
+
+### Features
+
+- **screener**: Add bounded two-stage fanout shadow pilot
+  ([#1893](https://github.com/ditto-assistant/ditto-subnet/pull/1893),
+  [`aaea7e8`](https://github.com/ditto-assistant/ditto-subnet/commit/aaea7e8ec1997aae8888875de589916aae99af33))
+
+
+## v0.265.1 (2026-09-14)
+
+### Bug Fixes
+
+- **screener**: Avoid claim lock convoys
+  ([`5748b29`](https://github.com/ditto-assistant/ditto-subnet/commit/5748b290f92449b0f3f79fdb3b8260e54c34f3fc))
+
+
 ## v0.265.0 (2026-09-14)
 
 ### Features

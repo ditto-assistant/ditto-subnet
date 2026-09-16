@@ -934,6 +934,61 @@ def test_public_leaderboard_serializes_shadow_longmem_zero() -> None:
     assert payload["v9_longmem_mean_composite"] == 0.0
 
 
+def test_public_leaderboard_serializes_router_shadow_state() -> None:
+    """The router shadow surface is display-only: measured composite keyed by
+    hotkey, queued marker when a ledger exists, nothing at all without one."""
+    row = LedgerRow(
+        miner_hotkey=_MINER_A,
+        agent_id=UUID(int=9),
+        composite=0.75,
+        tool_mean=0.75,
+        memory_mean=0.75,
+        first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+        sha256="ab" * 32,
+        size_bytes=123,
+        run_id="router-shadow-serialization",
+        seed=42,
+        validator_hotkey=_VALIDATOR_C,
+        signature=None,
+        status=AgentStatus.SCORED,
+        bench_version=9,
+        n=280,
+        eligible=True,
+    )
+    measured = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        finalized=True,
+        router_shadow_by_hotkey={_MINER_A: 0.4285},
+    ).model_dump(mode="json")
+    assert measured["router_shadow_composite"] == pytest.approx(0.4285)
+    assert measured["router_shadow_status"] == "measured"
+
+    queued = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        finalized=True,
+        router_shadow_by_hotkey={_MINER_B: 0.9},
+        router_shadow_queued=True,
+    ).model_dump(mode="json")
+    assert "router_shadow_composite" not in queued
+    assert queued["router_shadow_status"] == "queued"
+
+    off = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        finalized=True,
+    ).model_dump(mode="json")
+    assert "router_shadow_composite" not in off
+    assert "router_shadow_status" not in off
+
+
 def test_public_v9_base_projection_is_typed_and_fails_closed() -> None:
     vector_path = (
         Path(__file__).resolve().parents[6]
@@ -990,6 +1045,25 @@ _PASSING_V12_MODEL_DEPENDENCE = {
 }
 
 
+# Passing v13 claim-provenance summary: required on every bench_version>=13
+# digest (the scorer attaches it to every v13 run). Identity factor.
+_PASSING_V13_CLAIM_PROVENANCE = {
+    "administered_cases": 10,
+    "eligible_cases": 10,
+    "not_model_emitted_cases": 0,
+    "answer_in_prompt_cases": 0,
+    "flagged_cases": 0,
+    "unattributed_call_cases": 0,
+    "unsettled_cases": 0,
+    "zeroed_cases": 0,
+    "attribution_complete": True,
+    "posture": "shadow",
+    "flagged_bps": 0,
+    "result": "passed",
+    "factor_bps": 10000,
+}
+
+
 def _score_gates_for_version(score_gates: dict, bench_version: int) -> dict:
     """Rewrite a v9+ gate payload for another epoch of the same contract."""
     payload = dict(score_gates)
@@ -1000,6 +1074,10 @@ def _score_gates_for_version(score_gates: dict, bench_version: int) -> dict:
         payload.pop("model_dependence", None)
         payload.pop("inference_latency", None)
         payload.pop("answer_stuffing", None)
+    if bench_version >= 13:
+        payload.setdefault("claim_provenance", dict(_PASSING_V13_CLAIM_PROVENANCE))
+    else:
+        payload.pop("claim_provenance", None)
     return payload
 
 

@@ -124,13 +124,13 @@
       KillMode=mixed
       ExecStart=
       ExecStart={{ primary_argv }} --local-sandbox-slots 2 --local-source-review-slots 1 --resource-slice dittoscreener.slice
-- name: Persist two workers for normal release updater restarts
+- name: Persist four workers for normal release updater restarts
   ansible.builtin.copy:
     dest: /etc/systemd/system/ditto-screener-fleet-auto-update.service.d/partition.conf
     mode: '0644'
     content: |
       [Service]
-      Environment=SCREENER_FLEET_WORKER_PROCESSES=2
+      Environment=SCREENER_FLEET_WORKER_PROCESSES=4
 - name: Reload primary partition metadata without restarting jobs
   ansible.builtin.systemd:
     daemon_reload: true

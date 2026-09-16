@@ -14,7 +14,8 @@ import {
   sessionAuthHeader,
   setMinerSession,
 } from "../stores/sessionStore";
-import type { NameHandle } from "../types/leaderboard";
+import { gateNoteLabel, percentage, postureState } from "../components/evidence/GateEvidence";
+import type { GatePosture, NameHandle } from "../types/leaderboard";
 
 const SCOPES: Array<{ id: string; label: string; hint: string }> = [
   { id: "read", label: "Read", hint: "Required. Profile, my submissions, reviews, harness logs" },
@@ -131,6 +132,47 @@ interface MinerScreeningFeedback {
   agent_id: string;
   agent_status: string;
   attempts: MinerScreeningFailure[];
+}
+
+interface MinerGateNote {
+  note_id: string;
+  gate: string;
+  /** Whether the finding zeroes the case when its gate runs in enforce. */
+  zeroing?: boolean;
+}
+
+interface MinerGateNoteCase {
+  case_index?: number | null;
+  case_id?: string | null;
+  category?: string | null;
+  kind?: string | null;
+  score?: number | null;
+  notes: MinerGateNote[];
+  relation?: string | null;
+  cost_factor?: number | null;
+  tools_offered?: number | null;
+  catalog_present?: boolean | null;
+}
+
+interface MinerGateNotesRun {
+  validator_hotkey: string;
+  run_id: string;
+  bench_version: number;
+  composite: number;
+  posture?: GatePosture | null;
+  catalog_suppression_rate?: number | null;
+  flagged_case_count?: number;
+  flagged_case_share?: number | null;
+  gate_counts?: Record<string, number>;
+  cases: MinerGateNoteCase[];
+}
+
+/** Owner-only bench v13+ per-case gate notes (`/me/agents/{id}/gate-notes`). */
+interface MinerGateNotes {
+  agent_id: string;
+  agent_status: string;
+  runs: MinerGateNotesRun[];
+  dispute_submit_url?: string;
 }
 
 interface MinerReview {
@@ -492,6 +534,9 @@ function AccountPanel(): JSX.Element {
   const [screeningAgent, setScreeningAgent] = createSignal<string | null>(null);
   const [screening, setScreening] = createSignal<MinerScreeningFeedback | null>(null);
   const [screeningError, setScreeningError] = createSignal("");
+  const [gateAgent, setGateAgent] = createSignal<string | null>(null);
+  const [gateNotes, setGateNotes] = createSignal<MinerGateNotes | null>(null);
+  const [gateError, setGateError] = createSignal("");
   const [xUrl, setXUrl] = createSignal("");
   const [github, setGithub] = createSignal("");
   const [discord, setDiscord] = createSignal("");
@@ -673,6 +718,20 @@ function AccountPanel(): JSX.Element {
       setScreening(body);
     } catch (err) {
       setScreeningError(err instanceof Error ? err.message : "Could not load screening feedback.");
+    }
+  }
+
+  async function loadGateNotes(agentId: string): Promise<void> {
+    setGateAgent(agentId);
+    setGateNotes(null);
+    setGateError("");
+    try {
+      const body = await authJSON<MinerGateNotes>(`/me/agents/${agentId}/gate-notes`, {
+        headers: sessionAuthHeader(),
+      });
+      setGateNotes(body);
+    } catch (err) {
+      setGateError(err instanceof Error ? err.message : "Could not load gate notes.");
     }
   }
 
@@ -914,6 +973,9 @@ function AccountPanel(): JSX.Element {
                     <button class="btn ghost" onClick={() => void loadScreening(item.agent_id)}>
                       Screening feedback
                     </button>
+                    <button class="btn ghost" onClick={() => void loadGateNotes(item.agent_id)}>
+                      Gate notes
+                    </button>
                     <Show when={logAgent() === item.agent_id}>
                       <Show when={logsError()}>
                         <p class="account-error">{logsError()}</p>
@@ -946,6 +1008,110 @@ function AccountPanel(): JSX.Element {
                             )}
                           </For>
                         </ul>
+                      </Show>
+                    </Show>
+                    <Show when={gateAgent() === item.agent_id}>
+                      <Show when={gateError()}>
+                        <p class="account-error">{gateError()}</p>
+                      </Show>
+                      <Show when={gateNotes()}>
+                        {(notes) => (
+                          <Show
+                            when={notes().runs.length}
+                            fallback={
+                              <p class="muted">
+                                No bench v13+ gate notes yet. Runs scored before v13, or before the
+                                scorer reported gate telemetry, carry none.
+                              </p>
+                            }
+                          >
+                            <ul class="account-logs account-gate-notes">
+                              <For each={notes().runs}>
+                                {(run) => (
+                                  <li>
+                                    <p>
+                                      v{run.bench_version} · {run.validator_hotkey.slice(0, 8)}… ·{" "}
+                                      {postureState(run.posture)[0].toLowerCase()} · composite{" "}
+                                      {run.composite.toFixed(3)}
+                                      <span class="muted">
+                                        {" "}
+                                        · {run.flagged_case_count ?? 0} flagged{" "}
+                                        {(run.flagged_case_count ?? 0) === 1 ? "case" : "cases"}
+                                        {typeof run.flagged_case_share === "number"
+                                          ? ` (${percentage(run.flagged_case_share)})`
+                                          : ""}
+                                      </span>
+                                    </p>
+                                    <Show
+                                      when={run.cases.length}
+                                      fallback={<p class="muted">No case tripped a gate.</p>}
+                                    >
+                                      <ul class="account-gate-cases">
+                                        <For each={run.cases}>
+                                          {(c) => (
+                                            <li>
+                                              <p>
+                                                <span class="muted">
+                                                  case {c.case_index ?? "?"}
+                                                  {c.case_id ? ` (${c.case_id})` : ""} ·{" "}
+                                                  {[c.kind, c.category].filter(Boolean).join(" / ")}
+                                                  {typeof c.score === "number"
+                                                    ? ` · scored ${c.score.toFixed(2)}`
+                                                    : ""}
+                                                </span>
+                                              </p>
+                                              <For each={c.notes}>
+                                                {(note) => (
+                                                  <p>
+                                                    {gateNoteLabel(note.gate)}
+                                                    {note.zeroing ? (
+                                                      <span class="muted"> (would zero)</span>
+                                                    ) : null}{" "}
+                                                    <code
+                                                      class="account-gate-note-id"
+                                                      title="Cite this id in a dispute"
+                                                    >
+                                                      {note.note_id}
+                                                    </code>
+                                                  </p>
+                                                )}
+                                              </For>
+                                              <Show when={c.relation}>
+                                                <p class="muted">relation {c.relation}</p>
+                                              </Show>
+                                              <Show
+                                                when={
+                                                  typeof c.cost_factor === "number" ||
+                                                  typeof c.tools_offered === "number"
+                                                }
+                                              >
+                                                <p class="muted">
+                                                  {[
+                                                    typeof c.cost_factor === "number"
+                                                      ? `cost factor ${c.cost_factor.toFixed(2)}`
+                                                      : "",
+                                                    typeof c.tools_offered === "number"
+                                                      ? `${c.tools_offered} tools offered`
+                                                      : "",
+                                                    c.catalog_present === false
+                                                      ? "no catalog offered"
+                                                      : "",
+                                                  ]
+                                                    .filter(Boolean)
+                                                    .join(" · ")}
+                                                </p>
+                                              </Show>
+                                            </li>
+                                          )}
+                                        </For>
+                                      </ul>
+                                    </Show>
+                                  </li>
+                                )}
+                              </For>
+                            </ul>
+                          </Show>
+                        )}
                       </Show>
                     </Show>
                     <Show when={screeningAgent() === item.agent_id}>

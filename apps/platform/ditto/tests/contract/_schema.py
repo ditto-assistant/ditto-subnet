@@ -59,6 +59,19 @@ CONFIRMATION_MODELS = [
     "V9ConfirmationFailResponse",
 ]
 
+# The shadow router-track ledger the offloaded scorer publishes, Platform
+# relays, and the validator folds. It is a net-new hand-maintained copy on both
+# sides (root/validator + apps/platform), so it needs the same drift guard the
+# validator and miner models learned the hard way. ``shadow_composite`` is the
+# real measured number the dashboard shows while ``combined_score`` stays 0 and
+# ``weight_eligible`` stays False; a one-sided rename/retype of either would
+# silently break the shadow fold or the dashboard, so pin the structure here.
+ROUTER_MODELS = [
+    "RouterHarnessResult",
+    "RouterLedgerEntry",
+    "RouterLedgerResponse",
+]
+
 # Cosmetic JSON-Schema keys that carry prose/illustration, not structure.
 _STRIP_KEYS = {"title", "description", "examples", "example"}
 
@@ -90,3 +103,34 @@ def compute_confirmation_contract() -> dict[str, Any]:
     return compute_contract(
         CONFIRMATION_MODELS, module="ditto.api_models.validator_confirmation"
     )
+
+
+def compute_router_contract() -> dict[str, Any]:
+    """Return the normalized structure of the shadow router-ledger wire models."""
+    return compute_contract(ROUTER_MODELS, module="ditto.api_models.router_ledger")
+
+
+def compute_bench_versions() -> dict[str, Any]:
+    """Return the cross-layer bench-version set, derived from the shared package.
+
+    ``ditto_screening_protocol.bench_v9.V9EvidenceBenchVersion`` is the one
+    hand-typed epoch enumeration in the Python stack; everything here derives
+    from it. The committed ``bench_versions.json`` golden lets the layers that
+    cannot import Python (datagen and scorer Go, the starter-kit Rust, the
+    Backroom and dashboard TypeScript) be diffed against the same numbers by
+    ``ditto/tests/test_bench_version_pins.py``, so a bump that reaches one
+    layer and not another fails CI instead of stranding the version.
+    """
+    from ditto_screening_protocol.bench_v9 import (
+        CONFIRMATION_BENCH_VERSIONS,
+        MAX_SUPPORTED_BENCH_VERSION,
+        MIN_EXECUTABLE_BENCH_VERSION,
+        SUPPORTED_BENCH_VERSIONS,
+    )
+
+    return {
+        "confirmation_bench_versions": list(CONFIRMATION_BENCH_VERSIONS),
+        "max_supported_bench_version": MAX_SUPPORTED_BENCH_VERSION,
+        "min_executable_bench_version": MIN_EXECUTABLE_BENCH_VERSION,
+        "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
+    }

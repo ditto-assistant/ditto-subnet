@@ -28,6 +28,7 @@ import {
   resolveCopyReviewInputSchema,
   resolveScreeningQuarantineInputSchema,
   screeningDisputeListSchema,
+  screeningDisputeSchema,
   screeningQuarantineListSchema,
   screeningQuarantineBatchExecuteInputSchema,
   screeningQuarantineBatchPreviewInputSchema,
@@ -609,6 +610,43 @@ describe('admin API schemas', () => {
 
     expect(result.items[0].message).toContain('generic routing')
     expect(result.items[0].original_reason).toContain('benchmark-specific')
+    // A pre-v13 row carries no kind: it is a screening dispute.
+    expect(result.items[0].kind).toBe('screening')
+  })
+
+  it('parses a bench v13 gate-notes dispute, which has no quarantine', () => {
+    const result = screeningDisputeListSchema.parse({
+      count: 1,
+      items: [
+        {
+          dispute_id: '44444444-4444-4444-8444-444444444445',
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          kind: 'gate_notes',
+          quarantine_id: null,
+          miner_hotkey: '5Miner',
+          agent_name: 'memory-agent',
+          agent_version: 3,
+          artifact_sha256: 'ab'.repeat(32),
+          message: 'The twin_concordant marker fired on twins the seeded history answers identically.',
+          status: 'pending',
+          created_at: '2026-09-13T12:00:00Z',
+          original_reason: null,
+          resolved_at: null,
+          resolved_by: null,
+          resolution: null,
+          resolution_reason: null,
+          gate_note_ids: ['0123456789abcdef', 'fedcba9876543210'],
+        },
+      ],
+    })
+
+    expect(result.items[0]).toMatchObject({
+      kind: 'gate_notes',
+      quarantine_id: null,
+      original_reason: null,
+      gate_note_ids: ['0123456789abcdef', 'fedcba9876543210'],
+    })
+    expect(() => screeningDisputeSchema.parse({ ...result.items[0], kind: 'appeal' })).toThrow()
   })
 
   it('parses rejected screening history and short-lived artifact access', () => {
@@ -1803,6 +1841,41 @@ describe('source review causal evidence schema', () => {
     })).toThrow(/out of range/)
   })
 
+  it.each(['evaluation_independent_runtime', 'no_evaluation_identity_branch'] as const)(
+    'retains the complete policy-v13 sweep with %s', (passClause) => {
+      const assessment = {
+        schema_version: 2,
+        decisions: [...invariantAssessment.decisions, {
+          invariant: 'i8_evaluation_independence', disposition: 'pass',
+          pass_clause: passClause, summary: 'Runtime is independent of evaluation identity.',
+          evidence_indices: [],
+        }],
+      } satisfies GeneratedSourceReviewInvariantAssessment
+      const finding = { ...generatedFinding, invariant_assessment: assessment }
+      expect(sourceReviewFindingSchema.parse(finding).invariant_assessment).toEqual(assessment)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: { ...assessment, schema_version: 1 },
+      })).toThrow(/every policy-v10 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: assessment.decisions.slice(0, 7),
+        },
+      })).toThrow(/every policy-v13 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: [...assessment.decisions.slice(0, 7), assessment.decisions[0]],
+        },
+      })).toThrow(/every policy-v13 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: assessment.decisions.map((decision) => ({
+            ...decision, summary: 'x'.repeat(211),
+          })),
+        },
+      })).toThrow(/summaries exceed/)
+    },
+  )
+
   it('accepts the generated legacy shape when optional finding fields are absent', () => {
     const legacyFinding = {
       artifact_sha256: 'a'.repeat(64),
@@ -1888,6 +1961,34 @@ describe('screener review settings schemas', () => {
       shadow_observations: [],
     })
     expect(parsed.applied_instances[0]?.revision).toBe(42)
+  })
+
+  it('parses the historical Platform policy manifest wire shape', () => {
+    const parsed = screenerReviewControlSchema.parse({
+      current: [],
+      history: [],
+      known_instances: [],
+      applied_instances: [],
+      shadow_observations: [],
+      policy_manifests: [{
+        revision: 106,
+        scope: 'subnet-screener-1',
+        policy_version: 13,
+        profile: 'l1_l2',
+        rotation_id: 'policy-v11-global-topdown',
+        digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+        reason: 'Preserve the existing policy manifest contract.',
+        actor: 'operator@example.com',
+        created_at: '2026-09-14T02:51:58.121154Z',
+      }],
+    })
+
+    expect(parsed.policy_manifests[0]).toMatchObject({
+      revision: 106,
+      profile: 'l1_l2',
+      rotation_id: 'policy-v11-global-topdown',
+      digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+    })
   })
 
   it('fills L1 Luna budget defaults when older payloads omit them', () => {

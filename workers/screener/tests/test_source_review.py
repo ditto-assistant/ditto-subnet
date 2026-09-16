@@ -840,9 +840,9 @@ fn run() -> String {
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == (
-        f"source-review-v24-policy-v{SCREENING_POLICY_VERSION}"
-    )
+    assert observation.finding[
+        "prompt_revision"
+    ] == source_review_module._prompt_revision(SCREENING_POLICY_VERSION)
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -2102,9 +2102,9 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == (
-        f"source-review-v24-policy-v{SCREENING_POLICY_VERSION}"
-    )
+    assert observation.finding[
+        "prompt_revision"
+    ] == source_review_module._prompt_revision(SCREENING_POLICY_VERSION)
     assert len(observation.finding["invariant_assessment"]["decisions"]) == 8
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
@@ -2137,6 +2137,76 @@ async def test_each_source_review_completion_has_a_short_hard_timeout(
 
     assert attempts == 3
     assert observation.error_code == "source-review-timeouterror"
+
+
+async def test_completion_request_timeout_override_still_obeys_review_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    blocking_request_started = asyncio.Event()
+    block_request = False
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts, block_request
+        attempts += 1
+        if block_request:
+            blocking_request_started.set()
+            await asyncio.Event().wait()
+        await asyncio.sleep(0.02)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    monkeypatch.setattr(source_review_module, "_MAX_COMPLETION_REQUEST_SECONDS", 0.005)
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=None,
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=1,
+        max_steps=1,
+        max_completion_request_seconds=0.5,
+        transport=httpx.MockTransport(handler),
+        transport_retry_delays=(),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), timeout=1
+    ) as client:
+        message = await agent._completion_message(
+            client,
+            "sk-test-private-review",
+            [{"role": "user", "content": "test"}],
+            timeout=0.5,
+            reasoning_effort="low",
+        )
+        assert message["content"] == "ok"
+
+        block_request = True
+        with pytest.raises(TimeoutError):
+            await agent._completion_message(
+                client,
+                "sk-test-private-review",
+                [{"role": "user", "content": "test"}],
+                timeout=0.01,
+                reasoning_effort="low",
+            )
+    assert blocking_request_started.is_set()
+    assert attempts == 2
+
+
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan"), True])
+def test_completion_request_timeout_override_must_be_finite_positive(value) -> None:
+    with pytest.raises(
+        ValueError, match="max_completion_request_seconds must be finite and positive"
+    ):
+        OpenRouterSourceReviewAgent(
+            api_key_file=None,
+            model="openai/gpt-5.6-luna",
+            base_url="https://openrouter.test/api/v1",
+            timeout_seconds=10,
+            max_steps=1,
+            max_completion_request_seconds=value,
+        )
 
 
 async def test_first_turn_low_result_is_not_a_clearance_certificate(
@@ -2907,7 +2977,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v24-policy-v13"
+    assert _prompt_revision(13) == "source-review-v25-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3039,6 +3109,9 @@ def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
     assert "incorrect host removal" in v13
     assert "Security review covers" in v13
     assert "`bench_version` from changing substantive retrieval" in v13
+    assert "exact path-and-digest starter-kit provenance" in v13
+    assert "README, metadata sidecar, or duplicate\nself-report" in v13
+    assert "null score or leaderboard field" in v13
     assert "Decide I1 through I8 independently" not in v12
 
     legacy = _source_review_tools_for_policy(12, final_turn=True)[0]
@@ -3143,6 +3216,36 @@ def test_written_policy_v13_covers_new_invariant_and_activation_boundaries() -> 
     }
 
     assert all(fragment in policy for fragment in required)
+
+
+def test_written_policy_v13_accepts_exact_official_component_provenance() -> None:
+    docs = Path(__file__).resolve().parents[1] / "docs"
+    policy = (docs / "policy-v13.md").read_text()
+    opaque = (docs / "policy-v13-opaque-verification.md").read_text()
+
+    policy_required = {
+        "platform-published,\ncontent-addressed provenance record",
+        "exact path and\ndigest match to a named official starter-kit component",
+        "cannot by itself support `V1`",
+        "archive omits a README",
+        "null or omitted field in a score, leaderboard",
+    }
+    opaque_required = {
+        "### Platform-pinned official components",
+        "exact\nmatched bytes at the recorded path",
+        "This equivalence is field- and role-scoped.",
+        "verification-profile digest all match",
+        "artifact-bound screening and challenge records",
+        "V1.required_submission_evidence_missing",
+        "V2.platform_verification_failed",
+    }
+
+    assert not sorted(
+        fragment for fragment in policy_required if fragment not in policy
+    )
+    assert not sorted(
+        fragment for fragment in opaque_required if fragment not in opaque
+    )
 
 
 def test_written_policy_v13_is_strictly_two_outcome() -> None:

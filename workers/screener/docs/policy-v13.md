@@ -402,9 +402,20 @@ declaration, and deterministic or stochastic behavior. Hosted inference
 records the supported provider, model, and version provenance without
 inventing unavailable weight hashes.
 
+The declaration may combine submission evidence with a platform-published,
+content-addressed provenance record that predates the review. An exact path and
+digest match to a named official starter-kit component satisfies only the
+fields covered by that record and its referenced public documentation. The
+submission does not need to duplicate those fields inside its archive.
+
 - The complete artifact SHA covers every component.
 - Review caches include the artifact SHA and policy digest.
 - Changing one byte invalidates cached artifact review.
+- Moving a matched component, changing its selecting configuration, loader,
+  runtime role, candidate boundaries, or downstream authority requires fresh
+  evidence for the changed property even when the component bytes are stock.
+- Presence or loading of an exact official-component match is not by itself
+  missing submission evidence and cannot by itself support `V1`.
 - Bounded binary analysis records whether hashing and structural analysis were
   complete.
 - Review determines the actual role instead of trusting its label.
@@ -699,6 +710,11 @@ Findings are recorded under the `mandatory_contract_failure` review category.
 - The published submission/correction process was followed.
 - No accepted equivalent evidence satisfies it.
 
+Apply V1 only after combining the artifact's evidence with applicable accepted
+platform evidence. Do not assign V1 because an archive omits a README,
+metadata sidecar, or self-report whose required facts are already bound by an
+exact accepted component path and digest.
+
 This is a certification failure, not proof of misconduct.
 
 ### V2: platform verification not completed
@@ -743,6 +759,11 @@ callers/wrappers/recovery/final writers, addresses safe harbors, separates
 source proof from reproduction/production observation/hypothesis, records
 missing or opaque evidence, and never reports an illustrative witness as an
 observed incident.
+
+A null or omitted field in a score, leaderboard, or other compact projection
+proves only that the projection did not supply the field. It does not prove
+that an artifact-bound screening or challenge record is absent. Check the
+authoritative evidence store before assigning V1, V2, or V3.
 
 ## Mandatory verification
 
@@ -1070,7 +1091,10 @@ An operator override is an administrative action, not a third review outcome.
   retry evidence, and no misconduct allegation.
 - Raise the separately enforced screening-policy activation ceiling from v12
   only after the deadline finalizer and every other prerequisite above are
-  released and verified.
+  released and verified. Record: the ceiling moved to v13 on 2026-09-14, after
+  #1801 shipped the strict two-outcome contract and both production screeners
+  reported builtin policy 13 on release 0.264.0. Raising the ceiling makes v13
+  schedulable; it does not activate it, and it does not move the v10 floor.
 - Rollback preserves evidence/revocations and does not restore fail-open
   approval.
 

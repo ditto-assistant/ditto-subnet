@@ -187,6 +187,7 @@ async def scoring_readiness(
             verified=image_verified,
             policy_ok=policy_ok,
             missing_fields=missing_fields,
+            sha256=agent.screened_image_sha256,
         ),
         leaseable=not blocking,
         blocking_reasons=blocking,

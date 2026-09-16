@@ -14,6 +14,15 @@ Keep it exactly aligned with the subnet — the digest encoding is consensus.
 
 The int63 masking mirrors dittobench-api's ``gen.FreshSeed`` (``int64(uint64 >>
 1)``) so the value round-trips through the wire unchanged.
+
+**Block binding (bench v13+).** From :data:`CRN_BLOCK_BINDING_MIN_BENCH_VERSION`
+the champion-anchored family also hashes the finalized chain block Platform pins
+per reign (``crn_seed(..., block_hash=...)`` appends ``b"\\x00block"`` and the
+normalized hash). Without it the family is a pure function of the public
+champion id and a challenger can precompute the confirmation datasets. The
+platform pins the anchor (``ditto.api_server.confirmation_seed_anchor``) and
+serves it on every lease and ledger; validators re-derive and refuse a mismatch.
+``block_hash=None`` stays byte-identical to the legacy encoding.
 """
 
 from __future__ import annotations
@@ -29,13 +38,37 @@ from ditto.api_server.koth import (
     TOP5_MAX_CONFIRMATION_SEEDS,
     TOP5_MIN_CONFIRMATION_SEEDS,
 )
+from ditto_screening_protocol.crn_block_binding import (
+    CRN_ANCHOR_BLOCK_DELTA as _SHARED_CRN_ANCHOR_BLOCK_DELTA,
+)
+from ditto_screening_protocol.crn_block_binding import (
+    CRN_BLOCK_BINDING_MIN_BENCH_VERSION as _SHARED_CRN_BLOCK_BINDING_MIN_BENCH_VERSION,
+)
+from ditto_screening_protocol.crn_block_binding import normalize_block_hash
 
 # Mask to a non-negative signed-63-bit integer, matching dittobench-api's
 # FreshSeed (``int64(uint64 >> 1)``): JSON-clean and never negative.
 _INT63_MASK = (1 << 63) - 1
 
+# The binding floor and anchor delta are consensus inputs shared with the other
+# CRN copy; both import the one exported constant instead of retyping it. Read
+# through this module at call time (tests lower the floor to a fixture era).
+CRN_BLOCK_BINDING_MIN_BENCH_VERSION = _SHARED_CRN_BLOCK_BINDING_MIN_BENCH_VERSION
+CRN_ANCHOR_BLOCK_DELTA = _SHARED_CRN_ANCHOR_BLOCK_DELTA
 
-def crn_seed(agent_ids: Iterable[str], *, version: int, k: int = 0) -> int:
+
+def crn_block_binding_active(version: int) -> bool:
+    """Whether confirmation seeds at ``version`` must carry a block binding."""
+    return int(version) >= CRN_BLOCK_BINDING_MIN_BENCH_VERSION
+
+
+def crn_seed(
+    agent_ids: Iterable[str],
+    *,
+    version: int,
+    k: int = 0,
+    block_hash: str | None = None,
+) -> int:
     """Deterministic dataset seed for a CRN comparison over ``agent_ids`` at
     ``version``. Order-independent (the *set* of compared agents determines the
     seed) and pure, so every validator computes the same value.
@@ -43,6 +76,9 @@ def crn_seed(agent_ids: Iterable[str], *, version: int, k: int = 0) -> int:
     ``k`` indexes a confirmation replicate: a dethrone-grade comparison runs the
     compared agents on ``K`` common seeds (k = 0..K-1). ``k=0`` is byte-identical
     to the original single-seed derivation.
+
+    ``block_hash`` binds the seed to the reign's pinned finalized block (bench
+    v13+); ``None`` is the legacy encoding, unchanged to the byte.
 
     Byte-for-byte aligned with ``ditto-subnet/ditto/validator/crn.py::crn_seed``.
     """
@@ -54,11 +90,21 @@ def crn_seed(agent_ids: Iterable[str], *, version: int, k: int = 0) -> int:
     if k > 0:
         h.update(b"\x00k")
         h.update(str(int(k)).encode("ascii"))
+    if block_hash is not None:
+        normalized = normalize_block_hash(block_hash)
+        if not normalized:
+            raise ValueError("a block-bound CRN seed requires a non-empty block hash")
+        h.update(b"\x00block")
+        h.update(normalized.encode("ascii"))
     return int.from_bytes(h.digest()[:8], "little", signed=False) & _INT63_MASK
 
 
 def confirmation_seeds(
-    agent_ids: Iterable[str], *, version: int, count: int
+    agent_ids: Iterable[str],
+    *,
+    version: int,
+    count: int,
+    block_hash: str | None = None,
 ) -> list[int]:
     """The ``count`` common confirmation seeds for one comparison, k = 0..count-1.
 
@@ -67,11 +113,17 @@ def confirmation_seeds(
     """
     ids = list(agent_ids)
     n = max(1, int(count))
-    return [crn_seed(ids, version=version, k=k) for k in range(n)]
+    return [
+        crn_seed(ids, version=version, k=k, block_hash=block_hash) for k in range(n)
+    ]
 
 
 def champion_anchored_seeds(
-    champion_agent_id: UUID, *, version: int, max_seeds: int
+    champion_agent_id: UUID,
+    *,
+    version: int,
+    max_seeds: int,
+    block_hash: str | None = None,
 ) -> list[int]:
     """The champion-anchored CRN seed set for the top-5 shared-seed rescore lane.
 
@@ -83,9 +135,16 @@ def champion_anchored_seeds(
     ``confirmation_seeds([str(champion_id)], version=current_version, count)`` —
     the platform mirrors it to bound the anti-grind check to the first
     ``max_seeds`` (``TOP5_MAX_CONFIRMATION_SEEDS``) replicate indices.
+
+    ``block_hash`` is the reign's pinned finalized-block anchor (bench v13+):
+    with it the family is unpredictable before the pin; without it (legacy
+    versions) the encoding is unchanged.
     """
     return confirmation_seeds(
-        [str(champion_agent_id)], version=version, count=max_seeds
+        [str(champion_agent_id)],
+        version=version,
+        count=max_seeds,
+        block_hash=block_hash,
     )
 
 
@@ -138,6 +197,8 @@ def bounded_continual_seed_set(
     *,
     version: int,
     composites_by_agent: Mapping[UUID, Mapping[int, float]],
+    block_hash: str | None = None,
+    allow_fresh_seeds: bool = True,
 ) -> tuple[int, ...]:
     """The elastic cohort target: most-shared durable seeds, then fresh CRNs.
 
@@ -146,10 +207,23 @@ def bounded_continual_seed_set(
     durable universe is shallower than the elastic target, deterministic seeds
     from the current champion fill the remainder. Once the target is full no new
     seed is introduced, which is the actual continual-work cap.
+
+    ``block_hash`` is the reign's pinned anchor (bench v13+). While a v13+ reign
+    is still waiting for its anchor block to finalize the caller passes
+    ``allow_fresh_seeds=False``: recorded coverage is still planned (catch-up
+    never needs a fresh draw) but no unbound fresh seed may be introduced, so
+    the finality wait is the only thing that can open the wave.
     """
     ceiling = elastic_confirmation_seed_ceiling(composites_by_agent)
-    anchor = champion_anchored_seeds(
-        champion_agent_id, version=version, max_seeds=ceiling
+    anchor = (
+        champion_anchored_seeds(
+            champion_agent_id,
+            version=version,
+            max_seeds=ceiling,
+            block_hash=block_hash,
+        )
+        if allow_fresh_seeds
+        else []
     )
     anchor_order = {seed: index for index, seed in enumerate(anchor)}
     coverage: dict[int, int] = {}
@@ -202,6 +276,8 @@ def fold_seed_bound(
     anchor_version: int,
     seeds_by_agent: Mapping[UUID, Iterable[int]],
     max_seeds: int = TOP5_MAX_CONFIRMATION_SEEDS,
+    block_hash: str | None = None,
+    allow_fresh_seeds: bool = True,
 ) -> tuple[int, ...]:
     """The seeds the fold may consider under the current compiled work cap.
 
@@ -213,8 +289,15 @@ def fold_seed_bound(
     """
     active = list(active_confirmation_seed_set(seeds_by_agent, max_seeds=max_seeds))
     selected = set(active)
-    anchor = champion_anchored_seeds(
-        champion_agent_id, version=anchor_version, max_seeds=max_seeds
+    anchor = (
+        champion_anchored_seeds(
+            champion_agent_id,
+            version=anchor_version,
+            max_seeds=max_seeds,
+            block_hash=block_hash,
+        )
+        if allow_fresh_seeds
+        else []
     )
     for seed in anchor:
         if seed not in selected and len(active) < max_seeds:

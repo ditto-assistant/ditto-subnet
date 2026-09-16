@@ -38,7 +38,7 @@ import os
 import re
 import statistics
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from datetime import time as datetime_time
@@ -224,6 +224,11 @@ from ditto.api_server.endpoints.scoring import (
 from ditto.api_server.endpoints.screener import GeneratorDep
 from ditto.api_server.endpoints.upload import _verify_signature
 from ditto.api_server.endpoints.validator import SessionDep, StorageDep
+from ditto.api_server.gate_evidence import (
+    GATE_NOTE_DISPUTE_STATUSES,
+    gate_note_ids_for,
+    public_gate_evidence,
+)
 from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
@@ -893,6 +898,7 @@ def screening_dispute_signing_message(agent_id: UUID, message: str) -> bytes:
 
 def _public_dispute(dispute: ScreeningDispute) -> PublicScreeningDispute:
     return PublicScreeningDispute(
+        kind=dispute.kind,  # type: ignore[arg-type]
         status=dispute.status,  # type: ignore[arg-type]
         submitted_at=dispute.created_at,
         resolved_at=dispute.resolved_at,
@@ -2243,6 +2249,8 @@ def _public_entry(
     name_handle: PublicNameHandle | None = None,
     avatar_url: str | None = None,
     coding_shadow: PublicCodingShadowScore | None = None,
+    router_shadow_by_hotkey: Mapping[str, float] | None = None,
+    router_shadow_queued: bool = False,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -2367,6 +2375,12 @@ def _public_entry(
         ),
         v9_confirmation_evidence_sha256=(
             v9_confirmation.evidence_sha256 if v9_confirmation is not None else None
+        ),
+        router_shadow_composite=(router_shadow_by_hotkey or {}).get(r.miner_hotkey),
+        router_shadow_status=(
+            "measured"
+            if r.miner_hotkey in (router_shadow_by_hotkey or {})
+            else ("queued" if router_shadow_queued else None)
         ),
         pre_efficiency_composite=(
             pre_efficiency_composite
@@ -3375,6 +3389,40 @@ async def build_public_leaderboard(
             row.agent_id for row in rows if supports_confirmation(row.bench_version)
         ],
     )
+    # The shadow router surface is display-only and must never fail the board:
+    # read the published ledger best-effort and key its measured composites by
+    # the weight-destination hotkey. No feed configured, a failed read, or a
+    # ledger without entries all degrade to no router fields at all — the same
+    # benign default as before this surface existed. The relay clamps
+    # weight_eligible/combined_score itself; only the measured
+    # ``shadow_composite`` is consumed here, and only while the ledger holds
+    # one (rows without a real measurement stay off the board).
+    router_shadow_by_hotkey: dict[str, float] = {}
+    if bench_version is None:
+        router_reader = getattr(request.app.state, "router_ledger_reader", None)
+        if router_reader is not None:
+            try:
+                router_ledger = await router_reader.read()
+            except Exception:
+                logger.warning(
+                    "router ledger read for leaderboard failed; "
+                    "serving board without router shadow fields",
+                    exc_info=True,
+                )
+                router_ledger = None
+            if router_ledger is not None:
+                router_shadow_by_hotkey = {
+                    entry.miner_hotkey: entry.shadow_composite
+                    for entry in router_ledger.entries
+                    # A composite of exactly 0 with no measurement behind it is
+                    # the shadow default, not a score: only carry entries the
+                    # scorer actually measured. Shadow_composite defaults to
+                    # 0.0 on the wire, so a scorer that measured a genuine 0
+                    # still rounds to 0 and shows — but a placeholder entry
+                    # with every harness forfeited (operational=False) is not
+                    # a measurement.
+                    if any(result.operational for result in entry.harnesses)
+                }
     # The run ledger is append-only for its retention window, and a grant never
     # records its own outcome: ``status`` tracks budget and revocation, so it is
     # ``exhausted`` both for a run that finished and for one a stalled validator
@@ -3631,6 +3679,8 @@ async def build_public_leaderboard(
                     (row.agent_id, row.bench_version), (None, 0)
                 )[1],
                 v9_confirmation=v9_confirmations.get(row.agent_id),
+                router_shadow_by_hotkey=router_shadow_by_hotkey,
+                router_shadow_queued=bool(router_shadow_by_hotkey),
             )
         )
     for row, count in provisional_rows:
@@ -3683,6 +3733,8 @@ async def build_public_leaderboard(
                     (row.agent_id, row.bench_version), (None, 0)
                 )[1],
                 v9_confirmation=v9_confirmations.get(row.agent_id),
+                router_shadow_by_hotkey=router_shadow_by_hotkey,
+                router_shadow_queued=bool(router_shadow_by_hotkey),
             )
         )
     return PublicLeaderboardResponse(
@@ -3694,6 +3746,9 @@ async def build_public_leaderboard(
         available_bench_versions=await list_scored_bench_versions(session),
         selection_mode="historical" if bench_version is not None else "authoritative",
         v9_confirmation_mode=v9_confirmation_mode,
+        router_shadow_mode=(
+            "shadow" if router_shadow_by_hotkey and bench_version is None else None
+        ),
         continual_aggregate_active=continual_mean_active,
         continual_aggregate_required_protocol=_CONTINUAL_MEAN_PROTOCOL,
         registration_stale=registration_stale,
@@ -5104,6 +5159,7 @@ def _public_validator_score(s) -> PublicValidatorScore:
         signature=s.signature,
         generated_at=s.generated_at,
         case_results=_safe_case_results(details),
+        gate_evidence=public_gate_evidence(getattr(s, "gate_evidence", None)),
         transcript_sha256=_safe_transcript_sha256(details),
         transform_robustness=robustness,
         audit_case_count=audit_pairs,
@@ -6426,7 +6482,15 @@ async def create_screening_dispute(
     agent_id: UUID,
     payload: CreateScreeningDisputeRequest,
 ) -> CreateScreeningDisputeResponse:
-    """Record the submitting hotkey's single appeal of a quarantine rejection."""
+    """Record the submitting hotkey's single appeal.
+
+    Two kinds share the one-per-submission slot. A rejected submission with a
+    rejected quarantine files a ``screening`` dispute (optionally citing gate
+    notes). A scored, live, evaluating or held submission that cites bench
+    v13+ ``gate_note_ids`` files a ``gate_notes`` dispute against those exact
+    notes -- the appeal path the shadow verdict exists for, so a would-be zero
+    can be contested before any gate enforces. Anything else is a 409.
+    """
 
     response.headers["Cache-Control"] = "no-store"
     dispute: ScreeningDispute | None = None
@@ -6463,19 +6527,53 @@ async def create_screening_dispute(
                 .order_by(ScreeningQuarantine.resolved_at.desc())
                 .with_for_update()
             )
-            if agent.status != AgentStatus.REJECTED or quarantine is None:
+            if agent.status == AgentStatus.REJECTED and quarantine is not None:
+                kind = "screening"
+            elif payload.gate_note_ids and agent.status in GATE_NOTE_DISPUTE_STATUSES:
+                kind = "gate_notes"
+                quarantine = None
+            else:
                 raise HTTPException(
                     status_code=409,
-                    detail="only a rejected quarantine decision can be disputed",
+                    detail=(
+                        "only a rejected quarantine decision, or cited bench v13+ "
+                        "gate notes on a scored submission, can be disputed"
+                    ),
                 )
+            gate_note_ids: list[str] | None = None
+            if payload.gate_note_ids:
+                # A cited gate note must re-derive from THIS submission's own
+                # accepted scores: the id is a function of the score identity
+                # and the note, so a foreign or invented id cannot be linked.
+                # Checked before anything is written, so the one dispute is
+                # not spent on a malformed appeal.
+                own_scores = list(
+                    (
+                        await session.scalars(
+                            select(Score).where(Score.agent_id == agent_id)
+                        )
+                    ).all()
+                )
+                known = gate_note_ids_for(agent_id=agent_id, scores=own_scores)
+                unknown = [nid for nid in payload.gate_note_ids if nid not in known]
+                if unknown:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="gate note id does not belong to this submission",
+                    )
+                gate_note_ids = list(dict.fromkeys(payload.gate_note_ids))
             dispute = ScreeningDispute(
                 dispute_id=uuid4(),
                 agent_id=agent.agent_id,
-                quarantine_id=quarantine.quarantine_id,
+                kind=kind,
+                quarantine_id=(
+                    quarantine.quarantine_id if quarantine is not None else None
+                ),
                 miner_hotkey=agent.miner_hotkey,
                 message=payload.message,
                 status="pending",
                 created_at=datetime.now(UTC),
+                gate_note_ids=gate_note_ids,
             )
             session.add(dispute)
     except IntegrityError as exc:
@@ -7094,6 +7192,9 @@ async def agent_pipeline(
                 ),
                 case_results=_safe_case_results(
                     score.details if isinstance(score.details, dict) else {}
+                ),
+                gate_evidence=public_gate_evidence(
+                    getattr(score, "gate_evidence", None)
                 ),
                 transcript_sha256=_safe_transcript_sha256(
                     score.details if isinstance(score.details, dict) else {}

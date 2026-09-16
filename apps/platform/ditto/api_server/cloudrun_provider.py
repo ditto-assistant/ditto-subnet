@@ -173,14 +173,18 @@ class CloudRunComputeProvider:
         return f"{_SERVICE_PREFIX}{spec.name}"
 
     async def create_source_review(self, spec: ReviewSpec) -> str:
+        timeout_seconds = (
+            spec.timeout_seconds
+            if spec.timeout_seconds is not None
+            else int(self._targon_config.source_review_timeout_seconds) + 900
+        )
         try:
             await self._client.create_job(
                 spec.name,
                 image=spec.image,
                 env=spec.env,
                 service_account=self._config.untrusted_sa_email,
-                timeout_seconds=int(self._targon_config.source_review_timeout_seconds)
-                + 900,
+                timeout_seconds=timeout_seconds,
                 cpu="2",
                 memory="4Gi",
                 commands=spec.commands,

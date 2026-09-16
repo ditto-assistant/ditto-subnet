@@ -198,6 +198,28 @@ def test_pre_l1_model_checksum_remains_valid(make_config) -> None:
     assert compatible.settings.source_review_timeout_seconds == 1_800
 
 
+def test_inactive_fanout_uses_legacy_checksum_during_rolling_upgrade(
+    make_config,
+) -> None:
+    config = make_config(source_review_timeout_seconds=1_800)
+    payload = _legacy_payload(config, _introduced_from("fanout_shadow_mode"))
+    payload["settings"].update(
+        {
+            "fanout_shadow_mode": "off",
+            "fanout_shadow_image_source_sha": "1" * 40,
+            "fanout_shadow_max_requests": 12,
+            "fanout_shadow_daily_cost_usd": 5,
+        }
+    )
+    compatible = EffectiveReviewSettings.model_validate(payload)
+    assert compatible.settings.fanout_shadow_mode == "off"
+    assert compatible.settings.fanout_shadow_max_requests == 12
+
+    payload["settings"]["fanout_shadow_mode"] = "shadow"
+    with pytest.raises(ValidationError, match="checksum mismatch"):
+        EffectiveReviewSettings.model_validate(payload)
+
+
 @pytest.mark.parametrize(("mode", "profile"), (("shadow", "l1"), ("enforce", "l1_l2")))
 def test_pre_manifest_checksum_infers_legacy_profile(
     make_config, mode, profile

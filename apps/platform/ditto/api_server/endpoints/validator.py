@@ -129,6 +129,14 @@ from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.confirmation_candidate_reconciliation import (
     reconcile_confirmation_candidates,
 )
+from ditto.api_server.confirmation_seed_anchor import (
+    LEGACY_PLANNING,
+    bind_confirmation_seed,
+    list_reign_seed_anchors,
+    prefetch_finalized_anchor_hashes,
+    reign_seed_planning,
+    resolve_reign_seed_anchor,
+)
 from ditto.api_server.continual_retest_settings import (
     ContinualRetestSettingsResolver,
     rollout_standdown_reason,
@@ -157,6 +165,7 @@ from ditto.api_server.efficiency import (
 )
 from ditto.api_server.endpoints.retrieval import AgentNotFoundError
 from ditto.api_server.fingerprint import reference_corpus_provenance
+from ditto.api_server.gate_evidence import build_gate_evidence, persisted_case_dump
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.inference_routing import record_ticket_route_quality
 from ditto.api_server.koth import (
@@ -233,6 +242,7 @@ from ditto.db.queries.audit import (
     get_latest_score_retest_event,
 )
 from ditto.db.queries.benchmark_admission import activated_rollout_for_version
+from ditto.db.queries.benchmark_canaries import canary_for_lease, finish_canary
 from ditto.db.queries.benchmark_carryover import carryover_agent_ids
 from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
@@ -1046,6 +1056,7 @@ async def _fresh_submission_lane_due(
             ValidatorTicket.validator_hotkey == validator_hotkey,
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.created_at >= rollout_started_at,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             or_(
                 ValidatorTicket.status == TicketStatus.SCORED,
                 (
@@ -2038,7 +2049,12 @@ def _score_details(
     if report.base_evidence_sha256 is not None:
         details["base_evidence_sha256"] = report.base_evidence_sha256
     if report.per_case:
-        details["per_case"] = [item.model_dump(mode="json") for item in report.per_case]
+        # Era-aware: v<=12 rows keep the exact pre-v13 per-case shape; v13+
+        # rows keep the whole record (see ``persisted_case_dump``).
+        details["per_case"] = [
+            persisted_case_dump(item, bench_version=bench_version)
+            for item in report.per_case
+        ]
     return details
 
 
@@ -3274,6 +3290,76 @@ async def request_job(
                 slot_id=slot_id,
             )
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        canary_ticket = await session.scalar(
+            select(ValidatorTicket)
+            .where(
+                ValidatorTicket.validator_hotkey == payload.validator_hotkey,
+                ValidatorTicket.slot_id == slot_id,
+                ValidatorTicket.purpose == TicketPurpose.BENCHMARK_CANARY,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.deadline > now,
+            )
+            .with_for_update()
+        )
+        if canary_ticket is not None:
+            canary = await canary_for_lease(
+                session,
+                agent_id=canary_ticket.agent_id,
+                validator_hotkey=payload.validator_hotkey,
+                deadline=canary_ticket.deadline,
+            )
+            agent = await get_agent_by_id(session, agent_id=canary_ticket.agent_id)
+            if (
+                canary is None
+                or canary.status != "issued"
+                or agent is None
+                or agent.sha256 != canary.artifact_sha256
+                or agent.screened_image_sha256 != canary.screened_image_sha256
+                or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+                or heartbeat is None
+                or not heartbeat_supports_version(
+                    heartbeat, now=now, version=canary_ticket.bench_version
+                )
+            ):
+                raise HTTPException(
+                    409, "canary target or validator capability changed"
+                )
+            grant = await session.scalar(
+                select(InferenceGrant).where(
+                    InferenceGrant.agent_id == canary.agent_id,
+                    InferenceGrant.bench_version == canary.bench_version,
+                    InferenceGrant.validator_hotkey == payload.validator_hotkey,
+                    InferenceGrant.ticket_deadline == canary.deadline,
+                    InferenceGrant.status.in_(("pending", "active")),
+                )
+            )
+            if grant is None:
+                raise HTTPException(409, "canary inference capability is unavailable")
+            contract = benchmark_contract(canary.bench_version)
+            return JobResponse(
+                agent_id=canary.agent_id,
+                miner_hotkey=agent.miner_hotkey,
+                slot_id=canary.slot_id,
+                sha256=canary.artifact_sha256,
+                deadline=canary.deadline,
+                seed=canary.seed,
+                seed_scope="validator",
+                dataset_sha256=canary.dataset_sha256,
+                run_size=canary.run_size,
+                dataset_seed_block=canary_ticket.seed_block,
+                dataset_seed_block_hash=canary_ticket.seed_block_hash,
+                bench_version=canary.bench_version,
+                minimum_screening_policy_version=contract.minimum_screening_policy_version,
+                requires_screened_image=contract.requires_screened_image,
+                benchmark_runtime=(
+                    inference_settings.benchmark_runtime
+                    if canary.bench_version >= 10
+                    else None
+                ),
+                inference=_inference_grant_offer(
+                    request=request, grant=grant, bench_version=canary.bench_version
+                ),
+            )
         if rollout is not None:
             # A shadow/mismatched v9 score cannot satisfy rollout activation,
             # so its operator-authorized replacement is rollout work rather
@@ -3897,6 +3983,15 @@ async def _current_koth_entries(
         for rank, row in enumerate(raw_rows, start=1)
     ]
     raw_members = emission_set(project_koth(raw_entries))
+    fold_block_hash, fold_allow_fresh_seeds = (
+        await reign_seed_planning(
+            session,
+            champion_agent_id=raw_members[0].agent_id,
+            bench_version=canonical_version,
+        )
+        if raw_members
+        else LEGACY_PLANNING
+    )
     eligible_seeds = fold_eligible_seeds_by_agent(
         member_ids=[member.agent_id for member in raw_members],
         seeds_by_agent={
@@ -3910,6 +4005,8 @@ async def _current_koth_entries(
                 seeds_by_agent={
                     agent_id: values.keys() for agent_id, values in history.items()
                 },
+                block_hash=fold_block_hash,
+                allow_fresh_seeds=fold_allow_fresh_seeds,
             )
             if raw_members
             else None
@@ -4236,11 +4333,18 @@ async def _champion_anchored_seed_set(
         agent_ids=tuple(member.agent_id for member in members),
         bench_version=canonical_version,
     )
+    block_hash, allow_fresh_seeds = await reign_seed_planning(
+        session,
+        champion_agent_id=members[0].agent_id,
+        bench_version=canonical_version,
+    )
     return frozenset(
         bounded_continual_seed_set(
             members[0].agent_id,
             version=canonical_version,
             composites_by_agent=history,
+            block_hash=block_hash,
+            allow_fresh_seeds=allow_fresh_seeds,
         )
     )
 
@@ -4253,8 +4357,14 @@ async def _top5_confirmation_seed_plan(
     wave_member_ids: tuple[UUID, ...],
     cohort_member_ids: tuple[UUID, ...] = (),
     canonical_version: int,
+    seed_planning: tuple[str | None, bool] | None = None,
 ) -> tuple[int, ...]:
     """Every seed this member still owes: its backlog first, then wave growth.
+
+    ``seed_planning`` is the reign's ``(block_hash, allow_fresh_seeds)`` from
+    :mod:`ditto.api_server.confirmation_seed_anchor`; ``None`` reads it. At a
+    binding version with no pinned anchor yet, growth is withheld and only
+    catch-up over recorded coverage comes back.
 
     Which seed is open is decided by the emission set alone, never by the wider
     retest cohort. An extended member that never gets leased (or fails) must not
@@ -4283,10 +4393,19 @@ async def _top5_confirmation_seed_plan(
         bench_version=canonical_version,
     )
     wave_history = {agent_id: history.get(agent_id, {}) for agent_id in wave_member_ids}
+    if seed_planning is None:
+        seed_planning = await reign_seed_planning(
+            session,
+            champion_agent_id=champion_agent_id,
+            bench_version=canonical_version,
+        )
+    block_hash, allow_fresh_seeds = seed_planning
     target_seeds = bounded_continual_seed_set(
         champion_agent_id,
         version=canonical_version,
         composites_by_agent=wave_history,
+        block_hash=block_hash,
+        allow_fresh_seeds=allow_fresh_seeds,
     )
     seeds_by_agent = {agent_id: values.keys() for agent_id, values in history.items()}
     # Catch-up spans the whole retest cohort, not just the emission set. It used
@@ -4409,10 +4528,15 @@ async def _unserved_catchup_members(
     history = await confirmation_composites_by_seed(
         session, agent_ids=members, bench_version=canonical_version
     )
+    block_hash, allow_fresh_seeds = await reign_seed_planning(
+        session, champion_agent_id=champion_agent_id, bench_version=canonical_version
+    )
     target_seeds = bounded_continual_seed_set(
         champion_agent_id,
         version=canonical_version,
         composites_by_agent=history,
+        block_hash=block_hash,
+        allow_fresh_seeds=allow_fresh_seeds,
     )
     seeds_by_agent = {agent_id: values.keys() for agent_id, values in history.items()}
     leases = await _live_retest_leases(
@@ -4693,6 +4817,14 @@ async def request_top5_confirmation_job(
         getattr(request.app.state, "session_maker", None)
     )
     slot_settings = await _validator_slot_settings(request)
+    # Bench v13+: read the finalized hash of any reign anchor whose height the
+    # head has reached BEFORE the write transaction opens. The Substrate read
+    # is a fresh websocket and three RPCs; holding a Platform row lock across
+    # it is how a slow endpoint takes public reads dark. The transaction below
+    # pins from this map and never touches the chain itself.
+    finalized_anchor_hashes = await prefetch_finalized_anchor_hashes(
+        session, chain, latest_block=block.number
+    )
 
     async with session.begin():
         await _assert_validator_compatible(
@@ -4957,6 +5089,22 @@ async def request_top5_confirmation_job(
             )
         champion = await get_agent_by_id(session, agent_id=champion_agent_id)
         assert champion is not None
+        # Bench v13+: the reign's confirmation family binds to the finalized
+        # hash of ``B_ready + Δ``. First claim of a reign creates the anchor
+        # (unpinned); a later claim pins it from the hash prefetched above once
+        # the height is finalized. Until then the plan below withholds fresh
+        # seeds and serves catch-up only.
+        reign_anchor = await resolve_reign_seed_anchor(
+            session,
+            champion_agent_id=champion_agent_id,
+            bench_version=canonical_version,
+            ready_block=block.number,
+            now=now,
+            finalized_hashes=finalized_anchor_hashes,
+        )
+        seed_planning = (
+            reign_anchor.planning if reign_anchor is not None else LEGACY_PLANNING
+        )
         crown_block = champion.dataset_seed_block or block.number
         scheduled_round = top5_round_is_due(
             block.number,
@@ -5062,6 +5210,7 @@ async def request_top5_confirmation_job(
                 wave_member_ids=wave_member_ids,
                 cohort_member_ids=member_ids,
                 canonical_version=canonical_version,
+                seed_planning=seed_planning,
             )
             if not seeds:
                 legacy_decline = (
@@ -5112,6 +5261,16 @@ async def request_top5_confirmation_job(
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
         confirmation_datasets: list[ConfirmationDatasetPin] = []
+        # The seed's finalized-block binding, so the validator can re-derive it
+        # and refuse a seed inconsistent with the pin it is told about (the
+        # validator trusts the pin as served; it reads no chain). Searched
+        # across every pinned reign of the version: a catch-up seed introduced
+        # under an earlier champion still binds to that champion's block.
+        seed_binding = bind_confirmation_seed(
+            await list_reign_seed_anchors(session, bench_version=canonical_version),
+            seed=selected_wave_seed,
+            bench_version=canonical_version,
+        )
         if canonical_version >= 3:
             if generator.run_size is None:
                 raise HTTPException(
@@ -5125,6 +5284,22 @@ async def request_top5_confirmation_job(
                         selected_wave_seed, bench_version=canonical_version
                     ),
                     run_size=generator.run_size,
+                    anchor_agent_id=(
+                        seed_binding.anchor_agent_id
+                        if seed_binding is not None
+                        else None
+                    ),
+                    seed_index=(
+                        seed_binding.seed_index if seed_binding is not None else None
+                    ),
+                    seed_block=(
+                        seed_binding.seed_block if seed_binding is not None else None
+                    ),
+                    seed_block_hash=(
+                        seed_binding.seed_block_hash
+                        if seed_binding is not None
+                        else None
+                    ),
                 )
             ]
         # Place this retest on a real execution slot. The lane occupies one
@@ -5177,6 +5352,12 @@ async def request_top5_confirmation_job(
                     "validator has another live assignment or this retest is deferred"
                 ),
             )
+        if seed_binding is not None and ticket.seed == selected_wave_seed:
+            # Record the binding on the lease itself, the same columns the
+            # canonical lane pins, so the seed's provenance is auditable from
+            # the ticket without replaying reign history.
+            ticket.seed_block = seed_binding.seed_block
+            ticket.seed_block_hash = seed_binding.seed_block_hash
         agent = await get_agent_by_id(session, agent_id=ticket.agent_id)
         assert agent is not None
         dataset = await session.get(
@@ -5533,6 +5714,30 @@ async def fail_job(
             raise HTTPException(
                 status_code=409, detail="job-fail nonce has already been used"
             ) from exc
+        canary = await canary_for_lease(
+            session,
+            agent_id=payload.agent_id,
+            validator_hotkey=payload.validator_hotkey,
+            deadline=payload.ticket_deadline,
+            for_update=False,
+        )
+        if canary is not None:
+            canary_ticket = await session.get(
+                ValidatorTicket,
+                (canary.agent_id, canary.bench_version, canary.validator_hotkey),
+                with_for_update=True,
+            )
+            if canary_ticket is None:
+                raise HTTPException(409, "canary ticket is missing")
+            await session.refresh(canary, with_for_update=True)
+            await finish_canary(
+                session,
+                canary=canary,
+                ticket=canary_ticket,
+                now=now,
+                failure=f"{payload.reason}: {payload.failure_detail or ''}",
+            )
+            return FailJobResponse(agent_id=payload.agent_id, reopened=False)
         failure_gate = await lock_provider_work_gate(
             session,
             now=now,
@@ -5860,6 +6065,21 @@ async def agent_artifact(
                     "(never issued, expired, or already scored)"
                 ),
             )
+        if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+            canary = await canary_for_lease(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=x_validator_hotkey,
+                deadline=ticket.deadline,
+                for_update=False,
+            )
+            if (
+                canary is None
+                or canary.status != "issued"
+                or agent.sha256 != canary.artifact_sha256
+                or agent.screened_image_sha256 != canary.screened_image_sha256
+            ):
+                raise HTTPException(409, "canary artifact identity changed")
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
@@ -6015,6 +6235,30 @@ async def submit_score(
             (agent_id, report_version, payload.validator_hotkey),
             with_for_update=True,
         )
+        canary = await canary_for_lease(
+            session,
+            agent_id=agent_id,
+            validator_hotkey=payload.validator_hotkey,
+            deadline=payload.ticket_deadline,
+        )
+        if canary is not None:
+            if (
+                prior_ticket is None
+                or agent.sha256 != canary.artifact_sha256
+                or agent.screened_image_sha256 != canary.screened_image_sha256
+            ):
+                raise HTTPException(409, "canary artifact or ticket changed")
+            await finish_canary(
+                session,
+                canary=canary,
+                ticket=prior_ticket,
+                now=datetime.now(UTC),
+                report=report,
+                signature=payload.signature,
+            )
+            return SubmitScoreResponse(
+                agent_id=agent_id, status=agent.status, accepted=True
+            )
         if prior_ticket is not None and prior_ticket.status == TicketStatus.SCORED:
             prior_score = await session.get(
                 Score, (agent_id, report_version, payload.validator_hotkey)
@@ -6247,6 +6491,13 @@ async def submit_score(
             else "model_use"
         )
         score_details[model_use_key] = model_use.as_public_dict()
+        # Bench v13+ per-case gate findings and the run's shadow verdict,
+        # projected from the per-case ``catalog`` / ``claim_provenance`` /
+        # ``inference_cost`` records, the twin markers in ``notes`` and the
+        # four ``details`` gate summaries onto their own column. ``None`` below
+        # the v13 floor and for a v13+ scorer that emitted none, so v<=12 rows
+        # are byte-identical.
+        gate_evidence = build_gate_evidence(report, bench_version=ticket.bench_version)
         await upsert_score(
             session,
             agent_id=agent_id,
@@ -6263,6 +6514,7 @@ async def submit_score(
             signature=payload.signature,
             details=score_details or None,
             model_usage=model_usage,
+            gate_evidence=gate_evidence,
         )
         await record_ticket_route_quality(
             session,

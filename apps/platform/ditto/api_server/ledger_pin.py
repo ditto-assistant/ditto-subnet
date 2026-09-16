@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from ditto.api_models import LedgerEntry, LedgerResponse
+from ditto.api_models.validator import ConfirmationSeedAnchorPin
 from ditto.api_server.koth import koth_entries_from_ledger, project_koth
 from ditto.chain.errors import ChainError
 from ditto.db.queries.ledger_epochs import (
@@ -152,6 +153,12 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         crown_incumbent_agent_id=(
             pin.incumbent_agent_id if served.get("crown_mode") == "incumbent" else None
         ),
+        # Bench v13+ finalized-block anchors are chain facts frozen with the
+        # pin; a pin taken before any reign was anchored carries none.
+        confirmation_seed_anchors=[
+            ConfirmationSeedAnchorPin.model_validate(item)
+            for item in served.get("confirmation_seed_anchors", [])
+        ],
     )
 
 
@@ -439,6 +446,15 @@ def build_pin_draft(
         "continual_retest_cohort_size": snapshot.continual_retest_cohort_size,
         "crown_mode": snapshot.crown_mode,
     }
+    # Bench v13+: freeze the pinned confirmation seed anchors with the pin so a
+    # validator re-deriving the champion-anchored family from a pin sees the
+    # same binding a live read would have served. Keyed only when present, so
+    # every pin below the binding floor keeps its pre-v13 digest.
+    seed_anchors = getattr(snapshot, "confirmation_seed_anchors", None) or ()
+    if seed_anchors:
+        served["confirmation_seed_anchors"] = [
+            anchor.model_dump(mode="json") for anchor in seed_anchors
+        ]
     entries_json = canonical_entries(snapshot.entries)
     owner_roots: dict = getattr(snapshot, "owner_roots", None) or {}
     incumbent = None

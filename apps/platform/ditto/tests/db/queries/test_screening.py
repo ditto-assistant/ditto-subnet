@@ -6,13 +6,14 @@ tests) so the attempt/quarantine rows and the agent transition are real.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.db.models import (
     Agent,
@@ -35,6 +36,8 @@ from ditto.db.queries.screening import (
     POLICY_ONLY_RESCREEN_REASON,
     claim_screening_attempts,
     expire_screening_attempts,
+    fail_orphaned_screening_attempts,
+    try_acquire_screening_claim_lock,
 )
 from ditto.screener_policy_state import update_effective_screener_policy
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
@@ -51,6 +54,251 @@ _SCREENER = "5GScreenerHotkeyForClaimTests000000000000000000000"
 # real ones: nothing at or below v6 can be a rollout target any more.
 _ACTIVE_VERSION = 7
 _DESIRED_VERSION = 8
+
+
+async def test_busy_claim_gate_returns_without_waiting(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with (
+        session_maker() as owner,
+        session_maker() as contender,
+        owner.begin(),
+        contender.begin(),
+    ):
+        assert await try_acquire_screening_claim_lock(owner) is True
+        assert (
+            await asyncio.wait_for(
+                try_acquire_screening_claim_lock(contender), timeout=0.5
+            )
+            is False
+        )
+
+
+async def test_four_concurrent_claims_are_unique_and_capacity_bounded(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    agent_ids = [uuid4() for _ in range(6)]
+    async with session_maker() as session, session.begin():
+        session.add_all(
+            [
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=f"5HK-concurrent-{index}",
+                    name=f"concurrent-{index}",
+                    sha256=uuid4().hex * 2,
+                    status=AgentStatus.UPLOADED,
+                    created_at=now + timedelta(seconds=index),
+                )
+                for index, agent_id in enumerate(agent_ids)
+            ]
+            + [_heartbeat(instance_id=f"worker-{index}", now=now) for index in range(4)]
+        )
+
+    async def claim_one() -> list:
+        async with session_maker() as session, session.begin():
+            claimed = await claim_screening_attempts(
+                session,
+                screener_hotkey=_SCREENER,
+                now=now,
+                ttl=timedelta(minutes=45),
+                limit=1,
+            )
+            return [agent.agent_id for agent, _, _ in claimed]
+
+    claimed = [
+        agent_id
+        for rows in await asyncio.gather(*(claim_one() for _ in range(4)))
+        for agent_id in rows
+    ]
+
+    assert len(claimed) == 4
+    assert len(set(claimed)) == 4
+    async with session_maker() as session:
+        running = list(
+            await session.scalars(
+                select(ScreeningAttempt).where(ScreeningAttempt.status == "running")
+            )
+        )
+    assert len(running) == 4
+
+
+async def test_concurrent_same_hash_claims_choose_one_owner(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    shared_hash = "ab" * 32
+    async with session_maker() as session, session.begin():
+        session.add_all(
+            [
+                Agent(
+                    agent_id=uuid4(),
+                    miner_hotkey=f"5HK-duplicate-{index}",
+                    name=f"duplicate-{index}",
+                    sha256=shared_hash,
+                    status=AgentStatus.UPLOADED,
+                    created_at=now + timedelta(seconds=index),
+                )
+                for index in range(4)
+            ]
+            + [
+                _heartbeat(instance_id=f"duplicate-worker-{index}", now=now)
+                for index in range(4)
+            ]
+        )
+
+    async def claim_one() -> list:
+        async with session_maker() as session, session.begin():
+            claimed = await claim_screening_attempts(
+                session,
+                screener_hotkey=_SCREENER,
+                now=now,
+                ttl=timedelta(minutes=45),
+                limit=1,
+            )
+            return [agent.agent_id for agent, _, _ in claimed]
+
+    claimed = [
+        agent_id
+        for rows in await asyncio.gather(*(claim_one() for _ in range(4)))
+        for agent_id in rows
+    ]
+
+    assert len(claimed) == 1
+
+
+async def test_attempt_maintenance_skips_rows_owned_by_verdicts(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    expired_agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-expired-locked",
+        name="expired-locked",
+        sha256="c1" * 32,
+        status=AgentStatus.SCREENING,
+    )
+    orphan_agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-orphan-locked",
+        name="orphan-locked",
+        sha256="d2" * 32,
+        status=AgentStatus.SCREENING,
+    )
+    expired_attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=expired_agent.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=60),
+        deadline=now - timedelta(minutes=1),
+    )
+    orphan_attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=orphan_agent.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=10),
+        deadline=now + timedelta(minutes=35),
+    )
+    async with session_maker() as session, session.begin():
+        session.add_all(
+            [
+                expired_agent,
+                orphan_agent,
+                expired_attempt,
+                orphan_attempt,
+                _heartbeat(instance_id="maintenance-worker", now=now),
+            ]
+        )
+
+    async with (
+        session_maker() as verdict,
+        session_maker() as maintenance,
+        verdict.begin(),
+        maintenance.begin(),
+    ):
+        await verdict.execute(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.attempt_id.in_(
+                    (expired_attempt.attempt_id, orphan_attempt.attempt_id)
+                )
+            )
+            .with_for_update()
+        )
+        expired = await asyncio.wait_for(
+            expire_screening_attempts(maintenance, now=now), timeout=0.5
+        )
+        orphaned = await asyncio.wait_for(
+            fail_orphaned_screening_attempts(
+                maintenance, screener_hotkey=_SCREENER, now=now
+            ),
+            timeout=0.5,
+        )
+
+    assert expired == 0
+    assert orphaned == 0
+
+
+async def test_attempt_maintenance_does_not_lock_healthy_old_attempts(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-healthy-old-attempt",
+        name="healthy-old-attempt",
+        sha256="e3" * 32,
+        status=AgentStatus.SCREENING,
+    )
+    attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=agent.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=10),
+        deadline=now + timedelta(minutes=35),
+    )
+    async with session_maker() as session, session.begin():
+        session.add_all(
+            [
+                agent,
+                attempt,
+                _heartbeat(
+                    instance_id="healthy-worker",
+                    now=now,
+                    state="screening",
+                    active_agent_id=agent.agent_id,
+                ),
+            ]
+        )
+
+    async with session_maker() as maintenance, maintenance.begin():
+        assert await expire_screening_attempts(maintenance, now=now) == 0
+        assert (
+            await fail_orphaned_screening_attempts(
+                maintenance, screener_hotkey=_SCREENER, now=now
+            )
+            == 0
+        )
+
+        # Keep the maintenance transaction open. A verdict must still be able
+        # to acquire this attempt immediately; otherwise the sweep retained a
+        # row lock while merely observing positive liveness evidence.
+        async with session_maker() as verdict, verdict.begin():
+            locked = await asyncio.wait_for(
+                verdict.scalar(
+                    select(ScreeningAttempt)
+                    .where(ScreeningAttempt.attempt_id == attempt.attempt_id)
+                    .with_for_update()
+                ),
+                timeout=0.5,
+            )
+            assert locked is not None
 
 
 async def _seed_failed_agent(session: AsyncSession) -> Agent:

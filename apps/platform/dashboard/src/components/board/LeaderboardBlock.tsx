@@ -1145,6 +1145,10 @@ function LeaderboardNotice(props: { store: LeaderboardStore }): JSX.Element {
       notices.push(
         "<strong>LongMemEval enforcement is active.</strong> Only agents with qualified full confirmation evidence can rank or receive emissions.",
       );
+    if (!historicalView && d.router_shadow_mode === "shadow")
+      notices.push(
+        "<strong>Router shadow is active.</strong> Replay-based router efficiency is being measured per agent and shown as a shadow score. Shadow results do not change rankings or emissions.",
+      );
     if (provisional.length)
       notices.push(
         "<strong>Provisional standings.</strong> " +

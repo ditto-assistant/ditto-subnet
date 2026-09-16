@@ -40,13 +40,16 @@ from ditto.api_models.continual_retest_settings import (
     CROWN_INCUMBENT_PROTOCOL,
     ContinualRetestSettings,
 )
+from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator import (
+    ConfirmationSeedAnchorPin,
     LedgerScoreProof,
     V9BaseEvidence,
     V9ConfirmationReceipt,
 )
 from ditto.api_server.config import EfficiencyBonusConfig
+from ditto.api_server.confirmation_seed_anchor import list_reign_seed_anchors
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     crown_incumbent_is_active,
@@ -174,6 +177,10 @@ class _LedgerSnapshot:
     """Internal owner family per entry, for carrying the crown across pins.
     Never serialized onto any wire."""
     fleet_readiness: dict[str, bool] | None = None
+    confirmation_seed_anchors: tuple[ConfirmationSeedAnchorPin, ...] = ()
+    """Pinned finalized-block anchors of the active version's seed families.
+
+    Durable chain facts, so the stale path replays them unchanged."""
 
 
 @dataclass(frozen=True)
@@ -484,6 +491,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         # A live read carries the fleet's crown mode so the marker's readiness
         # is visible, but never an incumbent: only a pin has a previous epoch.
         crown_mode=None,
+        confirmation_seed_anchors=list(snapshot.confirmation_seed_anchors),
     )
 
 
@@ -620,6 +628,20 @@ async def materialize_ledger_snapshot(
         session,
         agent_ids=[r.agent_id for r in rows],
         bench_version=canonical_version,
+    )
+    # Bench v13+: the pinned finalized-block anchors every validator needs
+    # to re-derive the champion-anchored confirmation family fleet-wide.
+    confirmation_seed_anchors = tuple(
+        ConfirmationSeedAnchorPin(
+            champion_agent_id=anchor.champion_agent_id,
+            bench_version=anchor.bench_version,
+            anchor_block=anchor.anchor_block,
+            anchor_block_hash=anchor.block_hash or "",
+        )
+        for anchor in await list_reign_seed_anchors(
+            session, bench_version=canonical_version
+        )
+        if anchor.block_hash is not None
     )
     _, active_confirmation_by_seed, _ = completed_wave_data(
         rows,
@@ -772,6 +794,7 @@ async def materialize_ledger_snapshot(
         continual_retest_cohort_size=continual_settings.retest_cohort_size,
         requesting_validator_hotkey=requesting_validator_hotkey,
         context=ledger_context,
+        confirmation_seed_anchors=confirmation_seed_anchors,
         crown_mode=(
             "incumbent"
             if crown_incumbent_is_active(
@@ -965,6 +988,162 @@ async def scores(
     return ledger_response
 
 
+async def _authorize_ledger_request(
+    request: Request,
+    chain: ChainDep,
+    session: SessionDep,
+    *,
+    x_validator_hotkey: str | None,
+    x_validator_ledger_nonce: UUID | None,
+    x_validator_ledger_requested_at: datetime | None,
+    x_validator_ledger_signature: str | None,
+) -> datetime:
+    """Verify one validator ledger-read proof and burn its nonce.
+
+    Factored out of :func:`scores` so a second ledger read (the shadow router
+    ledger) is guarded by the identical proof-of-possession: SS58 shape,
+    sr25519 signature over the canonical ``validator-ledger:v1`` string, a
+    bounded request-age window, an on-chain validator permit, and one-time nonce
+    consumption. Returns the verified ``now`` used for the freshness window and
+    the nonce expiry. Raises the same errors :func:`scores` does; every failure
+    path rejects rather than admitting the caller.
+    """
+    if (
+        x_validator_hotkey is None
+        or not re.fullmatch(_SS58_PATTERN, x_validator_hotkey)
+        or x_validator_ledger_nonce is None
+        or x_validator_ledger_requested_at is None
+        or x_validator_ledger_signature is None
+        or x_validator_ledger_requested_at.tzinfo is None
+    ):
+        raise ValidatorAuthError("ledger request proof is missing or malformed")
+    signed = _ledger_signing_message(
+        x_validator_hotkey,
+        x_validator_ledger_nonce,
+        x_validator_ledger_requested_at,
+    )
+    if not _verify_signature(x_validator_hotkey, signed, x_validator_ledger_signature):
+        raise ValidatorAuthError("ledger request signature did not verify")
+    auth_now = datetime.now(UTC)
+    if (
+        abs(auth_now - x_validator_ledger_requested_at.astimezone(UTC))
+        > _LEDGER_REQUEST_MAX_AGE
+    ):
+        raise HTTPException(status_code=409, detail="ledger request timestamp is stale")
+    await _assert_validator_permitted(
+        chain,
+        request.app.state.config.chain.netuid,
+        x_validator_hotkey,
+        network=request.app.state.config.chain.subtensor_network,
+    )
+    async with session.begin():
+        try:
+            await consume_validator_nonce(
+                session,
+                nonce=x_validator_ledger_nonce,
+                validator_hotkey=x_validator_hotkey,
+                now=auth_now,
+                expires_at=auth_now + _LEDGER_REQUEST_MAX_AGE,
+            )
+        except ValidatorRequestReplayError as exc:
+            raise HTTPException(
+                status_code=409, detail="ledger request nonce has already been used"
+            ) from exc
+        except SQLAlchemyError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="scoring ledger authorization temporarily unavailable",
+            ) from exc
+    return auth_now
+
+
+@router.get(
+    "/router-ledger",
+    response_model=RouterLedgerResponse,
+    responses={
+        401: {"description": "Missing/invalid validator auth."},
+        409: {"description": "Stale or replayed ledger request proof."},
+        503: {"description": "Chain unavailable, or nonce store unavailable."},
+    },
+)
+async def router_ledger(
+    request: Request,
+    response: Response,
+    chain: ChainDep,
+    session: SessionDep,
+    x_validator_hotkey: Annotated[str | None, Header()] = None,
+    x_validator_ledger_nonce: Annotated[UUID | None, Header()] = None,
+    x_validator_ledger_requested_at: Annotated[datetime | None, Header()] = None,
+    x_validator_ledger_signature: Annotated[str | None, Header()] = None,
+) -> RouterLedgerResponse:
+    """Relay the shadow router-track ledger the offloaded scorer publishes.
+
+    The router eval never runs on a validator: one trusted ``dittobench-api``
+    scorer drives the coding harnesses against each miner's router, scores it,
+    and publishes a ledger; this endpoint relays that published ledger to any
+    permitted validator behind the same signed proof-of-possession as
+    :func:`scores`. The validator only reads and folds it, so no provider secret
+    or harness container ever touches a validator.
+
+    Shadow-only: every relayed entry stays ``weight_eligible=False`` with folded
+    ``combined_score=0`` (the real measurement rides ``shadow_composite``), so a
+    served ledger contributes zero emission — identical to the empty default.
+
+    Fail-closed to empty: when no scorer feed is configured, or a live read
+    fails with no fresh last-known snapshot, an **empty** ledger is served
+    (``count=0``), which folds to zero router emission. The validator's
+    :class:`PlatformRouterLedgerSource` also degrades any error here to empty, so
+    the two layers agree: a router-track problem can never distort the memory
+    fold or the on-chain weight vector.
+    """
+    response.headers["Cache-Control"] = "no-store"
+    await _authorize_ledger_request(
+        request,
+        chain,
+        session,
+        x_validator_hotkey=x_validator_hotkey,
+        x_validator_ledger_nonce=x_validator_ledger_nonce,
+        x_validator_ledger_requested_at=x_validator_ledger_requested_at,
+        x_validator_ledger_signature=x_validator_ledger_signature,
+    )
+    reader = getattr(request.app.state, "router_ledger_reader", None)
+    if reader is None:
+        # No scorer feed wired: the shadow default is an empty ledger, which
+        # folds to zero router emission — byte-identical to folding no router
+        # track at all.
+        return RouterLedgerResponse()
+    try:
+        ledger = await reader.read()
+    except Exception:
+        # A router-track read failure must never fail the validator's fold. Serve
+        # empty (zero emission) and let the operator see it in the reader's own
+        # logs; no secret or scorer detail is echoed onto the wire.
+        logger.warning("router ledger read failed; serving empty ledger", exc_info=True)
+        return RouterLedgerResponse()
+    return _clamp_router_ledger_to_shadow(ledger)
+
+
+def _clamp_router_ledger_to_shadow(
+    ledger: RouterLedgerResponse,
+) -> RouterLedgerResponse:
+    """Defensively force every relayed entry back to the shadow invariant.
+
+    The scorer is trusted, but the relay is the last place before a validator
+    folds these numbers, so it never vouches for a weight-bearing router entry:
+    ``weight_eligible`` is cleared and the folded ``combined_score`` zeroed on
+    every entry regardless of what the feed returned. The real measured number
+    rides ``shadow_composite`` untouched, so the dashboard still shows it while
+    the fold stays zero-emission.
+    """
+    if not ledger.entries:
+        return ledger
+    clamped = [
+        entry.model_copy(update={"weight_eligible": False, "combined_score": 0.0})
+        for entry in ledger.entries
+    ]
+    return ledger.model_copy(update={"entries": clamped})
+
+
 def _serve_last_known(
     request: Request, validator_hotkey: str, error: Exception
 ) -> LedgerResponse:
@@ -1038,4 +1217,6 @@ def _serve_last_known(
         age_seconds=max(0, age),
         # Replayed, not re-resolved: see _LedgerSnapshot.burn_share.
         burn_share=snapshot.burn_share,
+        # Chain facts pinned once per reign; replaying them cannot go stale.
+        confirmation_seed_anchors=list(snapshot.confirmation_seed_anchors),
     )

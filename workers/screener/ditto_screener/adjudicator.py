@@ -74,6 +74,8 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"{policy_version} is not implemented by this build "
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
+    if policy_version == 13:
+        return "adjudicator-v4-policy-v13"
     return f"adjudicator-v3-policy-v{policy_version}"
 
 
@@ -327,7 +329,13 @@ Opaque-file presence and feature-gated dead code are leads only. Establish the
 loaded role and effective lifecycle reachability. Build/security findings may
 end in unauthorized data access, disclosure, write, execution, persistence,
 privilege, or material availability effects without involving a model or
-scorer. A missing predefined verification artifact or failed platform review
+scorer. Combine submission evidence with platform-supplied exact
+path-and-digest provenance. A matched official starter-kit component satisfies
+only the recorded fields and role; omission of its duplicate README or
+metadata sidecar is not V1. Reverify changed configuration, loaders, candidate
+boundaries, inputs, outputs, and downstream authority. A null compact score
+field does not prove artifact-bound screening evidence is absent. A missing
+predefined verification artifact or failed platform review
 is not a proven integrity breach. If mandatory verification is incomplete, do
 not manufacture a clear or a violation; withhold submit_adjudication so the host
 retains an escalate processing state for the operator's eventual CLEAR/REJECT

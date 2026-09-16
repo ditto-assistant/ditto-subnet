@@ -53,14 +53,15 @@ exit 0
         assert "systemctl start dittoscreener.slice" not in commands
     elif failure == "none":
         assert result.returncode == 0, result.stderr
-        assert "systemctl disable ditto-screener-worker@3.service" in commands
+        assert "systemctl disable ditto-screener-worker@3.service" not in commands
     start = "systemctl start ditto-screener-fleet-agent.service "
     if failure in ("container", "runuser"):
         assert result.returncode != 0
         assert start not in commands
     elif failure != "virsh":
         assert (
-            start + "ditto-screener-worker@1.service ditto-screener-worker@2.service\n"
+            start + "ditto-screener-worker@1.service ditto-screener-worker@2.service "
+            "ditto-screener-worker@3.service ditto-screener-worker@4.service\n"
             in commands
         )
     assert "systemctl disable ditto-screener-worker@2.service" not in commands

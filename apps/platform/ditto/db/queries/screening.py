@@ -38,6 +38,10 @@ from ditto.db.queries.benchmark_admission import (
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
 from ditto.db.queries.scores import SCORING_QUORUM
+from ditto.db.queries.screening_retry import (
+    failed_screening_retry_authorized,
+    latest_screening_attempt_id,
+)
 from ditto.screener_policy_state import (
     effective_rescreen_scored,
     effective_scored_rescreen_activation_revision,
@@ -117,6 +121,24 @@ _SCREENER_HEARTBEAT_FRESHNESS = timedelta(minutes=5)
 _EXHAUSTED_MANIFEST_DIGEST = hashlib.sha256(
     b"ditto:repeatedly-inconclusive:v1"
 ).hexdigest()
+_SCREENING_CLAIM_LOCK_KEY = 0x445554544F534352
+
+
+async def try_acquire_screening_claim_lock(session: AsyncSession) -> bool:
+    """Acquire the claim serializer without queueing behind another poller.
+
+    Exact-hash ownership and shared-hotkey capacity are decided across several
+    rows, so claims still need one transaction-wide critical section. Polling
+    workers do not need to wait for it: a busy gate means another claim is
+    already making progress, and returning an empty claim avoids a lock convoy.
+    """
+    if session.get_bind().dialect.name != "postgresql":
+        return True
+    return bool(
+        await session.scalar(
+            select(func.pg_try_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
+        )
+    )
 
 
 def screening_score_count() -> ScalarSelect[int]:
@@ -329,7 +351,10 @@ async def expire_screening_attempts(session: AsyncSession, *, now: datetime) -> 
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.deadline < now,
             )
-            .with_for_update()
+            # A verdict already committing this attempt owns the outcome. An
+            # expiry sweep must skip it instead of waiting and delaying that
+            # verdict; the next sweep can reconsider any row left running.
+            .with_for_update(skip_locked=True)
         )
     )
     for attempt in attempts:
@@ -376,19 +401,25 @@ async def fail_orphaned_screening_attempts(
     ``failed`` so they retry immediately without consuming the five-expiry
     adjudication budget.
     """
-    attempts = list(
-        await session.scalars(
-            select(ScreeningAttempt)
-            .where(
-                ScreeningAttempt.screener_hotkey == screener_hotkey,
-                ScreeningAttempt.status == "running",
-                ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
-                ScreeningAttempt.deadline > now,
+    candidates = list(
+        (
+            await session.execute(
+                select(
+                    ScreeningAttempt.attempt_id,
+                    ScreeningAttempt.agent_id,
+                    ScreeningAttempt.started_at,
+                ).where(
+                    ScreeningAttempt.screener_hotkey == screener_hotkey,
+                    ScreeningAttempt.status == "running",
+                    ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
+                    ScreeningAttempt.deadline > now,
+                )
             )
-            .with_for_update()
         )
+        .tuples()
+        .all()
     )
-    if not attempts:
+    if not candidates:
         return 0
     heartbeats = list(
         await session.scalars(
@@ -400,12 +431,11 @@ async def fail_orphaned_screening_attempts(
     )
     if not heartbeats:
         return 0
-
     in_flight_builds = set(
         await session.scalars(
             select(SubmissionImageBuild.attempt_id).where(
                 SubmissionImageBuild.attempt_id.in_(
-                    [attempt.attempt_id for attempt in attempts]
+                    [attempt_id for attempt_id, _, _ in candidates]
                 ),
                 SubmissionImageBuild.status.in_(
                     ("queued", "leased", "running", "succeeded")
@@ -415,8 +445,8 @@ async def fail_orphaned_screening_attempts(
     )
 
     failed = 0
-    for attempt in attempts:
-        started_at = attempt.started_at
+    for attempt_id, agent_id, candidate_started_at in candidates:
+        started_at = candidate_started_at
         if started_at.tzinfo is None:
             started_at = started_at.replace(tzinfo=UTC)
         observed_after_claim = any(
@@ -429,15 +459,69 @@ async def fail_orphaned_screening_attempts(
             for heartbeat in heartbeats
         )
         still_active = any(
-            heartbeat.state == "screening"
-            and heartbeat.active_agent_id == attempt.agent_id
+            heartbeat.state == "screening" and heartbeat.active_agent_id == agent_id
             for heartbeat in heartbeats
         )
-        if (
-            not observed_after_claim
-            or still_active
-            or attempt.attempt_id in in_flight_builds
-        ):
+        if not observed_after_claim or still_active or attempt_id in in_flight_builds:
+            continue
+
+        # Only a row that currently looks orphaned is locked. Re-read all
+        # positive liveness evidence after obtaining that row lock so a stale
+        # candidate snapshot cannot fail an attempt that resumed meanwhile.
+        attempt = await session.scalar(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.attempt_id == attempt_id,
+                ScreeningAttempt.screener_hotkey == screener_hotkey,
+                ScreeningAttempt.status == "running",
+                ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
+                ScreeningAttempt.deadline > now,
+            )
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        if attempt is None:
+            continue
+        fresh_heartbeats = list(
+            await session.scalars(
+                select(ScreenerHeartbeat)
+                .where(
+                    ScreenerHeartbeat.screener_hotkey == screener_hotkey,
+                    ScreenerHeartbeat.seen_at >= now - _SCREENER_HEARTBEAT_FRESHNESS,
+                )
+                .execution_options(populate_existing=True)
+            )
+        )
+        attempt_started_at = attempt.started_at
+        if attempt_started_at.tzinfo is None:
+            attempt_started_at = attempt_started_at.replace(tzinfo=UTC)
+        observed_after_lock = any(
+            (
+                heartbeat.seen_at
+                if heartbeat.seen_at.tzinfo is not None
+                else heartbeat.seen_at.replace(tzinfo=UTC)
+            )
+            > attempt_started_at
+            for heartbeat in fresh_heartbeats
+        )
+        active_after_lock = any(
+            heartbeat.state == "screening"
+            and heartbeat.active_agent_id == attempt.agent_id
+            for heartbeat in fresh_heartbeats
+        )
+        build_after_lock = bool(
+            await session.scalar(
+                select(
+                    exists().where(
+                        SubmissionImageBuild.attempt_id == attempt.attempt_id,
+                        SubmissionImageBuild.status.in_(
+                            ("queued", "leased", "running", "succeeded")
+                        ),
+                    )
+                )
+            )
+        )
+        if not observed_after_lock or active_after_lock or build_after_lock:
             continue
         attempt.status = "failed"
         attempt.finished_at = now
@@ -661,6 +745,7 @@ async def claim_screening_attempts(
     review_settings_binding: tuple[int, str, str, str] | None = None,
     review_settings_enrolled_node_id: str | None = None,
     canary_policy_version: int | None = None,
+    claim_lock_held: bool = False,
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
     """Claim completion-lane contenders, then least-scored eligible work.
 
@@ -683,8 +768,10 @@ async def claim_screening_attempts(
     # workers cannot skip-lock sibling rows with the same hash and admit both.
     # SQLite serializes writes itself and does not provide advisory locks.
     bind = session.get_bind()
-    if bind.dialect.name == "postgresql":
-        await session.execute(select(func.pg_advisory_xact_lock(0x445554544F534352)))
+    if bind.dialect.name == "postgresql" and not claim_lock_held:
+        await session.execute(
+            select(func.pg_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
+        )
     # A REJECTED agent is deliberately absent above. It re-enters screening only
     # through the operator appeal (POST /screening-submissions/{id}/rescreen),
     # which moves it to SCREENING_FAILED. Re-queueing it on a policy bump instead
@@ -826,22 +913,8 @@ async def claim_screening_attempts(
     # a time by hand. Draining an already-open queue is bounded work that ends;
     # stranding a miner is not. The mode decides whether NEW holds open, never
     # whether existing ones can be settled.
-    latest_attempt_id = (
-        select(ScreeningAttempt.attempt_id)
-        .where(ScreeningAttempt.agent_id == Agent.agent_id)
-        .order_by(
-            ScreeningAttempt.started_at.desc(),
-            ScreeningAttempt.attempt_id.desc(),
-        )
-        .limit(1)
-        .correlate(Agent)
-        .scalar_subquery()
-    )
-    manual_failed_retry = exists(
-        select(ScreeningRetryOverride.override_id).where(
-            ScreeningRetryOverride.attempt_id == latest_attempt_id
-        )
-    )
+    latest_attempt_id = latest_screening_attempt_id()
+    manual_failed_retry = failed_screening_retry_authorized()
     latest_attempt_build_only = (
         select(ScreeningAttempt.build_only)
         .where(ScreeningAttempt.attempt_id == latest_attempt_id)

@@ -299,12 +299,48 @@ class TestWriteGuards:
         assert response.status_code == 422
         assert "implements" in response.json()["message"]
 
-    async def test_distributed_v13_is_not_activation_ready(
+    async def test_v13_is_activation_ready(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         activation_maker: async_sessionmaker[AsyncSession],
     ) -> None:
+        # Policy v13 became activation-ready on 2026-09-14: #1801 shipped the
+        # strict two-outcome contract and every production screener reported
+        # builtin 13, so the published ceiling now equals the built-in version.
+        assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION == 13
+        assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION == SCREENING_POLICY_VERSION
+        _install(app, activation_maker)
+        response = await client.post(
+            _URL,
+            json=_payload(target_policy_version=13),
+            headers=_HEADERS,
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["latest"]["target_policy_version"] == 13
+        # Scheduling is notice, not activation: the queue still requires the
+        # floor until activate_at passes.
+        assert body["effective_policy_version"] == SCREENING_FLOOR_POLICY_VERSION
+
+    async def test_a_target_above_the_published_ceiling_is_not_activation_ready(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The ceiling guard is checked separately from the build's implemented
+        # version: distributed-but-incomplete policy code must never be
+        # presented as activation-ready even when the build implements it.
+        from ditto.api_server.endpoints import admin_screener_policy_activation
+
+        monkeypatch.setattr(
+            admin_screener_policy_activation,
+            "SCREENING_ACTIVATION_CEILING_POLICY_VERSION",
+            SCREENING_POLICY_VERSION - 1,
+        )
         _install(app, activation_maker)
         response = await client.post(
             _URL,
@@ -314,7 +350,7 @@ class TestWriteGuards:
 
         assert response.status_code == 422
         assert "not activation-ready" in response.json()["message"]
-        assert str(SCREENING_ACTIVATION_CEILING_POLICY_VERSION) in response.text
+        assert str(SCREENING_POLICY_VERSION - 1) in response.text
 
     async def test_stale_expected_revision_conflicts(
         self,
@@ -368,54 +404,60 @@ class TestResolverDueActivation:
                 == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
             )
 
-    async def test_due_v13_row_does_not_override_valid_v12_activation(
+    async def test_due_row_above_the_ceiling_does_not_override_a_valid_activation(
         self,
         activation_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        from ditto.api_server import screener_policy_activation as resolver_module
         from ditto.api_server.screener_policy_activation import (
             ScreenerPolicyActivationResolver,
             resolve_screener_policy_activation,
         )
 
+        # The published ceiling equals the built-in version now that v13 is
+        # activation-ready, so pin the resolver one version below the build to
+        # exercise the guard: a due schedule row for a distributed-but-not-
+        # ready version (e.g. one that survived a rollback) must never govern
+        # over the newest valid at-ceiling activation.
+        ceiling = SCREENING_POLICY_VERSION - 1
+        monkeypatch.setattr(
+            resolver_module, "SCREENING_ACTIVATION_CEILING_POLICY_VERSION", ceiling
+        )
+
         async with activation_maker() as session:
-            v12 = await insert_screener_policy_activation(
+            valid = await insert_screener_policy_activation(
                 session,
                 parent_revision=0,
-                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
+                target_policy_version=ceiling,
                 activate_at=datetime.now(UTC) - timedelta(minutes=2),
                 rescreen_scored=True,
-                reason="test: valid v12 activation remains authoritative",
+                reason="test: valid at-ceiling activation remains authoritative",
                 actor="test",
             )
-            v13 = await insert_screener_policy_activation(
+            above = await insert_screener_policy_activation(
                 session,
-                parent_revision=v12.revision,
+                parent_revision=valid.revision,
                 target_policy_version=SCREENING_POLICY_VERSION,
                 activate_at=datetime.now(UTC) - timedelta(minutes=1),
                 rescreen_scored=True,
-                reason="test: incomplete v13 activation must remain ineffective",
+                reason="test: above-ceiling activation must remain ineffective",
                 actor="test",
             )
             await session.commit()
 
             policy = await resolve_screener_policy_activation(session)
 
-            assert (
-                policy.required_policy_version
-                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
-            )
-            assert policy.governing_revision == v12.revision
-            assert policy.latest_revision == v13.revision
+            assert policy.required_policy_version == ceiling
+            assert policy.governing_revision == valid.revision
+            assert policy.latest_revision == above.revision
 
             cached = await ScreenerPolicyActivationResolver(ttl_seconds=0).resolve(
                 activation_maker
             )
-            assert (
-                cached.required_policy_version
-                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
-            )
-            assert cached.governing_revision == v12.revision
-            assert cached.latest_revision == v13.revision
+            assert cached.required_policy_version == ceiling
+            assert cached.governing_revision == valid.revision
+            assert cached.latest_revision == above.revision
 
     async def test_due_version_above_activation_ceiling_cannot_govern(
         self,
@@ -986,6 +1028,9 @@ class TestFleetReadiness:
         response = await client.get(_URL, headers=_HEADERS)
         assert response.status_code == 200, response.text
         fleet = response.json()["fleet"]
+        # Every worker announces builtin 13 and the published ceiling is 13, so
+        # the board presents v13 as safe to schedule.
+        assert fleet["safe_to_schedule_up_to"] == 13
         assert (
             fleet["safe_to_schedule_up_to"]
             == SCREENING_ACTIVATION_CEILING_POLICY_VERSION

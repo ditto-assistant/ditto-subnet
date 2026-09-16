@@ -1032,6 +1032,108 @@ describe("board view controls (row 1 slice)", () => {
     expect(longmemRow?.querySelector(".mval")?.textContent).toBe("0.000");
   });
 
+  it("shows router shadow placeholders while measurements are queued or running", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          router_shadow_mode: "shadow",
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index < 2
+              ? {
+                  ...entry,
+                  router_shadow_status: index === 0 ? "queued" : "running",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelectorAll(".router-shadow-chip")).toHaveLength(2));
+    expect(el("leaderboard-notice")).toHaveTextContent("Router shadow is active");
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("#rows tr[data-i]"));
+    for (const label of ["Router shadow queued", "Router shadow running"]) {
+      const row = rows.find((candidate) => candidate.textContent?.includes(label));
+      expect(row).toBeTruthy();
+    }
+    const routerRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "Router",
+    );
+    expect(routerRow?.querySelector(".mval")?.textContent).toBe("queued");
+    expect(routerRow?.querySelector(".bar.router")).toBeNull();
+  });
+
+  it("shows the measured router shadow composite with chip, bar, and no weight language", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          router_shadow_mode: "shadow",
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? {
+                  ...entry,
+                  router_shadow_composite: 0.333333,
+                  router_shadow_status: "measured",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(document.querySelector(".router-shadow-chip")?.textContent).toBe("Router 0.333"),
+    );
+    const chip = document.querySelector(".router-shadow-chip");
+    expect(chip?.className).toContain("settled");
+    expect(chip?.getAttribute("data-tooltip")).toContain("does not change ranking or emissions");
+    const routerRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "Router",
+    );
+    expect(routerRow?.querySelector(".mval")?.textContent).toBe("0.333");
+    expect(routerRow?.querySelector(".bar.router")).toBeTruthy();
+  });
+
+  it("renders no router chip, placeholder, or notice outside router shadow mode", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index < 2
+              ? {
+                  ...entry,
+                  router_shadow_status: index === 0 ? "queued" : "running",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelector(".router-shadow-chip")).toBeNull());
+    expect(el("leaderboard-notice").textContent).not.toContain("Router shadow is active");
+    const routerRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "Router",
+    );
+    // Like LongMem, a measured composite renders data-driven regardless of
+    // mode, but unmetered rows only ever appear via the shadow-mode gate.
+    expect(routerRow).toBeUndefined();
+  });
+
+  it("keeps a dedicated router bar encoding in both modes", () => {
+    expect(tokenCss.match(/--router:/g)).toHaveLength(2);
+    expect(widgetCss).toMatch(/\.bar\.router\s*\{\s*background: var\(--router\);\s*\}/);
+  });
+
   it("defaults to the Scored tab with live counts (provisional is pre-quorum feedback)", async () => {
     renderPage();
     await waitForBoard();

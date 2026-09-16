@@ -34,7 +34,7 @@ component_tag="v$declared_version"
 
 (
   cd "$module_dir"
-  go test ./...
+  go test -timeout 20m ./...
   go test ./gen -run '^TestV7KnownVector$' -count=1
 )
 docker build \

@@ -317,6 +317,9 @@
   --memory: #6d5873;
   --coding: oklch(48% 0.12 225);
   --good: #356845;
+  /* Router shadow track: teal, deliberately desaturated — a display-only
+     shadow surface must read quieter than the authoritative encodings. */
+  --router: oklch(46% 0.06 200);
   --warn: #8a5a1f;
   --danger: #a33d36;
   --banner-text: #684215;
@@ -341,6 +344,7 @@
   --memory: var(--accent-2);
   --coding: oklch(76% 0.11 220);
   --good: oklch(75% 0.11 145);
+  --router: oklch(72% 0.07 200);
   --warn: oklch(76% 0.15 52);
   --danger: oklch(72% 0.13 28);
   --banner-text: oklch(86% 0.08 75);

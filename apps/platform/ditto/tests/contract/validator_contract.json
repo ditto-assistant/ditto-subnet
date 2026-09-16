@@ -109,7 +109,322 @@
     "type": "object"
   },
   "CaseScore": {
+    "$defs": {
+      "CatalogCompletion": {
+        "properties": {
+          "after_last_tool_result": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution_source": {
+            "default": "",
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "claim_corroborated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_span_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_choice": {
+            "default": "",
+            "type": "string"
+          },
+          "tools_choosable": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CatalogEvidence": {
+        "properties": {
+          "catalog_present": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_present_lower_bound": {
+            "default": false,
+            "type": "boolean"
+          },
+          "claim_attributed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "claim_corroborated_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "items": {
+              "$ref": "#/$defs/CatalogCompletion"
+            },
+            "type": "array"
+          },
+          "completions_after_last_tool_result": {
+            "default": 0,
+            "type": "integer"
+          },
+          "completions_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness_system_span_sha256": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "overlap_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "overlap_completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tool_choice_suppressed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "items": {
+              "$ref": "#/$defs/OfferedTool"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ClaimProvenanceEvidence": {
+        "properties": {
+          "answer_in_prompt": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "claim_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "posture": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_results": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unattributed_calls": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "default": "",
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 6000,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "OfferedTool": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema_sha256": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ToolProvenanceEvidence": {
+        "properties": {
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "endpoint_attempts": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matched": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_emitted": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_selected_not_executed": {
+            "default": 0,
+            "type": "integer"
+          },
+          "unmatched": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
     "properties": {
+      "allow_extra_tools": {
+        "default": false,
+        "type": "boolean"
+      },
+      "audit_half": {
+        "default": "",
+        "type": "string"
+      },
       "called": {
         "items": {
           "type": "string"
@@ -119,8 +434,30 @@
       "case_id": {
         "type": "string"
       },
+      "catalog": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CatalogEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "category": {
         "type": "string"
+      },
+      "claim_provenance": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ClaimProvenanceEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "confidence": {
         "anyOf": [
@@ -144,6 +481,17 @@
           "type": "string"
         },
         "type": "array"
+      },
+      "inference_cost": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/InferenceCostEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "injection": {
         "default": false,
@@ -173,6 +521,10 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "relation": {
+        "default": "",
+        "type": "string"
+      },
       "result_usage": {
         "default": 0.0,
         "maximum": 1.0,
@@ -184,6 +536,17 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "tool_provenance": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ToolProvenanceEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "tool_score": {
         "maximum": 1.0,
         "minimum": 0.0,
@@ -192,6 +555,14 @@
       "twin_group": {
         "default": "",
         "type": "string"
+      },
+      "undelivered": {
+        "default": false,
+        "type": "boolean"
+      },
+      "validator_fault": {
+        "default": false,
+        "type": "boolean"
       }
     },
     "required": [
@@ -466,7 +837,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -994,7 +1366,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -1235,7 +1608,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1328,7 +1702,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1404,7 +1779,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1425,6 +1801,99 @@
           "slice_attribution_complete",
           "dependence_bps",
           "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V13ClaimProvenanceGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "answer_in_prompt_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "const": 10000,
+            "type": "integer"
+          },
+          "flagged_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "flagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "not_model_emitted_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required",
+              "claim_provenance_flagged"
+            ],
+            "type": "string"
+          },
+          "unattributed_call_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsettled_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "zeroed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "not_model_emitted_cases",
+          "answer_in_prompt_cases",
+          "flagged_cases",
+          "unattributed_call_cases",
+          "unsettled_cases",
+          "zeroed_cases",
+          "attribution_complete",
+          "posture",
+          "flagged_bps",
           "result",
           "factor_bps"
         ],
@@ -1473,7 +1942,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1517,7 +1987,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -1648,7 +2119,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -1934,7 +2406,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -2011,9 +2484,21 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V13ClaimProvenanceGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "inference_latency": {
             "anyOf": [
@@ -2479,7 +2964,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -2764,6 +3250,33 @@
           "composite",
           "validator_hotkey",
           "bench_version"
+        ],
+        "type": "object"
+      },
+      "ConfirmationSeedAnchorPin": {
+        "properties": {
+          "anchor_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "anchor_block_hash": {
+            "pattern": "^(0x)?[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "champion_agent_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "champion_agent_id",
+          "bench_version",
+          "anchor_block",
+          "anchor_block_hash"
         ],
         "type": "object"
       },
@@ -3227,7 +3740,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -3468,7 +3982,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3561,7 +4076,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3637,7 +4153,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3658,6 +4175,99 @@
           "slice_attribution_complete",
           "dependence_bps",
           "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V13ClaimProvenanceGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "answer_in_prompt_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "const": 10000,
+            "type": "integer"
+          },
+          "flagged_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "flagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "not_model_emitted_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required",
+              "claim_provenance_flagged"
+            ],
+            "type": "string"
+          },
+          "unattributed_call_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsettled_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "zeroed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "not_model_emitted_cases",
+          "answer_in_prompt_cases",
+          "flagged_cases",
+          "unattributed_call_cases",
+          "unsettled_cases",
+          "zeroed_cases",
+          "attribution_complete",
+          "posture",
+          "flagged_bps",
           "result",
           "factor_bps"
         ],
@@ -3706,7 +4316,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3750,7 +4361,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -3881,7 +4493,8 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
           },
@@ -4167,7 +4780,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -4244,9 +4858,21 @@
               9,
               10,
               11,
-              12
+              12,
+              13
             ],
             "type": "integer"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V13ClaimProvenanceGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "inference_latency": {
             "anyOf": [
@@ -4339,6 +4965,12 @@
         "maximum": 1.0,
         "minimum": 0.0,
         "type": "number"
+      },
+      "confirmation_seed_anchors": {
+        "items": {
+          "$ref": "#/$defs/ConfirmationSeedAnchorPin"
+        },
+        "type": "array"
       },
       "continual_retest_cohort_size": {
         "default": 5,
@@ -4496,6 +5128,14 @@
     "$defs": {
       "CaseScore": {
         "properties": {
+          "allow_extra_tools": {
+            "default": false,
+            "type": "boolean"
+          },
+          "audit_half": {
+            "default": "",
+            "type": "string"
+          },
           "called": {
             "items": {
               "type": "string"
@@ -4505,8 +5145,30 @@
           "case_id": {
             "type": "string"
           },
+          "catalog": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "category": {
             "type": "string"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClaimProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "confidence": {
             "anyOf": [
@@ -4530,6 +5192,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "inference_cost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InferenceCostEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "injection": {
             "default": false,
@@ -4559,6 +5232,10 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "relation": {
+            "default": "",
+            "type": "string"
+          },
           "result_usage": {
             "default": 0.0,
             "maximum": 1.0,
@@ -4570,6 +5247,17 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "tool_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "tool_score": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -4578,6 +5266,14 @@
           "twin_group": {
             "default": "",
             "type": "string"
+          },
+          "undelivered": {
+            "default": false,
+            "type": "boolean"
+          },
+          "validator_fault": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [
@@ -4587,6 +5283,135 @@
           "tool_score",
           "latency_ms"
         ],
+        "type": "object"
+      },
+      "CatalogCompletion": {
+        "properties": {
+          "after_last_tool_result": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution_source": {
+            "default": "",
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "claim_corroborated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_span_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_choice": {
+            "default": "",
+            "type": "string"
+          },
+          "tools_choosable": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CatalogEvidence": {
+        "properties": {
+          "catalog_present": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_present_lower_bound": {
+            "default": false,
+            "type": "boolean"
+          },
+          "claim_attributed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "claim_corroborated_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "items": {
+              "$ref": "#/$defs/CatalogCompletion"
+            },
+            "type": "array"
+          },
+          "completions_after_last_tool_result": {
+            "default": 0,
+            "type": "integer"
+          },
+          "completions_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness_system_span_sha256": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "overlap_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "overlap_completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tool_choice_suppressed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "items": {
+              "$ref": "#/$defs/OfferedTool"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "CategoryStat": {
@@ -4616,6 +5441,74 @@
         ],
         "type": "object"
       },
+      "ClaimProvenanceEvidence": {
+        "properties": {
+          "answer_in_prompt": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "claim_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "posture": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_results": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unattributed_calls": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "CodeFingerprint": {
         "properties": {
           "card": {
@@ -4642,6 +5535,114 @@
           "k",
           "card"
         ],
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "default": "",
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 6000,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "OfferedTool": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema_sha256": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ToolProvenanceEvidence": {
+        "properties": {
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "endpoint_attempts": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matched": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_emitted": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_selected_not_executed": {
+            "default": 0,
+            "type": "integer"
+          },
+          "unmatched": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
         "type": "object"
       }
     },
@@ -4818,6 +5819,14 @@
     "$defs": {
       "CaseScore": {
         "properties": {
+          "allow_extra_tools": {
+            "default": false,
+            "type": "boolean"
+          },
+          "audit_half": {
+            "default": "",
+            "type": "string"
+          },
           "called": {
             "items": {
               "type": "string"
@@ -4827,8 +5836,30 @@
           "case_id": {
             "type": "string"
           },
+          "catalog": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "category": {
             "type": "string"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClaimProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "confidence": {
             "anyOf": [
@@ -4852,6 +5883,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "inference_cost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InferenceCostEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "injection": {
             "default": false,
@@ -4881,6 +5923,10 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "relation": {
+            "default": "",
+            "type": "string"
+          },
           "result_usage": {
             "default": 0.0,
             "maximum": 1.0,
@@ -4892,6 +5938,17 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "tool_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "tool_score": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -4900,6 +5957,14 @@
           "twin_group": {
             "default": "",
             "type": "string"
+          },
+          "undelivered": {
+            "default": false,
+            "type": "boolean"
+          },
+          "validator_fault": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [
@@ -4909,6 +5974,135 @@
           "tool_score",
           "latency_ms"
         ],
+        "type": "object"
+      },
+      "CatalogCompletion": {
+        "properties": {
+          "after_last_tool_result": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution_source": {
+            "default": "",
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "claim_corroborated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_span_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_choice": {
+            "default": "",
+            "type": "string"
+          },
+          "tools_choosable": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CatalogEvidence": {
+        "properties": {
+          "catalog_present": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_present_lower_bound": {
+            "default": false,
+            "type": "boolean"
+          },
+          "claim_attributed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "claim_corroborated_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "items": {
+              "$ref": "#/$defs/CatalogCompletion"
+            },
+            "type": "array"
+          },
+          "completions_after_last_tool_result": {
+            "default": 0,
+            "type": "integer"
+          },
+          "completions_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness_system_span_sha256": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "overlap_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "overlap_completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tool_choice_suppressed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "items": {
+              "$ref": "#/$defs/OfferedTool"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "CategoryStat": {
@@ -4938,6 +6132,74 @@
         ],
         "type": "object"
       },
+      "ClaimProvenanceEvidence": {
+        "properties": {
+          "answer_in_prompt": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "claim_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "posture": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_results": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unattributed_calls": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "CodeFingerprint": {
         "properties": {
           "card": {
@@ -4963,6 +6225,79 @@
           "v",
           "k",
           "card"
+        ],
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "default": "",
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 6000,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "OfferedTool": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema_sha256": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -5134,6 +6469,41 @@
           "n",
           "generated_at"
         ],
+        "type": "object"
+      },
+      "ToolProvenanceEvidence": {
+        "properties": {
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "endpoint_attempts": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matched": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_emitted": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_selected_not_executed": {
+            "default": 0,
+            "type": "integer"
+          },
+          "unmatched": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
         "type": "object"
       }
     },

@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ditto.api_models.benchmark_capacity import BenchmarkAdmission
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_progress import ConfirmationProgressStage
+from ditto.api_models.gate_evidence import PublicGateEvidence
 from ditto.api_models.name_claim import PublicNameHandle
 from ditto.api_models.retry_state import RetryState
 from ditto.api_models.screener import ScreenerProgressStage, ScreenerRuntimeState
@@ -881,6 +882,24 @@ class PublicLeaderboardEntry(BaseModel):
             exclude_if=lambda value: value is None,
             description="Signed full-confirmation evidence root digest.",
         ),
+    ] = None
+    router_shadow_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Display-only shadow router-track efficiency composite from the "
+                "published router ledger. Never ranked or weighted while the "
+                "router track is shadow."
+            ),
+        ),
+    ] = None
+    router_shadow_status: Annotated[
+        Literal["queued", "running", "measured"] | None,
+        Field(default=None, exclude_if=lambda value: value is None),
     ] = None
     aggregate_method: Literal["canonical_median", "continual_mean"] = "canonical_median"
     pre_efficiency_composite: Annotated[
@@ -2130,6 +2149,19 @@ class PublicLeaderboardResponse(BaseModel):
             ),
         ),
     ] = None
+    router_shadow_mode: Annotated[
+        Literal["shadow"] | None,
+        Field(
+            default=None,
+            description=(
+                "Router track measurement phase. ``shadow`` is present only "
+                "when the published router ledger carries at least one "
+                "measurement; the board's router surface is display-only and "
+                "never changes ranking or emissions. Null means the router "
+                "surface is off."
+            ),
+        ),
+    ] = None
     continual_aggregate_active: Annotated[
         bool,
         Field(
@@ -2582,6 +2614,19 @@ class PublicValidatorScore(BaseModel):
             ),
         ),
     ]
+    gate_evidence: Annotated[
+        PublicGateEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ gate verdict for this run: posture, composite with "
+                "and without the gates, the gate-induced loss and per-gate "
+                "counts. Aggregates only -- the per-case notes are owner-only "
+                "(``GET /me/agents/{agent_id}/gate-notes``). Null below v13 "
+                "and for a scorer that emitted no gate telemetry."
+            ),
+        ),
+    ] = None
 
 
 class PublicSubmissionScores(BaseModel):
@@ -3252,6 +3297,18 @@ class PublicAdmissionRetry(BaseModel):
 class PublicScreeningDispute(BaseModel):
     """Public-safe appeal state; the miner's private message is never exposed."""
 
+    kind: Annotated[
+        Literal["screening", "gate_notes"],
+        Field(
+            default="screening",
+            description=(
+                "``screening``: appeals a rejected quarantine decision (release "
+                "returns the submission to evaluation). ``gate_notes``: appeals "
+                "cited bench v13+ gate notes on a scored submission; either "
+                "resolution only records the operator's verdict."
+            ),
+        ),
+    ] = "screening"
     status: Literal["pending", "resolved"]
     submitted_at: datetime
     resolved_at: datetime | None = None
@@ -3259,12 +3316,26 @@ class PublicScreeningDispute(BaseModel):
 
 
 class CreateScreeningDisputeRequest(BaseModel):
-    """One signed appeal of a rejected screening decision."""
+    """One signed appeal: of a rejected screening decision, or -- for a scored,
+    live, evaluating or held submission -- of the bench v13+ gate notes cited
+    in ``gate_note_ids``. A submission gets exactly one either way."""
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     message: Annotated[str, Field(min_length=20, max_length=1000)]
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
+    gate_note_ids: Annotated[
+        list[Annotated[str, Field(pattern=r"^[0-9a-f]{16}$")]] | None,
+        Field(
+            default=None,
+            max_length=64,
+            description=(
+                "Bench v13+ gate ``note_id`` values this dispute contests, as "
+                "listed on ``GET /me/agents/{agent_id}/gate-notes``. Every id "
+                "must belong to this submission's own accepted scores."
+            ),
+        ),
+    ] = None
 
 
 class CreateScreeningDisputeResponse(BaseModel):
@@ -3516,6 +3587,16 @@ class PublicProvisionalScore(BaseModel):
             ),
         ),
     ]
+    gate_evidence: Annotated[
+        PublicGateEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ run-level gate verdict (aggregates only); see "
+                "``PublicValidatorScore.gate_evidence``."
+            ),
+        ),
+    ] = None
     transcript_sha256: Annotated[
         str | None,
         Field(

@@ -38,6 +38,8 @@ type GeneratedCopyCourtRecommendation =
   PlatformComponents['schemas']['AdminCopyCourtRecommendation']
 type GeneratedCopyCourtRecommendationList =
   PlatformComponents['schemas']['AdminCopyCourtRecommendationList']
+type GeneratedConfirmationSeedAnchorList =
+  PlatformComponents['schemas']['AdminConfirmationSeedAnchorList']
 
 // Every bench epoch that carries the signed confirmation evidence stack. One
 // definition, derived from the generated contract -- restating it per schema is
@@ -50,6 +52,7 @@ export const confirmationBenchVersionSchema = z.union([
   z.literal(10),
   z.literal(11),
   z.literal(12),
+  z.literal(13),
 ])
 
 // Exact set equality against the contract, checked in BOTH directions. A plain
@@ -253,6 +256,10 @@ export type InferenceRouteCalibrationAction = z.infer<typeof inferenceRouteCalib
 
 export const quarantineResolutionSchema = z.enum(['release', 'rescreen', 'reject'])
 export const screeningDisputeResolutionSchema = z.enum(['release', 'uphold'])
+// `screening` appeals a rejected quarantine (release re-evaluates the
+// submission); `gate_notes` appeals cited bench v13+ gate notes on a scored
+// submission (either resolution only records the operator's verdict).
+export const screeningDisputeKindSchema = z.enum(['screening', 'gate_notes'])
 
 export const screenerReviewModeSchema = z.enum(['off', 'shadow', 'enforce', 'inherit'])
 export const screenerReviewModelSchema = z.enum([
@@ -262,6 +269,22 @@ export const screenerReviewModelSchema = z.enum([
   'openai/gpt-5.6-sol',
 ])
 export const sourceReviewModelSchema = z.enum(['openai/gpt-5.6-luna'])
+export const fanoutShadowStatusSchema = z.enum([
+  'queued',
+  'leased',
+  'running',
+  'succeeded',
+  'incomplete',
+  'skipped',
+])
+export const fanoutShadowOutcomeSchema = z.enum([
+  'no_findings',
+  'candidate',
+  'unresolved_candidate',
+  'critic_also_flagged',
+  'incomplete',
+  'skipped',
+])
 export const policyManifestProfileSchema = z.enum(['core', 'l1', 'l1_l2'])
 export const screenerReviewSettingsSchema = z
   .object({
@@ -284,6 +307,19 @@ export const screenerReviewSettingsSchema = z
     adjudicator_model: z.literal('z-ai/glm-5.3-flash').default('z-ai/glm-5.3-flash'),
     adjudicator_max_steps: z.number().int().min(1).max(1024).default(128),
     adjudicator_timeout_seconds: z.number().int().min(60).max(3_600).default(600),
+    fanout_shadow_mode: z.enum(['off', 'shadow']).default('off'),
+    fanout_shadow_image_source_sha: z.string().regex(/^[0-9a-f]{40}$/).default('0'.repeat(40)),
+    fanout_shadow_model: z.literal('z-ai/glm-5.3-flash').default('z-ai/glm-5.3-flash'),
+    fanout_shadow_concurrency: z.number().int().min(1).max(4).default(2),
+    fanout_shadow_max_steps: z.number().int().min(1).max(8).default(4),
+    fanout_shadow_max_groups: z.number().int().min(1).max(8).default(4),
+    fanout_shadow_max_requests: z.number().int().min(1).max(64).default(40),
+    fanout_shadow_max_total_tokens: z.number().int().min(10_000).max(2_000_000).default(1_500_000),
+    fanout_shadow_timeout_seconds: z.number().int().min(60).max(1_800).default(900),
+    fanout_shadow_max_cost_usd: z.number().positive().max(10).default(3),
+    fanout_shadow_daily_cost_usd: z.number().positive().max(100).default(20),
+    fanout_shadow_global_concurrency: z.literal(1).default(1),
+    fanout_shadow_reserved_targon_slots: z.number().int().min(1).max(4).default(1),
     max_input_tokens: z.number().int().min(1).max(1_000_000),
     max_output_tokens: z.number().int().min(1).max(128_000),
     max_completion_tokens: z.number().int().min(1).max(128_000),
@@ -304,6 +340,16 @@ export const screenerReviewSettingsSchema = z
         code: 'custom',
         message: 'Completion budget cannot exceed output budget',
         path: ['max_completion_tokens'],
+      })
+    }
+    if (
+      value.fanout_shadow_mode === 'shadow' &&
+      value.fanout_shadow_image_source_sha === '0'.repeat(40)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Shadow mode requires the exact trusted image source SHA',
+        path: ['fanout_shadow_image_source_sha'],
       })
     }
   })
@@ -415,6 +461,61 @@ export const screenerPolicyManifestControlSchema = z.object({
 
 export type ScreenerReviewControl = z.infer<typeof screenerReviewControlSchema>
 export type ScreenerReviewSettings = z.infer<typeof screenerReviewSettingsSchema>
+
+export const screenerFanoutShadowInputSchema = z.object({
+  status: fanoutShadowStatusSchema.optional(),
+  limit: z.number().int().min(1).max(100).default(50),
+  offset: z.number().int().min(0).default(0),
+})
+
+export const screenerFanoutShadowReviewSchema = z.object({
+  shadow_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  policy_version: z.number().int().positive(),
+  settings_revision: z.number().int().nonnegative(),
+  settings_scope: z.string(),
+  settings_checksum: z.string().regex(/^[0-9a-f]{64}$/),
+  status: fanoutShadowStatusSchema,
+  outcome: fanoutShadowOutcomeSchema.nullable(),
+  baseline: z.record(z.string(), z.unknown()),
+  report: z.record(z.string(), z.unknown()).nullable(),
+  disagrees_with_baseline: z.boolean().nullable(),
+  coverage_complete: z.boolean().nullable(),
+  error_code: z.string().nullable(),
+  provider: z.string().nullable(),
+  reserved_cost_usd: z.number().nonnegative(),
+  reported_cost_usd: z.number().nonnegative().nullable(),
+  unmetered: z.boolean(),
+  reserved_at: z.string().nullable(),
+  created_at: z.string(),
+  started_at: z.string().nullable(),
+  completed_at: z.string().nullable(),
+})
+
+export const screenerFanoutShadowResponseSchema = z.object({
+  metrics: z.object({
+    total: z.number().int().nonnegative(),
+    queued: z.number().int().nonnegative(),
+    running: z.number().int().nonnegative(),
+    succeeded: z.number().int().nonnegative(),
+    incomplete: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+    compared: z.number().int().nonnegative(),
+    disagreements: z.number().int().nonnegative(),
+    incomplete_coverage: z.number().int().nonnegative(),
+    rolling_24h_reserved_cost_usd: z.number().nonnegative(),
+    rolling_24h_reported_cost_usd: z.number().nonnegative(),
+    rolling_24h_unmetered: z.number().int().nonnegative(),
+  }),
+  items: z.array(screenerFanoutShadowReviewSchema),
+  count: z.number().int().nonnegative(),
+  returned: z.number().int().nonnegative(),
+  limit: z.number().int().min(1).max(100),
+  offset: z.number().int().nonnegative(),
+  has_more: z.boolean(),
+})
 
 const screenerProviderSchema = z.enum(['gcp', 'targon', 'hetzner', 'home', 'test'])
 const capacityProviderSchema = z.enum(['hetzner', 'targon', 'gcp'])
@@ -3848,6 +3949,7 @@ const sourceReviewInvariantSchema = z.enum([
   'i5_production_engine',
   'i6_tool_execution_fidelity',
   'i7_model_tool_planning',
+  'i8_evaluation_independence',
 ])
 const sourceReviewInvariantDispositionSchema = z.enum([
   'pass', 'breach', 'inconclusive',
@@ -3868,6 +3970,8 @@ const sourceReviewPassClauseSchema = z.enum([
   'no_tool_planning',
   'policy_capability_filter_only',
   'natural_singleton_class',
+  'evaluation_independent_runtime',
+  'no_evaluation_identity_branch',
   'unreachable_nonruntime_code',
 ])
 const passClausesByInvariant: Record<
@@ -3897,6 +4001,10 @@ const passClausesByInvariant: Record<
   ]),
   i7_model_tool_planning: new Set([
     'no_tool_planning', 'policy_capability_filter_only', 'natural_singleton_class',
+    'unreachable_nonruntime_code',
+  ]),
+  i8_evaluation_independence: new Set([
+    'evaluation_independent_runtime', 'no_evaluation_identity_branch',
     'unreachable_nonruntime_code',
   ]),
 }
@@ -3931,13 +4039,21 @@ const sourceReviewInvariantDecisionSchema = z
 
 export const sourceReviewInvariantAssessmentSchema = z
   .strictObject({
-    schema_version: z.literal(1),
-    decisions: z.array(sourceReviewInvariantDecisionSchema).length(7),
+    schema_version: z.union([z.literal(1), z.literal(2)]),
+    decisions: z.array(sourceReviewInvariantDecisionSchema).min(7).max(8),
   } satisfies PlatformResponseShape<GeneratedSourceReviewInvariantAssessment>)
   .superRefine((assessment, context) => {
     const invariants = assessment.decisions.map((decision) => decision.invariant)
-    if (new Set(invariants).size !== 7) {
-      context.addIssue({ code: 'custom', message: 'source review must decide every policy-v10 invariant' })
+    const expected = assessment.schema_version === 1
+      ? sourceReviewInvariantSchema.options.filter((invariant) => invariant !== 'i8_evaluation_independence')
+      : sourceReviewInvariantSchema.options
+    if (invariants.length !== expected.length || new Set(invariants).size !== expected.length
+      || expected.some((invariant) => !invariants.includes(invariant))) {
+      context.addIssue({ code: 'custom', message: `source review must decide every policy-v${assessment.schema_version === 1 ? 10 : 13} invariant` })
+    }
+    if (assessment.schema_version === 2
+      && assessment.decisions.reduce((total, decision) => total + Array.from(decision.summary).length, 0) > 1680) {
+      context.addIssue({ code: 'custom', message: 'policy-v13 invariant summaries exceed bounded size' })
     }
   })
 
@@ -4055,7 +4171,10 @@ export const resolveScreeningQuarantineResponseSchema = z.object({
 export const screeningDisputeSchema = z.object({
   dispute_id: z.string().uuid(),
   agent_id: z.string().uuid(),
-  quarantine_id: z.string().uuid(),
+  // Defaulted so pre-v13 fixtures and responses parse unchanged.
+  kind: screeningDisputeKindSchema.default('screening'),
+  // Null for a gate-notes dispute, which appeals accepted-score evidence.
+  quarantine_id: z.string().uuid().nullable(),
   miner_hotkey: z.string(),
   agent_name: z.string(),
   agent_version: z.number().int().positive().nullish().default(null),
@@ -4068,6 +4187,10 @@ export const screeningDisputeSchema = z.object({
   resolved_by: z.string().nullable(),
   resolution: screeningDisputeResolutionSchema.nullable(),
   resolution_reason: z.string().nullable(),
+  // Bench v13+ gate note ids the miner contested; each re-derives from the
+  // submission's own accepted scores, so they are references, never verdicts.
+  // Optional (not defaulted) so pre-v13 fixtures and responses parse unchanged.
+  gate_note_ids: z.array(z.string()).nullish(),
 })
 
 export const screeningDisputeListSchema = z.object({
@@ -4598,7 +4721,7 @@ export const validatorAssignmentSchema = z.object({
   provisional_composite: z.number().nullable(),
   slot_id: z.string().nullish().default(null),
   purpose: z
-    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest'])
+    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest', 'benchmark_canary'])
     .nullish()
     .default(null),
   agent_status: z.string().nullish().default(null),
@@ -4699,7 +4822,7 @@ export const validationRetryTicketSchema = z.object({
   // from `false`, "this expiry came with a reported reason".
   silently_expired: z.boolean().nullish().default(null),
   purpose: z
-    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest'])
+    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest', 'benchmark_canary'])
     .nullish()
     .default(null),
   first_reported_at: z.string().nullish().default(null),
@@ -5078,6 +5201,7 @@ export const agentScoringReadinessInputSchema = z.object({
 })
 
 export const scoringReadinessScreenedImageSchema = z.object({
+  sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   complete: z.boolean(),
   verified: z.boolean(),
   policy_ok: z.boolean(),
@@ -6983,6 +7107,7 @@ export type ScreeningQuarantineBatchPreview = z.infer<
 >
 export type ScreeningDispute = z.infer<typeof screeningDisputeSchema>
 export type ScreeningDisputeResolution = z.infer<typeof screeningDisputeResolutionSchema>
+export type ScreeningDisputeKind = z.infer<typeof screeningDisputeKindSchema>
 export type ScreeningSubmission = z.infer<typeof screeningSubmissionSchema>
 export type ScreeningFailureDiagnostic = z.infer<
   typeof screeningFailureDiagnosticSchema
@@ -7260,6 +7385,94 @@ export const seedSchema = z
   ])
   .transform((seed) => (typeof seed === 'string' ? seed : String(seed)))
 
+// Bench v13+ run-level gate verdict (#1852). Aggregates only -- the per-case
+// notes are owner-only on Platform (`/me/agents/{id}/gate-notes`). Mirrors the
+// generated `PublicGateEvidence`; the posture enum is restated here so a new
+// posture value fails the parse loudly instead of being read as "unknown".
+// `observe` is the twin post-pass's name for shadow.
+export const gatePostureSchema = z.enum(['off', 'shadow', 'observe', 'enforce'])
+
+const gateCountSchema = z.number().int().nonnegative().default(0)
+const gateUnitSchema = z.number().min(0).max(1)
+const gateBpsSchema = z.number().int().min(0).max(10_000)
+
+// Sanitised mirrors of the four scorer run summaries (`details.catalog_gate`,
+// `details.claim_provenance`, `details.twin_post_pass`,
+// `details.inference_cost`): counts and rates, never per-case content.
+export const catalogGateSummarySchema = z.object({
+  posture: gatePostureSchema.nullish().default(null),
+  tool_cases: gateCountSchema,
+  attributed_cases: gateCountSchema,
+  incomplete_capture_cases: gateCountSchema,
+  lower_bound_cases: gateCountSchema,
+  no_completion_cases: gateCountSchema,
+  catalog_absent_cases: gateCountSchema,
+  catalog_suppression_rate: gateUnitSchema.nullish().default(null),
+  safe_harbor_cases: gateCountSchema,
+  restraint_without_offer: gateCountSchema,
+  expected_tool_not_offered: gateCountSchema,
+  swallowed_model_call: gateCountSchema,
+  zeroed_cases: gateCountSchema,
+  claim_uncorroborated_cases: gateCountSchema,
+  attribution_coverage_bps: gateBpsSchema.nullish().default(null),
+})
+
+export const claimProvenanceSummarySchema = z.object({
+  posture: gatePostureSchema.nullish().default(null),
+  memory_cases: gateCountSchema,
+  attributed_cases: gateCountSchema,
+  applicable_cases: gateCountSchema,
+  settled_cases: gateCountSchema,
+  not_model_emitted_cases: gateCountSchema,
+  answer_in_prompt_cases: gateCountSchema,
+  no_model_completion_cases: gateCountSchema,
+  unsettled_cases: gateCountSchema,
+  zeroed_cases: gateCountSchema,
+  attribution_coverage_bps: gateBpsSchema.nullish().default(null),
+})
+
+export const twinPostPassSummarySchema = z.object({
+  posture: gatePostureSchema.nullish().default(null),
+  rule_requested: z.string().nullish().default(null),
+  rule: z.string().nullish().default(null),
+  honest_concordant_error_rate: gateUnitSchema.nullish().default(null),
+  auto_fallback: z.boolean().default(false),
+  twin_groups: gateCountSchema,
+  twin_groups_concordant: gateCountSchema,
+  counterfactual_pairs: gateCountSchema,
+  counterfactual_insensitive: gateCountSchema,
+  cases_affected: gateCountSchema,
+  cases_affected_share: gateUnitSchema.nullish().default(null),
+  applied: z.boolean().default(false),
+})
+
+export const inferenceCostSummarySchema = z.object({
+  posture: gatePostureSchema.nullish().default(null),
+  applied: z.boolean().default(false),
+  floor_bps: gateBpsSchema.nullish().default(null),
+  cases: gateCountSchema,
+  attributed_cases: gateCountSchema,
+  cases_below_full_factor: gateCountSchema,
+  mean_factor_bps: gateBpsSchema.nullish().default(null),
+})
+
+export const publicGateEvidenceSchema = z.object({
+  bench_version: z.number().int().positive(),
+  // The most severe posture any gate ran under: `enforce` means a gate moved
+  // scores; `shadow` means every gate only recorded what it would have done.
+  posture: gatePostureSchema.nullish().default(null),
+  catalog_gate: catalogGateSummarySchema.nullish().default(null),
+  claim_provenance: claimProvenanceSummarySchema.nullish().default(null),
+  twin_post_pass: twinPostPassSummarySchema.nullish().default(null),
+  inference_cost: inferenceCostSummarySchema.nullish().default(null),
+  catalog_suppression_rate: gateUnitSchema.nullish().default(null),
+  // Cases a gate would zero at enforce (or did), plus cases the shadow cost
+  // factor would discount, and that count over the cases the run scored.
+  flagged_case_count: gateCountSchema,
+  flagged_case_share: gateUnitSchema.nullish().default(null),
+  gate_counts: z.record(z.string(), z.number().int().nonnegative()).default({}),
+})
+
 export const publicValidatorScoreSchema = z.object({
   validator_hotkey: z.string(),
   composite: z.number().min(0).max(1),
@@ -7278,6 +7491,8 @@ export const publicValidatorScoreSchema = z.object({
   transform_robustness: z.number().min(0).max(1).nullable().optional(),
   audit_case_count: z.number().int().nonnegative().nullable().optional(),
   transcript_sha256: z.string().nullable().optional(),
+  // Null below bench v13 and for a scorer that emitted no gate telemetry.
+  gate_evidence: publicGateEvidenceSchema.nullable().optional(),
 })
 
 export const publicAgentScoresSchema = z.object({
@@ -7394,6 +7609,11 @@ export const agentScoreHistoryVersionSchema = z.object({
   // Median-composite change against the previous listed version; null for
   // the first version group.
   composite_delta_vs_previous: z.number().nullable(),
+  // Bench v13+ gate verdict, folded over the rows that carry one: the posture
+  // when every such row agrees (null when mixed or absent) and the median
+  // share of cases the gates would zero. Null for versions below v13.
+  gate_posture: gatePostureSchema.nullable().default(null),
+  median_flagged_case_share: z.number().min(0).max(1).nullable().default(null),
 })
 
 export const agentScoreHistorySchema = z.object({
@@ -7783,4 +8003,42 @@ export const applyCopyCourtSettingsInputSchema = z.object({
 export type CopyCourtControl = z.infer<typeof copyCourtControlSchema>
 export type CopyCourtRecommendationList = z.infer<
   typeof copyCourtRecommendationListSchema
+>
+
+// Bench v13+ finalized-block confirmation seed anchors: one row per
+// (champion, bench_version) reign, pinned or still in its finality wait. The
+// ledger serves pinned rows only, so this read is where a waiting reign shows.
+
+export const confirmationSeedAnchorSchema = z.object({
+  champion_agent_id: z.string().uuid(),
+  champion_name: z.string().nullable(),
+  champion_miner_hotkey: z.string().nullable(),
+  bench_version: z.number().int().positive(),
+  ready_block: z.number().int().nonnegative(),
+  anchor_block: z.number().int().nonnegative(),
+  anchor_block_hash: z.string().nullable(),
+  pinned: z.boolean(),
+  pinned_at: z.string().nullable(),
+  created_at: z.string(),
+})
+
+export const confirmationSeedAnchorListSchema: z.ZodType<GeneratedConfirmationSeedAnchorList> =
+  z.object({
+    bench_version: z.number().int().positive(),
+    binding_active: z.boolean(),
+    binding_floor_bench_version: z.number().int().positive(),
+    anchor_block_delta: z.number().int().positive(),
+    items: z.array(confirmationSeedAnchorSchema),
+    count: z.number().int().nonnegative(),
+    pinned_count: z.number().int().nonnegative(),
+    waiting_count: z.number().int().nonnegative(),
+  })
+
+export const confirmationSeedAnchorsInputSchema = z.object({
+  benchVersion: z.number().int().positive().optional(),
+  limit: z.number().int().min(1).max(200).default(50),
+})
+
+export type ConfirmationSeedAnchorList = z.infer<
+  typeof confirmationSeedAnchorListSchema
 >

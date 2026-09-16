@@ -23,6 +23,7 @@ ReviewModel = Literal[
     "openai/gpt-5.6-sol",
 ]
 SourceReviewModel = Literal["openai/gpt-5.6-luna"]
+FanoutShadowModel = Literal["z-ai/glm-5.3-flash"]
 
 _MAX_SHADOW_PROVIDER_STAGES = 50
 
@@ -109,6 +110,23 @@ class ReviewSettings(BaseModel):
     # 128 and always carry the field explicitly.
     adjudicator_max_steps: Annotated[int, Field(ge=1, le=1_024)] = 24
     adjudicator_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 600
+    fanout_shadow_mode: Literal["off", "shadow"] = "off"
+    fanout_shadow_image_source_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")] = (
+        "0" * 40
+    )
+    fanout_shadow_model: FanoutShadowModel = "z-ai/glm-5.3-flash"
+    fanout_shadow_concurrency: Annotated[int, Field(ge=1, le=4)] = 2
+    fanout_shadow_max_steps: Annotated[int, Field(ge=1, le=8)] = 4
+    fanout_shadow_max_groups: Annotated[int, Field(ge=1, le=8)] = 4
+    fanout_shadow_max_requests: Annotated[int, Field(ge=1, le=64)] = 40
+    fanout_shadow_max_total_tokens: Annotated[int, Field(ge=10_000, le=2_000_000)] = (
+        1_500_000
+    )
+    fanout_shadow_timeout_seconds: Annotated[int, Field(ge=60, le=1_800)] = 900
+    fanout_shadow_max_cost_usd: Annotated[float, Field(gt=0, le=10)] = 3.0
+    fanout_shadow_daily_cost_usd: Annotated[float, Field(gt=0, le=100)] = 20.0
+    fanout_shadow_global_concurrency: Literal[1] = 1
+    fanout_shadow_reserved_targon_slots: Annotated[int, Field(ge=1, le=4)] = 1
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)]
@@ -152,6 +170,11 @@ class ReviewSettings(BaseModel):
             raise ValueError("L2 model chain must not contain duplicates")
         if self.max_completion_tokens > self.max_output_tokens:
             raise ValueError("completion budget must not exceed output budget")
+        if (
+            self.fanout_shadow_mode == "shadow"
+            and self.fanout_shadow_image_source_sha == "0" * 40
+        ):
+            raise ValueError("shadow mode requires an exact trusted image source SHA")
         return self
 
 
@@ -171,6 +194,19 @@ _POST_CHECKSUM_FIELDS: tuple[str, ...] = (
     "adjudicator_model",
     "adjudicator_max_steps",
     "adjudicator_timeout_seconds",
+    "fanout_shadow_mode",
+    "fanout_shadow_image_source_sha",
+    "fanout_shadow_model",
+    "fanout_shadow_concurrency",
+    "fanout_shadow_max_steps",
+    "fanout_shadow_max_groups",
+    "fanout_shadow_max_requests",
+    "fanout_shadow_max_total_tokens",
+    "fanout_shadow_timeout_seconds",
+    "fanout_shadow_max_cost_usd",
+    "fanout_shadow_daily_cost_usd",
+    "fanout_shadow_global_concurrency",
+    "fanout_shadow_reserved_targon_slots",
 )
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
@@ -192,6 +228,23 @@ class EffectiveReviewSettings(BaseModel):
         payload = json.dumps(current, sort_keys=True, separators=(",", ":")).encode()
         if hashlib.sha256(payload).hexdigest() == self.checksum:
             return self
+
+        # Platform deliberately hashes an inactive fan-out block in the legacy
+        # shape. Old native workers ignore these new response fields, so this
+        # keeps an off revision valid throughout the rolling Platform/worker
+        # deploy. Enabling shadow mode restores full-field checksum binding and
+        # therefore requires the upgraded worker release.
+        if self.settings.fanout_shadow_mode == "off":
+            inactive = dict(current)
+            for name in _POST_CHECKSUM_FIELDS[
+                _POST_CHECKSUM_FIELDS.index("fanout_shadow_mode") :
+            ]:
+                inactive.pop(name, None)
+            candidate = json.dumps(
+                inactive, sort_keys=True, separators=(",", ":")
+            ).encode()
+            if hashlib.sha256(candidate).hexdigest() == self.checksum:
+                return self
 
         # A revision minted before a control existed cannot carry that key in
         # the canonical JSON its immutable checksum was taken over, so replay

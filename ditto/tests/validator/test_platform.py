@@ -1869,6 +1869,90 @@ async def test_ledger_request_is_fresh_and_signed() -> None:
     assert response.entries == []
 
 
+async def test_router_ledger_request_is_fresh_and_signed() -> None:
+    """``get_router_ledger`` uses the identical proof-of-possession as the memory
+    ledger, and parses a shadow ledger whose real number rides shadow_composite.
+    """
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        nonce = UUID(request.headers["X-Validator-Ledger-Nonce"])
+        requested_at = datetime.fromisoformat(
+            request.headers["X-Validator-Ledger-Requested-At"]
+        )
+        message = ledger_signing_message(
+            validator_hotkey=keypair.ss58_address,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+        assert keypair.verify(
+            message,
+            bytes.fromhex(request.headers["X-Validator-Ledger-Signature"]),
+        )
+        return httpx.Response(
+            200,
+            json={
+                "entries": [
+                    {
+                        "miner_hotkey": _HOTKEY,
+                        "agent_id": "550e8400-e29b-41d4-a716-446655440000",
+                        "router_contract_version": 1,
+                        "weight_eligible": False,
+                        "combined_score": 0.0,
+                        "shadow_composite": 0.51,
+                        "harnesses": [
+                            {
+                                "harness": "claude_code",
+                                "operational": True,
+                                "floor_pass": True,
+                                "efficiency": 0.51,
+                                "upstream_token_cost_micros": 4242,
+                            }
+                        ],
+                        "first_seen": datetime.now(UTC).isoformat(),
+                    }
+                ],
+                "count": 1,
+                "generated_at": datetime.now(UTC).isoformat(),
+                "stale": False,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        ledger = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).get_router_ledger()
+
+    assert seen["path"].endswith("/scoring/router-ledger")
+    (entry,) = ledger.entries
+    assert entry.weight_eligible is False
+    assert entry.combined_score == 0.0
+    assert entry.shadow_composite == pytest.approx(0.51)
+
+
+async def test_router_ledger_non_200_raises_platform_error() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, text="scorer relay down")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformError, match="router ledger rejected"):
+            await PlatformClient(config, http, keypair).get_router_ledger()  # type: ignore[arg-type]
+
+
 def _signed_ledger_payload(
     *, bench_version: int, agent_id: UUID, miner_hotkey: str
 ) -> dict[str, object]:

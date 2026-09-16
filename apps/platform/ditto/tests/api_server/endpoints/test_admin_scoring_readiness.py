@@ -139,6 +139,7 @@ async def test_fully_ready_current_era_agent_is_leaseable(
     assert body["active_bench_version"] == MIN_SCOREABLE_BENCH_VERSION
     assert body["has_versioned_dataset"] is True
     assert body["screened_image"]["complete"] is True
+    assert body["screened_image"]["sha256"] == "a" * 64
 
 
 async def test_historical_nonmember_is_not_leaseable_even_with_dataset(

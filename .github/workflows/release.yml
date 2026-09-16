@@ -632,7 +632,9 @@ jobs:
           cache-dependency-path: research/dittobench-datagen/go.mod
 
       - name: Gate DittoBench datagen release on exact merge source
-        run: go test ./...
+        # Match datagen PR CI: v13's complete seed sweeps exceed Go's default
+        # ten-minute package timeout. Keep all tests and a bounded deadline.
+        run: go test -timeout 20m ./...
 
   verify-dittobench-coding-datagen:
     needs: [plan, admit-current]
@@ -2209,7 +2211,7 @@ jobs:
               .source_revision == $sha and
               .software_version == $version and
               (.source_revision_mismatch | not) and
-              (.supported_bench_versions | sort == [8, 9, 10, 11, 12])
+              (.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13])
             ' >/dev/null
           for bench_version in 8 9; do
             headers_file="$(mktemp)"

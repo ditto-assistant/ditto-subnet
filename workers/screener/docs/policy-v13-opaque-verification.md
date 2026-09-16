@@ -133,15 +133,40 @@ An equivalent route is valid only when this specification or a versioned
 successor names it before the artifact is reviewed. A human assertion that a
 missing mandatory test is unnecessary is not an equivalent route.
 
+### Platform-pinned official components
+
+A platform-published, content-addressed provenance record for a named official
+starter-kit component is accepted evidence for the declaration fields it
+actually records. The record must predate the review and bind, directly or
+through a content-addressed official revision, the component's exact path,
+digest, byte size, format, producer or training provenance, public
+documentation, and accepted runtime role. A submission containing the exact
+matched bytes at the recorded path does not need to copy the same README,
+metadata sidecar, or self-report into its archive.
+
+This equivalence is field- and role-scoped. It does not cover a changed digest
+or path, a different loader or selecting configuration, new inputs or outputs,
+changed candidate boundaries, or additional downstream authority. Reviewers
+must verify those artifact-specific properties from source, configuration,
+runtime evidence, or a fresh role-specific behavioral package. A behavioral
+package may be reused only when its recorded component digest, configuration,
+loader contract, candidate boundaries, downstream role, policy digest, and
+verification-profile digest all match.
+
+The absence of a test metric from a score or leaderboard projection is not
+evidence that the corresponding screening package was never executed. Consult
+the artifact-bound screening and challenge records before classifying the gap.
+
 Complete deterministic source causality may replace behavioral testing only
 when the applicable role requirement says source proof is sufficient and the
 review covers the entire effective downstream path.
 
 ## Failure treatment
 
-- Missing required submission evidence is `V1.required_evidence_missing`.
+- Missing required submission evidence is
+  `V1.required_submission_evidence_missing`.
 - Verification that remains incomplete after published retries/deadlines is
-  `V2.verification_not_completed`.
+  `V2.platform_verification_failed`.
 - V1/V2 do not establish misconduct and record `violation_proven: false`.
 - Infrastructure or provider failure remains attributable to that failure
   domain and receives the published re-review treatment.

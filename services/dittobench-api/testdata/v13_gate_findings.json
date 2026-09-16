@@ -1,0 +1,34 @@
+{
+  "contract": "Bench v13 per-case gate finding tokens (issue #1852). One list for both sides of the wire: the Go scorer emits these exact strings in CaseScore.catalog.findings (internal/scorer/catalog_gate.go CatalogFinding*), CaseScore.claim_provenance.findings (internal/scoregates/text_provenance.go Finding*) and as bare CaseScore.notes markers (internal/scorer/twins_v13.go TwinNote*); the Platform re-emits only tokens byte-identical to these (apps/platform/ditto/api_models/gate_evidence.py GATE_FINDINGS, pinned by ditto/tests/api_server/endpoints/test_gate_notes.py). `zeroing` is whether the settled finding zeroes the case when its gate runs in enforce; a case carrying one is a would-be zero in shadow. `waived_by` names the finding that, when present on the same case, cancels the zero.",
+  "version": 1,
+  "findings": {
+    "restraint_without_offer": {"gate": "catalog", "zeroing": true},
+    "expected_tool_not_offered": {"gate": "catalog", "zeroing": true, "waived_by": ["semantic_preloading_safe_harbor"]},
+    "swallowed_model_call": {"gate": "catalog", "zeroing": true},
+    "semantic_preloading_safe_harbor": {"gate": "catalog", "zeroing": false},
+    "catalog_evidence_unavailable": {"gate": "catalog", "zeroing": false},
+    "catalog_evidence_incomplete": {"gate": "catalog", "zeroing": false},
+    "catalog_absent": {"gate": "catalog", "zeroing": false},
+    "catalog_gate_zeroed": {"gate": "catalog", "zeroing": true},
+    "memory_only_catalog": {"gate": "catalog", "zeroing": false},
+    "offer_inferred_from_execution": {"gate": "catalog", "zeroing": false},
+    "catalog_present_lower_bound": {"gate": "catalog", "zeroing": false},
+    "claim_attribution_uncorroborated": {"gate": "catalog", "zeroing": false},
+    "no_model_completion": {"gate": "shared", "zeroing": false},
+    "served_text_not_model_emitted": {"gate": "claim_provenance", "zeroing": true},
+    "answer_in_prompt": {"gate": "claim_provenance", "zeroing": true},
+    "claim_provenance_unavailable": {"gate": "claim_provenance", "zeroing": false},
+    "claim_provenance_incomplete": {"gate": "claim_provenance", "zeroing": false},
+    "claim_not_applicable": {"gate": "claim_provenance", "zeroing": false},
+    "claim_provenance_zeroed": {"gate": "claim_provenance", "zeroing": true},
+    "twin_concordant": {"gate": "twin_post_pass", "zeroing": true},
+    "counterfactual_insensitive": {"gate": "twin_post_pass", "zeroing": true}
+  },
+  "case_note_markers": ["twin_concordant", "counterfactual_insensitive"],
+  "run_summaries": {
+    "catalog": "details.catalog_gate",
+    "claim_provenance": "details.claim_provenance",
+    "twin_post_pass": "details.twin_post_pass",
+    "inference_cost": "details.inference_cost"
+  }
+}
