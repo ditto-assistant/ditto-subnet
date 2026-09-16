@@ -91,6 +91,10 @@ type MemorySuite struct {
 	// world-question budget, so the total memory envelope is unchanged. Zero for
 	// pre-v12 contracts. Advisory telemetry.
 	FamilyCompilerCases int
+	// v13 temporal/decision-family telemetry; never sent to the harness.
+	PointInTimeCases      int
+	AbstentionCases       int
+	StagedCorrectionCases int
 	// LexicalGap is the query↔needle overlap telemetry (NoLiMa): how much
 	// content wording the emitted questions share with their evidence, before and
 	// after the low-overlap rewrite.

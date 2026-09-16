@@ -121,6 +121,7 @@ type World struct {
 	Accent         string
 	Preferences    []Preference
 	Integrity      IntegrityFacts
+	Probes         *V13Probes
 }
 
 // ProtectedTerms returns semantic identity and join-key surfaces that writing
@@ -279,6 +280,9 @@ func GenerateForVersion(seed int64, scale, benchVersion int) World {
 		w.StoryArcs, w.Stories = buildStories(seed, scale, w)
 	}
 	w.Pairs = w.renderPairs(r)
+	if benchVersion >= protocol.BenchVersionV13 {
+		appendV13Probes(&w)
+	}
 	return w
 }
 

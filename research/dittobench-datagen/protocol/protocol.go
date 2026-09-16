@@ -349,6 +349,8 @@ type MemoryCase struct {
 	// not on /seed or /run. gen.TestV13GraderOnlyFieldsNeverReachHarnessWire
 	// pins this.
 	Claims []Claim `json:"-"`
+	// TwinPairID pairs decision/as-of cases separately from invariance groups.
+	TwinPairID string `json:"-"`
 	// TwinRelation (bench_version 13, grader-only) names how this case is
 	// paired with the other member(s) of its TwinGroup (see the TwinRelation
 	// constants). Empty for the v5+ metamorphic phrasing twins, which remain
