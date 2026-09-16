@@ -299,6 +299,32 @@ func toWireEvidence(e scoregates.Evidence) protocol.V9ScoreGateEvidence {
 		ModelDependence:  toWireModelDependence(e.BenchVersion, e.ModelDependence),
 		InferenceLatency: toWireInferenceLatency(e.BenchVersion, e.InferenceLatency),
 		AnswerStuffing:   toWireAnswerStuffing(e.BenchVersion, e.AnswerStuffing),
+		ClaimProvenance:  toWireClaimProvenance(e.BenchVersion, e.ClaimProvenance),
+	}
+}
+
+func toWireClaimProvenance(benchVersion int, c scoregates.ClaimProvenanceEvidence) protocol.V13ClaimProvenanceGateEvidence {
+	if benchVersion < scoregates.BenchVersionV13 {
+		return protocol.V13ClaimProvenanceGateEvidence{}
+	}
+	return protocol.V13ClaimProvenanceGateEvidence{
+		AdministeredCases: c.AdministeredCases, EligibleCases: c.EligibleCases,
+		NotModelEmittedCases: c.NotModelEmittedCases, AnswerInPromptCases: c.AnswerInPromptCases,
+		FlaggedCases: c.FlaggedCases, UnattributedCallCases: c.UnattributedCallCases,
+		UnsettledCases: c.UnsettledCases, ZeroedCases: c.ZeroedCases,
+		AttributionComplete: c.AttributionComplete, Posture: string(c.Posture),
+		FlaggedBPS: c.FlaggedBPS, Result: string(c.Result), FactorBPS: c.FactorBPS,
+	}
+}
+
+func fromWireClaimProvenance(c protocol.V13ClaimProvenanceGateEvidence) scoregates.ClaimProvenanceEvidence {
+	return scoregates.ClaimProvenanceEvidence{
+		AdministeredCases: c.AdministeredCases, EligibleCases: c.EligibleCases,
+		NotModelEmittedCases: c.NotModelEmittedCases, AnswerInPromptCases: c.AnswerInPromptCases,
+		FlaggedCases: c.FlaggedCases, UnattributedCallCases: c.UnattributedCallCases,
+		UnsettledCases: c.UnsettledCases, ZeroedCases: c.ZeroedCases,
+		AttributionComplete: c.AttributionComplete, Posture: scoregates.ClaimProvenancePosture(c.Posture),
+		FlaggedBPS: c.FlaggedBPS, Result: scoregates.Result(c.Result), FactorBPS: c.FactorBPS,
 	}
 }
 
@@ -415,6 +441,7 @@ func fromWireEvidence(e protocol.V9ScoreGateEvidence) (scoregates.Evidence, erro
 		ModelDependence:  fromWireModelDependence(e.ModelDependence),
 		InferenceLatency: fromWireInferenceLatency(e.InferenceLatency),
 		AnswerStuffing:   fromWireAnswerStuffing(e.AnswerStuffing),
+		ClaimProvenance:  fromWireClaimProvenance(e.ClaimProvenance),
 	}
 	if err := result.Validate(); err != nil {
 		return scoregates.Evidence{}, err
