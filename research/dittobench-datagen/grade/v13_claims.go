@@ -406,6 +406,22 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 			continue
 		}
 		if n := matchPhraseAt(words, i, lex.rejection); n > 0 {
+			// A connective may overlap an intrinsic semantic phrase:
+			// "is not happening" contains the status "not happening".
+			// Leave its prefix in the clause and consume the protected phrase
+			// on the next iteration. An outer "not" still rejects the phrase.
+			overlap := false
+			for j := i + 1; j < i+n; j++ {
+				if k := matchPhraseAt(words, j, lex.protected); k > 0 && j+k > i+n {
+					overlap = true
+					break
+				}
+			}
+			if overlap {
+				cur = append(cur, words[i])
+				i++
+				continue
+			}
 			flush()
 			rejected = true
 			// Keep the connective in the text so negated direction phrases stay

@@ -71,8 +71,12 @@ func TestPersonalDateGranularityVectors(t *testing.T) {
 					}
 				}
 				slashed := fmt.Sprintf("%02d/%02d/%d", m, d, y)
-				if v := grade.Memory(mc, protocol.RunResponse{Answer: slashed}); v.Score != 0 {
-					t.Fatalf("seed %d case %s: ambiguous slashed date %q scored %.2f", seed, mc.ID, slashed, v.Score)
+				want := 1.0
+				if d <= 12 {
+					want = 0
+				} // Both positions could be the month.
+				if v := grade.Memory(mc, protocol.RunResponse{Answer: slashed}); v.Score != want {
+					t.Fatalf("seed %d case %s: slashed date %q scored %.2f, want %.2f", seed, mc.ID, slashed, v.Score, want)
 				}
 			case protocol.ClaimKindTime:
 				seenTime = true
@@ -124,9 +128,9 @@ func TestPersonalSetMembershipGradesCurrentSet(t *testing.T) {
 			if v := grade.Memory(mc, stale); v.Score != 0 {
 				t.Fatalf("seed %d case %s: listing the dropped item scored %.2f", seed, mc.ID, v.Score)
 			}
-			// Mentioning the dropped item in prose, with the correct slot, is fine
-			// under the v12+ slot-scoped scan.
-			prose := protocol.RunResponse{Answer: strings.Join(mc.AnswerItems, ", "), FinalText: "They dropped the " + mc.DistractorAnswers[0] + "."}
+			// v13 requires the structured set to also be asserted in non-empty
+			// prose; a separate explanation of the dropped item is not an answer.
+			prose := protocol.RunResponse{Answer: strings.Join(mc.AnswerItems, ", "), FinalText: strings.Join(mc.AnswerItems, ", ") + ". They dropped the " + mc.DistractorAnswers[0] + "."}
 			if v := grade.Memory(mc, prose); v.Score != 1 {
 				t.Fatalf("seed %d case %s: prose mention of the dropped item scored %.2f (%v)", seed, mc.ID, v.Score, v.Notes)
 			}

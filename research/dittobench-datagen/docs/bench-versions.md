@@ -711,14 +711,16 @@ calibration: `CurrentBenchVersion` stays v8, the runtime advertises v13 only
 when the contract is complete, and Platform rollout state activates it.
 ## Bench v13 grader (typed claims, requested-unit quantities, multilingual-safe)
 
-v13 is the first version whose contract change is primarily the **grader**. It
-is reachable only through `gradingPolicyForVersion(v >= 13)` (`grade/v13.go`);
+The v13 grader is reachable only through
+`gradingPolicyForVersion(v >= 13)` (`grade/v13.go`);
 every v2..v12 grading function is untouched and
 `TestV2ThroughV12RegradeGolden` pins the v9..v12 verdict bytes over a fixture
-corpus that exercises exactly the rules v13 changes. The `BenchVersionV13`
-constant exists so the grader, its audit bank, and the multilingual lexicons can
-be pinned ahead of the v13 generation contract; `SupportedBenchVersion` admits
-v13 only once that contract lands.
+corpus that exercises exactly the rules v13 changes. Generation already admits
+v13, but runtime advertisement and live activation remain separate gates.
+Generator-owned `Claims` are authoritative when present: the grader scores
+each typed claim, applies its weight (zero means one equal-share unit), and
+requires every critical claim. Unknown claim kinds and invalid weights fail
+closed. Cases without claim sets retain the v13 scalar/list policy.
 
 The v13 memory grading order: observed bait call -> empty -> case language
 without a lexicon (fail closed) -> question echo (persistence, reversal,
