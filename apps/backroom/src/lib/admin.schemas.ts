@@ -4721,7 +4721,7 @@ export const validatorAssignmentSchema = z.object({
   provisional_composite: z.number().nullable(),
   slot_id: z.string().nullish().default(null),
   purpose: z
-    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest'])
+    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest', 'benchmark_canary'])
     .nullish()
     .default(null),
   agent_status: z.string().nullish().default(null),
@@ -4822,7 +4822,7 @@ export const validationRetryTicketSchema = z.object({
   // from `false`, "this expiry came with a reported reason".
   silently_expired: z.boolean().nullish().default(null),
   purpose: z
-    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest'])
+    .enum(['legacy_unclassified', 'canonical_quorum', 'continual_retest', 'benchmark_canary'])
     .nullish()
     .default(null),
   first_reported_at: z.string().nullish().default(null),

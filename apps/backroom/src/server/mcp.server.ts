@@ -1,5 +1,10 @@
 import '@tanstack/react-start/server-only'
 
+import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
+  cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema } from '../lib/benchmark-canary.schemas'
+import { issueBenchmarkCanary, getBenchmarkCanary, listBenchmarkCanaries,
+  cancelBenchmarkCanary } from './admin.service'
+
 import {
   McpServer,
   type RegisteredTool,
@@ -306,6 +311,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'qualify_scored_benchmark_rollout',
   'expand_benchmark_rollout_cohort',
   'start_benchmark_rollout',
+  'issue_benchmark_canary',
+  'cancel_benchmark_canary',
   'set_efficiency_bonus_settings',
   'set_continual_retest_settings',
   'set_core_qualification_policy',
@@ -684,6 +691,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read rollout control: versions, start_ready, cohort, targets. Starts nothing.',
   start_benchmark_rollout:
     'Start a forward-only rollout. Confirmation: START BENCHMARK V{n}.',
+  list_benchmark_canaries: 'Page isolated benchmark canaries. No score or rollout authority.',
+  get_benchmark_canary: 'Read one diagnostic lease and its non-authoritative result summary.',
+  issue_benchmark_canary: 'Issue one bounded diagnostic lease for an explicit bench version, agent and validator. Never activates.',
+  cancel_benchmark_canary: 'Cancel one exact canary and revoke its inference. Does not affect canonical scores.',
   authorize_confirmation_bundle_retest:
     'Authorize one manual retest for a completed or failed bundle. Requires current generation, request UUID, reason, and exact phrase. Automatic retries stay disabled.',
   remove_failed_submission_from_queue:
@@ -2650,6 +2661,31 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         }),
       ),
   )
+
+  registerTool('list_benchmark_canaries', {
+    title: 'List benchmark canaries',
+    description: 'Page non-authoritative benchmark diagnostics, newest first. Requires backroom:read.',
+    inputSchema: listBenchmarkCanariesInputSchema,
+    annotations: toolAnnotations('read'),
+  }, async (input) => result(await listBenchmarkCanaries(input)))
+  registerTool('get_benchmark_canary', {
+    title: 'Get benchmark canary',
+    description: 'Read one exact diagnostic receipt. Completed means a signed result was recorded, not calibration or activation readiness. Scorer details and traces are not exposed. Requires backroom:read.',
+    inputSchema: getBenchmarkCanaryInputSchema,
+    annotations: toolAnnotations('read'),
+  }, async (input) => result(await getBenchmarkCanary(input)))
+  registerTool('issue_benchmark_canary', {
+    title: 'Issue benchmark canary',
+    description: 'Reserve exactly one full-profile diagnostic lease for an explicit supported, non-retired bench version. Bind a fresh canaryId, agent artifact/image digests, validator hotkey, idle slot and expected active version. Requires exact confirmation ISSUE CANARY V{benchVersion} {agentId}. One live canary fleet-wide; refuses existing ticket identities and unavailable capacity. Existing signed validator execution is reused, but results never enter score/confirmation tables, quorum, rewards or rollout authority. No automatic retry. Requires backroom:write.',
+    inputSchema: issueBenchmarkCanaryInputSchema,
+    annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => issueBenchmarkCanary(props.session.email, input)))
+  registerTool('cancel_benchmark_canary', {
+    title: 'Cancel benchmark canary',
+    description: 'Revoke an exact canary lease and inference capability without changing the agent or canonical scores. Requires reason and CANCEL CANARY {canaryId}. Requires backroom:write.',
+    inputSchema: cancelBenchmarkCanaryInputSchema,
+    annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => cancelBenchmarkCanary(props.session.email, input)))
 
   registerTool(
     'start_benchmark_rollout',

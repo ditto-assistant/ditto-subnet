@@ -1,5 +1,47 @@
 import '@tanstack/react-start/server-only'
 
+import { benchmarkCanarySchema, issueBenchmarkCanaryInputSchema,
+  getBenchmarkCanaryInputSchema, cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema,
+} from '../lib/benchmark-canary.schemas'
+
+export async function listBenchmarkCanaries(rawInput: unknown) {
+  const input = listBenchmarkCanariesInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(`/api/v1/admin/benchmark-canaries?limit=${input.limit}&offset=${input.offset}`)
+  return benchmarkCanarySchema.array().parse(payload)
+}
+
+export async function getBenchmarkCanary(rawInput: unknown) {
+  const input = getBenchmarkCanaryInputSchema.parse(rawInput)
+  return benchmarkCanarySchema.parse(await platformAdminRequest(
+    `/api/v1/admin/benchmark-canaries/${input.canaryId}`,
+  ))
+}
+
+export async function issueBenchmarkCanary(actor: string, rawInput: unknown) {
+  const input = issueBenchmarkCanaryInputSchema.parse(rawInput)
+  return benchmarkCanarySchema.parse(await platformAdminRequest(
+    '/api/v1/admin/benchmark-canaries', {
+      method: 'POST', actor, timeoutMs: 120_000,
+      body: { actor, canary_id: input.canaryId, agent_id: input.agentId,
+        bench_version: input.benchVersion, validator_hotkey: input.validatorHotkey,
+        slot_id: input.slotId, expected_artifact_sha256: input.expectedArtifactSha256,
+        expected_screened_image_sha256: input.expectedScreenedImageSha256,
+        expected_active_version: input.expectedActiveVersion,
+        reason: input.reason, confirmation: input.confirmation },
+    },
+  ))
+}
+
+export async function cancelBenchmarkCanary(actor: string, rawInput: unknown) {
+  const input = cancelBenchmarkCanaryInputSchema.parse(rawInput)
+  return benchmarkCanarySchema.parse(await platformAdminRequest(
+    `/api/v1/admin/benchmark-canaries/${input.canaryId}/cancel`, {
+      method: 'POST', actor,
+      body: { actor, reason: input.reason, confirmation: input.confirmation },
+    },
+  ))
+}
+
 import type { operations as PlatformOperations } from '../generated/platform-api'
 
 import {

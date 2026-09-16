@@ -861,9 +861,12 @@ class AdminValidatorAssignment(BaseModel):
     score_count: int
     provisional_composite: float | None
     slot_id: str = "slot-0"
-    purpose: Literal["legacy_unclassified", "canonical_quorum", "continual_retest"] = (
-        "legacy_unclassified"
-    )
+    purpose: Literal[
+        "legacy_unclassified",
+        "canonical_quorum",
+        "continual_retest",
+        "benchmark_canary",
+    ] = "legacy_unclassified"
     agent_status: str | None = None
     first_reported_at: datetime | None = None
 

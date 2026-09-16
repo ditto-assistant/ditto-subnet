@@ -1781,6 +1781,7 @@ async def issue_rollout_ticket(
         select(func.count(ValidatorTicket.validator_hotkey))
         .where(
             ValidatorTicket.agent_id == BenchmarkRolloutMember.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == rollout.desired_version,
             ValidatorTicket.status == TicketStatus.ISSUED,
             ValidatorTicket.deadline > now,
@@ -1958,11 +1959,20 @@ async def issue_rollout_ticket(
             ticket.status != TicketStatus.EXPIRED
             or (retry_after is not None and retry_after > now)
             or (
-                ticket.provider_outage_epoch is None
+                ticket.purpose != TicketPurpose.BENCHMARK_CANARY
+                and ticket.provider_outage_epoch is None
                 and ticket.attempt_count >= ticket_attempt_cap(ticket)
             )
         ):
             return None
+        if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+            ticket.attempt_count = 0
+            ticket.seed = None
+            ticket.dataset_sha256 = None
+            ticket.seed_block = None
+            ticket.seed_block_hash = None
+            ticket.provider_outage_epoch = None
+            ticket.provider_outage_attempted_epoch = None
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1

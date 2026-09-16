@@ -242,6 +242,7 @@ from ditto.db.queries.audit import (
     get_latest_score_retest_event,
 )
 from ditto.db.queries.benchmark_admission import activated_rollout_for_version
+from ditto.db.queries.benchmark_canaries import canary_for_lease, finish_canary
 from ditto.db.queries.benchmark_carryover import carryover_agent_ids
 from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
@@ -1055,6 +1056,7 @@ async def _fresh_submission_lane_due(
             ValidatorTicket.validator_hotkey == validator_hotkey,
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.created_at >= rollout_started_at,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             or_(
                 ValidatorTicket.status == TicketStatus.SCORED,
                 (
@@ -3288,6 +3290,76 @@ async def request_job(
                 slot_id=slot_id,
             )
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        canary_ticket = await session.scalar(
+            select(ValidatorTicket)
+            .where(
+                ValidatorTicket.validator_hotkey == payload.validator_hotkey,
+                ValidatorTicket.slot_id == slot_id,
+                ValidatorTicket.purpose == TicketPurpose.BENCHMARK_CANARY,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.deadline > now,
+            )
+            .with_for_update()
+        )
+        if canary_ticket is not None:
+            canary = await canary_for_lease(
+                session,
+                agent_id=canary_ticket.agent_id,
+                validator_hotkey=payload.validator_hotkey,
+                deadline=canary_ticket.deadline,
+            )
+            agent = await get_agent_by_id(session, agent_id=canary_ticket.agent_id)
+            if (
+                canary is None
+                or canary.status != "issued"
+                or agent is None
+                or agent.sha256 != canary.artifact_sha256
+                or agent.screened_image_sha256 != canary.screened_image_sha256
+                or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+                or heartbeat is None
+                or not heartbeat_supports_version(
+                    heartbeat, now=now, version=canary_ticket.bench_version
+                )
+            ):
+                raise HTTPException(
+                    409, "canary target or validator capability changed"
+                )
+            grant = await session.scalar(
+                select(InferenceGrant).where(
+                    InferenceGrant.agent_id == canary.agent_id,
+                    InferenceGrant.bench_version == canary.bench_version,
+                    InferenceGrant.validator_hotkey == payload.validator_hotkey,
+                    InferenceGrant.ticket_deadline == canary.deadline,
+                    InferenceGrant.status.in_(("pending", "active")),
+                )
+            )
+            if grant is None:
+                raise HTTPException(409, "canary inference capability is unavailable")
+            contract = benchmark_contract(canary.bench_version)
+            return JobResponse(
+                agent_id=canary.agent_id,
+                miner_hotkey=agent.miner_hotkey,
+                slot_id=canary.slot_id,
+                sha256=canary.artifact_sha256,
+                deadline=canary.deadline,
+                seed=canary.seed,
+                seed_scope="validator",
+                dataset_sha256=canary.dataset_sha256,
+                run_size=canary.run_size,
+                dataset_seed_block=canary_ticket.seed_block,
+                dataset_seed_block_hash=canary_ticket.seed_block_hash,
+                bench_version=canary.bench_version,
+                minimum_screening_policy_version=contract.minimum_screening_policy_version,
+                requires_screened_image=contract.requires_screened_image,
+                benchmark_runtime=(
+                    inference_settings.benchmark_runtime
+                    if canary.bench_version >= 10
+                    else None
+                ),
+                inference=_inference_grant_offer(
+                    request=request, grant=grant, bench_version=canary.bench_version
+                ),
+            )
         if rollout is not None:
             # A shadow/mismatched v9 score cannot satisfy rollout activation,
             # so its operator-authorized replacement is rollout work rather
@@ -5642,6 +5714,30 @@ async def fail_job(
             raise HTTPException(
                 status_code=409, detail="job-fail nonce has already been used"
             ) from exc
+        canary = await canary_for_lease(
+            session,
+            agent_id=payload.agent_id,
+            validator_hotkey=payload.validator_hotkey,
+            deadline=payload.ticket_deadline,
+            for_update=False,
+        )
+        if canary is not None:
+            canary_ticket = await session.get(
+                ValidatorTicket,
+                (canary.agent_id, canary.bench_version, canary.validator_hotkey),
+                with_for_update=True,
+            )
+            if canary_ticket is None:
+                raise HTTPException(409, "canary ticket is missing")
+            await session.refresh(canary, with_for_update=True)
+            await finish_canary(
+                session,
+                canary=canary,
+                ticket=canary_ticket,
+                now=now,
+                failure=f"{payload.reason}: {payload.failure_detail or ''}",
+            )
+            return FailJobResponse(agent_id=payload.agent_id, reopened=False)
         failure_gate = await lock_provider_work_gate(
             session,
             now=now,
@@ -5969,6 +6065,21 @@ async def agent_artifact(
                     "(never issued, expired, or already scored)"
                 ),
             )
+        if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+            canary = await canary_for_lease(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=x_validator_hotkey,
+                deadline=ticket.deadline,
+                for_update=False,
+            )
+            if (
+                canary is None
+                or canary.status != "issued"
+                or agent.sha256 != canary.artifact_sha256
+                or agent.screened_image_sha256 != canary.screened_image_sha256
+            ):
+                raise HTTPException(409, "canary artifact identity changed")
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
@@ -6124,6 +6235,30 @@ async def submit_score(
             (agent_id, report_version, payload.validator_hotkey),
             with_for_update=True,
         )
+        canary = await canary_for_lease(
+            session,
+            agent_id=agent_id,
+            validator_hotkey=payload.validator_hotkey,
+            deadline=payload.ticket_deadline,
+        )
+        if canary is not None:
+            if (
+                prior_ticket is None
+                or agent.sha256 != canary.artifact_sha256
+                or agent.screened_image_sha256 != canary.screened_image_sha256
+            ):
+                raise HTTPException(409, "canary artifact or ticket changed")
+            await finish_canary(
+                session,
+                canary=canary,
+                ticket=prior_ticket,
+                now=datetime.now(UTC),
+                report=report,
+                signature=payload.signature,
+            )
+            return SubmitScoreResponse(
+                agent_id=agent_id, status=agent.status, accepted=True
+            )
         if prior_ticket is not None and prior_ticket.status == TicketStatus.SCORED:
             prior_score = await session.get(
                 Score, (agent_id, report_version, payload.validator_hotkey)

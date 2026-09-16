@@ -14,8 +14,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ditto.api_models.ticket_status import TicketStatus
-from ditto.db.models import ProviderOutageCircuit, ValidatorTicket
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.db.models import BenchmarkCanary, ProviderOutageCircuit, ValidatorTicket
 from ditto.db.queries.inference import revoke_ticket_inference
 
 OPENROUTER_PROVIDER = "openrouter"
@@ -124,6 +124,22 @@ async def park_scoring_leases(
             continue
         await revoke_ticket_inference(session, ticket=ticket, now=now)
         ticket.status = TicketStatus.EXPIRED
+        if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+            canary = await session.scalar(
+                select(BenchmarkCanary)
+                .where(
+                    BenchmarkCanary.agent_id == ticket.agent_id,
+                    BenchmarkCanary.validator_hotkey == ticket.validator_hotkey,
+                    BenchmarkCanary.deadline == ticket.deadline,
+                )
+                .with_for_update()
+            )
+            if canary is not None and canary.status == "issued":
+                canary.status = "failed"
+                canary.failure_detail = "provider_outage_parked"
+                canary.finished_at = now
+            parked += 1
+            continue
         ticket.deadline = now
         ticket.retry_after = max(now, _aware(circuit.retry_at))
         # One logical ticket may receive at most one no-fault outage resume.

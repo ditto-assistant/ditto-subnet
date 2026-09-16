@@ -6278,7 +6278,8 @@ class ValidatorTicket(Base):
         ),
         CheckConstraint(
             "purpose IN ("
-            "'legacy_unclassified', 'canonical_quorum', 'continual_retest'"
+            "'legacy_unclassified', 'canonical_quorum', 'continual_retest', "
+            "'benchmark_canary'"
             ")",
             name="validator_tickets_purpose_valid",
         ),
@@ -6329,6 +6330,55 @@ class ValidatorTicket(Base):
             unique=True,
             postgresql_where=text("status = 'issued'"),
             sqlite_where=text("status = 'issued'"),
+        ),
+    )
+
+
+class BenchmarkCanary(Base):
+    """Operator-authorized, non-authoritative single lease and private receipt.
+
+    The ordinary ticket provides slot/inference/artifact capabilities only.
+    Results never enter Score, ConfirmationScore or benchmark rollout state.
+    """
+
+    __tablename__ = "benchmark_canaries"
+    canary_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    slot_id: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    dataset_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    run_size: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    deadline: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    result: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    signature: Mapped[str | None] = mapped_column(Text)
+    failure_detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"]),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "validator_hotkey",
+            "deadline",
+            name="benchmark_canaries_lease_key",
+        ),
+        CheckConstraint(
+            "status IN ('issued', 'completed', 'failed', 'cancelled')",
+            name="benchmark_canaries_status",
+        ),
+        CheckConstraint(
+            "bench_version > 0 AND seed >= 0", name="benchmark_canaries_version_seed"
         ),
     )
 

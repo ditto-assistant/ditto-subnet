@@ -134,6 +134,9 @@ from ditto.api_server.endpoints import (
     validator_confirmation_router,
     validator_router,
 )
+from ditto.api_server.endpoints.admin_benchmark_canary import (
+    router as admin_benchmark_canary_router,
+)
 from ditto.api_server.endpoints.validator_coding_hosted import HostedCodingControl
 from ditto.api_server.endpoints.validator_coding_hosted import (
     router as validator_coding_hosted_router,
@@ -671,6 +674,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_artifact_release_settings_router, prefix="/api/v1")
     app.include_router(admin_attestation_router, prefix="/api/v1")
     app.include_router(admin_benchmark_rollout_router, prefix="/api/v1")
+    app.include_router(admin_benchmark_canary_router, prefix="/api/v1")
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")

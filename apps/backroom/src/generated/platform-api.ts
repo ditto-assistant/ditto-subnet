@@ -303,6 +303,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/benchmark-canaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Benchmark Canaries */
+        get: operations["list_benchmark_canaries_api_v1_admin_benchmark_canaries_get"];
+        put?: never;
+        /**
+         * Issue Benchmark Canary
+         * @description Reserve one existing protocol lease, with a separate diagnostic receipt.
+         *
+         *     No mutable BenchmarkDataset, Score, Agent or Rollout fields are written.
+         *     Reject existing ticket identities rather than replacing any production work.
+         */
+        post: operations["issue_benchmark_canary_api_v1_admin_benchmark_canaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/benchmark-canaries/{canary_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Benchmark Canary */
+        get: operations["get_benchmark_canary_api_v1_admin_benchmark_canaries__canary_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/benchmark-canaries/{canary_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Benchmark Canary */
+        post: operations["cancel_benchmark_canary_api_v1_admin_benchmark_canaries__canary_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/benchmark-rollout": {
         parameters: {
             query?: never;
@@ -10875,7 +10933,7 @@ export interface components {
              * @default legacy_unclassified
              * @enum {string}
              */
-            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
+            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
             /** Retry After */
             retry_after: string | null;
             /** Retry Budget Exhausted */
@@ -10928,7 +10986,7 @@ export interface components {
              * @default legacy_unclassified
              * @enum {string}
              */
-            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
+            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
             /** Score Count */
             score_count: number;
             /**
@@ -11687,6 +11745,105 @@ export interface components {
              * @description Whether the benchmark model's locked reasoning mode is enabled.
              */
             thinking: boolean;
+        };
+        /** BenchmarkCanaryCancel */
+        BenchmarkCanaryCancel: {
+            /** Actor */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /** BenchmarkCanaryIssue */
+        BenchmarkCanaryIssue: {
+            /** Actor */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Canary Id
+             * Format: uuid
+             */
+            canary_id: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Active Version */
+            expected_active_version: number;
+            /** Expected Artifact Sha256 */
+            expected_artifact_sha256: string;
+            /** Expected Screened Image Sha256 */
+            expected_screened_image_sha256: string;
+            /** Reason */
+            reason: string;
+            /** Slot Id */
+            slot_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** BenchmarkCanaryView */
+        BenchmarkCanaryView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Authoritative
+             * @default false
+             * @constant
+             */
+            authoritative: false;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Canary Id
+             * Format: uuid
+             */
+            canary_id: string;
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /** Failure Detail */
+            failure_detail: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Reason */
+            reason: string;
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            } | null;
+            /** Run Size */
+            run_size: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Seed */
+            seed: string;
+            /** Slot Id */
+            slot_id: string;
+            /** Status */
+            status: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /**
          * BenchmarkCapacity
@@ -27067,7 +27224,7 @@ export interface components {
          * @description Authoritative reason the platform issued the current ticket lease.
          * @enum {string}
          */
-        TicketPurpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
+        TicketPurpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
         /**
          * ToolProvenanceEvidence
          * @description Per-case v10+ broker-to-endpoint tool provenance (``tool_provenance``).
@@ -29222,6 +29379,145 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminAthRulingsUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_benchmark_canaries_api_v1_admin_benchmark_canaries_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkCanaryView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    issue_benchmark_canary_api_v1_admin_benchmark_canaries_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkCanaryIssue"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkCanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_benchmark_canary_api_v1_admin_benchmark_canaries__canary_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                canary_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkCanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_benchmark_canary_api_v1_admin_benchmark_canaries__canary_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                canary_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkCanaryCancel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkCanaryView"];
                 };
             };
             /** @description Validation Error */
