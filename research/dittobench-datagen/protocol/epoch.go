@@ -126,7 +126,14 @@ import (
 // protocol types, and a surface pass that starts as a byte-for-byte copy of
 // v12 — so every v13 family, grader, and gate can land behind
 // bench_version >= 13 while v2..v12 regenerate and re-grade byte-identically.
-// See docs/bench-versions.md "Bench v13".
+// The surface levers land on top of that plumbing: every tool, world, settings,
+// integrity and question surface renders from a persona.Grammar with per-seed
+// nested banks; identity records are permuted-clause grammars; the typo
+// projector is v2 (per-seed keyboard layout, 1-3 bounded edits, no safelist);
+// and the artifact surface pass takes a surface salt (0 is the public
+// rehearsal default and byte-identical to the unsalted path) as the groundwork
+// for the private, unregenerable surface pass. See docs/bench-versions.md
+// "Bench v13".
 //
 // The deterministic grader, run sizes, inference boundary, LongMemEval
 // deep-history floors, and the v9 signed-evidence/score-gate/curve-v3

@@ -38,7 +38,7 @@ func TestHandleGenerateOmittedVersionIsDeprecatedV2Compatibility(t *testing.T) {
 }
 
 func TestHandleGenerateVersionedVectors(t *testing.T) {
-	for _, version := range []string{"2", "3", "4", "5", "6", "7", "8", "9", "10"} {
+	for _, version := range []string{"2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13"} {
 		rr := httptest.NewRecorder()
 		handleGenerate(rr, httptest.NewRequest(http.MethodPost, "/generate?seed=42&run_size=small&bench_version="+version, nil))
 		if rr.Code != http.StatusOK {
