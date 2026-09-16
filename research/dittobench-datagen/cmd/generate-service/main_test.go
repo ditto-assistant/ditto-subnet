@@ -34,12 +34,12 @@ func TestHandleGenerateRequiresSupportedVersion(t *testing.T) {
 // way: the newest contract the module reproduces must be servable.
 func TestHandleGenerateAcceptsNewestVersion(t *testing.T) {
 	rr := httptest.NewRecorder()
-	handleGenerate(rr, httptest.NewRequest(http.MethodPost, "/generate?seed=42&run_size=small&bench_version="+strconv.Itoa(protocol.NewestBenchVersion()), nil))
+	handleGenerate(rr, httptest.NewRequest(http.MethodPost, "/generate?seed=42&run_size=small&bench_version="+strconv.Itoa(protocol.NewestSupportedBenchVersion()), nil))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("newest version: status %d: %s", rr.Code, rr.Body.String())
 	}
-	if got := rr.Header().Get("X-Bench-Version"); got != strconv.Itoa(protocol.NewestBenchVersion()) {
-		t.Fatalf("X-Bench-Version=%q, want %d", got, protocol.NewestBenchVersion())
+	if got := rr.Header().Get("X-Bench-Version"); got != strconv.Itoa(protocol.NewestSupportedBenchVersion()) {
+		t.Fatalf("X-Bench-Version=%q, want %d", got, protocol.NewestSupportedBenchVersion())
 	}
 }
 

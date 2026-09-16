@@ -121,10 +121,6 @@ type World struct {
 	Accent         string
 	Preferences    []Preference
 	Integrity      IntegrityFacts
-	// BenchVersion is the immutable generation contract this world was built
-	// under. The v8 people/projects/trips substrate is shared by every version;
-	// version-gated story generation (v13 story v2) branches on it.
-	BenchVersion int
 }
 
 // ProtectedTerms returns semantic identity and join-key surfaces that writing

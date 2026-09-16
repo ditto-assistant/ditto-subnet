@@ -11,15 +11,15 @@ import (
 
 // TestV13EnvelopeGenerationIsExplicitAndNotActivated: v13 generates deterministically
 // behind an explicit profile decision while v8 remains the advertised version.
-func TestV13GenerationIsExplicitAndNotActivated(t *testing.T) {
+func TestV13EnvelopeGenerationIsExplicitAndNotActivated(t *testing.T) {
 	if protocol.CurrentBenchVersion != protocol.BenchVersionV8 {
 		t.Fatalf("v13 scaffold changed active version to %d", protocol.CurrentBenchVersion)
 	}
 	if !protocol.SupportedBenchVersion(protocol.BenchVersionV13) {
 		t.Fatal("v13 deterministic generation is not supported")
 	}
-	if protocol.NewestBenchVersion() != protocol.BenchVersionV13 {
-		t.Fatalf("newest supported version %d, want 13", protocol.NewestBenchVersion())
+	if protocol.NewestSupportedBenchVersion() != protocol.BenchVersionV13 {
+		t.Fatalf("newest supported version %d, want 13", protocol.NewestSupportedBenchVersion())
 	}
 	want := map[string]Profile{
 		"small":  {Tools: 6, Mem: 6, Waves: 1, RawPairsFrac: 0, IsoCases: 0},
