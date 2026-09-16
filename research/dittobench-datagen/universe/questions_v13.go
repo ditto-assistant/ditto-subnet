@@ -36,19 +36,8 @@ const (
 	oracleStoryOwnerEmail     = "story-x-owner-email"
 )
 
-// Claim is one typed graded assertion of a story v2 plan. It mirrors the
-// grader-only protocol.Claim shape planned by the v13 plumbing (#1824:
-// {Kind, Expected, Accept, Unit, Critical, Weight}); the adapter onto
-// MemoryCase.Claims is a one-line follow-up once that type lands, so nothing
-// here crosses the harness wire today.
-type Claim struct {
-	Kind     string   `json:"kind"`
-	Expected string   `json:"expected"`
-	Accept   []string `json:"accept,omitempty"`
-	Unit     string   `json:"unit,omitempty"`
-	Critical bool     `json:"critical"`
-	Weight   float64  `json:"weight"`
-}
+// Claim shares the authoritative grader contract; it never crosses the wire.
+type Claim = protocol.Claim
 
 // storyDisagreeMarkers is the reviewed accept set of the conflict-marker claim
 // on a records-disagree answer. It is exempt from distractor scanning by
@@ -240,6 +229,7 @@ func (w World) storyQuestionCandidatesV13() []QuestionPlan {
 
 		order := r.Perm(len(plans))
 		for _, j := range order {
+			plans[j].Case.Claims = append([]protocol.Claim(nil), plans[j].Claims...)
 			out = append(out, plans[j])
 		}
 	}

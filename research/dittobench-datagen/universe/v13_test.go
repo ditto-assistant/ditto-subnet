@@ -11,22 +11,20 @@ import (
 
 // TestGenerateForVersionKeepsFrozenWorldsByteIdentical is the byte half of the
 // v13 world contract: below v13 the versioned constructor is exactly Generate,
-// and at v13 the v8 pairs are a prefix of the world (probes are appended, never
-// interleaved or rewritten).
+// and at v13 probes are appended after the versioned story/surface world.
 func TestGenerateForVersionKeepsFrozenWorldsByteIdentical(t *testing.T) {
 	for _, scale := range []int{1, 2, 3} {
 		for seed := int64(1); seed <= 10; seed++ {
 			base := Generate(seed, scale)
 			for version := protocol.BenchVersionV8; version <= protocol.BenchVersionV12; version++ {
-				if got := GenerateForVersion(seed, scale, version); !reflect.DeepEqual(got, base) {
+				got := GenerateForVersion(seed, scale, version)
+				got.BenchVersion = 0 // constructor metadata is not serialized world content
+				if !reflect.DeepEqual(got, base) {
 					t.Fatalf("seed %d scale %d v%d world differs from the frozen Generate output", seed, scale, version)
 				}
 			}
 			v13 := GenerateForVersion(seed, scale, protocol.BenchVersionV13)
-			if len(v13.Pairs) < len(base.Pairs) || !reflect.DeepEqual(v13.Pairs[:len(base.Pairs)], base.Pairs) {
-				t.Fatalf("seed %d scale %d: v13 world does not keep the v8 pairs as a byte-identical prefix", seed, scale)
-			}
-			if v13.Probes == nil || len(v13.Pairs)-len(base.Pairs) != len(v13.Probes.Pairs) {
+			if v13.Probes == nil || len(v13.Probes.Pairs) > len(v13.Pairs) || (len(v13.Probes.Pairs) > 0 && !reflect.DeepEqual(v13.Pairs[len(v13.Pairs)-len(v13.Probes.Pairs):], v13.Probes.Pairs)) {
 				t.Fatalf("seed %d scale %d: v13 probes are not exactly the appended pairs", seed, scale)
 			}
 			ids := map[string]bool{}

@@ -131,7 +131,7 @@ var V13SlotOrder = []string{
 // generateV13WorldMemorySuite; TestV13InterimSlotsArePinned keeps the list
 // honest and TestV13MixAuditGateAcrossFortySeeds arms the full #1529 gate once
 // it is empty.
-var v13InterimSlots = []string{V13SlotPersonalPrograms, V13SlotAbstention, V13SlotPointInTime}
+var v13InterimSlots = []string{}
 
 // V13InterimSlots returns the interim slot names (copy).
 func V13InterimSlots() []string { return append([]string(nil), v13InterimSlots...) }
@@ -145,7 +145,7 @@ func V13InterimSlots() []string { return append([]string(nil), v13InterimSlots..
 // either this list or v13InterimSlots is non-empty, so landing the three interim
 // slots before the monetary swaps cannot turn the gate fatal-red on a mix that
 // is known to violate the money caps.
-var v13InterimGenerators = []string{V13SlotBusinessPrograms, V13SlotRecordQuantity, V13SlotStory}
+var v13InterimGenerators = []string{}
 
 // V13InterimGenerators returns the slots still filled by an interim monetary
 // generator (copy).
@@ -172,8 +172,8 @@ var V13FullEnvelope = V13MemoryEnvelope{
 // v13MediumEnvelope keeps the v12 medium memory total (95) at v13 proportions.
 // Six story arcs x six oracles, program counts stay multiples of four.
 var v13MediumEnvelope = V13MemoryEnvelope{
-	Story: 36, OrdinaryWorld: 10, BusinessPrograms: 8, PersonalPrograms: 6, Abstention: 6,
-	RecordQuantity: 4, Divergence: 4, PointInTime: 2, Integrity: 14, Isolation: 5,
+	Story: 36, OrdinaryWorld: 8, BusinessPrograms: 4, PersonalPrograms: 8, Abstention: 8,
+	RecordQuantity: 4, Divergence: 4, PointInTime: 4, Integrity: 14, Isolation: 5,
 }
 
 // v13SmallEnvelope is the smoke profile: one story arc, a handful of ordinary
@@ -233,51 +233,66 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	}
 	envelope, ok := v13EnvelopeFor(n)
 	if !ok {
-		return MemorySuite{}, fmt.Errorf("v13 memory envelope: no slot table for %d memory cases (public profiles only)", n)
-	}
-	if envelope.Story%v13StoryOraclesPerArc != 0 {
-		return MemorySuite{}, fmt.Errorf("v13 story slot %d is not a multiple of %d oracles per arc", envelope.Story, v13StoryOraclesPerArc)
+		return MemorySuite{}, fmt.Errorf("v13 memory envelope: no slot table for %d memory cases", n)
 	}
 	scale, _ := v8WorldProfile(n)
-	world := universe.Generate(seed, scale)
-	if got := len(world.StoryArcs) * v13StoryOraclesPerArc; got != envelope.Story {
-		return MemorySuite{}, fmt.Errorf("v13 story slot %d does not match %d arcs x %d oracles", envelope.Story, len(world.StoryArcs), v13StoryOraclesPerArc)
-	}
-	plans, counts, err := world.SelectQuestionPlans(envelope.worldPlanSelection())
+	world := universe.GenerateForVersion(seed, scale, benchVersion)
+	allocation := world.V13Allocation(envelope.Isolation)
+	decision, err := buildV13Abstention(seed, n, world, allocation, benchVersion)
 	if err != nil {
-		return MemorySuite{}, fmt.Errorf("v13 world questions: %w", err)
+		return MemorySuite{}, err
 	}
-
-	var programs []universe.V10GeneratedCase
-	if envelope.BusinessPrograms > 0 {
-		// INTERIM GENERATOR: the v12 monetary catalog fills the business-program
-		// slot until #1520 lands its semantic business-event programs. The slot
-		// count (7 groups x 4 on full) is already the v13 one.
-		programs, err = universe.GenerateV12Programs(seed, envelope.BusinessPrograms)
+	temporal, err := buildV13PointInTime(seed, world, allocation, benchVersion)
+	if err != nil {
+		return MemorySuite{}, err
+	}
+	if len(decision) != envelope.Abstention || 2*len(temporal) != envelope.PointInTime {
+		return MemorySuite{}, fmt.Errorf("v13 temporal budget mismatch: absence %d/%d, as-of %d/%d", len(decision), envelope.Abstention, 2*len(temporal), envelope.PointInTime)
+	}
+	selection := envelope.worldPlanSelection()
+	selection.Exclude = allocation.ExcludeKeys()
+	// Answerable decision twins occupy the ordinary-world slot, not an
+	// unreported extra case budget.
+	selection.Ordinary -= len(decision)
+	if selection.Ordinary < 0 {
+		return MemorySuite{}, fmt.Errorf("v13 answerable twins exceed ordinary-world budget")
+	}
+	plans, counts, err := world.SelectQuestionPlans(selection)
+	if err != nil {
+		return MemorySuite{}, err
+	}
+	business, err := universe.GenerateV13Programs(seed, envelope.BusinessPrograms)
+	if err != nil {
+		return MemorySuite{}, err
+	}
+	var personal []universe.V10GeneratedCase
+	if envelope.PersonalPrograms > 0 {
+		personal, err = universe.GenerateV13PersonalPrograms(seed, envelope.PersonalPrograms)
 		if err != nil {
-			return MemorySuite{}, fmt.Errorf("v13 business programs: %w", err)
+			return MemorySuite{}, err
 		}
 	}
 	integrity := v8WorldIntegrityCases(seed, world, benchVersion)
-	if len(integrity) != envelope.Integrity {
-		return MemorySuite{}, fmt.Errorf("v13 integrity tail has %d cases, envelope publishes %d", len(integrity), envelope.Integrity)
+	var injectionPairs []protocol.MemoryPair
+	if envelope.Integrity == 14 {
+		injection, err := BuildV13WorldInjection(seed, world)
+		if err != nil {
+			return MemorySuite{}, err
+		}
+		integrity = append(integrity[:v8WorldConversationalCaseCount+v8WorldCanaryCaseCount], injection.Cases...)
+		injectionPairs = injection.Pairs
 	}
-
 	suite := MemorySuite{
-		SeedingWaves:        nWaves,
-		WorldCases:          len(plans) + len(programs) + len(integrity) - v8WorldConversationalCaseCount,
-		ConversationalCases: v8WorldConversationalCaseCount,
-		// Derived from the generated tail: the smoke-scale world has three
-		// projects, so it carries three probes even though v13 publishes four.
+		SeedingWaves: nWaves, ConversationalCases: v8WorldConversationalCaseCount,
 		StoredInstructionCases: len(integrity) - v8WorldConversationalCaseCount - v8WorldCanaryCaseCount,
 		Waves:                  make([]protocol.SeedRequest, nWaves),
-		Cases:                  make([]StagedCase, 0, envelope.Total()),
 		V13Slots: map[string]int{
-			V13SlotStory:            counts.Story,
-			V13SlotOrdinaryWorld:    counts.Ordinary,
-			V13SlotBusinessPrograms: len(programs),
-			V13SlotIntegrity:        len(integrity),
+			V13SlotStory: counts.Story, V13SlotOrdinaryWorld: counts.Ordinary + len(decision),
+			V13SlotBusinessPrograms: len(business), V13SlotPersonalPrograms: len(personal),
+			V13SlotAbstention: len(decision), V13SlotPointInTime: 2 * len(temporal),
+			V13SlotIntegrity: len(integrity), V13SlotIsolation: envelope.Isolation,
 		},
+		AbstentionCases: len(decision), PointInTimeCases: 2 * len(temporal),
 	}
 	for i := range suite.Waves {
 		suite.Waves[i] = protocol.SeedRequest{UserID: PrimaryUser, Wave: i}
@@ -285,58 +300,37 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	for _, plan := range plans {
 		plan.Case.BenchVersion = benchVersion
 		plan.Case.WritingProtected = append([]string(nil), plan.Constraints...)
-		suite.Cases = append(suite.Cases, StagedCase{
-			Case: plan.Case, RunAfterWave: 0,
-			RequiredPairIDs: append([]string(nil), plan.RequiredPairIDs...),
-		})
+		suite.Cases = append(suite.Cases, StagedCase{Case: plan.Case, RequiredPairIDs: append([]string(nil), plan.RequiredPairIDs...)})
 	}
-	for i := range programs {
-		generated := &programs[i]
+	for _, generated := range append(business, personal...) {
 		provenance := generated.Provenance
-		generated.Plan.Case.BenchVersion = benchVersion
-		suite.Cases = append(suite.Cases, StagedCase{
-			Case: generated.Plan.Case, RunAfterWave: 0,
-			RequiredPairIDs: append([]string(nil), generated.Plan.RequiredPairIDs...),
-			V10Provenance:   &provenance,
-		})
+		suite.Cases = append(suite.Cases, StagedCase{Case: generated.Plan.Case,
+			RequiredPairIDs: append([]string(nil), generated.Plan.RequiredPairIDs...), V10Provenance: &provenance})
 		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, generated.Pairs...)
 	}
 	suite.Cases = append(suite.Cases, integrity...)
+	suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, injectionPairs...)
 	if envelope.Divergence > 0 {
-		divergence, divergencePairs := buildParserDivergence(seed, envelope.Divergence)
-		for i := range divergence {
-			divergence[i].Case.BenchVersion = benchVersion
+		cases, pairs := buildParserDivergence(seed, envelope.Divergence)
+		for i := range cases {
+			cases[i].Case.BenchVersion = benchVersion
 		}
-		suite.Cases = append(suite.Cases, divergence...)
-		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, divergencePairs...)
-		suite.ParserDivergenceCases = len(divergence)
-		suite.V13Slots[V13SlotDivergence] = len(divergence)
+		suite.Cases = append(suite.Cases, cases...)
+		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, pairs...)
+		suite.ParserDivergenceCases = len(cases)
+		suite.V13Slots[V13SlotDivergence] = len(cases)
 	}
-	if envelope.RecordQuantity > 0 {
-		// INTERIM GENERATOR: the v12 monetary family compiler fills the
-		// record-determined quantity slot until #1837 lands record-stated
-		// operations over non-monetary units.
-		family := buildFamilyCompiler(seed, envelope.RecordQuantity)
-		for _, fc := range family {
-			fc.Staged.Case.BenchVersion = benchVersion
-			suite.Cases = append(suite.Cases, fc.Staged)
-			suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, fc.Pairs...)
-		}
-		suite.FamilyCompilerCases = len(family)
-		suite.V13Slots[V13SlotRecordQuantity] = len(family)
+	for _, family := range BuildFamilyCompilerV13(seed, envelope.RecordQuantity) {
+		suite.Cases = append(suite.Cases, family.Staged)
+		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, family.Pairs...)
+		suite.FamilyCompilerCases++
 	}
-	// Interim fill: the world plans above already include counts.Interim
-	// non-monetary ordinary questions standing in for the slots below.
-	for _, slot := range v13InterimSlots {
-		suite.V13Slots[slot] = envelope.slot(slot)
+	suite.V13Slots[V13SlotRecordQuantity] = suite.FamilyCompilerCases
+	suite.Cases = placeV13TwinPairs(seed, suite.Cases, append(decision, temporal...))
+	suite.WorldCases = len(suite.Cases) - suite.ConversationalCases
+	if len(suite.Cases)+envelope.Isolation != envelope.Total() {
+		return MemorySuite{}, fmt.Errorf("v13 memory budget: %d plus %d isolation, want %d", len(suite.Cases), envelope.Isolation, envelope.Total())
 	}
-	suite.V13Slots[V13SlotIsolation] = envelope.Isolation
-	if counts.Interim != envelope.Interim() {
-		return MemorySuite{}, fmt.Errorf("v13 interim fill produced %d plans, envelope needs %d", counts.Interim, envelope.Interim())
-	}
-	if got := len(suite.Cases) + envelope.Isolation; got != envelope.Total() {
-		return MemorySuite{}, fmt.Errorf("v13 memory suite has %d cases plus %d isolation, envelope publishes %d", len(suite.Cases), envelope.Isolation, envelope.Total())
-	}
-	suite.WritingNoiseQuestions, suite.WritingNoisePairs = applyV8MemoryWritingNoise(seed, suite.Cases, suite.Waves)
+	// v13 writing noise is applied once by the salted artifact surface pass.
 	return suite, nil
 }

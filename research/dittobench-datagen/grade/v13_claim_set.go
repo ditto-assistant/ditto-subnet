@@ -66,6 +66,19 @@ func gradeClaimSetV13(mc protocol.MemoryCase, resp protocol.RunResponse, an anal
 		}
 		an = analyzeV13(resp.Answer, resp.FinalText, claimLex)
 		v := gradeClaimV13(cm, resp, cm.AnswerKind, an, claimLex, policy)
+		if claim.Kind == protocol.ClaimKindOrder {
+			// Neither field may contradict the requested sequence. A correct
+			// structured slot cannot excuse a reversed sequence in prose.
+			for _, field := range []string{resp.Answer, resp.FinalText} {
+				if strings.TrimSpace(field) == "" {
+					continue
+				}
+				fieldAnalysis := analyzeV13("", field, claimLex)
+				if !orderedHitV13(cm.AnswerItems, assertedProse(fieldAnalysis)) {
+					v = Verdict{Notes: []string{"order not asserted consistently (scored 0)"}}
+				}
+			}
+		}
 		if claim.Critical && v.Score != 1 {
 			return Verdict{Notes: []string{fmt.Sprintf("critical claim %d (%s) not satisfied (scored 0)", i, claim.Kind)}}
 		}
@@ -92,16 +105,30 @@ func memoryForClaimV13(mc protocol.MemoryCase, claim protocol.Claim) (protocol.M
 	case protocol.ClaimKindValue, protocol.ClaimKindPerson, protocol.ClaimKindStatus,
 		protocol.ClaimKindEvent, protocol.ClaimKindOrganisation, protocol.ClaimKindAction,
 		protocol.ClaimKindChannel, protocol.ClaimKindSetMember, protocol.ClaimKindConflict,
-		protocol.ClaimKindTime:
+		protocol.ClaimKindTime, protocol.ClaimKindEntity, protocol.ClaimKindConcept:
 		// These semantic categories use reviewed canonical/accept forms, never a
 		// guessed synonym or an arbitrary numeric substring.
 	case protocol.ClaimKindDate:
 		mc.AnswerKind = protocol.AnswerDate
 	case protocol.ClaimKindDirection:
 		mc.AnswerKind = protocol.AnswerDirection
+	case protocol.ClaimKindOrder:
+		mc.AnswerKind = protocol.AnswerOrderedList
+		mc.AnswerItems = strings.Split(claim.Expected, " -> ")
+		if len(mc.AnswerItems) < 2 {
+			return mc, false
+		}
+		seen := map[string]bool{}
+		for _, item := range mc.AnswerItems {
+			item = normalizeV13(item)
+			if item == "" || seen[item] {
+				return mc, false
+			}
+			seen[item] = true
+		}
 	case protocol.ClaimKindQuantity:
 		switch strings.ToLower(strings.TrimSpace(claim.Unit)) {
-		case "cents", "minor":
+		case "cents", "minor", "money":
 			mc.AnswerKind, mc.AnswerUnit = protocol.AnswerMoney, protocol.AnswerUnitMinor
 		case "usd", "eur", "gbp", "cad":
 			mc.AnswerKind, mc.AnswerUnit = protocol.AnswerMoney, protocol.AnswerUnitMajor
@@ -113,7 +140,7 @@ func memoryForClaimV13(mc protocol.MemoryCase, claim protocol.Claim) (protocol.M
 				return mc, false
 			}
 			mc.ExpectedAnswer = strconv.FormatInt(major*100, 10)
-		case "", "count", "units", "nights", "seats", "hours", "licences", "percentage points":
+		case "", "count", "units", "nights", "days", "seats", "hours", "licences", "percent", "percentage points":
 			mc.AnswerKind = protocol.AnswerNumber
 		default:
 			return mc, false

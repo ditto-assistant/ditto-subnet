@@ -5,6 +5,9 @@ package protocol
 // here so the generators and the v13 grader branch name each matcher
 // identically.
 const (
+	ClaimKindEntity       = "entity"
+	ClaimKindConcept      = "concept"
+	ClaimKindOrder        = "order"
 	ClaimKindPerson       = "person"
 	ClaimKindStatus       = "status"
 	ClaimKindEvent        = "event"

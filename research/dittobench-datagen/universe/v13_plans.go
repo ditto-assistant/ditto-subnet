@@ -37,7 +37,9 @@ type WorldPlanSelection struct {
 	StoryPerArc  int
 	Ordinary     int
 	OrdinaryCaps map[string]int
-	Interim      int
+	// Exclude removes ordinary facts already consumed by a relation twin.
+	Exclude map[string]bool
+	Interim int
 	// Salt names the shuffle stream. Distinct contracts pass distinct salts so a
 	// later budget change never re-orders an earlier version's candidates.
 	Salt string
@@ -83,6 +85,9 @@ func (w World) SelectQuestionPlans(sel WorldPlanSelection) ([]QuestionPlan, Worl
 	ordinary := make([]QuestionPlan, 0, len(candidates))
 	seenQuestions := make(map[string]bool, len(candidates))
 	for i := range candidates {
+		if sel.Exclude[excludeKey(candidates[i].oracleKind, candidates[i].oracleIndex)] {
+			continue
+		}
 		if err := w.validatePlan(candidates[i]); err != nil {
 			if errors.Is(err, errLexicalShortcut) {
 				continue
