@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.270.0 (2026-09-16)
+
+### Features
+
+- **datagen**: V13 event programs, family compiler v2, injection cases
+  ([#1862](https://github.com/ditto-assistant/ditto-subnet/pull/1862),
+  [`eccbb6e`](https://github.com/ditto-assistant/ditto-subnet/commit/eccbb6e1cd6a6489dff010498860cdd22454b3bc))
+
+
 ## v0.269.0 (2026-09-16)
 
 ### Features
