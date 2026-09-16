@@ -197,6 +197,7 @@ var knownAnswerKinds = map[string]bool{
 	protocol.AnswerDirection: true, protocol.AnswerList: true, protocol.AnswerOrderedList: true,
 	protocol.AnswerDuration: true, protocol.AnswerReversal: true, protocol.AnswerPersistence: true,
 	protocol.AnswerDecline: true, protocol.AnswerAcknowledge: true, protocol.AnswerChitchat: true,
+	protocol.AnswerAbsence: true, protocol.AnswerClarify: true, protocol.AnswerDate: true,
 }
 
 // AuditMix classifies every memory case of a generated artifact. It fails on an
@@ -204,6 +205,14 @@ var knownAnswerKinds = map[string]bool{
 // #1529 caps. Evidence-bound computed/verbatim classification uses the
 // artifact's own seeded pairs (tool prerequisites plus memory waves).
 func AuditMix(artifact DatasetArtifact) (MixAudit, error) {
+	var storyFamilies map[string]mixFamily
+	if artifact.BenchVersion >= protocol.BenchVersionV13 {
+		var err error
+		storyFamilies, err = v13StoryMixFamilies(artifact)
+		if err != nil {
+			return MixAudit{}, err
+		}
+	}
 	pairs := make(map[string]string)
 	for _, tc := range artifact.ToolCases {
 		for _, pair := range tc.PrerequisitePairs {
@@ -234,6 +243,9 @@ func AuditMix(artifact DatasetArtifact) (MixAudit, error) {
 	cfPairs := 0
 	for _, c := range artifact.MemoryCases {
 		family, ok := mixFamilyFor(c.QuestionType)
+		if artifact.BenchVersion >= protocol.BenchVersionV13 {
+			family, ok = v13MixFamily(c, storyFamilies)
+		}
 		if !ok {
 			return MixAudit{}, fmt.Errorf("mix audit: unclassified question type %q (case %s)", c.QuestionType, c.ID)
 		}
@@ -271,6 +283,15 @@ func AuditMix(artifact DatasetArtifact) (MixAudit, error) {
 				class.MoneyOnly = money > 0 && money == len(c.AnswerItems)
 			}
 		}
+		var claimKinds map[string]float64
+		if artifact.BenchVersion >= protocol.BenchVersionV13 && len(c.Claims) > 0 {
+			var err error
+			class.MoneyWeight, claimKinds, err = v13ClaimExposure(c.Claims)
+			if err != nil {
+				return MixAudit{}, fmt.Errorf("case %s: %w", c.ID, err)
+			}
+			class.MoneyBearing, class.MoneyOnly = class.MoneyWeight > 0, class.MoneyWeight == 1
+		}
 		if c.ExpectedAnswer != "" && kind != protocol.AnswerChitchat && len(c.V10EvidencePairIDs) > 0 {
 			class.EvidenceBound = true
 			var evidence strings.Builder
@@ -303,8 +324,23 @@ func AuditMix(artifact DatasetArtifact) (MixAudit, error) {
 			class.Dependency = pendingCFBase
 			pendingCFBase = ""
 		}
-		class.Twin = class.Dependency != ""
+		class.Twin = class.Dependency != "" || c.TwinPairID != ""
 		class.GateExposed = class.Twin || c.V10Provenance != nil
+		if artifact.BenchVersion >= protocol.BenchVersionV13 && c.V10Provenance != nil {
+			// The v13 sibling post-pass changes only base+counterfactual
+			// members. Invariant siblings remain independently graded.
+			// Per-case provenance checks do not introduce sibling cascade.
+			class.GateExposed = c.V10Provenance.Relation == protocol.RelationBase || c.V10Provenance.Relation == protocol.RelationCausalCounterfactual
+			if class.GateExposed {
+				class.Dependency = "v13-cf:" + c.V10Provenance.MetamorphicGroup
+			} else {
+				class.Dependency = ""
+			}
+		}
+		if c.TwinPairID != "" {
+			class.Dependency = "v13-pair:" + c.TwinPairID
+			class.GateExposed = true
+		}
 		if class.Dependency != "" {
 			clusters[class.Dependency]++
 			audit.DependentWeight++
@@ -317,7 +353,13 @@ func AuditMix(artifact DatasetArtifact) (MixAudit, error) {
 		audit.AnswerKinds[kind]++
 		audit.Domains[class.Domain]++
 		audit.SubDomains[class.Domain+"/"+class.SubDomain]++
-		audit.KindOperations[kind+"/"+class.Operation]++
+		if len(claimKinds) > 0 {
+			for claimKind, weight := range claimKinds {
+				audit.KindOperations[claimKind+"/"+class.Operation] += weight
+			}
+		} else {
+			audit.KindOperations[kind+"/"+class.Operation]++
+		}
 		audit.MoneyWeight += class.MoneyWeight
 		if class.MoneyBearing {
 			audit.MoneyCases++
@@ -343,7 +385,7 @@ func AuditMix(artifact DatasetArtifact) (MixAudit, error) {
 				}
 			}
 		}
-		if kind == protocol.AnswerDecline {
+		if kind == protocol.AnswerDecline || kind == protocol.AnswerAbsence {
 			audit.AbstentionCases++
 		}
 		if c.QuestionType == "world-project-outstanding" {

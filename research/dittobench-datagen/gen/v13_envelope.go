@@ -157,7 +157,10 @@ func V13InterimPending() bool { return len(v13InterimSlots) > 0 || len(v13Interi
 
 // V13OrdinaryProjectOutstandingCap bounds the monetary project-outstanding
 // oracle inside the ordinary-world slot (issue #1848: "project-outstanding <= 4").
-const V13OrdinaryProjectOutstandingCap = 4
+// Temporal invoice twins add eight monetary cases to the assembled mix.
+// Together with ten compiler and at most three story cases, one ordinary
+// invoice leaves the full run inside the published 22-case hard ceiling.
+const V13OrdinaryProjectOutstandingCap = 1
 
 // v13StoryOraclesPerArc is the number of story oracles kept per arc (78 = 13 x 6
 // on the full profile).
@@ -311,7 +314,7 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	suite.Cases = append(suite.Cases, integrity...)
 	suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, injectionPairs...)
 	if envelope.Divergence > 0 {
-		cases, pairs := buildParserDivergence(seed, envelope.Divergence)
+		cases, pairs := buildParserDivergenceForVersion(seed, envelope.Divergence, benchVersion)
 		for i := range cases {
 			cases[i].Case.BenchVersion = benchVersion
 		}

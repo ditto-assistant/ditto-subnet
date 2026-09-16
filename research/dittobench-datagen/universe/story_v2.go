@@ -19,7 +19,7 @@ import (
 
 // storyV2MoneyArcCap bounds the money-bearing story quantities per seed
 // (issue #1841: money in <= 5 of 13 arcs).
-const storyV2MoneyArcCap = 4
+const storyV2MoneyArcCap = 3
 
 // storyV2LessonArcs is the number of arcs whose rotating sixth oracle is the
 // lesson claim set instead of a quantity (<= 1 lesson per arc).

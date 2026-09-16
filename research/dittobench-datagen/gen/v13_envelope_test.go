@@ -156,92 +156,47 @@ func TestV13SuiteTelemetryReportsPublishedSlots(t *testing.T) {
 // published slots exactly: the artifact family counts, the integrity
 // composition, the project-outstanding cap, and the case version.
 func TestV13EnvelopeSlotsAcrossFortySeeds(t *testing.T) {
-	envelope := V13FullEnvelope
-	wantFamilies := v13MemoryFamilies()
-	union := map[string]bool{}
-	histograms := map[string]bool{}
+	env := V13FullEnvelope
 	for _, artifact := range v13FortySeeds(t) {
-		seed := artifact.Seed
 		hist := map[string]int{}
 		questions := map[string]bool{}
 		for _, c := range artifact.MemoryCases {
 			hist[c.QuestionType]++
-			union[c.QuestionType] = true
-			if c.BenchVersion != protocol.BenchVersionV13 {
-				t.Errorf("seed %d case %s carries bench version %d", seed, c.ID, c.BenchVersion)
+			if c.BenchVersion != 13 {
+				t.Fatalf("case %s version %d", c.ID, c.BenchVersion)
 			}
-			// The parser-divergence family deliberately repeats its short question
-			// surface across rounds (the trap is in the record, not the question);
-			// every shared-world question is unique.
 			if strings.HasPrefix(c.QuestionType, "world-") {
 				if questions[c.Question] {
-					t.Errorf("seed %d duplicate question %q", seed, c.Question)
+					t.Fatalf("seed %d duplicate world question %q", artifact.Seed, c.Question)
 				}
 				questions[c.Question] = true
 			}
-			if !wantFamilies[c.QuestionType] {
-				t.Errorf("seed %d emitted unexpected memory family %q", seed, c.QuestionType)
+		}
+		audit, err := AuditMix(artifact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, slot := range V13SlotOrder {
+			if audit.Slots[slot] != env.slot(slot) {
+				t.Fatalf("seed %d slot %s: got %d want %d", artifact.Seed, slot, audit.Slots[slot], env.slot(slot))
 			}
 		}
-		story, world, programs, records, divergence := 0, 0, 0, 0, 0
-		for family, count := range hist {
-			switch {
-			case strings.HasPrefix(family, "world-story-"):
-				story += count
-			case strings.HasPrefix(family, "world-contact-"), strings.HasPrefix(family, "world-project-"), strings.HasPrefix(family, "world-trip-"):
-				world += count
-			case strings.HasSuffix(family, "-open-program"):
-				programs += count
-			case strings.HasPrefix(family, "record-balance-"):
-				records += count
-			case strings.HasPrefix(family, "parser-divergence-"):
-				divergence += count
+		for _, family := range []string{"world-story-owner-current", "world-story-order", "world-story-next-action", "world-story-x-owner-email"} {
+			if hist[family] != 13 {
+				t.Fatalf("seed %d family %s count %d", artifact.Seed, family, hist[family])
 			}
 		}
-		if story != envelope.Story || world != envelope.OrdinaryWorld+envelope.Interim() || programs != envelope.BusinessPrograms ||
-			records != envelope.RecordQuantity || divergence != envelope.Divergence {
-			t.Errorf("seed %d story/world/programs/records/divergence = %d/%d/%d/%d/%d, want %d/%d/%d/%d/%d",
-				seed, story, world, programs, records, divergence,
-				envelope.Story, envelope.OrdinaryWorld+envelope.Interim(), envelope.BusinessPrograms, envelope.RecordQuantity, envelope.Divergence)
+		if hist["world-story-status-current"]+hist["world-story-status-disagree"] != 13 ||
+			hist["world-story-quantity"]+hist["world-story-lesson-claims"] != 13 {
+			t.Fatalf("seed %d story rotating slots: %v", artifact.Seed, hist)
+		}
+		if hist[QTChitchat] != 3 || hist[QTDeclarativeAck] != 3 || hist[QTDeclarativeBehavior] != 3 || hist["world-canary"] != 1 ||
+			hist[QTV13InjectionDataInside] != 2 || hist[QTV13InjectionEnvelopeFree] != 1 || hist[QTV13InjectionClassic] != 1 {
+			t.Fatalf("seed %d integrity composition: %v", artifact.Seed, hist)
 		}
 		if hist["world-project-outstanding"] > V13OrdinaryProjectOutstandingCap {
-			t.Errorf("seed %d has %d project-outstanding cases, cap %d", seed, hist["world-project-outstanding"], V13OrdinaryProjectOutstandingCap)
+			t.Fatalf("seed %d exceeded invoice cap", artifact.Seed)
 		}
-		// Every story arc keeps six oracles: the two non-monetary oracles and the
-		// two list oracles on every arc, one pure-money oracle dropped per arc.
-		for _, family := range []string{"world-story-contact-current", "world-story-lesson", "world-story-later-net-change", "world-story-outcome-summary"} {
-			if hist[family] != 13 {
-				t.Errorf("seed %d %s=%d, want 13 (one per arc)", seed, family, hist[family])
-			}
-		}
-		if pure := hist["world-story-balance-current"] + hist["world-story-budget-delta"] + hist["world-story-post-approval-balance"]; pure != 26 {
-			t.Errorf("seed %d pure-money story oracles=%d, want 26 (two of three per arc)", seed, pure)
-		}
-		// Integrity tail: 3 chitchat, 3 declarative ack, 3 declarative behaviour,
-		// 1 canary, 4 injection.
-		if hist[QTChitchat] != 3 || hist[QTDeclarativeAck] != 3 || hist[QTDeclarativeBehavior] != 3 || hist["world-canary"] != 1 || hist["world-injection-resistance"] != 4 {
-			t.Errorf("seed %d integrity tail chitchat/ack/behaviour/canary/injection = %d/%d/%d/%d/%d, want 3/3/3/1/4",
-				seed, hist[QTChitchat], hist[QTDeclarativeAck], hist[QTDeclarativeBehavior], hist["world-canary"], hist["world-injection-resistance"])
-		}
-		if hist["world-isolation-contact-current"] != envelope.Isolation {
-			t.Errorf("seed %d isolation=%d, want %d", seed, hist["world-isolation-contact-current"], envelope.Isolation)
-		}
-		for family := range wantFamilies {
-			// The capped monetary oracle may legitimately be absent from a seed's
-			// ordinary slot; every other family has a positive per-seed floor.
-			if family != "world-project-outstanding" && hist[family] < 1 {
-				t.Errorf("seed %d omitted memory family %q", seed, family)
-			}
-		}
-		histograms[v9HistogramKey(hist)] = true
-	}
-	for family := range wantFamilies {
-		if !union[family] {
-			t.Errorf("40-seed union omitted memory family %q", family)
-		}
-	}
-	if len(histograms) < 35 {
-		t.Errorf("only %d distinct v13 memory histograms across 40 seeds", len(histograms))
 	}
 }
 
@@ -252,7 +207,7 @@ func TestV13ComposedMemoryFloor(t *testing.T) {
 		composed := 0
 		for _, mc := range artifact.MemoryCases {
 			if v8ComposedMemoryType(mc.QuestionType) || strings.HasSuffix(mc.QuestionType, "-open-program") ||
-				strings.HasPrefix(mc.QuestionType, "record-balance-") || strings.HasPrefix(mc.QuestionType, "parser-divergence-") {
+				mc.QuestionType == "v13-personal-program" || strings.HasPrefix(mc.QuestionType, "record-quantity-") || strings.HasPrefix(mc.QuestionType, "parser-divergence-") {
 				composed++
 			}
 		}

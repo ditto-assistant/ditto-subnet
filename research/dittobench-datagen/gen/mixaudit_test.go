@@ -114,8 +114,8 @@ func TestV13MixAuditStructuralAcrossFortySeeds(t *testing.T) {
 		if share := audit.ArithmeticShare(); share > v13InterimArithmeticShareMax {
 			t.Errorf("seed %d interim arithmetic share %.4f exceeds the %.2f interim ceiling", seed, share, v13InterimArithmeticShareMax)
 		}
-		if audit.MonetaryOpenPrograms != V13FullEnvelope.BusinessPrograms {
-			t.Errorf("seed %d monetary open programs %d, want the interim v12 catalog count %d", seed, audit.MonetaryOpenPrograms, V13FullEnvelope.BusinessPrograms)
+		if audit.MonetaryOpenPrograms != 0 {
+			t.Errorf("seed %d monetary open programs %d, want zero", seed, audit.MonetaryOpenPrograms)
 		}
 	}
 }
@@ -167,19 +167,19 @@ func TestV13MixAuditGateAcrossFortySeeds(t *testing.T) {
 // swap must remove its slot here in the same change, which is what arms the
 // gate.
 func TestV13InterimSlotsArePinned(t *testing.T) {
-	want := []string{V13SlotPersonalPrograms, V13SlotAbstention, V13SlotPointInTime}
+	want := []string{}
 	got := V13InterimSlots()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("interim slots %v, want %v (update this pin and the gate when a generator lands)", got, want)
 	}
-	if V13FullEnvelope.Interim() != V13FullEnvelope.PersonalPrograms+V13FullEnvelope.Abstention+V13FullEnvelope.PointInTime {
+	if V13FullEnvelope.Interim() != 0 {
 		t.Fatalf("interim fill %d does not equal the interim slots", V13FullEnvelope.Interim())
 	}
-	wantGenerators := []string{V13SlotBusinessPrograms, V13SlotRecordQuantity, V13SlotStory}
+	wantGenerators := []string{}
 	if gotGenerators := V13InterimGenerators(); strings.Join(gotGenerators, ",") != strings.Join(wantGenerators, ",") {
 		t.Fatalf("interim generators %v, want %v (update this pin when a monetary generator is swapped)", gotGenerators, wantGenerators)
 	}
-	if !V13InterimPending() {
-		t.Fatal("V13InterimPending is false while interim slots and generators remain")
+	if V13InterimPending() {
+		t.Fatal("all generators must be wired; the mix gate may not skip")
 	}
 }
