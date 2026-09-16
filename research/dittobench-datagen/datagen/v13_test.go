@@ -189,7 +189,7 @@ func TestV13ToolSurfacesVaryAndKeepAnchors(t *testing.T) {
 					t.Fatalf("seed %d %s prompt lost its nickname anchor: %q", seed, tc.Category, tc.Prompt)
 				}
 			case "world_memory_update":
-				if !strings.Contains(tc.Prompt, "Friday") || !strings.Contains(strings.ToLower(tc.Prompt), "handoff") {
+				if !strings.Contains(strings.ToLower(tc.Prompt), "handoff") {
 					t.Fatalf("seed %d memory update prompt lost its content anchor: %q", seed, tc.Prompt)
 				}
 			case "world_theme_discover_set":

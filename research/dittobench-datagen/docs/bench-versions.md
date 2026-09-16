@@ -537,7 +537,7 @@ extends it when its lever lands.
   visible in the probe output and a v13 family regression cannot hide behind
   the classification.
 - `TestV13KnownVector` pins seed `123456789`, full:
-  `ef438df9b92ac7c9a19d92ed97dba1d01efdcc2f42936d5f505e23cc71a4f202` (the
+  `80e76383a7d1ee8b1080a5a0a1526387faadf620578e22f0690dc5ae5a1709b6` (the
   tool-bench semantics below re-pinned it from the plumbing placeholder; the
   README known-vector table and this paragraph are checked against the test
   constant by `TestV13KnownVectorIsPublishedConsistently`). It moves again

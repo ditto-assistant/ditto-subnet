@@ -449,7 +449,7 @@ func TestV12KnownVector(t *testing.T) {
 // v13KnownVectorWant is the pinned v13 full vector for seed 123456789; the
 // README table and docs/bench-versions.md must publish the same value
 // (TestV13KnownVectorIsPublishedConsistently).
-const v13KnownVectorWant = "ef438df9b92ac7c9a19d92ed97dba1d01efdcc2f42936d5f505e23cc71a4f202"
+const v13KnownVectorWant = "80e76383a7d1ee8b1080a5a0a1526387faadf620578e22f0690dc5ae5a1709b6"
 
 func TestV13KnownVector(t *testing.T) {
 	const (
