@@ -4,8 +4,10 @@ Use `issue_benchmark_canary` to test one shipped, non-retired benchmark version
 without starting a rollout. This is **not** `start_benchmark_rollout`: that
 operation can automatically activate once its authority gates are met.
 
-1. Read current benchmark rollout control, the selected agent's immutable source
-   and screened-image digests, and the validator's fresh capacity/capabilities.
+1. Read `get_benchmark_rollout_control`, `get_screening_submission` (source
+   `artifact_sha256`), `agent_scoring_readiness` (`screened_image.sha256`), and
+   `get_validator_fleet`. Readiness's ordinary `leaseable` flag is not canary
+   eligibility: this operation intentionally targets already scored/live agents.
 2. Choose an already scored/live, screened agent and one idle healthy validator
    slot supporting the requested version. Existing `(agent, version, validator)`
    ticket identities are refused, including terminal ones; choose another

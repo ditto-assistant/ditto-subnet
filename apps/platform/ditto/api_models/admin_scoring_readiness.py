@@ -23,6 +23,8 @@ class ScreenedImageReadiness(BaseModel):
     policy_ok: bool
     """Built under a screening policy at or above the active contract's minimum."""
     missing_fields: list[str]
+    sha256: str | None = None
+    """Immutable screened-image digest for guarded diagnostic operations."""
 
 
 class AgentScoringReadiness(BaseModel):

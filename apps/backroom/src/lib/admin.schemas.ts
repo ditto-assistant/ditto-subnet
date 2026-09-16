@@ -5201,6 +5201,7 @@ export const agentScoringReadinessInputSchema = z.object({
 })
 
 export const scoringReadinessScreenedImageSchema = z.object({
+  sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable().optional(),
   complete: z.boolean(),
   verified: z.boolean(),
   policy_ok: z.boolean(),

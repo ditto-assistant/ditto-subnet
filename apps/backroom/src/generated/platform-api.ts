@@ -24676,6 +24676,8 @@ export interface components {
             missing_fields: string[];
             /** Policy Ok */
             policy_ok: boolean;
+            /** Sha256 */
+            sha256?: string | null;
             /** Verified */
             verified: boolean;
         };
