@@ -38,7 +38,10 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        run: go test ./...
+        # The full v13 seed sweeps exceed Go's default per-package 10m on
+        # hosted runners. Preserve every seed and assertion with a bounded
+        # timeout rather than reducing the immutable-contract coverage.
+        run: go test -timeout 20m ./...
       - name: Grader audit release gate
         run: go run ./cmd/graderaudit -release-gate
       - name: Determinism
