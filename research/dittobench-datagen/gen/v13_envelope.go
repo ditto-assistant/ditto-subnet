@@ -31,8 +31,8 @@ import (
 // from that list, which arms the #1529 gate for that slot automatically
 // (TestV13MixAuditGateAcrossFortySeeds).
 
-// V13Envelope is the memory-case slot table for one v13 run size.
-type V13Envelope struct {
+// V13MemoryEnvelope is the memory-case slot table for one v13 run size.
+type V13MemoryEnvelope struct {
 	// Story is the deep three-record story programs (six oracles per arc).
 	Story int
 	// OrdinaryWorld is the person / project / trip questions, with the
@@ -65,13 +65,13 @@ type V13Envelope struct {
 }
 
 // Total is the number of memory cases the envelope publishes.
-func (e V13Envelope) Total() int {
+func (e V13MemoryEnvelope) Total() int {
 	return e.Story + e.OrdinaryWorld + e.BusinessPrograms + e.PersonalPrograms + e.Abstention +
 		e.RecordQuantity + e.Divergence + e.PointInTime + e.Integrity + e.Isolation
 }
 
 // Interim is the number of cases currently filled by the interim world fill.
-func (e V13Envelope) Interim() int {
+func (e V13MemoryEnvelope) Interim() int {
 	total := 0
 	for _, slot := range v13InterimSlots {
 		total += e.slot(slot)
@@ -79,7 +79,7 @@ func (e V13Envelope) Interim() int {
 	return total
 }
 
-func (e V13Envelope) slot(name string) int {
+func (e V13MemoryEnvelope) slot(name string) int {
 	switch name {
 	case V13SlotStory:
 		return e.Story
@@ -164,14 +164,14 @@ const V13OrdinaryProjectOutstandingCap = 4
 const v13StoryOraclesPerArc = 6
 
 // V13FullEnvelope is the published 250-case full-profile table.
-var V13FullEnvelope = V13Envelope{
+var V13FullEnvelope = V13MemoryEnvelope{
 	Story: 78, OrdinaryWorld: 32, BusinessPrograms: 28, PersonalPrograms: 24, Abstention: 25,
 	RecordQuantity: 16, Divergence: 12, PointInTime: 12, Integrity: 14, Isolation: 9,
 }
 
 // v13MediumEnvelope keeps the v12 medium memory total (95) at v13 proportions.
 // Six story arcs x six oracles, program counts stay multiples of four.
-var v13MediumEnvelope = V13Envelope{
+var v13MediumEnvelope = V13MemoryEnvelope{
 	Story: 36, OrdinaryWorld: 10, BusinessPrograms: 8, PersonalPrograms: 6, Abstention: 6,
 	RecordQuantity: 4, Divergence: 4, PointInTime: 2, Integrity: 14, Isolation: 5,
 }
@@ -179,7 +179,7 @@ var v13MediumEnvelope = V13Envelope{
 // v13SmallEnvelope is the smoke profile: one story arc, a handful of ordinary
 // questions, one program group, and the integrity tail (three injection probes:
 // the scale-1 world has only three projects).
-var v13SmallEnvelope = V13Envelope{
+var v13SmallEnvelope = V13MemoryEnvelope{
 	Story: 6, OrdinaryWorld: 4, BusinessPrograms: 4, PersonalPrograms: 0, Abstention: 0,
 	RecordQuantity: 0, Divergence: 0, PointInTime: 0, Integrity: 13, Isolation: 0,
 }
@@ -187,7 +187,7 @@ var v13SmallEnvelope = V13Envelope{
 // v13EnvelopeFor maps Profile.Mem to its slot table. Only the three public run
 // sizes are contracts; any other size fails closed rather than inventing a
 // table.
-func v13EnvelopeFor(mem int) (V13Envelope, bool) {
+func v13EnvelopeFor(mem int) (V13MemoryEnvelope, bool) {
 	switch mem {
 	case profilesV13["full"].Mem:
 		return V13FullEnvelope, true
@@ -196,15 +196,15 @@ func v13EnvelopeFor(mem int) (V13Envelope, bool) {
 	case profilesV13["small"].Mem:
 		return v13SmallEnvelope, true
 	default:
-		return V13Envelope{}, false
+		return V13MemoryEnvelope{}, false
 	}
 }
 
 // V13EnvelopeForRunSize is the public accessor for audits and tests.
-func V13EnvelopeForRunSize(runSize string) (V13Envelope, bool) {
+func V13EnvelopeForRunSize(runSize string) (V13MemoryEnvelope, bool) {
 	prof, ok := profilesV13[runSize]
 	if !ok {
-		return V13Envelope{}, false
+		return V13MemoryEnvelope{}, false
 	}
 	return v13EnvelopeFor(prof.Mem)
 }
@@ -212,7 +212,7 @@ func V13EnvelopeForRunSize(runSize string) (V13Envelope, bool) {
 // worldPlanSelection is the world-question budget the envelope hands to
 // universe.World.SelectQuestionPlans: the story slot, the capped ordinary slot,
 // and the interim fill for slots without a generator.
-func (e V13Envelope) worldPlanSelection() universe.WorldPlanSelection {
+func (e V13MemoryEnvelope) worldPlanSelection() universe.WorldPlanSelection {
 	return universe.WorldPlanSelection{
 		StoryPerArc:  v13StoryOraclesPerArc,
 		Ordinary:     e.OrdinaryWorld,
@@ -225,7 +225,7 @@ func (e V13Envelope) worldPlanSelection() universe.WorldPlanSelection {
 // generateV13WorldMemorySuite fills the published v13 slot table. It shares the
 // v8 coherent world, the v12 program / divergence / family-compiler generators,
 // and the integrity tail with the v12 path, but every count comes from
-// V13Envelope rather than from a residual budget. The isolation slot is added by
+// V13MemoryEnvelope rather than from a residual budget. The isolation slot is added by
 // the pipeline (GenerateIsolationForVersion) exactly as before.
 func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (MemorySuite, error) {
 	if nWaves < 1 {

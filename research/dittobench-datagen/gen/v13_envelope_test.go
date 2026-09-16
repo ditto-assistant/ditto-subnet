@@ -9,7 +9,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-// TestV13GenerationIsExplicitAndNotActivated: v13 generates deterministically
+// TestV13EnvelopeGenerationIsExplicitAndNotActivated: v13 generates deterministically
 // behind an explicit profile decision while v8 remains the advertised version.
 func TestV13GenerationIsExplicitAndNotActivated(t *testing.T) {
 	if protocol.CurrentBenchVersion != protocol.BenchVersionV8 {
@@ -37,7 +37,7 @@ func TestV13GenerationIsExplicitAndNotActivated(t *testing.T) {
 // TestV13EnvelopeTablesArePublished pins the slot tables. The full table is
 // the one issue #1848 publishes; moving any count is a new contract.
 func TestV13EnvelopeTablesArePublished(t *testing.T) {
-	want := V13Envelope{
+	want := V13MemoryEnvelope{
 		Story: 78, OrdinaryWorld: 32, BusinessPrograms: 28, PersonalPrograms: 24, Abstention: 25,
 		RecordQuantity: 16, Divergence: 12, PointInTime: 12, Integrity: 14, Isolation: 9,
 	}
