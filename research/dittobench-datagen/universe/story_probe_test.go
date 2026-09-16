@@ -120,12 +120,12 @@ func storyGIHProbe(w World) storyProbeReport {
 }
 
 // This is a diagnostic baseline, not the private-surface acceptance ceiling.
-// The assembled public-corpus/calendar contract changes the pre-integration
-// 40/17/104/89/20 observation to 45/20/104/90/17. Pin BOTH directions: losing
+// The assembled corpus/calendar contract plus rendered swap arithmetic changes
+// the pre-integration 40/17/104/89/20 observation to 45/18/104/94/16. Pin BOTH directions: losing
 // parser coverage must not masquerade as hardening. Private-surface acceptance
 // still requires the independent parserprobe qualification against the honest
 // reference score; this toy scan cannot qualify a release.
-var storyProbeRawBaseline = storyProbeReport{Arcs: 104, Owner: 45, Status: 20, Sequence: 104, NextWho: 90, Quantity: 17}
+var storyProbeRawBaseline = storyProbeReport{Arcs: 104, Owner: 45, Status: 18, Sequence: 104, NextWho: 94, Quantity: 16}
 
 func TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic(t *testing.T) {
 	total := storyProbeReport{}

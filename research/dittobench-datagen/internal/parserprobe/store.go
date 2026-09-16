@@ -16,12 +16,14 @@ import (
 type store struct {
 	// version is the artifact bench_version; it selects the program record
 	// grammar (programGrammars) and nothing else.
-	version  int
-	people   []*person
-	projects []*project
-	trips    []*trip
-	stories  []*storyMem
-	programs map[string]*program // by thread alias
+	version       int
+	storyV13Ready bool
+	storyV13      []storyEventV13
+	people        []*person
+	projects      []*project
+	trips         []*trip
+	stories       []*storyMem
+	programs      map[string]*program // by thread alias
 	// programOrder lists thread aliases in first-appearance order. The v12
 	// program question never names its workstream, so the only wire-visible
 	// binding from a question to its group is position: the k-th program
@@ -243,6 +245,11 @@ var glossaryVerbs = map[string]bool{"names": true, "designates": true, "labels":
 
 // buildStores ingests every public pair of the artifact grouped by memory graph.
 func buildStores(a gen.DatasetArtifact) map[string]*store {
+	return buildStoresThroughWave(a, -1)
+}
+
+// A negative cutoff is the complete archive; a run sees only delivered waves.
+func buildStoresThroughWave(a gen.DatasetArtifact, cutoff int) map[string]*store {
 	stores := map[string]*store{}
 	get := func(user string) *store {
 		if user == "" {
@@ -262,6 +269,9 @@ func buildStores(a gen.DatasetArtifact) map[string]*store {
 		}
 	}
 	for _, w := range a.MemoryWaves {
+		if cutoff >= 0 && w.Wave > cutoff {
+			continue
+		}
 		s := get(w.UserID)
 		for _, p := range w.Pairs {
 			s.ingest(p)
@@ -285,6 +295,9 @@ func newStore(benchVersion int) *store {
 // matching frame classifies the record.
 func (s *store) ingest(p protocol.MemoryPair) {
 	s.pairs = append(s.pairs, p)
+	if s.version >= protocol.BenchVersionV13 && s.ingestWorldV13(p) {
+		return
+	}
 	prompt := strings.TrimSpace(p.Prompt)
 	if len(prompt) > 1500 {
 		s.ingestStory(p)

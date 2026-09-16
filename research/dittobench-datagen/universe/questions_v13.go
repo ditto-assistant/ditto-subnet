@@ -201,7 +201,11 @@ func (w World) storyQuestionCandidatesV13() []QuestionPlan {
 			for _, concept := range v2.Lesson.concepts {
 				items = append(items, concept.term)
 				accepts = append(accepts, append([]string(nil), concept.accept...))
-				claims = append(claims, Claim{Kind: "concept", Expected: concept.term, Accept: concept.accept, Critical: false, Weight: 1})
+				// The complete reviewed lesson asserts each of its component
+				// concepts, including intrinsic temporal wording ("look before
+				// you leap") that is not a superseded-answer qualifier.
+				claimAccept := append(append([]string(nil), concept.accept...), v2.Lesson.canonical)
+				claims = append(claims, Claim{Kind: "concept", Expected: concept.term, Accept: claimAccept, Critical: false, Weight: 1})
 			}
 			plan := w.storyPlanV13(oracleStoryLessonClaims, i, question(oracleStoryLessonClaims), constraints, strings.Join(items, "; "), protocol.AnswerList, w.storyV13LessonDistractors(i), nil)
 			plan.Case.AnswerItems = items

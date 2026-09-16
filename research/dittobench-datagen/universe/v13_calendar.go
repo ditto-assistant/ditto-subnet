@@ -35,5 +35,9 @@ func v13CalendarTimestamp(seed int64, domain string, group, slot int) string {
 func v13CalendarProse(seed int64, domain string, group int, salt string, date v13Date, past bool) string {
 	at := v13CalendarDate(seed, domain, group, date, past)
 	forms := V13DateAccept(at.Year(), int(at.Month()), at.Day())
+	// Relative anchors can straddle a year boundary. A yearless event date
+	// does not uniquely determine chronology from the seeded evidence.
+	// Keep answer aliases permissive, but make every recorded date explicit.
+	forms = []string{forms[0], forms[2], forms[4], forms[6]}
 	return v13Pick(seed, "date-form-"+salt, forms)
 }

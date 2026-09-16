@@ -22,14 +22,8 @@ import (
 // filled by exactly one generator. The table is the contract; a generator
 // change that moves a count is a new contract, not a drift.
 //
-// The dedicated v13 generators land as separate stacked changes. A slot whose
-// generator has not landed is INTERIM: it is filled with additional
-// non-monetary ordinary world questions (universe.WorldPlanSelection.Interim)
-// so the envelope is complete and byte-reproducible today, and the mix audit
-// (gen/mixaudit.go) reports the slot as interim. v13InterimSlots names them;
-// swapping one for its generator is a one-line change here plus removing it
-// from that list, which arms the #1529 gate for that slot automatically
-// (TestV13MixAuditGateAcrossFortySeeds).
+// All dedicated v13 generators are integrated. The interim registries are
+// empty, so TestV13MixAuditGateAcrossFortySeeds enforces the complete gate.
 
 // V13MemoryEnvelope is the memory-case slot table for one v13 run size.
 type V13MemoryEnvelope struct {
@@ -38,21 +32,17 @@ type V13MemoryEnvelope struct {
 	// OrdinaryWorld is the person / project / trip questions, with the
 	// monetary project-outstanding oracle capped at OrdinaryProjectOutstandingCap.
 	OrdinaryWorld int
-	// BusinessPrograms is the metamorphic open-program catalog (#1520 replaces
-	// the monetary v12 catalog with semantic business events; until then the v12
-	// generator fills the slot and the audit reports the monetary exposure).
+	// BusinessPrograms is the semantic business-event open-program catalog.
 	BusinessPrograms int
-	// PersonalPrograms is the personal-life event programs (#1838). INTERIM.
+	// PersonalPrograms is the personal-life event programs (#1838).
 	PersonalPrograms int
-	// Abstention is the evidence-bounded abstention family (#1530). INTERIM.
+	// Abstention is the evidence-bounded abstention family (#1530).
 	Abstention int
-	// RecordQuantity is the record-determined quantity family (#1837 replaces
-	// the monetary v12 family compiler; until then that generator fills it).
+	// RecordQuantity is the record-determined quantity family (#1837).
 	RecordQuantity int
 	// Divergence is the parser-divergence canary family (gen/divergence.go).
 	Divergence int
 	// PointInTime is the same-turn correction / point-in-time twins (#1844).
-	// INTERIM.
 	PointInTime int
 	// Integrity is the world-native conversational and integrity tail:
 	// 3 chitchat, 3 declarative acknowledgement, 3 declarative behaviour,

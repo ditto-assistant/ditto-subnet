@@ -32,6 +32,11 @@ type frame struct {
 	raw    string
 	tokens []frameToken
 	slots  int
+	// V13's composed renderers can project a literal more than once. The
+	// extra budget applies to grammar words only, never captured values.
+	literalBudget int
+	validateSlot  map[int]func(string) bool
+	slotLimit     int
 }
 
 type frameToken struct {
@@ -39,6 +44,7 @@ type frameToken struct {
 	slot    bool
 	prefix  string // punctuation before a slot ("“", "\"", "(")
 	suffix  string // punctuation after a slot (".", ",", "?”", "'s")
+	index   int
 }
 
 // compileFrame turns a generator template into a frame. %q is a quoted %s;
@@ -49,7 +55,7 @@ func compileFrame(template string) frame {
 	f := frame{raw: template}
 	for _, tok := range strings.Fields(t) {
 		if i := strings.Index(tok, "%s"); i >= 0 {
-			f.tokens = append(f.tokens, frameToken{slot: true, prefix: tok[:i], suffix: tok[i+2:]})
+			f.tokens = append(f.tokens, frameToken{slot: true, prefix: tok[:i], suffix: tok[i+2:], index: f.slots})
 			f.slots++
 			continue
 		}
@@ -77,11 +83,16 @@ const maxSlotTokens = 14
 // suffix punctuation.
 func (f frame) match(text string) ([]string, bool) {
 	words := strings.Fields(text)
-	if len(words) < len(f.tokens)-f.slots || len(words) > len(f.tokens)+f.slots*(maxSlotTokens-1) {
+	slotLimit := maxSlotTokens
+	if f.slotLimit > 0 {
+		slotLimit = f.slotLimit
+	}
+	if len(words) < len(f.tokens)-f.slots || len(words) > len(f.tokens)+f.slots*(slotLimit-1) {
 		return nil, false
 	}
 	type key struct{ ti, wi int }
 	memo := map[key][]string{}
+	costs := map[key]int{}
 	failed := map[key]bool{}
 	var rec func(ti, wi int) ([]string, bool)
 	rec = func(ti, wi int) ([]string, bool) {
@@ -100,16 +111,28 @@ func (f frame) match(text string) ([]string, bool) {
 		}
 		tok := f.tokens[ti]
 		if !tok.slot {
-			if wi < len(words) && fuzzyWord(tok.literal, strings.ToLower(words[wi])) {
+			if wi < len(words) && fuzzyWordBudget(tok.literal, strings.ToLower(words[wi]), f.literalBudget) {
 				if rest, ok := rec(ti+1, wi+1); ok {
 					memo[k] = rest
+					_, lc, _ := splitPunct(tok.literal)
+					_, wc, _ := splitPunct(strings.ToLower(words[wi]))
+					costs[k] = costs[key{ti + 1, wi + 1}] + damerauLevenshtein(lc, wc, 8)
 					return rest, true
 				}
 			}
 			failed[k] = true
 			return nil, false
 		}
-		for n := 1; n <= maxSlotTokens && wi+n <= len(words); n++ {
+		limit := min(slotLimit, len(words)-wi)
+		var best []string
+		bestCost := int(^uint(0) >> 1)
+		for attempt := 1; attempt <= limit; attempt++ {
+			n := attempt
+			if f.literalBudget > 0 {
+				// Dates contain commas and clock times contain spaces. Prefer
+				// the longest value that leaves the complete grammar matched.
+				n = limit + 1 - attempt
+			}
 			first, last := words[wi], words[wi+n-1]
 			if !strings.HasPrefix(first, tok.prefix) {
 				break
@@ -123,16 +146,28 @@ func (f frame) match(text string) ([]string, bool) {
 			if strings.TrimSpace(value) == "" {
 				continue
 			}
+			if valid := f.validateSlot[tok.index]; valid != nil && !valid(value) {
+				continue
+			}
 			// A slot never swallows the frame's next literal: that would let one
 			// frame absorb another family's clause.
-			if ti+1 < len(f.tokens) && !f.tokens[ti+1].slot && wi+n < len(words) && !fuzzyWord(f.tokens[ti+1].literal, strings.ToLower(words[wi+n])) {
+			if ti+1 < len(f.tokens) && !f.tokens[ti+1].slot && wi+n < len(words) && !fuzzyWordBudget(f.tokens[ti+1].literal, strings.ToLower(words[wi+n]), f.literalBudget) {
 				continue
 			}
 			if rest, ok := rec(ti+1, wi+n); ok {
 				out := append([]string{value}, rest...)
-				memo[k] = out
-				return out, true
+				cost := costs[key{ti + 1, wi + n}]
+				if cost < bestCost {
+					best, bestCost = out, cost
+				}
+				if f.literalBudget == 0 {
+					break
+				}
 			}
+		}
+		if best != nil {
+			memo[k], costs[k] = best, bestCost
+			return best, true
 		}
 		failed[k] = true
 		return nil, false
@@ -164,6 +199,10 @@ var grammarEquivalents = map[string]string{
 // Attached punctuation must match exactly; the letter core tolerates the edit
 // budget textnoise spends on words of that length.
 func fuzzyWord(literal, word string) bool {
+	return fuzzyWordBudget(literal, word, 0)
+}
+
+func fuzzyWordBudget(literal, word string, extraBudget int) bool {
 	if literal == word {
 		return true
 	}
@@ -188,6 +227,7 @@ func fuzzyWord(literal, word string) bool {
 	if len(lc) >= 7 {
 		budget = 2
 	}
+	budget = max(budget, extraBudget)
 	if abs(len(lc)-len(wc)) > budget {
 		return false
 	}

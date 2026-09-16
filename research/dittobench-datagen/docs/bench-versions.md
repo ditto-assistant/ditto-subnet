@@ -618,12 +618,9 @@ honest error never costs more than ~4% of memory weight). The classifier is
 pinned to the v12 diagnosis (`TestMixAuditReproducesV12MoneyExposure` (#1830):
 117 direct money cases / 143 money-bearing / 50.9% of weight on seed
 `123456789`); the gate over the pinned 40 seeds is
-`TestV13MixAuditGateAcrossFortySeeds` (#1848), and it arms itself slot by slot
-as the interim generators are replaced (`gen.V13InterimSlots`,
-`gen.V13InterimGenerators`; while either list is non-empty the full gate skips
-with a violation report and only the structural bounds and the pinned interim
-ceilings — money ≤ 37% of weight, ≤ 110 money-bearing cases, arithmetic ≤ 45%
-— are asserted, so interim exposure cannot creep upward). Medium is 95 memory
+`TestV13MixAuditGateAcrossFortySeeds` (#1848). All dedicated slot generators
+are integrated: `gen.V13InterimSlots` and `gen.V13InterimGenerators` are empty,
+so the complete mix gate is asserted. Medium is 95 memory
 cases (36 · 12 · 4 · 4 · 8 · 4 · 4 · 4 · 14 · 5) and small 27 (6 · 4 · 4 · 13);
 only the three public run sizes have a table, any other size fails closed.
 
@@ -925,15 +922,24 @@ relationally and never names its group, so order is the only wire-visible
 binding; the parser-divergence questions repeat verbatim per round; and the
 projector edits unprotected join keys, which one-edit fuzzy joins absorb.
 
+The integrated v13 parser additionally handles the public business/personal
+event programs, explicit-year date ordering, historical queries, quantity
+conventions, story event grammars, and evidence-bounded absence. Memory queries
+see only their delivered seeding waves. These are diagnostic inverses, not a
+qualified private-surface adversary: the complete v13 tool/control baseline and
+measured honest starter-kit reference still need qualification. The private
+ceiling test first requires a public pass-off control of at least 0.90 in every
+surface slice; missing parser coverage cannot be reported as resistance.
+
 ### Known vector
 
 `TestV13KnownVector` (#1848) in `gen/publicvector_test.go` pins seed
-`123456789`, full profile. Until the last interim slot generator lands and the
-`/seed` label-leak fix is in the same tree, the pin is **interim**: every
-generator swap re-pins it as a deliberate contract decision, and the hash in
-the test is authoritative over any copy in prose. The final v13 vector is the
-one pinned after the last swap, so opaque session ids and jittered timestamps
-— never `story-%02d-*` ids or 137-hour steps — are what the contract freezes.
+`123456789`, full profile:
+`4ac6913c55b59a8ed4ed99e05278de4d003f1161ce8a711afb9eb6b469e535db`.
+This integrated pin includes every dedicated slot generator, opaque session
+ids and jittered timestamps, explicit-year calendar records, and story swap
+arithmetic rendered into the records rather than held only in hidden state.
+It is a pre-activation contract pin, not evidence of private-surface calibration.
 v2–v12 vectors do not move; if one does, the gating is wrong.
 
 ### The surface pass and the open owner decision (#1832)

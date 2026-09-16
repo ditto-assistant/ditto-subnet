@@ -676,6 +676,12 @@ func (b *storyV2Builder) compileMemory(arcIndex, chunk int, arc StoryArc, person
 			g = personalRootGrammar
 		}
 		sentence := storySentence(storyFill(persona.Expand(r, g, "frame"), e.Slots))
+		// Swap renderers describe the provider change, but do not contain a
+		// quantity slot. Their arithmetic must also reach the wire: recording
+		// qtyphrase only in the hidden event state creates an impossible task.
+		if (e.Kind == EventVendorSwapped || e.Kind == EventProviderSwapped) && e.Slots["qtyphrase"] != "" {
+			sentence += " " + storySentence(e.Slots["qtyphrase"]) + "."
+		}
 		if base, ok := e.Slots["qtybase"]; ok {
 			sentence += " " + storyFill(persona.Expand(r, persona.Grammar{"q": {"The scope on the table is {q}.", "It covers {q} as first written.", "First version: {q}.", "That opening version was for {q}."}}, "q"), map[string]string{"q": base})
 		}

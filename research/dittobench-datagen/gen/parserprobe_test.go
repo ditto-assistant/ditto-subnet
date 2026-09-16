@@ -193,6 +193,19 @@ func TestParserprobeCeilingOnSurfacePassedArtifacts(t *testing.T) {
 		}
 		artifacts = append(artifacts, a)
 	}
+	// A low private score is not resistance if the parser cannot recover the
+	// corresponding public contract. Require a real pass-off control before
+	// applying ceilings; registering family names alone is insufficient.
+	baseline, err := parserprobe.Run(parserprobe.Options{BenchVersion: artifacts[0].BenchVersion, RunSize: "full", FirstSeed: 11, Seeds: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, slice := range parserprobeSurfaceSlices {
+		s, ok := baseline.GIH.Slices[slice]
+		if !ok || s.Mean < parserprobeBaselineFloor {
+			t.Fatalf("unqualified public control for %s: mean %.4f, need >= %.2f before interpreting a private ceiling", slice, s.Mean, parserprobeBaselineFloor)
+		}
+	}
 	report, err := parserprobe.Run(parserprobe.Options{
 		BenchVersion: artifacts[0].BenchVersion, RunSize: "full", Artifacts: artifacts,
 		RouterSeeds: parserprobeCIRouterSeeds, RouterFirstSeed: parserprobeCIRouterFirstSeed,

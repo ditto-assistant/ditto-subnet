@@ -224,6 +224,7 @@ func Run(opts Options) (Report, error) {
 // families the frame banks do not know.
 func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]bool) {
 	stores := buildStores(a)
+	waveStores := map[int]map[string]*store{}
 	tp := newToolParser(a.BenchVersion)
 	needles := fixtureNeedles(a)
 	sr := SeedReport{Seed: a.Seed, BenchVersion: a.BenchVersion, MemoryCases: len(a.MemoryCases), ToolCases: len(a.ToolCases), GIH: newVariant()}
@@ -248,7 +249,14 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 		if user == "" {
 			user = gen.PrimaryUser
 		}
-		st := stores[user]
+		caseStores := stores
+		if a.BenchVersion >= protocol.BenchVersionV13 {
+			if waveStores[ac.RunAfterWave] == nil {
+				waveStores[ac.RunAfterWave] = buildStoresThroughWave(a, ac.RunAfterWave)
+			}
+			caseStores = waveStores[ac.RunAfterWave]
+		}
+		st := caseStores[user]
 		if st == nil {
 			st = newStore(a.BenchVersion)
 		}
@@ -259,10 +267,21 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 		// GIH: frame banks decide the family.
 		pq, ok := classifyMemory(a.BenchVersion, ac.Question)
 		var d derived
-		if ok {
+		if a.BenchVersion >= protocol.BenchVersionV13 {
+			d = answerV13(st, ac.Question)
+		}
+		if d.ok {
+			pq, ok = parsedQuestion{family: d.family}, true
+		} else if ok {
 			d = answerMemory(st, pq, next(ordinals, user, pq.family))
 		} else if len(unmatched) < 6 {
 			unmatched = append(unmatched, ac.QuestionType+": "+ac.Question)
+		}
+		if !d.ok && a.BenchVersion >= protocol.BenchVersionV13 {
+			d = answerAbsenceV13(st, ac.Question)
+			if d.ok {
+				pq, ok = parsedQuestion{family: d.family}, true
+			}
 		}
 		score := 0.0
 		if d.ok {
@@ -276,8 +295,15 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 			fam := rt.predict("mem:", ac.Question)
 			rq, rok := classifyWithin(a.BenchVersion, fam, ac.Question)
 			var rd derived
-			if rok {
+			if a.BenchVersion >= protocol.BenchVersionV13 && (fam == "v13-open-program" || fam == "v13-personal-program" || strings.HasPrefix(fam, "world-story-") || strings.HasPrefix(fam, "record-quantity") || strings.HasPrefix(fam, "point-in-time") || strings.HasPrefix(fam, "injection-")) {
+				rd = answerV13(st, ac.Question)
+				rok = rd.ok
+			} else if rok {
 				rd = answerMemory(st, rq, next(routerOrdinals, user, rq.family))
+			}
+			if !rd.ok && a.BenchVersion >= protocol.BenchVersionV13 && strings.HasPrefix(fam, "absence") {
+				rd = answerAbsenceV13(st, ac.Question)
+				rok = rd.ok
 			}
 			rscore := 0.0
 			if rd.ok {
@@ -350,6 +376,21 @@ func familyMatches(resolved, surface string, ok bool, want string) bool {
 	if resolved != "" && resolved == want {
 		return true
 	}
+	if resolved == "record-quantity" && strings.HasPrefix(want, "record-quantity-") {
+		return true
+	}
+	if resolved == "absence" && strings.HasPrefix(want, "absence-") && !strings.HasPrefix(want, "absence-twin-") {
+		return true
+	}
+	if (resolved == "contact-current" || resolved == "world-contact-current" || surface == "world-contact-current") && strings.HasPrefix(want, "absence-twin-") {
+		return true
+	}
+	if (resolved == "trip-current" || surface == "world-trip-changed-leg-current") && want == "absence-twin-false-premise" {
+		return true
+	}
+	if surface == "world-project-outstanding" && want == "absence-twin-insufficient-composition" {
+		return true
+	}
 	return surface == want
 }
 
@@ -376,6 +417,26 @@ func classifyWithin(benchVersion int, family, question string) (parsedQuestion, 
 // Report.Unclassified instead of scoring a silent zero.
 func knownFamilies(benchVersion int) map[string]bool {
 	out := map[string]bool{}
+	if benchVersion >= protocol.BenchVersionV13 {
+		out["v13-open-program"] = true
+		out["v13-personal-program"] = true
+		for _, f := range storyQuestionsV13 {
+			out[f.kind] = true
+		}
+		for _, family := range []string{"injection-classic", "injection-data-inside-envelope", "injection-envelope-free"} {
+			out[family] = true
+		}
+		for _, suffix := range []string{"pure-absence", "near-miss", "stale-removed", "cross-user", "false-premise", "insufficient-composition"} {
+			out["absence-"+suffix] = true
+			out["absence-twin-"+suffix] = true
+		}
+		for _, family := range []string{"point-in-time-contact", "point-in-time-invoice", "point-in-time-trip-leg"} {
+			out[family] = true
+		}
+		for _, suffix := range []string{"money", "units", "direction", "cf-base", "cf-variant"} {
+			out["record-quantity-"+suffix] = true
+		}
+	}
 	if _, ok := programGrammarFor(benchVersion); ok {
 		out[programFamily(benchVersion)] = true
 	}
@@ -416,6 +477,9 @@ func launder(d derived) protocol.RunResponse {
 	case protocol.AnswerChitchat:
 		return protocol.RunResponse{FinalText: "Hey! Doing well, thanks for asking — how is your day going?"}
 	case protocol.AnswerDecline:
+		if d.value != "" {
+			return protocol.RunResponse{Abstain: true, FinalText: d.value}
+		}
 		return protocol.RunResponse{Abstain: true, FinalText: "I don't have that on record."}
 	case protocol.AnswerAcknowledge:
 		return protocol.RunResponse{FinalText: "Done — noted.", Answer: "noted"}

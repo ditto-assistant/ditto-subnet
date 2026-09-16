@@ -3,6 +3,7 @@ package grade
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,11 @@ func gradeClaimSetV13(mc protocol.MemoryCase, resp protocol.RunResponse, an anal
 		for _, accepted := range claim.Accept {
 			claimLex.protected = append(claimLex.protected, foldV13(accepted))
 		}
+		claimLex.semanticValues = append([]string{foldV13(claim.Expected)}, claim.Accept...)
+		for i := range claimLex.semanticValues {
+			claimLex.semanticValues[i] = foldV13(claimLex.semanticValues[i])
+		}
+		sort.SliceStable(claimLex.semanticValues, func(i, j int) bool { return len(claimLex.semanticValues[i]) > len(claimLex.semanticValues[j]) })
 		if claim.Kind == protocol.ClaimKindDirection {
 			forms := make([]string, 0, len(claim.Accept))
 			for _, accepted := range claim.Accept {

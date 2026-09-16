@@ -438,18 +438,13 @@ func TestV12KnownVector(t *testing.T) {
 	}
 }
 
-// TestV13KnownVector is the PLACEHOLDER pin for the v13 plumbing contract
-// (issue #1824): the v13 version constant, the 250-case memory envelope
-// (profilesV13 full: Mem 224 + 9 isolation), and a surface pass that is a
-// byte-for-byte copy of v12. It exists so every later v13 PR (mix rebalance,
-// story v2, tool bench, grader, label-leak fix) moves THIS hash deliberately
-// and leaves every v2..v12 vector above untouched — a moved earlier vector
-// means a lever is not gated on bench_version >= 13. It is re-pinned when the
-// v13 envelope lands, after the /seed label-leak fix.
+// The integrated v13 contract pins all slot generators, opaque seed metadata,
+// explicit-year calendar evidence, and fully rendered story arithmetic.
+// Every v2..v12 vector above remains unchanged.
 // v13KnownVectorWant is the pinned v13 full vector for seed 123456789; the
 // README table and docs/bench-versions.md must publish the same value
 // (TestV13KnownVectorIsPublishedConsistently).
-const v13KnownVectorWant = "80e76383a7d1ee8b1080a5a0a1526387faadf620578e22f0690dc5ae5a1709b6"
+const v13KnownVectorWant = "4ac6913c55b59a8ed4ed99e05278de4d003f1161ce8a711afb9eb6b469e535db"
 
 func TestV13KnownVector(t *testing.T) {
 	const (

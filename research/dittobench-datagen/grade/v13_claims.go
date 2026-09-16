@@ -58,6 +58,7 @@ type claimLexicon struct {
 	citation                      []string
 	echo, clarify                 []string
 	protected                     []string
+	semanticValues                []string
 	decline, acknowledge          []string
 	increase, decrease, unchanged []string
 	neither                       []string
@@ -388,8 +389,22 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 	flush := func() {
 		if len(cur) > 0 {
 			seg := segment{text: strings.Join(cur, " "), rejected: rejected, afterContrast: afterContrast, afterColon: afterColon}
-			seg.past = anyBounded(seg.text, lex.pastStrong)
-			seg.weakPast = !seg.past && anyBounded(seg.text, lex.pastWeak)
+			// Reviewed values may themselves contain temporal language, e.g.
+			// "cancel the old plan". Only markers outside those values qualify
+			// the assertion as historical; "previously cancel the old plan"
+			// must still be superseded.
+			context := seg.text
+			for _, value := range lex.semanticValues {
+				for {
+					j := indexBoundedV13(context, value, 0)
+					if j < 0 {
+						break
+					}
+					context = context[:j] + strings.Repeat("_", len(value)) + context[j+len(value):]
+				}
+			}
+			seg.past = anyBounded(context, lex.pastStrong)
+			seg.weakPast = !seg.past && anyBounded(context, lex.pastWeak)
 			seg.current = anyBounded(seg.text, lex.current)
 			seg.echo = anyBounded(seg.text, lex.echo)
 			seg.hedge = anyBounded(seg.text, lex.hedge)

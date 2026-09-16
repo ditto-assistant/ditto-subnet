@@ -104,6 +104,10 @@ func main() {
 		}
 	}
 	printSummary(os.Stderr, report)
+	if len(report.Unclassified) != 0 {
+		fmt.Fprintln(os.Stderr, "parserprobe: INCOMPLETE coverage; scores are not surface qualification")
+		os.Exit(1)
+	}
 }
 
 func printSummary(w *os.File, r parserprobe.Report) {
