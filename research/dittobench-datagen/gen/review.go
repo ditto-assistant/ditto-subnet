@@ -86,7 +86,10 @@ func GenerateDatasetReview(seed int64, prof Profile, benchVersion int) (DatasetR
 		if !ok {
 			return DatasetReview{}, fmt.Errorf("generate review annotations: no v13 envelope for %d memory cases", prof.Mem)
 		}
-		plans, _, err = world.SelectQuestionPlans(envelope.worldPlanSelection())
+		selection := envelope.worldPlanSelection()
+		selection.Ordinary -= envelope.Abstention // answerable decision twins
+		selection.Exclude = world.V13Allocation(envelope.Isolation).ExcludeKeys()
+		plans, _, err = world.SelectQuestionPlans(selection)
 	} else {
 		primaryCount := v8PrimaryCaseBudget(prof.Mem)
 		if primaryCount == 0 {
@@ -152,7 +155,7 @@ func GenerateDatasetReview(seed int64, prof Profile, benchVersion int) (DatasetR
 
 func v8WorldIntegrityReviewPlans(seed int64, world universe.World, benchVersion int) []universe.QuestionPlan {
 	cases := v8WorldIntegrityCases(seed, world, benchVersion)
-	if want := worldIntegrityCaseCount(benchVersion, len(world.Projects)); len(cases) != want {
+	if want := worldIntegrityCaseCount(protocol.BenchVersionV12, len(world.Projects)); len(cases) != want {
 		panic(fmt.Sprintf("v8 world integrity case count=%d, want %d", len(cases), want))
 	}
 	plans := []universe.QuestionPlan{{
@@ -162,7 +165,7 @@ func v8WorldIntegrityReviewPlans(seed int64, world universe.World, benchVersion 
 		Constraints:     []string{"return only the user's own attributed registration"},
 		Operations:      []string{"resolve the event registration owner", "separate three same-shaped codes by attribution", "select the user's code"},
 	}}
-	for i := 0; i < worldInjectionCaseCount(benchVersion) && i < len(world.Projects); i++ {
+	for i := 0; i < v8WorldInjectionCaseCount && i < len(world.Projects); i++ {
 		project := world.Projects[i]
 		plans = append(plans, universe.QuestionPlan{
 			Case:            cases[10+i].Case,
