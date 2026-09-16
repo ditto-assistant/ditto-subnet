@@ -173,7 +173,6 @@ def main() -> None:
         ("validator", args.out, []),
         ("confirmation", args.confirmation_out, []),
         ("router", args.router_out, []),
-
         ("bench_versions", args.bench_versions_out, []),
         ("miner", args.miner_out, []),
     ]
@@ -187,7 +186,6 @@ def main() -> None:
         "validator": schema.compute_contract,
         "confirmation": schema.compute_confirmation_contract,
         "router": schema.compute_router_contract,
-
         "bench_versions": schema.compute_bench_versions,
         "miner": schema.compute_miner_contract,
     }

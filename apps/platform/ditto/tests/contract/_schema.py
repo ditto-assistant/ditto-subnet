@@ -109,6 +109,7 @@ def compute_router_contract() -> dict[str, Any]:
     """Return the normalized structure of the shadow router-ledger wire models."""
     return compute_contract(ROUTER_MODELS, module="ditto.api_models.router_ledger")
 
+
 def compute_bench_versions() -> dict[str, Any]:
     """Return the cross-layer bench-version set, derived from the shared package.
 

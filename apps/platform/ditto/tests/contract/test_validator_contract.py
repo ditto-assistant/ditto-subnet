@@ -140,7 +140,6 @@ def test_monorepo_validator_goldens_match_validator_byte_for_byte() -> None:
         "validator_contract.json",
         "confirmation_contract.json",
         "router_contract.json",
-
         "bench_versions.json",
     ):
         local = (Path(__file__).parent / filename).read_bytes()

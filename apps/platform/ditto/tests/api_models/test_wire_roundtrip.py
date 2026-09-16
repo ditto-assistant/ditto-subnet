@@ -119,10 +119,16 @@ def test_v13_unknown_evidence_is_not_persisted() -> None:
     assert "future_field" not in provenance
 
 
-@pytest.mark.parametrize("field,value", [
-    ("output_tokens", -1), ("reasoning_tokens", -1),
-    ("completions", -1), ("factor_bps", 5999), ("factor_bps", 10001),
-])
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("output_tokens", -1),
+        ("reasoning_tokens", -1),
+        ("completions", -1),
+        ("factor_bps", 5999),
+        ("factor_bps", 10001),
+    ],
+)
 def test_v13_known_cost_fields_are_bounded(field: str, value: int) -> None:
     raw = _fixture_v13()
     raw["per_case"][0]["inference_cost"][field] = value

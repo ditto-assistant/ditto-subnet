@@ -155,13 +155,19 @@ def _scorer_advertised_versions() -> set[int]:
     start = source.index("func supportedBenchVersions(")
     body = source[start : source.index("\n}\n", start)]
     assert "protocol.SupportedBenchVersions()" in body
-    assert "version < advertisedMinBenchVersion || version > advertisedMaxBenchVersion" in body
-    bounds = dict(re.findall(
-        r"advertised(Min|Max)BenchVersion\s*=\s*protocol.BenchVersionV(\d+)", source
-    ))
+    assert (
+        "version < advertisedMinBenchVersion || version > advertisedMaxBenchVersion"
+        in body
+    )
+    bounds = dict(
+        re.findall(
+            r"advertised(Min|Max)BenchVersion\s*=\s*protocol.BenchVersionV(\d+)", source
+        )
+    )
     assert set(bounds) == {"Min", "Max"}
     return {
-        version for version in _golden()["supported_bench_versions"]
+        version
+        for version in _golden()["supported_bench_versions"]
         if int(bounds["Min"]) <= version <= int(bounds["Max"])
     }
 
