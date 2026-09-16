@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -11,13 +12,27 @@ from ditto.api_server.coding_hosted_runtime_config import postgres_config
 from ditto.api_server.coding_hosted_runtime_io import read_json
 
 ROOT = Path(__file__).resolve().parents[5]
-TASKS = ROOT / "infra/ansible/roles/coding_hosted_postgres_environment/tasks/main.yml"
+# The default-off gate lives in tasks/main.yml; the entries and the
+# password-bearing document are assembled by set_fact in the dynamically
+# included tasks/materialize.yml, from the captured (validated) host.
+TASKS = (
+    ROOT
+    / "infra/ansible/roles/coding_hosted_postgres_environment/tasks/materialize.yml"
+)
+
+
+def _set_fact(key: str) -> Any:
+    """Return the value a set_fact task assigns to ``key`` in materialize.yml."""
+    for task in yaml.safe_load(TASKS.read_text()):
+        arguments = task.get("ansible.builtin.set_fact", {})
+        if key in arguments:
+            return arguments[key]
+    raise AssertionError(f"no set_fact assigns {key}")
 
 
 def _entries(host: str, password: str) -> list[str]:
-    variables = yaml.safe_load(TASKS.read_text())[1]["vars"]
     document = " ".join(
-        variables["coding_hosted_postgres_environment_document"].split()
+        _set_fact("coding_hosted_postgres_environment_document").split()
     )
     # The document appends exactly one environment-sourced password entry.
     assert document == (
@@ -26,8 +41,8 @@ def _entries(host: str, password: str) -> list[str]:
         "| to_json }}"
     )
     rendered = [
-        entry.replace("{{ coding_hosted_postgres_environment_host }}", host)
-        for entry in variables["coding_hosted_postgres_environment_entries"]
+        entry.replace("{{ coding_hosted_postgres_environment_captured_host }}", host)
+        for entry in _set_fact("coding_hosted_postgres_environment_entries")
     ]
     assert not any("{{" in entry for entry in rendered)
     return [*rendered, f"POSTGRES_PASSWORD={password}"]

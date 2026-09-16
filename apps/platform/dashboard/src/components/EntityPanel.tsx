@@ -52,6 +52,7 @@ import {
   isEligible,
   isFinalized,
   unrankedKind,
+  unrankedReasonLabel,
 } from "../lib/scoring";
 import type { ContinualAggregate } from "../lib/scoring";
 import { scrollRestoreOwnsEntry } from "../lib/scroll";
@@ -762,6 +763,17 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
  * moved into the Standing rows; a KOTH crown outranks the raw number, so it
  * leads when held. */
 function minerStandingChip(e: RankedEntry): { text: string; class: string; title: string } {
+  const kind = unrankedKind(e);
+  // A team canary never ranks, finalized or not, so it leads before the
+  // provisional "P<rank>" form that would otherwise render a null rank.
+  if (kind === "team_canary") {
+    return {
+      text: "Unranked · " + unrankedReasonLabel(kind),
+      class: "prev",
+      title:
+        "An audited team canary. It is screened, copy-checked and scored normally, but it never ranks and never earns weight or emissions.",
+    };
+  }
   if (!isFinalized(e)) {
     return {
       text:
@@ -773,7 +785,6 @@ function minerStandingChip(e: RankedEntry): { text: string; class: string; title
         " independent validator scores.",
     };
   }
-  const kind = unrankedKind(e);
   if (kind === "zero") {
     return {
       text: "Unranked · scored 0.000",
@@ -1095,11 +1106,9 @@ function MinerSummary(props: {
           <Stat
             k="Rank"
             v={
-              isEligible(e())
+              kind() !== "team_canary" && isEligible(e())
                 ? "#" + e().rank + " of " + props.total
-                : kind() === "zero"
-                  ? "unranked (scored 0.000)"
-                  : "unranked (provisional)"
+                : "unranked (" + unrankedReasonLabel(kind() ?? "provisional") + ")"
             }
           />
           <Stat

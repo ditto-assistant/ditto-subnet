@@ -110,8 +110,19 @@ Platform persists `certified` only when that ledger matches the receipt.
 The persisted receipt also carries the verified terminal grant generation,
 inference-grant digest, and settlement-set digest; legacy unbound receipts are
 evidence history, never private-task authority.
-The host constructs the adapter only when `DITTOBENCH_CODING_CANARY_ENABLED` is
-set and the certification pack root is present. Flags stay false until a
+Only the host certification service (`internal/codingcertservice`,
+`cmd/dittobench-coding-certification-service`) constructs the adapter. The
+Compose scorer's certification route and its `DITTOBENCH_CODING_CANARY_ENABLED`
+switch are retired: that scorer has no rootless topology probe, so readiness v2
+could never report it ready. The service loads the pack root through
+`LoadPublicPack`, which checks the grader files against the manifest's
+`grader_files` and the visible workspace against its pinned listing digest, and
+rejects any other file or link. `GET /v1/coding/certifier/canary/readiness`
+reports, over the service's fixed Unix socket, with the certification bearer
+and without side effects, whether the pack, rootless topology, listener
+namespace, control socket, executor daemon and pinned runtime image are ready;
+validators refuse to issue or claim a lease otherwise. See
+`infra/docs/coding-certification-service.md`. Flags stay false until a
 separately reviewed activation.
 
 Coding contract v1 remains permanently shadow-only. A separately reviewed

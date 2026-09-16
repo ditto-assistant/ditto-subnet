@@ -1,0 +1,49 @@
+# Rendered for review only. Do not install without explicit approval.
+[Unit]
+Description=Coding certification service (review render)
+Requires=ditto-coding-certification-docker.service
+After=ditto-coding-certification-docker.service
+BindsTo=ditto-coding-certification-docker.service
+
+[Service]
+Type=exec
+User={{ coding_certification_service_user }}
+Group={{ coding_certification_service_user }}
+SupplementaryGroups={{ coding_certification_service_client_group }}
+UMask=0077
+WorkingDirectory=/var/lib/ditto-coding-certification
+StateDirectory=ditto-coding-certification
+StateDirectoryMode=0700
+# The validator control socket directory: owner the service user, group the
+# client group, mode 0750. The service refuses any other ownership or mode.
+RuntimeDirectory=ditto-coding-certification
+RuntimeDirectoryMode=0750
+# The validator container bind-mounts this directory, not the socket. Keep the
+# directory (and so its inode) across service restarts; the service replaces
+# only its own stale socket inside it.
+RuntimeDirectoryPreserve=yes
+ExecStartPre=+/usr/bin/chown --no-dereference :{{ coding_certification_service_client_group }} /run/ditto-coding-certification
+EnvironmentFile=/usr/local/lib/ditto-coding-certification/ditto-coding-certification.env
+# The bearer is a root-only host file loaded as a systemd credential. This
+# render never contains or reads it.
+LoadCredential=control-token:/etc/ditto-coding-certification/control-token
+# systemd starts the service with a clean environment: only these variables,
+# the reviewed EnvironmentFile and CREDENTIALS_DIRECTORY. No proxy, CA or
+# DOCKER_HOST variable is set, and the binary never reads one.
+Environment=PATH=/usr/bin:/bin HOME=/var/lib/ditto-coding-certification
+ExecStart=/usr/local/lib/ditto-coding-certification/dittobench-coding-certification-service
+Restart=no
+TimeoutStartSec=90
+TimeoutStopSec=35min
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/ditto-coding-certification /run/ditto-coding-certification
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+# The in-namespace router listener needs only RootlessKit's child pid.
+ProtectHome=tmpfs
+BindReadOnlyPaths=/run/user/{{ coding_certification_service_uid }}/dockerd-rootless/child_pid
+PrivateDevices=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
+# No Install section: operator start only, never at boot or restart.

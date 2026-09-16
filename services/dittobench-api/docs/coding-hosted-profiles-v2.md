@@ -4,7 +4,8 @@
 assignment commits to: the authoring (execution) profile and the grading
 profile of one private catalog index. It proves both against the worker's own
 launch-time checks before anyone reviews their digests. The inference policy and
-budget profile are separate, time-bound documents and are not produced here.
+budget profile are separate, time-bound documents, issued by
+[`ditto.coding_hosted_policy_issue`](../../../apps/platform/docs/coding-hosted-policy-issue-v2.md).
 
 Run it only on an owner-controlled machine that already holds the verified
 private payload. Outputs are private review inputs. They are not an approval,
@@ -98,7 +99,9 @@ It contains no argv, suite path, source or private object bytes.
   imported native images before a canary (see `coding_runtime/qualification`).
 - **Approval.** Launch checks passing is not approval. The profile digests,
   limits, budgets, driver commands and expected counts still need independent
-  review.
+  review. After review, the digests are bound into one canonical approval
+  document that only a detached curator signature approves
+  (`apps/platform/docs/coding-hosted-profile-approval-v2.md`).
   The approved digests must then be bound together with a current inference
   policy and budget profile.
 - **Activation.** It changes no Platform, host, release, assignment or reward

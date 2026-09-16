@@ -108,7 +108,11 @@ async def _create(
         "authorize_coding_certification_harness_delivery",
         _async_ok,
     )
-    session = _Session(fixture, scalars=[_NOW, None])
+    # The shared lease gate (allowlist, claimed, deadline, image) is replaced
+    # here; it runs against real Postgres in test_coding_certification_leases.py
+    # and test_coding_certification_canary_safety.py. The grant row is locked
+    # before the database clock is read.
+    session = _Session(fixture, scalars=[None, _NOW])
     result = await ensure_coding_certification_inference_grant(
         session,  # type: ignore[arg-type]
         lease_id=_LEASE,
@@ -135,7 +139,7 @@ async def test_canary_grant_binds_claimed_lease_without_prior_certification(
     assert grant.status == "pending" and grant.generation == 0
     assert grant.weight_eligible is False
     replay = await ensure_coding_certification_inference_grant(
-        _Session(fixture, scalars=[_NOW, grant], grant=grant),  # type: ignore[arg-type]
+        _Session(fixture, scalars=[grant, _NOW], grant=grant),  # type: ignore[arg-type]
         lease_id=_LEASE,
         validator_hotkey=_VALIDATOR,
         policy=fixture.policy,
@@ -148,7 +152,7 @@ async def test_canary_exchange_and_capability_revoke_are_generation_exact(
 ) -> None:
     fixture, grant = await _create(monkeypatch)
     activated = await activate_coding_certification_inference_grant(
-        _Session(fixture, scalars=[_NOW, grant], grant=grant),  # type: ignore[arg-type]
+        _Session(fixture, scalars=[grant, _NOW], grant=grant),  # type: ignore[arg-type]
         grant_id=grant.grant_id,
         validator_hotkey=_VALIDATOR,
         broker_public_key="A" * 43 + "=",

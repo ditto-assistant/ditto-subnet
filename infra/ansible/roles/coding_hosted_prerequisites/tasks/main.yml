@@ -1,0 +1,279 @@
+---
+- name: Explain dormant native Coding host prerequisites
+  ansible.builtin.debug:
+    msg: Native Coding host prerequisites are disabled; no file, unit, account or Docker state is changed.
+  when: not (coding_hosted_prerequisites_enabled | bool)
+
+- name: Converge fixed native Coding host prerequisites without starting a service
+  when: coding_hosted_prerequisites_enabled | bool
+  block:
+    - name: Run the exact host and input guard
+      ansible.builtin.import_tasks: guard.yml
+
+    - name: Refuse check mode for an enabled convergence
+      ansible.builtin.assert:
+        that:
+          - not ansible_check_mode
+        fail_msg: Enabled convergence must run its read-only host checks for real; the disabled fixture covers check mode.
+        quiet: true
+
+    - name: Require the existing daemon-identity deny guard
+      ansible.builtin.command:
+        argv: [/usr/bin/systemctl, is-active, --quiet, ditto-coding-hosted-egress.service]
+      changed_when: false
+
+    - name: List worker, custody and egress proxy units
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/systemctl
+          - list-units
+          - --all
+          - --plain
+          - --no-legend
+          - --full
+          - ditto-coding-hosted-worker.service
+          - ditto-coding-custody@*.service
+          - ditto-coding-hosted-egress-proxy.service
+      register: coding_hosted_prerequisites_units
+      changed_when: false
+
+    - name: Refuse to converge while a worker, custody instance or egress proxy is live
+      ansible.builtin.assert:
+        that:
+          # Columns are UNIT LOAD ACTIVE SUB; only inactive or failed units pass.
+          - >-
+            coding_hosted_prerequisites_units.stdout is not
+            search('^\\S+\\s+\\S+\\s+(?!(inactive|failed)\\s)\\S+\\s', multiline=True)
+        fail_msg: Stop the hosted worker, every custody instance and the egress proxy before converging prerequisites.
+        quiet: true
+
+    - name: Inspect the daemon's root-owned policy directory and host policy
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /usr/local/lib/ditto-coding-hosted
+        - /usr/local/lib/ditto-coding-hosted/host-policy.py
+      register: coding_hosted_prerequisites_policy
+
+    - name: Require the policy directory and host policy from daemon provisioning
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_prerequisites_policy.results[0].stat.isdir | default(false)
+          - not coding_hosted_prerequisites_policy.results[0].stat.islnk
+          - coding_hosted_prerequisites_policy.results[0].stat.uid == 0
+          - coding_hosted_prerequisites_policy.results[0].stat.mode == '0755'
+          - coding_hosted_prerequisites_policy.results[1].stat.isreg | default(false)
+          - coding_hosted_prerequisites_policy.results[1].stat.uid == 0
+          - coding_hosted_prerequisites_policy.results[1].stat.mode == '0444'
+        fail_msg: Provision the native daemon first; its root-owned policy directory or host policy is missing or unsafe.
+        quiet: true
+
+    - name: Render every fixed prerequisite file in memory
+      ansible.builtin.set_fact:
+        coding_hosted_prerequisites_files:
+          helper:
+            path: /usr/local/lib/ditto-coding-hosted/host-prerequisites.py
+            mode: "0444"
+            content: "{{ lookup('ansible.builtin.file', 'host-prerequisites.py', rstrip=false) }}"
+          proxy:
+            path: /usr/local/lib/ditto-coding-hosted/egress-proxy.py
+            mode: "0444"
+            content: "{{ lookup('ansible.builtin.file', 'egress-proxy.py', rstrip=false) }}"
+          record:
+            path: /usr/local/lib/ditto-coding-hosted/host-prerequisites.json
+            mode: "0444"
+            content: "{{ lookup('ansible.builtin.template', 'host-prerequisites.json.j2') }}"
+          unit:
+            path: /etc/systemd/system/ditto-coding-hosted-egress-proxy.service
+            mode: "0644"
+            content: "{{ lookup('ansible.builtin.template', 'egress-proxy.service.j2') }}"
+
+    - name: Refuse to rewrite unexpected existing prerequisite state
+      ansible.builtin.import_tasks: files.yml
+      vars:
+        coding_hosted_prerequisites_require_installed: false
+
+    # Not byte-compared: it names the revision that installed the current bytes.
+    - name: Inspect the convergence receipt without following links
+      ansible.builtin.stat:
+        path: /usr/local/lib/ditto-coding-hosted/host-prerequisites-receipt.json
+        follow: false
+      register: coding_hosted_prerequisites_receipt_state
+
+    - name: Refuse an unexpected convergence receipt path
+      ansible.builtin.assert:
+        that:
+          - >-
+            not coding_hosted_prerequisites_receipt_state.stat.exists or
+            (coding_hosted_prerequisites_receipt_state.stat.isreg and
+             coding_hosted_prerequisites_receipt_state.stat.uid == 0 and
+             coding_hosted_prerequisites_receipt_state.stat.nlink == 1 and
+             coding_hosted_prerequisites_receipt_state.stat.mode == '0444')
+        fail_msg: The convergence receipt path is not a root-owned 0444 file; reconcile it explicitly first.
+        quiet: true
+
+    # Every check below runs before any persistent write. The scratch directory
+    # is transient and removed in the same run, so it is not reported as a change.
+    - name: Create a root-only scratch directory for pre-write checks
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: .coding-prerequisites
+      register: coding_hosted_prerequisites_scratch
+      changed_when: false
+
+    - name: Check the record, unit search path and unit before installing anything
+      block:
+        - name: Stage the helper and rendered unit for checks only
+          ansible.builtin.copy:
+            dest: "{{ coding_hosted_prerequisites_scratch.path }}/{{ item.name }}"
+            content: "{{ item.content }}"
+            owner: root
+            group: root
+            mode: "0600"
+          loop:
+            - {name: host-prerequisites.py, content: "{{ coding_hosted_prerequisites_files.helper.content }}"}
+            - {name: ditto-coding-hosted-egress-proxy.service, content: "{{ coding_hosted_prerequisites_files.unit.content }}"}
+          loop_control:
+            label: "{{ item.name }}"
+          changed_when: false
+
+        # The helper also compares `systemd-analyze unit-paths` with its reviewed
+        # list and refuses any other fragment, alias, mask, drop-in, dependency
+        # link or trigger unit for the proxy in every path.
+        - name: Check address, listeners, port range, identity mapping and unit overrides
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/python3
+              - -I
+              - -B
+              - "{{ coding_hosted_prerequisites_scratch.path }}/host-prerequisites.py"
+              - check
+            stdin: "{{ coding_hosted_prerequisites_files.record.content }}"
+            stdin_add_newline: false
+          register: coding_hosted_prerequisites_check
+          changed_when: false
+
+        # With --recursive-errors=no, systemd 257 reports only this unit and its
+        # drop-ins, never its dependencies, so any output or nonzero exit refuses.
+        # Output is not filtered by unit name: a drop-in message names the drop-in.
+        - name: Require systemd to accept every unit directive without warnings
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/systemd-analyze
+              - verify
+              - --recursive-errors=no
+              - --man=no
+              - "{{ coding_hosted_prerequisites_scratch.path }}/ditto-coding-hosted-egress-proxy.service"
+          register: coding_hosted_prerequisites_verify
+          changed_when: false
+          failed_when: >-
+            coding_hosted_prerequisites_verify.rc != 0 or
+            coding_hosted_prerequisites_verify.stdout | length > 0 or
+            coding_hosted_prerequisites_verify.stderr | length > 0
+      always:
+        - name: Remove only the scratch check directory
+          ansible.builtin.file:
+            path: "{{ coding_hosted_prerequisites_scratch.path }}"
+            state: absent
+          changed_when: false
+
+    - name: Require the exact redacted check result
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_prerequisites_result.schema == 'dittobench-coding-hosted-host-prerequisites-check-v2'
+          - >-
+            coding_hosted_prerequisites_result.router_listen ==
+            coding_hosted_prerequisites_host_address ~ ':' ~ coding_hosted_prerequisites_router_port
+          - >-
+            coding_hosted_prerequisites_result.egress_proxy ==
+            'http://' ~ coding_hosted_prerequisites_host_address ~ ':' ~ coding_hosted_prerequisites_proxy_port
+          - coding_hosted_prerequisites_result.egress_network == 'ditto-coding-restricted'
+          - coding_hosted_prerequisites_result.candidate_host_uid is integer
+          - coding_hosted_prerequisites_result.candidate_host_gid is integer
+          - coding_hosted_prerequisites_result.services_started is false
+          - coding_hosted_prerequisites_result.private_execution_ready is false
+          - coding_hosted_prerequisites_result.shadow_only is true
+          - coding_hosted_prerequisites_result.weight_eligible is false
+        fail_msg: The host prerequisites check returned an unexpected result.
+        quiet: true
+      vars:
+        coding_hosted_prerequisites_result: "{{ coding_hosted_prerequisites_check.stdout | from_json }}"
+
+    - name: Install fixed prerequisite files without replacing existing bytes
+      ansible.builtin.copy:
+        dest: "{{ coding_hosted_prerequisites_files[item].path }}"
+        content: "{{ coding_hosted_prerequisites_files[item].content }}"
+        owner: root
+        group: root
+        mode: "{{ coding_hosted_prerequisites_files[item].mode }}"
+        force: false
+      # The unit is written last so it never names a missing script.
+      loop: [helper, proxy, record, unit]
+      register: coding_hosted_prerequisites_install
+
+    # A run stopped between install and reload is refused below as
+    # NeedDaemonReload or not loaded; reload manually and rerun.
+    - name: Reload unit definitions after installing a file, without enabling or starting the proxy
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: coding_hosted_prerequisites_install is changed
+
+    - name: Read the loaded egress proxy unit state
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/systemctl
+          - show
+          - ditto-coding-hosted-egress-proxy.service
+          # Reverse start dependencies catch links in vendor paths and Wants= in
+          # other loaded units, which UnitFileState=static does not report.
+          - --property=LoadState,FragmentPath,DropInPaths,UnitFileState,ActiveState,NeedDaemonReload,WantedBy,RequiredBy,UpheldBy,BoundBy,TriggeredBy,OnFailureOf,OnSuccessOf
+      register: coding_hosted_prerequisites_show
+      changed_when: false
+
+    - name: Require the exact static, inactive and unmodified proxy unit
+      ansible.builtin.assert:
+        that:
+          - >-
+            coding_hosted_prerequisites_show.stdout_lines | sort ==
+            ['ActiveState=inactive', 'BoundBy=', 'DropInPaths=',
+             'FragmentPath=/etc/systemd/system/ditto-coding-hosted-egress-proxy.service',
+             'LoadState=loaded', 'NeedDaemonReload=no', 'OnFailureOf=', 'OnSuccessOf=',
+             'RequiredBy=', 'TriggeredBy=', 'UnitFileState=static', 'UpheldBy=', 'WantedBy=']
+        fail_msg: The egress proxy unit is enabled, running, overridden, pulled in by another unit or not the installed file.
+        quiet: true
+
+    - name: Require exact root-owned installed bytes and modes
+      ansible.builtin.import_tasks: files.yml
+      vars:
+        coding_hosted_prerequisites_require_installed: true
+
+    # Written only when this run installed a file or no receipt exists, so a rerun
+    # at a newer revision with identical bytes keeps the installing revision.
+    - name: Record the source revision that installed these bytes
+      ansible.builtin.copy:
+        dest: /usr/local/lib/ditto-coding-hosted/host-prerequisites-receipt.json
+        content: >-
+          {{ {'schema': 'dittobench-coding-hosted-host-prerequisites-receipt-v2',
+              'source_revision': coding_hosted_prerequisites_source_revision,
+              'record_sha256': coding_hosted_prerequisites_files.record.content | hash('sha256'),
+              'applied_at': now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ')}
+             | to_json(sort_keys=true, separators=[',', ':']) }}
+        owner: root
+        group: root
+        mode: "0444"
+      when: >-
+        coding_hosted_prerequisites_install is changed or
+        not coding_hosted_prerequisites_receipt_state.stat.exists
+
+    - name: Report converged prerequisites without starting anything
+      ansible.builtin.debug:
+        msg: >-
+          Native Coding host prerequisites converged from source {{ coding_hosted_prerequisites_source_revision }}.
+          router_listen={{ coding_hosted_prerequisites_host_address }}:{{ coding_hosted_prerequisites_router_port }} (one attempt at a time);
+          egress_proxy=http://{{ coding_hosted_prerequisites_host_address }}:{{ coding_hosted_prerequisites_proxy_port }} (unit installed, not enabled or started);
+          egress_network=ditto-coding-restricted (no Docker network created);
+          candidate_uid=candidate_gid=10001 (host IDs
+          {{ (coding_hosted_prerequisites_check.stdout | from_json).candidate_host_uid }}/{{
+          (coding_hosted_prerequisites_check.stdout | from_json).candidate_host_gid }});
+          services_started=false; shadow_only=true; weight_eligible=false.

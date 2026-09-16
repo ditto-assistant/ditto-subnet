@@ -85,6 +85,79 @@ phrases, idempotent database authority and permanent `weight_eligible=false`.
 The MCP calls carry the signed-in operator email in `X-Admin-Actor`; no shared
 operator identity is used.
 
+Hosted-v2 shadow assignments have their own five tools over
+`/api/v1/admin/coding-hosted-assignments`:
+
+- `list_coding_hosted_assignments` (`backroom:read`) pages summaries newest
+  first. Platform pages the collection; `count` is its untruncated total and
+  `has_more` reports the next window.
+- `get_coding_hosted_assignment` (`backroom:read`) reads one lifecycle: digests,
+  derived state, cancellation record, private task phase timestamps, terminal
+  outcome and sealed evidence digest, inference limits with charged versus
+  settled totals, and the newest 20 result deliveries with acknowledgement
+  times. It never returns catalog index, patch digest, test counts, terminal
+  domain, settlement documents, result bodies, grant or worker identifiers.
+- `preview_coding_hosted_assignment` writes nothing but shares the
+  `backroom:write` gate, because it returns the exact phrase create requires.
+- `create_coding_hosted_assignment` forwards the previewed subject, IDs,
+  deadline, digest, reason and the operator's typed
+  `CREATE SHADOW CODING HOSTED ASSIGNMENT {evaluation_id} {assignment_sha256}`.
+  Backroom never builds or repairs the phrase. Its response omits the private
+  task grant identifiers Platform returns.
+- `cancel_coding_hosted_assignment` forwards
+  `CANCEL SHADOW CODING HOSTED ASSIGNMENT {evaluation_id} {assignment_sha256}`
+  for an assignment whose attempt never started. Platform closes the private
+  task as `aborted`, appends an immutable cancellation, and refuses later
+  admission, start, binding, grants and inference. A started attempt is
+  refused: only its worker can abort it. The same reason from the same operator
+  replays idempotently. The response is the post-write assignment view.
+
+All three writes carry the signed-in operator email as the audit actor and stay
+weight-zero. None starts a worker or approves a canary. Create and cancel
+reasons must be 8 to 512 characters after trimming, Platform's own bound; the
+service refuses a longer one before any request. As with every MCP reason, the
+published input schema does not cap the length, and the tool description names
+the bound.
+
+`get_coding_control_plane` keeps its seven published native states. A cancelled
+assignment reads `aborted` there with `cancelled: true`; only the hosted
+assignment views report `state: cancelled`. A Platform that predates the flag
+parses as `cancelled: false`, so Platform and Backroom may deploy in either
+order.
+
+The contract-v1 public-canary certification path adds one write tool and two
+read surfaces on existing tools, so the MCP catalog grows by a single compact
+envelope:
+
+- `set_coding_certification_allowlist` (write) appends one complete, strict
+  allowlist revision. Its catalog schema is an open object; the exact fields
+  are in `get_backroom_tool_help`: `expectedRevision`, `enabled`, 1 to 16 exact
+  `{agent_id, artifact_sha256, screened_image_sha256, validator_hotkey}`
+  entries when enabled (none
+  when `enabled=false`), a reason, and
+  `APPLY CODING CERTIFICATION ALLOWLIST ENABLED <count>` or
+  `APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL`. Shape, duplicate, and
+  confirmation errors are refused before any Platform call. Platform refuses
+  every certification lease issue, claim, harness launch, grant, and receipt
+  unless the latest intact revision lists that exact tuple; no revision, a
+  refuse-all revision, and a corrupt revision refuse everything. The write
+  aborts refused in-flight leases and revokes refused live grants in the same
+  transaction and reports both counts. There is no open revision and no
+  certification bypass.
+- `get_coding_control_plane` also returns `certification_allowlist` (`enabled`,
+  `effective`, `integrity`, current revision where 0 is the built-in refuse-all
+  default, and newest-first history up to `limit`) and `certification_leases`
+  (newest lease rows across agents, up to `limit`).
+- `get_agent_coding_certifications` also returns `certification_leases` for
+  that agent. Lease rows carry status (`completed` means the receipt was
+  accepted and is terminal), deadline, `receipt_window_ends_at`,
+  `deadline_passed`, the admitting and aborting allowlist revisions, and grant
+  and receipt status. They never return grant ids, bearer digests, broker keys,
+  or image locators.
+
+See `apps/platform/docs/coding-certification-lease.md` for receipt-terminal
+leases, the receipt window, deadline expiry, and the claimed-attempt budget.
+
 Shadow admission score floors remain the existing append-only
 `get_core_qualification_policy` / `set_core_qualification_policy` controls.
 They determine qualification only; they never rewrite validator scores. Coding
@@ -208,6 +281,40 @@ the signed-in operator identity plus the previous ban evidence to
 `hotkey_ban_audit`. Existing agent UUID statuses are never changed. The tool
 returns the post-write state so a successful call proves `banned=false` and
 surfaces the new audit entry.
+
+## Noncompetitive team canaries
+
+A team canary is an ordinary upload the team runs through normal screening and
+scoring that must never compete for weights or emissions. See
+`apps/platform/docs/noncompetitive-team-canaries.md` for matching and where the
+exclusion applies. `list_team_canaries` (read) lists every exclusion and the
+agents it currently removes.
+
+`set_team_canary` (write) is the single compact write for both audited steps.
+Its catalog schema is an open object; the exact fields are in
+`get_backroom_tool_help`. Backroom accepts exactly one of two shapes and refuses
+any other key, including `actor`:
+
+- `action: "reserve"`, before upload: `minerHotkey` (SS58), `artifactSha256`
+  (64 lowercase hex), a `reason` of at least 8 characters, and the confirmation
+  `RESERVE TEAM CANARY <minerHotkey> <artifactSha256>`. Platform refuses the
+  pair if it already has any score or is already reserved.
+- `action: "bind"`, after screening: `exclusionId` and `agentId` (lowercase
+  UUIDs, as Platform formats them), `minerHotkey`, `artifactSha256`,
+  `screenedImageSha256`, a `reason`, and the confirmation
+  `BIND TEAM CANARY <exclusionId> <agentId>`. Platform binds a reservation once,
+  and only when the hotkey and artifact equal both the reservation and the
+  agent row and the agent's screened image digest equals `screenedImageSha256`.
+
+Shape and confirmation errors are refused before any Platform call, and Platform
+checks the same confirmation again. The signed-in operator email is always the
+`X-Admin-Actor`. Platform refusals (409 or 404) are returned as tool errors and
+never retried. After a write, the tool re-reads Platform, like `unban_hotkey`,
+and returns the durable `exclusion` plus the full list (`total`, `exclusions`).
+If the write response cannot be parsed or the re-read fails, the tool reports
+that the write may have succeeded and does not retry; read `list_team_canaries`
+before acting again. Exclusions are append-only; there is no tool or endpoint that
+lifts one.
 
 ## Reading miner source
 

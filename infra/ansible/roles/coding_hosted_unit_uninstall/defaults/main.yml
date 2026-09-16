@@ -1,0 +1,6 @@
+---
+coding_hosted_unit_uninstall_enabled: false
+coding_hosted_unit_uninstall_confirmation: ""
+coding_hosted_unit_uninstall_source_revision: ""
+# No path, unit or owner input exists. The two removal targets are literals in
+# the role-local unlink module, checked against the install roles by tests.

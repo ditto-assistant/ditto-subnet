@@ -356,6 +356,16 @@ func newCodingCertificationPGFixture(t *testing.T, cfg *config.Config) *codingPG
 		connection.Release()
 		t.Fatal(err)
 	}
+	// Platform stamps a claimed lease with the allowlist revision that admitted
+	// it; the relay admits inference only while that revision is the latest.
+	var allowlistRevision int32
+	insertAllowlistErr := connection.QueryRow(t.Context(), `
+		INSERT INTO coding_certification_allowlist_revisions (
+		  parent_revision, enabled, entries, checksum, reason, actor
+		) VALUES (
+		  0, true, '[{"agent_id":"fixture"}]'::jsonb, repeat('a', 64),
+		  'fixture canary allowlist', 'test'
+		) RETURNING revision`).Scan(&allowlistRevision)
 	_, insertLeaseErr := connection.Exec(t.Context(), `
 		INSERT INTO coding_certification_leases (
 		  lease_id, agent_id, artifact_sha256, screened_image_sha256,
@@ -365,7 +375,7 @@ func newCodingCertificationPGFixture(t *testing.T, cfg *config.Config) *codingPG
 		  canary_manifest_sha256, runner_plan_sha256, grader_plan_sha256,
 		  resource_profile_sha256, inference_policy_sha256,
 		  status, weight_eligible, issued_at, deadline, claimed_at, aborted_at,
-		  authority, created_at
+		  claim_allowlist_revision, authority, created_at
 		) VALUES (
 		  $1, $2, repeat('a', 64), repeat('b', 64),
 		  'canary-image', 'canary-image-ref', $3,
@@ -373,10 +383,10 @@ func newCodingCertificationPGFixture(t *testing.T, cfg *config.Config) *codingPG
 		  repeat('d', 64), repeat('e', 64), repeat('f', 64),
 		  repeat('0', 64), $6,
 		  'claimed', false, $7, $8, $7, NULL,
-		  '{}'::jsonb, $7
+		  $9, '{}'::jsonb, $7
 		)`,
 		f.ticketID, uuid.New(), uuid.New(), pgTestHotkey, uuid.New(),
-		codingInferenceGrantSHA256, now.Add(-time.Minute), deadline)
+		codingInferenceGrantSHA256, now.Add(-time.Minute), deadline, allowlistRevision)
 	_, insertGrantErr := connection.Exec(t.Context(), `
 		INSERT INTO coding_certification_inference_grants (
 		  grant_id, lease_id, validator_hotkey,
@@ -405,8 +415,9 @@ func newCodingCertificationPGFixture(t *testing.T, cfg *config.Config) *codingPG
 		deadline, now.Add(-time.Minute))
 	_, restoreErr := connection.Exec(t.Context(), `SET session_replication_role = origin`)
 	connection.Release()
-	if insertLeaseErr != nil || insertGrantErr != nil || restoreErr != nil {
-		t.Fatalf("seed canary grant: lease=%v grant=%v restore=%v", insertLeaseErr, insertGrantErr, restoreErr)
+	if insertAllowlistErr != nil || insertLeaseErr != nil || insertGrantErr != nil || restoreErr != nil {
+		t.Fatalf("seed canary grant: allowlist=%v lease=%v grant=%v restore=%v",
+			insertAllowlistErr, insertLeaseErr, insertGrantErr, restoreErr)
 	}
 	queries := postgres.New(pool)
 	logger := slog.New(slog.NewTextHandler(testWriter{t}, nil))
@@ -489,6 +500,60 @@ func TestCodingCertificationFullFlowPersistsCanonicalSettlement(t *testing.T) {
 	}
 	if grantStatus != "active" || requestCount != 1 || active != 0 || prompt != 1000 || completion != 200 || cost != 1234 {
 		t.Fatalf("grant=%s count=%d active=%d usage=%d/%d/%d", grantStatus, requestCount, active, prompt, completion, cost)
+	}
+}
+
+func TestCodingCertificationRefusesLeaseAllowlistDrift(t *testing.T) {
+	cases := []struct {
+		name  string
+		drift string
+	}{
+		// A revision appended outside Platform's allowlist write (for example
+		// one that reads corrupt) never re-stamped this lease.
+		{"newer allowlist revision", `
+			INSERT INTO coding_certification_allowlist_revisions (
+			  parent_revision, enabled, entries, checksum, reason, actor
+			) SELECT max(revision), false, '[]'::jsonb, repeat('b', 64),
+			  'tampered revision fixture', 'test'
+			FROM coding_certification_allowlist_revisions`},
+		// Leases claimed before the strict allowlist carry no admitting revision.
+		{"unstamped claim", `
+			UPDATE coding_certification_leases SET claim_allowlist_revision = NULL`},
+		{"lease no longer claimed", `
+			UPDATE coding_certification_leases
+			SET status = 'aborted', aborted_at = claimed_at,
+			    aborted_allowlist_revision = claim_allowlist_revision`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured []byte
+			provider := fakeCodingProvider(t, []byte(`{}`), &captured)
+			defer provider.Close()
+			f := newCodingCertificationPGFixture(t, codingTestConfig(t, provider.URL))
+			f.deps.Upstream = provider.Client()
+			if _, err := f.pool.Exec(t.Context(), tc.drift); err != nil {
+				t.Fatal(err)
+			}
+			body := f.canaryDispatchBody(t, 1, 1, 1)
+			w := serve(f.deps, codingRequest(body, f.headers(body)))
+			if w.Code != http.StatusConflict || len(captured) != 0 {
+				t.Fatalf("response=%d %s provider_body=%q", w.Code, w.Body.String(), captured)
+			}
+			var status string
+			var bearer *string
+			var requests int
+			if err := f.pool.QueryRow(t.Context(), `
+				SELECT g.status, g.bearer_digest,
+				       (SELECT count(*) FROM coding_certification_inference_requests r
+				        WHERE r.grant_id = g.grant_id)
+				FROM coding_certification_inference_grants g WHERE g.grant_id = $1`, f.grantID).
+				Scan(&status, &bearer, &requests); err != nil {
+				t.Fatal(err)
+			}
+			if status != "revoked" || bearer != nil || requests != 0 {
+				t.Fatalf("grant=%s bearer=%v requests=%d", status, bearer, requests)
+			}
+		})
 	}
 }
 

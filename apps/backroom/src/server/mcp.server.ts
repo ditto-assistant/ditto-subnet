@@ -76,6 +76,11 @@ import {
   transitionCodingPrivateV2ReleaseInputSchema,
   reconcileCodingShadowInputSchema,
   issueCodingShadowTicketSetInputSchema,
+  cancelCodingHostedAssignmentMcpInputSchema,
+  createCodingHostedAssignmentMcpInputSchema,
+  getCodingHostedAssignmentInputSchema,
+  listCodingHostedAssignmentsInputSchema,
+  previewCodingHostedAssignmentInputSchema,
   registerCodingCatalogMcpInputSchema,
   retireCodingCatalogInputSchema,
   supersedeCodingCatalogInputSchema,
@@ -84,6 +89,8 @@ import {
   getCoreQualificationPolicyInputSchema,
   refreshAgentCoreQualificationInputSchema,
   setCoreQualificationPolicyMcpInputSchema,
+  setTeamCanaryMcpInputSchema,
+  setCodingCertificationAllowlistMcpInputSchema,
   agentScoresLookupInputSchema,
   scoreLeaderboardInputSchema,
   ownerFootprintLookupInputSchema,
@@ -162,15 +169,20 @@ import {
   fetchLeaseRevocations,
   batchRetryValidation,
   fetchAgentScoringReadiness,
-  fetchAgentCodingCertifications,
+  fetchAgentCodingCertificationsWithLeases,
   fetchCodingCatalogReleases,
   fetchCodingPrivateV2Releases,
-  fetchCodingControlPlane,
+  fetchCodingControlPlaneWithCertification,
   registerCodingPrivateV2Release,
   quarantineCodingPrivateV2Release,
   retireCodingPrivateV2Release,
   reconcileCodingShadowArtifact,
   issueCodingShadowTicketSet,
+  fetchCodingHostedAssignments,
+  fetchCodingHostedAssignment,
+  previewCodingHostedAssignment,
+  createCodingHostedAssignment,
+  cancelCodingHostedAssignment,
   registerCodingCatalogRelease,
   retireCodingCatalogRelease,
   supersedeCodingCatalogRelease,
@@ -179,6 +191,7 @@ import {
   fetchCoreQualificationPolicy,
   refreshAgentCoreQualification,
   setCoreQualificationPolicy,
+  setCodingCertificationAllowlist,
   fetchBenchmarkContractRefresh,
   fetchBenchmarkContractMigration,
   migrateBenchmarkContract,
@@ -247,6 +260,8 @@ import {
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
   fetchHotkeyBans,
+  fetchTeamCanaries,
+  setTeamCanary,
   unbanHotkey,
   fetchConfirmationBundleSettings,
   setConfirmationBundleSettings,
@@ -286,6 +301,11 @@ export const WRITE_TOOL_NAMES = new Set([
   'retire_coding_private_v2_release',
   'reconcile_coding_shadow_artifact',
   'issue_coding_shadow_ticket_set',
+  // Preview writes nothing, but it is the first half of an exact-confirmation
+  // write and returns the phrase create requires, so it shares the write gate.
+  'preview_coding_hosted_assignment',
+  'create_coding_hosted_assignment',
+  'cancel_coding_hosted_assignment',
   'resolve_screening_quarantine',
   'resolve_screening_dispute',
   'rescreen_rejected_submission',
@@ -317,6 +337,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_continual_retest_settings',
   'set_core_qualification_policy',
   'refresh_agent_core_qualification',
+  'set_coding_certification_allowlist',
   'set_queue_policy_settings',
   'apply_screener_review_settings',
   'rotate_screener_policy_manifest',
@@ -328,6 +349,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'start_runtime_profile',
   'set_submission_cooldown',
   'unban_hotkey',
+  'set_team_canary',
   'set_source_release_policy',
   'set_burn_settings',
   'set_confirmation_bundle_settings',
@@ -549,7 +571,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_coding_private_v2_releases:
     'Read native v2 registrations; never launches.',
   get_coding_control_plane:
-    'Read unified Coding authority state.',
+    'Read unified Coding authority state, including the certification allowlist and leases.',
   register_coding_private_v2_release:
     'Register signed, non-selectable native v2.',
   quarantine_coding_private_v2_release:
@@ -560,6 +582,16 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Prepare one exact weight-zero Coding run.',
   issue_coding_shadow_ticket_set:
     'Issue fixed k=3 weight-zero Coding tickets.',
+  list_coding_hosted_assignments:
+    'Page hosted-v2 lifecycles.',
+  get_coding_hosted_assignment:
+    'Read one hosted-v2 lifecycle.',
+  preview_coding_hosted_assignment:
+    'Derive hosted-v2 authority; no write.',
+  create_coding_hosted_assignment:
+    'Create a previewed hosted-v2 assignment.',
+  cancel_coding_hosted_assignment:
+    'Cancel unstarted hosted-v2 assignment.',
   register_coding_catalog_release:
     'Register one curator-signed, weight-zero catalog commitment.',
   supersede_coding_catalog_release:
@@ -578,6 +610,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read one artifact-bound shadow qualification history.',
   refresh_agent_core_qualification:
     'Idempotently observe one current score snapshot. No scoring effect.',
+  set_coding_certification_allowlist:
+    'Append a strict certification allowlist revision; read its tool help first.',
   get_screener_review_settings:
     'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
   get_screener_fanout_shadow:
@@ -676,6 +710,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_submission_cooldown:
     'Read the current miner submission fee and owner-coldkey cooldown. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
   list_hotkey_bans: 'Hotkey bans.',
+  list_team_canaries: 'Team canaries.',
+  set_team_canary: 'Reserve or bind a team canary; read its tool help first.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
     'Read isolated LongMem confirmation issuance settings and optional audit history. Shadow cannot full-confirm. This does not activate rewards.',
@@ -719,6 +755,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   // repeating the excerpt semantics that get_backroom_tool_help carries.
   read_screening_source_file:
     'Read a bounded line range (max 400 lines) from one file in a screened submission. Get the line first from search_screening_source, or from flagged path:line evidence. Requires backroom:artifact:read.',
+  // Concise catalog lines for four reads whose full notes previously rode in
+  // every session's catalog. The notes stay verbatim in get_backroom_tool_help;
+  // this reclaims whole-payload headroom instead of raising the budget.
+  get_screening_quarantine_contexts:
+    'Review context for up to 50 quarantines; each item returns its context or its own error. Never returns source or artifact URLs.',
+  get_copy_review_source_diff:
+    'Per-file diff manifest between a held agent and its matched agent: added, removed, modified, identical or renamed, line counts, and normalized-identical copies. Requires backroom:artifact:read.',
+  list_screening_submissions:
+    'Page SN118 submissions newest first. generation=active (default) is the current benchmark admission set; all is the cross-benchmark audit view. detail=full returns every attempt.',
+  get_benchmark_contract_refresh:
+    'Inspect whether one submission\'s stale benchmark contract can be safely rebuilt, with any blocking reason. Read-only.',
 }
 
 export function createBackroomMcpServer(props: McpGrantProps) {
@@ -1460,11 +1507,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Inspect agent coding certifications',
       description:
-        'Shadow coding-capability receipts for one agent UUID. weight_eligible is always false; never feeds ranking or Tool+Memory scores. Requires backroom:read.',
+        'Shadow coding-capability receipts for one agent UUID, plus certification_leases: that agent\'s newest 10 certification lease rows, or {available:false,error} when that audit is unavailable (status issued | claimed | completed | aborted | expired, where completed means the receipt was accepted and is terminal; deadline, receipt_window_ends_at, deadline_passed on the Platform clock, claim_allowlist_revision, aborted_allowlist_revision, grant and receipt status; never grant ids, bearer digests, broker keys, or image locators). An overdue lease keeps its stored status until Platform next touches it. weight_eligible is always false; never feeds ranking or Tool+Memory scores. Requires backroom:read.',
       inputSchema: agentCodingCertificationInputSchema,
       annotations: toolAnnotations('read'),
     },
-    async (input) => result(await fetchAgentCodingCertifications(input)),
+    async (input) => result(await fetchAgentCodingCertificationsWithLeases(input)),
   )
 
   registerTool(
@@ -1496,11 +1543,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get unified Coding control-plane state',
       description:
-        'Read the contract-v1 catalog and distinct native private-v2 registry in one bounded snapshot. Reports permanent shadow and weight-zero flags. It does not establish fresh provider access, key custody, host qualification, canary completion or rollout approval and performs no mutation.',
+        'Read the contract-v1 catalog and distinct native private-v2 registry in one bounded snapshot, plus the strict contract-v1 certification canary state: certification_allowlist (enabled, effective refuse_all | exact_tuples, integrity valid | invalid, and the current revision, where 0 is the built-in refuse-all default; no history) and certification_leases (the newest 10 lease rows across agents). Each is {available:false,error} instead when Platform cannot serve it; the rest of the snapshot is unaffected. Reports permanent shadow and weight-zero flags. It does not establish fresh provider access, key custody, host qualification, canary completion or rollout approval and performs no mutation.',
       inputSchema: getCodingCatalogInputSchema,
       annotations: toolAnnotations('read'),
     },
-    async (input) => result(await fetchCodingControlPlane(input)),
+    async (input) => result(await fetchCodingControlPlaneWithCertification(input)),
   )
 
   registerTool(
@@ -1566,6 +1613,74 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => issueCodingShadowTicketSet(input, props.session.email)),
+  )
+
+  registerTool(
+    'list_coding_hosted_assignments',
+    {
+      title: 'List hosted-v2 Coding assignments',
+      description:
+        'Page Platform-hosted native-v2 shadow assignments, newest first (created_at, then evaluation_id), with count (the untruncated total), returned, limit (1-100, default 20), offset and has_more. Each row carries identity digests, derived state (cancelled, completed, failed, aborted, expired, running, admitted, pending_admission), lifecycle timestamps, cancellation time, private task close reason, terminal outcome and whether any result delivery was acknowledged. Private selections, grading details, grant and worker identifiers are never returned. Requires backroom:read; no mutation is performed.',
+      inputSchema: listCodingHostedAssignmentsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      result(
+        compacted(await fetchCodingHostedAssignments(input), {
+          assignments: { pin: ['evaluation_id'] },
+        }),
+      ),
+  )
+
+  registerTool(
+    'get_coding_hosted_assignment',
+    {
+      title: 'Get one hosted-v2 Coding assignment',
+      description:
+        'Read one hosted-v2 assignment by evaluationId: lifecycle and authority digests, cancellable flag, cancellation record, private task bind/freeze/close timestamps, authoring evidence and grading-claim presence, terminal outcome with its sealed evidence digest, inference grant limits with request counts and charged (settled plus reserved/uncertain ceilings) versus settled totals, and up to 20 newest result delivery digests with acknowledgement times. Catalog index, patch digest, test counts, terminal domain, settlement documents, result bodies, grant and worker identifiers are never returned. Requires backroom:read.',
+      inputSchema: getCodingHostedAssignmentInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCodingHostedAssignment(input)),
+  )
+
+  registerTool(
+    'preview_coding_hosted_assignment',
+    {
+      title: 'Preview hosted-v2 Coding assignment',
+      description:
+        'Ask Platform to derive, without writing, the exact hosted-v2 shadow authority for one subject: agent, registered private-v2 release, catalog index, validator hotkey, approved policy/execution/grading profile digests, patch bound and lease seconds. Platform derives artifact, image, registration, schedule, selection and assignment digests from locked state, checks the active coding certification, and returns fresh evaluation/attempt IDs, the deadline and its own confirmation phrase. Review it, then pass the returned values unchanged to create_coding_hosted_assignment. Requires backroom:write.',
+      inputSchema: previewCodingHostedAssignmentInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      write(() => previewCodingHostedAssignment(input, props.session.email)),
+  )
+
+  registerTool(
+    'create_coding_hosted_assignment',
+    {
+      title: 'Create hosted-v2 Coding assignment',
+      description:
+        'Create and bind one previewed hosted-v2 shadow assignment. Pass the same subject plus the preview evaluationId, attemptId, deadlineUnix, confirmedAssignmentSha256, a specific reason (8-512 characters), and the exact confirmation CREATE SHADOW CODING HOSTED ASSIGNMENT {evaluation_id} {assignment_sha256}. Platform re-derives the authority and refuses any drift; Backroom never builds the phrase. Replays are idempotent. The response omits private task grant identifiers. Always weight-zero; this does not start a worker. Requires backroom:write; the signed-in operator is the audit actor.',
+      inputSchema: createCodingHostedAssignmentMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => createCodingHostedAssignment(input, props.session.email)),
+  )
+
+  registerTool(
+    'cancel_coding_hosted_assignment',
+    {
+      title: 'Cancel unstarted hosted-v2 Coding assignment',
+      description:
+        'Append one immutable cancellation for a hosted-v2 assignment whose attempt never started (pending admission or admitted), even past its deadline. Read get_coding_hosted_assignment first, then pass evaluationId, expectedAssignmentSha256, a specific reason (8-512 characters) and the exact confirmation CANCEL SHADOW CODING HOSTED ASSIGNMENT {evaluation_id} {assignment_sha256}. Platform closes the private task as aborted and refuses later admission, start, binding, object grants and inference; no row is deleted. A started attempt is refused: only its worker can abort it. Replaying the same reason as the same operator is idempotent. Returns the post-write assignment view. Requires backroom:write.',
+      inputSchema: cancelCodingHostedAssignmentMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => cancelCodingHostedAssignment(input, props.session.email)),
   )
 
   registerTool(
@@ -1665,6 +1780,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => refreshAgentCoreQualification(input, props.session.email)),
+  )
+
+  registerTool(
+    'set_coding_certification_allowlist',
+    {
+      title: 'Set coding certification allowlist',
+      description:
+        'Append one complete, strict coding-certification allowlist revision. Read get_coding_control_plane first: certification_allowlist.current.revision is expectedRevision, and certification_leases shows in-flight leases. Arguments: expectedRevision (integer), enabled (boolean), entries (1-16 exact {agent_id, artifact_sha256, screened_image_sha256, validator_hotkey} tuples when enabled, none when enabled=false; screened_image_sha256 is the current verified screened-image digest, so a rebuild needs a new revision), reason (at least 8 characters), and confirmation, exactly "APPLY CODING CERTIFICATION ALLOWLIST ENABLED <entry count>" or "APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL". Platform refuses every certification lease issue, claim, harness launch, grant, and receipt unless the latest intact revision lists that exact tuple; with no revision, a refuse-all revision, or a corrupt revision (integrity=invalid) it refuses everything. There is no wildcard, no open revision, and no admin certification bypass. In the same transaction the write aborts every issued or claimed lease it does not admit (aborted_lease_count) and revokes every live certification inference grant it does not admit (revoked_inference_grant_count); completed (receipted) leases are never touched. Invalid shapes, duplicate tuples, and a wrong confirmation are refused before any Platform call. The signed-in operator email is the audit actor. Requires backroom:write.',
+      inputSchema: setCodingCertificationAllowlistMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => setCodingCertificationAllowlist(input, props.session.email)),
   )
 
   registerTool(
@@ -1824,6 +1952,52 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         ),
       )
     },
+  )
+
+  registerTool(
+    'list_team_canaries',
+    {
+      title: 'List noncompetitive team canaries',
+      description: 'Noncompetitive team canaries and matched agents. Read-only.',
+      inputSchema: MCP_PAGINATION_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset }) => {
+      const value = await fetchTeamCanaries(limit, offset)
+      return result(
+        compacted(
+          {
+            ...value,
+            count: value.total,
+            returned: value.exclusions.length,
+            limit,
+            offset,
+            has_more: offset + value.exclusions.length < value.total,
+          },
+          { exclusions: { pin: ['exclusion_id', 'miner_hotkey'] } },
+        ),
+      )
+    },
+  )
+
+  registerTool(
+    'set_team_canary',
+    {
+      title: 'Set team canary',
+      description:
+        'Reserve or bind one audited noncompetitive team canary. The exclusion only removes that exact identity from ranking, weights and emissions: it never changes agent status, screening, copy detection or any other gate, it is append-only, and there is no tool or endpoint that lifts it. Read list_team_canaries first. Arguments are one of two exact shapes; any other key, including actor, is refused. ' +
+        'action="reserve": minerHotkey (SS58), artifactSha256 (64 lowercase hex), reason (at least 8 characters), and confirmation exactly "RESERVE TEAM CANARY <minerHotkey> <artifactSha256>". Reserve before upload: Platform refuses the reservation if that hotkey + artifact pair already has any score, or is already reserved. ' +
+        'action="bind": exclusionId and agentId (lowercase UUIDs), minerHotkey, artifactSha256, screenedImageSha256 (64 lowercase hex), reason, and confirmation exactly "BIND TEAM CANARY <exclusionId> <agentId>". Bind after screening: Platform binds a reservation once, and only when the hotkey and artifact equal the reservation and the agent row, and that agent\'s screened image digest equals screenedImageSha256; a mismatch, an unscreened agent, an already-bound reservation, an agent bound to another canary, or an unknown exclusion or agent is refused. ' +
+        'Invalid shapes and a wrong confirmation are refused before any Platform call, and Platform checks the confirmation again. The signed-in operator email is the audit actor. After the write it re-reads Platform, like unban_hotkey, and returns the durable exclusion with its matched agents plus the full team canary list. If that response or re-read fails, it reports that the write may have succeeded and never retries; check list_team_canaries before acting again. Requires backroom:write.',
+      inputSchema: setTeamCanaryMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(async () =>
+        compacted(await setTeamCanary(input, props.session.email), {
+          exclusions: { pin: ['exclusion_id', 'miner_hotkey'] },
+        }),
+      ),
   )
 
   registerTool(

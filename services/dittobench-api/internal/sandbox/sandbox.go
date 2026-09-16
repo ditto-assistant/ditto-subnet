@@ -28,7 +28,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
@@ -195,6 +198,14 @@ type LocalDocker struct {
 	MemoryLimit string
 	// TmpfsLimit caps the only writable filesystem mounted at /tmp.
 	TmpfsLimit string
+	// MemorySwapLimit, when set, is passed as docker --memory-swap. Hosted-v2
+	// sets it equal to MemoryLimit so its harness gets no swap. Empty keeps
+	// Docker's default and the shared sandbox's existing arguments.
+	MemorySwapLimit string
+	// PullNever adds --pull never, so a missing local image fails the start
+	// instead of falling back to a registry pull. Hosted-v2 sets it on top of
+	// its screened image digest check.
+	PullNever bool
 	// CPULimit is passed to docker --cpus.
 	CPULimit string
 	// BuildTimeout bounds a single `docker build` (cold dependency builds are slow).
@@ -236,10 +247,12 @@ type LocalDocker struct {
 	// host-gateway magic to reach its outer network namespace, so production
 	// normally discovers eth0 and may override it explicitly.
 	HostGatewayIP string
-	// EgressNetwork, when set, attaches the container to this user-defined docker
-	// network — the egress-restricted sandbox network (allowlisting proxy + host
-	// firewall) — instead of the default full-egress bridge. Empty = today's
-	// behavior. Env DITTOBENCH_SANDBOX_EGRESS_NETWORK. See
+	// EgressNetwork, when nonempty, switches Run onto a fresh per-run bridge: it
+	// creates an ICC-disabled `ditto-job-<id>` network, attaches only that
+	// container to it and removes it at Stop. The configured name is not
+	// attached or required to exist; it acts as the enable switch (runArgs, a
+	// test-only helper, passes it through as --network). Empty = the default
+	// bridge. Env DITTOBENCH_SANDBOX_EGRESS_NETWORK. See
 	// docs/sandbox-egress.md (the egress proof).
 	EgressNetwork string
 	// EgressProxy, when set, is injected as HTTPS_PROXY/HTTP_PROXY so the harness's
@@ -252,6 +265,15 @@ type LocalDocker struct {
 	// validator-local certificate mounted from this path. The corresponding TLS
 	// listener remains source-bound by the inference broker.
 	OpenRouterShimCABundleHostPath string
+	// DockerHost, when set, selects the Docker endpoint for every CLI call this
+	// runtime makes instead of the process DOCKER_HOST. The dedicated coding
+	// host uses it to reach its own rootless daemon while ordinary scoring keeps
+	// the stack's sandbox daemon.
+	DockerHost string
+	// LaunchIntent, when set, durably records the run identity, container name
+	// and job network name before either is created (the hosted runtime's
+	// launch journal). A failure prevents the launch.
+	LaunchIntent func(ctx context.Context, run string, containers, networks []string) error
 	// dockerCommand is injectable only for deterministic command/parse tests.
 	dockerCommand func(context.Context, ...string) ([]byte, error)
 }
@@ -466,8 +488,11 @@ func (d *LocalDocker) Build(ctx context.Context, src Source) (string, string, *p
 	args := []string{"build", "-t", image}
 	args = append(args, contextDir)
 
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
+	cmd := d.docker(ctx, args...)
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(cmd.Env, "DOCKER_BUILDKIT=1")
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -554,7 +579,24 @@ func (d *LocalDocker) dockerOutput(ctx context.Context, args ...string) ([]byte,
 	if d.dockerCommand != nil {
 		return d.dockerCommand(ctx, args...)
 	}
-	return exec.CommandContext(ctx, "docker", args...).CombinedOutput()
+	return d.docker(ctx, args...).CombinedOutput()
+}
+
+// docker builds one Docker CLI command against this runtime's endpoint.
+func (d *LocalDocker) docker(ctx context.Context, args ...string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "docker", args...)
+	command.Env = d.dockerEnvironment()
+	return command
+}
+
+// dockerEnvironment is nil (inherit) unless DockerHost selects an endpoint. A
+// dedicated endpoint never inherits the process's Docker context, TLS, config
+// or proxy selectors.
+func (d *LocalDocker) dockerEnvironment() []string {
+	if d.DockerHost == "" {
+		return nil
+	}
+	return dedicatedDockerEnvironment(os.Environ(), d.DockerHost)
 }
 
 // CleanupStale removes only resources carrying this scorer's ownership label.
@@ -593,17 +635,31 @@ func (d *LocalDocker) runArgs(image string, env map[string]string) []string {
 }
 
 func (d *LocalDocker) runArgsForNetwork(image string, env map[string]string, network string, identity string) []string {
+	return d.runArgsForWorkload(image, env, network, identity, nil)
+}
+
+func (d *LocalDocker) runArgsForWorkload(image string, env map[string]string, network string, identity string, workload *enforcementWorkload) []string {
 	args := []string{
 		// Do not use --rm: Docker would erase an OOM-killed container before the
 		// scorer can inspect State.OOMKilled/ExitCode. Every successful Run path
 		// owns a deferred Stop, which removes it immediately after diagnostics.
 		"run", "-d",
+	}
+	if d.PullNever {
+		args = append(args, "--pull", "never")
+	}
+	args = append(args,
 		"--init",
 		"--user", "65532:65532",
 		"--read-only",
 		"--ipc", "none",
-		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=" + d.tmpfsLimit(),
+		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size="+d.tmpfsLimit(),
 		"--memory", d.MemoryLimit,
+	)
+	if d.MemorySwapLimit != "" {
+		args = append(args, "--memory-swap", d.MemorySwapLimit)
+	}
+	args = append(args,
 		"--cpus", d.CPULimit,
 		"--pids-limit", strconv.Itoa(d.pidsLimit()),
 		"--ulimit", "nofile=1024:1024",
@@ -616,7 +672,7 @@ func (d *LocalDocker) runArgsForNetwork(image string, env map[string]string, net
 		// the tighter single-file/8 MiB bound and disable unusable rotation
 		// compression explicitly so rootless executors fail closed consistently.
 		"--log-opt", "compress=false",
-	}
+	)
 	if identity != "" {
 		args = append(args,
 			"--name", "dittobench-"+identity,
@@ -696,6 +752,14 @@ func (d *LocalDocker) runArgsForNetwork(image string, env map[string]string, net
 			"-e", "HTTP_PROXY="+d.EgressProxy,
 			"-e", "NO_PROXY="+noProxy,
 		)
+	}
+	if workload != nil {
+		args = append(args,
+			"--mount", "type=bind,src="+workload.runner+",dst="+EnforcementRunnerPath+",readonly",
+			"--entrypoint", EnforcementRunnerPath,
+			image,
+		)
+		return append(args, workload.argv...)
 	}
 	return append(args, image)
 }
@@ -781,6 +845,89 @@ func (d *LocalDocker) sandboxHostGateway() (string, error) {
 	}
 	sort.Strings(candidates)
 	return candidates[0], nil
+}
+
+// DefaultBridgeGateway returns the IPv4 gateway of the selected daemon's
+// default bridge network. For a rootless daemon this address exists only inside
+// RootlessKit's network namespace; it is reachable from every per-run bridge
+// as a local address and preserves each container's source address.
+func (d *LocalDocker) DefaultBridgeGateway(ctx context.Context) (netip.Addr, error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	out, err := d.dockerOutput(ctx, "network", "inspect", "--format", "{{json .}}", "bridge")
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("inspect default bridge network: %w", err)
+	}
+	return parseDefaultBridgeGateway(out)
+}
+
+// DefaultBridgeGatewayFromSocket reads the same default bridge network with
+// one read-only Engine API request on an explicit local Unix socket. It uses no
+// Docker CLI, environment, configuration directory, context or credential
+// helper, so a one-shot runtime can check the daemon before it consumes its
+// state directory and installs its private Docker environment.
+func DefaultBridgeGatewayFromSocket(ctx context.Context, socket string) (netip.Addr, error) {
+	invalid := errors.New("default bridge network unavailable")
+	if ctx == nil || !filepath.IsAbs(socket) || filepath.Clean(socket) != socket {
+		return netip.Addr{}, invalid
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	transport := &http.Transport{
+		Proxy:             nil,
+		DisableKeepAlives: true,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "unix", socket)
+		},
+	}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/networks/bridge", nil)
+	if err != nil {
+		return netip.Addr{}, invalid
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return netip.Addr{}, invalid
+	}
+	defer response.Body.Close()
+	const maximum = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(response.Body, maximum+1))
+	if err != nil || response.StatusCode != http.StatusOK || len(body) > maximum {
+		return netip.Addr{}, invalid
+	}
+	return parseDefaultBridgeGateway(body)
+}
+
+func parseDefaultBridgeGateway(out []byte) (netip.Addr, error) {
+	var network struct {
+		Name     string `json:"Name"`
+		Driver   string `json:"Driver"`
+		Internal bool   `json:"Internal"`
+		IPAM     struct {
+			Config []struct {
+				Subnet  string `json:"Subnet"`
+				Gateway string `json:"Gateway"`
+			} `json:"Config"`
+		} `json:"IPAM"`
+		Options map[string]string `json:"Options"`
+	}
+	invalid := errors.New("default bridge network is not a single private IPv4 bridge")
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	if decoder.Decode(&network) != nil || decoder.More() {
+		return netip.Addr{}, invalid
+	}
+	if network.Name != "bridge" || network.Driver != "bridge" || network.Internal ||
+		network.Options["com.docker.network.bridge.default_bridge"] != "true" || len(network.IPAM.Config) != 1 {
+		return netip.Addr{}, invalid
+	}
+	subnet, subnetErr := netip.ParsePrefix(network.IPAM.Config[0].Subnet)
+	gateway, gatewayErr := netip.ParseAddr(network.IPAM.Config[0].Gateway)
+	if subnetErr != nil || gatewayErr != nil || !subnet.Addr().Is4() || subnet.Masked() != subnet || !gateway.Is4() ||
+		!subnet.Contains(gateway) || gateway == subnet.Addr() || !gateway.IsPrivate() || gateway.IsLoopback() {
+		return netip.Addr{}, invalid
+	}
+	return gateway, nil
 }
 
 func isolatedIdentity() (string, error) {
@@ -1002,7 +1149,7 @@ func parseRuntimeMetrics(diagnostics *RuntimeDiagnostics, output string) {
 // Run starts the image detached with resource caps and a random host port, then
 // resolves the mapped host port.
 func (d *LocalDocker) Run(ctx context.Context, image string, env map[string]string) (*Handle, error) {
-	return d.run(ctx, image, env, false)
+	return d.run(ctx, image, env, false, nil)
 }
 
 // RunRetainingFailedHandle preserves exact container/network cleanup authority
@@ -1010,10 +1157,10 @@ func (d *LocalDocker) Run(ctx context.Context, image string, env map[string]stri
 // with StopRetainingImage even when err is nonnil. It performs no best-effort
 // cleanup that could discard an ambiguous container. Legacy Run is unchanged.
 func (d *LocalDocker) RunRetainingFailedHandle(ctx context.Context, image string, env map[string]string) (*Handle, error) {
-	return d.run(ctx, image, env, true)
+	return d.run(ctx, image, env, true, nil)
 }
 
-func (d *LocalDocker) run(ctx context.Context, image string, env map[string]string, retainFailure bool) (*Handle, error) {
+func (d *LocalDocker) run(ctx context.Context, image string, env map[string]string, retainFailure bool, workload *enforcementWorkload) (*Handle, error) {
 	runCtx, cancel := context.WithTimeout(ctx, d.startTimeout())
 	defer cancel()
 	if _, err := brokerCapabilityHostFromEnv(env); err != nil {
@@ -1025,6 +1172,15 @@ func (d *LocalDocker) run(ctx context.Context, image string, env map[string]stri
 		return nil, err
 	}
 	containerName := "dittobench-" + identity
+	if d.LaunchIntent != nil {
+		networks := []string{}
+		if d.EgressNetwork != "" {
+			networks = append(networks, "ditto-job-"+identity)
+		}
+		if err := d.LaunchIntent(runCtx, identity, []string{containerName}, networks); err != nil {
+			return nil, fmt.Errorf("record sandbox launch intent: %w", err)
+		}
+	}
 	network := ""
 	if d.EgressNetwork != "" {
 		network, err = d.createIsolatedNetwork(runCtx, identity)
@@ -1040,7 +1196,7 @@ func (d *LocalDocker) run(ctx context.Context, image string, env map[string]stri
 			_, _ = d.dockerOutput(context.Background(), "network", "rm", network)
 		}
 	}
-	out, err := d.dockerOutput(runCtx, d.runArgsForNetwork(image, env, network, identity)...)
+	out, err := d.dockerOutput(runCtx, d.runArgsForWorkload(image, env, network, identity, workload)...)
 	if err != nil {
 		if retainFailure {
 			return &Handle{ContainerID: containerName, ImageRef: image, NetworkName: network}, fmt.Errorf("sandbox start requires cleanup: %w", err)
@@ -1095,7 +1251,7 @@ func (d *LocalDocker) containerIP(ctx context.Context, containerID string) (stri
 
 // mappedPort returns the host port docker assigned to the harness port.
 func (d *LocalDocker) mappedPort(ctx context.Context, containerID string) (string, error) {
-	out, err := exec.CommandContext(ctx, "docker", "port", containerID, d.HarnessPort).CombinedOutput()
+	out, err := d.docker(ctx, "port", containerID, d.HarnessPort).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("docker port: %s: %w", strings.TrimSpace(string(out)), err)
 	}
@@ -1125,8 +1281,8 @@ func (d *LocalDocker) StopRetainingImage(ctx context.Context, h *Handle) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	removeOutput, removeErr := exec.CommandContext(ctx, "docker", "rm", "-f", h.ContainerID).CombinedOutput()
-	inspectOutput, inspectErr := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{.Id}}", h.ContainerID).CombinedOutput()
+	removeOutput, removeErr := d.docker(ctx, "rm", "-f", h.ContainerID).CombinedOutput()
+	inspectOutput, inspectErr := d.docker(ctx, "inspect", "--format", "{{.Id}}", h.ContainerID).CombinedOutput()
 	if inspectErr == nil {
 		return fmt.Errorf("sandbox container removal was not confirmed")
 	}
@@ -1167,7 +1323,7 @@ func (d *LocalDocker) Release(ctx context.Context, image string) {
 	}
 	cleanupCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
-	_ = exec.CommandContext(cleanupCtx, "docker", "image", "rm", image).Run()
+	_ = d.docker(cleanupCtx, "image", "rm", image).Run()
 }
 
 // safeTag derives a docker-safe tag from the source ref.

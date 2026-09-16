@@ -1,0 +1,149 @@
+---
+# Exercise the render-only certification service role on localhost. In --check
+# mode nothing is written; templates are inspected through lookup('template').
+- name: Verify the certification service role is default-off and render-only
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../roles/coding_certification_service/defaults/main.yml
+  vars:
+    templates: ../roles/coding_certification_service/templates
+    valid_profile: &valid_profile
+      coding_certification_service_render_enabled: true
+      coding_certification_service_render_root: /tmp/ditto-coding-certification-render-test
+      coding_certification_service_user: ditto-coding-cert
+      coding_certification_service_client_group: ditto-coding-cert-clients
+      coding_certification_service_uid: 61001
+      coding_certification_service_client_gid: 61002
+      coding_certification_service_bip: 10.203.0.1/24
+      coding_certification_service_router_port: 11438
+      coding_certification_service_egress_network: ditto-coding-certification-egress
+      coding_certification_service_egress_proxy: http://10.203.0.1:3128
+      coding_certification_service_runtime_image_repository: registry.invalid/ditto/coding-runtime
+      coding_certification_service_runtime_image_digest: "sha256:{{ '1' * 64 }}"
+      coding_certification_service_pack_manifest_sha256: cb608113db0cc31001fe0a7294854453061f9e85d1471520100ce99eca97a903
+      coding_certification_service_router_helper_sha256: "{{ '3' * 64 }}"
+      coding_certification_service_max_lifetime_seconds: 7200
+      coding_certification_service_idle_timeout_seconds: 900
+  tasks:
+    - name: Keep the shipped defaults disabled and empty
+      ansible.builtin.assert:
+        that:
+          - coding_certification_service_render_enabled is sameas false
+          - coding_certification_service_render_root == ''
+          - coding_certification_service_uid == 0
+          - coding_certification_service_runtime_image_digest == ''
+          # Conservative, bounded admission defaults.
+          - coding_certification_service_max_lifetime_seconds == 7200
+          - coding_certification_service_idle_timeout_seconds == 900
+
+    - name: Run the role with its defaults
+      ansible.builtin.include_role:
+        name: coding_certification_service
+      vars:
+        # Even with a render root, the disabled role must write nothing.
+        coding_certification_service_render_root: /tmp/ditto-coding-certification-default-off-test
+
+    - name: Inspect the default-off render root
+      ansible.builtin.stat:
+        path: /tmp/ditto-coding-certification-default-off-test
+      register: default_off_root
+
+    - name: Prove the default-off role wrote nothing
+      ansible.builtin.assert:
+        that:
+          - not default_off_root.stat.exists
+
+    - name: Accept the complete render profile
+      vars: *valid_profile
+      ansible.builtin.include_tasks: ../roles/coding_certification_service/tasks/validate.yml
+
+    - name: Render the review files in memory
+      vars:
+        coding_certification_service_render_enabled: "{{ valid_profile.coding_certification_service_render_enabled }}"
+        coding_certification_service_uid: "{{ valid_profile.coding_certification_service_uid }}"
+        coding_certification_service_client_gid: "{{ valid_profile.coding_certification_service_client_gid }}"
+        coding_certification_service_bip: "{{ valid_profile.coding_certification_service_bip }}"
+        coding_certification_service_router_port: "{{ valid_profile.coding_certification_service_router_port }}"
+        coding_certification_service_egress_network: "{{ valid_profile.coding_certification_service_egress_network }}"
+        coding_certification_service_egress_proxy: "{{ valid_profile.coding_certification_service_egress_proxy }}"
+        coding_certification_service_runtime_image_repository: "{{ valid_profile.coding_certification_service_runtime_image_repository }}"
+        coding_certification_service_runtime_image_digest: "{{ valid_profile.coding_certification_service_runtime_image_digest }}"
+        coding_certification_service_pack_manifest_sha256: "{{ valid_profile.coding_certification_service_pack_manifest_sha256 }}"
+        coding_certification_service_router_helper_sha256: "{{ valid_profile.coding_certification_service_router_helper_sha256 }}"
+        daemon_unit: "{{ lookup('template', templates + '/ditto-coding-certification-docker.service.j2') }}"
+        service_unit: "{{ lookup('template', templates + '/ditto-coding-certification.service.j2') }}"
+        environment_file: "{{ lookup('template', templates + '/ditto-coding-certification.env.j2').splitlines() }}"
+        daemon_policy: "{{ lookup('template', templates + '/daemon.json.j2') | from_json }}"
+      ansible.builtin.assert:
+        that:
+          # Nothing starts at boot or restarts on its own.
+          - "'[Install]' not in daemon_unit and '[Install]' not in service_unit"
+          - "'Restart=no' in daemon_unit and 'Restart=no' in service_unit"
+          # The dedicated rootless daemon: fixed socket, pinned modes, attached netns.
+          - "'--host=unix:///run/ditto-coding-certification-docker/docker.sock' in daemon_unit"
+          - "'ExecStartPost=/usr/bin/chmod 0600 /run/ditto-coding-certification-docker/docker.sock' in daemon_unit"
+          - "'RuntimeDirectoryMode=0700' in daemon_unit"
+          - "'DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false' in daemon_unit"
+          - "'tcp://' not in daemon_unit"
+          - daemon_policy.bip == '10.203.0.1/24'
+          - daemon_policy.labels == ['io.heyditto.dittobench.isolated=true']
+          - daemon_policy.ipv6 is sameas false
+          - daemon_policy.icc is sameas false
+          - daemon_policy['live-restore'] is sameas false
+          # The service: fixed control socket directory, credential by reference only.
+          - "'User=ditto-coding-cert' in service_unit"
+          - "'SupplementaryGroups=ditto-coding-cert-clients' in service_unit"
+          - "'RuntimeDirectory=ditto-coding-certification' in service_unit"
+          - "'RuntimeDirectoryMode=0750' in service_unit"
+          - "'RuntimeDirectoryPreserve=yes' in service_unit"
+          - "'LoadCredential=control-token:/etc/ditto-coding-certification/control-token' in service_unit"
+          - "'BindReadOnlyPaths=/run/user/61001/dockerd-rootless/child_pid' in service_unit"
+          - "'BindsTo=ditto-coding-certification-docker.service' in service_unit"
+          # Rendered default-off, with only certification-owned settings.
+          - "'DITTOBENCH_CODING_CERTIFICATION_SERVICE_ENABLED=false' in environment_file"
+          - "'DITTOBENCH_CODING_CERTIFICATION_ROUTER_LISTEN=10.203.0.1:11438' in environment_file"
+          - "'DITTOBENCH_CODING_CERTIFICATION_CONTROL_GID=61002' in environment_file"
+          - "'DITTOBENCH_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST=sha256:' + '1' * 64 in environment_file"
+          - "'DITTOBENCH_CODING_CERTIFICATION_ROUTER_HELPER_SHA256=' + '3' * 64 in environment_file"
+          - "'DITTOBENCH_CODING_CERTIFICATION_MAX_LIFETIME_SECONDS=7200' in environment_file"
+          - "'DITTOBENCH_CODING_CERTIFICATION_IDLE_TIMEOUT_SECONDS=900' in environment_file"
+          - environment_file | select('search', 'SANDBOX|DOCKER_HOST|PROXY=|CA_BUNDLE|SSL_CERT|TOKEN') | reject('search', '^DITTOBENCH_CODING_CERTIFICATION_EGRESS_PROXY=') | list == []
+
+    - name: Reject every incomplete or unsafe render profile
+      ansible.builtin.include_tasks: coding-certification-service-reject.yml
+      loop_control:
+        loop_var: case
+        label: "{{ case.name }}"
+      loop:
+        - {name: missing render root, set: {coding_certification_service_render_root: ""}}
+        - {name: relative render root, set: {coding_certification_service_render_root: "render"}}
+        - {name: render into etc, set: {coding_certification_service_render_root: "/etc/systemd/system"}}
+        - {name: render into usr, set: {coding_certification_service_render_root: "/usr/local/lib/ditto-coding-certification"}}
+        - {name: render into run, set: {coding_certification_service_render_root: "/run/ditto-coding-certification"}}
+        - {name: render into var, set: {coding_certification_service_render_root: "/var/lib/ditto-coding-certification"}}
+        - {name: render root with a parent segment, set: {coding_certification_service_render_root: "/tmp/../etc"}}
+        - {name: root service uid, set: {coding_certification_service_uid: 0}}
+        - {name: root client gid, set: {coding_certification_service_client_gid: 0}}
+        - {name: non-numeric uid, set: {coding_certification_service_uid: "ditto"}}
+        - {name: client group equal to the service user, set: {coding_certification_service_client_group: ditto-coding-cert}}
+        - {name: public bip, set: {coding_certification_service_bip: "8.8.8.1/24"}}
+        - {name: bip without a prefix, set: {coding_certification_service_bip: "10.203.0.1"}}
+        - {name: privileged router port, set: {coding_certification_service_router_port: 443}}
+        - {name: router port above 65535, set: {coding_certification_service_router_port: 70000}}
+        - {name: missing egress network, set: {coding_certification_service_egress_network: ""}}
+        - {name: public egress proxy, set: {coding_certification_service_egress_proxy: "http://8.8.8.8:3128"}}
+        - {name: egress proxy by hostname, set: {coding_certification_service_egress_proxy: "http://proxy:3128"}}
+        - {name: runtime image tag, set: {coding_certification_service_runtime_image_digest: "latest"}}
+        - {name: repository with a tag, set: {coding_certification_service_runtime_image_repository: "registry.invalid/runtime:latest"}}
+        - {name: missing router helper digest, set: {coding_certification_service_router_helper_sha256: ""}}
+        - {name: lifetime below one hour, set: {coding_certification_service_max_lifetime_seconds: 3599}}
+        - {name: lifetime above twelve hours, set: {coding_certification_service_max_lifetime_seconds: 43201}}
+        - {name: zero lifetime, set: {coding_certification_service_max_lifetime_seconds: 0}}
+        - {name: lifetime with a unit, set: {coding_certification_service_max_lifetime_seconds: "2h"}}
+        - {name: idle below ten minutes, set: {coding_certification_service_idle_timeout_seconds: 599}}
+        - {name: idle above the lifetime, set: {coding_certification_service_max_lifetime_seconds: 3600, coding_certification_service_idle_timeout_seconds: 3601}}
+        - {name: idle with a leading zero, set: {coding_certification_service_idle_timeout_seconds: "0900"}}
+        - {name: uppercase manifest digest, set: {coding_certification_service_pack_manifest_sha256: "CB608113DB0CC31001FE0A7294854453061F9E85D1471520100CE99ECA97A903"}}

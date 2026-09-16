@@ -1,5 +1,5 @@
 [Unit]
-Description=Approved private shadow Coding {{ 'cohort' if coding_hosted_worker_mode == 'rollout' else 'attempt' }}
+Description=Approved private shadow Coding {{ 'cohort' if coding_hosted_worker_mode == 'rollout' else 'network enforcement collection' if coding_hosted_worker_mode == 'network_enforcement' else 'attempt' }}
 Requires=ditto-coding-hosted-egress.service user@{{ coding_hosted_uid }}.service
 After=ditto-coding-hosted-egress.service user@{{ coding_hosted_uid }}.service
 BindsTo=ditto-coding-hosted-egress.service user@{{ coding_hosted_uid }}.service
@@ -12,7 +12,13 @@ Slice=system.slice
 Delegate=no
 UMask=0077
 WorkingDirectory=/var/lib/ditto-coding-hosted
-{% if coding_hosted_worker_mode == 'rollout' %}
+{% if coding_hosted_worker_mode == 'network_enforcement' %}
+# B5 PR4 network enforcement collection only: the release-recorded probe runner
+# serves one root collector session in this exact cgroup. No private input,
+# credential or worker configuration is read.
+ExecStartPre=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/connectivity-policy.py install
+ExecStart={{ coding_hosted_probe_runner }} net-agent --unix /run/ditto-coding-hosted-enforcement/agent.sock
+{% elif coding_hosted_worker_mode == 'rollout' %}
 ExecStartPre=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/connectivity-policy.py install-rollout {{ coding_hosted_rollout_connectivity_sha256 }}
 ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 {{ coding_hosted_worker_python }} -B -I -m ditto.coding_bounded_rollout --bounded-shadow-once --config {{ coding_hosted_worker_config }} --approval-sha256 {{ coding_hosted_rollout_approval_sha256 }} --connectivity-sha256 {{ coding_hosted_rollout_connectivity_sha256 }}
 {% else %}
@@ -20,6 +26,11 @@ ExecStartPre=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/connectivit
 ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 {{ coding_hosted_worker_python }} -I -m ditto.coding_hosted_worker --private-shadow-once --config {{ coding_hosted_worker_config }}
 {% endif %}
 ExecStopPost=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/connectivity-policy.py revoke
+{% if coding_hosted_worker_mode == 'network_enforcement' %}
+# After revoke, still in this cgroup and as this user: one-shot attempts from
+# the collector's plan, gated until the collector has measured the process.
+ExecStopPost={{ coding_hosted_probe_runner }} net-once --gate /run/ditto-coding-hosted-enforcement/gate --plan /run/ditto-coding-hosted-enforcement/plan.json --report /run/ditto-coding-hosted-enforcement/report.json
+{% endif %}
 Restart=no
 KillMode={{ 'mixed' if coding_hosted_worker_mode == 'rollout' else 'control-group' }}
 TimeoutStartSec=60
@@ -28,7 +39,17 @@ NoNewPrivileges=yes
 ProtectControlGroups=yes
 ProtectKernelTunables=yes
 ProtectKernelModules=yes
+{% if coding_hosted_router_namespace == 'rootless-netns' %}
+# The in-namespace router listener needs RootlessKit's child pid, which is
+# written below the daemon user's runtime directory. Expose only that file.
+# systemd creates the bind's missing parents as root 0755 with the umask blocked
+# during namespace setup, so UMask=0077 cannot hide them from the worker
+# (verified under systemd 255 and 257).
+ProtectHome=tmpfs
+BindReadOnlyPaths=/run/user/{{ coding_hosted_uid }}/dockerd-rootless/child_pid
+{% else %}
 ProtectHome=yes
+{% endif %}
 PrivateDevices=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_NETLINK
 StandardOutput=null

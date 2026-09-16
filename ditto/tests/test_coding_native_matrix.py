@@ -2,9 +2,12 @@
 
 import copy
 import hashlib
+import importlib
 import importlib.util
+import inspect
 import json
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,11 +25,18 @@ assert SPEC is not None and SPEC.loader is not None
 NATIVE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NATIVE)
 SOURCE = "b" * 40
+ROOT = Path(__file__).parents[2]
+DAEMON_VECTOR = json.loads(
+    (
+        ROOT / "services/dittobench-api/internal/codingenforcement/catalog/testdata/"
+        "daemon-identity-vector-v1.json"
+    ).read_bytes()
+)
 
 
 def approval():
     return {
-        "schema": "dittobench-coding-native-controls-approval-v2",
+        "schema": "dittobench-coding-native-controls-approval-v3",
         "purpose": "private-compatibility-once",
         "source_revision": SOURCE,
         "release_manifest_sha256": "1" * 64,
@@ -34,8 +44,11 @@ def approval():
         "helper_sha256": "3" * 64,
         "runner_sha256": "4" * 64,
         "binding_sha256": "5" * 64,
+        "evidence_tool_sha256": "d" * 64,
+        "curator_signing_key_sha256": NATIVE.CURATOR_SIGNING_KEY_SHA256,
         "machine_id_sha256": "6" * 64,
         "boot_id": "11111111-2222-3333-4444-555555555555",
+        "daemon_identity": copy.deepcopy(DAEMON_VECTOR["identity"]),
         "issued_at_unix": 900,
         "expires_at_unix": 2000,
         "controls": 32,
@@ -51,6 +64,7 @@ def approval():
             for lang, profile in NATIVE.PROFILES.items()
         },
         "evidence_sha256": dict.fromkeys(NATIVE.EVIDENCE, "8" * 64),
+        "profile_pins": dict.fromkeys(NATIVE.PROFILE_PINS, "e" * 64),
         "shadow_only": True,
         "weight_eligible": False,
     }
@@ -89,6 +103,13 @@ def validate(value):
         ("evidence_sha256", {}),
         ("images", {}),
         ("extra", True),
+        ("schema", "dittobench-coding-native-controls-approval-v2"),
+        ("evidence_tool_sha256", "0" * 64),
+        ("curator_signing_key_sha256", "short"),
+        ("daemon_identity", {}),
+        ("daemon_identity", None),
+        ("profile_pins", {}),
+        ("profile_pins", {"execution_profile_sha256": "e" * 64}),
     ],
 )
 def test_native_approval_is_exact_bounded_and_not_an_activation(field, value):
@@ -102,7 +123,7 @@ def test_native_approval_is_exact_bounded_and_not_an_activation(field, value):
 def test_release_index_and_each_image_pin_must_match():
     value = approval()
     release = {
-        "schema": "dittobench-coding-native-release-set-v2",
+        "schema": "dittobench-coding-native-release-set-v3",
         "source_revision": SOURCE,
         "images": copy.deepcopy(value["images"]),
         "independent_approval_required": True,
@@ -125,7 +146,10 @@ def test_release_index_and_each_image_pin_must_match():
 def bare_binding(monkeypatch):
     binding = NATIVE.Binding.__new__(NATIVE.Binding)
     binding.value, binding.approval_sha = approval(), "9" * 64
-    binding.deadline, binding.daemon, binding.consumed = 2000, "synthetic-daemon", False
+    binding.signature_sha = "f" * 64
+    binding.deadline, binding.consumed = 2000, False
+    binding.daemon = DAEMON_VECTOR["identity_sha256"]
+    binding.daemon_observations = []
     binding.image_policy = IMAGE
     monkeypatch.setattr(binding, "check_current", lambda: None)
     return binding
@@ -223,7 +247,7 @@ def test_boot_binding_and_monotonic_expiry_cannot_be_extended(monkeypatch):
     [
         ["--private-native-controls-once"],
         ["--native-approval", "/unread/approval"],
-        ["--native-approval-sha256", "a" * 64],
+        ["--native-approval-signature", "/unread/approval.sig"],
         ["--native-release-index", "/unread/release"],
     ],
 )
@@ -542,8 +566,8 @@ def test_native_runner_wiring_retains_manifest_authority_without_real_docker(
             "--private-native-controls-once",
             "--native-approval",
             "/unused/approval",
-            "--native-approval-sha256",
-            "9" * 64,
+            "--native-approval-signature",
+            "/unused/approval.sig",
             "--native-release-index",
             "/unused/release",
         ],
@@ -572,3 +596,623 @@ def test_native_runner_wiring_retains_manifest_authority_without_real_docker(
     assert (
         len(list(destination.glob("case-*"))) == 64
     )  # inputs and observations retained
+
+
+# ---------------------------------------------------------------------------
+# B5 PR 3a: on-host curator signature and daemon identity (Peyton, 2026-09-15)
+
+EVIDENCE_TESTS = importlib.import_module(
+    "ditto.tests.test_coding_native_enforcement_evidence"
+)
+Curator = EVIDENCE_TESTS.Curator
+needs_openssl = EVIDENCE_TESTS.needs_openssl
+EXPECTED = {
+    "source": SOURCE,
+    "plan_sha": "2" * 64,
+    "helper_sha": "3" * 64,
+    "controls": 32,
+    "jobs": 2,
+}
+
+
+class HostApproval:
+    """A synthetic curator, a copied verifier checkout and private files."""
+
+    def __init__(self, tmp_path, monkeypatch):
+        self.directory = tmp_path / "private"
+        self.directory.mkdir(mode=0o700)
+        self.curator = Curator(tmp_path / "curator", "curator")
+        checkout = tmp_path / "checkout"
+        verifier = checkout / NATIVE.VERIFIER
+        verifier.parent.mkdir(parents=True)
+        verifier.write_bytes((ROOT / NATIVE.VERIFIER).read_bytes())
+        verifier.chmod(0o644)
+        self.verifier_sha = NATIVE.sha(verifier.read_bytes())
+        self.reads = []
+        real_read = NATIVE.read_private
+
+        def read_private(path, maximum):
+            self.reads.append(path)
+            return real_read(path, maximum)
+
+        monkeypatch.setattr(NATIVE, "ROOT", checkout)
+        monkeypatch.setattr(NATIVE, "OPENSSL", Path(EVIDENCE_TESTS.OPENSSL_BIN))
+        monkeypatch.setattr(NATIVE, "protected_parents", lambda _path: None)
+        monkeypatch.setattr(NATIVE, "read_private", read_private)
+        monkeypatch.setattr(
+            NATIVE, "CURATOR_SIGNING_PUBLIC_KEY", self.curator.public.read_bytes()
+        )
+        monkeypatch.setattr(
+            NATIVE, "CURATOR_SIGNING_KEY_SHA256", self.curator.key_sha256
+        )
+
+    def value(self, **overrides):
+        value = approval()
+        value.update(
+            curator_signing_key_sha256=self.curator.key_sha256,
+            evidence_tool_sha256=self.verifier_sha,
+        )
+        value.update(overrides)
+        return value
+
+    def write(self, value=None, *, raw=None, signer=None, name="approval"):
+        body = raw if raw is not None else NATIVE.canonical(value or self.value())
+        path = self.directory / f"{name}.json"
+        path.write_bytes(body)
+        path.chmod(0o600)
+        signature = (signer or self.curator).sign(body, self.directory / f"{name}.sig")
+        signature.chmod(0o600)
+        return path, signature
+
+    def authorize(self, path, signature):
+        return NATIVE.authorize(path, signature, now=1000, **EXPECTED)
+
+
+@pytest.fixture
+def host_approval(tmp_path, monkeypatch):
+    return HostApproval(tmp_path, monkeypatch)
+
+
+@needs_openssl
+def test_host_verifies_the_curator_signature_over_the_stored_approval(
+    host_approval,
+):
+    path, signature = host_approval.write()
+    value, approval_sha, signature_sha = host_approval.authorize(path, signature)
+    assert value == host_approval.value()
+    assert approval_sha == NATIVE.sha(path.read_bytes())
+    assert signature_sha == NATIVE.sha(signature.read_bytes())
+    # One read each: the verified bytes are the only approval ever parsed.
+    assert host_approval.reads == [path, signature]
+
+
+@needs_openssl
+def test_host_refuses_a_bad_signature(host_approval):
+    path, signature = host_approval.write()
+    raw = bytearray(signature.read_bytes())
+    raw[10] ^= 1
+    signature.write_bytes(bytes(raw))
+    with pytest.raises(ValueError, match="does not verify"):
+        host_approval.authorize(path, signature)
+    # A validly signed approval edited afterwards is refused too.
+    path, signature = host_approval.write()
+    path.write_bytes(path.read_bytes().replace(b'"controls":32', b'"controls":64'))
+    with pytest.raises(ValueError, match="does not verify"):
+        host_approval.authorize(path, signature)
+
+
+@needs_openssl
+def test_host_refuses_another_key(host_approval, tmp_path, monkeypatch):
+    other = Curator(tmp_path / "other", "other")
+    path, signature = host_approval.write(signer=other)
+    with pytest.raises(ValueError, match="does not verify"):
+        host_approval.authorize(path, signature)
+    # Substituting the verification key alone is caught by the pinned identity.
+    monkeypatch.setattr(NATIVE, "CURATOR_SIGNING_PUBLIC_KEY", other.public.read_bytes())
+    with pytest.raises(ValueError, match="native control approval rejected"):
+        host_approval.authorize(path, signature)
+    # A validly signed approval that names another key is refused.
+    monkeypatch.setattr(
+        NATIVE, "CURATOR_SIGNING_PUBLIC_KEY", host_approval.curator.public.read_bytes()
+    )
+    path, signature = host_approval.write(
+        host_approval.value(curator_signing_key_sha256=other.key_sha256)
+    )
+    with pytest.raises(ValueError, match="native control approval rejected"):
+        host_approval.authorize(path, signature)
+
+
+@needs_openssl
+def test_host_refuses_a_missing_or_malformed_signature(host_approval):
+    path, signature = host_approval.write()
+    signature.unlink()
+    with pytest.raises(OSError):
+        host_approval.authorize(path, signature)
+    path, signature = host_approval.write()
+    signature.write_bytes(signature.read_bytes()[:63])
+    with pytest.raises(ValueError):
+        host_approval.authorize(path, signature)
+    signature.write_bytes(b"")
+    with pytest.raises(ValueError):
+        host_approval.authorize(path, signature)
+    path, signature = host_approval.write()
+    signature.chmod(0o644)
+    with pytest.raises(ValueError):
+        host_approval.authorize(path, signature)
+
+
+@needs_openssl
+def test_host_accepts_a_signed_noncanonical_approval_by_its_exact_bytes(
+    host_approval,
+):
+    """Peyton, 2026-09-16: the signature covers the stored bytes, not a
+    re-serialization, so a pretty-printed signed approval is accepted and its
+    digest is the sha256 of exactly those bytes."""
+
+    raw = json.dumps(host_approval.value(), indent=2).encode() + b"\n"
+    assert raw != NATIVE.canonical(host_approval.value())
+    path, signature = host_approval.write(raw=raw)
+    value, approval_sha, _signature_sha = host_approval.authorize(path, signature)
+    assert value == host_approval.value()
+    assert approval_sha == NATIVE.sha(raw)
+    assert approval_sha != NATIVE.sha(NATIVE.canonical(value))
+    assert host_approval.reads == [path, signature]
+
+
+@needs_openssl
+@pytest.mark.parametrize("pretty", [False, True])
+def test_host_refuses_a_one_byte_tampered_approval(host_approval, pretty):
+    body = (
+        json.dumps(host_approval.value(), indent=2).encode()
+        if pretty
+        else NATIVE.canonical(host_approval.value())
+    )
+    path, signature = host_approval.write(raw=body)
+    host_approval.authorize(path, signature)
+    # Even a semantically neutral byte (whitespace) voids the signature.
+    for index, replacement in ((len(body) - 1, b" }"), (1, b" " + body[1:2])):
+        tampered = body[:index] + replacement + body[index + 1 :]
+        path.write_bytes(tampered)
+        with pytest.raises(ValueError, match="does not verify"):
+            host_approval.authorize(path, signature)
+    flipped = bytearray(body)
+    flipped[len(body) // 2] ^= 1
+    path.write_bytes(bytes(flipped))
+    with pytest.raises(ValueError, match="does not verify"):
+        host_approval.authorize(path, signature)
+
+
+@needs_openssl
+@pytest.mark.parametrize(
+    "raw",
+    [
+        lambda b: b[:-1] + b',"schema":"x"}',
+        lambda b: b + b"{}",
+        lambda b: b + b"x",
+        lambda b: b.replace(NATIVE.APPROVAL_SCHEMA.encode(), b"other-schema-v3"),
+        lambda b: b.replace(b'"controls":32', b'"controls":32.0'),
+        lambda b: b"\xef\xbb\xbf" + b,
+        lambda b: b[:-1] + b',"extra":true}',
+    ],
+    ids=[
+        "duplicate",
+        "trailing-json",
+        "trailing-text",
+        "schema",
+        "float",
+        "bom",
+        "extra",
+    ],
+)
+def test_host_parses_signed_approval_bytes_strictly(host_approval, raw):
+    path, signature = host_approval.write(
+        raw=raw(NATIVE.canonical(host_approval.value()))
+    )
+    with pytest.raises(ValueError):
+        host_approval.authorize(path, signature)
+
+
+@needs_openssl
+def test_host_caps_approval_validity_at_24_hours(host_approval):
+    path, signature = host_approval.write(
+        host_approval.value(issued_at_unix=900, expires_at_unix=900 + 86400)
+    )
+    host_approval.authorize(path, signature)
+    path, signature = host_approval.write(
+        host_approval.value(issued_at_unix=900, expires_at_unix=900 + 86401)
+    )
+    with pytest.raises(ValueError, match="native control approval rejected"):
+        host_approval.authorize(path, signature)
+    assert NATIVE.APPROVAL_MAX_VALIDITY_SECONDS == 24 * 60 * 60
+    # Expired and not-yet-valid approvals are refused as before.
+    for issued, expires in ((500, 1000), (1001, 2000)):
+        path, signature = host_approval.write(
+            host_approval.value(issued_at_unix=issued, expires_at_unix=expires)
+        )
+        with pytest.raises(ValueError, match="native control approval rejected"):
+            host_approval.authorize(path, signature)
+
+
+@needs_openssl
+def test_host_refuses_a_verifier_other_than_the_signed_one(host_approval):
+    path, signature = host_approval.write(
+        host_approval.value(evidence_tool_sha256="c" * 64)
+    )
+    with pytest.raises(ValueError, match="native control approval rejected"):
+        host_approval.authorize(path, signature)
+    verifier = NATIVE.ROOT / NATIVE.VERIFIER
+    verifier.chmod(0o664)
+    path, signature = host_approval.write()
+    with pytest.raises(ValueError):
+        host_approval.authorize(path, signature)
+
+
+@needs_openssl
+def test_host_refuses_a_signed_approval_for_another_invocation(host_approval):
+    path, signature = host_approval.write(host_approval.value(controls=16))
+    with pytest.raises(ValueError, match="native control approval rejected"):
+        host_approval.authorize(path, signature)
+    path, signature = host_approval.write(host_approval.value(issued_at_unix=1001))
+    with pytest.raises(ValueError, match="native control approval rejected"):
+        host_approval.authorize(path, signature)
+
+
+def test_hash_only_invocation_is_refused_before_reading_anything(monkeypatch):
+    def forbidden(*_args):
+        pytest.fail("a hash-only invocation read private input")
+
+    monkeypatch.setattr(RUNNER, "private_document", forbidden)
+    base = [
+        "run",
+        "--plan",
+        "/unread/plan",
+        "--images",
+        "/unread/images",
+        "--corpus",
+        "/unread/corpus",
+        "--helper",
+        "/unread/helper",
+        "--checkout",
+        "/unread/checkout",
+        "--output",
+        "/unread/output",
+        "--private-native-controls-once",
+        "--native-approval",
+        "/unread/approval",
+        "--native-release-index",
+        "/unread/release",
+    ]
+    for extra in (
+        ["--native-approval-sha256", "a" * 64],
+        ["--native-approval-sha", "a" * 64],
+        # A prefix of --native-approval-signature is not accepted as one.
+        ["--native-approval-sig", "/unread/signature"],
+        [],
+    ):
+        monkeypatch.setattr(RUNNER.sys, "argv", [*base, *extra])
+        with pytest.raises(SystemExit) as error:
+            RUNNER.main()
+        assert error.value.code == 2
+    assert "native_approval_sha256" not in Path(RUNNER_FILE).read_text()
+    assert "expected_sha" not in inspect.signature(NATIVE.Binding).parameters
+
+
+def test_the_curator_key_is_pinned_in_source_not_selected_at_runtime():
+    assert list(inspect.signature(NATIVE.authorize).parameters) == [
+        "approval_path",
+        "signature_path",
+        "now",
+        "expected",
+    ]
+    source = Path(NATIVE.__file__).read_text()
+    assert "os.environ" not in source and "getenv" not in source
+    namespace = {"__name__": "verifier", "__builtins__": __builtins__}
+    raw = (ROOT / NATIVE.VERIFIER).read_bytes()
+    exec(compile(raw, NATIVE.VERIFIER, "exec", dont_inherit=True), namespace)
+    key = namespace["curator_public_key"](NATIVE.CURATOR_SIGNING_PUBLIC_KEY)
+    assert NATIVE.sha(key) == NATIVE.CURATOR_SIGNING_KEY_SHA256
+    # Stage 3 custody record: the registry identity of Peyton's offline key.
+    assert NATIVE.CURATOR_SIGNING_KEY_SHA256 == (
+        "aa7e1d820f2cfea52932c21629c0f51d3b1f9c2362b218e7a8759e32fd8b2220"
+    )
+
+
+def test_no_native_or_evidence_tool_can_mint_an_approval():
+    for relative in (
+        NATIVE.VERIFIER,
+        "services/dittobench-api/coding_runtime/qualification/native.py",
+        "services/dittobench-api/coding_runtime/qualification/run.py",
+        "infra/scripts/inspect-coding-native-host.py",
+    ):
+        source = (ROOT / relative).read_text()
+        for forbidden in ('"-sign"', "genpkey", "private_key", "Ed25519PrivateKey"):
+            assert forbidden not in source, (relative, forbidden)
+
+
+def test_native_daemon_identity_matches_the_shared_go_vector():
+    info = DAEMON_VECTOR["info"]
+    identity = NATIVE.daemon_identity(copy.deepcopy(info))
+    assert NATIVE.canonical(identity).decode() == DAEMON_VECTOR["identity_canonical"]
+    assert NATIVE.daemon_identity_sha256(identity) == DAEMON_VECTOR["identity_sha256"]
+    assert str(NATIVE.SOCKET) == DAEMON_VECTOR["socket_path"]
+    for key, value in DAEMON_VECTOR["volatile"].items():
+        assert NATIVE.daemon_identity({**info, key: value}) == identity, key
+    for key, value in DAEMON_VECTOR["binding"].items():
+        assert NATIVE.daemon_identity({**info, key: value}) != identity, key
+    for key, value in DAEMON_VECTOR["refused"].items():
+        with pytest.raises(ValueError):
+            NATIVE.daemon_identity({**info, key: value})
+        with pytest.raises(ValueError):
+            NATIVE.daemon_identity({k: v for k, v in info.items() if k != key})
+    for socket_path in ("", "relative.sock", "//run/docker.sock", "/run/../x.sock"):
+        with pytest.raises(ValueError):
+            NATIVE.daemon_identity(copy.deepcopy(info), socket_path)
+
+
+def daemon_binding(monkeypatch, *, peer_uid=None):
+    binding = bare_binding(monkeypatch)
+    binding.daemon = None
+    binding.image_policy = SimpleNamespace(validate_daemon=lambda _info: None)
+    uid = os.geteuid() if peer_uid is None else peer_uid
+    monkeypatch.setattr(NATIVE, "socket_peer_uid", lambda: uid)
+    return binding
+
+
+def test_daemon_identity_must_equal_the_approved_identity(monkeypatch):
+    binding = daemon_binding(monkeypatch)
+    binding.check_daemon(copy.deepcopy(DAEMON_VECTOR["info"]))
+    assert binding.daemon == DAEMON_VECTOR["identity_sha256"]
+    assert binding.provenance()["daemon_identity_sha256"] == binding.daemon
+    assert binding.provenance()["daemon_identity_observations"] == []
+    hard = {k: v for k, v in DAEMON_VECTOR["binding"].items() if k != "ServerVersion"}
+    assert {"ID", "DockerRootDir", "Driver", "Containerd"} <= set(hard)
+    for key, value in hard.items():
+        other = daemon_binding(monkeypatch)
+        with pytest.raises(ValueError):
+            other.check_daemon({**DAEMON_VECTOR["info"], key: value})
+        assert other.daemon is None
+    # A different daemon (engine ID) is refused even if its version matches.
+    other = daemon_binding(monkeypatch)
+    with pytest.raises(ValueError):
+        other.check_daemon(
+            {**DAEMON_VECTOR["info"], "ID": DAEMON_VECTOR["binding"]["ID"]}
+        )
+    # The daemon cannot change between the checks before and after the matrix.
+    with pytest.raises(ValueError):
+        binding.check_daemon(
+            {**DAEMON_VECTOR["info"], "ID": DAEMON_VECTOR["binding"]["ID"]}
+        )
+    assert binding.provenance()["daemon_identity_observations"] == []
+
+
+def test_daemon_server_version_change_is_observed_not_refused(monkeypatch):
+    """Peyton, 2026-09-16: a Docker patch upgrade must not void every approval."""
+
+    binding = daemon_binding(monkeypatch)
+    upgraded = {**DAEMON_VECTOR["info"], "ServerVersion": "29.1.4"}
+    assert NATIVE.daemon_identity(copy.deepcopy(upgraded))["server_version"] == "29.1.4"
+    binding.check_daemon(copy.deepcopy(upgraded))
+    binding.check_daemon(copy.deepcopy(upgraded))
+    # Provenance keeps binding the approved identity digest (the evidence
+    # daemon) and reports the version drift once.
+    provenance = binding.provenance()
+    assert provenance["daemon_identity_sha256"] == DAEMON_VECTOR["identity_sha256"]
+    assert provenance["daemon_identity_observations"] == [
+        {
+            "field": "server_version",
+            "approved": DAEMON_VECTOR["identity"]["server_version"],
+            "observed": "29.1.4",
+        }
+    ]
+    # A version change never excuses a different daemon.
+    with pytest.raises(ValueError):
+        binding.check_daemon({**upgraded, "ID": DAEMON_VECTOR["binding"]["ID"]})
+    assert {"server_version"} == NATIVE.DAEMON_OBSERVED_KEYS
+
+
+def test_daemon_socket_must_be_served_by_the_native_principal(monkeypatch):
+    binding = daemon_binding(monkeypatch, peer_uid=os.geteuid() + 1)
+    with pytest.raises(ValueError):
+        binding.check_daemon(copy.deepcopy(DAEMON_VECTOR["info"]))
+    assert binding.daemon is None
+
+
+def test_daemon_check_refuses_a_different_boot(monkeypatch):
+    binding = daemon_binding(monkeypatch)
+
+    def other_boot():
+        raise ValueError("native control approval rejected")
+
+    monkeypatch.setattr(binding, "check_current", other_boot)
+    with pytest.raises(ValueError):
+        binding.check_daemon(copy.deepcopy(DAEMON_VECTOR["info"]))
+    assert binding.daemon is None
+
+
+def test_ambient_docker_environment_never_selects_the_daemon(monkeypatch):
+    for name, value in (
+        ("DOCKER_HOST", "tcp://198.51.100.7:2375"),
+        ("DOCKER_CONTEXT", "attacker"),
+        ("DOCKER_CONFIG", "/tmp/attacker"),
+        ("DOCKER_CERT_PATH", "/tmp/attacker"),
+    ):
+        monkeypatch.setenv(name, value)
+    environment = NATIVE.native_environment()
+    assert environment == {
+        "PATH": "/usr/bin:/bin",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "DOCKER_HOST": f"unix://{NATIVE.SOCKET}",
+        "DOCKER_CONFIG": str(NATIVE.HOME_DIR / "empty-client"),
+    }
+    # The approved identity names the fixed socket, so a daemon reached any
+    # other way cannot present it.
+    assert approval()["daemon_identity"]["socket_path"] == str(NATIVE.SOCKET)
+    with pytest.raises(ValueError):
+        NATIVE.daemon_identity_policy(
+            {**approval()["daemon_identity"], "socket_path": "/run/other.sock"}
+        )
+
+
+def protected_runner_copy(tmp_path, monkeypatch, native=None):
+    """run.py beside a native.py copy; ancestors are checked separately."""
+    directory = tmp_path / "qualification"
+    directory.mkdir()
+    runner = directory / "run.py"
+    runner.write_bytes(Path(RUNNER_FILE).read_bytes())
+    path = directory / "native.py"
+    real = Path(RUNNER_FILE).with_name("native.py").read_bytes()
+    path.write_bytes(real if native is None else native)
+    path.chmod(0o644)
+    monkeypatch.setattr(RUNNER, "__file__", str(runner))
+    monkeypatch.setattr(RUNNER, "protected_ancestors", lambda _path: None)
+    return path
+
+
+def test_runner_compiles_the_binding_it_hashes(monkeypatch, tmp_path):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("native.py must not load through an import loader")
+
+    path = protected_runner_copy(tmp_path, monkeypatch)
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", forbidden)
+    loaded = RUNNER.load_native()
+    expected = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert expected == loaded.LOADED_SHA256
+    assert loaded.__file__ == str(path)
+    assert callable(loaded.authorize)
+    assert 'globals().get("LOADED_SHA256")' in path.read_text()
+
+
+def test_runner_refuses_an_editable_binding_before_compiling_it(monkeypatch, tmp_path):
+    # Binding's own ownership checks run inside native.py, too late to refuse a
+    # substituted module, so run.py checks before any byte is compiled.
+    path = protected_runner_copy(
+        tmp_path, monkeypatch, native=b"raise SystemExit('compiled')\n"
+    )
+    path.chmod(0o664)
+    with pytest.raises(ValueError, match="native binding rejected"):
+        RUNNER.load_native()
+    path.chmod(0o644)
+    link = path.with_name("second-link.py")
+    os.link(path, link)
+    with pytest.raises(ValueError, match="native binding rejected"):
+        RUNNER.load_native()
+    link.unlink()
+    with pytest.raises(SystemExit, match="compiled"):
+        RUNNER.load_native()
+    # A shared writable ancestor (here /tmp) is refused as well.
+    monkeypatch.setattr(RUNNER, "protected_ancestors", PROTECTED_ANCESTORS)
+    with pytest.raises(ValueError, match="native binding rejected"):
+        RUNNER.load_native()
+    PROTECTED_ANCESTORS(Path("/usr/bin/native.py"))
+
+
+PROTECTED_ANCESTORS = RUNNER.protected_ancestors
+
+
+@pytest.mark.usefixtures("host_approval")
+def test_host_verifier_is_protected_and_single_link_before_it_runs():
+    verifier = NATIVE.ROOT / NATIVE.VERIFIER
+    verifier.write_bytes(b"raise SystemExit('verifier ran')\n")
+    verifier.chmod(0o644)
+    with pytest.raises(SystemExit, match="verifier ran"):
+        NATIVE.load_verifier()
+    link = verifier.with_name("second-link.py")
+    os.link(verifier, link)
+    with pytest.raises(ValueError, match="native control approval rejected"):
+        NATIVE.load_verifier()
+    link.unlink()
+    refused = []
+
+    def unprotected(path):
+        refused.append(path)
+        raise ValueError("native control approval rejected")
+
+    NATIVE.protected_parents, real = unprotected, NATIVE.protected_parents
+    try:
+        with pytest.raises(ValueError, match="native control approval rejected"):
+            NATIVE.load_verifier()
+    finally:
+        NATIVE.protected_parents = real
+    assert refused == [verifier]
+
+
+def test_native_daemon_data_root_is_pinned():
+    identity = approval()["daemon_identity"]
+    NATIVE.daemon_identity_policy(identity)
+    with pytest.raises(ValueError):
+        NATIVE.daemon_identity_policy(
+            {**identity, "docker_root_dir": "/var/lib/other/docker"}
+        )
+
+
+def test_private_read_refuses_a_file_changed_while_read(monkeypatch, tmp_path):
+    monkeypatch.setattr(NATIVE, "private", lambda *_args, **_kwargs: None)
+    path = tmp_path / "approval.json"
+    path.write_bytes(b"{}")
+    real_fstat, calls = os.fstat, []
+
+    def changing(fd):
+        info = real_fstat(fd)
+        calls.append(fd)
+        if len(calls) == 1:
+            return info
+        fields = list(info)
+        return os.stat_result(
+            (*fields[:7], info.st_atime, info.st_mtime, info.st_ctime),
+            {"st_mtime_ns": info.st_mtime_ns + 1, "st_ctime_ns": info.st_ctime_ns},
+        )
+
+    assert NATIVE.read_private(path, 16) == b"{}"
+    monkeypatch.setattr(NATIVE.os, "fstat", changing)
+    calls.clear()
+    with pytest.raises(ValueError):
+        NATIVE.read_private(path, 16)
+
+
+CATALOG_DIR = ROOT / "services/dittobench-api/internal/codingenforcement/catalog"
+# Pinned identically in catalog/approval_test.go.
+APPROVAL_VECTOR_SHA256 = (
+    "ce8830672afe8a3daea3c10361968a671a60abf1faea3eebcb71e7f887b3749a"
+)
+
+
+def test_approval_vector_is_canonical_in_both_languages():
+    raw = (CATALOG_DIR / "testdata/approval-vector-v3.json").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == APPROVAL_VECTOR_SHA256
+    value = json.loads(raw)
+    assert NATIVE.canonical(value) == raw
+    NATIVE.policy(
+        copy.deepcopy(value),
+        source=value["source_revision"],
+        plan_sha=value["plan_sha256"],
+        helper_sha=value["helper_sha256"],
+        controls=value["controls"],
+        jobs=1,
+        now=value["issued_at_unix"],
+    )
+    assert value["curator_signing_key_sha256"] == NATIVE.CURATOR_SIGNING_KEY_SHA256
+    assert (
+        NATIVE.daemon_identity_sha256(value["daemon_identity"])
+        == DAEMON_VECTOR["identity_sha256"]
+    )
+    go = (CATALOG_DIR / "approval.go").read_text()
+    assert f'ApprovalSchema = "{NATIVE.APPROVAL_SCHEMA}"' in go
+    block = go.split("var ApprovalKeys = []string{", 1)[1].split("}", 1)[0]
+    assert sorted(re.findall(r'"([a-z0-9_]+)"', block)) == sorted(value)
+    assert (
+        f'approvalVectorSHA256 = "{APPROVAL_VECTOR_SHA256}"'
+        in (CATALOG_DIR / "approval_test.go").read_text()
+    )
+    for key in ("daemon_identity", "profile_pins", "evidence_tool_sha256"):
+        changed = {k: v for k, v in value.items() if k != key}
+        with pytest.raises(ValueError):
+            NATIVE.policy(
+                changed,
+                source=value["source_revision"],
+                plan_sha=value["plan_sha256"],
+                helper_sha=value["helper_sha256"],
+                controls=value["controls"],
+                jobs=1,
+                now=value["issued_at_unix"],
+            )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
@@ -42,6 +43,7 @@ from ditto.db.queries.validator_auth import ValidatorRequestReplayError
 
 _NO_STORE = {"Cache-Control": "no-store"}
 _MAX_REQUEST_BYTES = 8192
+logger = logging.getLogger(__name__)
 
 
 class HostedSigner(Protocol):
@@ -245,7 +247,18 @@ async def control(
             media_type="application/json",
             headers=_NO_STORE,
         )
-    except (HostedAdmissionError, ValidatorRequestReplayError):
+    except (HostedAdmissionError, ValidatorRequestReplayError) as error:
+        # The signed contract has no cancelled state, so the validator sees the
+        # same generic 409 for every refusal. Operators get the reason here;
+        # admission refusal messages are static and carry no private contents.
+        logger.warning(
+            "hosted validator request refused status=409 reason=%s "
+            "evaluation_id=%s validator=%s operation=%s",
+            "nonce replay" if isinstance(error, ValidatorRequestReplayError) else error,
+            payload.evaluation_id,
+            payload.validator_hotkey,
+            payload.operation,
+        )
         raise HTTPException(
             409, "hosted assignment conflict", headers=_NO_STORE
         ) from None

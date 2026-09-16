@@ -35,7 +35,8 @@ func TestHandlerRejectsUnauthorizedAndInvalidRequests(t *testing.T) {
 			LeaseID:             "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 			CapabilitiesRevoked: true, HarnessDestroyed: true,
 		}},
-		Now: func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+		Now:      func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+		Topology: placed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -77,7 +78,8 @@ func TestHandlerRequiresRevokedDestroyedCanaryResult(t *testing.T) {
 			LeaseID: leaseID, CapabilitiesRevoked: true, HarnessDestroyed: true,
 			Receipt: codingcertifier.Receipt{Schema: codingcertifier.CertificationSchema, WeightEligible: false},
 		}},
-		Now: func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+		Now:      func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+		Topology: placed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +145,8 @@ func TestHandlerReportsUnavailableWhenBackendIsMissing(t *testing.T) {
 		Backend: stubBackend{outcome: Outcome{
 			LeaseID: leaseID, CapabilitiesRevoked: true, HarnessDestroyed: true,
 		}},
-		Now: func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+		Now:      func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+		Topology: placed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -167,7 +170,8 @@ func TestHandlerReportsConflictWhenLeaseIsActive(t *testing.T) {
 		Backend: stubBackend{outcome: Outcome{
 			LeaseID: leaseID, CapabilitiesRevoked: true, HarnessDestroyed: true,
 		}},
-		Now: func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+		Now:      func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+		Topology: placed,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -258,5 +262,53 @@ func assertErrorCode(t *testing.T, response *http.Response, want string) {
 	}
 	if payload["error"] != want {
 		t.Fatalf("error=%q", payload["error"])
+	}
+}
+
+type countingBackend struct{ calls *int }
+
+func (backend countingBackend) Certify(context.Context, Request) (Outcome, error) {
+	*backend.calls++
+	return Outcome{}, ErrUnavailable
+}
+
+// Certify re-proves placement before touching the backend. The Compose scorer
+// (no probe) and a service whose listener namespace, rootless topology or
+// control socket no longer hold refuse with 503 and never start a harness.
+func TestHandlerRefusesCertifyWithoutCurrentPlacement(t *testing.T) {
+	t.Parallel()
+	leaseID := "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	for name, topology := range map[string]func(context.Context) TopologyCheck{
+		"no probe": nil,
+		"rootless topology lost": func(context.Context) TopologyCheck {
+			return TopologyCheck{ListenerNamespace: true, ControlSocket: true}
+		},
+		"stale listener namespace": func(context.Context) TopologyCheck {
+			return TopologyCheck{RootlessTopology: true, ControlSocket: true}
+		},
+		"swapped control socket": func(context.Context) TopologyCheck {
+			return TopologyCheck{RootlessTopology: true, ListenerNamespace: true}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			service, err := New(Config{
+				ControlToken: testToken, Backend: countingBackend{calls: &calls},
+				Now:      func() time.Time { return time.Date(2026, 8, 30, 18, 0, 0, 0, time.UTC) },
+				Topology: topology,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := postCanary(t, service, leaseID)
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("status=%d", response.StatusCode)
+			}
+			assertErrorCode(t, response, "placement")
+			if calls != 0 {
+				t.Fatalf("backend called %d times without placement", calls)
+			}
+		})
 	}
 }

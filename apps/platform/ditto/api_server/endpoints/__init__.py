@@ -20,6 +20,9 @@ from ditto.api_server.endpoints.admin_burn_settings import (
 from ditto.api_server.endpoints.admin_coding_catalog import (
     router as admin_coding_catalog_router,
 )
+from ditto.api_server.endpoints.admin_coding_certification_canary import (
+    router as admin_coding_certification_canary_router,
+)
 from ditto.api_server.endpoints.admin_coding_certifications import (
     router as admin_coding_certifications_router,
 )
@@ -28,6 +31,9 @@ from ditto.api_server.endpoints.admin_coding_control_plane import (
 )
 from ditto.api_server.endpoints.admin_coding_evaluations import (
     router as admin_coding_evaluations_router,
+)
+from ditto.api_server.endpoints.admin_coding_hosted_assignments import (
+    router as admin_coding_hosted_assignments_router,
 )
 from ditto.api_server.endpoints.admin_coding_private_v2_releases import (
     router as admin_coding_private_v2_releases_router,
@@ -79,6 +85,9 @@ from ditto.api_server.endpoints.admin_lease_revocations import (
 )
 from ditto.api_server.endpoints.admin_miner_fees import (
     router as admin_miner_fees_router,
+)
+from ditto.api_server.endpoints.admin_noncompetitive_canaries import (
+    router as admin_noncompetitive_canaries_router,
 )
 from ditto.api_server.endpoints.admin_owner import (
     router as admin_owner_router,
@@ -193,15 +202,18 @@ __all__ = [
     "admin_efficiency_bonus_settings_router",
     "admin_inference_routes_router",
     "admin_hotkey_bans_router",
+    "admin_noncompetitive_canaries_router",
     "admin_leaderboard_router",
     "admin_validator_weights_router",
     "admin_lease_revocations_router",
     "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
     "admin_copy_review_router",
+    "admin_coding_certification_canary_router",
     "admin_coding_certifications_router",
     "admin_coding_control_plane_router",
     "admin_coding_catalog_router",
+    "admin_coding_hosted_assignments_router",
     "admin_coding_private_v2_releases_router",
     "admin_coding_evaluations_router",
     "admin_coding_reconciliation_router",

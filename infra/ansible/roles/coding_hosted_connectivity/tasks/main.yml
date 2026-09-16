@@ -13,11 +13,16 @@
           - inventory_hostname in groups.get('role_coding_hosted', [])
           - ansible_facts['hostname'] == 'ditto-coding-hosted-v2'
           - ansible_facts['distribution'] == 'Debian'
-          - coding_hosted_worker_python is match('^/opt/ditto-coding-hosted/[A-Za-z0-9_./-]+$')
-          - coding_hosted_worker_config is match('^/var/lib/ditto-coding-hosted/[A-Za-z0-9_./-]+[.]json$')
+          - coding_hosted_worker_mode == 'network_enforcement' or coding_hosted_worker_python is match('^/opt/ditto-coding-hosted/[A-Za-z0-9_./-]+$')
+          - coding_hosted_worker_mode == 'network_enforcement' or coding_hosted_worker_config is match('^/var/lib/ditto-coding-hosted/[A-Za-z0-9_./-]+[.]json$')
           - "'..' not in coding_hosted_worker_python.split('/')"
           - "'..' not in coding_hosted_worker_config.split('/')"
-          - coding_hosted_worker_mode in ['single', 'rollout']
+          - coding_hosted_worker_mode in ['single', 'rollout', 'network_enforcement']
+          - coding_hosted_router_namespace in ['host', 'rootless-netns']
+          - coding_hosted_worker_mode != 'network_enforcement' or coding_hosted_router_namespace == 'host'
+          - coding_hosted_worker_mode != 'network_enforcement' or coding_hosted_probe_runner is match('^/opt/ditto-coding-hosted/[0-9a-f]{40}/bin/dittobench-coding-enforcement-probe$')
+          - coding_hosted_worker_mode != 'network_enforcement' or coding_hosted_connectivity_profile.get('schema') == 'dittobench-coding-hosted-connectivity-v2'
+          - coding_hosted_worker_mode != 'network_enforcement' or (coding_hosted_connectivity_profile.get('expires_at_unix', 0) | int) - (coding_hosted_connectivity_profile.get('issued_at_unix', 0) | int) <= 280
           - coding_hosted_worker_mode != 'rollout' or coding_hosted_rollout_approval_sha256 is match('^[0-9a-f]{64}$')
           - coding_hosted_worker_mode != 'rollout' or coding_hosted_rollout_connectivity_sha256 is match('^[0-9a-f]{64}$')
           - coding_hosted_worker_mode != 'rollout' or coding_hosted_connectivity_profile.get('schema') == 'dittobench-coding-hosted-connectivity-v3'
@@ -48,13 +53,32 @@
         - "user@{{ coding_hosted_uid }}.service"
       changed_when: false
 
+    - name: Inspect the release probe runner for network enforcement collection
+      when: coding_hosted_worker_mode == 'network_enforcement'
+      ansible.builtin.stat:
+        path: "{{ coding_hosted_probe_runner }}"
+        follow: false
+      register: coding_hosted_probe_runner_stat
+
+    - name: Require a protected executable release probe runner
+      when: coding_hosted_worker_mode == 'network_enforcement'
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_probe_runner_stat.stat.isreg | default(false)
+          - coding_hosted_probe_runner_stat.stat.uid == 0
+          - not coding_hosted_probe_runner_stat.stat.wgrp
+          - not coding_hosted_probe_runner_stat.stat.woth
+          - coding_hosted_probe_runner_stat.stat.executable
+
     - name: Inspect the approved installed interpreter
+      when: coding_hosted_worker_mode != 'network_enforcement'
       ansible.builtin.stat:
         path: "{{ coding_hosted_worker_python }}"
         follow: true
       register: coding_hosted_python_stat
 
     - name: Require a protected executable interpreter
+      when: coding_hosted_worker_mode != 'network_enforcement'
       ansible.builtin.assert:
         that:
           - coding_hosted_python_stat.stat.isreg | default(false)
@@ -64,18 +88,67 @@
           - coding_hosted_python_stat.stat.executable
 
     - name: Inspect the private pre-provisioned runtime configuration
+      when: coding_hosted_worker_mode != 'network_enforcement'
       ansible.builtin.stat:
         path: "{{ coding_hosted_worker_config }}"
         follow: false
       register: coding_hosted_config_stat
 
     - name: Require worker-owned private runtime configuration
+      when: coding_hosted_worker_mode != 'network_enforcement'
       ansible.builtin.assert:
         that:
           - coding_hosted_config_stat.stat.isreg | default(false)
           - coding_hosted_config_stat.stat.uid == coding_hosted_uid | int
           - coding_hosted_config_stat.stat.mode == '0600'
           - coding_hosted_config_stat.stat.nlink == 1
+
+    - name: Read the private rollout approval's attempt list without logging it
+      ansible.builtin.slurp:
+        path: "{{ coding_hosted_worker_config }}"
+      register: coding_hosted_approval_body
+      no_log: true
+      when: coding_hosted_worker_mode == 'rollout'
+
+    - name: Bind the attempt configurations this unit will run
+      when: coding_hosted_worker_mode != 'network_enforcement'
+      ansible.builtin.set_fact:
+        coding_hosted_attempt_configs: >-
+          {{ [coding_hosted_worker_config] if coding_hosted_worker_mode == 'single'
+          else (coding_hosted_approval_body.content | b64decode | from_json).attempts | map(attribute='config_file') | list }}
+
+    - name: Require protected attempt configuration paths
+      when: coding_hosted_worker_mode != 'network_enforcement'
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_attempt_configs | length >= 1
+          - item is match('^/var/lib/ditto-coding-hosted/[A-Za-z0-9_./-]+[.]json$')
+          - "'..' not in item.split('/')"
+      loop: "{{ coding_hosted_attempt_configs }}"
+
+    - name: Inspect each attempt configuration without following links
+      when: coding_hosted_worker_mode != 'network_enforcement'
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop: "{{ coding_hosted_attempt_configs }}"
+      register: coding_hosted_attempt_stats
+
+    - name: Require worker-owned private attempt configurations
+      when: coding_hosted_worker_mode != 'network_enforcement'
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | default(false)
+          - item.stat.uid == coding_hosted_uid | int
+          - item.stat.mode == '0600'
+          - item.stat.nlink == 1
+      loop: "{{ coding_hosted_attempt_stats.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Refuse a router namespace, expiry or grant that differs from the attempts
+      when: coding_hosted_worker_mode != 'network_enforcement'
+      ansible.builtin.include_tasks: router-namespace.yml
 
     - name: Create the root-only public network-policy directory
       ansible.builtin.file:

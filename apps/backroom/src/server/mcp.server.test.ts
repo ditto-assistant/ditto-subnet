@@ -10,6 +10,7 @@ import {
   createBackroomMcpServer,
   type McpGrantProps,
 } from './mcp.server'
+import { fetchCodingControlPlane } from './admin.service'
 
 const session: BackroomSession = {
   version: 2,
@@ -52,6 +53,51 @@ function readTextResult(response: unknown) {
 
 function readJsonResult(response: unknown) {
   return JSON.parse(readTextResult(response)) as unknown
+}
+
+function codingAllowlistRevision(
+  revision: number,
+  overrides: Record<string, unknown> = {},
+) {
+  const entries = (overrides.entries as Array<unknown> | undefined) ?? []
+  return {
+    revision,
+    parent_revision: revision - 1,
+    enabled: entries.length > 0,
+    integrity: 'valid',
+    effective: entries.length > 0 ? 'exact_tuples' : 'refuse_all',
+    entries,
+    checksum: 'a'.repeat(64),
+    reason: 'restrict certification to the team canary',
+    actor: 'peyton@omniaura.ai',
+    created_at: `2026-09-1${revision}T00:00:00Z`,
+    ...overrides,
+    ...(overrides.integrity === 'invalid' ? { effective: 'refuse_all', entries: [] } : {}),
+  }
+}
+
+function codingCertificationLease(leaseId: string, status: string) {
+  return {
+    lease_id: leaseId,
+    agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+    artifact_sha256: 'b'.repeat(64),
+    screened_image_sha256: 'c'.repeat(64),
+    bench_version: 12,
+    coding_contract_version: 1,
+    validator_hotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+    status,
+    issued_at: '2026-09-14T00:00:00Z',
+    claimed_at: status === 'issued' ? null : '2026-09-14T00:01:00Z',
+    aborted_at: null,
+    deadline: '2026-09-14T00:20:00Z',
+    deadline_passed: true,
+    receipt_window_ends_at: '2026-09-14T00:22:00Z',
+    claim_allowlist_revision: status === 'issued' ? null : 1,
+    aborted_allowlist_revision: null,
+    inference_grant_status: status === 'issued' ? null : 'revoked',
+    receipt_status: status === 'completed' ? 'failed' : null,
+    weight_eligible: false,
+  }
 }
 
 afterEach(() => {
@@ -192,6 +238,7 @@ describe('Backroom MCP tools', () => {
         'set_continual_retest_settings',
         'set_core_qualification_policy',
         'refresh_agent_core_qualification',
+        'set_coding_certification_allowlist',
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
         'set_validator_slot_settings',
@@ -214,6 +261,8 @@ describe('Backroom MCP tools', () => {
         'list_copy_court_recommendations',
         'apply_copy_court_settings',
         'list_hotkey_bans',
+        'list_team_canaries',
+        'set_team_canary',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
         'get_agent_coding_certifications',
@@ -222,6 +271,11 @@ describe('Backroom MCP tools', () => {
         'get_coding_control_plane',
         'get_coding_private_v2_releases',
         'issue_coding_shadow_ticket_set',
+        'list_coding_hosted_assignments',
+        'get_coding_hosted_assignment',
+        'preview_coding_hosted_assignment',
+        'create_coding_hosted_assignment',
+        'cancel_coding_hosted_assignment',
         'get_validator_weight_diagnostics',
         'get_agent_core_qualification',
         'get_agent_scores',
@@ -331,10 +385,24 @@ describe('Backroom MCP tools', () => {
     // rulings triple and the bench v13 gate-evidence notes (130_073 together);
     // each fit under 130_000 alone. Raised again to 132_000 when the screener
     // fan-out shadow read (#1893) landed on main between those reads being
-    // measured and merged; none of them is a tutorial.
-    // Four canary operations add explicit lease identity/digest/CAS inputs;
-    // measured catalog is 133,733 bytes. Descriptions remain short summaries.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(134_500)
+    // measured and merged; none of them is a tutorial. Four long read notes
+    // (quarantine contexts, copy diff manifest, submissions page, contract
+    // refresh) moved to concise catalog lines to reclaim ~1,050 chars rather
+    // than raise this budget for set_team_canary.
+    // The five hosted-v2 assignment tools (list/get/preview/create/cancel) add
+    // 5.7k of exact UUID, digest and subject bounds (the rest of the catalog
+    // stays under the previous 132_000). Platform derives every digest from
+    // those fields, so none is droppable (135_918 measured on main e1a8fa2b7).
+    // The four benchmark canary operations add explicit lease identity/digest/CAS
+    // inputs (133,733 bytes measured on main without the assignment tools);
+    // both sets together measure 139,424 on main ea20fc343.
+    // The coding-certification canary adds a single open-object write envelope
+    // (~450 chars); its allowlist and lease reads ride inside
+    // get_coding_control_plane and get_agent_coding_certifications, and its
+    // fields live in get_backroom_tool_help. With set_team_canary's trims
+    // (-170), the hosted-v2 assignment tools (+5,691) and that envelope (+503)
+    // the catalog measures 139,757 on main ea20fc343.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(140_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -351,10 +419,23 @@ describe('Backroom MCP tools', () => {
     // one-line bench v13+ confirmation seed anchor read (its notes live in the
     // detailed help) lands at 25_047, so the bound moves to 25_200;
     // the one-line bench v13 gate-evidence and dispute-kind notes on the score
-    // and dispute tools land at 25_237, so it moves to 25_400.
+    // and dispute tools land at 25_237, so it moves to 25_400. The one-line
+    // team-canary read (list_team_canaries) fits under that bound. The five
+    // hosted-v2 assignment catalog lines (170 chars) fit under 25_400 as they
+    // are; existing Coding lines keep their routing terms. With main's four
+    // one-line benchmark canary tools as well the catalog lands at 25_512, so
+    // it moves to 25_600; the coding-certification canary write line also
+    // fits under 25_600.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      25_400,
+      25_600,
     )
+    // Raise the budget with a reason rather than strip routing terms clients
+    // use to pick these tools.
+    const catalogLine = (name: string) => response.tools.find((tool) => tool.name === name)?.description
+    expect(catalogLine('get_agent_coding_shadow_evaluations')).toMatch(
+      /future-height assignments, finalized issuances.*repair outcomes/,
+    )
+    expect(catalogLine('get_coding_catalog_releases')).toMatch(/signed .*commitments, retirement/)
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
       response.tools.find((tool) => tool.name === 'get_screening_review_queue')?.annotations
@@ -1015,6 +1096,20 @@ describe('Backroom MCP tools', () => {
     expect(payload.guidance).toContain('APPLY QUEUE POLICY SETTINGS')
     expect(payload.guidance).toContain('deferred_source_review')
 
+    // Reads whose catalog line was shortened keep their full notes verbatim.
+    for (const [tool, needle] of [
+      ['list_screening_submissions', 'get_screening_submission is the exact one-row detail path'],
+      ['get_copy_review_source_diff', 'a reformatted copy'],
+      ['get_screening_quarantine_contexts', 'one stale queue row does not hide the rest'],
+      ['get_benchmark_contract_refresh', 'accepted-score count, active-screening state'],
+    ] as const) {
+      const help = readJsonResult(
+        await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool } }),
+      ) as { summary: string; guidance: string }
+      expect(help.guidance).toContain(needle)
+      expect(help.summary.length).toBeLessThan(help.guidance.length)
+    }
+
     await client.close()
     await server.close()
   })
@@ -1114,6 +1209,7 @@ describe('Backroom MCP tools', () => {
       list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
       list_hotkey_bans: { maxLimit: 200, maxDefault: 50 },
+      list_team_canaries: { maxLimit: 200, maxDefault: 50 },
       get_leaderboard: { maxLimit: 200, maxDefault: 50 },
       get_validator_fleet: { maxLimit: 200, maxDefault: 50 },
       list_validator_assignments: { maxLimit: 200, maxDefault: 50 },
@@ -5114,6 +5210,334 @@ describe('Backroom MCP tools', () => {
     await writeConnection.server.close()
   })
 
+  it('lists audited team canaries read-only with the agents each excludes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const exclusionId = '3f1c9d27-b40a-4e6b-9c1d-2a7f0e5b8c41'
+    const agentId = '11ad9203-0860-40a9-9432-059b4ef68865'
+    const listing = {
+      total: 1,
+      exclusions: [
+        {
+          exclusion_id: exclusionId,
+          kind: 'team_canary',
+          miner_hotkey: '5FKbkmKbJHTgsELVPigLJqbmovaviDN7dHZzX7UJ6xoqG4fx',
+          artifact_sha256: 'c1'.repeat(32),
+          reason: 'team canary for hosted coding certification',
+          created_by: 'peyton@omniaura.ai',
+          created_at: '2026-09-14T00:00:00Z',
+          agent_id: agentId,
+          screened_image_sha256: 'e3'.repeat(32),
+          bound_by: 'peyton@omniaura.ai',
+          bound_reason: 'bound after the screened image was verified',
+          bound_at: '2026-09-14T01:00:00Z',
+          matched_agents: [
+            {
+              agent_id: agentId,
+              status: 'scored',
+              sha256: 'c1'.repeat(32),
+              screened_image_sha256: 'e3'.repeat(32),
+              state: 'bound',
+              competition_excluded: true,
+            },
+          ],
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(listing))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const connection = await connect([BACKROOM_READ_SCOPE])
+    const response = await connection.client.callTool({
+      name: 'list_team_canaries',
+      arguments: { limit: 50, offset: 0 },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      total: 1,
+      count: 1,
+      returned: 1,
+      has_more: false,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/noncompetitive-canaries?limit=50&offset=0',
+      expect.anything(),
+    )
+    await connection.client.close()
+    await connection.server.close()
+  })
+
+  it('reserves and binds team canaries only with the exact confirmation and the session actor', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const exclusionId = '3f1c9d27-b40a-4e6b-9c1d-2a7f0e5b8c41'
+    const agentId = '11ad9203-0860-40a9-9432-059b4ef68865'
+    const minerHotkey = '5FKbkmKbJHTgsELVPigLJqbmovaviDN7dHZzX7UJ6xoqG4fx'
+    const artifactSha256 = 'c1'.repeat(32)
+    const screenedImageSha256 = 'e3'.repeat(32)
+    const reserved = {
+      exclusion_id: exclusionId,
+      kind: 'team_canary',
+      miner_hotkey: minerHotkey,
+      artifact_sha256: artifactSha256,
+      reason: 'team canary for hosted coding certification',
+      created_by: 'peyton@omniaura.ai',
+      created_at: '2026-09-14T00:00:00Z',
+      agent_id: null,
+      screened_image_sha256: null,
+      bound_by: null,
+      bound_reason: null,
+      bound_at: null,
+      matched_agents: [],
+    }
+    const bound = {
+      ...reserved,
+      agent_id: agentId,
+      screened_image_sha256: screenedImageSha256,
+      bound_by: 'peyton@omniaura.ai',
+      bound_reason: 'bound after the screened image was verified',
+      bound_at: '2026-09-14T01:00:00Z',
+      matched_agents: [
+        {
+          agent_id: agentId,
+          status: 'screening_passed',
+          sha256: artifactSha256,
+          screened_image_sha256: screenedImageSha256,
+          state: 'bound',
+          competition_excluded: true,
+        },
+      ],
+    }
+    const reserve = {
+      action: 'reserve',
+      minerHotkey,
+      artifactSha256,
+      reason: reserved.reason,
+      confirmation: `RESERVE TEAM CANARY ${minerHotkey} ${artifactSha256}`,
+    }
+    const bind = {
+      action: 'bind',
+      exclusionId,
+      agentId,
+      minerHotkey,
+      artifactSha256,
+      screenedImageSha256,
+      reason: bound.bound_reason,
+      confirmation: `BIND TEAM CANARY ${exclusionId} ${agentId}`,
+    }
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    // A read-only connection cannot reach Platform even with a valid request.
+    const readConnection = await connect([BACKROOM_READ_SCOPE])
+    const readOnly = await readConnection.client.callTool({
+      name: 'set_team_canary',
+      arguments: reserve,
+    })
+    expect(readOnly.isError).toBe(true)
+    expect(readTextResult(readOnly)).toContain('backroom:write')
+    await readConnection.client.close()
+    await readConnection.server.close()
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const help = readJsonResult(
+        await client.callTool({
+          name: 'get_backroom_tool_help',
+          arguments: { tool: 'set_team_canary' },
+        }),
+      ) as { guidance: string }
+      for (const needle of [
+        'RESERVE TEAM CANARY <minerHotkey> <artifactSha256>',
+        'BIND TEAM CANARY <exclusionId> <agentId>',
+        'screenedImageSha256',
+        'including actor, is refused',
+        'no tool or endpoint that lifts it',
+        'Requires backroom:write',
+      ]) {
+        expect(help.guidance).toContain(needle)
+      }
+
+      for (const refused of [
+        // Wrong or reordered phrases.
+        { ...reserve, confirmation: `RESERVE TEAM CANARY ${artifactSha256} ${minerHotkey}` },
+        { ...reserve, confirmation: `${reserve.confirmation} ` },
+        { ...bind, confirmation: `BIND TEAM CANARY ${agentId} ${exclusionId}` },
+        { ...bind, confirmation: reserve.confirmation },
+        // Platform formats UUIDs lowercase, so an uppercase id could never match there.
+        {
+          ...bind,
+          agentId: agentId.toUpperCase(),
+          confirmation: `BIND TEAM CANARY ${exclusionId} ${agentId.toUpperCase()}`,
+        },
+        // Bad shapes.
+        { ...reserve, action: 'lift' },
+        { ...reserve, artifactSha256: 'C1'.repeat(32), confirmation: `RESERVE TEAM CANARY ${minerHotkey} ${'C1'.repeat(32)}` },
+        { ...reserve, minerHotkey: 'not-a-hotkey', confirmation: `RESERVE TEAM CANARY not-a-hotkey ${artifactSha256}` },
+        { ...reserve, reason: 'short' },
+        { ...bind, screenedImageSha256: undefined },
+        { ...bind, screenedImageSha256: 'e3'.repeat(31) },
+        // A reserve request cannot smuggle bind fields, and nobody may choose the actor.
+        { ...reserve, agentId },
+        { ...reserve, actor: 'someone-else@example.com' },
+        { ...bind, actor: 'someone-else@example.com' },
+        {},
+      ]) {
+        const response = await client.callTool({ name: 'set_team_canary', arguments: refused })
+        expect(response.isError, JSON.stringify(refused)).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      // Each write is followed by one re-read of the durable list, and the
+      // result is what Platform stores, not what the write response claimed.
+      fetchMock
+        .mockResolvedValueOnce(Response.json(reserved, { status: 201 }))
+        .mockResolvedValueOnce(Response.json({ total: 1, exclusions: [reserved] }))
+      const reservedResult = await client.callTool({ name: 'set_team_canary', arguments: reserve })
+      expect(reservedResult.isError, readTextResult(reservedResult)).not.toBe(true)
+      expect(readJsonResult(reservedResult)).toMatchObject({
+        exclusion: { exclusion_id: exclusionId, agent_id: null, created_by: 'peyton@omniaura.ai' },
+        total: 1,
+      })
+
+      fetchMock
+        .mockResolvedValueOnce(Response.json({ ...bound, bound_reason: 'stale write response' }))
+        .mockResolvedValueOnce(Response.json({ total: 1, exclusions: [bound] }))
+      const boundResult = await client.callTool({ name: 'set_team_canary', arguments: bind })
+      expect(boundResult.isError, readTextResult(boundResult)).not.toBe(true)
+      expect(readJsonResult(boundResult)).toMatchObject({
+        exclusion: {
+          agent_id: agentId,
+          bound_reason: bound.bound_reason,
+          matched_agents: [{ state: 'bound', competition_excluded: true }],
+        },
+        total: 1,
+      })
+
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+      for (const index of [1, 3]) {
+        const [rereadUrl, rereadInit] = fetchMock.mock.calls[index] as [string, RequestInit]
+        expect(rereadUrl).toBe(
+          'https://platform-api.heyditto.ai/api/v1/admin/noncompetitive-canaries?limit=200&offset=0',
+        )
+        expect(rereadInit.method ?? 'GET').toBe('GET')
+      }
+      const [reserveUrl, reserveInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(reserveUrl).toBe('https://platform-api.heyditto.ai/api/v1/admin/noncompetitive-canaries')
+      expect(reserveInit.method).toBe('POST')
+      expect(reserveInit.headers).toMatchObject({
+        Authorization: 'Bearer platform-admin-token',
+        'X-Admin-Actor': 'peyton@omniaura.ai',
+      })
+      expect(JSON.parse(String(reserveInit.body))).toEqual({
+        miner_hotkey: minerHotkey,
+        artifact_sha256: artifactSha256,
+        reason: reserved.reason,
+        confirmation: reserve.confirmation,
+      })
+      const [bindUrl, bindInit] = fetchMock.mock.calls[2] as [string, RequestInit]
+      expect(bindUrl).toBe(
+        `https://platform-api.heyditto.ai/api/v1/admin/noncompetitive-canaries/${exclusionId}/bind`,
+      )
+      expect(bindInit.method).toBe('POST')
+      expect(bindInit.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+      expect(JSON.parse(String(bindInit.body))).toEqual({
+        agent_id: agentId,
+        miner_hotkey: minerHotkey,
+        artifact_sha256: artifactSha256,
+        screened_image_sha256: screenedImageSha256,
+        reason: bound.bound_reason,
+        confirmation: bind.confirmation,
+      })
+
+      // Platform's own refusals surface verbatim and are never retried.
+      fetchMock.mockClear()
+      fetchMock.mockResolvedValueOnce(
+        Response.json(
+          { detail: 'team canary artifact already has scores; reserve before upload' },
+          { status: 409 },
+        ),
+      )
+      const scored = await client.callTool({ name: 'set_team_canary', arguments: reserve })
+      expect(scored.isError).toBe(true)
+      expect(readTextResult(scored)).toContain('already has scores')
+      fetchMock.mockResolvedValueOnce(
+        Response.json({ detail: 'team canary binding does not match the exact agent identity' }, { status: 409 }),
+      )
+      const drifted = await client.callTool({ name: 'set_team_canary', arguments: bind })
+      expect(drifted.isError).toBe(true)
+      expect(readTextResult(drifted)).toContain('does not match the exact agent identity')
+      fetchMock.mockResolvedValueOnce(
+        Response.json({ detail: 'team canary was not found' }, { status: 404 }),
+      )
+      const missing = await client.callTool({ name: 'set_team_canary', arguments: bind })
+      expect(missing.isError).toBe(true)
+      expect(readTextResult(missing)).toContain('team canary was not found')
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+
+      // Once a write was sent, a failed re-read, an unparseable write response or
+      // a list that lacks the exclusion reports an unknown outcome and never
+      // retries the write.
+      const unconfirmed: Array<[string, Record<string, unknown>, Response[]]> = [
+        [
+          'failed re-read',
+          bind,
+          [Response.json(bound), Response.json({ detail: 'database unavailable' }, { status: 503 })],
+        ],
+        ['unparseable write response', reserve, [Response.json({ ok: true }, { status: 201 })]],
+        [
+          'exclusion missing from the re-read',
+          bind,
+          [Response.json(bound), Response.json({ total: 0, exclusions: [] })],
+        ],
+        [
+          'short re-read',
+          reserve,
+          [
+            Response.json(reserved, { status: 201 }),
+            Response.json({ total: 2, exclusions: [reserved] }),
+            Response.json({ total: 2, exclusions: [] }),
+          ],
+        ],
+      ]
+      for (const [label, argumentsForCall, responses] of unconfirmed) {
+        fetchMock.mockReset()
+        for (const response of responses) fetchMock.mockResolvedValueOnce(response)
+        const outcome = await client.callTool({ name: 'set_team_canary', arguments: argumentsForCall })
+        expect(outcome.isError, label).toBe(true)
+        expect(readTextResult(outcome), label).toContain('The write may have succeeded. It was not retried')
+        expect(fetchMock, label).toHaveBeenCalledTimes(responses.length)
+        expect(
+          fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === 'POST'),
+          label,
+        ).toHaveLength(1)
+      }
+      fetchMock.mockReset()
+      fetchMock
+        .mockResolvedValueOnce(Response.json(bound))
+        .mockResolvedValueOnce(Response.json({ detail: 'database unavailable' }, { status: 503 }))
+      const failedReread = await client.callTool({ name: 'set_team_canary', arguments: bind })
+      expect(readTextResult(failedReread)).toContain(`bind for team canary ${exclusionId}`)
+
+      // The re-read pages through a list longer than one Platform page.
+      fetchMock.mockReset()
+      const earlier = Array.from({ length: 200 }, (_, index) => ({
+        ...reserved,
+        exclusion_id: `00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+      }))
+      fetchMock
+        .mockResolvedValueOnce(Response.json(reserved, { status: 201 }))
+        .mockResolvedValueOnce(Response.json({ total: 201, exclusions: earlier }))
+        .mockResolvedValueOnce(Response.json({ total: 201, exclusions: [reserved] }))
+      const paged = await client.callTool({ name: 'set_team_canary', arguments: reserve })
+      expect(paged.isError, readTextResult(paged)).not.toBe(true)
+      expect(readJsonResult(paged)).toMatchObject({ exclusion: { exclusion_id: exclusionId }, total: 201 })
+      expect(String(fetchMock.mock.calls[2]?.[0])).toContain('limit=200&offset=200')
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('answers owner attestations on read scope alone, keeping every grade and revoked links', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const queried = '5QueriedHotkey'
@@ -7230,7 +7654,26 @@ describe('Backroom MCP tools', () => {
         },
       ],
     }
-    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    const leases = {
+      total: 1,
+      limit: 10,
+      offset: 0,
+      leases: [
+        {
+          ...codingCertificationLease('22222222-2222-4222-8222-222222222222', 'completed'),
+          agent_id: agentId,
+        },
+      ],
+      weight_eligible: false,
+    }
+    let leaseStatus = 200
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) =>
+      String(input).includes('/coding-certification-leases')
+        ? Response.json(leaseStatus === 200 ? leases : { detail: 'unavailable' }, {
+            status: leaseStatus,
+          })
+        : Response.json(payload),
+    )
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
 
@@ -7251,6 +7694,26 @@ describe('Backroom MCP tools', () => {
       agent_id: agentId,
       coding_certified: true,
       active_certification_count: 1,
+      certification_leases: {
+        available: true,
+        total: 1,
+        leases: [{ status: 'completed', receipt_status: 'failed', claim_allowlist_revision: 1 }],
+      },
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/coding-certification-leases?agent_id=${agentId}&limit=10`,
+      expect.anything(),
+    )
+    leaseStatus = 503
+    const degraded = await client.callTool({
+      name: 'get_agent_coding_certifications',
+      arguments: { agentId, limit: 25 },
+    })
+    expect(degraded.isError, readTextResult(degraded)).not.toBe(true)
+    expect(readJsonResult(degraded)).toMatchObject({
+      agent_id: agentId,
+      active_certification_count: 1,
+      certification_leases: { available: false },
     })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/coding-certifications?limit=25`,
@@ -7527,13 +7990,41 @@ describe('Backroom MCP tools', () => {
       shadow_only: true,
       weight_eligible: false,
     }
-    const fetchMock = vi.fn().mockImplementation(async (url: string) => Response.json(
-      url.includes('/coding-catalog/releases')
-        ? catalog
-        : url.includes('/coding-private-v2-releases')
-          ? privateV2
-          : native,
-    ))
+    const current = codingAllowlistRevision(2, { enabled: true, integrity: 'invalid' })
+    const certificationAllowlist = {
+      enabled: false,
+      integrity: 'invalid',
+      effective: 'refuse_all',
+      current,
+      history: [],
+      max_entries: 16,
+      weight_eligible: false,
+    }
+    const certificationLeases = {
+      total: 1,
+      limit: 10,
+      offset: 0,
+      leases: [codingCertificationLease('11111111-1111-4111-8111-111111111111', 'completed')],
+      weight_eligible: false,
+    }
+    let certificationStatus = 200
+    let leaseBody: unknown = certificationLeases
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/coding-certification-allowlist')) {
+        return Response.json(
+          certificationStatus === 200 ? certificationAllowlist : { detail: 'Not Found' },
+          { status: certificationStatus },
+        )
+      }
+      if (url.includes('/coding-certification-leases')) return Response.json(leaseBody)
+      return Response.json(
+        url.includes('/coding-catalog/releases')
+          ? catalog
+          : url.includes('/coding-private-v2-releases')
+            ? privateV2
+            : native,
+      )
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     try {
@@ -7542,18 +8033,47 @@ describe('Backroom MCP tools', () => {
         arguments: { limit: 25 },
       })
       expect(response.isError, readTextResult(response)).not.toBe(true)
+      const { history: _history, ...allowlistWithoutHistory } = certificationAllowlist
       expect(readJsonResult(response)).toEqual({
         catalog,
         private_v2: privateV2,
         native,
+        certification_allowlist: { available: true, ...allowlistWithoutHistory },
+        certification_leases: { available: true, ...certificationLeases },
         shadow_only: true,
         weight_eligible: false,
       })
+      expect(readTextResult(response)).not.toMatch(/grant_id|bearer/)
+      // The embedded canary state is bounded independently of the catalog limit.
       expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual([
         'https://platform-api.heyditto.ai/api/v1/admin/coding-catalog/releases?limit=25',
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-certification-allowlist?history_limit=0',
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-certification-leases?limit=10',
         'https://platform-api.heyditto.ai/api/v1/admin/coding-control-plane?limit=25',
         'https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=25',
       ])
+
+      // A Platform that lacks or fails the canary endpoints still serves the
+      // Coding control plane, with explicit unavailable markers.
+      certificationStatus = 404
+      leaseBody = { leases: 'not a lease page' }
+      const degraded = await client.callTool({
+        name: 'get_coding_control_plane',
+        arguments: { limit: 25 },
+      })
+      expect(degraded.isError, readTextResult(degraded)).not.toBe(true)
+      const degradedBody = readJsonResult(degraded) as Record<string, Record<string, unknown>>
+      expect(degradedBody.native).toEqual(native)
+      expect(degradedBody.certification_allowlist).toMatchObject({ available: false })
+      expect(degradedBody.certification_leases).toMatchObject({ available: false })
+      expect(String(degradedBody.certification_allowlist.error)).toMatch(/404|not found/i)
+
+      // The console loader discards canary state, so it never requests it.
+      fetchMock.mockClear()
+      await fetchCodingControlPlane({ limit: 25 })
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).includes('/coding-certification-')),
+      ).toBe(false)
     } finally {
       await client.close()
       await server.close()
@@ -7736,6 +8256,423 @@ describe('Backroom MCP tools', () => {
       await client.close()
       await server.close()
     }
+  })
+
+  describe('hosted-v2 Coding assignment operations', () => {
+    const evaluationId = '11111111-1111-4111-8111-111111111111'
+    const attemptId = '22222222-2222-4222-8222-222222222222'
+    const agentId = '33333333-3333-4333-8333-333333333333'
+    const releaseRowId = '44444444-4444-4444-8444-444444444444'
+    const validatorHotkey = `5${'V'.repeat(47)}`
+    const assignmentSha256 = 'a'.repeat(64)
+    const subject = {
+      agentId,
+      releaseRowId,
+      catalogIndex: 3,
+      validatorHotkey,
+      policySha256: '2'.repeat(64),
+      executionProfileSha256: '3'.repeat(64),
+      gradingProfileSha256: '4'.repeat(64),
+      maxPatchBytes: 1 << 20,
+    }
+    const selection = {
+      schema: 'dittobench-coding-hosted-task-selection-v2',
+      coding_contract_version: 2,
+      shadow_only: true,
+      weight_eligible: false,
+      evaluation_id: evaluationId,
+      attempt_id: attemptId,
+      registration_sha256: '5'.repeat(64),
+      artifact_sha256: '6'.repeat(64),
+      schedule_sha256: '7'.repeat(64),
+      catalog_index: 3,
+      max_patch_bytes: 1 << 20,
+    }
+    const authority = {
+      schema: 'dittobench-coding-hosted-assignment-v2',
+      coding_contract_version: 2,
+      shadow_only: true,
+      weight_eligible: false,
+      evaluation_id: evaluationId,
+      attempt_id: attemptId,
+      release_row_id: releaseRowId,
+      registration_sha256: '5'.repeat(64),
+      agent_id: agentId,
+      validator_hotkey: validatorHotkey,
+      artifact_sha256: '6'.repeat(64),
+      screened_image_sha256: '8'.repeat(64),
+      selection_sha256: '9'.repeat(64),
+      policy_sha256: '2'.repeat(64),
+      execution_profile_sha256: '3'.repeat(64),
+      grading_profile_sha256: '4'.repeat(64),
+      deadline_unix: 1_789_000_000,
+    }
+    const plan = {
+      evaluation_id: evaluationId,
+      attempt_id: attemptId,
+      deadline_unix: 1_789_000_000,
+      artifact_sha256: '6'.repeat(64),
+      screened_image_sha256: '8'.repeat(64),
+      registration_sha256: '5'.repeat(64),
+      bench_version: 12,
+      certification_row_id: '55555555-5555-4555-8555-555555555555',
+      schedule_sha256: '7'.repeat(64),
+      selection_sha256: '9'.repeat(64),
+      selection,
+      assignment_sha256: assignmentSha256,
+      authority,
+      confirmation: `CREATE SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+      shadow_only: true,
+      weight_eligible: false,
+    }
+    const summary = {
+      evaluation_id: evaluationId,
+      attempt_id: attemptId,
+      release_row_id: releaseRowId,
+      registration_sha256: '5'.repeat(64),
+      agent_id: agentId,
+      validator_hotkey: validatorHotkey,
+      artifact_sha256: '6'.repeat(64),
+      screened_image_sha256: '8'.repeat(64),
+      assignment_sha256: assignmentSha256,
+      state: 'cancelled',
+      created_at: '2026-09-14T12:00:00Z',
+      expires_at: '2026-09-14T12:15:00Z',
+      admitted_at: '2026-09-14T12:01:00Z',
+      started_at: null,
+      cancelled_at: '2026-09-14T12:02:00Z',
+      closed_at: '2026-09-14T12:02:00Z',
+      close_reason: 'aborted',
+      terminal_outcome: null,
+      acknowledged: false,
+      registered_actor: 'peyton@omniaura.ai',
+      registered_reason: 'synthetic hosted canary assignment',
+      shadow_only: true,
+      weight_eligible: false,
+    }
+    const cancellation = {
+      assignment_sha256: assignmentSha256,
+      prior_state: 'admitted',
+      reason: 'cancel the unstarted canary assignment',
+      actor: 'peyton@omniaura.ai',
+      cancelled_at: '2026-09-14T12:02:00Z',
+    }
+    const detail = {
+      ...summary,
+      observed_at: '2026-09-14T12:03:00Z',
+      deadline_unix: 1_789_000_000,
+      selection_sha256: '9'.repeat(64),
+      policy_sha256: '2'.repeat(64),
+      execution_profile_sha256: '3'.repeat(64),
+      grading_profile_sha256: '4'.repeat(64),
+      admission_request_sha256: 'b'.repeat(64),
+      cancellable: false,
+      cancellation,
+      private_task: {
+        bound_at: '2026-09-14T12:00:00Z',
+        selection_sha256: '9'.repeat(64),
+        frozen_at: null,
+        closed_at: '2026-09-14T12:02:00Z',
+        close_reason: 'aborted',
+        catalog_index: 3,
+      },
+      authoring_evidence_reserved_at: null,
+      authoring_evidence_finalized_at: null,
+      grading_claimed_at: null,
+      terminal: null,
+      inference: null,
+      delivery_count: 0,
+      acknowledged_count: 0,
+      deliveries: [],
+      deliveries_truncated: false,
+      worker_id: 'must-not-escape-worker',
+    }
+
+    function hostedFetch() {
+      return vi.fn().mockImplementation(async (url: string) => {
+        if (url.endsWith('/coding-hosted-assignments/preview')) return Response.json(plan)
+        if (url.endsWith('/coding-hosted-assignments')) {
+          return Response.json({
+            ...plan,
+            authoring_grant_id: '66666666-6666-4666-8666-666666666666',
+            grading_grant_id: '77777777-7777-4777-8777-777777777777',
+          })
+        }
+        if (url.endsWith('/cancel')) {
+          return Response.json({
+            idempotent: false,
+            private_task_closed: true,
+            cancellation,
+            assignment: detail,
+            shadow_only: true,
+            weight_eligible: false,
+          })
+        }
+        if (url.includes('/coding-hosted-assignments?')) {
+          return Response.json({
+            total: 3,
+            limit: 2,
+            offset: 0,
+            observed_at: '2026-09-14T12:03:00Z',
+            assignments: [summary, { ...summary, evaluation_id: attemptId }],
+            shadow_only: true,
+            weight_eligible: false,
+          })
+        }
+        return Response.json(detail)
+      })
+    }
+
+    it('pages and reads redacted lifecycles with backroom:read only', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = hostedFetch()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+      try {
+        const listed = await client.callTool({
+          name: 'list_coding_hosted_assignments',
+          arguments: { limit: 2 },
+        })
+        expect(listed.isError, readTextResult(listed)).not.toBe(true)
+        const page = readJsonResult(listed) as Record<string, unknown>
+        expect(page).toMatchObject({ count: 3, returned: 2, limit: 2, offset: 0, has_more: true })
+        const detailResponse = await client.callTool({
+          name: 'get_coding_hosted_assignment',
+          arguments: { evaluationId },
+        })
+        expect(detailResponse.isError, readTextResult(detailResponse)).not.toBe(true)
+        const body = readJsonResult(detailResponse) as typeof detail
+        expect(body.state).toBe('cancelled')
+        expect(body.cancellation).toEqual(cancellation)
+        expect(JSON.stringify(body)).not.toContain('must-not-escape-worker')
+        expect(JSON.stringify(body)).not.toContain('catalog_index')
+        expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+          'https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments?limit=2&offset=0',
+          `https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments/${evaluationId}`,
+        ])
+        for (const name of [
+          'preview_coding_hosted_assignment',
+          'create_coding_hosted_assignment',
+          'cancel_coding_hosted_assignment',
+        ]) {
+          const refused = await client.callTool({
+            name,
+            arguments:
+              name === 'cancel_coding_hosted_assignment'
+                ? {
+                    evaluationId,
+                    expectedAssignmentSha256: assignmentSha256,
+                    reason: 'cancel the unstarted canary assignment',
+                    confirmation: 'CANCEL SHADOW CODING HOSTED ASSIGNMENT',
+                  }
+                : name === 'create_coding_hosted_assignment'
+                  ? {
+                      ...subject,
+                      evaluationId,
+                      attemptId,
+                      deadlineUnix: 1_789_000_000,
+                      confirmedAssignmentSha256: assignmentSha256,
+                      reason: 'synthetic hosted canary assignment',
+                      confirmation: plan.confirmation,
+                    }
+                  : subject,
+          })
+          expect(refused.isError, name).toBe(true)
+          expect(readTextResult(refused)).toContain('backroom:write')
+        }
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+      } finally {
+        await client.close()
+        await server.close()
+      }
+    })
+
+    it('forwards preview, create and cancel with exact operator values', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = hostedFetch()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        const previewed = await client.callTool({
+          name: 'preview_coding_hosted_assignment',
+          arguments: { ...subject, leaseSeconds: 600 },
+        })
+        expect(previewed.isError, readTextResult(previewed)).not.toBe(true)
+        expect(readJsonResult(previewed)).toEqual(plan)
+
+        // Backroom never fills in the phrase: whatever the operator typed is
+        // what Platform sees, and Platform alone decides whether it matches.
+        const typedConfirmation = `CREATE SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${'f'.repeat(64)}`
+        const created = await client.callTool({
+          name: 'create_coding_hosted_assignment',
+          arguments: {
+            ...subject,
+            evaluationId,
+            attemptId,
+            deadlineUnix: 1_789_000_000,
+            confirmedAssignmentSha256: assignmentSha256,
+            reason: 'synthetic hosted canary assignment',
+            confirmation: typedConfirmation,
+          },
+        })
+        expect(created.isError, readTextResult(created)).not.toBe(true)
+        const createdText = readTextResult(created)
+        expect(createdText).not.toContain('authoring_grant_id')
+        expect(createdText).not.toContain('66666666-6666-4666-8666-666666666666')
+
+        const missingConfirmation = await client.callTool({
+          name: 'create_coding_hosted_assignment',
+          arguments: {
+            ...subject,
+            evaluationId,
+            attemptId,
+            deadlineUnix: 1_789_000_000,
+            confirmedAssignmentSha256: assignmentSha256,
+            reason: 'synthetic hosted canary assignment',
+          },
+        })
+        expect(missingConfirmation.isError).toBe(true)
+
+        const cancelled = await client.callTool({
+          name: 'cancel_coding_hosted_assignment',
+          arguments: {
+            evaluationId,
+            expectedAssignmentSha256: assignmentSha256,
+            reason: 'cancel the unstarted canary assignment',
+            confirmation: `CANCEL SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+          },
+        })
+        expect(cancelled.isError, readTextResult(cancelled)).not.toBe(true)
+        const cancelBody = readJsonResult(cancelled) as { assignment: typeof detail }
+        expect(cancelBody.assignment.state).toBe('cancelled')
+        expect(JSON.stringify(cancelBody)).not.toContain('must-not-escape-worker')
+
+        const calls = fetchMock.mock.calls.map(([url, options]) => ({
+          url: String(url),
+          method: options?.method,
+          actor: (options?.headers as Record<string, string> | undefined)?.['X-Admin-Actor'],
+          body: options?.body ? JSON.parse(String(options.body)) : null,
+        }))
+        expect(calls).toHaveLength(3)
+        expect(calls[0]).toEqual({
+          url: 'https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments/preview',
+          method: 'POST',
+          actor: 'peyton@omniaura.ai',
+          body: {
+            agent_id: agentId,
+            release_row_id: releaseRowId,
+            catalog_index: 3,
+            validator_hotkey: validatorHotkey,
+            policy_sha256: '2'.repeat(64),
+            execution_profile_sha256: '3'.repeat(64),
+            grading_profile_sha256: '4'.repeat(64),
+            max_patch_bytes: 1 << 20,
+            lease_seconds: 600,
+          },
+        })
+        expect(calls[1]).toMatchObject({
+          url: 'https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments',
+          method: 'POST',
+          actor: 'peyton@omniaura.ai',
+          body: {
+            evaluation_id: evaluationId,
+            attempt_id: attemptId,
+            deadline_unix: 1_789_000_000,
+            confirmed_assignment_sha256: assignmentSha256,
+            reason: 'synthetic hosted canary assignment',
+            actor: 'peyton@omniaura.ai',
+            confirmation: typedConfirmation,
+          },
+        })
+        expect(calls[2]).toEqual({
+          url: `https://platform-api.heyditto.ai/api/v1/admin/coding-hosted-assignments/${evaluationId}/cancel`,
+          method: 'POST',
+          actor: 'peyton@omniaura.ai',
+          body: {
+            expected_assignment_sha256: assignmentSha256,
+            reason: 'cancel the unstarted canary assignment',
+            actor: 'peyton@omniaura.ai',
+            confirmation: `CANCEL SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+          },
+        })
+
+        fetchMock.mockResolvedValueOnce(
+          Response.json({ detail: 'hosted attempt already started; only its worker can abort it' }, { status: 409 }),
+        )
+        const refused = await client.callTool({
+          name: 'cancel_coding_hosted_assignment',
+          arguments: {
+            evaluationId,
+            expectedAssignmentSha256: assignmentSha256,
+            reason: 'cancel the unstarted canary assignment',
+            confirmation: `CANCEL SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+          },
+        })
+        expect(refused.isError).toBe(true)
+      } finally {
+        await client.close()
+        await server.close()
+      }
+    })
+
+    it('bounds hosted assignment inputs before any request', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = hostedFetch()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        for (const [name, args] of [
+          ['list_coding_hosted_assignments', { limit: 101 }],
+          ['list_coding_hosted_assignments', { offset: -1 }],
+          ['get_coding_hosted_assignment', { evaluationId: 'not-a-uuid' }],
+          ['preview_coding_hosted_assignment', { ...subject, catalogIndex: 250 }],
+          ['preview_coding_hosted_assignment', { ...subject, leaseSeconds: 3601 }],
+          ['cancel_coding_hosted_assignment', {
+            evaluationId,
+            expectedAssignmentSha256: 'A'.repeat(64),
+            reason: 'cancel the unstarted canary assignment',
+            confirmation: 'x',
+          }],
+          ['cancel_coding_hosted_assignment', {
+            evaluationId,
+            expectedAssignmentSha256: assignmentSha256,
+            reason: ' short ',
+            confirmation: 'x',
+          }],
+        ] as const) {
+          const response = await client.callTool({ name, arguments: args })
+          expect(response.isError, `${name} ${JSON.stringify(args)}`).toBe(true)
+        }
+        // Platform refuses a trimmed reason over 512 characters; the service
+        // names the field before any request instead of forwarding a 409.
+        for (const [name, args] of [
+          ['create_coding_hosted_assignment', {
+            ...subject,
+            evaluationId,
+            attemptId,
+            deadlineUnix: 1_789_000_000,
+            confirmedAssignmentSha256: assignmentSha256,
+            reason: 'r'.repeat(513),
+            confirmation: plan.confirmation,
+          }],
+          ['cancel_coding_hosted_assignment', {
+            evaluationId,
+            expectedAssignmentSha256: assignmentSha256,
+            reason: 'r'.repeat(513),
+            confirmation: `CANCEL SHADOW CODING HOSTED ASSIGNMENT ${evaluationId} ${assignmentSha256}`,
+          }],
+        ] as const) {
+          const response = await client.callTool({ name, arguments: args })
+          expect(response.isError, name).toBe(true)
+          expect(readTextResult(response), name).toMatch(/reason/)
+          expect(readTextResult(response), name).toMatch(/512/)
+        }
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally {
+        await client.close()
+        await server.close()
+      }
+    })
   })
 
   it('registers, reads, and retires signed shadow coding catalog commitments', async () => {
@@ -8005,6 +8942,126 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('restricts the strict coding certification allowlist with exact local guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const entry = {
+      agent_id: agentId,
+      artifact_sha256: 'b'.repeat(64),
+      screened_image_sha256: 'c'.repeat(64),
+      validator_hotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+    }
+    const { screened_image_sha256: _image, ...entryWithoutImage } = entry
+    const applied = {
+      enabled: true,
+      integrity: 'valid',
+      effective: 'exact_tuples',
+      current: codingAllowlistRevision(2, { entries: [entry] }),
+      history: [codingAllowlistRevision(2, { entries: [entry] }), codingAllowlistRevision(1)],
+      max_entries: 16,
+      weight_eligible: false,
+      aborted_lease_count: 1,
+      revoked_inference_grant_count: 1,
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(applied))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const help = readJsonResult(
+        await client.callTool({
+          name: 'get_backroom_tool_help',
+          arguments: { tool: 'set_coding_certification_allowlist' },
+        }),
+      ) as { guidance: string }
+      for (const needle of [
+        'expectedRevision',
+        'APPLY CODING CERTIFICATION ALLOWLIST ENABLED <entry count>',
+        'APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL',
+        'aborted_lease_count',
+        'screened_image_sha256',
+        'no admin certification bypass',
+      ]) {
+        expect(help.guidance).toContain(needle)
+      }
+
+      const base = {
+        expectedRevision: 1,
+        reason: 'restrict certification to the team canary',
+      }
+      for (const refused of [
+        // A refuse-all revision cannot carry tuples.
+        { ...base, enabled: false, entries: [entry], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL' },
+        // There is no open enabled revision.
+        { ...base, enabled: true, entries: [], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 0' },
+        // The legacy "disabled" phrase no longer applies anything.
+        { ...base, enabled: false, entries: [], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST DISABLED' },
+        { ...base, enabled: true, entries: [entry, entry], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 2' },
+        { ...base, enabled: true, entries: [{ ...entry, agent_id: 'not-a-uuid' }], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+        // The tuple binds the exact screened image: no omission, wildcard, or extra field.
+        { ...base, enabled: true, entries: [entryWithoutImage], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+        { ...base, enabled: true, entries: [{ ...entry, screened_image_sha256: '*' }], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+        { ...base, enabled: true, entries: [{ ...entry, screened_image_sha256: 'C'.repeat(64) }], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+        { ...base, enabled: true, entries: [{ ...entry, screened_image_digest: 'c'.repeat(64) }], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+      ]) {
+        const response = await client.callTool({
+          name: 'set_coding_certification_allowlist',
+          arguments: refused,
+        })
+        expect(response.isError, JSON.stringify(refused)).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      const written = await client.callTool({
+        name: 'set_coding_certification_allowlist',
+        arguments: {
+          ...base,
+          enabled: true,
+          entries: [entry],
+          confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1',
+        },
+      })
+      expect(written.isError, readTextResult(written)).not.toBe(true)
+      expect(readJsonResult(written)).toMatchObject({
+        effective: 'exact_tuples',
+        aborted_lease_count: 1,
+        revoked_inference_grant_count: 1,
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-certification-allowlist',
+      )
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({
+        expected_revision: 1,
+        enabled: true,
+        entries: [entry],
+        reason: 'restrict certification to the team canary',
+        actor: 'peyton@omniaura.ai',
+        confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1',
+      })
+
+      const refuseAll = await client.callTool({
+        name: 'set_coding_certification_allowlist',
+        arguments: {
+          ...base,
+          expectedRevision: 2,
+          enabled: false,
+          confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL',
+        },
+      })
+      expect(refuseAll.isError, readTextResult(refuseAll)).not.toBe(true)
+      expect(JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body))).toMatchObject({
+        enabled: false,
+        entries: [],
+        confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL',
+      })
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('serves authoritative scores, leaderboard, and history to a read-only grant without the admin token', async () => {

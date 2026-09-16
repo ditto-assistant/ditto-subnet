@@ -1290,6 +1290,30 @@ class CodingCapabilityCertification(Base):
     )
 
 
+CODING_CERTIFICATION_LEASE_LIFECYCLE = (
+    "(status = 'issued' AND claimed_at IS NULL AND aborted_at IS NULL "
+    "AND aborted_allowlist_revision IS NULL) "
+    "OR (status IN ('claimed', 'completed') AND claimed_at IS NOT NULL "
+    "AND claimed_at >= issued_at AND claimed_at < deadline "
+    "AND aborted_at IS NULL AND aborted_allowlist_revision IS NULL) "
+    "OR (status = 'aborted' AND aborted_at IS NOT NULL "
+    "AND aborted_at >= issued_at AND (claimed_at IS NULL "
+    "OR (aborted_allowlist_revision IS NOT NULL "
+    "AND claimed_at >= issued_at AND claimed_at < deadline "
+    "AND aborted_at >= claimed_at))) "
+    "OR (status = 'expired' AND aborted_at IS NULL "
+    "AND aborted_allowlist_revision IS NULL "
+    "AND (claimed_at IS NULL "
+    "OR (claimed_at >= issued_at AND claimed_at < deadline)))"
+)
+"""One-way certification lease lifecycle.
+
+``issued -> claimed | aborted | expired`` and ``claimed -> completed | expired``,
+plus ``claimed -> aborted`` only by an allowlist revision. ``completed`` (an
+accepted receipt) is terminal.
+"""
+
+
 class CodingCertificationLease(Base):
     """One shadow public-canary lease minted from current core qualification."""
 
@@ -1332,6 +1356,13 @@ class CodingCertificationLease(Base):
     aborted_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    # The allowlist revision that admitted the claim. Only admitted claims
+    # count toward the per-identity attempt budget.
+    claim_allowlist_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # The allowlist revision whose write aborted this in-flight lease.
+    aborted_allowlist_revision: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     authority: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
@@ -1343,6 +1374,18 @@ class CodingCertificationLease(Base):
             ["agents.agent_id"],
             ondelete="CASCADE",
             name="coding_certification_leases_agent_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["claim_allowlist_revision"],
+            ["coding_certification_allowlist_revisions.revision"],
+            ondelete="RESTRICT",
+            name="coding_certification_leases_claim_allowlist_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["aborted_allowlist_revision"],
+            ["coding_certification_allowlist_revisions.revision"],
+            ondelete="RESTRICT",
+            name="coding_certification_leases_aborted_allowlist_fkey",
         ),
         ForeignKeyConstraint(
             ["core_qualification_observation_id"],
@@ -1370,7 +1413,7 @@ class CodingCertificationLease(Base):
             name="coding_certification_leases_version_check",
         ),
         CheckConstraint(
-            "status IN ('issued', 'claimed', 'aborted', 'expired')",
+            "status IN ('issued', 'claimed', 'completed', 'aborted', 'expired')",
             name="coding_certification_leases_status_check",
         ),
         CheckConstraint(
@@ -1389,14 +1432,13 @@ class CodingCertificationLease(Base):
             name="coding_certification_leases_image_identity_check",
         ),
         CheckConstraint(
-            "(status = 'issued' AND claimed_at IS NULL AND aborted_at IS NULL) "
-            "OR (status = 'claimed' AND claimed_at IS NOT NULL "
-            "AND claimed_at >= issued_at AND claimed_at < deadline "
-            "AND aborted_at IS NULL) "
-            "OR (status = 'aborted' AND aborted_at IS NOT NULL "
-            "AND aborted_at >= issued_at AND claimed_at IS NULL) "
-            "OR (status = 'expired' AND claimed_at IS NULL AND aborted_at IS NULL)",
+            CODING_CERTIFICATION_LEASE_LIFECYCLE,
             name="coding_certification_leases_lifecycle_check",
+        ),
+        CheckConstraint(
+            "claim_allowlist_revision IS NULL "
+            "OR (claim_allowlist_revision > 0 AND claimed_at IS NOT NULL)",
+            name="coding_certification_leases_claim_allowlist_check",
         ),
         Index(
             "coding_certification_leases_inflight_idx",
@@ -1412,6 +1454,58 @@ class CodingCertificationLease(Base):
             "coding_certification_leases_validator_deadline_idx",
             "validator_hotkey",
             "deadline",
+        ),
+    )
+
+
+class CodingCertificationAllowlistRevision(Base):
+    """Append-only, strict operator restriction on coding certification.
+
+    No row, or a latest ``enabled=false`` revision, refuses every certification
+    lease, claim, harness launch, inference grant, and receipt. An enabled
+    revision admits only its 1-16 exact ``(agent_id, artifact_sha256,
+    screened_image_sha256, validator_hotkey)`` tuples.
+    """
+
+    __tablename__ = "coding_certification_allowlist_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    entries: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_revision >= 0 AND parent_revision < revision",
+            name="coding_certification_allowlist_parent_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(entries) = 'array' "
+            "AND jsonb_array_length(entries) <= 16 "
+            "AND enabled = (jsonb_array_length(entries) > 0)",
+            name="coding_certification_allowlist_entries_check",
+        ),
+        CheckConstraint(
+            "checksum ~ '^[0-9a-f]{64}$'",
+            name="coding_certification_allowlist_checksum_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="coding_certification_allowlist_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="coding_certification_allowlist_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="coding_certification_allowlist_parent_key",
         ),
     )
 
@@ -1812,6 +1906,36 @@ class CodingHostedAssignment(Base):
             "AND (started_at IS NULL OR (admitted_at IS NOT NULL "
             "AND started_at >= admitted_at))",
             name="coding_hosted_assignments_lifecycle_check",
+        ),
+    )
+
+
+class CodingHostedAssignmentCancellation(Base):
+    """Append-only operator cancellation of an assignment that never started."""
+
+    __tablename__ = "coding_hosted_assignment_cancellations"
+
+    evaluation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    assignment_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    prior_state: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    cancelled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.clock_timestamp()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["evaluation_id"],
+            ["coding_hosted_assignments.evaluation_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "assignment_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND prior_state IN ('pending_admission','admitted') "
+            "AND length(trim(reason)) BETWEEN 8 AND 512 "
+            "AND length(trim(actor)) BETWEEN 1 AND 120",
+            name="coding_hosted_assignment_cancellations_audit_check",
         ),
     )
 
@@ -7331,6 +7455,78 @@ class HotkeyBanAudit(Base):
     __table_args__ = (
         CheckConstraint("action = 'unban'", name="hotkey_ban_audit_action"),
         Index("hotkey_ban_audit_hotkey_recorded_idx", "hotkey", "recorded_at"),
+    )
+
+
+class NoncompetitiveAgentExclusion(Base):
+    """An audited team canary that must never compete for weights or emissions.
+
+    Reserved before upload for one exact ``(miner_hotkey, artifact_sha256)``
+    pair, then bound once to the resulting ``agent_id`` and its screened image
+    digest. It is only ever an additional exclusion (AND-NOT) on top of normal
+    status, screening and copy-detection rules: nothing reads it as permission,
+    and agent status is never changed by it. Rows are append-only; there is no
+    revoke path. See :mod:`ditto.db.queries.noncompetitive_exclusions`.
+    """
+
+    __tablename__ = "noncompetitive_agent_exclusions"
+
+    exclusion_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    agent_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    screened_image_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bound_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bound_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    bound_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="noncompetitive_agent_exclusions_agent_id_fkey",
+        ),
+        UniqueConstraint(
+            "miner_hotkey",
+            "artifact_sha256",
+            name="noncompetitive_agent_exclusions_identity_key",
+        ),
+        UniqueConstraint("agent_id", name="noncompetitive_agent_exclusions_agent_key"),
+        CheckConstraint(
+            "kind = 'team_canary'", name="noncompetitive_agent_exclusions_kind"
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            name="noncompetitive_agent_exclusions_artifact",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="noncompetitive_agent_exclusions_reason",
+        ),
+        CheckConstraint(
+            "length(trim(created_by)) BETWEEN 1 AND 120",
+            name="noncompetitive_agent_exclusions_created_by",
+        ),
+        CheckConstraint(
+            "(agent_id IS NULL AND screened_image_sha256 IS NULL AND bound_by IS NULL "
+            "AND bound_reason IS NULL AND bound_at IS NULL) OR "
+            "(agent_id IS NOT NULL AND screened_image_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND length(trim(bound_by)) BETWEEN 1 AND 120 "
+            "AND length(trim(bound_reason)) >= 8 AND bound_at IS NOT NULL)",
+            name="noncompetitive_agent_exclusions_binding",
+        ),
+        Index("noncompetitive_agent_exclusions_hotkey_idx", "miner_hotkey"),
     )
 
 

@@ -150,6 +150,8 @@ paths = [
   "scripts/test-coding-node-driver.sh",
   "scripts/test-coding-node-confinement.sh",
   "packages/dittobench-coding-contract/**",
+  # Baked into the sandbox scorer image for the default-off certification canary.
+  "research/dittobench-coding-datagen/certification/v1/**",
 ]
 
 [components.dittobench_datagen]
@@ -210,6 +212,7 @@ paths = [
   "apps/platform/alembic.ini",
   "apps/platform/docker-compose.yml",
   "apps/platform/pyproject.toml",
+  "apps/platform/release-build-requirements.txt",
   "apps/platform/skills-lock.json",
   "apps/platform/uv.lock",
   ".github/workflows/platform-ci.yml",

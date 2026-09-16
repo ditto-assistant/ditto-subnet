@@ -1,0 +1,63 @@
+#!/bin/bash
+# Managed by infra/ansible/roles/platform_app. Edits here are wiped on next run.
+#
+# Starts ditto-api from a sealed root-owned release as the dedicated ditto-api
+# user, always after the hosted-v2 signer metadata preflight (`serve`), or runs
+# only that preflight (`preflight`). Run only by ditto-platform-api.service and
+# by the root release installer's transient preflight unit
+# (infra/docs/coding-hosted-control-signer-v2.md). It sources only root-owned
+# environment files and never touches the control-signer seed; the Python
+# loader and preflight own every seed check.
+set -euo pipefail
+umask 077
+
+readonly api_root=/opt/ditto-platform-api
+readonly config_dir=/etc/ditto-platform/api
+
+usage() {
+  echo "usage: ditto-platform-api-launch preflight|serve [release]" >&2
+  exit 64
+}
+
+[ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+mode="$1"
+case "$mode" in
+  preflight | serve) ;;
+  *) usage ;;
+esac
+[ "$(id -un)" = ditto-api ] || {
+  echo "ERROR: ditto-platform-api-launch runs only as ditto-api" >&2
+  exit 77
+}
+
+# Resolve `current` once, in this single launcher run, and use the resolved
+# release for both the preflight and the server, so the two cannot straddle a
+# release switch. The unit therefore has no separate ExecStartPre.
+release="$(readlink -e -- "${2:-$api_root/current}")" || {
+  echo "ERROR: no installed ditto-api release" >&2
+  exit 66
+}
+revision="${release##*/}"
+if [ "$release" != "$api_root/releases/$revision" ] ||
+  ! [[ "$revision" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "ERROR: the release must be $api_root/releases/<40-character revision>" >&2
+  exit 64
+fi
+
+set -a
+# shellcheck source=/dev/null
+. "$config_dir/platform.env"
+if [ "$mode" = serve ]; then
+  # shellcheck source=/dev/null
+  . "$config_dir/deploy.env"
+fi
+set +a
+# /health reports the sealed revision; a release has no .git to ask.
+export DITTO_BUILD_COMMIT="$revision"
+
+cd "$release/apps/platform"
+if [ "$mode" = preflight ]; then
+  exec ./.venv/bin/python -I -m ditto.api_server.coding_hosted_signer_preflight --check-metadata
+fi
+./.venv/bin/python -I -m ditto.api_server.coding_hosted_signer_preflight --check-metadata
+exec ./.venv/bin/python -I -m ditto.api_server

@@ -1,0 +1,30 @@
+---
+# One invalid certification canary profile. The shared validation task must be
+# the task that fails; accepting the profile fails this test.
+- name: Reject {{ case.name }}
+  vars:
+    validator_stack_coding_canary_enabled: "{{ case.validator | default(true) }}"
+    validator_stack_coding_canary_poll_seconds: "{{ case.poll | default(10) }}"
+    validator_stack_coding_canary_targets: "{{ case.targets | default(valid_targets) }}"
+    validator_stack_coding_canary_validator_hotkey: "{{ case.canary_hotkey | default(valid_hotkey) }}"
+    validator_stack_hotkey: "{{ case.hotkey | default(valid_hotkey) }}"
+    validator_stack_coding_certification_socket_uid: "{{ case.socket_uid | default(valid_socket_uid) }}"
+    validator_stack_coding_certification_socket_gid: "{{ case.socket_gid | default(valid_socket_gid) }}"
+    validator_stack_coding_certification_control_token_path: "{{ case.token_path | default(valid_token_path) }}"
+    validator_stack_coding_certification_runtime_image_digest: "{{ case.runtime_digest | default(valid_runtime_digest) }}"
+    validator_stack_coding_certification_pack_manifest_sha256: "{{ case.pack_manifest | default(valid_pack_manifest) }}"
+    validator_stack_coding_executor_connectivity_canary_enabled: "{{ case.connectivity | default(false) }}"
+    validator_stack_coding_executor_connectivity_canary_run_enabled: "{{ case.connectivity_run | default(false) }}"
+  block:
+    - name: Evaluate {{ case.name }}
+      ansible.builtin.include_tasks: ../roles/validator_stack/tasks/validate_coding_canary.yml
+
+    - name: Invalid profile was accepted
+      ansible.builtin.fail:
+        msg: "{{ case.name }} must be rejected"
+  rescue:
+    - name: Require the canary validation to be the rejecting task
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Validate the default-off certification canary profile'
+        fail_msg: "{{ case.name }} was accepted or failed for another reason"

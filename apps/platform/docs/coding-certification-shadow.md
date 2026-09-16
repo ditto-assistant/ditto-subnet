@@ -11,7 +11,11 @@ receipt only when all of these match:
 
 - a permitted validator hotkey and valid sr25519 signature;
 - a claimed certification lease for the same validator, agent, artifact,
-  screened image, and benchmark version;
+  screened image, and benchmark version, whose tuple the strict certification
+  allowlist admits (otherwise `403`, and no row is written);
+- submission before the lease's receipt window closes, 120 seconds after its
+  deadline on the database clock read after the lease lock (otherwise `404`,
+  and the lease expires);
 - a representable receipt timestamp no earlier than the lease issuance (with
   five minutes of clock skew), no later than its deadline, and not expired;
 - the agent's immutable source-artifact SHA-256;
@@ -28,6 +32,13 @@ receipt only when all of these match:
 Unused-inference failed receipts (`coding_inference_not_observed`, no invoked
 model evidence) persist without a settlement row. A settlement on that lease
 makes that unused-inference claim a `409`.
+
+The transaction that accepts a receipt moves its lease to the terminal
+`completed` status. No later lease can be issued for that identity while a
+`certified` receipt for it is still valid on the database clock; after it
+expires, or at once after a `failed` or `unsupported` receipt, the same exact
+tuple may take a new lease under the allowlist and attempt budget (see
+`coding-certification-lease.md`).
 
 The signature binds the validator, agent, benchmark version, lease ID,
 screened image, and receipt digest. Exact retries are idempotent. Reusing the

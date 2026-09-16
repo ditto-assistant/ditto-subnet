@@ -73,6 +73,13 @@ func readPrivate(path string, maximum int64) ([]byte, error) {
 	return body, nil
 }
 
+// ConsumeAttempt is the single-use marker Run commits before any environment
+// or execution: it exclusively creates and fsyncs root/consumed, and refuses
+// with ErrConsumed when any marker, even a partial one, exists. It is exported
+// only so the native enforcement probe runner (B5 cleanup_recovery rerun) can
+// drive the same function from outside; Run's own call is unchanged.
+func ConsumeAttempt(root string) error { return consume(root) }
+
 // The marker is append-only and conservative: any failure after creation
 // consumes this runtime directory, even if no candidate start was observed.
 // Platform's PostgreSQL start remains authoritative across hosts/directories.

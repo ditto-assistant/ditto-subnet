@@ -953,6 +953,9 @@ async def _efficiency_evidence_watermark(
         Score,
     )
     from ditto.db.queries.benchmark_rollout import active_bench_version
+    from ditto.db.queries.noncompetitive_exclusions import (
+        agent_competition_excluded,
+    )
 
     bench_version = await active_bench_version(session)
     candidate_rows = (
@@ -965,6 +968,8 @@ async def _efficiency_evidence_watermark(
                 Agent.created_at,
                 Agent.miner_hotkey,
                 EvaluationPayment.miner_coldkey,
+                # A new team canary exclusion must re-materialize the cohort.
+                agent_competition_excluded().label("competition_excluded"),
             )
             .select_from(Agent)
             .join(

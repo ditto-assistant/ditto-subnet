@@ -6,8 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codinggrader"
@@ -28,11 +26,15 @@ func (pack PublicPack) executionPlans(
 	imageDigest string,
 ) (executionPlans, error) {
 	var zero executionPlans
-	visible, err := tarDirectory(pack.VisibleDir)
+	visibleFiles, graderFiles, err := pack.verifiedTrees()
 	if err != nil {
 		return zero, err
 	}
-	graderBundle, err := tarDirectory(pack.GraderDir)
+	visible, err := tarPackFiles(visibleFiles)
+	if err != nil {
+		return zero, err
+	}
+	graderBundle, err := tarPackFiles(graderFiles)
 	if err != nil {
 		return zero, err
 	}
@@ -113,44 +115,26 @@ func (pack PublicPack) executionPlans(
 
 var codingGraderGroups = []string{"adversarial", "fail_to_pass", "hidden", "integrity", "pass_to_pass"}
 
-func tarDirectory(root string) ([]byte, error) {
+// tarPackFiles bundles an already verified tree in its lexical walk order.
+func tarPackFiles(files []packFile) ([]byte, error) {
+	if len(files) == 0 {
+		return nil, ErrInvalid
+	}
 	var buffer bytes.Buffer
 	writer := tar.NewWriter(&buffer)
-	err := filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if info.IsDir() {
-			return nil
-		}
-		if !info.Mode().IsRegular() {
-			return ErrInvalid
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		body, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
+	for _, file := range files {
 		header := &tar.Header{
-			Name: filepath.ToSlash(rel), Mode: 0o644, Size: int64(len(body)), Typeflag: tar.TypeReg,
+			Name: file.path, Mode: 0o644, Size: int64(len(file.body)), Typeflag: tar.TypeReg,
 		}
 		if err := writer.WriteHeader(header); err != nil {
-			return err
+			return nil, err
 		}
-		_, err = writer.Write(body)
-		return err
-	})
-	if err != nil {
-		return nil, err
+		if _, err := writer.Write(file.body); err != nil {
+			return nil, err
+		}
 	}
 	if err := writer.Close(); err != nil {
 		return nil, err
-	}
-	if buffer.Len() == 0 {
-		return nil, ErrInvalid
 	}
 	return buffer.Bytes(), nil
 }

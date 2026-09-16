@@ -30,17 +30,32 @@ type Config struct {
 	Backend          Backend
 	OperationTimeout time.Duration
 	Now              func() time.Time
+	// Pack is the loaded public pack. Readiness re-verifies it on every probe.
+	Pack PublicPack
+	// Readiness probes executor eligibility. Nil always reports not ready.
+	Readiness func(context.Context) ReadinessCheck
+	// Topology proves the host certification service's placement. Nil always
+	// reports not ready, so a scorer without that service can never be ready.
+	Topology func(context.Context) TopologyCheck
+	// RuntimeImageDigest is the pinned sha256 runtime image digest readiness
+	// reports; anything else reports runtime_image.
+	RuntimeImageDigest string
 }
 
 type Service struct {
-	mu      sync.Mutex
-	backend Backend
-	now     func() time.Time
-	timeout time.Duration
-	token   [sha256.Size]byte
-	active  map[string]struct{}
-	lastNow time.Time
-	closed  bool
+	mu        sync.Mutex
+	backend   Backend
+	now       func() time.Time
+	timeout   time.Duration
+	token     [sha256.Size]byte
+	active    map[string]struct{}
+	lastNow   time.Time
+	closed    bool
+	pack      PublicPack
+	readiness func(context.Context) ReadinessCheck
+	topology  func(context.Context) TopologyCheck
+	image     string
+	probe     chan struct{}
 }
 
 func New(config Config) (*Service, error) {
@@ -61,8 +76,136 @@ func New(config Config) (*Service, error) {
 	return &Service{
 		backend: config.Backend, now: config.Now, timeout: config.OperationTimeout,
 		token: sha256.Sum256([]byte(config.ControlToken)), lastNow: now,
-		active: make(map[string]struct{}),
+		active: make(map[string]struct{}), pack: config.Pack, readiness: config.Readiness,
+		topology: config.Topology, image: config.RuntimeImageDigest, probe: make(chan struct{}, 1),
 	}, nil
+}
+
+// ReadinessHandler serves GET ReadinessPath with the canary's bearer. It never
+// creates a harness, container, grant, or lease; it re-verifies the loaded
+// pack, the host certification service's rootless topology, router listener
+// namespace and control socket, and asks the host whether the dedicated
+// executor daemon and pinned runtime image digest would pass certification
+// preflight now. Anything short of all of them reports ready=false, so a
+// validator refuses before its irreversible claim.
+func (service *Service) ReadinessHandler() http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		setPrivateHeaders(response)
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		if request.URL.Path != ReadinessPath || request.URL.RawQuery != "" {
+			writeError(response, http.StatusNotFound, "not_found")
+			return
+		}
+		if request.Method != http.MethodGet {
+			response.Header().Set("Allow", http.MethodGet)
+			writeError(response, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		if !service.authorized(request) {
+			writeError(response, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		select {
+		case service.probe <- struct{}{}:
+			defer func() { <-service.probe }()
+		default:
+			writeError(response, http.StatusServiceUnavailable, "busy")
+			return
+		}
+		service.mu.Lock()
+		closed := service.closed
+		service.mu.Unlock()
+		if closed {
+			writeError(response, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), readinessTimeout)
+		defer cancel()
+		encoded, err := json.Marshal(service.readinessResult(ctx))
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "internal")
+			return
+		}
+		encoded = append(encoded, '\n')
+		response.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(encoded)
+	})
+}
+
+func (service *Service) readinessResult(ctx context.Context) ReadinessResponse {
+	result := ReadinessResponse{
+		Schema: ReadinessSchema, CodingContractVersion: 1, WeightEligible: false,
+		CanaryManifestSHA256: service.pack.CanaryManifestSHA256, RunnerPlanSHA256: service.pack.RunnerPlanSHA256,
+		GraderPlanSHA256: service.pack.GraderPlanSHA256, ResourceProfileSHA256: service.pack.ResourceProfileSHA256,
+		InferencePolicySHA256: service.pack.InferencePolicySHA256,
+	}
+	if validImageDigest(service.image) {
+		result.RuntimeImageDigest = service.image
+	}
+	// Checks run in a fixed order and each flag requires every earlier one, so
+	// the first failure is reported and nothing later can be ready without it.
+	result.PackLoaded = validSHA256(service.pack.CanaryManifestSHA256) && service.pack.Verify() == nil
+	if !result.PackLoaded {
+		result.Failure = "pack"
+		return result
+	}
+	if service.topology == nil {
+		result.Failure = "rootless_topology"
+		return result
+	}
+	topology := service.topology(ctx)
+	result.RootlessTopologyReady = topology.RootlessTopology && ctx.Err() == nil
+	result.ListenerNamespaceReady = result.RootlessTopologyReady && topology.ListenerNamespace
+	result.ControlSocketReady = result.ListenerNamespaceReady && topology.ControlSocket
+	switch {
+	case !result.RootlessTopologyReady:
+		result.Failure = "rootless_topology"
+		return result
+	case !result.ListenerNamespaceReady:
+		result.Failure = "listener_namespace"
+		return result
+	case !result.ControlSocketReady:
+		result.Failure = "control_socket"
+		return result
+	}
+	if service.readiness == nil {
+		result.Failure = "executor_daemon"
+		return result
+	}
+	check := service.readiness(ctx)
+	result.ExecutorDaemonReady = check.ExecutorDaemon && ctx.Err() == nil
+	result.RuntimeImageReady = result.ExecutorDaemonReady && check.RuntimeImage && result.RuntimeImageDigest != ""
+	switch {
+	case !result.ExecutorDaemonReady:
+		result.Failure = "executor_daemon"
+	case !result.RuntimeImageReady:
+		result.Failure = "runtime_image"
+	default:
+		result.Ready = true
+	}
+	return result
+}
+
+// placed reports whether the host certification service's topology probe
+// proves all three placement facts now. Without a probe it is never placed.
+func (service *Service) placed(parent context.Context) bool {
+	if service.topology == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(parent, readinessTimeout)
+	defer cancel()
+	check := service.topology(ctx)
+	return ctx.Err() == nil && check.RootlessTopology && check.ListenerNamespace && check.ControlSocket
+}
+
+// validImageDigest accepts exactly sha256:<64 lowercase hex>, never a tag.
+func validImageDigest(value string) bool {
+	digest, found := strings.CutPrefix(value, "sha256:")
+	return found && validSHA256(digest)
 }
 
 func (service *Service) Handler() http.Handler {
@@ -72,7 +215,7 @@ func (service *Service) Handler() http.Handler {
 			writeError(response, http.StatusServiceUnavailable, "unavailable")
 			return
 		}
-		if request.URL.Path != "/v1/coding/certifier/canary" || request.URL.RawQuery != "" {
+		if request.URL.Path != CanaryPath || request.URL.RawQuery != "" {
 			writeError(response, http.StatusNotFound, "not_found")
 			return
 		}
@@ -107,6 +250,13 @@ func (service *Service) Handler() http.Handler {
 		value, err := parseRequest(body, now)
 		if err != nil {
 			writeError(response, http.StatusBadRequest, "invalid")
+			return
+		}
+		// Re-prove placement before any harness, route or grant use. A stale
+		// router listener would otherwise turn an infrastructure fault into a
+		// failed certification attributed to the candidate.
+		if !service.placed(request.Context()) {
+			writeError(response, http.StatusServiceUnavailable, "placement")
 			return
 		}
 		backend, beginErr := service.begin(value.LeaseID)

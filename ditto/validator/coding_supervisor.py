@@ -40,8 +40,8 @@ from ditto.validator.coding_attempt import (
 from ditto.validator.coding_executor_transport import (
     CodingExecutorRequestAuthority,
     private_executor_endpoint,
+    scorer_control_origin,
     sign_coding_executor_request,
-    tls_or_loopback,
 )
 from ditto.validator.config import ValidatorConfig
 from ditto.validator.errors import ValidatorInfrastructureError
@@ -258,14 +258,16 @@ class CodingSupervisorRuntime:
         )
         parsed = urlsplit(base_url)
         if (
-            not tls_or_loopback(parsed.scheme, parsed.hostname)
-            or not parsed.netloc
+            not parsed.netloc
             or parsed.username is not None
             or parsed.password is not None
             or parsed.path not in {"", "/"}
             or parsed.query
             or parsed.fragment
+            # The dedicated executor is HTTPS on a private :9443 origin; the
+            # local scorer shares the canary's single origin rule.
             or (remote and not private_executor_endpoint(parsed))
+            or (not remote and not scorer_control_origin(base_url))
             or (not remote and not _valid_control_token(token))
             or (remote and keypair is None)
         ):

@@ -24,12 +24,28 @@ type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewF
 type GeneratedSourceReviewNote = PlatformComponents['schemas']['SourceReviewNote']
 type GeneratedValidatorUpdaterStatus = PlatformComponents['schemas']['ValidatorUpdaterStatus']
 type GeneratedAdminActiveHotkeyBan = PlatformComponents['schemas']['AdminActiveHotkeyBan']
+type GeneratedAdminTeamCanaryAgent = PlatformComponents['schemas']['AdminTeamCanaryAgent']
+type GeneratedAdminTeamCanaryExclusion =
+  PlatformComponents['schemas']['AdminTeamCanaryExclusion']
+type GeneratedAdminTeamCanaryList = PlatformComponents['schemas']['AdminTeamCanaryList']
 type GeneratedAdminHotkeyBanAuditEntry =
   PlatformComponents['schemas']['AdminHotkeyBanAuditEntry']
 type GeneratedAdminHotkeyBanControl = PlatformComponents['schemas']['AdminHotkeyBanControl']
 type GeneratedAdminHotkeyBanList = PlatformComponents['schemas']['AdminHotkeyBanList']
 type GeneratedAdminHotkeyUnbanResponse =
   PlatformComponents['schemas']['AdminHotkeyUnbanResponse']
+type GeneratedCodingCertificationAllowlistEntry =
+  PlatformComponents['schemas']['CodingCertificationAllowlistEntry']
+type GeneratedCodingCertificationAllowlistRevision =
+  PlatformComponents['schemas']['CodingCertificationAllowlistRevision']
+type GeneratedCodingCertificationAllowlistControl =
+  PlatformComponents['schemas']['AdminCodingCertificationAllowlistResponse']
+type GeneratedCodingCertificationAllowlistApply =
+  PlatformComponents['schemas']['AdminCodingCertificationAllowlistApplyResponse']
+type GeneratedCodingCertificationLeaseRecord =
+  PlatformComponents['schemas']['AdminCodingCertificationLeaseRecord']
+type GeneratedCodingCertificationLeaseList =
+  PlatformComponents['schemas']['AdminCodingCertificationLeaseList']
 type GeneratedScoredPolicyRescreenView =
   PlatformComponents['schemas']['ScoredPolicyRescreenView']
 type GeneratedCopyCourtSettingsResponse =
@@ -1045,6 +1061,115 @@ export function unbanHotkeyConfirmation(hotkey: string) {
 }
 
 export type HotkeyBanControl = z.infer<typeof hotkeyBanControlSchema>
+
+// Audited noncompetitive team canaries. An exclusion can only remove an exact
+// identity from weights and emissions, never lift a gate, and Backroom has no
+// way to lift an exclusion: set_team_canary only reserves or binds.
+export const teamCanaryAgentSchema = z.object({
+  agent_id: z.string().uuid(),
+  status: z.enum([
+    'uploaded',
+    'screening',
+    'screening_passed',
+    'screening_failed',
+    'quarantined',
+    'rejected',
+    'evaluating',
+    'scored',
+    'live',
+    'ath_pending_review',
+    'banned',
+  ]),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  screened_image_sha256: z.string().nullable(),
+  state: z.enum(['reserved', 'bound', 'binding_drift']),
+  competition_excluded: z.literal(true).default(true),
+} satisfies PlatformResponseShape<GeneratedAdminTeamCanaryAgent>)
+
+export const teamCanaryExclusionSchema = z.object({
+  exclusion_id: z.string().uuid(),
+  kind: z.literal('team_canary').default('team_canary'),
+  miner_hotkey: z.string().min(1),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string().min(1),
+  created_by: z.string().min(1),
+  created_at: z.string().datetime({ offset: true }),
+  agent_id: z.string().uuid().nullable(),
+  screened_image_sha256: z.string().nullable(),
+  bound_by: z.string().nullable(),
+  bound_reason: z.string().nullable(),
+  bound_at: z.string().datetime({ offset: true }).nullable(),
+  matched_agents: z.array(teamCanaryAgentSchema),
+} satisfies PlatformResponseShape<GeneratedAdminTeamCanaryExclusion>)
+
+export const teamCanaryListSchema = z.object({
+  total: z.number().int().nonnegative(),
+  exclusions: z.array(teamCanaryExclusionSchema).max(200),
+} satisfies PlatformResponseShape<GeneratedAdminTeamCanaryList>)
+
+// Platform formats both confirmations from its canonical values: the SS58
+// hotkey and lowercase digest as sent, and each UUID as Python's lowercase
+// str(UUID). Backroom requires those exact canonical forms so the phrase an
+// operator types here is the phrase Platform checks again.
+const TEAM_CANARY_HOTKEY = /^[1-9A-HJ-NP-Za-km-z]{47,48}$/
+const TEAM_CANARY_SHA256 = /^[0-9a-f]{64}$/
+const TEAM_CANARY_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+export function teamCanaryReserveConfirmation(minerHotkey: string, artifactSha256: string) {
+  return `RESERVE TEAM CANARY ${minerHotkey} ${artifactSha256}`
+}
+
+export function teamCanaryBindConfirmation(exclusionId: string, agentId: string) {
+  return `BIND TEAM CANARY ${exclusionId} ${agentId}`
+}
+
+// The MCP catalog carries every tool schema in every session and has almost no
+// headroom under its whole-payload budget, so set_team_canary publishes an open
+// object envelope. Its fields live in get_backroom_tool_help, and the service
+// parses the exact schema below before any Platform call. Unknown keys,
+// including a client-supplied actor, are refused rather than dropped.
+export const setTeamCanaryMcpInputSchema = z.looseObject({})
+
+const teamCanaryIdentityShape = {
+  minerHotkey: z.string().regex(TEAM_CANARY_HOTKEY, 'minerHotkey must be an SS58 hotkey'),
+  artifactSha256: z
+    .string()
+    .regex(TEAM_CANARY_SHA256, 'artifactSha256 must be 64 lowercase hex characters'),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+}
+
+export const setTeamCanaryInputSchema = z
+  .discriminatedUnion('action', [
+    z.strictObject({
+      action: z.literal('reserve'),
+      ...teamCanaryIdentityShape,
+    }),
+    z.strictObject({
+      action: z.literal('bind'),
+      exclusionId: z
+        .string()
+        .regex(TEAM_CANARY_UUID, 'exclusionId must be a lowercase UUID'),
+      agentId: z.string().regex(TEAM_CANARY_UUID, 'agentId must be a lowercase UUID'),
+      ...teamCanaryIdentityShape,
+      screenedImageSha256: z
+        .string()
+        .regex(TEAM_CANARY_SHA256, 'screenedImageSha256 must be 64 lowercase hex characters'),
+    }),
+  ])
+  .superRefine((input, context) => {
+    const expected =
+      input.action === 'reserve'
+        ? teamCanaryReserveConfirmation(input.minerHotkey, input.artifactSha256)
+        : teamCanaryBindConfirmation(input.exclusionId, input.agentId)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        path: ['confirmation'],
+        message: `confirmation must be exactly ${expected}`,
+      })
+    }
+  })
 
 // SN118 relative token-efficiency bonus (bench_version >= 7).
 //
@@ -5380,6 +5505,8 @@ export const codingNativeControlStatusSchema = z.object({
     artifact_sha256: codingPrivateV2Digest,
     screened_image_sha256: codingPrivateV2Digest,
     assignment_sha256: codingPrivateV2Digest,
+    // Platform never widens this published enum: an unknown value would fail
+    // the whole read. A cancelled assignment reads `aborted` with `cancelled`.
     state: z.enum([
       'pending_admission',
       'admitted',
@@ -5396,6 +5523,8 @@ export const codingNativeControlStatusSchema = z.object({
     frozen: z.boolean(),
     closed_at: z.string().nullable(),
     close_reason: z.enum(['completed', 'failed', 'aborted']).nullable(),
+    // Additive; absent from a Platform deployed before cancellation.
+    cancelled: z.boolean().default(false),
     registered_actor: z.string(),
     registered_reason: z.string(),
     shadow_only: z.literal(true),
@@ -5525,6 +5654,250 @@ export const codingShadowTicketSetResponseSchema = z.object({
     deadline: z.string(),
   })).length(3),
   idempotent: z.boolean(),
+  weight_eligible: z.literal(false),
+})
+
+// Hosted-v2 assignment operator path (Platform #1823 plus bounded cancellation
+// and redacted lifecycle reads). Platform derives every artifact, release,
+// selection and assignment digest from locked state and owns the confirmation
+// phrase; Backroom forwards the operator's exact values and never builds one.
+// Explicit response projections strip unknown fields, including the private
+// task grant identifiers create returns.
+const codingHostedSs58Hotkey = z.string().regex(SS58_HOTKEY_PATTERN)
+const codingHostedOutcomeSchema = z.enum([
+  'completed',
+  'candidate_failure',
+  'infrastructure_failure',
+  'integrity_failure',
+])
+const codingHostedCloseReasonSchema = z.enum(['completed', 'failed', 'aborted'])
+// Platform derives the lifecycle view state from durable rows and its database
+// clock: cancelled, then the private task close reason, then expired, running,
+// admitted, pending_admission. Only these new views carry `cancelled`.
+export const codingHostedAssignmentStateSchema = z.enum([
+  'pending_admission',
+  'admitted',
+  'running',
+  'completed',
+  'failed',
+  'aborted',
+  'expired',
+  'cancelled',
+])
+// Platform refuses a trimmed reason outside 8-512 characters on both writes, so
+// the service parse refuses it first with a named field error. The MCP catalog
+// copies below keep `reason` unbounded above, like every other MCP reason, and
+// state the bound in their descriptions instead.
+const codingHostedReasonSchema = auditReasonSchema(8).max(512)
+
+export const codingHostedAssignmentSubjectInputSchema = z.object({
+  agentId: z.string().uuid(),
+  releaseRowId: z.string().uuid(),
+  catalogIndex: z.number().int().min(0).max(249),
+  validatorHotkey: codingHostedSs58Hotkey,
+  policySha256: codingPrivateV2Digest,
+  executionProfileSha256: codingPrivateV2Digest,
+  gradingProfileSha256: codingPrivateV2Digest,
+  maxPatchBytes: z.number().int().min(1).max(128 << 20),
+})
+
+export const previewCodingHostedAssignmentInputSchema =
+  codingHostedAssignmentSubjectInputSchema.extend({
+    leaseSeconds: z.number().int().min(60).max(3600).default(900),
+  })
+
+export const createCodingHostedAssignmentInputSchema =
+  codingHostedAssignmentSubjectInputSchema.extend({
+    evaluationId: z.string().uuid(),
+    attemptId: z.string().uuid(),
+    deadlineUnix: z.number().int().positive(),
+    confirmedAssignmentSha256: codingPrivateV2Digest,
+    reason: codingHostedReasonSchema,
+    confirmation: z.string().min(1).max(1024),
+  })
+
+export const cancelCodingHostedAssignmentInputSchema = z.object({
+  evaluationId: z.string().uuid(),
+  expectedAssignmentSha256: codingPrivateV2Digest,
+  reason: codingHostedReasonSchema,
+  confirmation: z.string().min(1).max(1024),
+})
+
+export const createCodingHostedAssignmentMcpInputSchema =
+  createCodingHostedAssignmentInputSchema.extend({ reason: auditReasonSchema(8) })
+
+export const cancelCodingHostedAssignmentMcpInputSchema =
+  cancelCodingHostedAssignmentInputSchema.extend({ reason: auditReasonSchema(8) })
+
+export const listCodingHostedAssignmentsInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(20),
+  offset: z.number().int().min(0).default(0),
+})
+
+export const getCodingHostedAssignmentInputSchema = z.object({
+  evaluationId: z.string().uuid(),
+})
+
+export const codingHostedTaskSelectionSchema = z.object({
+  schema: z.literal('dittobench-coding-hosted-task-selection-v2'),
+  coding_contract_version: z.literal(2),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+  evaluation_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  registration_sha256: codingPrivateV2Digest,
+  artifact_sha256: codingPrivateV2Digest,
+  schedule_sha256: codingPrivateV2Digest,
+  catalog_index: z.number().int().min(0).max(249),
+  max_patch_bytes: z.number().int().min(1).max(128 << 20),
+})
+
+export const codingHostedAssignmentAuthoritySchema = z.object({
+  schema: z.literal('dittobench-coding-hosted-assignment-v2'),
+  coding_contract_version: z.literal(2),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+  evaluation_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  release_row_id: z.string().uuid(),
+  registration_sha256: codingPrivateV2Digest,
+  agent_id: z.string().uuid(),
+  validator_hotkey: codingHostedSs58Hotkey,
+  artifact_sha256: codingPrivateV2Digest,
+  screened_image_sha256: codingPrivateV2Digest,
+  selection_sha256: codingPrivateV2Digest,
+  policy_sha256: codingPrivateV2Digest,
+  execution_profile_sha256: codingPrivateV2Digest,
+  grading_profile_sha256: codingPrivateV2Digest,
+  deadline_unix: z.number().int().positive(),
+})
+
+export const codingHostedAssignmentPlanSchema = z.object({
+  evaluation_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  deadline_unix: z.number().int().positive(),
+  artifact_sha256: codingPrivateV2Digest,
+  screened_image_sha256: codingPrivateV2Digest,
+  registration_sha256: codingPrivateV2Digest,
+  bench_version: z.number().int(),
+  certification_row_id: z.string().uuid(),
+  schedule_sha256: codingPrivateV2Digest,
+  selection_sha256: codingPrivateV2Digest,
+  selection: codingHostedTaskSelectionSchema,
+  assignment_sha256: codingPrivateV2Digest,
+  authority: codingHostedAssignmentAuthoritySchema,
+  confirmation: z.string(),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+})
+
+const codingHostedCancellationRecordSchema = z.object({
+  assignment_sha256: codingPrivateV2Digest,
+  prior_state: z.enum(['pending_admission', 'admitted']),
+  reason: z.string(),
+  actor: z.string(),
+  cancelled_at: z.string(),
+})
+
+export const codingHostedAssignmentSummarySchema = z.object({
+  evaluation_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  release_row_id: z.string().uuid(),
+  registration_sha256: codingPrivateV2Digest,
+  agent_id: z.string().uuid(),
+  validator_hotkey: codingHostedSs58Hotkey,
+  artifact_sha256: codingPrivateV2Digest,
+  screened_image_sha256: codingPrivateV2Digest,
+  assignment_sha256: codingPrivateV2Digest,
+  state: codingHostedAssignmentStateSchema,
+  created_at: z.string(),
+  expires_at: z.string(),
+  admitted_at: z.string().nullable(),
+  started_at: z.string().nullable(),
+  cancelled_at: z.string().nullable(),
+  closed_at: z.string().nullable(),
+  close_reason: codingHostedCloseReasonSchema.nullable(),
+  terminal_outcome: codingHostedOutcomeSchema.nullable(),
+  acknowledged: z.boolean(),
+  registered_actor: z.string(),
+  registered_reason: z.string(),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+})
+
+export const codingHostedAssignmentListSchema = z.object({
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().min(1).max(100),
+  offset: z.number().int().nonnegative(),
+  observed_at: z.string(),
+  assignments: z.array(codingHostedAssignmentSummarySchema).max(100),
+  shadow_only: z.literal(true),
+  weight_eligible: z.literal(false),
+})
+
+export const codingHostedAssignmentDetailSchema = codingHostedAssignmentSummarySchema.extend({
+  observed_at: z.string(),
+  deadline_unix: z.number().int().positive(),
+  selection_sha256: codingPrivateV2Digest,
+  policy_sha256: codingPrivateV2Digest,
+  execution_profile_sha256: codingPrivateV2Digest,
+  grading_profile_sha256: codingPrivateV2Digest,
+  admission_request_sha256: codingPrivateV2Digest.nullable(),
+  cancellable: z.boolean(),
+  cancellation: codingHostedCancellationRecordSchema.nullable(),
+  private_task: z.object({
+    bound_at: z.string(),
+    selection_sha256: codingPrivateV2Digest,
+    frozen_at: z.string().nullable(),
+    closed_at: z.string().nullable(),
+    close_reason: codingHostedCloseReasonSchema.nullable(),
+  }).nullable(),
+  authoring_evidence_reserved_at: z.string().nullable(),
+  authoring_evidence_finalized_at: z.string().nullable(),
+  grading_claimed_at: z.string().nullable(),
+  terminal: z.object({
+    outcome: codingHostedOutcomeSchema,
+    evidence_sha256: codingPrivateV2Digest,
+    reserved_at: z.string(),
+    finalized_at: z.string().nullable(),
+  }).nullable(),
+  inference: z.object({
+    policy_sha256: codingPrivateV2Digest,
+    issued_at: z.string(),
+    expires_at: z.string(),
+    revoked_at: z.string().nullable(),
+    request_limit: z.number().int().min(1),
+    prompt_token_limit: z.number().int().min(1),
+    completion_token_limit: z.number().int().min(1),
+    cost_usd_micros_limit: z.number().int().min(1),
+    request_count: z.number().int().nonnegative(),
+    reserved_count: z.number().int().nonnegative(),
+    settled_count: z.number().int().nonnegative(),
+    uncertain_count: z.number().int().nonnegative(),
+    charged_prompt_tokens: z.number().int().nonnegative(),
+    charged_completion_tokens: z.number().int().nonnegative(),
+    charged_cost_usd_micros: z.number().int().nonnegative(),
+    settled_prompt_tokens: z.number().int().nonnegative(),
+    settled_completion_tokens: z.number().int().nonnegative(),
+    settled_cost_usd_micros: z.number().int().nonnegative(),
+    verified: z.boolean(),
+  }).nullable(),
+  delivery_count: z.number().int().nonnegative(),
+  acknowledged_count: z.number().int().nonnegative(),
+  deliveries: z.array(z.object({
+    result_sha256: codingPrivateV2Digest,
+    delivered_at: z.string(),
+    acknowledged_at: z.string().nullable(),
+  })).max(20),
+  deliveries_truncated: z.boolean(),
+})
+
+export const codingHostedAssignmentCancelledSchema = z.object({
+  idempotent: z.boolean(),
+  private_task_closed: z.boolean(),
+  cancellation: codingHostedCancellationRecordSchema,
+  assignment: codingHostedAssignmentDetailSchema,
+  shadow_only: z.literal(true),
   weight_eligible: z.literal(false),
 })
 
@@ -5873,6 +6246,171 @@ export const agentCoreQualificationStatusSchema = z.object({
   observations: z.array(coreQualificationObservationSchema),
   shadow_only: z.literal(true),
 })
+
+// Shadow coding-certification canary controls. The allowlist is a strict,
+// append-only Platform restriction: it refuses every tuple by default and can
+// admit only exact tuples, never global access. The lease audit never
+// transitions a row.
+const CODING_SHA256 = /^[0-9a-f]{64}$/
+const CODING_SS58_HOTKEY = /^[1-9A-HJ-NP-Za-km-z]{47,48}$/
+export const CODING_CERTIFICATION_ALLOWLIST_MAX_ENTRIES = 16
+
+export function codingCertificationAllowlistConfirmation(enabled: boolean, entryCount: number) {
+  return enabled
+    ? `APPLY CODING CERTIFICATION ALLOWLIST ENABLED ${entryCount}`
+    : 'APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL'
+}
+
+const codingCertificationAllowlistEntryShape = {
+  agent_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(CODING_SHA256),
+  screened_image_sha256: z.string().regex(CODING_SHA256),
+  validator_hotkey: z.string().regex(CODING_SS58_HOTKEY),
+} satisfies PlatformResponseShape<GeneratedCodingCertificationAllowlistEntry>
+
+export const codingCertificationAllowlistEntrySchema = z.object(
+  codingCertificationAllowlistEntryShape,
+)
+
+const codingCertificationAllowlistIntegritySchema = z.enum(['valid', 'invalid'])
+const codingCertificationAllowlistEffectSchema = z.enum(['refuse_all', 'exact_tuples'])
+
+export const codingCertificationAllowlistRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  enabled: z.boolean(),
+  integrity: codingCertificationAllowlistIntegritySchema,
+  effective: codingCertificationAllowlistEffectSchema,
+  entries: z
+    .array(codingCertificationAllowlistEntrySchema)
+    .max(CODING_CERTIFICATION_ALLOWLIST_MAX_ENTRIES),
+  checksum: z.string().regex(CODING_SHA256),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string().nullable(),
+} satisfies PlatformResponseShape<GeneratedCodingCertificationAllowlistRevision>)
+
+const codingCertificationAllowlistControlShape = {
+  enabled: z.boolean(),
+  integrity: codingCertificationAllowlistIntegritySchema,
+  effective: codingCertificationAllowlistEffectSchema,
+  current: codingCertificationAllowlistRevisionSchema,
+  history: z.array(codingCertificationAllowlistRevisionSchema).max(200),
+  max_entries: z.number().int().positive(),
+  weight_eligible: z.literal(false),
+} satisfies PlatformResponseShape<GeneratedCodingCertificationAllowlistControl>
+
+export const codingCertificationAllowlistControlSchema = z.object(
+  codingCertificationAllowlistControlShape,
+)
+
+export const codingCertificationAllowlistApplySchema = z.object({
+  ...codingCertificationAllowlistControlShape,
+  aborted_lease_count: z.number().int().nonnegative(),
+  revoked_inference_grant_count: z.number().int().nonnegative(),
+} satisfies PlatformResponseShape<GeneratedCodingCertificationAllowlistApply>)
+
+// Entries use the Platform's snake_case tuple so an operator can paste the
+// exact identity straight from a lease row. The MCP catalog carries every tool
+// schema in every session and sat ~560 characters under its whole-payload
+// budget, so this write publishes an open object envelope; its fields live in
+// get_backroom_tool_help and the service parses the exact schema below before
+// any Platform call.
+export const setCodingCertificationAllowlistMcpInputSchema = z.looseObject({})
+
+export const setCodingCertificationAllowlistInputSchema = z
+  .object({
+    expectedRevision: z.number().int().nonnegative(),
+    enabled: z.boolean(),
+    // Strict: a misspelled or missing tuple field is refused, never dropped.
+    entries: z
+      .array(z.strictObject(codingCertificationAllowlistEntryShape))
+      .max(CODING_CERTIFICATION_ALLOWLIST_MAX_ENTRIES)
+      .default([]),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((value, context) => {
+    if (!value.enabled && value.entries.length > 0) {
+      context.addIssue({
+        code: 'custom',
+        path: ['entries'],
+        message: 'a refuse-all allowlist must not carry entries',
+      })
+    }
+    if (value.enabled && value.entries.length === 0) {
+      context.addIssue({
+        code: 'custom',
+        path: ['entries'],
+        message: 'an enabled allowlist needs at least one exact entry; use enabled=false to refuse all',
+      })
+    }
+    const confirmation = codingCertificationAllowlistConfirmation(
+      value.enabled,
+      value.entries.length,
+    )
+    if (value.confirmation !== confirmation) {
+      context.addIssue({
+        code: 'custom',
+        path: ['confirmation'],
+        message: `confirmation must equal "${confirmation}"`,
+      })
+    }
+    const keys = value.entries.map(
+      (entry) =>
+        `${entry.agent_id}|${entry.artifact_sha256}|${entry.screened_image_sha256}|${entry.validator_hotkey}`,
+    )
+    if (new Set(keys).size !== keys.length) {
+      context.addIssue({
+        code: 'custom',
+        path: ['entries'],
+        message: 'allowlist entries must be unique',
+      })
+    }
+  })
+
+const CODING_CERTIFICATION_LEASE_STATUSES = [
+  'issued',
+  'claimed',
+  'completed',
+  'aborted',
+  'expired',
+] as const
+
+export const codingCertificationLeaseRecordSchema = z.object({
+  lease_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(CODING_SHA256),
+  screened_image_sha256: z.string().regex(CODING_SHA256),
+  bench_version: z.number().int().positive(),
+  coding_contract_version: z.number().int().positive(),
+  validator_hotkey: z.string(),
+  status: z.enum(CODING_CERTIFICATION_LEASE_STATUSES),
+  issued_at: z.string(),
+  claimed_at: z.string().nullable(),
+  aborted_at: z.string().nullable(),
+  deadline: z.string(),
+  deadline_passed: z.boolean(),
+  receipt_window_ends_at: z.string(),
+  claim_allowlist_revision: z.number().int().positive().nullable(),
+  aborted_allowlist_revision: z.number().int().positive().nullable(),
+  inference_grant_status: z.enum(['pending', 'active', 'revoked', 'exhausted']).nullable(),
+  receipt_status: z.enum(['unsupported', 'failed', 'certified']).nullable(),
+  weight_eligible: z.literal(false),
+} satisfies PlatformResponseShape<GeneratedCodingCertificationLeaseRecord>)
+
+export const codingCertificationLeaseListSchema = z.object({
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  leases: z.array(codingCertificationLeaseRecordSchema).max(200),
+  weight_eligible: z.literal(false),
+} satisfies PlatformResponseShape<GeneratedCodingCertificationLeaseList>)
+
+export type CodingCertificationAllowlistControl = z.infer<
+  typeof codingCertificationAllowlistControlSchema
+>
+export type CodingCertificationLeaseList = z.infer<typeof codingCertificationLeaseListSchema>
 
 export const validatorScoreReplacementLookupInputSchema = z.object({
   agentId: z.string().uuid(),
@@ -7268,6 +7806,8 @@ export const publicLeaderboardEntrySchema = z.object({
   median_ms: z.number().int().nonnegative().nullable().optional(),
   n: z.number().int().nonnegative().nullable().optional(),
   eligible: z.boolean(),
+  // An audited team canary is scored normally but never ranked or paid.
+  team_canary: z.boolean().default(false),
   bench_version: z.number().int().nullable().optional(),
   dataset_sha256: z.string().nullable().optional(),
   composite_breakdown: publicCompositeBreakdownSchema.nullable().optional(),

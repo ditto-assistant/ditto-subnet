@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/ditto-assistant/dittobench-api/internal/codinglaunchjournal"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 )
 
@@ -146,5 +148,103 @@ func TestEnvironmentIsReplacedInDedicatedProcess(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Join(root, "docker-config"))
 	if err != nil || len(entries) != 0 {
 		t.Fatal("Docker configuration not empty")
+	}
+}
+
+func TestLaunchHookRefusesOutsideAReconciledAttempt(t *testing.T) {
+	slot := &launchSlot{}
+	if slot.intent(t.Context(), "abcd", []string{"dittobench-abcd"}, nil) == nil {
+		t.Fatal("launch allowed before the journal was reconciled and opened")
+	}
+	root := privateTemp(t)
+	journal, err := codinglaunchjournal.Open(root, "20000000-0000-4000-8000-000000000002", "30000000-0000-4000-8000-000000000003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	slot.set(journal)
+	if err := slot.intent(t.Context(), "abcd", []string{"dittobench-abcd"}, []string{"ditto-job-abcd"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishJournal(slot, failingReconciler{}, nil); err != ErrCleanup {
+		t.Fatalf("unconfirmed reconciliation = %v", err)
+	}
+	if slot.intent(t.Context(), "abce", []string{"dittobench-abce"}, nil) == nil {
+		t.Fatal("launch allowed after the attempt finished")
+	}
+}
+
+type failingReconciler struct{}
+
+func (failingReconciler) Reconcile(context.Context, codinglaunchjournal.Docker) (codinglaunchjournal.Report, error) {
+	return codinglaunchjournal.Report{}, codinglaunchjournal.ErrUnconfirmed
+}
+
+func TestExplicitReconcileUsesOnlyTheNamedDaemonAndAnEmptyClientConfig(t *testing.T) {
+	root := privateTemp(t)
+	journalDir := filepath.Join(root, "journal")
+	bin := filepath.Join(root, "bin")
+	for _, dir := range []string{journalDir, bin} {
+		if err := os.Mkdir(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	socket := filepath.Join(root, "docker.sock")
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	if err := os.Chmod(socket, 0600); err != nil {
+		t.Fatal(err)
+	}
+	log := filepath.Join(root, "calls")
+	docker := filepath.Join(bin, "docker")
+	// PATH holds only the docker directory, so the script uses shell builtins.
+	script := "#!/bin/sh\n" +
+		"n=0; [ -d \"$DOCKER_CONFIG\" ] || n=missing\n" +
+		"for f in \"$DOCKER_CONFIG\"/* \"$DOCKER_CONFIG\"/.[!.]*; do [ -e \"$f\" ] && n=nonempty; done\n" +
+		"printf '%s|%s|%s|%s\\n' \"$DOCKER_HOST\" \"$n\" \"$OPENROUTER_API_KEY\" \"$*\" >> " + log + "\n" +
+		"echo \"Error: No such container: $5\"\nexit 1\n"
+	if err := os.WriteFile(docker, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	journal, err := codinglaunchjournal.Open(journalDir, "attempt", "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := journal.Record("abcd", []string{"dittobench-abcd"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	// A live owner holds the directory: the explicit reconcile refuses.
+	allow := func(path string) bool { return path == docker }
+	if _, err := reconcileLaunchJournal(t.Context(), journalDir, docker, socket, allow); !errors.Is(err, codinglaunchjournal.ErrLocked) {
+		t.Fatalf("reconciled under a live owner: %v", err)
+	}
+	_ = journal.Close()
+	t.Setenv("OPENROUTER_API_KEY", "must-not-inherit")
+	report, err := reconcileLaunchJournal(t.Context(), journalDir, docker, socket, allow)
+	if err != nil || report.AbsentContainers != 1 {
+		t.Fatalf("report = %+v %v", report, err)
+	}
+	calls, _ := os.ReadFile(log)
+	want := "unix://" + socket + "|0||container inspect --format {{.Id}} {{json .Config.Labels}} dittobench-abcd\n"
+	if string(calls) != want {
+		t.Fatalf("docker calls = %q", calls)
+	}
+	entries, _ := os.ReadDir(journalDir)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), "docker-config-") || entry.Name() == codinglaunchjournal.FileName {
+			t.Fatalf("left %s behind", entry.Name())
+		}
+	}
+	for name, args := range map[string][3]string{
+		"shared journal": {root + "/missing", docker, socket},
+		"executable":     {journalDir, "/usr/bin/docker", socket},
+		"socket":         {journalDir, docker, filepath.Join(root, "calls")},
+	} {
+		if _, err := reconcileLaunchJournal(t.Context(), args[0], args[1], args[2], allow); err != ErrConfig {
+			t.Fatalf("%s accepted: %v", name, err)
+		}
 	}
 }

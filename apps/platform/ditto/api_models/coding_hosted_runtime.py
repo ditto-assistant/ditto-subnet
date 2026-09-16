@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ditto.api_models.coding_hosted_start import Digest
 
@@ -18,7 +18,20 @@ class HostedRuntimeHostSettings(BaseModel):
 
     docker_executable: PrivatePath
     docker_socket: PrivatePath
+    # Persistent private directory for the runtime's launch intent journal.
+    # It outlives every invocation's runtime_root; the worker refuses to start
+    # an attempt until the journal there is reconciled.
+    launch_journal_dir: PrivatePath
     router_listen: Name
+    # "host" keeps the listener in the worker's network namespace. The Go worker
+    # treats "rootless-netns" as the RootlessKit bridge-gateway listener.
+    router_namespace: Literal["host", "rootless-netns"] = "host"
+    # Only for "rootless-netns": the connectivity profile's expires_at_unix.
+    # Candidate router traffic then bypasses host nftables, so the worker itself
+    # ends router access at this time or the assignment deadline.
+    router_expires_at_unix: (
+        Annotated[int, Field(strict=True, gt=0, lt=2**32)] | None
+    ) = None
     egress_network: Name
     egress_proxy: Name
     executor_repository: Name
@@ -26,6 +39,14 @@ class HostedRuntimeHostSettings(BaseModel):
     candidate_gid: Annotated[int, Field(strict=True, ge=1, le=4294967295)]
     seccomp_profile: Annotated[str, Field(strict=True, max_length=4096)] = ""
     apparmor_profile: Annotated[str, Field(strict=True, max_length=4096)] = ""
+
+    @model_validator(mode="after")
+    def router_window(self) -> HostedRuntimeHostSettings:
+        if (self.router_namespace == "rootless-netns") != (
+            self.router_expires_at_unix is not None
+        ):
+            raise ValueError("router expiry must match the router namespace")
+        return self
 
 
 class HostedPlatformRuntimeInput(BaseModel):

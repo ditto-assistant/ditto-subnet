@@ -349,6 +349,8 @@ def coding_certification_lease_accepts_receipt(
     bench_version: int,
     receipt: CodingCapabilityCertificationReceipt,
 ) -> bool:
+    """Identity match only; the endpoint owns the one deadline decision."""
+
     return (
         lease.status == "claimed"
         and lease.validator_hotkey == validator_hotkey

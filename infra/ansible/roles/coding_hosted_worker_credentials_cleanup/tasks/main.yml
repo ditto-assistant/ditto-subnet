@@ -1,0 +1,42 @@
+---
+# Before any role-internal name is created, refuse a preset of any of them, not
+# only the input prefix. See the materialization role for the rationale; the
+# message is constant and names no value.
+- name: Refuse a preset gate, capture, result or credential-named variable
+  ansible.builtin.assert:
+    that:
+      - >-
+        lookup('ansible.builtin.varnames', '^coding_hosted_worker_credentials_cleanup_', wantlist=True)
+        | sort == ['coding_hosted_worker_credentials_cleanup_confirmation',
+        'coding_hosted_worker_credentials_cleanup_enabled',
+        'coding_hosted_worker_credentials_cleanup_source_revision']
+      - >-
+        lookup('ansible.builtin.varnames',
+        '(?i)^(DITTO_CODING_WORKER_|DITTO_CODING_HIPPIUS_)', wantlist=True) | length == 0
+    fail_msg: >-
+      Only the enabled, confirmation and source_revision inputs are accepted, and no worker
+      credential may be passed as an Ansible variable; a registered result, a capture, the gate
+      or an undocumented coding_hosted_worker_credentials_cleanup_ variable is set. Nothing was
+      removed.
+    quiet: true
+
+# Freeze the enabled gate exactly once. `is sameas true` opens the gate only for
+# a real boolean true and prints nothing (the bool filter would print a coerced
+# value in a deprecation warning even under no_log); default(false, true) turns
+# an undefined-class template error into false; no_log censors the fatal result.
+# The removal branch runs through a dynamic include_tasks --start-at-task cannot
+# jump into.
+- name: Freeze the enabled gate once
+  ansible.builtin.set_fact:
+    coding_hosted_worker_credentials_cleanup_gate: >-
+      {{ (coding_hosted_worker_credentials_cleanup_enabled | default(false, true)) is sameas true }}
+  no_log: true
+
+- name: Explain dormant native worker credential removal
+  ansible.builtin.debug:
+    msg: Native Coding worker credential removal is disabled; no credential file is removed.
+  when: not coding_hosted_worker_credentials_cleanup_gate
+
+- name: Remove the worker-owned credential files behind the enabled gate
+  ansible.builtin.include_tasks: remove.yml
+  when: coding_hosted_worker_credentials_cleanup_gate

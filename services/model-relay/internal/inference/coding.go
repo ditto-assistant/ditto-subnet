@@ -347,6 +347,22 @@ func (d *Deps) admitCertificationCodingDispatch(
 	if err != nil {
 		return zero, httpErrorf(500, "coding inference admission failed")
 	}
+	admission, admissionErr := q.GetCodingCertificationLeaseAdmission(ctx, grant.LeaseID)
+	if admissionErr != nil && !errors.Is(admissionErr, pgx.ErrNoRows) {
+		return zero, httpErrorf(500, "coding inference admission failed")
+	}
+	if admissionErr != nil || !codingCertificationLeaseAdmitted(admission, now) {
+		// The lease is no longer claimed, is past its deadline, or the latest
+		// allowlist revision did not admit it: end the grant, not just this call.
+		if grant.Status == "active" {
+			if revokeErr := q.RevokeCodingCertificationInferenceGrantUnsettled(ctx, postgres.RevokeCodingCertificationInferenceGrantUnsettledParams{
+				Now: pgTime(now), GrantID: grant.GrantID,
+			}); revokeErr != nil || tx.Commit(ctx) != nil {
+				return zero, httpErrorf(500, "coding inference admission failed")
+			}
+		}
+		return zero, httpErrorf(409, "coding inference grant is not live")
+	}
 	deadline, deadlineErr := time.Parse(time.RFC3339Nano, dispatch.Deadline)
 	if deadlineErr != nil || !grant.ExpiresAt.Valid || !deadline.Equal(grant.ExpiresAt.Time.UTC()) ||
 		!grant.ExpiresAt.Time.After(now) || !codingCertificationGrantMatchesDispatch(grant, dispatch) {
@@ -456,6 +472,17 @@ func (d *Deps) admitCertificationCodingDispatch(
 		kind: codingLedgerCertification, expiresAt: grant.ExpiresAt.Time.UTC(),
 		certGrant: grant, certRequest: row,
 	}, nil
+}
+
+// codingCertificationLeaseAdmitted mirrors Platform's lease authority for paid
+// canary inference: a claimed lease before its deadline whose admitting
+// allowlist revision is still the latest one. Revision 0 means no revision
+// exists, which Platform treats as refuse-all.
+func codingCertificationLeaseAdmitted(admission postgres.GetCodingCertificationLeaseAdmissionRow, now time.Time) bool {
+	return admission.Status == "claimed" &&
+		admission.Deadline.Valid && admission.Deadline.Time.After(now) &&
+		admission.ClaimAllowlistRevision.Valid && admission.LatestAllowlistRevision > 0 &&
+		admission.ClaimAllowlistRevision.Int32 == admission.LatestAllowlistRevision
 }
 
 func codingCertificationGrantAuthenticates(

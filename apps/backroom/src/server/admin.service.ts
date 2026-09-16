@@ -1,5 +1,6 @@
 import '@tanstack/react-start/server-only'
 
+import type { z } from 'zod'
 import { benchmarkCanarySchema, issueBenchmarkCanaryInputSchema,
   getBenchmarkCanaryInputSchema, cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema,
 } from '../lib/benchmark-canary.schemas'
@@ -162,6 +163,15 @@ import {
   codingShadowReconciliationResponseSchema,
   issueCodingShadowTicketSetInputSchema,
   codingShadowTicketSetResponseSchema,
+  cancelCodingHostedAssignmentInputSchema,
+  codingHostedAssignmentCancelledSchema,
+  codingHostedAssignmentDetailSchema,
+  codingHostedAssignmentListSchema,
+  codingHostedAssignmentPlanSchema,
+  createCodingHostedAssignmentInputSchema,
+  getCodingHostedAssignmentInputSchema,
+  listCodingHostedAssignmentsInputSchema,
+  previewCodingHostedAssignmentInputSchema,
   registerCodingCatalogInputSchema,
   retireCodingCatalogInputSchema,
   supersedeCodingCatalogInputSchema,
@@ -169,6 +179,10 @@ import {
   agentCodingShadowEvaluationStatusSchema,
   agentCoreQualificationInputSchema,
   agentCoreQualificationStatusSchema,
+  codingCertificationAllowlistApplySchema,
+  codingCertificationAllowlistControlSchema,
+  codingCertificationLeaseListSchema,
+  setCodingCertificationAllowlistInputSchema,
   coreQualificationPolicyControlSchema,
   getCoreQualificationPolicyInputSchema,
   refreshAgentCoreQualificationInputSchema,
@@ -232,6 +246,9 @@ import {
   submissionSettingsControlSchema,
   hotkeyBanControlSchema,
   hotkeyBanListSchema,
+  teamCanaryListSchema,
+  teamCanaryExclusionSchema,
+  setTeamCanaryInputSchema,
   hotkeyBanLookupInputSchema,
   hotkeyUnbanResponseSchema,
   unbanHotkeyInputSchema,
@@ -730,6 +747,109 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
     },
   })
   return fetchSubmissionSettingsControl()
+}
+
+const TEAM_CANARIES_PATH = '/api/v1/admin/noncompetitive-canaries'
+
+export async function fetchTeamCanaries(limit: number, offset: number) {
+  const query = new URLSearchParams({
+    limit: String(limit),
+    offset: String(offset),
+  })
+  const payload = await platformAdminRequest(`${TEAM_CANARIES_PATH}?${query}`)
+  return teamCanaryListSchema.parse(payload)
+}
+
+// Team canaries are few, so the post-write re-read collects the whole durable
+// list in bounded pages rather than trusting the write response.
+const TEAM_CANARY_REREAD_PAGE_SIZE = 200
+const TEAM_CANARY_REREAD_MAX_PAGES = 5
+
+async function fetchAllTeamCanaries() {
+  const exclusions: z.infer<typeof teamCanaryListSchema>['exclusions'] = []
+  let total = 0
+  for (let page = 0; page < TEAM_CANARY_REREAD_MAX_PAGES; page += 1) {
+    const value = await fetchTeamCanaries(TEAM_CANARY_REREAD_PAGE_SIZE, exclusions.length)
+    total = value.total
+    exclusions.push(...value.exclusions)
+    if (value.exclusions.length === 0 || exclusions.length >= total) break
+  }
+  if (exclusions.length !== total) {
+    throw new Error(`the list returned ${exclusions.length} of ${total} team canaries`)
+  }
+  return { total, exclusions }
+}
+
+// Once Platform has been sent a write, every later failure (an unparseable
+// response or a failed re-read) leaves its outcome unknown here. Say so and
+// stop: the tool never retries a write on its own.
+function teamCanaryWriteUnconfirmed(action: string, exclusionId: string | undefined, error: unknown) {
+  const target = exclusionId ? `team canary ${exclusionId}` : 'the team canary'
+  const reason = error instanceof Error ? error.message : String(error)
+  return new Error(
+    `Platform was sent the ${action} for ${target}, but reading back the durable team canary list failed: ${reason}. ` +
+      'The write may have succeeded. It was not retried; check list_team_canaries before any further change.',
+  )
+}
+
+// Reserve or bind one audited team canary. The exact shape and confirmation are
+// parsed here before any Platform call, Platform checks the same confirmation
+// again, and the audit actor is always the signed-in operator. Like
+// unban_hotkey, the result is re-read from Platform after the write.
+export async function setTeamCanary(rawInput: unknown, actor: string) {
+  const input = setTeamCanaryInputSchema.parse(rawInput)
+  const payload = await sendTeamCanaryWrite(input, actor)
+  const knownId = input.action === 'bind' ? input.exclusionId : undefined
+  try {
+    const written = teamCanaryExclusionSchema.parse(payload)
+    if (knownId !== undefined && written.exclusion_id !== knownId) {
+      throw new Error(`Platform answered for exclusion ${written.exclusion_id}`)
+    }
+    const durable = await fetchAllTeamCanaries()
+    const exclusion = durable.exclusions.find((row) => row.exclusion_id === written.exclusion_id)
+    if (!exclusion) {
+      throw new Error(`exclusion ${written.exclusion_id} is not in the re-read list`)
+    }
+    return { exclusion, ...durable }
+  } catch (error) {
+    const writtenId =
+      knownId ??
+      (typeof payload === 'object' && payload !== null && 'exclusion_id' in payload
+        ? String(payload.exclusion_id)
+        : undefined)
+    throw teamCanaryWriteUnconfirmed(input.action, writtenId, error)
+  }
+}
+
+async function sendTeamCanaryWrite(
+  input: z.infer<typeof setTeamCanaryInputSchema>,
+  actor: string,
+): Promise<unknown> {
+  if (input.action === 'reserve') {
+    type ReserveRequest =
+      PlatformOperations['reserve_api_v1_admin_noncompetitive_canaries_post']['requestBody']['content']['application/json']
+    const body = {
+      miner_hotkey: input.minerHotkey,
+      artifact_sha256: input.artifactSha256,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    } satisfies ReserveRequest
+    return platformAdminRequest(TEAM_CANARIES_PATH, { method: 'POST', actor, body })
+  }
+  type BindRequest =
+    PlatformOperations['bind_api_v1_admin_noncompetitive_canaries__exclusion_id__bind_post']['requestBody']['content']['application/json']
+  const body = {
+    agent_id: input.agentId,
+    miner_hotkey: input.minerHotkey,
+    artifact_sha256: input.artifactSha256,
+    screened_image_sha256: input.screenedImageSha256,
+    reason: input.reason,
+    confirmation: input.confirmation,
+  } satisfies BindRequest
+  return platformAdminRequest(
+    `${TEAM_CANARIES_PATH}/${encodeURIComponent(input.exclusionId)}/bind`,
+    { method: 'POST', actor, body },
+  )
 }
 
 const HOTKEY_BANS_PATH = '/api/v1/admin/hotkey-bans'
@@ -2244,6 +2364,18 @@ export async function fetchAgentCodingCertifications(rawInput: unknown) {
   return agentCodingCertificationStatusSchema.parse(payload)
 }
 
+// The MCP certification read also carries that agent's newest lease rows. They
+// are a bounded, non-fatal addition: a missing or failing lease audit never
+// hides the receipts.
+export async function fetchAgentCodingCertificationsWithLeases(rawInput: unknown) {
+  const input = agentCodingCertificationInputSchema.parse(rawInput)
+  const [certifications, certificationLeases] = await Promise.all([
+    fetchAgentCodingCertifications(input),
+    fetchCodingCertificationLeaseSummary({ agentId: input.agentId }),
+  ])
+  return { ...certifications, certification_leases: certificationLeases }
+}
+
 export async function fetchCodingCatalogReleases(rawInput: unknown) {
   const input = getCodingCatalogInputSchema.parse(rawInput)
   const payload = await platformAdminRequest(
@@ -2276,6 +2408,26 @@ export async function fetchCodingControlPlane(rawInput: unknown) {
     native,
     shadow_only: true as const,
     weight_eligible: false as const,
+  }
+}
+
+// The MCP control-plane read also carries the certification canary state: the
+// current allowlist revision (no history) and the newest lease rows. Both are
+// bounded and non-fatal, so a Platform without these endpoints, or one that
+// fails them, still returns the Coding control plane.
+export async function fetchCodingControlPlaneWithCertification(rawInput: unknown) {
+  const [control, certificationAllowlist, certificationLeases] = await Promise.all([
+    fetchCodingControlPlane(rawInput),
+    fetchCodingCertificationAllowlistSummary(),
+    fetchCodingCertificationLeaseSummary({}),
+  ])
+  const { shadow_only: shadowOnly, weight_eligible: weightEligible, ...rest } = control
+  return {
+    ...rest,
+    certification_allowlist: certificationAllowlist,
+    certification_leases: certificationLeases,
+    shadow_only: shadowOnly,
+    weight_eligible: weightEligible,
   }
 }
 
@@ -2360,6 +2512,119 @@ export async function issueCodingShadowTicketSet(rawInput: unknown, actor: strin
   return codingShadowTicketSetResponseSchema.parse(payload)
 }
 
+const CODING_HOSTED_ASSIGNMENTS_PATH = '/api/v1/admin/coding-hosted-assignments'
+
+type CodingHostedOperation<Name extends keyof PlatformOperations> =
+  PlatformOperations[Name] extends {
+    responses: { 200: { content: { 'application/json': infer Body } } }
+  }
+    ? Body
+    : never
+
+function codingHostedSubjectBody(input: {
+  agentId: string
+  releaseRowId: string
+  catalogIndex: number
+  validatorHotkey: string
+  policySha256: string
+  executionProfileSha256: string
+  gradingProfileSha256: string
+  maxPatchBytes: number
+}) {
+  return {
+    agent_id: input.agentId,
+    release_row_id: input.releaseRowId,
+    catalog_index: input.catalogIndex,
+    validator_hotkey: input.validatorHotkey,
+    policy_sha256: input.policySha256,
+    execution_profile_sha256: input.executionProfileSha256,
+    grading_profile_sha256: input.gradingProfileSha256,
+    max_patch_bytes: input.maxPatchBytes,
+  }
+}
+
+export async function fetchCodingHostedAssignments(rawInput: unknown = {}) {
+  const input = listCodingHostedAssignmentsInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  const payload = await platformAdminRequest(`${CODING_HOSTED_ASSIGNMENTS_PATH}?${query}`)
+  const list = codingHostedAssignmentListSchema.parse(payload) satisfies CodingHostedOperation<
+    'list_hosted_assignments_api_v1_admin_coding_hosted_assignments_get'
+  >
+  // Platform pages this collection; `total` is the untruncated row count.
+  return {
+    ...list,
+    count: list.total,
+    returned: list.assignments.length,
+    has_more: list.offset + list.assignments.length < list.total,
+  }
+}
+
+export async function fetchCodingHostedAssignment(rawInput: unknown) {
+  const input = getCodingHostedAssignmentInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `${CODING_HOSTED_ASSIGNMENTS_PATH}/${encodeURIComponent(input.evaluationId)}`,
+  )
+  return codingHostedAssignmentDetailSchema.parse(payload) satisfies CodingHostedOperation<
+    'get_hosted_assignment_api_v1_admin_coding_hosted_assignments__evaluation_id__get'
+  >
+}
+
+export async function previewCodingHostedAssignment(rawInput: unknown, actor: string) {
+  const input = previewCodingHostedAssignmentInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(`${CODING_HOSTED_ASSIGNMENTS_PATH}/preview`, {
+    method: 'POST',
+    actor,
+    body: { ...codingHostedSubjectBody(input), lease_seconds: input.leaseSeconds },
+  })
+  return codingHostedAssignmentPlanSchema.parse(payload) satisfies CodingHostedOperation<
+    'preview_hosted_assignment_api_v1_admin_coding_hosted_assignments_preview_post'
+  >
+}
+
+export async function createCodingHostedAssignment(rawInput: unknown, actor: string) {
+  const input = createCodingHostedAssignmentInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(CODING_HOSTED_ASSIGNMENTS_PATH, {
+    method: 'POST',
+    actor,
+    body: {
+      ...codingHostedSubjectBody(input),
+      evaluation_id: input.evaluationId,
+      attempt_id: input.attemptId,
+      deadline_unix: input.deadlineUnix,
+      confirmed_assignment_sha256: input.confirmedAssignmentSha256,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  // The plan projection deliberately omits the private task grant identifiers
+  // Platform returns; the hosted worker, not an operator, consumes them.
+  return codingHostedAssignmentPlanSchema.parse(payload)
+}
+
+export async function cancelCodingHostedAssignment(rawInput: unknown, actor: string) {
+  const input = cancelCodingHostedAssignmentInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `${CODING_HOSTED_ASSIGNMENTS_PATH}/${encodeURIComponent(input.evaluationId)}/cancel`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        expected_assignment_sha256: input.expectedAssignmentSha256,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return codingHostedAssignmentCancelledSchema.parse(payload) satisfies CodingHostedOperation<
+    'cancel_hosted_assignment_endpoint_api_v1_admin_coding_hosted_assignments__evaluation_id__cancel_post'
+  >
+}
+
 export async function registerCodingCatalogRelease(rawInput: unknown, actor: string) {
   const input = registerCodingCatalogInputSchema.parse(rawInput)
   const payload = await platformAdminRequest('/api/v1/admin/coding-catalog/releases', {
@@ -2440,6 +2705,67 @@ export async function setCoreQualificationPolicy(rawInput: unknown, actor: strin
     },
   })
   return coreQualificationPolicyControlSchema.parse(payload)
+}
+
+const CODING_CERTIFICATION_ALLOWLIST_PATH = '/api/v1/admin/coding-certification-allowlist'
+
+export const CODING_CERTIFICATION_EMBEDDED_LEASE_LIMIT = 10
+
+type CodingCertificationUnavailable = { available: false; error: string }
+
+async function codingCertificationSection<T extends Record<string, unknown>>(
+  read: () => Promise<T>,
+): Promise<({ available: true } & T) | CodingCertificationUnavailable> {
+  try {
+    return { available: true, ...(await read()) }
+  } catch (cause) {
+    return {
+      available: false,
+      error: cause instanceof Error ? cause.message : 'unavailable',
+    }
+  }
+}
+
+function fetchCodingCertificationAllowlistSummary() {
+  return codingCertificationSection(async () => {
+    const payload = await platformAdminRequest(
+      `${CODING_CERTIFICATION_ALLOWLIST_PATH}?history_limit=0`,
+    )
+    const { history: _history, ...current } =
+      codingCertificationAllowlistControlSchema.parse(payload)
+    return current
+  })
+}
+
+export async function setCodingCertificationAllowlist(rawInput: unknown, actor: string) {
+  const input = setCodingCertificationAllowlistInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(CODING_CERTIFICATION_ALLOWLIST_PATH, {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      enabled: input.enabled,
+      entries: input.entries,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return codingCertificationAllowlistApplySchema.parse(payload)
+}
+
+// The newest certification lease audit rows, read inside the existing Coding
+// reads rather than through their own catalog tools.
+function fetchCodingCertificationLeaseSummary(input: { agentId?: string }) {
+  return codingCertificationSection(async () => {
+    const query = new URLSearchParams()
+    if (input.agentId) query.set('agent_id', input.agentId)
+    query.set('limit', String(CODING_CERTIFICATION_EMBEDDED_LEASE_LIMIT))
+    const payload = await platformAdminRequest(
+      `/api/v1/admin/coding-certification-leases?${query}`,
+    )
+    return codingCertificationLeaseListSchema.parse(payload)
+  })
 }
 
 export async function fetchAgentCoreQualification(rawInput: unknown) {

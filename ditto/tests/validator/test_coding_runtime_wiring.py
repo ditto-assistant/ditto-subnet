@@ -9,7 +9,11 @@ import httpx
 import pytest
 
 import ditto.validator.__main__ as validator_main
+import ditto.validator.coding_canary_runtime as runtime_module
+from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
+from ditto.validator.coding_certification_socket import CertificationSocketTransport
 from ditto.validator.coding_supervisor import CodingSupervisorRuntime
+from ditto.validator.config import CodingCanaryTarget
 
 
 def _config(*, remote: bool) -> Any:
@@ -56,6 +60,7 @@ async def test_remote_runtime_injects_one_dedicated_client_and_closes_it(
             platform=object(),  # type: ignore[arg-type]
             keypair=object(),
             resources=resources,
+            scorer_http=_scorer_http(_config(remote=True), resources),
         )
         assert worker is not None
         runtime = cast(CodingSupervisorRuntime, worker._runtime)
@@ -83,6 +88,7 @@ async def test_local_runtime_uses_separate_no_proxy_client(
             platform=object(),  # type: ignore[arg-type]
             keypair=object(),
             resources=resources,
+            scorer_http=_scorer_http(_config(remote=False), resources),
         )
         assert worker is not None
         runtime = cast(CodingSupervisorRuntime, worker._runtime)
@@ -112,6 +118,7 @@ async def test_disabled_runtime_constructs_no_executor_client(
                 platform=object(),  # type: ignore[arg-type]
                 keypair=object(),
                 resources=resources,
+                scorer_http=_scorer_http(config, resources),
             )
             is None
         )
@@ -142,6 +149,7 @@ async def test_remote_runtime_closes_client_when_atomic_construction_fails(
                 platform=object(),  # type: ignore[arg-type]
                 keypair=object(),
                 resources=resources,
+                scorer_http=_scorer_http(_config(remote=True), resources),
             )
     assert executor_http.is_closed is True
 
@@ -231,3 +239,162 @@ async def test_connectivity_canary_exits_before_keypair_platform_and_chain(
 
 async def _record_async(events: list[str], value: str) -> None:
     events.append(value)
+
+
+def _scorer_http(config: Any, resources: AsyncExitStack) -> Any:
+    return validator_main._ScorerControlClient(config, resources)
+
+
+def _canary_config(*, enabled: bool) -> Any:
+    return SimpleNamespace(
+        coding_canary_enabled=enabled,
+        coding_canary_poll_seconds=10.0,
+        # The exact value docker-compose.yml hardcodes for the validator.
+        dittobench_api_url="http://sandbox-docker:8000",
+        dittobench_control_token="coding-control-token-00000000000000000001",
+        validator_hotkey="5" + "V" * 47,
+        coding_canary_targets=(
+            CodingCanaryTarget(
+                agent_id=UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+                artifact_sha256="aa" * 32,
+                screened_image_sha256="1a" * 32,
+            ),
+        ),
+        coding_canary_validator_hotkey="5" + "V" * 47,
+        coding_certification_control_token="coding-certification-token-000000001",
+        coding_certification_socket_uid=61001,
+        coding_certification_socket_gid=61002,
+        coding_certification_runtime_image_digest="sha256:" + "1" * 64,
+        coding_certification_pack_manifest_sha256="2" * 64,
+        http_timeout_seconds=30.0,
+    )
+
+
+async def test_disabled_canary_constructs_no_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        validator_main,
+        "CodingCanaryRuntime",
+        lambda *_a, **_k: pytest.fail("canary runtime constructed"),
+    )
+    async with AsyncExitStack() as resources:
+        assert (
+            await validator_main._create_coding_canary_worker(
+                config=_canary_config(enabled=False),
+                platform=object(),  # type: ignore[arg-type]
+                keypair=object(),
+                resources=resources,
+            )
+            is None
+        )
+
+
+async def test_enabled_canary_uses_only_the_verified_certification_socket() -> None:
+    canary_http: httpx.AsyncClient | None = None
+    async with AsyncExitStack() as resources:
+        scorer_http = _scorer_http(_canary_config(enabled=True), resources)
+        worker = await validator_main._create_coding_canary_worker(
+            config=_canary_config(enabled=True),
+            platform=object(),  # type: ignore[arg-type]
+            keypair=object(),
+            resources=resources,
+        )
+        assert worker is not None
+        runtime = cast(CodingCanaryRuntime, worker._runtime)
+        canary_http = runtime._client
+        transport = canary_http._transport
+        assert isinstance(transport, CertificationSocketTransport)
+        assert transport._pool._uds == "/run/ditto-coding-certification/control.sock"
+        assert runtime._base == "http://coding-certification.invalid"
+        assert runtime._token == "coding-certification-token-000000001"
+        assert canary_http.trust_env is False
+        assert canary_http.is_closed is False
+        # The shared scorer client is never created for the canary.
+        assert scorer_http._client is None
+        assert worker._validator_hotkey == "5" + "V" * 47
+        assert worker._targets.permits(
+            UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), "5" + "V" * 47
+        )
+    assert canary_http is not None and canary_http.is_closed is True
+
+
+async def test_enabled_canary_without_matching_targets_warns_and_refuses_all(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = _canary_config(enabled=True)
+    config.coding_canary_validator_hotkey = "5" + "F" * 47
+    async with AsyncExitStack() as resources:
+        with caplog.at_level("WARNING", logger="ditto.validator.__main__"):
+            worker = await validator_main._create_coding_canary_worker(
+                config=config,
+                platform=object(),  # type: ignore[arg-type]
+                keypair=object(),
+                resources=resources,
+            )
+        assert worker is not None
+        assert worker._targets.refuses_all(config.validator_hotkey)
+    assert "refuses every lease" in caplog.text
+
+
+async def test_enabled_canary_refuses_the_scorer_bearer_before_any_client() -> None:
+    config = _canary_config(enabled=True)
+    config.coding_certification_control_token = config.dittobench_control_token
+    observed: list[httpx.AsyncClient] = []
+    original = httpx.AsyncClient
+
+    def capture(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        client = original(*args, **kwargs)
+        observed.append(client)
+        return client
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(runtime_module.httpx, "AsyncClient", capture)
+        with pytest.raises(ValueError, match="configuration is invalid"):
+            async with AsyncExitStack() as resources:
+                await validator_main._create_coding_canary_worker(
+                    config=config,
+                    platform=object(),  # type: ignore[arg-type]
+                    keypair=object(),
+                    resources=resources,
+                )
+    assert observed == []
+
+
+async def test_canary_never_shares_the_local_shadow_scorer_client() -> None:
+    config = _config(remote=False)
+    config.dittobench_api_url = "http://sandbox-docker:8000"
+    config.coding_canary_enabled = True
+    config.coding_canary_poll_seconds = 10.0
+    config.coding_canary_targets = ()
+    config.coding_canary_validator_hotkey = ""
+    for name, value in vars(_canary_config(enabled=True)).items():
+        if name.startswith("coding_certification_"):
+            setattr(config, name, value)
+    async with AsyncExitStack() as resources:
+        scorer_http = _scorer_http(config, resources)
+        canary = await validator_main._create_coding_canary_worker(
+            config=config,
+            platform=object(),  # type: ignore[arg-type]
+            keypair=object(),
+            resources=resources,
+        )
+        shadow = await validator_main._create_coding_shadow_worker(
+            config=config,
+            platform=object(),  # type: ignore[arg-type]
+            keypair=object(),
+            resources=resources,
+            scorer_http=scorer_http,
+        )
+        assert canary is not None and shadow is not None
+        canary_runtime = cast(CodingCanaryRuntime, canary._runtime)
+        shadow_runtime = cast(CodingSupervisorRuntime, shadow._runtime)
+        assert canary_runtime._client is not shadow_runtime._client
+        assert isinstance(
+            canary_runtime._client._transport, CertificationSocketTransport
+        )
+        assert canary_runtime._base != shadow_runtime._base
+        assert canary_runtime._token != config.dittobench_control_token
+        canary_client = canary_runtime._client
+        assert canary_client.is_closed is False
+    assert canary_client.is_closed is True

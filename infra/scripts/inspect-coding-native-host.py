@@ -31,6 +31,10 @@ TOOL_FILES = (
     "infra/ansible/roles/coding_hosted_runtime/files/runtime-bundle.py",
     "infra/ansible/roles/coding_hosted/files/host-policy.py",
 )
+SOCKET = "/run/ditto-coding-hosted/docker.sock"
+DAEMON_IDENTITY_SCHEMA = "dittobench-coding-native-daemon-identity-v1"
+DAEMON_IMAGE_STORE = "io.containerd.snapshotter.v1"
+DAEMON_TEXT = re.compile(r"[\x21-\x7e]{1,512}")
 PENDING = [
     "live_network_and_expiry_enforcement",
     "live_resource_limit_enforcement",
@@ -85,6 +89,222 @@ def object_json(raw):
     return result
 
 
+def daemon_identity(info, socket_path=SOCKET):
+    """Canonical daemon identity; mirrors native.daemon_identity and Go's
+    catalog.DaemonIdentityFromInfo, all pinned to one shared vector."""
+
+    def text(value):
+        return type(value) is str and DAEMON_TEXT.fullmatch(value) is not None
+
+    require(type(info) is dict and text(socket_path))
+    require(socket_path.startswith("/") and not socket_path.startswith("//"))
+    require(os.path.normpath(socket_path) == socket_path)
+    fields = {
+        "engine_id": "ID",
+        "server_version": "ServerVersion",
+        "docker_root_dir": "DockerRootDir",
+        "storage_driver": "Driver",
+        "cgroup_driver": "CgroupDriver",
+        "cgroup_version": "CgroupVersion",
+        "default_runtime": "DefaultRuntime",
+    }
+    identity = {name: info.get(key) for name, key in fields.items()}
+    require(all(text(item) for item in identity.values()))
+    containerd = info.get("Containerd")
+    require(type(containerd) is dict and text(containerd.get("Address")))
+    options = info.get("SecurityOptions")
+    require(type(options) is list and all(text(item) for item in options))
+    require(len(set(options)) == len(options) and "name=rootless" in options)
+    status = info.get("DriverStatus")
+    require(type(status) is list and ["driver-type", DAEMON_IMAGE_STORE] in status)
+    require(
+        identity["cgroup_driver"] == "systemd" and identity["cgroup_version"] == "2"
+    )
+    identity.update(
+        schema=DAEMON_IDENTITY_SCHEMA,
+        rootless=True,
+        socket_path=socket_path,
+        image_store=DAEMON_IMAGE_STORE,
+        containerd_address=containerd["Address"],
+        security_options=sorted(options),
+    )
+    return identity
+
+
+# nft ruleset normalization. The native network enforcement evidence tooling
+# loads this file from the same reviewed checkout rather than copying it.
+
+NFT_DYNAMIC_ELEMENT_KEYS = frozenset({"timeout", "expires"})
+NFT_BASE_CHAIN_KEYS = frozenset(
+    {"family", "table", "name", "type", "hook", "prio", "policy"}
+)
+NFT_OBJECT_ORDER = ("table", "chain", "set", "map")
+
+
+def _nft_canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def nft_strip(value):
+    """One listing value without handles or counter values.
+
+    Counter statements and named counters keep their identity with zeroed
+    packets and bytes.
+    """
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            if key == "handle":
+                continue
+            result[key] = nft_strip(item)
+            if key == "counter" and isinstance(item, dict):
+                result[key].update(packets=0, bytes=0)
+        return result
+    if isinstance(value, list):
+        return [nft_strip(item) for item in value]
+    return value
+
+
+def nft_entries(value):
+    """Listing entries in kernel order, stripped; ``None`` if malformed.
+
+    Elements of named sets and maps also lose their kernel-side ``timeout`` and
+    ``expires``; their values, counters' presence and comments stay.
+    """
+    if type(value) is not dict or set(value) != {"nftables"}:
+        return None
+    if type(value["nftables"]) is not list:
+        return None
+    result = []
+    for entry in value["nftables"]:
+        if type(entry) is not dict or len(entry) != 1:
+            return None
+        kind, body = next(iter(entry.items()))
+        if type(body) is not dict:
+            return None
+        if kind == "metainfo":
+            continue
+        body = nft_strip(body)
+        if kind in ("set", "map") and "elem" in body:
+            if type(body["elem"]) is not list:
+                return None
+            body["elem"] = [
+                {
+                    "elem": {
+                        k: v
+                        for k, v in item["elem"].items()
+                        if k not in NFT_DYNAMIC_ELEMENT_KEYS
+                    }
+                }
+                if type(item) is dict
+                and set(item) == {"elem"}
+                and type(item["elem"]) is dict
+                else item
+                for item in body["elem"]
+            ]
+        result.append({kind: body})
+    return result
+
+
+def _nft_references(value, sets, chains):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            target = item.get("target") if isinstance(item, dict) else None
+            if key in ("jump", "goto") and type(target) is str:
+                chains.add(target)
+            _nft_references(item, sets, chains)
+    elif isinstance(value, list):
+        for item in value:
+            _nft_references(item, sets, chains)
+    elif isinstance(value, str) and value.startswith("@"):
+        sets.add(value[1:])
+
+
+def _nft_sorted_elements(value):
+    """Set membership is unordered: sort named and anonymous element lists."""
+    if isinstance(value, dict):
+        result = {}
+        for key, item in value.items():
+            item = _nft_sorted_elements(item)
+            if key in ("elem", "set") and isinstance(item, list):
+                item = sorted(item, key=_nft_canonical)
+            result[key] = item
+        return result
+    if isinstance(value, list):
+        return [_nft_sorted_elements(item) for item in value]
+    return value
+
+
+def nft_semantic_entries(entries):
+    """The enforcement-relevant content of one stripped table listing.
+
+    Kept: every rule (in chain order), every referenced chain or set, every
+    set or map with elements, every stateful object and every base chain that
+    is not a provable no-op. Dropped, because no packet verdict can depend on
+    them: a regular chain with no rules that no jump or goto names; a set or
+    map with no elements that no rule, set or map references (``@name``); and
+    a ``filter`` base chain with no rules and policy ``accept``, since an
+    accept verdict from one base chain never ends traversal of the others.
+    A base chain with policy ``drop``, another type or any extra attribute
+    is kept even when empty. Objects sort canonically; rules keep their
+    order within a chain, since first match is semantic.
+    """
+    sets, chains = set(), set()
+    ruled = set()
+    for entry in entries:
+        kind = next(iter(entry))
+        if kind != "chain" and kind not in ("set", "map"):
+            _nft_references(entry[kind], sets, chains)
+        if kind in ("set", "map"):
+            _nft_references(entry[kind].get("elem", []), sets, chains)
+        if kind == "rule":
+            ruled.add(entry[kind].get("chain"))
+    objects, rules = [], []
+    for entry in entries:
+        kind = next(iter(entry))
+        body = entry[kind]
+        if kind == "rule":
+            rules.append(entry)
+            continue
+        if kind == "chain":
+            name = body.get("name")
+            if name not in ruled and name not in chains:
+                if "hook" not in body and "policy" not in body and "type" not in body:
+                    continue
+                if (
+                    set(body) == NFT_BASE_CHAIN_KEYS
+                    and body["type"] == "filter"
+                    and body["policy"] == "accept"
+                ):
+                    continue
+        if (
+            kind in ("set", "map")
+            and body.get("name") not in sets
+            and not body.get("elem")
+        ):
+            continue
+        objects.append(entry)
+
+    def object_key(entry):
+        kind = next(iter(entry))
+        rank = NFT_OBJECT_ORDER.index(kind) if kind in NFT_OBJECT_ORDER else 4
+        return rank, kind, _nft_canonical(entry)
+
+    objects.sort(key=object_key)
+    rules.sort(key=lambda entry: _nft_canonical(entry["rule"].get("chain")))
+    return _nft_sorted_elements(objects + rules)
+
+
+def nft_ruleset_semantic_sha256(raw, table):
+    """Digest of ``nft -j list table inet <table>``, stable across worker cycles."""
+    entries = nft_entries(object_json(raw))
+    require(entries is not None)
+    tables = [entry["table"] for entry in entries if "table" in entry]
+    require(tables == [{"family": "inet", "name": table}])
+    semantic = nft_semantic_entries(entries)
+    return checksum(_nft_canonical(semantic).encode())
+
+
 def config_policy(value):
     required = {
         "schema",
@@ -136,7 +356,7 @@ def command(arguments, *, uid=None, gid=None):
         require(type(uid) is int and uid >= 1000 and type(gid) is int and gid >= 1000)
         env.update(
             {
-                "DOCKER_HOST": "unix:///run/ditto-coding-hosted/docker.sock",
+                "DOCKER_HOST": f"unix://{SOCKET}",
                 "DOCKER_CONFIG": "/var/lib/ditto-coding-hosted/empty-client",
             }
         )
@@ -287,6 +507,7 @@ def inspect_host(config):
             config["runtime_archive_sha256"],
         )
     user = native.identity()
+    require(str(native.SOCKET) == SOCKET)
     for path in (
         native.DAEMON_HOME,
         native.SOCKET.parent,
@@ -314,33 +535,27 @@ def inspect_host(config):
             json.loads(docker(["image", "inspect", approval["image_ref"]])), approval
         )
     rules = command(["/usr/sbin/nft", "-j", "list", "table", "inet", native.TABLE])
-    nft = object_json(rules).get("nftables")
-    require(type(nft) is list)
-    tables = [
-        entry["table"] for entry in nft if type(entry) is dict and "table" in entry
-    ]
-    require(len(tables) == 1 and type(tables[0]) is dict)
-    require(tables[0].get("family") == "inet" and tables[0].get("name") == native.TABLE)
+    ruleset_sha256 = nft_ruleset_semantic_sha256(rules, native.TABLE)
     after = object_json(docker(["info", "--format", "{{json .}}"]))
     image.validate_daemon(after)
-    require(
-        type(before.get("ID")) is str
-        and bool(before["ID"])
-        and before["ID"] == after.get("ID")
-    )
+    identity = daemon_identity(before)
+    require(daemon_identity(after) == identity)
     require(docker(["ps", "--all", "--quiet"]).strip() == b"")
     require(host_binding(config) == host)
     return {
-        "schema": "dittobench-coding-native-host-preflight-v2",
+        "schema": "dittobench-coding-native-host-preflight-v4",
         "source_revision": config["source_revision"],
         "release_manifest_sha256": config["release_manifest_sha256"],
         "runtime_archive_sha256": config["runtime_archive_sha256"],
         "image_approval_sha256": config["image_approval_sha256"],
         "config_sha256": checksum(image.json_bytes(config)),
         "host": host,
-        "daemon_identity_sha256": checksum(before["ID"].encode()),
+        "daemon_identity": identity,
+        "daemon_identity_sha256": checksum(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ),
         "tool_sha256": tools,
-        "nft_snapshot_sha256": checksum(rules),
+        "nft_ruleset_semantic_sha256": ruleset_sha256,
         "checked_at_unix": int(time.time()),
         "host_preflight_passed": True,
         "pending_host_qualification": PENDING,

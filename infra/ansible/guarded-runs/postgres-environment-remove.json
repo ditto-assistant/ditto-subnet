@@ -1,0 +1,15 @@
+{
+  "schema": "ditto-coding-hosted-guarded-run/v1",
+  "operation": "postgres-environment-remove",
+  "playbook": "playbooks/gcp-coding-hosted-postgres-environment-cleanup.yml",
+  "limit": "ditto-coding-hosted-v2",
+  "enabled_var": "coding_hosted_postgres_environment_cleanup_enabled",
+  "confirmation_var": "coding_hosted_postgres_environment_cleanup_confirmation",
+  "confirmation": "REMOVE NATIVE CODING POSTGRES ENVIRONMENT",
+  "revision_var": "coding_hosted_postgres_environment_cleanup_source_revision",
+  "nonsecret_env_vars": [],
+  "secret_env": [],
+  "distinct_secret_values": false,
+  "forbidden_env": ["DITTO_CODING_PG_PASSWORD", "DITTO_CODING_PG_HOST"],
+  "forbidden_env_prefixes": []
+}

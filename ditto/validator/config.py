@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import math
 import os
+import re
+import stat
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from ipaddress import ip_address, ip_network
@@ -201,6 +203,22 @@ def _is_private_coding_executor_url(value: str) -> bool:
     except ValueError:
         return False
     return any(address in network for network in _CODING_EXECUTOR_PRIVATE_NETWORKS)
+
+
+@dataclass(frozen=True)
+class CodingCanaryTarget:
+    """One exact certifiable identity, matching one Platform allowlist tuple.
+
+    Platform's certification allowlist admits exact
+    ``(agent_id, artifact_sha256, screened_image_sha256, validator_hotkey)``
+    tuples. The validator hotkey is bound once for the whole target set, so a
+    target carries the other three fields. Digests are lowercase 64-hex, the
+    form every lease authority carries.
+    """
+
+    agent_id: UUID
+    artifact_sha256: str
+    screened_image_sha256: str
 
 
 @dataclass(frozen=True)
@@ -487,6 +505,34 @@ class ValidatorConfig:
     coding_canary_poll_seconds: float = 10.0
     """Idle polling interval for the public certification canary worker."""
 
+    coding_canary_targets: tuple[CodingCanaryTarget, ...] = ()
+    """Exact identities the certification canary may target: each an agent,
+    its artifact digest, and its screened-image digest, matching Platform's
+    four-field certification allowlist with ``coding_canary_validator_hotkey``.
+    Empty refuses all."""
+
+    coding_canary_validator_hotkey: str = ""
+    """Validator hotkey the canary targets are bound to. It must equal
+    ``validator_hotkey`` or the worker refuses every lease."""
+
+    coding_certification_socket_uid: int = 0
+    """Pinned owner uid of the host certification service's fixed Unix socket."""
+
+    coding_certification_socket_gid: int = 0
+    """Pinned group gid of the host certification service's fixed Unix socket."""
+
+    coding_certification_control_token: str = field(default="", repr=False)
+    """The certification service's own bearer, distinct from the scorer's.
+    Read once at startup from ``VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE``
+    (a mounted file, never an environment value that ``docker inspect`` would
+    show). Sent only over the verified certification socket; never logged."""
+
+    coding_certification_runtime_image_digest: str = ""
+    """Pinned ``sha256:`` runtime image digest the service must report ready."""
+
+    coding_certification_pack_manifest_sha256: str = ""
+    """Pinned canary manifest digest the service must report ready."""
+
     # --- Competition-track split (scalable, retirable registry) ---
     track_shares_bps: dict[str, int] = field(
         default_factory=lambda: dict(TRACK_SHARES_BPS)
@@ -770,6 +816,45 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         if coding_canary_enabled
         else 10.0
     )
+    coding_canary_targets = (
+        _parse_coding_canary_targets(
+            os.environ.get("VALIDATOR_CODING_CANARY_TARGETS", "")
+        )
+        if coding_canary_enabled
+        else ()
+    )
+    coding_canary_validator_hotkey = (
+        os.environ.get("VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY", "").strip()
+        if coding_canary_enabled
+        else ""
+    )
+    coding_certification_socket_uid = (
+        _parse_certification_id("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID")
+        if coding_canary_enabled
+        else 0
+    )
+    coding_certification_socket_gid = (
+        _parse_certification_id("VALIDATOR_CODING_CERTIFICATION_SOCKET_GID")
+        if coding_canary_enabled
+        else 0
+    )
+    coding_certification_control_token = (
+        _read_certification_control_token() if coding_canary_enabled else ""
+    )
+    coding_certification_runtime_image_digest = (
+        os.environ.get(
+            "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST", ""
+        ).strip()
+        if coding_canary_enabled
+        else ""
+    )
+    coding_certification_pack_manifest_sha256 = (
+        os.environ.get(
+            "VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256", ""
+        ).strip()
+        if coding_canary_enabled
+        else ""
+    )
     config = ValidatorConfig(
         platform_api_url=platform_api_url,
         platform_inference_base_url=(
@@ -844,6 +929,17 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_executor_timeout_seconds=coding_executor_timeout_seconds,
         coding_canary_enabled=coding_canary_enabled,
         coding_canary_poll_seconds=coding_canary_poll_seconds,
+        coding_canary_targets=coding_canary_targets,
+        coding_canary_validator_hotkey=coding_canary_validator_hotkey,
+        coding_certification_socket_uid=coding_certification_socket_uid,
+        coding_certification_socket_gid=coding_certification_socket_gid,
+        coding_certification_control_token=coding_certification_control_token,
+        coding_certification_runtime_image_digest=(
+            coding_certification_runtime_image_digest
+        ),
+        coding_certification_pack_manifest_sha256=(
+            coding_certification_pack_manifest_sha256
+        ),
         router_ledger_read_enabled=(
             os.environ.get("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", "false").lower()
             in _truthy
@@ -927,15 +1023,184 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             "coding executor connectivity canary must be ticketless and exclusive"
         )
     if config.coding_canary_enabled and (
-        not 32 <= len(config.dittobench_control_token.encode()) <= 256
-        or not all(
-            character.isascii() and (character.isalnum() or character in "_-")
-            for character in config.dittobench_control_token
-        )
-        or not math.isfinite(config.coding_canary_poll_seconds)
+        not math.isfinite(config.coding_canary_poll_seconds)
         or not 1 <= config.coding_canary_poll_seconds <= 300
     ):
+        raise ValidatorConfigError("enabled coding canary requires poll in [1, 300]")
+    certification_token = config.coding_certification_control_token
+    if config.coding_canary_enabled and (
+        not 32 <= len(certification_token.encode()) <= 256
+        or not all(
+            character.isascii() and (character.isalnum() or character in "_-")
+            for character in certification_token
+        )
+        or certification_token == config.dittobench_control_token
+    ):
         raise ValidatorConfigError(
-            "enabled coding canary requires a control token and poll in [1, 300]"
+            "enabled coding canary requires "
+            "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE to hold 32-256 "
+            "URL-safe characters, distinct from the scorer control token"
+        )
+    if config.coding_canary_enabled and (
+        _CERTIFICATION_IMAGE_DIGEST.fullmatch(
+            config.coding_certification_runtime_image_digest
+        )
+        is None
+        or _CERTIFICATION_SHA256.fullmatch(
+            config.coding_certification_pack_manifest_sha256
+        )
+        is None
+    ):
+        raise ValidatorConfigError(
+            "enabled coding canary requires "
+            "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST (sha256:<64 hex>) "
+            "and VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256 (64 hex)"
+        )
+    if config.coding_canary_validator_hotkey and not _is_ss58_hotkey(
+        config.coding_canary_validator_hotkey
+    ):
+        raise ValidatorConfigError(
+            "VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY must be an SS58 hotkey"
         )
     return config
+
+
+_CERTIFICATION_IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_CERTIFICATION_TOKEN_FILE_ENV = "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE"
+_CERTIFICATION_TOKEN_ENV = "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN"
+_MAX_CERTIFICATION_TOKEN_FILE_BYTES = 257
+
+
+def _read_certification_control_token() -> str:
+    """Read the certification bearer from its mounted file.
+
+    The bearer is never accepted as an environment value: an environment value
+    is visible to ``docker inspect``. The path must be absolute and normalized,
+    the final component must not be a symlink, and the file must be a regular
+    file of at most 256 bytes plus one trailing newline. Errors never echo the
+    path contents.
+    """
+
+    if os.environ.get(_CERTIFICATION_TOKEN_ENV, ""):
+        raise ValidatorConfigError(
+            f"{_CERTIFICATION_TOKEN_ENV} is not accepted; mount the bearer as a "
+            f"file and set {_CERTIFICATION_TOKEN_FILE_ENV}"
+        )
+    path = os.environ.get(_CERTIFICATION_TOKEN_FILE_ENV, "").strip()
+    refused = ValidatorConfigError(
+        f"enabled coding canary requires {_CERTIFICATION_TOKEN_FILE_ENV} to name "
+        "a readable regular bearer file"
+    )
+    if not path.startswith("/") or os.path.normpath(path) != path or "\x00" in path:
+        raise refused
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as error:
+        raise refused from error
+    try:
+        status = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(status.st_mode)
+            or status.st_size > _MAX_CERTIFICATION_TOKEN_FILE_BYTES
+        ):
+            raise refused
+        body = os.read(descriptor, _MAX_CERTIFICATION_TOKEN_FILE_BYTES + 1)
+    except OSError as error:
+        raise refused from error
+    finally:
+        os.close(descriptor)
+    if len(body) > _MAX_CERTIFICATION_TOKEN_FILE_BYTES:
+        raise refused
+    if body.endswith(b"\n"):
+        body = body[:-1]
+    try:
+        return body.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise refused from error
+
+
+_CERTIFICATION_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def _parse_certification_id(name: str) -> int:
+    """A canonical decimal uid or gid in [1, 2^31-2]; root is refused."""
+
+    raw = os.environ.get(name, "").strip()
+    if (
+        not raw.isascii()
+        or not raw.isdigit()
+        or str(int(raw)) != raw
+        or not 1 <= int(raw) <= (1 << 31) - 2
+    ):
+        raise ValidatorConfigError(
+            f"{name} must be a non-root numeric id for the certification socket"
+        )
+    return int(raw)
+
+
+_MAX_CODING_CANARY_TARGETS = 16
+_HEX = frozenset("0123456789abcdef")
+_SS58_ALPHABET = frozenset("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+
+
+def _parse_coding_canary_targets(raw: str) -> tuple[CodingCanaryTarget, ...]:
+    """Parse the exact canary targets.
+
+    The value is a comma-separated list of
+    ``<agent_id>:<artifact_sha256>:<screened_image_sha256>`` entries: a
+    canonical non-nil UUID and two lowercase 64-hex digests, the same fields as
+    one Platform allowlist tuple minus the separately bound validator hotkey.
+    Entries must be unique. Empty is valid and refuses every lease. The bound
+    matches Platform's certification allowlist.
+    """
+
+    name = "VALIDATOR_CODING_CANARY_TARGETS"
+    values = [value.strip() for value in raw.split(",")] if raw.strip() else []
+    targets: list[CodingCanaryTarget] = []
+    for value in values:
+        parts = value.split(":")
+        if len(parts) != 3:
+            raise ValidatorConfigError(
+                f"{name} entries must be "
+                "<agent_id>:<artifact_sha256>:<screened_image_sha256>"
+            )
+        agent_raw, artifact_sha256, screened_image_sha256 = parts
+        try:
+            agent_id = UUID(agent_raw)
+        except ValueError as error:
+            raise ValidatorConfigError(
+                f"{name} agent ids must be canonical UUIDs"
+            ) from error
+        if str(agent_id) != agent_raw or agent_id.int == 0:
+            raise ValidatorConfigError(
+                f"{name} agent ids must be canonical, non-nil UUIDs"
+            )
+        if not (
+            _is_lower_sha256(artifact_sha256)
+            and _is_lower_sha256(screened_image_sha256)
+        ):
+            raise ValidatorConfigError(
+                f"{name} artifact and screened-image digests must be lowercase "
+                "64-hex SHA-256 values"
+            )
+        target = CodingCanaryTarget(
+            agent_id=agent_id,
+            artifact_sha256=artifact_sha256,
+            screened_image_sha256=screened_image_sha256,
+        )
+        if target in targets:
+            raise ValidatorConfigError(f"{name} entries must be unique")
+        targets.append(target)
+    if len(targets) > _MAX_CODING_CANARY_TARGETS:
+        raise ValidatorConfigError(f"{name} allows at most 16 targets")
+    return tuple(targets)
+
+
+def _is_lower_sha256(value: str) -> bool:
+    return len(value) == 64 and all(character in _HEX for character in value)
+
+
+def _is_ss58_hotkey(value: str) -> bool:
+    return 47 <= len(value) <= 48 and all(
+        character in _SS58_ALPHABET for character in value
+    )

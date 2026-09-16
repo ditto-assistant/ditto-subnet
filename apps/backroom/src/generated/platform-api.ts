@@ -552,6 +552,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-certification-allowlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Coding Certification Allowlist
+         * @description Current restriction (revision 0 = built-in refuse-all) and history.
+         */
+        get: operations["get_coding_certification_allowlist_api_v1_admin_coding_certification_allowlist_get"];
+        put?: never;
+        /**
+         * Set Coding Certification Allowlist
+         * @description Append one complete revision, then abort and revoke what it refuses.
+         *
+         *     In the same transaction as the new revision, every issued or claimed lease
+         *     the revision does not admit is aborted (recording the revision) and every
+         *     live certification inference grant it does not admit is revoked.
+         */
+        post: operations["set_coding_certification_allowlist_api_v1_admin_coding_certification_allowlist_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-certification-leases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Coding Certification Lease Audit
+         * @description Newest-first certification lease rows without grant ids or bearer data.
+         */
+        get: operations["list_coding_certification_lease_audit_api_v1_admin_coding_certification_leases_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/coding-control-plane": {
         parameters: {
             query?: never;
@@ -566,6 +614,90 @@ export interface paths {
         get: operations["get_coding_control_plane_api_v1_admin_coding_control_plane_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-hosted-assignments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Hosted Assignments
+         * @description Page redacted hosted assignment lifecycles, newest first.
+         */
+        get: operations["list_hosted_assignments_api_v1_admin_coding_hosted_assignments_get"];
+        put?: never;
+        /**
+         * Create Hosted Assignment Endpoint
+         * @description Re-derive the previewed authority, then create and bind it atomically.
+         */
+        post: operations["create_hosted_assignment_endpoint_api_v1_admin_coding_hosted_assignments_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-hosted-assignments/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Hosted Assignment
+         * @description Derive the exact authority without writing anything.
+         */
+        post: operations["preview_hosted_assignment_api_v1_admin_coding_hosted_assignments_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-hosted-assignments/{evaluation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Hosted Assignment
+         * @description Read one lifecycle, terminal outcome, accounting and delivery status.
+         */
+        get: operations["get_hosted_assignment_api_v1_admin_coding_hosted_assignments__evaluation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-hosted-assignments/{evaluation_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel Hosted Assignment Endpoint
+         * @description Append one cancellation for an assignment whose attempt never started.
+         */
+        post: operations["cancel_hosted_assignment_endpoint_api_v1_admin_coding_hosted_assignments__evaluation_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1334,6 +1466,50 @@ export interface paths {
         get: operations["get_miner_owner_footprint_api_v1_admin_miner_owners__identifier__get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/noncompetitive-canaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Team Canaries
+         * @description List audited team canaries, oldest first, with the agents each excludes.
+         */
+        get: operations["team_canaries_api_v1_admin_noncompetitive_canaries_get"];
+        put?: never;
+        /**
+         * Reserve
+         * @description Reserve one exact hotkey + artifact as a noncompetitive team canary.
+         */
+        post: operations["reserve_api_v1_admin_noncompetitive_canaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/noncompetitive-canaries/{exclusion_id}/bind": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Bind
+         * @description Bind a reservation once to the exact agent and screened image digest.
+         */
+        post: operations["bind_api_v1_admin_noncompetitive_canaries__exclusion_id__bind_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -7252,6 +7428,172 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** AdminCodingCertificationAllowlistApplyResponse */
+        AdminCodingCertificationAllowlistApplyResponse: {
+            /** Aborted Lease Count */
+            aborted_lease_count: number;
+            current: components["schemas"]["CodingCertificationAllowlistRevision"];
+            /**
+             * Effective
+             * @enum {string}
+             */
+            effective: "refuse_all" | "exact_tuples";
+            /** Enabled */
+            enabled: boolean;
+            /** History */
+            history: components["schemas"]["CodingCertificationAllowlistRevision"][];
+            /**
+             * Integrity
+             * @enum {string}
+             */
+            integrity: "valid" | "invalid";
+            /**
+             * Max Entries
+             * @default 16
+             */
+            max_entries: number;
+            /** Revoked Inference Grant Count */
+            revoked_inference_grant_count: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminCodingCertificationAllowlistRequest */
+        AdminCodingCertificationAllowlistRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Entries */
+            entries: components["schemas"]["CodingCertificationAllowlistEntry"][];
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * AdminCodingCertificationAllowlistResponse
+         * @description Current enforcement. ``enabled`` is true only for valid exact tuples.
+         */
+        AdminCodingCertificationAllowlistResponse: {
+            current: components["schemas"]["CodingCertificationAllowlistRevision"];
+            /**
+             * Effective
+             * @enum {string}
+             */
+            effective: "refuse_all" | "exact_tuples";
+            /** Enabled */
+            enabled: boolean;
+            /** History */
+            history: components["schemas"]["CodingCertificationAllowlistRevision"][];
+            /**
+             * Integrity
+             * @enum {string}
+             */
+            integrity: "valid" | "invalid";
+            /**
+             * Max Entries
+             * @default 16
+             */
+            max_entries: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminCodingCertificationLeaseList */
+        AdminCodingCertificationLeaseList: {
+            /** Leases */
+            leases: components["schemas"]["AdminCodingCertificationLeaseRecord"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total */
+            total: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * AdminCodingCertificationLeaseRecord
+         * @description One lease row. Grant ids, bearer digests, and image locators are omitted.
+         *
+         *     ``completed`` means Platform accepted the lease's receipt; it is terminal
+         *     and never expires. ``claim_allowlist_revision`` is the allowlist revision
+         *     that admitted the claim, and ``aborted_allowlist_revision`` the revision
+         *     whose write aborted the lease.
+         */
+        AdminCodingCertificationLeaseRecord: {
+            /** Aborted Allowlist Revision */
+            aborted_allowlist_revision: number | null;
+            /** Aborted At */
+            aborted_at: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Claim Allowlist Revision */
+            claim_allowlist_revision: number | null;
+            /** Claimed At */
+            claimed_at: string | null;
+            /** Coding Contract Version */
+            coding_contract_version: number;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /** Deadline Passed */
+            deadline_passed: boolean;
+            /** Inference Grant Status */
+            inference_grant_status: ("pending" | "active" | "revoked" | "exhausted") | null;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            receipt_status: components["schemas"]["CodingCertificationStatus"] | null;
+            /**
+             * Receipt Window Ends At
+             * Format: date-time
+             */
+            receipt_window_ends_at: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            status: components["schemas"]["CodingCertificationLeaseStatus"];
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
         /** AdminCodingControlPlaneResponse */
         AdminCodingControlPlaneResponse: {
             /** Contract V1 Reconciliation Enabled */
@@ -8330,6 +8672,590 @@ export interface components {
             status: "queued" | "leased" | "running" | "succeeded" | "incomplete" | "skipped";
             /** Unmetered */
             unmetered: boolean;
+        };
+        /**
+         * AdminHostedAssignmentCancelRequest
+         * @description Cancel one unstarted assignment; the confirmation binds its exact digest.
+         */
+        AdminHostedAssignmentCancelRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Assignment Sha256 */
+            expected_assignment_sha256: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminHostedAssignmentCancellationRecord */
+        AdminHostedAssignmentCancellationRecord: {
+            /** Actor */
+            actor: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Cancelled At
+             * Format: date-time
+             */
+            cancelled_at: string;
+            /**
+             * Prior State
+             * @enum {string}
+             */
+            prior_state: "pending_admission" | "admitted";
+            /** Reason */
+            reason: string;
+        };
+        /** AdminHostedAssignmentCancelled */
+        AdminHostedAssignmentCancelled: {
+            assignment: components["schemas"]["AdminHostedAssignmentDetail"];
+            cancellation: components["schemas"]["AdminHostedAssignmentCancellationRecord"];
+            /** Idempotent */
+            idempotent: boolean;
+            /** Private Task Closed */
+            private_task_closed: boolean;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminHostedAssignmentCreateRequest */
+        AdminHostedAssignmentCreateRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Catalog Index */
+            catalog_index: number;
+            /** Confirmation */
+            confirmation: string;
+            /** Confirmed Assignment Sha256 */
+            confirmed_assignment_sha256: string;
+            /** Deadline Unix */
+            deadline_unix: number;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /** Execution Profile Sha256 */
+            execution_profile_sha256: string;
+            /** Grading Profile Sha256 */
+            grading_profile_sha256: string;
+            /** Max Patch Bytes */
+            max_patch_bytes: number;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Release Row Id
+             * Format: uuid
+             */
+            release_row_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** AdminHostedAssignmentCreated */
+        AdminHostedAssignmentCreated: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Authoring Grant Id
+             * Format: uuid
+             */
+            authoring_grant_id: string;
+            /** Authority */
+            authority: {
+                [key: string]: unknown;
+            };
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Certification Row Id
+             * Format: uuid
+             */
+            certification_row_id: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Deadline Unix */
+            deadline_unix: number;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /**
+             * Grading Grant Id
+             * Format: uuid
+             */
+            grading_grant_id: string;
+            /** Registration Sha256 */
+            registration_sha256: string;
+            /** Schedule Sha256 */
+            schedule_sha256: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Selection */
+            selection: {
+                [key: string]: unknown;
+            };
+            /** Selection Sha256 */
+            selection_sha256: string;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminHostedAssignmentDetail */
+        AdminHostedAssignmentDetail: {
+            /** Acknowledged */
+            acknowledged: boolean;
+            /** Acknowledged Count */
+            acknowledged_count: number;
+            /** Admission Request Sha256 */
+            admission_request_sha256: string | null;
+            /** Admitted At */
+            admitted_at: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Authoring Evidence Finalized At */
+            authoring_evidence_finalized_at: string | null;
+            /** Authoring Evidence Reserved At */
+            authoring_evidence_reserved_at: string | null;
+            /** Cancellable */
+            cancellable: boolean;
+            cancellation: components["schemas"]["AdminHostedAssignmentCancellationRecord"] | null;
+            /** Cancelled At */
+            cancelled_at: string | null;
+            /** Close Reason */
+            close_reason: ("completed" | "failed" | "aborted") | null;
+            /** Closed At */
+            closed_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Deadline Unix */
+            deadline_unix: number;
+            /** Deliveries */
+            deliveries: components["schemas"]["AdminHostedResultDelivery"][];
+            /** Deliveries Truncated */
+            deliveries_truncated: boolean;
+            /** Delivery Count */
+            delivery_count: number;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /** Execution Profile Sha256 */
+            execution_profile_sha256: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Grading Claimed At */
+            grading_claimed_at: string | null;
+            /** Grading Profile Sha256 */
+            grading_profile_sha256: string;
+            inference: components["schemas"]["AdminHostedInferenceAccounting"] | null;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            private_task: components["schemas"]["AdminHostedPrivateTaskStatus"] | null;
+            /** Registered Actor */
+            registered_actor: string;
+            /** Registered Reason */
+            registered_reason: string;
+            /** Registration Sha256 */
+            registration_sha256: string;
+            /**
+             * Release Row Id
+             * Format: uuid
+             */
+            release_row_id: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Selection Sha256 */
+            selection_sha256: string;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending_admission" | "admitted" | "running" | "completed" | "failed" | "aborted" | "expired" | "cancelled";
+            terminal: components["schemas"]["AdminHostedTerminalStatus"] | null;
+            /** Terminal Outcome */
+            terminal_outcome: ("completed" | "candidate_failure" | "infrastructure_failure" | "integrity_failure") | null;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminHostedAssignmentList */
+        AdminHostedAssignmentList: {
+            /** Assignments */
+            assignments: components["schemas"]["AdminHostedAssignmentSummary"][];
+            /** Limit */
+            limit: number;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Offset */
+            offset: number;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /** Total */
+            total: number;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminHostedAssignmentPlan */
+        AdminHostedAssignmentPlan: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Authority */
+            authority: {
+                [key: string]: unknown;
+            };
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Certification Row Id
+             * Format: uuid
+             */
+            certification_row_id: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Deadline Unix */
+            deadline_unix: number;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /** Registration Sha256 */
+            registration_sha256: string;
+            /** Schedule Sha256 */
+            schedule_sha256: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Selection */
+            selection: {
+                [key: string]: unknown;
+            };
+            /** Selection Sha256 */
+            selection_sha256: string;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** AdminHostedAssignmentPreviewRequest */
+        AdminHostedAssignmentPreviewRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Catalog Index */
+            catalog_index: number;
+            /** Execution Profile Sha256 */
+            execution_profile_sha256: string;
+            /** Grading Profile Sha256 */
+            grading_profile_sha256: string;
+            /**
+             * Lease Seconds
+             * @default 900
+             */
+            lease_seconds: number;
+            /** Max Patch Bytes */
+            max_patch_bytes: number;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /**
+             * Release Row Id
+             * Format: uuid
+             */
+            release_row_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** AdminHostedAssignmentSummary */
+        AdminHostedAssignmentSummary: {
+            /** Acknowledged */
+            acknowledged: boolean;
+            /** Admitted At */
+            admitted_at: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Cancelled At */
+            cancelled_at: string | null;
+            /** Close Reason */
+            close_reason: ("completed" | "failed" | "aborted") | null;
+            /** Closed At */
+            closed_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Evaluation Id
+             * Format: uuid
+             */
+            evaluation_id: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Registered Actor */
+            registered_actor: string;
+            /** Registered Reason */
+            registered_reason: string;
+            /** Registration Sha256 */
+            registration_sha256: string;
+            /**
+             * Release Row Id
+             * Format: uuid
+             */
+            release_row_id: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending_admission" | "admitted" | "running" | "completed" | "failed" | "aborted" | "expired" | "cancelled";
+            /** Terminal Outcome */
+            terminal_outcome: ("completed" | "candidate_failure" | "infrastructure_failure" | "integrity_failure") | null;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * AdminHostedInferenceAccounting
+         * @description Grant limits and ledger totals.
+         *
+         *     ``charged_*`` counts settled usage plus the full ceiling of every reserved or
+         *     uncertain request, which is what the grant budget enforces. ``settled_*``
+         *     counts provider-settled usage only. ``verified`` is true only once the grant
+         *     is revoked with no reserved or uncertain request left.
+         */
+        AdminHostedInferenceAccounting: {
+            /** Charged Completion Tokens */
+            charged_completion_tokens: number;
+            /** Charged Cost Usd Micros */
+            charged_cost_usd_micros: number;
+            /** Charged Prompt Tokens */
+            charged_prompt_tokens: number;
+            /** Completion Token Limit */
+            completion_token_limit: number;
+            /** Cost Usd Micros Limit */
+            cost_usd_micros_limit: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Policy Sha256 */
+            policy_sha256: string;
+            /** Prompt Token Limit */
+            prompt_token_limit: number;
+            /** Request Count */
+            request_count: number;
+            /** Request Limit */
+            request_limit: number;
+            /** Reserved Count */
+            reserved_count: number;
+            /** Revoked At */
+            revoked_at: string | null;
+            /** Settled Completion Tokens */
+            settled_completion_tokens: number;
+            /** Settled Cost Usd Micros */
+            settled_cost_usd_micros: number;
+            /** Settled Count */
+            settled_count: number;
+            /** Settled Prompt Tokens */
+            settled_prompt_tokens: number;
+            /** Uncertain Count */
+            uncertain_count: number;
+            /** Verified */
+            verified: boolean;
+        };
+        /**
+         * AdminHostedPrivateTaskStatus
+         * @description Phase timestamps only; the private selection itself is never returned.
+         */
+        AdminHostedPrivateTaskStatus: {
+            /**
+             * Bound At
+             * Format: date-time
+             */
+            bound_at: string;
+            /** Close Reason */
+            close_reason: ("completed" | "failed" | "aborted") | null;
+            /** Closed At */
+            closed_at: string | null;
+            /** Frozen At */
+            frozen_at: string | null;
+            /** Selection Sha256 */
+            selection_sha256: string;
+        };
+        /** AdminHostedResultDelivery */
+        AdminHostedResultDelivery: {
+            /** Acknowledged At */
+            acknowledged_at: string | null;
+            /**
+             * Delivered At
+             * Format: date-time
+             */
+            delivered_at: string;
+            /** Result Sha256 */
+            result_sha256: string;
+        };
+        /**
+         * AdminHostedTerminalStatus
+         * @description Non-secret outcome and sealed-evidence digest; grading details stay sealed.
+         */
+        AdminHostedTerminalStatus: {
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /** Finalized At */
+            finalized_at: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "completed" | "candidate_failure" | "infrastructure_failure" | "integrity_failure";
+            /**
+             * Reserved At
+             * Format: date-time
+             */
+            reserved_at: string;
         };
         /** AdminHotkeyBanAuditEntry */
         AdminHotkeyBanAuditEntry: {
@@ -10504,6 +11430,105 @@ export interface components {
             replacement_commitment: components["schemas"]["CodingCatalogCommitment"];
             /** Replacement Signature */
             replacement_signature: string;
+        };
+        /** AdminTeamCanaryAgent */
+        AdminTeamCanaryAgent: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Competition Excluded
+             * @default true
+             * @constant
+             */
+            competition_excluded: true;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string | null;
+            /** Sha256 */
+            sha256: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "reserved" | "bound" | "binding_drift";
+            status: components["schemas"]["AgentStatus"];
+        };
+        /** AdminTeamCanaryBindRequest */
+        AdminTeamCanaryBindRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Reason */
+            reason: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+        };
+        /** AdminTeamCanaryExclusion */
+        AdminTeamCanaryExclusion: {
+            /** Agent Id */
+            agent_id: string | null;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bound At */
+            bound_at: string | null;
+            /** Bound By */
+            bound_by: string | null;
+            /** Bound Reason */
+            bound_reason: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /**
+             * Exclusion Id
+             * Format: uuid
+             */
+            exclusion_id: string;
+            /**
+             * Kind
+             * @default team_canary
+             * @constant
+             */
+            kind: "team_canary";
+            /** Matched Agents */
+            matched_agents: components["schemas"]["AdminTeamCanaryAgent"][];
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Reason */
+            reason: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string | null;
+        };
+        /** AdminTeamCanaryList */
+        AdminTeamCanaryList: {
+            /** Exclusions */
+            exclusions: components["schemas"]["AdminTeamCanaryExclusion"][];
+            /** Total */
+            total: number;
+        };
+        /** AdminTeamCanaryReserveRequest */
+        AdminTeamCanaryReserveRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Reason */
+            reason: string;
         };
         /** AdminTransitionCodingPrivateV2ReleaseRequest */
         AdminTransitionCodingPrivateV2ReleaseRequest: {
@@ -13125,6 +14150,59 @@ export interface components {
             /** Test Command Ids */
             test_command_ids: string[];
         };
+        /**
+         * CodingCertificationAllowlistEntry
+         * @description One exact certifiable tuple. Every field must match; nothing is a wildcard.
+         */
+        CodingCertificationAllowlistEntry: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * CodingCertificationAllowlistRevision
+         * @description One stored revision as enforcement sees it.
+         *
+         *     ``enabled`` is the stored flag. ``integrity="invalid"`` means the stored
+         *     entries failed to parse or their checksum does not bind them; such a
+         *     revision reports no entries and ``effective="refuse_all"``.
+         */
+        CodingCertificationAllowlistRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /** Created At */
+            created_at: string | null;
+            /**
+             * Effective
+             * @enum {string}
+             */
+            effective: "refuse_all" | "exact_tuples";
+            /** Enabled */
+            enabled: boolean;
+            /** Entries */
+            entries: components["schemas"]["CodingCertificationAllowlistEntry"][];
+            /**
+             * Integrity
+             * @enum {string}
+             */
+            integrity: "valid" | "invalid";
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+        };
         /** CodingCertificationHarnessLaunchRequest */
         CodingCertificationHarnessLaunchRequest: {
             /**
@@ -13624,9 +14702,10 @@ export interface components {
         };
         /**
          * CodingCertificationLeaseStatus
+         * @description Lease lifecycle. ``completed`` means an accepted receipt; it is terminal.
          * @enum {string}
          */
-        CodingCertificationLeaseStatus: "issued" | "claimed" | "aborted" | "expired";
+        CodingCertificationLeaseStatus: "issued" | "claimed" | "completed" | "aborted" | "expired";
         /** CodingCertificationModelEvidence */
         CodingCertificationModelEvidence: {
             /** Completion Tokens */
@@ -14082,6 +15161,11 @@ export interface components {
              * Format: uuid
              */
             attempt_id: string;
+            /**
+             * Cancelled
+             * @default false
+             */
+            cancelled: boolean;
             /** Close Reason */
             close_reason: ("completed" | "failed" | "aborted") | null;
             /** Closed At */
@@ -21771,6 +22855,12 @@ export interface components {
             shadow: boolean;
             /** @description Compact finalized children sharing this entry's owner slot. Only identity/version and canonical score are included; full family evidence is loaded from the agent detail endpoint. */
             submission_family?: components["schemas"]["PublicLeaderboardFamily"] | null;
+            /**
+             * Team Canary
+             * @description Whether this is an audited noncompetitive team canary. It is screened, copy-checked and scored normally, but it is never ranked, never earns weight or emissions, and never holds a leader, crown or rollout position.
+             * @default false
+             */
+            team_canary: boolean;
             /** @description Benchmark-v5 efficiency adjustment. */
             token_efficiency?: components["schemas"]["PublicTokenEfficiency"] | null;
             /** @description Validator-proxy token accounting. */
@@ -29961,6 +31051,116 @@ export interface operations {
             };
         };
     };
+    get_coding_certification_allowlist_api_v1_admin_coding_certification_allowlist_get: {
+        parameters: {
+            query?: {
+                history_limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCertificationAllowlistResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_coding_certification_allowlist_api_v1_admin_coding_certification_allowlist_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCodingCertificationAllowlistRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCertificationAllowlistApplyResponse"];
+                };
+            };
+            /** @description Stale expected_revision or concurrent write. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Confirmation or entry shape is invalid. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    list_coding_certification_lease_audit_api_v1_admin_coding_certification_leases_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+                validator_hotkey?: string | null;
+                status?: components["schemas"]["CodingCertificationLeaseStatus"] | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCertificationLeaseList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_coding_control_plane_api_v1_admin_coding_control_plane_get: {
         parameters: {
             query?: {
@@ -29981,6 +31181,180 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCodingControlPlaneResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_hosted_assignments_api_v1_admin_coding_hosted_assignments_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHostedAssignmentList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_hosted_assignment_endpoint_api_v1_admin_coding_hosted_assignments_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminHostedAssignmentCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHostedAssignmentCreated"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_hosted_assignment_api_v1_admin_coding_hosted_assignments_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminHostedAssignmentPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHostedAssignmentPlan"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_hosted_assignment_api_v1_admin_coding_hosted_assignments__evaluation_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                evaluation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHostedAssignmentDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_hosted_assignment_endpoint_api_v1_admin_coding_hosted_assignments__evaluation_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                evaluation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminHostedAssignmentCancelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHostedAssignmentCancelled"];
                 };
             };
             /** @description Validation Error */
@@ -31516,6 +32890,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminOwnerFootprint"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    team_canaries_api_v1_admin_noncompetitive_canaries_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamCanaryList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reserve_api_v1_admin_noncompetitive_canaries_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTeamCanaryReserveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamCanaryExclusion"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    bind_api_v1_admin_noncompetitive_canaries__exclusion_id__bind_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                exclusion_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTeamCanaryBindRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTeamCanaryExclusion"];
                 };
             };
             /** @description Validation Error */
@@ -38971,7 +40453,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Agent not found. */
+            /** @description The certification allowlist refuses the lease. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Agent or live lease not found. */
             404: {
                 headers: {
                     [name: string]: unknown;
@@ -39232,6 +40721,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description The enabled certification allowlist refuses it. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Agent is not currently eligible. */
             404: {
                 headers: {
@@ -39389,6 +40885,13 @@ export interface operations {
                     "application/json": components["schemas"]["CodingCertificationLeaseResponse"];
                 };
             };
+            /** @description The certification allowlist refuses the lease. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -39426,6 +40929,13 @@ export interface operations {
             };
             /** @description Signature invalid or validator not permitted. */
             401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The certification allowlist refuses the lease. */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

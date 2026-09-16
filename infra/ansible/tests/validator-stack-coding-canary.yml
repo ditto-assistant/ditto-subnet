@@ -1,0 +1,197 @@
+---
+# Exercise the validator-stack certification canary gates and environment
+# rendering on localhost. This never converges the role or touches a host.
+- name: Verify the validator certification canary is default-off and fail-closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../roles/validator_stack/defaults/main.yml
+  vars:
+    validator_stack_pylon_token: pylon-token-placeholder
+    validator_stack_broker_token: broker-token-placeholder
+    validator_stack_wandb_api_key: wandb-placeholder
+    canary_template: ../roles/validator_stack/templates/validator.env.j2
+    valid_artifact: "{{ 'a1' * 32 }}"
+    valid_screened_image: "{{ 'b1' * 32 }}"
+    valid_targets:
+      - agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+        artifact_sha256: "{{ valid_artifact }}"
+        screened_image_sha256: "{{ valid_screened_image }}"
+    # Synthetic SS58 test hotkey; production takes it from validated config.
+    valid_hotkey: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+    valid_socket_uid: 61001
+    valid_socket_gid: 61002
+    valid_token_path: /etc/ditto-coding-certification/control-token
+    valid_runtime_digest: "sha256:{{ '1' * 64 }}"
+    valid_pack_manifest: "{{ '2' * 64 }}"
+    # Placeholder synthetic bearer: it must never appear in any rendered file.
+    placeholder_bearer: coding-certification-bearer-must-not-render-0001
+  tasks:
+    - name: Accept the shipped defaults
+      ansible.builtin.include_tasks: ../roles/validator_stack/tasks/validate_coding_canary.yml
+
+    - name: Render the shipped defaults as disabled, empty and unmounted
+      vars:
+        rendered: "{{ lookup('template', canary_template).splitlines() }}"
+      ansible.builtin.assert:
+        that:
+          - not validator_stack_coding_canary_enabled
+          - validator_stack_coding_canary_targets == []
+          - validator_stack_coding_canary_validator_hotkey == ''
+          - validator_stack_coding_certification_socket_uid == 0
+          - validator_stack_coding_certification_socket_gid == 0
+          - validator_stack_coding_certification_control_token_path == ''
+          - validator_stack_coding_certification_runtime_image_digest == ''
+          - validator_stack_coding_certification_pack_manifest_sha256 == ''
+          - "'VALIDATOR_CODING_CANARY_ENABLED=false' in rendered"
+          - "'VALIDATOR_CODING_CANARY_POLL_SECONDS=10' in rendered"
+          - "'VALIDATOR_CODING_CANARY_TARGETS=' in rendered"
+          - "'VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY=' in rendered"
+          # Off: nothing from the host is mounted and every setting is empty.
+          - "'VALIDATOR_CODING_CERTIFICATION_SOCKET_HOST_DIRECTORY=/dev/null' in rendered"
+          - "'VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_HOST_PATH=/dev/null' in rendered"
+          - "'VALIDATOR_CODING_CERTIFICATION_SOCKET_UID=' in rendered"
+          - "'VALIDATOR_CODING_CERTIFICATION_SOCKET_GID=' in rendered"
+          - "'VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST=' in rendered"
+          - "'VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256=' in rendered"
+          # The retired Compose scorer route renders nothing.
+          - rendered | select('match', 'DITTOBENCH_CODING_') | list == []
+          # The bearer is only ever a mounted file, never an environment value.
+          - rendered | select('match', 'VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN=') | list == []
+
+    - name: Keep targets and the socket route out of the disabled switch
+      vars:
+        validator_stack_coding_canary_targets: "{{ valid_targets }}"
+        validator_stack_coding_canary_validator_hotkey: "{{ valid_hotkey }}"
+        validator_stack_coding_certification_socket_uid: "{{ valid_socket_uid }}"
+        validator_stack_coding_certification_socket_gid: "{{ valid_socket_gid }}"
+        validator_stack_coding_certification_control_token_path: "{{ valid_token_path }}"
+        validator_stack_coding_certification_runtime_image_digest: "{{ valid_runtime_digest }}"
+        validator_stack_coding_certification_pack_manifest_sha256: "{{ valid_pack_manifest }}"
+        rendered: "{{ lookup('template', canary_template).splitlines() }}"
+      ansible.builtin.assert:
+        that:
+          - "'VALIDATOR_CODING_CANARY_TARGETS=' in rendered"
+          - "'VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY=' in rendered"
+          - "'VALIDATOR_CODING_CERTIFICATION_SOCKET_HOST_DIRECTORY=/dev/null' in rendered"
+          - "'VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_HOST_PATH=/dev/null' in rendered"
+          - "'VALIDATOR_CODING_CERTIFICATION_SOCKET_UID=' in rendered"
+          - "'VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST=' in rendered"
+
+    - name: Accept and render the complete validator profile with its socket route
+      vars:
+        validator_stack_coding_canary_enabled: true
+        validator_stack_coding_canary_poll_seconds: 30
+        validator_stack_coding_canary_targets:
+          - agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+            artifact_sha256: "{{ valid_artifact }}"
+            screened_image_sha256: "{{ valid_screened_image }}"
+          - agent_id: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
+            artifact_sha256: "{{ 'a2' * 32 }}"
+            screened_image_sha256: "{{ 'b2' * 32 }}"
+        validator_stack_coding_canary_validator_hotkey: "{{ valid_hotkey }}"
+        validator_stack_hotkey: "{{ valid_hotkey }}"
+        validator_stack_coding_certification_socket_uid: "{{ valid_socket_uid }}"
+        validator_stack_coding_certification_socket_gid: "{{ valid_socket_gid }}"
+        validator_stack_coding_certification_control_token_path: "{{ valid_token_path }}"
+        validator_stack_coding_certification_runtime_image_digest: "{{ valid_runtime_digest }}"
+        validator_stack_coding_certification_pack_manifest_sha256: "{{ valid_pack_manifest }}"
+        # Present in the play only to prove the template never renders it.
+        validator_stack_coding_certification_control_token: "{{ placeholder_bearer }}"
+      block:
+        - name: Validate the complete validator profile
+          ansible.builtin.include_tasks: ../roles/validator_stack/tasks/validate_coding_canary.yml
+
+        - name: Render the complete validator profile
+          vars:
+            rendered_text: "{{ lookup('template', canary_template) }}"
+            rendered: "{{ rendered_text.splitlines() }}"
+          ansible.builtin.assert:
+            that:
+              - "'VALIDATOR_CODING_CANARY_ENABLED=true' in rendered"
+              - "'VALIDATOR_CODING_CANARY_POLL_SECONDS=30' in rendered"
+              - "'VALIDATOR_CODING_CANARY_TARGETS=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:' + valid_artifact + ':' + valid_screened_image + ',bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:' + 'a2' * 32 + ':' + 'b2' * 32 in rendered"
+              - "'VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY=' + valid_hotkey in rendered"
+              # The socket's parent directory, never the socket file, so a
+              # service restart that recreates the socket keeps working.
+              - "'VALIDATOR_CODING_CERTIFICATION_SOCKET_HOST_DIRECTORY=/run/ditto-coding-certification' in rendered"
+              - rendered | select('match', '.*control\\.sock') | list == []
+              - "'VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_HOST_PATH=' + valid_token_path in rendered"
+              - "'VALIDATOR_CODING_CERTIFICATION_SOCKET_UID=61001' in rendered"
+              - "'VALIDATOR_CODING_CERTIFICATION_SOCKET_GID=61002' in rendered"
+              - "'VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST=' + valid_runtime_digest in rendered"
+              - "'VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256=' + valid_pack_manifest in rendered"
+              - placeholder_bearer not in rendered_text
+              - rendered | select('match', 'VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN=') | list == []
+              - rendered | select('match', 'DITTOBENCH_CODING_') | list == []
+
+    - name: Reject every incomplete or unsafe validator profile
+      ansible.builtin.include_tasks: validator-stack-coding-canary-reject.yml
+      loop_control:
+        loop_var: case
+        label: "{{ case.name }}"
+      loop:
+        - {name: validator worker beside the connectivity canary, connectivity: true}
+        - {name: validator worker beside the connectivity run, connectivity_run: true}
+        - {name: poll below one second, poll: 0}
+        - {name: poll above five minutes, poll: 301}
+        # The socket route and the bearer file path must both be rendered.
+        - {name: validator worker without the socket owner uid, socket_uid: 0}
+        - {name: validator worker without the socket group gid, socket_gid: 0}
+        - {name: validator worker with a root socket owner, socket_uid: "0"}
+        - {name: validator worker with a negative socket owner, socket_uid: -1}
+        - {name: validator worker with a leading-zero socket gid, socket_gid: "061002"}
+        - {name: validator worker with a socket gid at the overflow id, socket_gid: 2147483647}
+        - {name: validator worker with a named socket group, socket_gid: ditto-coding-cert-clients}
+        - {name: validator worker without the bearer file path, token_path: ""}
+        - {name: validator worker with a relative bearer file path, token_path: etc/ditto-coding-certification/control-token}
+        - {name: validator worker with a parent segment in the bearer path, token_path: /etc/ditto-coding-certification/../control-token}
+        - {name: validator worker with an empty segment in the bearer path, token_path: /etc//ditto-coding-certification/control-token}
+        - {name: validator worker with a trailing slash bearer path, token_path: /etc/ditto-coding-certification/}
+        - {name: validator worker with the null device as the bearer, token_path: /dev/null}
+        - {name: validator worker with the bearer inside the socket directory, token_path: /run/ditto-coding-certification/control-token}
+        - {name: validator worker with the socket as the bearer, token_path: /run/ditto-coding-certification/control.sock}
+        - {name: validator worker with whitespace in the bearer path, token_path: "/etc/ditto coding/control-token"}
+        - {name: validator worker with a newline in the bearer path, token_path: "/etc/ditto-coding-certification/control-token\nX=1"}
+        - {name: validator worker without a runtime image digest, runtime_digest: ""}
+        - {name: validator worker with a runtime image tag, runtime_digest: latest}
+        - {name: validator worker with an uppercase runtime image digest, runtime_digest: "sha256:{{ 'A' * 64 }}"}
+        - {name: validator worker without a pack manifest digest, pack_manifest: ""}
+        - {name: validator worker with a prefixed pack manifest digest, pack_manifest: "sha256:{{ '2' * 64 }}"}
+        - {name: validator worker without targets, targets: []}
+        - {name: validator worker with a target string, targets: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
+        - name: validator worker with a target mapping instead of a list
+          targets: {agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}
+        - {name: validator worker with an agent-only target, targets: [aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa]}
+        - name: validator worker with a target missing its artifact digest
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a target missing its screened-image digest
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}"}]
+        - name: validator worker with an extra target field
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}", validator_hotkey: "{{ valid_hotkey }}"}]
+        - name: validator worker with an uppercase target
+          targets: [{agent_id: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a malformed target
+          targets: [{agent_id: not-a-uuid, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a nil target
+          targets: [{agent_id: "00000000-0000-0000-0000-000000000000", artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with an uppercase artifact digest
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ 'A1' * 32 }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a prefixed artifact digest
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "sha256:{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a short screened-image digest
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ 'b' * 63 }}"}]
+        - name: validator worker with an empty screened-image digest
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: ""}]
+        - name: validator worker with duplicate targets
+          targets: "{{ valid_targets + valid_targets }}"
+        - name: validator worker with seventeen targets
+          targets: >-
+            {{ query('ansible.builtin.sequence', 'start=1 end=17 format=aaaaaaaa-aaaa-4aaa-8aaa-%012x')
+            | map('regex_replace', '^(.*)$', '{"agent_id": "\1", "artifact_sha256": "' ~ valid_artifact ~ '", "screened_image_sha256": "' ~ valid_screened_image ~ '"}')
+            | map('from_json') | list }}
+        - {name: validator worker without a target hotkey, canary_hotkey: ""}
+        - {name: validator worker bound to another validator hotkey, canary_hotkey: 5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty}
+        - {name: validator worker with a malformed target hotkey, canary_hotkey: not-a-hotkey, hotkey: not-a-hotkey}

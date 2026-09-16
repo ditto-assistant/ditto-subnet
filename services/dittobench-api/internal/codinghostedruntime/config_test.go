@@ -88,8 +88,8 @@ func fixture(t *testing.T) (configWire, string) {
 		Harness:              codingharness.HostedBinding{EvaluationID: expected.EvaluationID, AttemptID: expected.AttemptID, WorkerID: expected.WorkerID, AssignmentSHA256: expected.AssignmentSHA256, AgentID: agent, AgentArtifactSHA256: strings.Repeat("5", 64), ProfileCapabilityID: "hosted-" + expected.AttemptID, Deadline: time.Unix(expected.DeadlineUnix, 0).UTC(), ScreenedImageSHA256: strings.Repeat("6", 64), ScreenedImageID: "sha256:" + strings.Repeat("7", 64), ScreenedImageRef: "ditto-screen/" + agent + ":latest", ScreenedImageSize: 1, ScreeningPolicyVersion: 12, ImageURL: "https://storage.invalid/image?signature=private-marker", ImageExpiresAt: time.Now().Add(time.Minute).UTC()},
 		AuthoringProfileFile: filepath.Join(root, "authoring.json"), GradingProfileFile: filepath.Join(root, "grading.json"), GradingProfileSHA256: fmt.Sprintf("%x", sha256.Sum256(grading)),
 		ControlSocket: filepath.Join(root, "control.sock"), ControlTokenFile: filepath.Join(root, "token"), PythonExecutable: "/approved/python", PostgresEnvironmentFile: filepath.Join(root, "postgres.json"),
-		StateRoot: filepath.Join(root, "state"), DockerExecutable: "/approved/docker", DockerSocket: filepath.Join(root, "docker.sock"), RouterListen: "172.21.0.1:19010", EgressNetwork: "coding-restricted", EgressProxy: "http://172.21.0.2:3128", ExecutorRepository: "example.invalid/coding", CandidateUID: 10001, CandidateGID: 10001}
-	if os.Mkdir(wire.StateRoot, 0700) != nil {
+		StateRoot: filepath.Join(root, "state"), LaunchJournalDir: filepath.Join(root, "launch-journal"), DockerExecutable: "/approved/docker", DockerSocket: filepath.Join(root, "docker.sock"), RouterListen: "172.21.0.1:19010", EgressNetwork: "coding-restricted", EgressProxy: "http://172.21.0.2:3128", ExecutorRepository: "example.invalid/coding", CandidateUID: 10001, CandidateGID: 10001}
+	if os.Mkdir(wire.StateRoot, 0700) != nil || os.Mkdir(wire.LaunchJournalDir, 0700) != nil {
 		t.Fatal("state fixture")
 	}
 	write(t, wire.AuthoringProfileFile, encode(t, p))
@@ -134,6 +134,14 @@ func TestLoadConfigBindsProfilesAndFixedSandboxPolicy(t *testing.T) {
 	}
 	if !config.docker.RequireRootless || !config.docker.RequireIsolatedDaemon || !config.docker.Harden || config.docker.AllowPrivate || config.docker.GitHubTokenFile != "" || config.docker.OpenRouterShimCABundleHostPath != "" || config.docker.CPULimit != "2.000" || config.publicBase != "http://host.docker.internal:19010" {
 		t.Fatal("sandbox confinement drift")
+	}
+	// Hosted-v2 alone disables swap (swap limit == memory limit) and never pulls,
+	// and the runtime it builds accepts exactly that policy.
+	if config.docker.MemoryLimit == "" || config.docker.MemorySwapLimit != config.docker.MemoryLimit || !config.docker.PullNever {
+		t.Fatalf("hosted harness must run without swap and with --pull never: memory=%q swap=%q pull_never=%v", config.docker.MemoryLimit, config.docker.MemorySwapLimit, config.docker.PullNever)
+	}
+	if _, err := codingharness.NewHostedSandboxRuntime(config.docker); err != nil {
+		t.Fatalf("hosted runtime refused the loaded policy: %v", err)
 	}
 	for _, value := range []any{wire, config} {
 		if _, err := json.Marshal(value); err == nil {
@@ -181,6 +189,14 @@ func TestConfigRejectsDriftBeforeConsumingAttempt(t *testing.T) {
 		{"proxy_port", func(w *configWire) { w.EgressProxy = "http://172.21.0.2:99999" }},
 		{"unconfined", func(w *configWire) { w.SeccompProfile = "unconfined" }},
 		{"executable", func(w *configWire) { w.PythonExecutable = "/unapproved/python" }},
+		{"no_launch_journal", func(w *configWire) { w.LaunchJournalDir = "" }},
+		{"journal_is_state", func(w *configWire) { w.LaunchJournalDir = w.StateRoot }},
+		{"journal_inside_state", func(w *configWire) {
+			w.LaunchJournalDir = filepath.Join(w.StateRoot, "journal")
+			_ = os.Mkdir(w.LaunchJournalDir, 0700)
+		}},
+		{"journal_above_state", func(w *configWire) { w.LaunchJournalDir = filepath.Dir(w.StateRoot) }},
+		{"journal_shared", func(w *configWire) { _ = os.Chmod(w.LaunchJournalDir, 0750) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			wire, path := fixture(t)

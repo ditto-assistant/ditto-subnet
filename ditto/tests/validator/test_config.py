@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 from uuid import UUID
 
 import pytest
 
-from ditto.validator.config import FINNEY_BURN_HOTKEY, parse_validator_config_from_env
+from ditto.validator.config import (
+    FINNEY_BURN_HOTKEY,
+    CodingCanaryTarget,
+    parse_validator_config_from_env,
+)
 from ditto.validator.errors import ValidatorConfigError
+
+_AGENT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_DIGEST = "a1" * 32
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 
@@ -352,25 +360,285 @@ class TestCodingShadowConfig:
             parse_validator_config_from_env()
 
 
+_CERTIFICATION_TOKEN = "coding-certification-token-0000000000001"
+_CERTIFICATION_ENV = {
+    "VALIDATOR_CODING_CERTIFICATION_SOCKET_UID": "61001",
+    "VALIDATOR_CODING_CERTIFICATION_SOCKET_GID": "61002",
+    "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST": "sha256:" + "1" * 64,
+    "VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256": "2" * 64,
+}
+
+
 class TestCodingCanaryConfig:
+    @pytest.fixture(autouse=True)
+    def _token_file(self, tmp_path: Path) -> None:
+        self.token_file = tmp_path / "coding-certification-control-token"
+        self.token_file.write_text(_CERTIFICATION_TOKEN + "\n")
+
     def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)
         config = parse_validator_config_from_env()
         assert config.coding_canary_enabled is False
 
-    def test_enable_requires_control_token(
+    def test_enable_requires_the_certification_settings(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _base_env(monkeypatch)
         monkeypatch.setenv("VALIDATOR_CODING_CANARY_ENABLED", "true")
-        with pytest.raises(ValidatorConfigError, match="coding canary"):
+        with pytest.raises(ValidatorConfigError, match="CERTIFICATION_SOCKET_UID"):
             parse_validator_config_from_env()
-        monkeypatch.setenv(
-            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
-            "coding-canary-control-token-0000000000000001",
-        )
+        self._enable(monkeypatch)
         config = parse_validator_config_from_env()
         assert config.coding_canary_enabled is True
+        assert config.coding_certification_socket_uid == 61001
+        assert config.coding_certification_socket_gid == 61002
+        assert config.coding_certification_runtime_image_digest == "sha256:" + "1" * 64
+        assert config.coding_certification_pack_manifest_sha256 == "2" * 64
+        assert "coding-certification-token" not in repr(config)
+        # Enabled without targets is inert: the worker refuses every lease.
+        assert config.coding_canary_targets == ()
+        assert config.coding_canary_validator_hotkey == ""
+
+    def _enable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_ENABLED", "true")
+        for name, value in _CERTIFICATION_ENV.items():
+            monkeypatch.setenv(name, value)
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE", str(self.token_file)
+        )
+
+    @pytest.mark.parametrize(
+        ("name", "value", "match"),
+        [
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "0", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "-1", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "061001", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "2147483647", "SOCKET_UID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_GID", "", "SOCKET_GID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_GID", "0", "SOCKET_GID"),
+            ("VALIDATOR_CODING_CERTIFICATION_SOCKET_GID", "root", "SOCKET_GID"),
+            ("VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE", "", "TOKEN_FILE"),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE",
+                "relative/token",
+                "TOKEN_FILE",
+            ),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE",
+                "/run/secrets/../secrets/token",
+                "TOKEN_FILE",
+            ),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE",
+                "/nonexistent/coding-certification-control-token",
+                "TOKEN_FILE",
+            ),
+            ("VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST", "", "IMAGE_DIGEST"),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST",
+                "latest",
+                "IMAGE_DIGEST",
+            ),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST",
+                "sha256:" + "A" * 64,
+                "IMAGE_DIGEST",
+            ),
+            ("VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256", "", "MANIFEST"),
+            (
+                "VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256",
+                "F" * 64,
+                "MANIFEST",
+            ),
+        ],
+    )
+    def test_rejects_invalid_certification_settings(
+        self, monkeypatch: pytest.MonkeyPatch, name: str, value: str, match: str
+    ) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv(name, value)
+        with pytest.raises(ValidatorConfigError, match=match) as raised:
+            parse_validator_config_from_env()
+        if len(value) > 4:
+            assert value not in str(raised.value)
+
+    def test_certification_token_must_differ_from_the_scorer_token(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_DITTOBENCH_CONTROL_TOKEN", _CERTIFICATION_TOKEN)
+        with pytest.raises(ValidatorConfigError, match="distinct"):
+            parse_validator_config_from_env()
+
+    def test_certification_token_is_read_from_its_file_not_the_environment(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._enable(monkeypatch)
+        config = parse_validator_config_from_env()
+        assert config.coding_certification_control_token == _CERTIFICATION_TOKEN
+        assert _CERTIFICATION_TOKEN not in repr(config)
+        # An environment bearer would be visible to docker inspect: refused
+        # outright, even beside a valid file, and never echoed.
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN", _CERTIFICATION_TOKEN
+        )
+        with pytest.raises(ValidatorConfigError, match="not accepted") as raised:
+            parse_validator_config_from_env()
+        assert _CERTIFICATION_TOKEN not in str(raised.value)
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            b"",
+            b"\n",
+            b"short\n",
+            b"coding certification token with spaces 000\n",
+            _CERTIFICATION_TOKEN.encode() + b"\n\n",
+            _CERTIFICATION_TOKEN.encode() + b"\r\n",
+            b"x" * 257,
+            b"x" * 300,
+            "coding-certification-token-\u00e9-000000001".encode(),
+        ],
+    )
+    def test_rejects_an_invalid_certification_token_file(
+        self, monkeypatch: pytest.MonkeyPatch, body: bytes
+    ) -> None:
+        self._enable(monkeypatch)
+        self.token_file.write_bytes(body)
+        with pytest.raises(ValidatorConfigError, match="TOKEN_FILE"):
+            parse_validator_config_from_env()
+
+    def test_rejects_a_token_file_that_is_a_link_or_a_directory(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        self._enable(monkeypatch)
+        link = tmp_path / "token-link"
+        link.symlink_to(self.token_file)
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE", str(link)
+        )
+        with pytest.raises(ValidatorConfigError, match="TOKEN_FILE"):
+            parse_validator_config_from_env()
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE", str(tmp_path)
+        )
+        with pytest.raises(ValidatorConfigError, match="TOKEN_FILE"):
+            parse_validator_config_from_env()
+
+    def test_disabled_canary_ignores_certification_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CERTIFICATION_SOCKET_UID", "0")
+        monkeypatch.setenv("VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE", "x")
+        monkeypatch.setenv("VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST", "x")
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_enabled is False
+        assert config.coding_certification_socket_uid == 0
+        assert config.coding_certification_control_token == ""
+        assert config.coding_certification_runtime_image_digest == ""
+
+    def test_parses_exact_targets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CANARY_TARGETS",
+            f"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:{'a1' * 32}:{'b1' * 32}, "
+            f"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:{'a2' * 32}:{'b2' * 32}",
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY",
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        )
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_targets == (
+            CodingCanaryTarget(
+                agent_id=UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+                artifact_sha256="a1" * 32,
+                screened_image_sha256="b1" * 32,
+            ),
+            CodingCanaryTarget(
+                agent_id=UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+                artifact_sha256="a2" * 32,
+                screened_image_sha256="b2" * 32,
+            ),
+        )
+        assert config.coding_canary_validator_hotkey == (
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+        )
+
+    def test_same_agent_may_list_distinct_image_identities(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Platform's allowlist keys on all four fields, so one agent may be
+        # listed for two exact screened images; each tuple is still exact.
+        self._enable(monkeypatch)
+        agent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CANARY_TARGETS",
+            f"{agent}:{'a1' * 32}:{'b1' * 32},{agent}:{'a1' * 32}:{'b2' * 32}",
+        )
+        config = parse_validator_config_from_env()
+        assert [
+            target.screened_image_sha256 for target in config.coding_canary_targets
+        ] == [
+            "b1" * 32,
+            "b2" * 32,
+        ]
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            # Agent-only entries no longer bind the artifact or image.
+            _AGENT_A,
+            f"{_AGENT_A}:{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:{_DIGEST}:{_DIGEST}",
+            f"not-a-uuid:{_DIGEST}:{_DIGEST}",
+            f"00000000-0000-0000-0000-000000000000:{_DIGEST}:{_DIGEST}",
+            f"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA:{_DIGEST}:{_DIGEST}",
+            f"aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa:{_DIGEST}:{_DIGEST}",
+            f"{_AGENT_A}::{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:",
+            f"{_AGENT_A}:{'A1' * 32}:{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:{'B1' * 32}",
+            f"{_AGENT_A}:{'a' * 63}:{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:{'b' * 65}",
+            f"{_AGENT_A}:sha256:{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:{'g' * 64}",
+            f"{_AGENT_A}:{_DIGEST}:{_DIGEST},",
+            f"{_AGENT_A}:{_DIGEST}:{_DIGEST},{_AGENT_A}:{_DIGEST}:{_DIGEST}",
+            ",".join(
+                f"aaaaaaaa-aaaa-4aaa-8aaa-{index:012x}:{_DIGEST}:{_DIGEST}"
+                for index in range(1, 18)
+            ),
+        ],
+    )
+    def test_rejects_malformed_targets(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_TARGETS", value)
+        with pytest.raises(ValidatorConfigError, match="CODING_CANARY_TARGETS"):
+            parse_validator_config_from_env()
+
+    def test_rejects_a_malformed_target_hotkey(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY", "0" * 48)
+        with pytest.raises(ValidatorConfigError, match="CANARY_VALIDATOR_HOTKEY"):
+            parse_validator_config_from_env()
+
+    def test_disabled_canary_ignores_target_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_TARGETS", "not-a-uuid")
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY", "bad")
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_targets == ()
+        assert config.coding_canary_validator_hotkey == ""
 
 
 class TestRequiredConfig:

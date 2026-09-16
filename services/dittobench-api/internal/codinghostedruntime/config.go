@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/codingharness"
 	"github.com/ditto-assistant/dittobench-api/internal/codinghostedinput"
 	"github.com/ditto-assistant/dittobench-api/internal/codinghostedworker"
+	"github.com/ditto-assistant/dittobench-api/internal/rootlessnetns"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 )
 
@@ -47,9 +49,12 @@ type configWire struct {
 	PythonExecutable        string                      `json:"python_executable"`
 	PostgresEnvironmentFile string                      `json:"postgres_environment_file"`
 	StateRoot               string                      `json:"state_root"`
+	LaunchJournalDir        string                      `json:"launch_journal_dir"`
 	DockerExecutable        string                      `json:"docker_executable"`
 	DockerSocket            string                      `json:"docker_socket"`
 	RouterListen            string                      `json:"router_listen"`
+	RouterNamespace         string                      `json:"router_namespace"`
+	RouterExpiresAtUnix     int64                       `json:"router_expires_at_unix"`
 	EgressNetwork           string                      `json:"egress_network"`
 	EgressProxy             string                      `json:"egress_proxy"`
 	ExecutorRepository      string                      `json:"executor_repository"`
@@ -59,14 +64,37 @@ type configWire struct {
 	AppArmorProfile         string                      `json:"apparmor_profile"`
 }
 
+const (
+	// routerNamespaceHost is the existing listener in the worker's own network
+	// namespace. An omitted router_namespace keeps this behavior.
+	routerNamespaceHost = "host"
+	// routerNamespaceRootless creates the listener on the rootless daemon's
+	// default bridge gateway inside RootlessKit's network namespace.
+	routerNamespaceRootless = "rootless-netns"
+)
+
 type runtimeConfig struct {
 	wire       configWire
+	launch     *launchSlot
 	control    *codinghostedworker.ControlClient
 	starts     *codingharness.HostedStartCommand
 	executors  *codingexecutor.PhaseFactory
 	docker     *sandbox.LocalDocker
 	publicBase string
+	// router is set only in rootless-netns mode.
+	router *rootlessRouter
 }
+
+type rootlessRouter struct {
+	address netip.AddrPort
+	helper  string
+	// expires is min(router_expires_at_unix, attempt deadline). Candidate
+	// access through the in-namespace listener ends then.
+	expires time.Time
+}
+
+// maxRouterAuthority matches the connectivity profile's longest window.
+const maxRouterAuthority = 24 * time.Hour
 
 func privateJSON(path string, maximum int64, value any) ([]byte, error) {
 	body, err := readPrivate(path, maximum)
@@ -104,7 +132,7 @@ func loadConfigChecked(path string, executable func(string) bool) (*runtimeConfi
 	}
 	clear(body)
 	if wire.Schema != "dittobench-coding-hosted-runtime-v2" || wire.ShadowOnly == nil || !*wire.ShadowOnly || wire.WeightEligible == nil || *wire.WeightEligible ||
-		wire.Expected.Validate() != nil || wire.Harness.Validate(time.Now()) != nil || !privateDirectory(wire.StateRoot) {
+		wire.Expected.Validate() != nil || wire.Harness.Validate(time.Now()) != nil || !privateDirectory(wire.StateRoot) || !separateJournal(wire.LaunchJournalDir, wire.StateRoot) {
 		return nil, ErrConfig
 	}
 	e, h := wire.Expected, wire.Harness
@@ -158,22 +186,43 @@ func loadConfigChecked(path string, executable func(string) bool) (*runtimeConfi
 	}
 	// The Docker CLI gets only an explicit local daemon. No contexts, TLS,
 	// credential helpers, proxy overrides or ambient fallback are inherited.
-	if !filepath.IsAbs(wire.DockerSocket) || filepath.Clean(wire.DockerSocket) != wire.DockerSocket {
+	if !privateSocket(wire.DockerSocket) {
 		return nil, ErrConfig
 	}
-	info, err := os.Lstat(wire.DockerSocket)
-	real, realErr := filepath.EvalSymlinks(wire.DockerSocket)
-	if err != nil || realErr != nil || real != wire.DockerSocket || info.Mode()&os.ModeSocket == 0 {
+	// One parse and one address policy for both namespaces: the exact canonical
+	// text of a private, non-loopback IPv4 address with an unprivileged port.
+	routerAddress, err := netip.ParseAddrPort(wire.RouterListen)
+	if err != nil || routerAddress.String() != wire.RouterListen || !rootlessnetns.ValidAddress(routerAddress) {
 		return nil, ErrConfig
 	}
-	owner, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || owner.Uid != uint32(os.Geteuid()) || info.Mode().Perm() != 0600 || !privateDirectory(filepath.Dir(wire.DockerSocket)) {
-		return nil, ErrConfig
-	}
-	ipText, port, err := net.SplitHostPort(wire.RouterListen)
-	ip := net.ParseIP(ipText)
-	portNumber, portErr := strconv.Atoi(port)
-	if err != nil || ip == nil || ip.To4() == nil || !ip.IsPrivate() || ip.IsLoopback() || portErr != nil || portNumber < 1024 || portNumber > 65535 || strconv.Itoa(portNumber) != port {
+	var router *rootlessRouter
+	switch wire.RouterNamespace {
+	case "", routerNamespaceHost:
+		// Host nftables bound this listener's candidate traffic; the field
+		// belongs only to the rootless-netns window below.
+		if wire.RouterExpiresAtUnix != 0 {
+			return nil, ErrConfig
+		}
+	case routerNamespaceRootless:
+		// The helper is bound to the installed worker's own bundle directory; no
+		// configured path can select another executable.
+		worker, workerErr := os.Executable()
+		helper := filepath.Join(filepath.Dir(worker), rootlessnetns.HelperExecutableName)
+		if workerErr != nil || !filepath.IsAbs(worker) || !executable(helper) || !executable(rootlessnetns.NsenterExecutable) {
+			return nil, ErrConfig
+		}
+		// router_expires_at_unix is the connectivity profile's expires_at_unix,
+		// which host nftables can no longer enforce for this traffic.
+		now := time.Now()
+		expires := time.Unix(wire.RouterExpiresAtUnix, 0)
+		if wire.RouterExpiresAtUnix <= 0 || !expires.After(now) || expires.After(now.Add(maxRouterAuthority)) {
+			return nil, ErrConfig
+		}
+		if h.Deadline.Before(expires) {
+			expires = h.Deadline
+		}
+		router = &rootlessRouter{address: routerAddress, helper: helper, expires: expires}
+	default:
 		return nil, ErrConfig
 	}
 	proxy, err := url.Parse(wire.EgressProxy)
@@ -185,7 +234,10 @@ func loadConfigChecked(path string, executable func(string) bool) (*runtimeConfi
 	if proxyIP == nil || !proxyIP.IsPrivate() || proxyIP.IsLoopback() || err != nil || proxyPort < 1 || proxyPort > 65535 || strconv.Itoa(proxyPort) != proxy.Port() || !identifier(wire.EgressNetwork) {
 		return nil, ErrConfig
 	}
-	executors, err := codingexecutor.NewPhaseFactory(codingexecutor.FactoryConfig{ImageRepository: wire.ExecutorRepository, CandidateUID: wire.CandidateUID, CandidateGID: wire.CandidateGID, RequireRootless: true, RequireIsolatedDaemon: true, SeccompProfile: wire.SeccompProfile, AppArmorProfile: wire.AppArmorProfile})
+	// Every container and network either launch path creates is journaled
+	// first; until Run opens the journal the hook refuses every launch.
+	launch := &launchSlot{}
+	executors, err := codingexecutor.NewPhaseFactory(codingexecutor.FactoryConfig{ImageRepository: wire.ExecutorRepository, CandidateUID: wire.CandidateUID, CandidateGID: wire.CandidateGID, RequireRootless: true, RequireIsolatedDaemon: true, SeccompProfile: wire.SeccompProfile, AppArmorProfile: wire.AppArmorProfile, LaunchIntent: launch.intent})
 	if err != nil {
 		return nil, ErrConfig
 	}
@@ -195,11 +247,37 @@ func loadConfigChecked(path string, executable func(string) bool) (*runtimeConfi
 		}
 	}
 	p := profile.ResourcePolicy
-	docker := &sandbox.LocalDocker{HarnessPort: "8080", MemoryLimit: strconv.FormatUint(p.MemoryLimitBytes, 10), TmpfsLimit: strconv.FormatUint(p.ScratchLimitBytes, 10),
-		CPULimit: fmt.Sprintf("%d.%03d", p.CPUQuotaMillis/1000, p.CPUQuotaMillis%1000), PidsLimit: int(p.PidsLimit), StartTimeout: 2 * time.Minute,
-		Harden: true, RequireRootless: true, RequireIsolatedDaemon: true, HostGatewayIP: ip.String(), EgressNetwork: wire.EgressNetwork, EgressProxy: wire.EgressProxy,
-		SeccompProfile: wire.SeccompProfile, AppArmorProfile: wire.AppArmorProfile}
-	return &runtimeConfig{wire: wire, control: control, starts: starts, executors: executors, docker: docker, publicBase: "http://host.docker.internal:" + port}, nil
+	docker := sandbox.NewHostedHarnessDocker(sandbox.HostedHarnessConfig{MemoryLimitBytes: p.MemoryLimitBytes, ScratchLimitBytes: p.ScratchLimitBytes,
+		CPUQuotaMillis: p.CPUQuotaMillis, PidsLimit: p.PidsLimit, HostGatewayIP: routerAddress.Addr().String(), EgressNetwork: wire.EgressNetwork, EgressProxy: wire.EgressProxy,
+		SeccompProfile: wire.SeccompProfile, AppArmorProfile: wire.AppArmorProfile, LaunchIntent: launch.intent})
+	return &runtimeConfig{wire: wire, launch: launch, control: control, starts: starts, executors: executors, docker: docker, publicBase: "http://host.docker.internal:" + strconv.Itoa(int(routerAddress.Port())), router: router}, nil
+}
+
+// privateSocket is an explicit owner-only Unix socket in a private directory.
+func privateSocket(path string) bool {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return false
+	}
+	info, err := os.Lstat(path)
+	real, realErr := filepath.EvalSymlinks(path)
+	if err != nil || realErr != nil || real != path || info.Mode()&os.ModeSocket == 0 {
+		return false
+	}
+	owner, ok := info.Sys().(*syscall.Stat_t)
+	return ok && owner.Uid == uint32(os.Geteuid()) && info.Mode().Perm() == 0600 && privateDirectory(filepath.Dir(path))
+}
+
+// separateJournal is a private launch journal directory that persists across
+// invocations: never the per-invocation state root, inside it, or above it.
+func separateJournal(journal, state string) bool {
+	if !privateDirectory(journal) {
+		return false
+	}
+	inside := func(child, parent string) bool {
+		relative, err := filepath.Rel(parent, child)
+		return err == nil && relative != ".." && !strings.HasPrefix(relative, "../")
+	}
+	return !inside(journal, state) && !inside(state, journal)
 }
 
 func identifier(s string) bool {

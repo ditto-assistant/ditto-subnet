@@ -33,6 +33,8 @@ _SOURCE_SHA = re.compile(r"^[0-9a-f]{40}$")
 _SYNTHETIC_BYTES = 4096
 _MAX_DOWNLOAD_BYTES = _SYNTHETIC_BYTES + 1
 _MAX_RECEIPT_BYTES = 1 << 20
+# Hosted evidence publication requires a receipt younger than this at each step.
+PROBE_RECEIPT_MAX_AGE_SECONDS = 86400
 _PROBE_PREFIX = "coding-capability-probe/v1"
 
 

@@ -67,7 +67,10 @@ for protected reads and systemd/nft inspection, not for a rootful Docker client.
 
 It checks rootless/containerd/cgroup-v2/resource-support metadata, exact imported
 repository/config/manifest/profile identities, and an empty container list before
-and after inspection. It captures the hash of the dedicated nft table snapshot
+and after inspection. It records the semantic digest of the dedicated nft table
+(`nft_ruleset_semantic_sha256`, report schema
+`dittobench-coding-native-host-preflight-v4`; see
+[the enforcement evidence contract](coding-native-enforcement-evidence-v1.md#semantic-nft-ruleset-digest-preflight-v4))
 and rechecks daemon identity and host boot. Commands have bounded output/time;
 they cannot install packages, load images, start/stop services, create containers,
 change nft rules or repair state. Python bytecode writes are disabled.
@@ -75,7 +78,7 @@ change nft rules or repair state. Python bytecode writes are disabled.
 `host_preflight_passed=true` means only the listed checks passed at observation
 time. This does not lock the host, exclude changes between observations, prove
 hardware integrity or protect against a malicious host administrator. A table
-snapshot hash and an active guard service are **not packet-enforcement proof**.
+ruleset digest and an active guard service are **not packet-enforcement proof**.
 Resource-support metadata is **not measured limit enforcement**.
 
 The report explicitly leaves these host gates pending:

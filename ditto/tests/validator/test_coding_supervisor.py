@@ -611,3 +611,50 @@ def test_supervisor_remains_unmounted_and_unconstructed() -> None:
     ).read_text()
     assert "CodingSupervisorRuntime" not in worker
     assert "internal/codingsupervisor" not in scorer_main
+
+
+@pytest.mark.parametrize(
+    ("url", "accepted"),
+    [
+        ("http://sandbox-docker:8000", True),
+        ("http://sandbox-docker:8000/", True),
+        ("http://127.0.0.1:18081", True),
+        ("http://localhost:18081", True),
+        ("https://scorer.invalid", True),
+        ("http://sandbox-docker", False),
+        ("http://sandbox-docker:8001", False),
+        ("http://SANDBOX-DOCKER:8000", False),
+        ("http://sandbox-docker.invalid:8000", False),
+        ("http://10.0.0.5:8000", False),
+        ("http://sandbox-docker:8000/v1", False),
+        ("http://operator:secret@sandbox-docker:8000", False),
+        ("http://sandbox-docker:8000?next=1", False),
+        ("http://sandbox-docker:8000#fragment", False),
+        ("ws://sandbox-docker:8000", False),
+        ("http://127.0.0.1:not-a-port", False),
+    ],
+)
+async def test_local_supervisor_uses_the_shared_scorer_origin_rule(
+    url: str, accepted: bool
+) -> None:
+    # The certification canary no longer uses a scorer origin at all; it reaches
+    # the host certification service only over its verified Unix socket.
+    from ditto.validator.coding_executor_transport import scorer_control_origin
+
+    config: Any = SimpleNamespace(
+        dittobench_api_url=url,
+        dittobench_control_token="coding-supervisor-control-token-000000000000",
+    )
+    async with httpx.AsyncClient(trust_env=False) as client:
+        try:
+            CodingSupervisorRuntime(
+                config,
+                client,
+                object(),  # type: ignore[arg-type]
+            )
+        except ValueError:
+            outcome = False
+        else:
+            outcome = True
+    assert outcome is accepted
+    assert scorer_control_origin(url) is accepted

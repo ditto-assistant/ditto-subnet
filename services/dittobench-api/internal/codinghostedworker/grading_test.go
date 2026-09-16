@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/codinggrader"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
@@ -64,4 +66,61 @@ func (e *scriptedGrader) Test(ctx context.Context, workspace, protected string, 
 		result.ReturnCode = 0
 	}
 	return result, nil
+}
+
+func TestEnforcementProbeManifestUsesTheHostedConversion(t *testing.T) {
+	profile := GradingProfile{
+		Schema: "dittobench-coding-hosted-grading-profile-v2", ImageDigest: "sha256:" + strings.Repeat("a", 64),
+		GraderContractSHA256: codinggrader.HostedGraderContractSHA256(), GraderBundleSHA256: strings.Repeat("b", 64),
+		ResourcePolicy: codinggrader.ResourcePolicy{
+			CandidateLimits: codingrunner.DefaultLimits(), ProtectedLimits: codingrunner.DefaultLimits(),
+			MaxCombinedDiskBytes: 4 << 30, MemoryLimitBytes: 1 << 30, ScratchLimitBytes: 1 << 30, PidsLimit: 256, CPUQuotaMillis: 1000,
+		},
+		Build: codinggrader.BuildSpec{Required: true, Command: codingrunner.CommandSpec{ID: "build", Argv: []string{"dittobench-build"}, Timeout: time.Minute}},
+		TestGroups: []codinggrader.TestGroupSpec{
+			{Group: "hidden", Command: codingrunner.CommandSpec{ID: "hidden", Argv: []string{"dittobench-test-driver", "hidden"}, Timeout: time.Minute}, ExpectedTotal: 2},
+			{Group: "visible", Command: codingrunner.CommandSpec{ID: "visible", Argv: []string{"dittobench-test-driver", "visible"}, Timeout: time.Minute}, ExpectedTotal: 2},
+		},
+		ExecutionTimeout: 10 * time.Minute,
+	}
+	image := EnforcementProbeImage{
+		ImageDigest: "sha256:" + strings.Repeat("d", 64),
+		BuildArgv:   []string{"cargo", "build", "--offline"},
+		TestArgv: map[string][]string{
+			"hidden":  {"dittobench-test-driver", "--group", "hidden", "--authority", "rust/hidden.json", "--authority-sha256", strings.Repeat("a", 64)},
+			"visible": {"dittobench-test-driver", "--group", "visible", "--authority", "rust/visible.json", "--authority-sha256", strings.Repeat("b", 64)},
+		},
+	}
+	manifest, err := profile.EnforcementProbeManifest(image, time.Now().Add(30*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.GraderImageDigest != image.ImageDigest || manifest.ResourcePolicy != profile.ResourcePolicy || manifest.Validate(time.Now()) != nil {
+		t.Fatalf("manifest=%#v", manifest)
+	}
+	// Each language's own commands are used; limits, timeouts and IDs stay.
+	if !slices.Equal(manifest.Build.Command.Argv, image.BuildArgv) || manifest.Build.Command.Timeout != time.Minute ||
+		!slices.Equal(manifest.TestGroups[0].Command.Argv, image.TestArgv["hidden"]) ||
+		manifest.TestGroups[1].Command.ID != "visible" || manifest.TestGroups[1].ExpectedTotal != 2 {
+		t.Fatalf("per-language commands were not applied: %#v", manifest)
+	}
+	// The approved profile itself is never modified through shared slices.
+	if profile.TestGroups[0].Command.Argv[1] != "hidden" || profile.Build.Command.Argv[0] != "dittobench-build" {
+		t.Fatalf("approved profile was mutated: %#v", profile)
+	}
+	for name, broken := range map[string]EnforcementProbeImage{
+		"missing group":    {ImageDigest: image.ImageDigest, BuildArgv: image.BuildArgv, TestArgv: map[string][]string{"hidden": image.TestArgv["hidden"]}},
+		"renamed group":    {ImageDigest: image.ImageDigest, BuildArgv: image.BuildArgv, TestArgv: map[string][]string{"hidden": image.TestArgv["hidden"], "other": image.TestArgv["visible"]}},
+		"no build":         {ImageDigest: image.ImageDigest, TestArgv: image.TestArgv},
+		"untrusted driver": {ImageDigest: image.ImageDigest, BuildArgv: image.BuildArgv, TestArgv: map[string][]string{"hidden": {"cargo", "test"}, "visible": image.TestArgv["visible"]}},
+		"tag image":        {ImageDigest: "latest", BuildArgv: image.BuildArgv, TestArgv: image.TestArgv},
+	} {
+		if _, err := profile.EnforcementProbeManifest(broken, time.Now().Add(30*time.Minute)); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	profile.GraderContractSHA256 = strings.Repeat("e", 64)
+	if _, err := profile.EnforcementProbeManifest(image, time.Now().Add(30*time.Minute)); err == nil {
+		t.Fatal("a profile with another grader contract must be refused")
+	}
 }

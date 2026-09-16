@@ -1,0 +1,64 @@
+---
+# Pure input validation for the default-off certification canary. It runs before
+# the role mutates the host and is exercised on localhost by
+# infra/ansible/tests/validator-stack-coding-canary.yml.
+#
+# The validator worker reaches certification only through the host
+# certification service's fixed Unix socket. The Compose scorer's certification
+# route and its scorer switch are retired, so nothing here configures a scorer
+# coding daemon, runtime image or egress profile for the canary.
+- name: Validate the default-off certification canary profile
+  vars:
+    canary_validator: "{{ validator_stack_coding_canary_enabled | bool }}"
+    canary_targets: "{{ validator_stack_coding_canary_targets }}"
+    canary_token_path: "{{ validator_stack_coding_certification_control_token_path | string }}"
+  ansible.builtin.assert:
+    that:
+      # The validator worker reaches certification only through the host
+      # service's control socket. The switch is admitted only when the socket
+      # route and the bearer file path are rendered: without them the validator
+      # exits at startup and takes ordinary scoring down with it. The template
+      # renders the socket's parent directory and the bearer host path only
+      # from these validated values.
+      - not canary_validator or (validator_stack_coding_certification_socket_uid | string) is match('^[1-9][0-9]{0,9}\Z')
+      - not canary_validator or (validator_stack_coding_certification_socket_uid | int) <= 2147483646
+      - not canary_validator or (validator_stack_coding_certification_socket_gid | string) is match('^[1-9][0-9]{0,9}\Z')
+      - not canary_validator or (validator_stack_coding_certification_socket_gid | int) <= 2147483646
+      # The bearer is a mounted file: an absolute, normalized host path that is
+      # not the null device and not inside the socket directory the validator
+      # mounts. Its contents are never read here.
+      - not canary_validator or canary_token_path is match('^/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*\Z')
+      - not canary_validator or canary_token_path is not search('(^|/)\.\.?(/|\Z)')
+      - not canary_validator or canary_token_path | length <= 255
+      - not canary_validator or canary_token_path != '/dev/null'
+      - not canary_validator or not (canary_token_path == '/run/ditto-coding-certification' or canary_token_path.startswith('/run/ditto-coding-certification/'))
+      # The service's pins: the readiness answer must equal both.
+      - not canary_validator or (validator_stack_coding_certification_runtime_image_digest | string) is match('^sha256:[0-9a-f]{64}\Z')
+      - not canary_validator or (validator_stack_coding_certification_pack_manifest_sha256 | string) is match('^[0-9a-f]{64}\Z')
+      - not canary_validator or not (validator_stack_coding_executor_connectivity_canary_enabled | bool)
+      - not canary_validator or not (validator_stack_coding_executor_connectivity_canary_run_enabled | bool)
+      - not canary_validator or (validator_stack_coding_canary_poll_seconds | float >= 1 and validator_stack_coding_canary_poll_seconds | float <= 300)
+      # Exact targets: 1-16 unique (agent_id, artifact_sha256,
+      # screened_image_sha256) mappings bound to this validator's own hotkey,
+      # the four fields of one Platform allowlist tuple. The empty defaults
+      # refuse every lease. Checks run in order, so shape is proven before any
+      # field is read.
+      - not canary_validator or (canary_targets is sequence and canary_targets is not string and canary_targets is not mapping)
+      - not canary_validator or (canary_targets | length >= 1 and canary_targets | length <= 16)
+      - not canary_validator or (canary_targets | reject('mapping') | list | length) == 0
+      - not canary_validator or (canary_targets | map('dict2items') | map('map', attribute='key') | map('sort') | map('join', ',') | unique | list) == ['agent_id,artifact_sha256,screened_image_sha256']
+      - not canary_validator or (canary_targets | map(attribute='agent_id') | select('string') | select('match', '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z') | list | length) == (canary_targets | length)
+      - not canary_validator or '00000000-0000-0000-0000-000000000000' not in (canary_targets | map(attribute='agent_id') | list)
+      - not canary_validator or (canary_targets | map(attribute='artifact_sha256') | select('string') | select('match', '^[0-9a-f]{64}\Z') | list | length) == (canary_targets | length)
+      - not canary_validator or (canary_targets | map(attribute='screened_image_sha256') | select('string') | select('match', '^[0-9a-f]{64}\Z') | list | length) == (canary_targets | length)
+      - not canary_validator or (canary_targets | map(attribute='agent_id') | zip(canary_targets | map(attribute='artifact_sha256'), canary_targets | map(attribute='screened_image_sha256')) | map('join', ':') | unique | list | length) == (canary_targets | length)
+      - not canary_validator or validator_stack_coding_canary_validator_hotkey is match('^5[1-9A-HJ-NP-Za-km-z]{47}\Z')
+      - not canary_validator or validator_stack_coding_canary_validator_hotkey == validator_stack_hotkey
+    fail_msg: >-
+      The certification canary is exclusive with the executor connectivity
+      canary, polls within [1, 300] seconds, and needs 1-16 exact targets, each
+      an agent UUID with its artifact and screened-image SHA-256 digests, and a
+      target hotkey equal to this validator's hotkey. It also needs the rendered
+      certification socket route: non-root numeric socket owner uid and group
+      gid, an absolute normalized bearer file path outside the socket directory,
+      and the service's sha256 runtime image digest and pack manifest digest.

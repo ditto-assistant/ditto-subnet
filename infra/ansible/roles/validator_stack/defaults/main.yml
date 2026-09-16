@@ -52,6 +52,59 @@ validator_stack_coding_executor_ca_path: /var/lib/ditto-validator/coding-executo
 validator_stack_coding_executor_client_cert_path: /var/lib/ditto-validator/coding-executor-mtls/validator-client.pem
 validator_stack_coding_executor_client_key_path: /var/lib/ditto-validator/coding-executor-mtls/validator-client-key.pem
 
+# Hosted-v2 validator control trust. Default-off and empty: only
+# `python -m ditto.validator.coding_hosted_control` reads these, never the
+# worker, and it refuses to run unless both are set. The hotkey is the PUBLIC
+# SS58 address of the dedicated Platform control signer, reviewed in Git and
+# distributed independently of Platform; it can never equal
+# validator_stack_hotkey. Validators trust only this configured address.
+validator_stack_coding_hosted_control_enabled: false
+validator_stack_coding_hosted_platform_hotkey: ""
+
+# Contract-v1 public certification canary, off by default.
+#
+# The validator switch issues and claims certification leases against the host
+# certification service (infra/docs/coding-certification-service.md), reached
+# only over its fixed Unix socket. It requires exact targets, and the worker
+# still refuses before issue unless that service's readiness probe reports the
+# pack, rootless topology, listener namespace, control socket, executor daemon
+# and pinned runtime image as ready. The Compose scorer's certification route
+# and its scorer switch are retired.
+validator_stack_coding_canary_enabled: false
+validator_stack_coding_canary_poll_seconds: 10
+# Exact certification canary targets. The empty defaults refuse every lease.
+# Each target is one mapping with exactly agent_id (canonical UUID),
+# artifact_sha256 and screened_image_sha256 (lowercase 64-hex), the same fields
+# as one Platform certification allowlist tuple; the fourth field is the
+# validator hotkey below. A lease whose artifact or screened-image digest
+# differs from a listed target is refused before any execution. The hotkey
+# must equal validator_stack_hotkey, so the targets cannot be reused on another
+# validator.
+validator_stack_coding_canary_targets: []
+validator_stack_coding_canary_validator_hotkey: ""
+# The host certification service's socket route, rendered only while the
+# validator switch is on (infra/docs/coding-certification-service.md). The
+# validator container bind-mounts the socket's parent directory,
+# /run/ditto-coding-certification, read-only, never the socket file, so a
+# service restart that recreates the socket keeps working; the service unit
+# preserves that directory across restarts. Off, the mount source is /dev/null.
+#
+# socket_uid and socket_gid pin the service user and the client group that
+# must own the directory and socket (the coding_certification_service role's
+# coding_certification_service_uid and coding_certification_service_client_gid).
+# runtime_image_digest and pack_manifest_sha256 must equal the service's pins.
+validator_stack_coding_certification_socket_uid: 0
+validator_stack_coding_certification_socket_gid: 0
+# Host path of the certification bearer file, for example the file the service
+# unit loads as its credential. Compose mounts it read-only as a secret at
+# /run/secrets/coding-certification-control-token and the validator reads it
+# through VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE. The bearer is
+# never read, rendered or passed as an environment value by this role, because
+# container environment values are visible to docker inspect.
+validator_stack_coding_certification_control_token_path: ""
+validator_stack_coding_certification_runtime_image_digest: ""
+validator_stack_coding_certification_pack_manifest_sha256: ""
+
 validator_stack_cosign_version: v3.0.6
 validator_stack_cosign_linux_amd64_sha256: c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
 validator_stack_uv_bin: /usr/local/bin/uv

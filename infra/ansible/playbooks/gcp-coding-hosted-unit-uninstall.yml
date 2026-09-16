@@ -1,0 +1,21 @@
+---
+# Uninstall only the native Coding worker unit file
+# (/etc/systemd/system/ditto-coding-hosted-worker.service, installed by
+# coding_hosted_connectivity) and the custody unit template
+# (/etc/systemd/system/ditto-coding-custody@.service, installed by
+# coding_hosted_custody_service), then daemon-reload. It needs no secret and
+# stops nothing: stop the worker and every custody instance first. It never
+# touches credentials, PostgreSQL environment copies, worker credential files,
+# data directories, accounts or Docker. See infra/docs/coding-hosted-unit-uninstall-v2.md.
+#
+#   GCP_OSLOGIN_USER=… ansible-playbook -i infra/ansible/inventory/gcp.yml \
+#     infra/ansible/playbooks/gcp-coding-hosted-unit-uninstall.yml \
+#     --limit ditto-coding-hosted-v2 -e '{"coding_hosted_unit_uninstall_enabled": true, …}'
+- name: Uninstall the native Coding worker unit and custody template without stopping a service
+  hosts: role_coding_hosted
+  become: true
+  # Identity comes from the role's registered probe, which extra vars cannot
+  # preset; gathered facts would be replaced by a -e ansible_facts value.
+  gather_facts: false
+  roles:
+    - coding_hosted_unit_uninstall

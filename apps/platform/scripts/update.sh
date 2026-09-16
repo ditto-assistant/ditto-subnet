@@ -2,8 +2,24 @@
 #
 # Scripted update for the Ditto Platform API:
 #   fetch -> reset -> preflight -> uv sync -> build dashboard -> set deploy
-#   config -> ensure Pylon -> migrate -> pm2 start/reload/recreate -> verify
-#   the app is serving the commit that was checked out.
+#   config -> [dedicated identity: install and seal the ditto-api release,
+#   with the hosted signer metadata check as ditto-api] -> ensure Pylon ->
+#   migrate -> pm2 start/reload/recreate -> [dedicated identity: activate the
+#   release in ditto-platform-api.service] -> verify the app is serving the
+#   commit that was checked out.
+#
+# PROCESS SUPERVISION (.env, rendered by the platform_app role):
+#   DITTO_PLATFORM_API_SUPERVISOR=pm2 (default) runs ditto-api under this
+#     user's pm2 from this checkout, as it always has.
+#   DITTO_PLATFORM_API_SUPERVISOR=systemd runs ditto-api as the dedicated
+#     `ditto-api` user from a sealed root-owned release. This script reaches it
+#     only through `sudo -n /usr/local/sbin/ditto-platform-api-release
+#     install|activate|stop|logs`. It cannot read the control-signer seed and
+#     never tries to. The relays and the image-cleanup job stay on pm2.
+#   DITTO_PLATFORM_PYLON_UNIT empty (default) runs `docker compose` as this
+#     user; ditto-platform-pylon.service restarts that root-owned unit instead,
+#     so this user needs no docker group.
+#   See infra/docs/coding-hosted-control-signer-v2.md.
 # NOT zero-downtime: ditto-api is a single fork-mode pm2 process, so the reload
 # below is a stop/start with ~6s of refused connections (measured), not a
 # rolling handover. See scripts/ecosystem.config.js.
@@ -76,11 +92,20 @@ deploy_stage="startup"
 deploy_target=""          # commit this run is trying to put into service
 deploy_running_commit=""  # commit the process that is serving RIGHT NOW reports
 deploy_rollback_source="" # where deploy_running_commit came from, for the log
-deploy_pm2_touched=0      # 1 once pm2 has been asked to start/reload/delete
+deploy_pm2_touched=0      # 1 once the serving ditto-api (pm2 app or unit) may
+                          # have been stopped, started or replaced
 deploy_synced=0           # 1 once uv sync has rewritten .venv
 deploy_state_file="logs/last-deploy.json"
 deployed_source_file="logs/deployed-source.sha"
 health_snapshot=""
+# Fixed literals, never taken from the environment: sudoers allows exactly
+# these commands, and nothing here may point them elsewhere.
+readonly api_release_command=/usr/local/sbin/ditto-platform-api-release
+readonly api_unit=ditto-platform-api.service
+readonly pylon_unit=ditto-platform-pylon.service
+# Only decides whether a pm2 deploy first stops a unit left by an earlier
+# dedicated-identity deploy. Overridable for the test harness alone.
+api_unit_file="${DITTO_PLATFORM_API_UNIT_FILE:-/etc/systemd/system/$api_unit}"
 
 # Extract one top-level string field from a JSON document on stdin. Empty when
 # the document is absent, unparseable, or lacks the field -- callers treat that
@@ -424,13 +449,105 @@ set -a
 . ./.env.deploy
 set +a
 
+api_supervisor="${DITTO_PLATFORM_API_SUPERVISOR:-pm2}"
+case "$api_supervisor" in
+  pm2|systemd) ;;
+  *)
+    echo "ERROR: DITTO_PLATFORM_API_SUPERVISOR must be pm2 or systemd" >&2
+    exit 1
+    ;;
+esac
+
+deploy_stage="signer-preflight"
+# Hosted-v2 control signer (default off; infra/docs/coding-hosted-control-signer-v2.md).
+# Only ditto-api may read the online control-signer seed, which belongs to the
+# dedicated `ditto-api` user. Under pm2, ditto-api would run as this user and
+# could not open it, so an enabled signer requires the dedicated identity. Its
+# metadata check then runs as ditto-api inside the release install below --
+# still before Pylon, migrations or the serving process are touched. This user
+# never stats or opens the seed.
+case "${DITTO_CODING_HOSTED_CONTROL_ENABLED-false}" in
+  false|0) ;;
+  *)
+    if [ "$api_supervisor" != systemd ]; then
+      echo "ERROR: refusing to deploy $deploy_target: DITTO_CODING_HOSTED_CONTROL_ENABLED does not" >&2
+      echo "       disable the hosted-v2 control signer, but ditto-api would run under pm2 as" >&2
+      echo "       $(id -un), which must never be able to read the seed. The serving process was not" >&2
+      echo "       touched; the checkout is restored below. Enable" >&2
+      echo "       platform_api_service_identity_enabled with the signer, or set" >&2
+      echo "       platform_coding_hosted_control_enabled: false and converge, then redeploy." >&2
+      exit 1
+    fi
+    # Docker access is root-equivalent, and a switch in .env proves nothing
+    # about running processes: this pm2 daemon may still hold the docker group.
+    # This early check gives a clear stop; the root installer repeats it
+    # authoritatively, with its own root-owned probe, before install and activate.
+    docker_probe="${DITTO_DEPLOY_DOCKER_PROBE:-../../infra/ansible/roles/platform_app/files/deploy-docker-access.py}"
+    if ! docker_access="$(python3 -I "$docker_probe" --user="$(id -un)" --group=docker \
+      --proc="${DITTO_DEPLOY_PROC_ROOT:-/proc}" --socket=/run/docker.sock)"; then
+      echo "ERROR: refusing to deploy $deploy_target: the hosted-v2 control signer is enabled, but" >&2
+      echo "       $(id -un) can still reach the Docker daemon, which would expose the seed:" >&2
+      printf '       %s\n' "$docker_access" >&2
+      echo "       Enable platform_pylon_root_unit_enabled and converge, restart" >&2
+      echo "       pm2-$(id -un).service, then redeploy. The serving process was not touched." >&2
+      exit 1
+    fi
+    ;;
+esac
+
+# Only the exact keys .env.deploy owns are forwarded, on stdin: never as
+# arguments, and never a path the root installer would open for this user.
+api_release_request() {
+  local key
+  printf 'revision=%s\n' "$deploy_target"
+  for key in "${deploy_owned_keys[@]}"; do
+    sed -n "/^${key}=/p" "$deploy_env_file" | tail -n 1
+  done
+}
+
+if [ "$api_supervisor" = systemd ]; then
+  deploy_stage="api-release"
+  # Fetches the revision from GitHub as root, refuses it unless it is on main,
+  # builds its environment as ditto-api-build, seals it root-owned and runs the
+  # hosted signer metadata preflight from it as ditto-api. Nothing that serves
+  # traffic changes here, so a failure rolls the checkout back as usual.
+  echo "==> installing the sealed ditto-api release for $deploy_target"
+  if ! api_release_request | sudo -n "$api_release_command" install; then
+    echo "ERROR: refusing to deploy $deploy_target: the sealed ditto-api release could not be" >&2
+    echo "       installed, or its hosted signer metadata preflight failed as ditto-api." >&2
+    echo "       $api_unit was not touched; the checkout is restored below." >&2
+    exit 1
+  fi
+fi
+
 deploy_stage="infra"
 # Ensure the Docker infra this host needs is up (Pylon on a deployed host; the
 # full local stack in dev). See DITTO_COMPOSE_SERVICES in scripts/start.sh.
-compose_services="${DITTO_COMPOSE_SERVICES:-postgres minio pylon}"
-echo "==> ensuring infra ($compose_services)"
-# shellcheck disable=SC2086
-docker compose up -d --wait $compose_services
+case "${DITTO_PLATFORM_PYLON_UNIT:-}" in
+  "")
+    compose_services="${DITTO_COMPOSE_SERVICES:-postgres minio pylon}"
+    echo "==> ensuring infra ($compose_services)"
+    # shellcheck disable=SC2086
+    docker compose up -d --wait $compose_services
+    ;;
+  "$pylon_unit")
+    # The root-owned unit runs the same `up -d --wait pylon` from compose inputs
+    # this user cannot edit; this user has no docker group membership.
+    echo "==> ensuring Pylon through $pylon_unit"
+    if ! sudo -n /usr/bin/systemctl restart "$pylon_unit"; then
+      echo "ERROR: $pylon_unit failed; its last journal lines:" >&2
+      # The one journal read /etc/sudoers.d/ditto-platform-pylon allows.
+      sudo -n /usr/bin/journalctl --no-pager --quiet --output=short-iso --lines=80 \
+        --unit=ditto-platform-pylon.service >&2 || \
+        echo "  (could not read the $pylon_unit journal)" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "ERROR: DITTO_PLATFORM_PYLON_UNIT must be empty or $pylon_unit" >&2
+    exit 1
+    ;;
+esac
 
 deploy_stage="migrate"
 # `head`, singular, on purpose -- see the preflight assertion above for why the
@@ -440,6 +557,92 @@ deploy_stage="migrate"
 # EXIT trap rolls the checkout back to whatever is still serving.
 echo "==> applying migrations (head $migration_head)"
 uv run alembic upgrade head
+
+# --------------------------------------------------------------------------
+# Live state and failure reporting for service apps. Defined before anything
+# touches the serving process, so an activation failure reports the same way a
+# failed verification does.
+
+# Print one app's live state as "status<TAB>pid<TAB>restarts<TAB>exec_path".
+pm2_app_state() {
+  pm2 jlist 2>/dev/null | node -e '
+    const name = process.argv[1];
+    let raw = "";
+    process.stdin.on("data", (c) => (raw += c)).on("end", () => {
+      const at = raw.indexOf("[");
+      let list = [];
+      try { list = at === -1 ? [] : JSON.parse(raw.slice(at)); } catch { list = []; }
+      const app = (Array.isArray(list) ? list : []).find((a) => a && a.name === name);
+      if (!app) { console.log("missing\t0\t0\t"); return; }
+      const env = app.pm2_env || {};
+      console.log([env.status || "unknown", app.pid || env.pm_pid || 0,
+                   env.restart_time || 0, env.pm_exec_path || ""].join("\t"));
+    });
+  ' "$1"
+}
+
+# The same four fields for ditto-api under its unit, where pm2 never sees it.
+# `systemctl show` needs no privilege. `failed` (the unit's start limit was hit)
+# is terminal, like pm2's `errored`; a crash loop shows as `launching`.
+api_unit_state() {
+  local key value active="" pid=0 restarts=0 status
+  while IFS='=' read -r key value; do
+    case "$key" in
+      ActiveState) active="$value" ;;
+      MainPID) pid="$value" ;;
+      NRestarts) restarts="$value" ;;
+    esac
+  done < <(systemctl show --property=ActiveState --property=MainPID \
+    --property=NRestarts "$api_unit" 2>/dev/null || true)
+  case "$active" in
+    active) status=online ;;
+    failed) status=errored ;;
+    activating|reloading) status=launching ;;
+    *) status="${active:-unknown}" ;;
+  esac
+  printf '%s\t%s\t%s\t%s\n' "$status" "${pid:-0}" "${restarts:-0}" "$api_unit"
+}
+
+service_app_state() {
+  if [ "$1" = ditto-api ] && [ "$api_supervisor" = systemd ]; then
+    api_unit_state
+  else
+    pm2_app_state "$1"
+  fi
+}
+
+# Dump everything an operator needs to diagnose a failed deploy, then exit 1.
+fail_deploy() {
+  local app="$1" why="$2" state err_log want running_script
+  state="$(service_app_state "$app")"
+  running_script="$(printf '%s' "$state" | cut -f4)"
+  echo "" >&2
+  echo "ERROR: deploy failed -- $app $why" >&2
+  if [ "$app" = ditto-api ] && [ "$api_supervisor" = systemd ]; then
+    echo "  $api_unit status/pid/restarts: $state" >&2
+    echo "  --- last $api_unit journal lines (ditto-api never logs the seed) ---" >&2
+    sudo -n "$api_release_command" logs >&2 || \
+      echo "  (could not read the $api_unit journal)" >&2
+    exit 1
+  fi
+  echo "  pm2 status/pid/restarts/script: $state" >&2
+  err_log="$(printf '%s\n' "$pm2_plan" | awk -F'\t' -v n="$app" '$2 == n { print $4; exit }')"
+  want="$(printf '%s\n' "$pm2_plan" | awk -F'\t' -v n="$app" '$2 == n { print $5; exit }')"
+  if [ -n "$err_log" ] && [ -s "$err_log" ]; then
+    echo "  --- tail -n 50 $err_log ---" >&2
+    tail -n 50 "$err_log" >&2
+  else
+    echo "  (no error log at ${err_log:-<unset>}; try: pm2 logs $app --lines 50)" >&2
+  fi
+  # Only raise stale-definition suspicion when the paths actually disagree.
+  # A hint that points at the wrong cause is worse than no hint.
+  if [ -n "$running_script" ] && [ -n "$want" ] && [ "$running_script" != "$want" ]; then
+    echo "" >&2
+    echo "  pm2 is running a STALE script path (expected $want)." >&2
+    echo "  Recover with: pm2 delete $app && ./scripts/update.sh" >&2
+  fi
+  exit 1
+}
 
 # --------------------------------------------------------------------------
 # Start / reload / recreate.
@@ -478,12 +681,21 @@ fresh_apps=""
 reload_apps=""
 service_apps=""
 oneshot_apps=""
+retire_pm2_api=0
 # Column 5 (the configured script path) is unused here; fail_deploy reads it
 # back out of "$pm2_plan" only when it has to explain a failure.
 while IFS=$'\t' read -r action name role err_log _ reason; do
   [ -n "$name" ] || continue
   if [[ "$name" == ditto-api-relay-* ]]; then
     echo "    $name: managed by the rolling relay release; ordinary deploy skips it"
+    continue
+  fi
+  if [ "$name" = ditto-api ] && [ "$api_supervisor" = systemd ]; then
+    # Verified below like any service, but started by $api_unit, never pm2.
+    # A pm2 copy left from before the switch still holds the API port.
+    echo "    $name: managed by $api_unit as the dedicated ditto-api user"
+    service_apps="$service_apps $name"
+    [ "$action" = start ] || retire_pm2_api=1
     continue
   fi
   case "$role" in
@@ -516,6 +728,14 @@ done <<<"$pm2_plan"
 join_csv() { echo "$*" | tr -s ' ' | sed -e 's/^ //' -e 's/ /,/g'; }
 
 deploy_stage="pm2-apply"
+# Returning to pm2 after the dedicated identity: stop and disable the unit
+# first, so the pm2 copy can bind the API port and a reboot does not start both.
+if [ "$api_supervisor" = pm2 ] && [ -e "$api_unit_file" ] && \
+  [ "$(systemctl is-enabled "$api_unit" 2>/dev/null || true)$(systemctl is-active "$api_unit" 2>/dev/null || true)" != disabledinactive ]; then
+  echo "==> stopping $api_unit; ditto-api returns to pm2 as $(id -un)"
+  deploy_pm2_touched=1
+  sudo -n "$api_release_command" stop
+fi
 if [ -n "${fresh_apps// /}" ]; then
   echo "==> starting:$fresh_apps"
   deploy_pm2_touched=1
@@ -525,6 +745,27 @@ if [ -n "${reload_apps// /}" ]; then
   echo "==> reloading:$reload_apps"
   deploy_pm2_touched=1
   pm2 reload scripts/ecosystem.config.js --only "$(join_csv "$reload_apps")" --update-env
+fi
+
+if [ "$api_supervisor" = systemd ]; then
+  deploy_stage="api-activate"
+  if [ "$retire_pm2_api" -eq 1 ]; then
+    echo "==> removing the pm2 copy of ditto-api; $api_unit takes over"
+    deploy_pm2_touched=1
+    pm2 delete ditto-api >/dev/null 2>&1 || true
+    # Persist the removal before activating. If activation fails, pm2's dump
+    # must not resurrect this copy after a reboot next to the enabled unit on
+    # the same port: exactly one supervisor owns ditto-api from here on.
+    pm2 save
+  fi
+  # Re-verifies the sealed manifest, points `current` at this revision, clears
+  # a start-limit failure and restarts the unit. Its launcher repeats the
+  # metadata preflight from the release it resolved.
+  echo "==> activating ditto-api release $deploy_target in $api_unit"
+  deploy_pm2_touched=1
+  if ! printf 'revision=%s\n' "$deploy_target" | sudo -n "$api_release_command" activate; then
+    fail_deploy ditto-api "could not be activated on release $deploy_target"
+  fi
 fi
 pm2 save
 
@@ -553,50 +794,6 @@ DITTO_HEALTH_TIMEOUT="${DITTO_HEALTH_TIMEOUT:-120}"
 # the host there is no longer a single health URL for the whole deploy.
 health_snapshot="$(mktemp "${TMPDIR:-/tmp}/ditto-health.XXXXXX")"
 
-# Print one app's live state as "status<TAB>pid<TAB>restarts<TAB>exec_path".
-pm2_app_state() {
-  pm2 jlist 2>/dev/null | node -e '
-    const name = process.argv[1];
-    let raw = "";
-    process.stdin.on("data", (c) => (raw += c)).on("end", () => {
-      const at = raw.indexOf("[");
-      let list = [];
-      try { list = at === -1 ? [] : JSON.parse(raw.slice(at)); } catch { list = []; }
-      const app = (Array.isArray(list) ? list : []).find((a) => a && a.name === name);
-      if (!app) { console.log("missing\t0\t0\t"); return; }
-      const env = app.pm2_env || {};
-      console.log([env.status || "unknown", app.pid || env.pm_pid || 0,
-                   env.restart_time || 0, env.pm_exec_path || ""].join("\t"));
-    });
-  ' "$1"
-}
-
-# Dump everything an operator needs to diagnose a failed deploy, then exit 1.
-fail_deploy() {
-  local app="$1" why="$2" state err_log want running_script
-  state="$(pm2_app_state "$app")"
-  running_script="$(printf '%s' "$state" | cut -f4)"
-  echo "" >&2
-  echo "ERROR: deploy failed -- $app $why" >&2
-  echo "  pm2 status/pid/restarts/script: $state" >&2
-  err_log="$(printf '%s\n' "$pm2_plan" | awk -F'\t' -v n="$app" '$2 == n { print $4; exit }')"
-  want="$(printf '%s\n' "$pm2_plan" | awk -F'\t' -v n="$app" '$2 == n { print $5; exit }')"
-  if [ -n "$err_log" ] && [ -s "$err_log" ]; then
-    echo "  --- tail -n 50 $err_log ---" >&2
-    tail -n 50 "$err_log" >&2
-  else
-    echo "  (no error log at ${err_log:-<unset>}; try: pm2 logs $app --lines 50)" >&2
-  fi
-  # Only raise stale-definition suspicion when the paths actually disagree.
-  # A hint that points at the wrong cause is worse than no hint.
-  if [ -n "$running_script" ] && [ -n "$want" ] && [ "$running_script" != "$want" ]; then
-    echo "" >&2
-    echo "  pm2 is running a STALE script path (expected $want)." >&2
-    echo "  Recover with: pm2 delete $app && ./scripts/update.sh" >&2
-  fi
-  exit 1
-}
-
 echo "==> verifying apps came up (timeout ${DITTO_HEALTH_TIMEOUT}s)"
 deadline=$((SECONDS + DITTO_HEALTH_TIMEOUT))
 
@@ -606,10 +803,15 @@ for app in $service_apps; do
   http_code=""
   served_commit=""
   app_health_url="$(app_health_url_for "$app")"
+  supervisor_label=pm2
+  if [ "$app" = ditto-api ] && [ "$api_supervisor" = systemd ]; then
+    supervisor_label="$api_unit"
+  fi
   while :; do
-    IFS=$'\t' read -r status pid restarts _exec_path <<<"$(pm2_app_state "$app")"
-    # `errored` is terminal for a service: pm2 exhausted max_restarts.
-    [ "$status" = "errored" ] && fail_deploy "$app" "is in pm2 state 'errored'"
+    IFS=$'\t' read -r status pid restarts _exec_path <<<"$(service_app_state "$app")"
+    # `errored` is terminal for a service: pm2 exhausted max_restarts, or the
+    # unit hit its start limit.
+    [ "$status" = "errored" ] && fail_deploy "$app" "is in $supervisor_label state 'errored'"
 
     if [ "$status" = "online" ]; then
       if [ -z "$app_health_url" ]; then
@@ -649,7 +851,7 @@ for app in $service_apps; do
       if [ "$status" = "online" ] && [ -n "$http_code" ] && [ "$http_code" != "000" ]; then
         fail_deploy "$app" "is serving but $app_health_url returned HTTP $http_code (dependency down?)"
       fi
-      fail_deploy "$app" "did not come up within ${DITTO_HEALTH_TIMEOUT}s (pm2 status '$status')"
+      fail_deploy "$app" "did not come up within ${DITTO_HEALTH_TIMEOUT}s ($supervisor_label status '$status')"
     fi
     sleep 3
   done
@@ -675,7 +877,11 @@ printf '%s\n' "$deploy_target" > "$next_deployed_source"
 mv "$next_deployed_source" "$deployed_source_file"
 
 deploy_stage="done"
-echo "done. pm2 logs ditto-api"
+if [ "$api_supervisor" = systemd ]; then
+  echo "done. sudo -n $api_release_command logs"
+else
+  echo "done. pm2 logs ditto-api"
+fi
 # Machine-readable last line: the deploy workflow reads this to assert that the
 # public host is serving the same revision the host was left on. Keep the
 # `key=value` shape stable.

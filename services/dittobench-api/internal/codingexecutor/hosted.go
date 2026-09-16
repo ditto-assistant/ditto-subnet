@@ -13,7 +13,7 @@ import (
 // All existing Docker isolation, image and trusted-report checks remain active.
 func NewHostedGrading(config Config, manifest codinggrader.HostedManifest) (*Executor, error) {
 	config.Manifest, config.hosted = codinggrader.Manifest(manifest), true
-	return newWithDocker(config, execDocker{})
+	return newWithDocker(config, execDocker{host: config.DockerHost})
 }
 
 func (factory *PhaseFactory) HostedGrading(ctx context.Context, manifest codinggrader.HostedManifest) (codinggrader.Executor, error) {

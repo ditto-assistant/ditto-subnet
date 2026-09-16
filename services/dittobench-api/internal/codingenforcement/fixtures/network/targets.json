@@ -1,0 +1,14 @@
+{
+  "schema": "dittobench-coding-native-network-targets-v1",
+  "public": {"address": "1.1.1.1", "port": 443},
+  "ipv6": {"address": "2606:4700:4700::1111", "port": 443},
+  "metadata": {"address": "169.254.169.254", "port": 80},
+  "dns_name": "example.com",
+  "proxy_target": "example.com:443",
+  "docker_api_port": 2375,
+  "host_loopback_alias": "10.0.2.2",
+  "host_loopback_port": 18101,
+  "sibling_port": 18100,
+  "timeout_ms": 3000,
+  "check_timeout_ms": 8000
+}

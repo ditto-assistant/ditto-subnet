@@ -1,0 +1,36 @@
+---
+# One invalid render profile. The shared validation task must be the task that
+# fails; accepting the profile fails this test.
+- name: Reject {{ case.name }}
+  vars:
+    coding_certification_service_render_enabled: "{{ case.set.coding_certification_service_render_enabled if 'coding_certification_service_render_enabled' in case.set else valid_profile.coding_certification_service_render_enabled }}"
+    coding_certification_service_render_root: "{{ case.set.coding_certification_service_render_root if 'coding_certification_service_render_root' in case.set else valid_profile.coding_certification_service_render_root }}"
+    coding_certification_service_user: "{{ case.set.coding_certification_service_user if 'coding_certification_service_user' in case.set else valid_profile.coding_certification_service_user }}"
+    coding_certification_service_client_group: "{{ case.set.coding_certification_service_client_group if 'coding_certification_service_client_group' in case.set else valid_profile.coding_certification_service_client_group }}"
+    coding_certification_service_uid: "{{ case.set.coding_certification_service_uid if 'coding_certification_service_uid' in case.set else valid_profile.coding_certification_service_uid }}"
+    coding_certification_service_client_gid: "{{ case.set.coding_certification_service_client_gid if 'coding_certification_service_client_gid' in case.set else valid_profile.coding_certification_service_client_gid }}"
+    coding_certification_service_bip: "{{ case.set.coding_certification_service_bip if 'coding_certification_service_bip' in case.set else valid_profile.coding_certification_service_bip }}"
+    coding_certification_service_router_port: "{{ case.set.coding_certification_service_router_port if 'coding_certification_service_router_port' in case.set else valid_profile.coding_certification_service_router_port }}"
+    coding_certification_service_egress_network: "{{ case.set.coding_certification_service_egress_network if 'coding_certification_service_egress_network' in case.set else valid_profile.coding_certification_service_egress_network }}"
+    coding_certification_service_egress_proxy: "{{ case.set.coding_certification_service_egress_proxy if 'coding_certification_service_egress_proxy' in case.set else valid_profile.coding_certification_service_egress_proxy }}"
+    coding_certification_service_runtime_image_repository: "{{ case.set.coding_certification_service_runtime_image_repository if 'coding_certification_service_runtime_image_repository' in case.set else valid_profile.coding_certification_service_runtime_image_repository }}"
+    coding_certification_service_runtime_image_digest: "{{ case.set.coding_certification_service_runtime_image_digest if 'coding_certification_service_runtime_image_digest' in case.set else valid_profile.coding_certification_service_runtime_image_digest }}"
+    coding_certification_service_pack_manifest_sha256: "{{ case.set.coding_certification_service_pack_manifest_sha256 if 'coding_certification_service_pack_manifest_sha256' in case.set else valid_profile.coding_certification_service_pack_manifest_sha256 }}"
+    coding_certification_service_router_helper_sha256: "{{ case.set.coding_certification_service_router_helper_sha256 if 'coding_certification_service_router_helper_sha256' in case.set else valid_profile.coding_certification_service_router_helper_sha256 }}"
+    coding_certification_service_max_lifetime_seconds: "{{ case.set.coding_certification_service_max_lifetime_seconds if 'coding_certification_service_max_lifetime_seconds' in case.set else valid_profile.coding_certification_service_max_lifetime_seconds }}"
+    coding_certification_service_idle_timeout_seconds: "{{ case.set.coding_certification_service_idle_timeout_seconds if 'coding_certification_service_idle_timeout_seconds' in case.set else valid_profile.coding_certification_service_idle_timeout_seconds }}"
+  block:
+    - name: Evaluate {{ case.name }}
+      ansible.builtin.include_tasks: ../roles/coding_certification_service/tasks/validate.yml
+
+    - name: Invalid render profile was accepted
+      ansible.builtin.fail:
+        msg: "{{ case.name }} must be rejected"
+  rescue:
+    - name: Require the render validation to be the rejecting task
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name == 'Validate the certification service render profile'
+          - ansible_failed_result.assertion is defined
+          - "'certification service render needs' in ansible_failed_result.msg"
+        fail_msg: "{{ case.name }} was accepted or failed for another reason"

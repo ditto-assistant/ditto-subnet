@@ -297,6 +297,21 @@ CREATE FUNCTION public.guard_coding_catalog_append_only() RETURNS trigger
 
 
 --
+-- Name: guard_coding_certification_allowlist_append_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.guard_coding_certification_allowlist_append_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            RAISE EXCEPTION 'coding certification allowlist revisions are append-only'
+                USING ERRCODE = '23514',
+                      CONSTRAINT = 'coding_certification_allowlist_append_only_guard';
+        END;
+        $$;
+
+
+--
 -- Name: guard_confirmation_bundle_immutability(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -582,6 +597,68 @@ CREATE FUNCTION public.guard_efficiency_snapshot_curve() RETURNS trigger
 
 
 --
+-- Name: guard_hosted_assignment_cancellation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.guard_hosted_assignment_cancellation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        DECLARE a coding_hosted_assignments%ROWTYPE;
+        BEGIN
+            IF TG_TABLE_NAME = 'coding_hosted_assignment_cancellations' THEN
+                -- Row lock serialises with admission, start, binding and close.
+                SELECT * INTO a FROM coding_hosted_assignments
+                    WHERE evaluation_id = NEW.evaluation_id FOR UPDATE;
+                IF NOT FOUND
+                   OR a.assignment_sha256 IS DISTINCT FROM NEW.assignment_sha256
+                   OR a.started_at IS NOT NULL
+                   OR a.worker_id IS NOT NULL
+                   OR NEW.prior_state IS DISTINCT FROM (CASE
+                        WHEN a.admitted_at IS NULL THEN 'pending_admission'
+                        ELSE 'admitted' END)
+                   OR NEW.cancelled_at < a.created_at
+                   OR NEW.cancelled_at > clock_timestamp()
+                THEN
+                    RAISE EXCEPTION
+                        'hosted cancellation requires an unstarted assignment'
+                        USING ERRCODE = '23514';
+                END IF;
+                -- Object access is removed before the ledger row is appended.
+                IF EXISTS (
+                    SELECT 1 FROM coding_hosted_private_tasks t
+                    WHERE t.evaluation_id = NEW.evaluation_id
+                      AND t.closed_at IS NULL
+                ) THEN
+                    RAISE EXCEPTION
+                        'hosted cancellation requires a closed private task'
+                        USING ERRCODE = '23514';
+                END IF;
+            ELSIF TG_TABLE_NAME = 'coding_hosted_private_tasks' THEN
+                -- FOR SHARE waits for a cancellation holding FOR UPDATE and
+                -- makes a later cancellation wait for this insert to commit.
+                PERFORM 1 FROM coding_hosted_assignments
+                    WHERE evaluation_id = NEW.evaluation_id FOR SHARE;
+                IF EXISTS (
+                    SELECT 1 FROM coding_hosted_assignment_cancellations c
+                    WHERE c.evaluation_id = NEW.evaluation_id
+                ) THEN
+                    RAISE EXCEPTION 'hosted assignment is cancelled'
+                        USING ERRCODE = '23514';
+                END IF;
+            -- A BEFORE UPDATE row trigger fires with the row lock already held.
+            ELSIF NEW IS DISTINCT FROM OLD AND EXISTS (
+                SELECT 1 FROM coding_hosted_assignment_cancellations c
+                WHERE c.evaluation_id = NEW.evaluation_id
+            ) THEN
+                RAISE EXCEPTION 'hosted assignment is cancelled'
+                    USING ERRCODE = '23514';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+
+
+--
 -- Name: guard_hosted_authoring_insert(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -791,6 +868,32 @@ CREATE FUNCTION public.guard_validator_ticket_purpose() RETURNS trigger
                 RAISE EXCEPTION
                     'cannot score an unclassified validator ticket'
                     USING ERRCODE = 'check_violation';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+
+
+--
+-- Name: noncompetitive_agent_exclusions_append_only(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.noncompetitive_agent_exclusions_append_only() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            IF TG_OP = 'DELETE' THEN
+                RAISE EXCEPTION 'noncompetitive agent exclusions are append-only';
+            END IF;
+            IF OLD.agent_id IS NOT NULL
+                OR NEW.exclusion_id IS DISTINCT FROM OLD.exclusion_id
+                OR NEW.kind IS DISTINCT FROM OLD.kind
+                OR NEW.miner_hotkey IS DISTINCT FROM OLD.miner_hotkey
+                OR NEW.artifact_sha256 IS DISTINCT FROM OLD.artifact_sha256
+                OR NEW.reason IS DISTINCT FROM OLD.reason
+                OR NEW.created_by IS DISTINCT FROM OLD.created_by
+                OR NEW.created_at IS DISTINCT FROM OLD.created_at THEN
+                RAISE EXCEPTION 'noncompetitive agent exclusions bind once';
             END IF;
             RETURN NEW;
         END;
@@ -1328,6 +1431,47 @@ CREATE TABLE public.coding_catalog_retirements (
 
 
 --
+-- Name: coding_certification_allowlist_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_certification_allowlist_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    enabled boolean NOT NULL,
+    entries jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_certification_allowlist_revisions_coding_cert_3c2e CHECK ((checksum ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_coding_certification_allowlist_revisions_coding_cert_5186 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_coding_certification_allowlist_revisions_coding_cert_5319 CHECK (((parent_revision >= 0) AND (parent_revision < revision))),
+    CONSTRAINT ck_coding_certification_allowlist_revisions_coding_cert_6f81 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_coding_certification_allowlist_revisions_coding_cert_8052 CHECK (((jsonb_typeof(entries) = 'array'::text) AND (jsonb_array_length(entries) <= 16) AND (enabled = (jsonb_array_length(entries) > 0))))
+);
+
+
+--
+-- Name: coding_certification_allowlist_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.coding_certification_allowlist_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: coding_certification_allowlist_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.coding_certification_allowlist_revisions_revision_seq OWNED BY public.coding_certification_allowlist_revisions.revision;
+
+
+--
 -- Name: coding_certification_inference_grants; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1437,14 +1581,32 @@ CREATE TABLE public.coding_certification_leases (
     aborted_at timestamp with time zone,
     authority jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    claim_allowlist_revision integer,
+    aborted_allowlist_revision integer,
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_012f CHECK ((validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$'::text)),
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_066c CHECK (((issued_at < deadline) AND (deadline <= (issued_at + '00:30:00'::interval)))),
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_5aab CHECK (((coding_contract_version = 1) AND (bench_version >= 7))),
-    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_88ef CHECK ((((status = 'issued'::text) AND (claimed_at IS NULL) AND (aborted_at IS NULL)) OR ((status = 'claimed'::text) AND (claimed_at IS NOT NULL) AND (claimed_at >= issued_at) AND (claimed_at < deadline) AND (aborted_at IS NULL)) OR ((status = 'aborted'::text) AND (aborted_at IS NOT NULL) AND (aborted_at >= issued_at) AND (claimed_at IS NULL)) OR ((status = 'expired'::text) AND (claimed_at IS NULL) AND (aborted_at IS NULL)))),
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_88ef CHECK ((((status = 'issued'::text) AND (claimed_at IS NULL) AND (aborted_at IS NULL) AND (aborted_allowlist_revision IS NULL)) OR ((status = ANY (ARRAY['claimed'::text, 'completed'::text])) AND (claimed_at IS NOT NULL) AND (claimed_at >= issued_at) AND (claimed_at < deadline) AND (aborted_at IS NULL) AND (aborted_allowlist_revision IS NULL)) OR ((status = 'aborted'::text) AND (aborted_at IS NOT NULL) AND (aborted_at >= issued_at) AND ((claimed_at IS NULL) OR ((aborted_allowlist_revision IS NOT NULL) AND (claimed_at >= issued_at) AND (claimed_at < deadline) AND (aborted_at >= claimed_at)))) OR ((status = 'expired'::text) AND (aborted_at IS NULL) AND (aborted_allowlist_revision IS NULL) AND ((claimed_at IS NULL) OR ((claimed_at >= issued_at) AND (claimed_at < deadline)))))),
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_9708 CHECK ((((octet_length(screened_image_id) >= 1) AND (octet_length(screened_image_id) <= 256)) AND ((octet_length(screened_image_ref) >= 1) AND (octet_length(screened_image_ref) <= 512)) AND (screened_image_id !~ '[[:space:][:cntrl:]]'::text) AND (screened_image_ref !~ '[[:cntrl:]]'::text))),
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_bded CHECK (((claim_allowlist_revision IS NULL) OR ((claim_allowlist_revision > 0) AND (claimed_at IS NOT NULL)))),
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_e585 CHECK ((weight_eligible = false)),
     CONSTRAINT ck_coding_certification_leases_coding_certification_lea_e6b0 CHECK (((artifact_sha256 ~ '^[0-9a-f]{64}$'::text) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND (core_qualification_policy_checksum ~ '^[0-9a-f]{64}$'::text) AND (canary_manifest_sha256 ~ '^[0-9a-f]{64}$'::text) AND (runner_plan_sha256 ~ '^[0-9a-f]{64}$'::text) AND (grader_plan_sha256 ~ '^[0-9a-f]{64}$'::text) AND (resource_profile_sha256 ~ '^[0-9a-f]{64}$'::text) AND (inference_policy_sha256 ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_fe07 CHECK ((status = ANY (ARRAY['issued'::text, 'claimed'::text, 'aborted'::text, 'expired'::text])))
+    CONSTRAINT ck_coding_certification_leases_coding_certification_lea_fe07 CHECK ((status = ANY (ARRAY['issued'::text, 'claimed'::text, 'completed'::text, 'aborted'::text, 'expired'::text])))
+);
+
+
+--
+-- Name: coding_hosted_assignment_cancellations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_hosted_assignment_cancellations (
+    evaluation_id uuid NOT NULL,
+    assignment_sha256 text NOT NULL,
+    prior_state text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    cancelled_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
+    CONSTRAINT ck_coding_hosted_assignment_cancellations_coding_hosted_e78a CHECK (((assignment_sha256 ~ '^[0-9a-f]{64}$'::text) AND (prior_state = ANY (ARRAY['pending_admission'::text, 'admitted'::text])) AND ((length(TRIM(BOTH FROM reason)) >= 8) AND (length(TRIM(BOTH FROM reason)) <= 512)) AND ((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))))
 );
 
 
@@ -3236,6 +3398,31 @@ CREATE TABLE public.name_claims (
 
 
 --
+-- Name: noncompetitive_agent_exclusions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.noncompetitive_agent_exclusions (
+    exclusion_id uuid NOT NULL,
+    kind text NOT NULL,
+    miner_hotkey text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    reason text NOT NULL,
+    created_by text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    agent_id uuid,
+    screened_image_sha256 text,
+    bound_by text,
+    bound_reason text,
+    bound_at timestamp with time zone,
+    CONSTRAINT noncompetitive_agent_exclusions_artifact CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT noncompetitive_agent_exclusions_binding CHECK ((((agent_id IS NULL) AND (screened_image_sha256 IS NULL) AND (bound_by IS NULL) AND (bound_reason IS NULL) AND (bound_at IS NULL)) OR ((agent_id IS NOT NULL) AND (screened_image_sha256 ~ '^[0-9a-f]{64}$'::text) AND ((length(TRIM(BOTH FROM bound_by)) >= 1) AND (length(TRIM(BOTH FROM bound_by)) <= 120)) AND (length(TRIM(BOTH FROM bound_reason)) >= 8) AND (bound_at IS NOT NULL)))),
+    CONSTRAINT noncompetitive_agent_exclusions_created_by CHECK (((length(TRIM(BOTH FROM created_by)) >= 1) AND (length(TRIM(BOTH FROM created_by)) <= 120))),
+    CONSTRAINT noncompetitive_agent_exclusions_kind CHECK ((kind = 'team_canary'::text)),
+    CONSTRAINT noncompetitive_agent_exclusions_reason CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
 -- Name: owner_attestations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4505,6 +4692,13 @@ ALTER TABLE ONLY public.burn_settings_revisions ALTER COLUMN revision SET DEFAUL
 
 
 --
+-- Name: coding_certification_allowlist_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_allowlist_revisions ALTER COLUMN revision SET DEFAULT nextval('public.coding_certification_allowlist_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: confirmation_bundle_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -4806,6 +5000,14 @@ ALTER TABLE ONLY public.coding_catalog_releases
 
 ALTER TABLE ONLY public.coding_catalog_retirements
     ADD CONSTRAINT coding_catalog_retirements_pkey PRIMARY KEY (release_row_id);
+
+
+--
+-- Name: coding_certification_allowlist_revisions coding_certification_allowlist_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_allowlist_revisions
+    ADD CONSTRAINT coding_certification_allowlist_parent_key UNIQUE (parent_revision);
 
 
 --
@@ -5641,6 +5843,30 @@ ALTER TABLE ONLY public.name_claims
 
 
 --
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_agent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.noncompetitive_agent_exclusions
+    ADD CONSTRAINT noncompetitive_agent_exclusions_agent_key UNIQUE (agent_id);
+
+
+--
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_identity_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.noncompetitive_agent_exclusions
+    ADD CONSTRAINT noncompetitive_agent_exclusions_identity_key UNIQUE (miner_hotkey, artifact_sha256);
+
+
+--
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.noncompetitive_agent_exclusions
+    ADD CONSTRAINT noncompetitive_agent_exclusions_pkey PRIMARY KEY (exclusion_id);
+
+
+--
 -- Name: owner_attestations owner_attestations_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5737,11 +5963,27 @@ ALTER TABLE ONLY public.burn_settings_revisions
 
 
 --
+-- Name: coding_certification_allowlist_revisions pk_coding_certification_allowlist_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_allowlist_revisions
+    ADD CONSTRAINT pk_coding_certification_allowlist_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: coding_certification_leases pk_coding_certification_leases; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.coding_certification_leases
     ADD CONSTRAINT pk_coding_certification_leases PRIMARY KEY (lease_id);
+
+
+--
+-- Name: coding_hosted_assignment_cancellations pk_coding_hosted_assignment_cancellations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_assignment_cancellations
+    ADD CONSTRAINT pk_coding_hosted_assignment_cancellations PRIMARY KEY (evaluation_id);
 
 
 --
@@ -7270,6 +7512,13 @@ CREATE INDEX name_claims_status_idx ON public.name_claims USING btree (netuid, s
 
 
 --
+-- Name: noncompetitive_agent_exclusions_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX noncompetitive_agent_exclusions_hotkey_idx ON public.noncompetitive_agent_exclusions USING btree (miner_hotkey);
+
+
+--
 -- Name: owner_attestations_active_pair_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -7683,10 +7932,38 @@ CREATE TRIGGER coding_catalog_retirements_append_only_guard BEFORE DELETE OR UPD
 
 
 --
+-- Name: coding_certification_allowlist_revisions coding_certification_allowlist_revisions_append_only_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_certification_allowlist_revisions_append_only_guard BEFORE DELETE OR UPDATE ON public.coding_certification_allowlist_revisions FOR EACH ROW EXECUTE FUNCTION public.guard_coding_certification_allowlist_append_only();
+
+
+--
+-- Name: coding_hosted_assignment_cancellations coding_hosted_assignment_cancellations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_assignment_cancellations_immutable BEFORE DELETE OR UPDATE ON public.coding_hosted_assignment_cancellations FOR EACH ROW EXECUTE FUNCTION public.guard_coding_catalog_append_only();
+
+
+--
+-- Name: coding_hosted_assignment_cancellations coding_hosted_assignment_cancellations_insert; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_assignment_cancellations_insert BEFORE INSERT ON public.coding_hosted_assignment_cancellations FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_assignment_cancellation();
+
+
+--
 -- Name: coding_hosted_assignments coding_hosted_assignment_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
 CREATE TRIGGER coding_hosted_assignment_guard BEFORE DELETE OR UPDATE ON public.coding_hosted_assignments FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_assignment_guard();
+
+
+--
+-- Name: coding_hosted_assignments coding_hosted_assignments_cancellation_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_assignments_cancellation_guard BEFORE UPDATE ON public.coding_hosted_assignments FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_assignment_cancellation();
 
 
 --
@@ -7785,6 +8062,13 @@ CREATE TRIGGER coding_hosted_inference_request_guard BEFORE INSERT OR DELETE OR 
 --
 
 CREATE TRIGGER coding_hosted_private_task_guard BEFORE INSERT OR DELETE OR UPDATE ON public.coding_hosted_private_tasks FOR EACH ROW EXECUTE FUNCTION public.coding_hosted_private_task_guard();
+
+
+--
+-- Name: coding_hosted_private_tasks coding_hosted_private_tasks_cancellation_guard; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER coding_hosted_private_tasks_cancellation_guard BEFORE INSERT ON public.coding_hosted_private_tasks FOR EACH ROW EXECUTE FUNCTION public.guard_hosted_assignment_cancellation();
 
 
 --
@@ -7921,6 +8205,13 @@ CREATE TRIGGER efficiency_cohort_snapshots_curve_guard BEFORE INSERT OR UPDATE O
 
 
 --
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_append_only; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER noncompetitive_agent_exclusions_append_only BEFORE DELETE OR UPDATE ON public.noncompetitive_agent_exclusions FOR EACH ROW EXECUTE FUNCTION public.noncompetitive_agent_exclusions_append_only();
+
+
+--
 -- Name: scores scores_reject_benchmark_canary; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -8014,11 +8305,27 @@ ALTER TABLE ONLY public.coding_certification_inference_requests
 
 
 --
+-- Name: coding_certification_leases coding_certification_leases_aborted_allowlist_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_leases
+    ADD CONSTRAINT coding_certification_leases_aborted_allowlist_fkey FOREIGN KEY (aborted_allowlist_revision) REFERENCES public.coding_certification_allowlist_revisions(revision) ON DELETE RESTRICT;
+
+
+--
 -- Name: coding_certification_leases coding_certification_leases_agent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.coding_certification_leases
     ADD CONSTRAINT coding_certification_leases_agent_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: coding_certification_leases coding_certification_leases_claim_allowlist_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_certification_leases
+    ADD CONSTRAINT coding_certification_leases_claim_allowlist_fkey FOREIGN KEY (claim_allowlist_revision) REFERENCES public.coding_certification_allowlist_revisions(revision) ON DELETE RESTRICT;
 
 
 --
@@ -8462,6 +8769,14 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 
 --
+-- Name: coding_hosted_assignment_cancellations fk_coding_hosted_assignment_cancellations_evaluation_id_2de8; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_hosted_assignment_cancellations
+    ADD CONSTRAINT fk_coding_hosted_assignment_cancellations_evaluation_id_2de8 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_assignments(evaluation_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: coding_hosted_assignments fk_coding_hosted_assignments_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8667,6 +8982,14 @@ ALTER TABLE ONLY public.miner_session_tokens
 
 ALTER TABLE ONLY public.name_claim_endorsements
     ADD CONSTRAINT name_claim_endorsements_claim_id_fkey FOREIGN KEY (claim_id) REFERENCES public.name_claims(claim_id) ON DELETE CASCADE;
+
+
+--
+-- Name: noncompetitive_agent_exclusions noncompetitive_agent_exclusions_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.noncompetitive_agent_exclusions
+    ADD CONSTRAINT noncompetitive_agent_exclusions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
 
 
 --
