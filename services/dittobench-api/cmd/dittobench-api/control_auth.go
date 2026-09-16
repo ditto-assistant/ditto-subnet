@@ -46,8 +46,6 @@ func (s *server) newControlPlaneMux() *http.ServeMux {
 	mux.HandleFunc("POST /v1/confirmation/execute", s.handleConfirmationExecute)
 	mux.HandleFunc("POST /v1/coding/supervisor/{operation}", s.handleCodingSupervisor)
 	mux.HandleFunc("POST /v1/coding/publications/{operation}", s.handleCodingPublication)
-	mux.HandleFunc("POST /v1/coding/certifier/canary", s.handleCodingCanary)
-	mux.HandleFunc("GET /v1/coding/certifier/canary/readiness", s.handleCodingCanaryReadiness)
 	mux.HandleFunc("GET /v1/router/ledger", s.handleRouterLedger)
 	return mux
 }
@@ -76,8 +74,6 @@ var controlPlaneRoutes = []string{
 	"POST /v1/confirmation/execute",
 	"POST /v1/coding/supervisor/{operation}",
 	"POST /v1/coding/publications/{operation}",
-	"POST /v1/coding/certifier/canary",
-	"GET /v1/coding/certifier/canary/readiness",
 	"GET /v1/router/ledger",
 }
 
@@ -95,22 +91,6 @@ func (s *server) handleCodingPublication(response http.ResponseWriter, request *
 		return
 	}
 	s.codingHost.PublicationHandler().ServeHTTP(response, request)
-}
-
-func (s *server) handleCodingCanary(response http.ResponseWriter, request *http.Request) {
-	if s == nil || s.codingHost == nil {
-		http.NotFound(response, request)
-		return
-	}
-	s.codingHost.CanaryHandler().ServeHTTP(response, request)
-}
-
-func (s *server) handleCodingCanaryReadiness(response http.ResponseWriter, request *http.Request) {
-	if s == nil || s.codingHost == nil {
-		http.NotFound(response, request)
-		return
-	}
-	s.codingHost.CanaryReadinessHandler().ServeHTTP(response, request)
 }
 
 // handleRouterLedger serves the accumulated SN118 router shadow ledger as

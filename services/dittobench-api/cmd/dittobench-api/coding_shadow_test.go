@@ -18,7 +18,6 @@ import (
 
 func TestCodingShadowHostIsDefaultOffAndLockedPolicyIsCanonical(t *testing.T) {
 	t.Setenv("DITTOBENCH_CODING_SHADOW_ENABLED", "false")
-	t.Setenv("DITTOBENCH_CODING_CANARY_ENABLED", "false")
 	host, err := codingShadowHostFromEnvironment(8000, 11436)
 	if err != nil || host != nil {
 		t.Fatalf("default host=%v err=%v", host, err)
@@ -77,7 +76,7 @@ func TestCodingDockerHostMustBeADedicatedRootlessSocket(t *testing.T) {
 // sandbox-docker. Enabling a coding gate there must refuse before creating
 // private state or binding the source listener.
 func TestEnabledCodingGateRefusesTheSandboxDaemonBeforeSideEffects(t *testing.T) {
-	for _, gate := range []string{"DITTOBENCH_CODING_CANARY_ENABLED", "DITTOBENCH_CODING_SHADOW_ENABLED"} {
+	for _, gate := range []string{"DITTOBENCH_CODING_SHADOW_ENABLED"} {
 		for _, endpoint := range []string{"", "tcp://127.0.0.1:2375"} {
 			t.Run(fmt.Sprintf("%s/%q", gate, endpoint), func(t *testing.T) {
 				listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -90,7 +89,6 @@ func TestEnabledCodingGateRefusesTheSandboxDaemonBeforeSideEffects(t *testing.T)
 				}
 				privateRoot := filepath.Join(t.TempDir(), "coding-shadow-v1")
 				t.Setenv("DITTOBENCH_CODING_SHADOW_ENABLED", "false")
-				t.Setenv("DITTOBENCH_CODING_CANARY_ENABLED", "false")
 				t.Setenv(gate, "true")
 				t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
 				t.Setenv(codingDockerHostEnvironment, endpoint)
@@ -127,9 +125,9 @@ func TestCodingHostFailureIsNonFatalForOrdinaryScoring(t *testing.T) {
 		t.Fatalf("disabled host=%v logs=%q", host, logs)
 	}
 
-	// With the coding host refused, every coding route (including the canary
-	// readiness probe the validator requires) is absent while ordinary
-	// control-plane routes keep serving.
+	// With the coding host refused, every coding route is absent while
+	// ordinary control-plane routes keep serving. The retired certification
+	// canary routes are never registered at all.
 	mux := (&server{broker: newInferenceBroker(1, 1)}).newControlPlaneMux()
 	for _, route := range []struct{ method, path string }{
 		{http.MethodPost, "/v1/coding/certifier/canary"},
@@ -251,8 +249,7 @@ func TestEnabledCodingGateRefusesMissingRuntimeSettingsBeforeSideEffects(t *test
 		t.Fatal(err)
 	}
 	privateRoot := filepath.Join(t.TempDir(), "coding-shadow-v1")
-	t.Setenv("DITTOBENCH_CODING_SHADOW_ENABLED", "false")
-	t.Setenv("DITTOBENCH_CODING_CANARY_ENABLED", "true")
+	t.Setenv("DITTOBENCH_CODING_SHADOW_ENABLED", "true")
 	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:2375")
 	t.Setenv(codingDockerHostEnvironment, "unix:///run/ditto-coding-executor/docker.sock")
 	t.Setenv("DITTOBENCH_SANDBOX_EGRESS_NETWORK", "ditto-sandbox")
@@ -275,4 +272,50 @@ func TestEnabledCodingGateRefusesMissingRuntimeSettingsBeforeSideEffects(t *test
 		t.Fatalf("source port was left bound: %v", err)
 	}
 	_ = rebound.Close()
+}
+
+// The Compose scorer's certification canary route and its switch are retired:
+// certification runs only in the host certification service behind its fixed
+// Unix socket. A stale DITTOBENCH_CODING_CANARY_ENABLED=true builds no coding
+// host, creates no private state, binds no source port and registers no route.
+func TestComposeScorerHasNoCertificationCanaryRouteOrSwitch(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	privateRoot := filepath.Join(t.TempDir(), "coding-shadow-v1")
+	t.Setenv("DITTOBENCH_CODING_SHADOW_ENABLED", "false")
+	t.Setenv("DITTOBENCH_CODING_CANARY_ENABLED", "true")
+	t.Setenv("DITTOBENCH_CODING_PRIVATE_ROOT", privateRoot)
+	t.Setenv("DITTOBENCH_CODING_SOURCE_PORT", strconv.Itoa(port))
+	host, err := codingShadowHostFromEnvironment(8000, 11436)
+	if err != nil || host != nil {
+		t.Fatalf("retired canary switch built host=%v err=%v", host, err)
+	}
+	if _, statErr := os.Stat(privateRoot); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("private root was created: %v", statErr)
+	}
+	for _, route := range controlPlaneRoutes {
+		if strings.Contains(route, "/certifier") {
+			t.Fatalf("control plane still registers %q", route)
+		}
+	}
+	for _, name := range []string{"coding_shadow.go", "control_auth.go", "main.go"} {
+		body, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, retired := range []string{
+			"DITTOBENCH_CODING_CANARY_ENABLED", "DITTOBENCH_CODING_CERTIFICATION_ROOT",
+			"CanaryEnabled", "CanaryHandler", "CanaryReadinessHandler", "/v1/coding/certifier",
+		} {
+			if strings.Contains(string(body), retired) {
+				t.Fatalf("%s still references the retired certification route: %s", name, retired)
+			}
+		}
+	}
 }

@@ -23,6 +23,16 @@ func (control *fakeControl) Verify() error {
 
 type placementCalls struct{ docker, gateway, precheck, listener int }
 
+type fakeAdmission struct {
+	open  bool
+	calls int
+}
+
+func (admission *fakeAdmission) permits(context.Context) bool {
+	admission.calls++
+	return admission.open
+}
+
 func testPlacement(t *testing.T) (*Placement, *placementCalls, *fakeControl) {
 	t.Helper()
 	config, err := ConfigFromEnvironment(lookup(validEnvironment()), testUID)
@@ -37,6 +47,7 @@ func testPlacement(t *testing.T) (*Placement, *placementCalls, *fakeControl) {
 	control := &fakeControl{}
 	calls := &placementCalls{}
 	placement := newPlacement(config, testUID, router, control)
+	placement.admission = &fakeAdmission{open: true}
 	placement.verifyDockerSocket = func(path string, euid int) error {
 		calls.docker++
 		if path != DockerSocketPath || euid != testUID {
@@ -128,6 +139,14 @@ func TestPlacementRefusesEachUnprovenStepInOrder(t *testing.T) {
 				}
 			},
 			want: codingcanary.TopologyCheck{RootlessTopology: true},
+		},
+		"admission window ended or without room for a certification": {
+			mutate: func(p *Placement, _ *fakeControl) { p.admission = &fakeAdmission{open: false} },
+			want:   codingcanary.TopologyCheck{RootlessTopology: true},
+		},
+		"no admission window": {
+			mutate: func(p *Placement, _ *fakeControl) { p.admission = nil },
+			want:   codingcanary.TopologyCheck{RootlessTopology: true},
 		},
 		"no router listener": {
 			mutate: func(p *Placement, _ *fakeControl) { p.router = nil },

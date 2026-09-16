@@ -194,11 +194,9 @@ def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None
     validator = services["ditto-subnet"]["environment"]
 
     assert _compose_default(scorer["DITTOBENCH_CODING_SHADOW_ENABLED"]) == "false"
-    assert _compose_default(scorer["DITTOBENCH_CODING_CANARY_ENABLED"]) == "false"
-    # Fixed image path, consumed only behind the canary gate above.
-    assert scorer["DITTOBENCH_CODING_CERTIFICATION_ROOT"] == (
-        "/opt/ditto/coding/certification-root"
-    )
+    # The Compose certification canary route and its switch are retired.
+    assert "DITTOBENCH_CODING_CANARY_ENABLED" not in scorer
+    assert "DITTOBENCH_CODING_CERTIFICATION_ROOT" not in scorer
     assert _compose_default(scorer["DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST"]) == ""
     # No dedicated rootless coding daemon by default: every coding gate refuses,
     # and the coding host never falls back to the rootful sandbox DOCKER_HOST.
@@ -247,11 +245,13 @@ def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None
         "coding-executor-validator-ca",
         "coding-executor-validator-client-cert",
         "coding-executor-validator-client-key",
+        "coding-certification-control-token",
     }
     for secret in (
         "coding-executor-validator-ca",
         "coding-executor-validator-client-cert",
         "coding-executor-validator-client-key",
+        "coding-certification-control-token",
     ):
         assert _compose_default(compose["secrets"][secret]["file"]) == "/dev/null"
     assert scorer["DITTOBENCH_CODING_PRIVATE_ROOT"].startswith(
@@ -271,6 +271,63 @@ def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None
         "DITTOBENCH_CODING_CANARY_ENABLED"
         not in services["sandbox-docker"]["environment"]
     )
+
+
+def test_validator_certification_socket_route_is_default_off_and_file_only() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    validator = compose["services"]["ditto-subnet"]
+    environment = validator["environment"]
+
+    for name in (
+        "VALIDATOR_CODING_CERTIFICATION_SOCKET_UID",
+        "VALIDATOR_CODING_CERTIFICATION_SOCKET_GID",
+        "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST",
+        "VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256",
+    ):
+        assert _compose_default(environment[name]) == ""
+    # The bearer is a mounted secret file, never an environment value.
+    assert "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN" not in environment
+    assert environment["VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE"] == (
+        "/run/secrets/coding-certification-control-token"
+    )
+    assert {
+        "source": "coding-certification-control-token",
+        "target": "coding-certification-control-token",
+        "mode": 0o400,
+    } in validator["secrets"]
+    assert (
+        _compose_default(
+            compose["secrets"]["coding-certification-control-token"]["file"]
+        )
+        == "/dev/null"
+    )
+    assert (
+        "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_HOST_PATH"
+        in (compose["secrets"]["coding-certification-control-token"]["file"])
+    )
+    # The socket's parent directory, read-only, never the socket file; off,
+    # the source is /dev/null.
+    mounts = [
+        volume
+        for volume in validator["volumes"]
+        if isinstance(volume, dict)
+        and volume.get("target") == "/run/ditto-coding-certification"
+    ]
+    assert len(mounts) == 1
+    (mount,) = mounts
+    assert mount["type"] == "bind"
+    assert mount["read_only"] is True
+    assert "VALIDATOR_CODING_CERTIFICATION_SOCKET_HOST_DIRECTORY" in mount["source"]
+    assert _compose_default(mount["source"]) == "/dev/null"
+    serialized = COMPOSE_PATH.read_text()
+    assert "control.sock:" not in serialized
+    assert not [
+        volume for volume in validator["volumes"] if "control.sock" in str(volume)
+    ]
+    # The scorer never sees the certification socket or bearer.
+    scorer = compose["services"]["dittobench-api"]
+    assert "coding-certification" not in str(scorer.get("volumes", []))
+    assert "coding-certification" not in str(scorer.get("secrets", []))
 
 
 def test_confirmation_runtime_uses_only_exact_public_release_assets() -> None:
@@ -589,7 +646,9 @@ def test_validator_hotkey_access_is_read_only_and_service_scoped() -> None:
     assert services["pylon"]["cap_drop"] == ["ALL"]
     assert services["pylon"]["cap_add"] == ["DAC_READ_SEARCH"]
 
-    assert len(validator["volumes"]) == 2
+    # The update bootstrap volume, the hotkey, and the default-off certification
+    # socket directory (checked in its own test).
+    assert len(validator["volumes"]) == 3
     bootstrap_mount = next(
         mount
         for mount in validator["volumes"]
@@ -604,7 +663,10 @@ def test_validator_hotkey_access_is_read_only_and_service_scoped() -> None:
     assert "validator-update-bootstrap" in compose["volumes"]
 
     wallet_mount = next(
-        mount for mount in validator["volumes"] if mount["type"] == "bind"
+        mount
+        for mount in validator["volumes"]
+        if mount["type"] == "bind"
+        and mount["target"] != "/run/ditto-coding-certification"
     )
     assert wallet_mount["type"] == "bind"
     assert wallet_mount["read_only"] is True

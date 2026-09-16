@@ -3,18 +3,16 @@
 # the task that fails; accepting the profile fails this test.
 - name: Reject {{ case.name }}
   vars:
-    validator_stack_coding_canary_enabled: "{{ case.validator | default(false) }}"
-    validator_stack_dittobench_coding_canary_enabled: "{{ case.scorer | default(true) }}"
+    validator_stack_coding_canary_enabled: "{{ case.validator | default(true) }}"
     validator_stack_coding_canary_poll_seconds: "{{ case.poll | default(10) }}"
-    validator_stack_coding_runtime_image_repository: "{{ case.repository | default(valid_repository) }}"
-    validator_stack_coding_runtime_image_digest: "{{ case.digest | default(valid_digest) }}"
-    validator_stack_coding_docker_host: "{{ case.docker_host | default(valid_docker_host) }}"
-    validator_stack_coding_egress_network: "{{ case.egress_network | default(valid_egress_network) }}"
-    validator_stack_coding_egress_proxy: "{{ case.egress_proxy | default(valid_egress_proxy) }}"
-    validator_stack_coding_host_gateway_ip: "{{ case.host_gateway_ip | default(valid_host_gateway_ip) }}"
     validator_stack_coding_canary_targets: "{{ case.targets | default(valid_targets) }}"
     validator_stack_coding_canary_validator_hotkey: "{{ case.canary_hotkey | default(valid_hotkey) }}"
     validator_stack_hotkey: "{{ case.hotkey | default(valid_hotkey) }}"
+    validator_stack_coding_certification_socket_uid: "{{ case.socket_uid | default(valid_socket_uid) }}"
+    validator_stack_coding_certification_socket_gid: "{{ case.socket_gid | default(valid_socket_gid) }}"
+    validator_stack_coding_certification_control_token_path: "{{ case.token_path | default(valid_token_path) }}"
+    validator_stack_coding_certification_runtime_image_digest: "{{ case.runtime_digest | default(valid_runtime_digest) }}"
+    validator_stack_coding_certification_pack_manifest_sha256: "{{ case.pack_manifest | default(valid_pack_manifest) }}"
     validator_stack_coding_executor_connectivity_canary_enabled: "{{ case.connectivity | default(false) }}"
     validator_stack_coding_executor_connectivity_canary_run_enabled: "{{ case.connectivity_run | default(false) }}"
   block:

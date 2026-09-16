@@ -33,3 +33,13 @@ coding_certification_service_pack_manifest_sha256: ""
 # SHA-256 of the reviewed router listener helper installed at
 # /usr/local/lib/ditto-coding-certification/dittobench-coding-router-listener.
 coding_certification_service_router_helper_sha256: ""
+# The service's bounded admission window. It admits certification work for at
+# most max_lifetime_seconds after start ([3600, 43200]) and until it has been
+# idle for idle_timeout_seconds ([600, max lifetime]); activity is an open
+# router connection or an in-flight certify request, never a readiness probe.
+# Readiness also refuses once less than 35 minutes of lifetime (one full lease)
+# or, when idle, 5 minutes of idle time remains. At either bound the service
+# closes the router listener and the control socket and exits; Restart=no keeps
+# it stopped until an operator starts it again.
+coding_certification_service_max_lifetime_seconds: 7200
+coding_certification_service_idle_timeout_seconds: 900

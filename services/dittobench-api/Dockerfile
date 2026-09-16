@@ -71,15 +71,17 @@ RUN wget -q -O /longmemeval_s_cleaned.json \
     chmod 0444 /longmemeval_s_cleaned.json
 
 # ---- public coding certification pack ----
-# The default-off certification canary (DITTOBENCH_CODING_CANARY_ENABLED) loads
-# a repo-shaped root. Copy the committed certification/v1 capsule and the locked
+# The certification canary loads a repo-shaped root. The scorer no longer serves
+# the canary route (it runs only in the host certification service), so no
+# Compose setting points at this copy. Copy the committed certification/v1
+# capsule and the locked
 # inference policy its manifest names, and make the tree read-only. Integrity is
 # checked where the pack is used, not by pins here: codingcanary.LoadPublicPack
 # verifies the grader files against the manifest Platform binds into every
 # lease, the visible workspace against its pinned listing digest, and the policy
 # against its pinned digest, and rejects any other file or link. A bad pack
-# therefore disables only the canary route, never this build or ordinary
-# scoring. The root .dockerignore drops the cache names the loader ignores.
+# therefore never fails this build or ordinary scoring. The root .dockerignore
+# drops the cache names the loader ignores.
 FROM alpine:3.22 AS coding-certification-pack
 COPY research/dittobench-coding-datagen/certification/v1/ \
     /pack/certification-root/research/dittobench-coding-datagen/certification/v1/

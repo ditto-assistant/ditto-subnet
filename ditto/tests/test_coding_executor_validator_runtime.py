@@ -71,31 +71,50 @@ def test_validator_environment_keeps_credentials_out_of_values() -> None:
     assert "BEGIN PRIVATE KEY" not in ENVIRONMENT
 
 
-def test_validator_certification_canary_is_double_gated_default_off() -> None:
-    assert DEFAULTS["validator_stack_dittobench_coding_canary_enabled"] is False
+def test_validator_certification_canary_is_default_off_on_its_socket_route() -> None:
     assert DEFAULTS["validator_stack_coding_canary_enabled"] is False
     assert DEFAULTS["validator_stack_coding_canary_poll_seconds"] == 10
-    assert DEFAULTS["validator_stack_coding_runtime_image_repository"] == ""
-    assert DEFAULTS["validator_stack_coding_runtime_image_digest"] == ""
-    # The dedicated rootless coding daemon and exact targets default to empty,
-    # which refuses both canary switches and every lease.
-    assert DEFAULTS["validator_stack_coding_docker_host"] == ""
+    # Exact targets and the socket route default to empty, which refuses the
+    # validator switch and every lease.
     assert DEFAULTS["validator_stack_coding_canary_targets"] == []
     assert DEFAULTS["validator_stack_coding_canary_validator_hotkey"] == ""
+    assert DEFAULTS["validator_stack_coding_certification_socket_uid"] == 0
+    assert DEFAULTS["validator_stack_coding_certification_socket_gid"] == 0
+    assert DEFAULTS["validator_stack_coding_certification_control_token_path"] == ""
+    assert DEFAULTS["validator_stack_coding_certification_runtime_image_digest"] == ""
+    assert DEFAULTS["validator_stack_coding_certification_pack_manifest_sha256"] == ""
+    # The Compose scorer's certification route and its switch are retired.
+    for retired in (
+        "validator_stack_dittobench_coding_canary_enabled",
+        "validator_stack_coding_runtime_image_repository",
+        "validator_stack_coding_runtime_image_digest",
+        "validator_stack_coding_docker_host",
+        "validator_stack_coding_egress_network",
+        "validator_stack_coding_egress_proxy",
+        "validator_stack_coding_host_gateway_ip",
+    ):
+        assert retired not in DEFAULTS
+        assert retired not in ENVIRONMENT
+        assert retired not in CANARY_VALIDATION
+    assert "DITTOBENCH_CODING_" not in ENVIRONMENT
     # Validation runs before the first host mutation in the role.
     include = "ansible.builtin.include_tasks: validate_coding_canary.yml"
     assert TASKS.index(include) < TASKS.index("ansible.builtin.command")
-    assert "validator_stack_dittobench_coding_canary_enabled | bool" in (
-        CANARY_VALIDATION
-    )
-    assert "'^sha256:[0-9a-f]{64}\\Z'" in CANARY_VALIDATION
-    assert "canary_docker_host is match('^unix:///[A-Za-z0-9._/-]+\\.sock\\Z')" in (
-        CANARY_VALIDATION
-    )
     assert (
         "validator_stack_coding_canary_validator_hotkey == validator_stack_hotkey"
         in CANARY_VALIDATION
     )
+    # The unconditional refusal is lifted: every assertion is gated on the
+    # switch, and the socket route and bearer path are required.
+    assert "\n      - not canary_validator\n" not in CANARY_VALIDATION
+    for required in (
+        "validator_stack_coding_certification_socket_uid",
+        "validator_stack_coding_certification_socket_gid",
+        "validator_stack_coding_certification_control_token_path",
+        "validator_stack_coding_certification_runtime_image_digest",
+        "validator_stack_coding_certification_pack_manifest_sha256",
+    ):
+        assert required in CANARY_VALIDATION
     for line in (
         "VALIDATOR_CODING_CANARY_ENABLED={{ 'true' if "
         "coding_canary_enabled else 'false' }}",
@@ -109,17 +128,29 @@ def test_validator_certification_canary_is_double_gated_default_off() -> None:
         "VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY={{ "
         "validator_stack_coding_canary_validator_hotkey if "
         "coding_canary_enabled else '' }}",
-        "DITTOBENCH_CODING_CANARY_ENABLED={{ 'true' if "
-        "dittobench_coding_canary_enabled else 'false' }}",
-        "DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST={{ "
-        "validator_stack_coding_runtime_image_digest if "
-        "dittobench_coding_canary_enabled else '' }}",
-        "DITTOBENCH_CODING_DOCKER_HOST={{ "
-        "validator_stack_coding_docker_host if "
-        "dittobench_coding_canary_enabled else '' }}",
+        # The socket's parent directory, never the socket file; off, /dev/null.
+        "VALIDATOR_CODING_CERTIFICATION_SOCKET_HOST_DIRECTORY={{ "
+        "'/run/ditto-coding-certification' if coding_canary_enabled "
+        "else '/dev/null' }}",
+        "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_HOST_PATH={{ "
+        "validator_stack_coding_certification_control_token_path if "
+        "coding_canary_enabled else '/dev/null' }}",
+        "VALIDATOR_CODING_CERTIFICATION_SOCKET_UID={{ "
+        "validator_stack_coding_certification_socket_uid if "
+        "coding_canary_enabled else '' }}",
+        "VALIDATOR_CODING_CERTIFICATION_SOCKET_GID={{ "
+        "validator_stack_coding_certification_socket_gid if "
+        "coding_canary_enabled else '' }}",
+        "VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST={{ "
+        "validator_stack_coding_certification_runtime_image_digest if "
+        "coding_canary_enabled else '' }}",
+        "VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256={{ "
+        "validator_stack_coding_certification_pack_manifest_sha256 if "
+        "coding_canary_enabled else '' }}",
     ):
         assert line in ENVIRONMENT
-    # Compose pins the image-baked pack; the host must not select another root.
-    assert "\nDITTOBENCH_CODING_CERTIFICATION_ROOT=" not in ENVIRONMENT
+    # The bearer is only ever a mounted file: never rendered as a value.
+    assert "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN=" not in ENVIRONMENT
+    assert "control.sock" not in ENVIRONMENT
     assert "tests/validator-stack-coding-canary.yml" in INFRA_CI
     assert "validator-stack-coding-canary-reject.yml" in CANARY_RENDER_TEST

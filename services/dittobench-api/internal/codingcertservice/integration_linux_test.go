@@ -99,6 +99,10 @@ func TestCertificationServiceSocketAndReadinessUnderRootlessDocker(t *testing.T)
 	}
 	defer router.Close()
 	placement.router = router
+	limits := AdmissionLimits{MaxLifetime: DefaultMaxLifetime, IdleTimeout: DefaultIdleTimeout}
+	window, _ := newAdmission(ctx, limits, time.Now)
+	defer window.end()
+	placement.admission = window
 
 	root, err := os.MkdirTemp("/tmp", "ccs")
 	if err != nil {
@@ -250,6 +254,20 @@ func TestCertificationServiceSocketAndReadinessUnderRootlessDocker(t *testing.T)
 	placement.router = router
 	if got := readiness(t); !got.Ready {
 		t.Fatalf("restored listener readiness=%+v", got)
+	}
+
+	// (c2) An ended admission window (lifetime or idle bound reached): the
+	// in-namespace listener is no longer ready, so no lease can be claimed.
+	ended, _ := newAdmission(ctx, limits, time.Now)
+	ended.end()
+	placement.admission = ended
+	if got := readiness(t); got.Ready || got.Failure != "listener_namespace" || !got.RootlessTopologyReady {
+		t.Fatalf("ended admission readiness=%+v", got)
+	}
+	runClient(t, "not_ready:listener_namespace")
+	placement.admission = window
+	if got := readiness(t); !got.Ready {
+		t.Fatalf("restored admission readiness=%+v", got)
 	}
 
 	// (d) The control socket path swapped for another socket with identical

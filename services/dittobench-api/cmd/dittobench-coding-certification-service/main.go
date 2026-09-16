@@ -47,6 +47,11 @@ func run(
 	switch {
 	case err == nil:
 		return exitOK
+	case errors.Is(err, codingcertservice.ErrAdmissionEnded):
+		// The bounded admission window ended normally. systemd does not
+		// restart the unit; an operator starts it again, re-proving placement.
+		_, _ = fmt.Fprintln(stderr, codingcertservice.ErrAdmissionEnded.Error())
+		return exitOK
 	case errors.Is(err, codingcertservice.ErrDisabled):
 		_, _ = fmt.Fprintln(stderr, codingcertservice.ErrDisabled.Error())
 		return exitDisabled

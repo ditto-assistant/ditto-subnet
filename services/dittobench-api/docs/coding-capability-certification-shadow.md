@@ -110,21 +110,20 @@ Platform persists `certified` only when that ledger matches the receipt.
 The persisted receipt also carries the verified terminal grant generation,
 inference-grant digest, and settlement-set digest; legacy unbound receipts are
 evidence history, never private-task authority.
-The host constructs the adapter only when `DITTOBENCH_CODING_CANARY_ENABLED` is
-set, `DITTOBENCH_CODING_DOCKER_HOST` names a dedicated rootless daemon socket,
-the coding runtime's own `DITTOBENCH_CODING_EGRESS_NETWORK`,
-`DITTOBENCH_CODING_EGRESS_PROXY` and `DITTOBENCH_CODING_HOST_GATEWAY_IP` are
-valid (they never fall back to the sandbox settings, and the coding harness
-gets no CA bundle), and the certification pack root passes `LoadPublicPack`. The loader checks the
-grader files against the manifest's `grader_files`, the visible workspace
-against its pinned listing digest, and rejects any other file or link. The
-sandbox scorer image carries that pack at
-`/opt/ditto/coding/certification-root`, and Compose pins the root there. A
-construction failure disables the coding routes without stopping ordinary
-scoring. `GET /v1/coding/certifier/canary/readiness` reports, with the canary
-bearer and without side effects, whether the pack, the rootless isolated
-daemon, and the runtime image are ready; validators refuse to issue or claim a
-lease otherwise. Flags stay false until a separately reviewed activation.
+Only the host certification service (`internal/codingcertservice`,
+`cmd/dittobench-coding-certification-service`) constructs the adapter. The
+Compose scorer's certification route and its `DITTOBENCH_CODING_CANARY_ENABLED`
+switch are retired: that scorer has no rootless topology probe, so readiness v2
+could never report it ready. The service loads the pack root through
+`LoadPublicPack`, which checks the grader files against the manifest's
+`grader_files` and the visible workspace against its pinned listing digest, and
+rejects any other file or link. `GET /v1/coding/certifier/canary/readiness`
+reports, over the service's fixed Unix socket, with the certification bearer
+and without side effects, whether the pack, rootless topology, listener
+namespace, control socket, executor daemon and pinned runtime image are ready;
+validators refuse to issue or claim a lease otherwise. See
+`infra/docs/coding-certification-service.md`. Flags stay false until a
+separately reviewed activation.
 
 Coding contract v1 remains permanently shadow-only. A separately reviewed
 contract v2, calibration result, and owner-approved emissions policy are

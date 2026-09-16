@@ -197,12 +197,9 @@ services:
       # candidate execution, Luna dispatch, grading, and publication remain off
       # until an operator explicitly enables the complete rootless profile.
       DITTOBENCH_CODING_SHADOW_ENABLED: ${DITTOBENCH_CODING_SHADOW_ENABLED:-false}
-      DITTOBENCH_CODING_CANARY_ENABLED: ${DITTOBENCH_CODING_CANARY_ENABLED:-false}
-      # The build-verified certification/v1 pack baked into the scorer image.
-      # Read only when DITTOBENCH_CODING_CANARY_ENABLED is true, and not
-      # operator-selectable: a host-supplied root could substitute workspace or
-      # grader files that the manifest digest does not re-hash at runtime.
-      DITTOBENCH_CODING_CERTIFICATION_ROOT: /opt/ditto/coding/certification-root
+      # The scorer serves no certification canary route. Certification runs
+      # only in the host certification service, which the validator reaches
+      # over its fixed Unix socket (infra/docs/coding-certification-service.md).
       DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST: ${DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST:-}
       DITTOBENCH_CODING_PRIVATE_ROOT: /var/lib/dittobench-private-artifacts/coding-shadow-v1
       DITTOBENCH_CODING_POLICY_FILE: /opt/ditto/coding/coding_inference_policy_locked_v1.json
@@ -316,6 +313,16 @@ services:
       # every lease.
       VALIDATOR_CODING_CANARY_TARGETS: ${VALIDATOR_CODING_CANARY_TARGETS:-}
       VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY: ${VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY:-}
+      # The host certification service route (default-off). The canary reaches
+      # only /run/ditto-coding-certification/control.sock, mounted below, and
+      # pins the service's owner, group, runtime image and pack. Empty values
+      # refuse the canary at startup. The bearer is never an environment value
+      # (visible to docker inspect); it is the mounted secret file named here.
+      VALIDATOR_CODING_CERTIFICATION_SOCKET_UID: ${VALIDATOR_CODING_CERTIFICATION_SOCKET_UID:-}
+      VALIDATOR_CODING_CERTIFICATION_SOCKET_GID: ${VALIDATOR_CODING_CERTIFICATION_SOCKET_GID:-}
+      VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE: /run/secrets/coding-certification-control-token
+      VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST: ${VALIDATOR_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST:-}
+      VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256: ${VALIDATOR_CODING_CERTIFICATION_PACK_MANIFEST_SHA256:-}
       # The PINNED scorer revision links its identity into the binary, so the
       # only acceptable answer from /v1/capabilities is a binary-derived
       # revision. An environment-asserted revision from this pin means the
@@ -449,6 +456,9 @@ services:
       - source: coding-executor-validator-client-key
         target: coding-executor-validator-client-key.pem
         mode: 0400
+      - source: coding-certification-control-token
+        target: coding-certification-control-token
+        mode: 0400
     volumes:
       # The root filesystem stays read-only. The updater gives every forced
       # candidate/rollback recreation a new token, so only that container's
@@ -463,6 +473,19 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # The host certification service's control socket directory, read-only.
+      # The socket's parent directory, never the socket file: a service restart
+      # recreates the socket inside the same preserved directory, which a file
+      # bind mount would miss. Off, the source is /dev/null and the canary
+      # client refuses the path. On, Docker may create the directory before the
+      # service starts; the client refuses it until the service owns it with
+      # the pinned uid, gid and mode.
+      - type: bind
+        source: ${VALIDATOR_CODING_CERTIFICATION_SOCKET_HOST_DIRECTORY:-/dev/null}
+        target: /run/ditto-coding-certification
+        read_only: true
+        bind:
+          create_host_path: true
 
 volumes:
   pylon-data:
@@ -476,5 +499,7 @@ secrets:
     file: ${VALIDATOR_CODING_EXECUTOR_CA_HOST_PATH:-/dev/null}
   coding-executor-validator-client-cert:
     file: ${VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_HOST_PATH:-/dev/null}
+  coding-certification-control-token:
+    file: ${VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_HOST_PATH:-/dev/null}
   coding-executor-validator-client-key:
     file: ${VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_HOST_PATH:-/dev/null}

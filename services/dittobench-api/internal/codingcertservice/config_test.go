@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -69,8 +70,52 @@ func TestConfigUsesFixedPathsAndItsOwnSettings(t *testing.T) {
 		config.Runtime.DockerHost != "unix:///run/ditto-coding-certification-docker/docker.sock" ||
 		config.Runtime.HostGatewayIP != "10.203.0.1" || config.Runtime.EgressProxy != "http://10.203.0.1:3128" ||
 		config.CertificationRoot != CertificationRoot || config.RouterHelperPath != RouterHelperPath ||
-		config.ServiceUID != testUID || config.ControlGID != testGID || config.RuntimeImageDigest != testDigest {
+		config.ServiceUID != testUID || config.ControlGID != testGID || config.RuntimeImageDigest != testDigest ||
+		config.Admission != (AdmissionLimits{MaxLifetime: 2 * time.Hour, IdleTimeout: 15 * time.Minute}) {
 		t.Fatalf("config=%+v", config)
+	}
+}
+
+func TestConfigBoundsTheAdmissionWindow(t *testing.T) {
+	for _, test := range []struct {
+		lifetime, idle string
+		want           AdmissionLimits
+	}{
+		{"", "", AdmissionLimits{MaxLifetime: 2 * time.Hour, IdleTimeout: 15 * time.Minute}},
+		{"3600", "600", AdmissionLimits{MaxLifetime: time.Hour, IdleTimeout: 10 * time.Minute}},
+		{"43200", "43200", AdmissionLimits{MaxLifetime: 12 * time.Hour, IdleTimeout: 12 * time.Hour}},
+		{"14400", "", AdmissionLimits{MaxLifetime: 4 * time.Hour, IdleTimeout: 15 * time.Minute}},
+	} {
+		values := validEnvironment()
+		values[MaxLifetimeEnvironment] = test.lifetime
+		values[IdleTimeoutEnvironment] = test.idle
+		config, err := ConfigFromEnvironment(lookup(values), testUID)
+		if err != nil || config.Admission != test.want {
+			t.Fatalf("lifetime=%q idle=%q admission=%+v err=%v", test.lifetime, test.idle, config.Admission, err)
+		}
+	}
+	for name, values := range map[string][2]string{
+		"lifetime below one hour":      {"3599", ""},
+		"lifetime above twelve hours":  {"43201", ""},
+		"zero lifetime":                {"0", ""},
+		"negative lifetime":            {"-3600", ""},
+		"lifetime with a unit":         {"2h", ""},
+		"lifetime with a leading zero": {"07200", ""},
+		"lifetime with whitespace":     {" 7200", ""},
+		"idle below ten minutes":       {"", "599"},
+		"idle above the lifetime":      {"3600", "3601"},
+		"idle default above lifetime":  {"", "7201"},
+		"idle with a unit":             {"", "15m"},
+		"idle overflow":                {"", "99999999999999999999"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			environment := validEnvironment()
+			environment[MaxLifetimeEnvironment] = values[0]
+			environment[IdleTimeoutEnvironment] = values[1]
+			if _, err := ConfigFromEnvironment(lookup(environment), testUID); !errors.Is(err, ErrConfig) {
+				t.Fatalf("err=%v", err)
+			}
+		})
 	}
 }
 

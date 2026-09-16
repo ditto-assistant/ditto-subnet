@@ -25,6 +25,8 @@
       coding_certification_service_runtime_image_digest: "sha256:{{ '1' * 64 }}"
       coding_certification_service_pack_manifest_sha256: cb608113db0cc31001fe0a7294854453061f9e85d1471520100ce99eca97a903
       coding_certification_service_router_helper_sha256: "{{ '3' * 64 }}"
+      coding_certification_service_max_lifetime_seconds: 7200
+      coding_certification_service_idle_timeout_seconds: 900
   tasks:
     - name: Keep the shipped defaults disabled and empty
       ansible.builtin.assert:
@@ -33,6 +35,9 @@
           - coding_certification_service_render_root == ''
           - coding_certification_service_uid == 0
           - coding_certification_service_runtime_image_digest == ''
+          # Conservative, bounded admission defaults.
+          - coding_certification_service_max_lifetime_seconds == 7200
+          - coding_certification_service_idle_timeout_seconds == 900
 
     - name: Run the role with its defaults
       ansible.builtin.include_role:
@@ -93,6 +98,7 @@
           - "'SupplementaryGroups=ditto-coding-cert-clients' in service_unit"
           - "'RuntimeDirectory=ditto-coding-certification' in service_unit"
           - "'RuntimeDirectoryMode=0750' in service_unit"
+          - "'RuntimeDirectoryPreserve=yes' in service_unit"
           - "'LoadCredential=control-token:/etc/ditto-coding-certification/control-token' in service_unit"
           - "'BindReadOnlyPaths=/run/user/61001/dockerd-rootless/child_pid' in service_unit"
           - "'BindsTo=ditto-coding-certification-docker.service' in service_unit"
@@ -102,6 +108,8 @@
           - "'DITTOBENCH_CODING_CERTIFICATION_CONTROL_GID=61002' in environment_file"
           - "'DITTOBENCH_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST=sha256:' + '1' * 64 in environment_file"
           - "'DITTOBENCH_CODING_CERTIFICATION_ROUTER_HELPER_SHA256=' + '3' * 64 in environment_file"
+          - "'DITTOBENCH_CODING_CERTIFICATION_MAX_LIFETIME_SECONDS=7200' in environment_file"
+          - "'DITTOBENCH_CODING_CERTIFICATION_IDLE_TIMEOUT_SECONDS=900' in environment_file"
           - environment_file | select('search', 'SANDBOX|DOCKER_HOST|PROXY=|CA_BUNDLE|SSL_CERT|TOKEN') | reject('search', '^DITTOBENCH_CODING_CERTIFICATION_EGRESS_PROXY=') | list == []
 
     - name: Reject every incomplete or unsafe render profile
@@ -131,4 +139,11 @@
         - {name: runtime image tag, set: {coding_certification_service_runtime_image_digest: "latest"}}
         - {name: repository with a tag, set: {coding_certification_service_runtime_image_repository: "registry.invalid/runtime:latest"}}
         - {name: missing router helper digest, set: {coding_certification_service_router_helper_sha256: ""}}
+        - {name: lifetime below one hour, set: {coding_certification_service_max_lifetime_seconds: 3599}}
+        - {name: lifetime above twelve hours, set: {coding_certification_service_max_lifetime_seconds: 43201}}
+        - {name: zero lifetime, set: {coding_certification_service_max_lifetime_seconds: 0}}
+        - {name: lifetime with a unit, set: {coding_certification_service_max_lifetime_seconds: "2h"}}
+        - {name: idle below ten minutes, set: {coding_certification_service_idle_timeout_seconds: 599}}
+        - {name: idle above the lifetime, set: {coding_certification_service_max_lifetime_seconds: 3600, coding_certification_service_idle_timeout_seconds: 3601}}
+        - {name: idle with a leading zero, set: {coding_certification_service_idle_timeout_seconds: "0900"}}
         - {name: uppercase manifest digest, set: {coding_certification_service_pack_manifest_sha256: "CB608113DB0CC31001FE0A7294854453061F9E85D1471520100CE99ECA97A903"}}

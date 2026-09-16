@@ -12,6 +12,7 @@ from __future__ import annotations
 import math
 import os
 import re
+import stat
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from ipaddress import ip_address, ip_network
@@ -522,7 +523,9 @@ class ValidatorConfig:
 
     coding_certification_control_token: str = field(default="", repr=False)
     """The certification service's own bearer, distinct from the scorer's.
-    Sent only over the verified certification socket; never logged."""
+    Read once at startup from ``VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE``
+    (a mounted file, never an environment value that ``docker inspect`` would
+    show). Sent only over the verified certification socket; never logged."""
 
     coding_certification_runtime_image_digest: str = ""
     """Pinned ``sha256:`` runtime image digest the service must report ready."""
@@ -836,9 +839,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         else 0
     )
     coding_certification_control_token = (
-        os.environ.get("VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN", "").strip()
-        if coding_canary_enabled
-        else ""
+        _read_certification_control_token() if coding_canary_enabled else ""
     )
     coding_certification_runtime_image_digest = (
         os.environ.get(
@@ -1037,8 +1038,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     ):
         raise ValidatorConfigError(
             "enabled coding canary requires "
-            "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN (32-256 URL-safe "
-            "characters, distinct from the scorer control token)"
+            "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE to hold 32-256 "
+            "URL-safe characters, distinct from the scorer control token"
         )
     if config.coding_canary_enabled and (
         _CERTIFICATION_IMAGE_DIGEST.fullmatch(
@@ -1065,6 +1066,59 @@ def parse_validator_config_from_env() -> ValidatorConfig:
 
 
 _CERTIFICATION_IMAGE_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_CERTIFICATION_TOKEN_FILE_ENV = "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE"
+_CERTIFICATION_TOKEN_ENV = "VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN"
+_MAX_CERTIFICATION_TOKEN_FILE_BYTES = 257
+
+
+def _read_certification_control_token() -> str:
+    """Read the certification bearer from its mounted file.
+
+    The bearer is never accepted as an environment value: an environment value
+    is visible to ``docker inspect``. The path must be absolute and normalized,
+    the final component must not be a symlink, and the file must be a regular
+    file of at most 256 bytes plus one trailing newline. Errors never echo the
+    path contents.
+    """
+
+    if os.environ.get(_CERTIFICATION_TOKEN_ENV, ""):
+        raise ValidatorConfigError(
+            f"{_CERTIFICATION_TOKEN_ENV} is not accepted; mount the bearer as a "
+            f"file and set {_CERTIFICATION_TOKEN_FILE_ENV}"
+        )
+    path = os.environ.get(_CERTIFICATION_TOKEN_FILE_ENV, "").strip()
+    refused = ValidatorConfigError(
+        f"enabled coding canary requires {_CERTIFICATION_TOKEN_FILE_ENV} to name "
+        "a readable regular bearer file"
+    )
+    if not path.startswith("/") or os.path.normpath(path) != path or "\x00" in path:
+        raise refused
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as error:
+        raise refused from error
+    try:
+        status = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(status.st_mode)
+            or status.st_size > _MAX_CERTIFICATION_TOKEN_FILE_BYTES
+        ):
+            raise refused
+        body = os.read(descriptor, _MAX_CERTIFICATION_TOKEN_FILE_BYTES + 1)
+    except OSError as error:
+        raise refused from error
+    finally:
+        os.close(descriptor)
+    if len(body) > _MAX_CERTIFICATION_TOKEN_FILE_BYTES:
+        raise refused
+    if body.endswith(b"\n"):
+        body = body[:-1]
+    try:
+        return body.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise refused from error
+
+
 _CERTIFICATION_SHA256 = re.compile(r"[0-9a-f]{64}")
 
 

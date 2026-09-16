@@ -18,6 +18,10 @@ StateDirectoryMode=0700
 # client group, mode 0750. The service refuses any other ownership or mode.
 RuntimeDirectory=ditto-coding-certification
 RuntimeDirectoryMode=0750
+# The validator container bind-mounts this directory, not the socket. Keep the
+# directory (and so its inode) across service restarts; the service replaces
+# only its own stale socket inside it.
+RuntimeDirectoryPreserve=yes
 ExecStartPre=+/usr/bin/chown --no-dereference :{{ coding_certification_service_client_group }} /run/ditto-coding-certification
 EnvironmentFile=/usr/local/lib/ditto-coding-certification/ditto-coding-certification.env
 # The bearer is a root-only host file loaded as a systemd credential. This

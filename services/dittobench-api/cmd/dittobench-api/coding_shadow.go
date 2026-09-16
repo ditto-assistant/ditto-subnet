@@ -64,15 +64,20 @@ func codingRuntimeDockerFromEnvironment(getenv func(string) string, dockerHost s
 
 // installCodingHost isolates the default-off coding runtime from ordinary
 // scoring. A construction failure disables every coding route (they answer
-// 404, so the validator canary and shadow workers refuse) and is logged, but
-// the scorer keeps serving benchmark tickets.
+// 404, so the validator shadow worker refuses) and is logged, but the scorer
+// keeps serving benchmark tickets.
+//
+// The scorer serves no certification canary route. Certification runs only in
+// the host certification service (internal/codingcertservice), which the
+// validator reaches over its fixed Unix socket; the retired Compose route
+// could never pass readiness v2's topology proof.
 func installCodingHost(
 	build func() (*codinghost.Host, error),
 	logf func(string, ...any),
 ) *codinghost.Host {
 	host, err := build()
 	if err != nil {
-		logf("coding runtime refused; coding and certification canary routes stay disabled and ordinary scoring continues: %v", err)
+		logf("coding runtime refused; coding routes stay disabled and ordinary scoring continues: %v", err)
 		return nil
 	}
 	if host != nil {
@@ -94,7 +99,7 @@ func codingDockerHostFromEnvironment(getenv func(string) string) (string, error)
 }
 
 func codingShadowHostFromEnvironment(apiPort int, brokerPort int) (*codinghost.Host, error) {
-	if !envBool("DITTOBENCH_CODING_SHADOW_ENABLED") && !envBool("DITTOBENCH_CODING_CANARY_ENABLED") {
+	if !envBool("DITTOBENCH_CODING_SHADOW_ENABLED") {
 		return nil, nil
 	}
 	dockerHost, err := codingDockerHostFromEnvironment(os.Getenv)
@@ -156,8 +161,6 @@ func codingShadowHostFromEnvironment(apiPort int, brokerPort int) (*codinghost.H
 		SourceListener: listener, SourcePublicBaseURL: publicBase, Policy: policy,
 		RuntimeImageRepository: strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY")),
 		RuntimeImageDigest:     strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST")),
-		CanaryEnabled:          envBool("DITTOBENCH_CODING_CANARY_ENABLED"),
-		CertificationRoot:      strings.TrimSpace(os.Getenv("DITTOBENCH_CODING_CERTIFICATION_ROOT")),
 		Docker:                 docker, CandidateUID: uint32(candidateUID), CandidateGID: uint32(candidateGID),
 		MaxTotalBytes: 16 << 30, JournalMaxTotalBytes: 3 << 30, MaxAttempts: 64,
 	})

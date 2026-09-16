@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/rootlessnetns"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
@@ -66,6 +67,10 @@ const (
 	RuntimeDigestEnvironment     = "DITTOBENCH_CODING_CERTIFICATION_RUNTIME_IMAGE_DIGEST"
 	PackManifestEnvironment      = "DITTOBENCH_CODING_CERTIFICATION_PACK_MANIFEST_SHA256"
 	RouterHelperEnvironment      = "DITTOBENCH_CODING_CERTIFICATION_ROUTER_HELPER_SHA256"
+	// Optional admission bounds, in canonical decimal seconds. Empty selects
+	// DefaultMaxLifetime and DefaultIdleTimeout.
+	MaxLifetimeEnvironment = "DITTOBENCH_CODING_CERTIFICATION_MAX_LIFETIME_SECONDS"
+	IdleTimeoutEnvironment = "DITTOBENCH_CODING_CERTIFICATION_IDLE_TIMEOUT_SECONDS"
 )
 
 var (
@@ -98,6 +103,7 @@ type Config struct {
 	PrivateRoot         string
 	PolicyPath          string
 	CredentialDirectory string
+	Admission           AdmissionLimits
 }
 
 // ConfigFromEnvironment returns ErrDisabled unless the enable flag is exactly
@@ -136,6 +142,12 @@ func ConfigFromEnvironment(getenv func(string) string, euid int) (Config, error)
 		!sha256Pattern.MatchString(helper) {
 		return Config{}, ErrConfig
 	}
+	lifetime, lifetimeErr := optionalSeconds(getenv(MaxLifetimeEnvironment), DefaultMaxLifetime)
+	idle, idleErr := optionalSeconds(getenv(IdleTimeoutEnvironment), DefaultIdleTimeout)
+	admission := AdmissionLimits{MaxLifetime: lifetime, IdleTimeout: idle}
+	if lifetimeErr != nil || idleErr != nil || !admission.Valid() {
+		return Config{}, ErrConfig
+	}
 	credentials := getenv("CREDENTIALS_DIRECTORY")
 	if !strings.HasPrefix(credentials, "/run/credentials/") || strings.Contains(credentials, "..") ||
 		strings.ContainsAny(credentials, "\x00\n") {
@@ -148,7 +160,21 @@ func ConfigFromEnvironment(getenv func(string) string, euid int) (Config, error)
 		CertificationRoot:  CertificationRoot, ControlSocketPath: ControlSocketPath,
 		DockerSocketPath: DockerSocketPath, RouterHelperPath: RouterHelperPath,
 		PrivateRoot: PrivateRoot, PolicyPath: PolicyPath, CredentialDirectory: credentials,
+		Admission: admission,
 	}, nil
+}
+
+// optionalSeconds parses an optional canonical decimal number of seconds. Empty
+// selects fallback; bounds are checked by AdmissionLimits.Valid.
+func optionalSeconds(value string, fallback time.Duration) (time.Duration, error) {
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil || strconv.Itoa(parsed) != value || parsed < 1 || parsed > int(MaxMaxLifetime/time.Second) {
+		return 0, ErrConfig
+	}
+	return time.Duration(parsed) * time.Second, nil
 }
 
 // strictID accepts a canonical decimal ID in [1, 2^31-2]. Zero (root) and the

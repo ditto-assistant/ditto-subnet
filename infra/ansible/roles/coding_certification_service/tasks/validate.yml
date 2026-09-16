@@ -28,10 +28,19 @@
       - coding_certification_service_runtime_image_digest | string is match('^sha256:[0-9a-f]{64}\Z')
       - coding_certification_service_pack_manifest_sha256 | string is match('^[0-9a-f]{64}\Z')
       - coding_certification_service_router_helper_sha256 | string is match('^[0-9a-f]{64}\Z')
+      # Bounded admission window, shared with codingcertservice.AdmissionLimits.
+      - coding_certification_service_max_lifetime_seconds | string is match('^[1-9][0-9]{3,4}\Z')
+      - (coding_certification_service_max_lifetime_seconds | int) >= 3600
+      - (coding_certification_service_max_lifetime_seconds | int) <= 43200
+      - coding_certification_service_idle_timeout_seconds | string is match('^[1-9][0-9]{2,4}\Z')
+      - (coding_certification_service_idle_timeout_seconds | int) >= 600
+      - (coding_certification_service_idle_timeout_seconds | int) <= (coding_certification_service_max_lifetime_seconds | int)
     fail_msg: >-
       The certification service render needs an explicit controller-local
       render root outside system locations, non-root numeric ids, distinct
       user and client group names, a private IPv4 bip, a private IPv4 egress
       proxy, a Docker-grammar runtime repository, a sha256 runtime image digest
-      the pinned canary manifest digest and the pinned router helper digest.
+      the pinned canary manifest digest, the pinned router helper digest, a
+      lifetime of 3600-43200 seconds and an idle timeout of at least 600
+      seconds and at most that lifetime.
     quiet: true

@@ -17,6 +17,8 @@
     coding_certification_service_runtime_image_digest: "{{ case.set.coding_certification_service_runtime_image_digest if 'coding_certification_service_runtime_image_digest' in case.set else valid_profile.coding_certification_service_runtime_image_digest }}"
     coding_certification_service_pack_manifest_sha256: "{{ case.set.coding_certification_service_pack_manifest_sha256 if 'coding_certification_service_pack_manifest_sha256' in case.set else valid_profile.coding_certification_service_pack_manifest_sha256 }}"
     coding_certification_service_router_helper_sha256: "{{ case.set.coding_certification_service_router_helper_sha256 if 'coding_certification_service_router_helper_sha256' in case.set else valid_profile.coding_certification_service_router_helper_sha256 }}"
+    coding_certification_service_max_lifetime_seconds: "{{ case.set.coding_certification_service_max_lifetime_seconds if 'coding_certification_service_max_lifetime_seconds' in case.set else valid_profile.coding_certification_service_max_lifetime_seconds }}"
+    coding_certification_service_idle_timeout_seconds: "{{ case.set.coding_certification_service_idle_timeout_seconds if 'coding_certification_service_idle_timeout_seconds' in case.set else valid_profile.coding_certification_service_idle_timeout_seconds }}"
   block:
     - name: Evaluate {{ case.name }}
       ansible.builtin.include_tasks: ../roles/coding_certification_service/tasks/validate.yml

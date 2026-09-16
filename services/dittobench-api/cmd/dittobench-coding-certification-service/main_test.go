@@ -33,6 +33,7 @@ func TestExitCodesPrintOnlyFixedMessages(t *testing.T) {
 		want string
 	}{
 		{nil, exitOK, ""},
+		{fmt.Errorf("%w: %s", codingcertservice.ErrAdmissionEnded, secret), exitOK, codingcertservice.ErrAdmissionEnded.Error()},
 		{fmt.Errorf("%w: %s", codingcertservice.ErrDisabled, secret), exitDisabled, codingcertservice.ErrDisabled.Error()},
 		{fmt.Errorf("%w: %s", codingcertservice.ErrPlacement, secret), exitPlacement, codingcertservice.ErrPlacement.Error()},
 		{fmt.Errorf("%w: %s", codingcertservice.ErrConfig, secret), exitRefused, codingcertservice.ErrConfig.Error()},

@@ -52,41 +52,17 @@ validator_stack_coding_executor_ca_path: /var/lib/ditto-validator/coding-executo
 validator_stack_coding_executor_client_cert_path: /var/lib/ditto-validator/coding-executor-mtls/validator-client.pem
 validator_stack_coding_executor_client_key_path: /var/lib/ditto-validator/coding-executor-mtls/validator-client-key.pem
 
-# Contract-v1 public certification canary, independently double-gated and off.
+# Contract-v1 public certification canary, off by default.
 #
-# The scorer switch builds the whole scorer coding host, not just a route: the
-# private root and relay journal, the 0.0.0.0:11438 source listener, a live
-# probe of the dedicated coding daemon, the supervisor and publication routes,
-# the certification pack, and the canary and readiness routes. If any of that
-# fails, the scorer logs a refusal, every coding route answers 404, and ordinary
-# benchmark scoring continues. The runtime image identity and the coding daemon
-# endpoint are rendered only while the scorer switch is on.
-#
-# The validator switch issues and claims certification leases. It requires the
-# scorer switch and exact targets, and the worker still refuses before issue
-# unless the scorer's readiness probe reports the pack, the rootless isolated
-# daemon, and the runtime image as ready.
-validator_stack_dittobench_coding_canary_enabled: false
+# The validator switch issues and claims certification leases against the host
+# certification service (infra/docs/coding-certification-service.md), reached
+# only over its fixed Unix socket. It requires exact targets, and the worker
+# still refuses before issue unless that service's readiness probe reports the
+# pack, rootless topology, listener namespace, control socket, executor daemon
+# and pinned runtime image as ready. The Compose scorer's certification route
+# and its scorer switch are retired.
 validator_stack_coding_canary_enabled: false
 validator_stack_coding_canary_poll_seconds: 10
-validator_stack_coding_runtime_image_repository: ""
-validator_stack_coding_runtime_image_digest: ""
-# DITTOBENCH_CODING_DOCKER_HOST: the dedicated rootless coding daemon's local
-# socket, for example unix:///run/ditto-coding-executor/docker.sock. It is never
-# the stack's privileged rootful sandbox-docker daemon (tcp://127.0.0.1:2375).
-# This role does not install that daemon, its socket mount, its isolated-daemon
-# label, or its runtime image; they are a separately reviewed change. Until they
-# exist, leave both canary switches false.
-validator_stack_coding_docker_host: ""
-# The coding runtime's own container settings on that dedicated daemon:
-# DITTOBENCH_CODING_EGRESS_NETWORK (its egress-restricted network name),
-# DITTOBENCH_CODING_EGRESS_PROXY (exactly http://<private IPv4>:<port>) and
-# DITTOBENCH_CODING_HOST_GATEWAY_IP (the private IPv4 that host.docker.internal
-# names inside that daemon's network namespace). The scorer never falls back to
-# the ordinary DITTOBENCH_SANDBOX_* values or the OpenRouter shim CA bundle.
-validator_stack_coding_egress_network: ""
-validator_stack_coding_egress_proxy: ""
-validator_stack_coding_host_gateway_ip: ""
 # Exact certification canary targets. The empty defaults refuse every lease.
 # Each target is one mapping with exactly agent_id (canonical UUID),
 # artifact_sha256 and screened_image_sha256 (lowercase 64-hex), the same fields
@@ -97,6 +73,28 @@ validator_stack_coding_host_gateway_ip: ""
 # validator.
 validator_stack_coding_canary_targets: []
 validator_stack_coding_canary_validator_hotkey: ""
+# The host certification service's socket route, rendered only while the
+# validator switch is on (infra/docs/coding-certification-service.md). The
+# validator container bind-mounts the socket's parent directory,
+# /run/ditto-coding-certification, read-only, never the socket file, so a
+# service restart that recreates the socket keeps working; the service unit
+# preserves that directory across restarts. Off, the mount source is /dev/null.
+#
+# socket_uid and socket_gid pin the service user and the client group that
+# must own the directory and socket (the coding_certification_service role's
+# coding_certification_service_uid and coding_certification_service_client_gid).
+# runtime_image_digest and pack_manifest_sha256 must equal the service's pins.
+validator_stack_coding_certification_socket_uid: 0
+validator_stack_coding_certification_socket_gid: 0
+# Host path of the certification bearer file, for example the file the service
+# unit loads as its credential. Compose mounts it read-only as a secret at
+# /run/secrets/coding-certification-control-token and the validator reads it
+# through VALIDATOR_CODING_CERTIFICATION_CONTROL_TOKEN_FILE. The bearer is
+# never read, rendered or passed as an environment value by this role, because
+# container environment values are visible to docker inspect.
+validator_stack_coding_certification_control_token_path: ""
+validator_stack_coding_certification_runtime_image_digest: ""
+validator_stack_coding_certification_pack_manifest_sha256: ""
 
 validator_stack_cosign_version: v3.0.6
 validator_stack_cosign_linux_amd64_sha256: c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74

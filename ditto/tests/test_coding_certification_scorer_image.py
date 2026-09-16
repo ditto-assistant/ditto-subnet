@@ -201,15 +201,15 @@ def test_only_the_sandbox_scorer_carries_the_pack_at_a_traversable_fixed_root() 
     )
 
 
-def test_compose_points_the_gated_canary_at_the_baked_root_only() -> None:
+def test_compose_scorer_has_no_certification_route_or_host_pack_root() -> None:
     compose = yaml.safe_load(COMPOSE.read_text())
     scorer = compose["services"]["dittobench-api"]
     assert scorer["build"]["target"] == "sandbox"
     environment = scorer["environment"]
-    assert environment["DITTOBENCH_CODING_CANARY_ENABLED"] == (
-        "${DITTOBENCH_CODING_CANARY_ENABLED:-false}"
-    )
-    assert environment["DITTOBENCH_CODING_CERTIFICATION_ROOT"] == IMAGE_ROOT
+    # The Compose certification route and its switch are retired; nothing may
+    # select or mount another certification root into the scorer.
+    assert "DITTOBENCH_CODING_CANARY_ENABLED" not in environment
+    assert "DITTOBENCH_CODING_CERTIFICATION_ROOT" not in environment
     assert scorer["read_only"] is True
     for volume in scorer.get("volumes", []):
         target = volume.split(":")[1] if isinstance(volume, str) else volume["target"]

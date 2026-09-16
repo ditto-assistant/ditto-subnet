@@ -17,6 +17,9 @@ type Placement struct {
 	euid    int
 	router  net.Listener
 	control interface{ Verify() error }
+	// admission is the run's bounded admission window. Without one the
+	// listener is never reported ready.
+	admission interface{ permits(context.Context) bool }
 
 	verifyDockerSocket func(path string, euid int) error
 	bridgeGateway      func(ctx context.Context, socket string) (netip.Addr, error)
@@ -62,7 +65,12 @@ func (placement *Placement) Check(ctx context.Context) codingcanary.TopologyChec
 		return check
 	}
 	check.RootlessTopology = true
-	if placement.router == nil || placement.verifyListener(ctx, placement.router, placement.config.routerConfig()) != nil ||
+	// The listener is ready only inside its admission window: before the
+	// lifetime and idle bounds end, and for readiness with room for a whole
+	// certification. A certify request already in flight needs only an open
+	// window.
+	if placement.router == nil || placement.admission == nil || !placement.admission.permits(ctx) ||
+		placement.verifyListener(ctx, placement.router, placement.config.routerConfig()) != nil ||
 		ctx.Err() != nil {
 		return check
 	}

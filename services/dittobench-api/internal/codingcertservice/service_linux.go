@@ -81,15 +81,27 @@ func Run(ctx context.Context, getenv func(string) string, euid int) error {
 	if err := os.Mkdir(config.PrivateRoot, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 		return ErrUnavailable
 	}
+	// The admission window starts before the router listener exists. It ends
+	// the run at the lifetime or idle bound, whichever is first.
+	window, admitted := newAdmission(ctx, config.Admission, time.Now)
+	defer window.end()
+	placement.admission = window
 	router, err := rootlessnetns.Listen(startup, config.routerConfig())
 	if err != nil {
 		return ErrPlacement
 	}
 	placement.router = router
+	// Candidates reach the router only inside the admission window: every
+	// accepted connection is activity, and at the window's end the listener
+	// and all its connections are closed.
+	source, err := rootlessnetns.WithAuthority(admitted, window.Listener(router), window.Expires())
+	if err != nil {
+		return ErrUnavailable
+	}
 	// codinghost owns and closes the router listener from here, including on
 	// construction failure.
 	host, err := codinghost.New(codinghost.Config{
-		ControlToken: token, PrivateRoot: config.PrivateRoot, SourceListener: router,
+		ControlToken: token, PrivateRoot: config.PrivateRoot, SourceListener: source,
 		SourcePublicBaseURL:    "http://host.docker.internal:" + strconv.Itoa(int(config.RouterListen.Port())),
 		Policy:                 policy,
 		RuntimeImageRepository: config.RuntimeRepository, RuntimeImageDigest: config.RuntimeImageDigest,
@@ -116,7 +128,7 @@ func Run(ctx context.Context, getenv func(string) string, euid int) error {
 	}
 	placement.control = control
 	server := &http.Server{
-		Handler:           Routes(host.CanaryHandler(), host.CanaryReadinessHandler()),
+		Handler:           Routes(window.Certify(host.CanaryHandler()), host.CanaryReadinessHandler()),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
@@ -126,9 +138,10 @@ func Run(ctx context.Context, getenv func(string) string, euid int) error {
 	go func() { served <- server.Serve(control.Listener()) }()
 	var serveErr error
 	select {
-	case <-ctx.Done():
+	case <-admitted.Done():
 	case serveErr = <-served:
 	}
+	ended := ctx.Err() == nil && admitted.Err() != nil
 	shutdown, cancelShutdown := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancelShutdown()
 	_ = server.Shutdown(shutdown)
@@ -136,6 +149,9 @@ func Run(ctx context.Context, getenv func(string) string, euid int) error {
 	closeHost()
 	if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
 		return ErrUnavailable
+	}
+	if ended {
+		return ErrAdmissionEnded
 	}
 	return nil
 }
