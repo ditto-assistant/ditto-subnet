@@ -106,6 +106,8 @@ func memoryV13(mc protocol.MemoryCase, resp protocol.RunResponse, policy grading
 	verdict := gradeClaimV13(mc, resp, kind, an, lex, policy)
 	if len(mc.Claims) > 0 {
 		verdict = gradeClaimSetV13(mc, resp, an, lex, policy)
+	} else if verdict.Score > 0 {
+		verdict.Provenance = provenanceV13(mc, resp, ClaimAlternatives(mc))
 	}
 	verdict.Injection = injFlag
 	verdict.Notes = append(injNotes, verdict.Notes...)

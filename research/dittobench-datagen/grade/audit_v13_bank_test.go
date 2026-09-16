@@ -41,11 +41,16 @@ func TestV13ProvenanceBankGraderVerdicts(t *testing.T) {
 				t.Fatalf("%s: provenance source %q, want %q", vec.Name, v.Provenance.Source, wantSource)
 			}
 		}
-		// The v13 grading policy is v12 plus the provenance report: same score.
+		// Historical v12 scoring is unchanged. The typed v13 policy adds the
+		// slot-in-prose check, catching composed-slot before provenance.
 		v12 := vec.Case
 		v12.BenchVersion = protocol.BenchVersionV12
-		if got := Memory(v12, vec.Response); got.Score != v.Score || got.Provenance != nil {
-			t.Fatalf("%s: v12 re-grade score %.2f provenance %v, want %.2f and nil", vec.Name, got.Score, got.Provenance, v.Score)
+		wantV12 := v.Score
+		if vec.Name == "composed-slot" {
+			wantV12 = 1
+		}
+		if got := Memory(v12, vec.Response); got.Score != wantV12 || got.Provenance != nil {
+			t.Fatalf("%s: v12 re-grade score %.2f provenance %v, want %.2f and nil", vec.Name, got.Score, got.Provenance, wantV12)
 		}
 	}
 }

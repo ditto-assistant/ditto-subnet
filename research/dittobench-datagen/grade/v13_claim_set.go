@@ -15,6 +15,7 @@ import (
 func gradeClaimSetV13(mc protocol.MemoryCase, resp protocol.RunResponse, an analysis, lex claimLexicon, policy gradingPolicy) Verdict {
 	var weighted, total float64
 	var notes []string
+	var credited [][]string
 	for i, claim := range mc.Claims {
 		weight := claim.Weight
 		if weight == 0 {
@@ -83,13 +84,33 @@ func gradeClaimSetV13(mc protocol.MemoryCase, resp protocol.RunResponse, an anal
 			return Verdict{Notes: []string{fmt.Sprintf("critical claim %d (%s) not satisfied (scored 0)", i, claim.Kind)}}
 		}
 		weighted += weight * v.Score
+		if v.Score > 0 {
+			credited = append(credited, ClaimAlternatives(cm)...)
+		}
 		total += weight
 		notes = append(notes, fmt.Sprintf("claim %d (%s): %.3f", i, claim.Kind, v.Score))
 	}
 	if total == 0 || math.IsInf(total, 0) {
 		return Verdict{Notes: []string{"invalid v13 claim weights (scored 0)"}}
 	}
-	return Verdict{Score: weighted / total, Notes: notes}
+	return Verdict{Score: weighted / total, Notes: notes, Provenance: provenanceV13(mc, resp, credited)}
+}
+
+// Only the accepted forms of claims actually credited above are eligible.
+// Unanswered siblings and a stale flattened ExpectedAnswer are never evidence.
+func provenanceV13(mc protocol.MemoryCase, resp protocol.RunResponse, groups [][]string) *ClaimProvenance {
+	if len(groups) == 0 {
+		return nil
+	}
+	span, source := resp.FinalText, SpanSourceFinalText
+	if strings.TrimSpace(resp.Answer) != "" {
+		span, source = resp.Answer, SpanSourceAnswer
+	}
+	kind := mc.AnswerKind
+	if kind == "" {
+		kind = protocol.AnswerValue
+	}
+	return &ClaimProvenance{Span: span, Source: source, Kind: kind, Alternatives: groups}
 }
 
 func memoryForClaimV13(mc protocol.MemoryCase, claim protocol.Claim) (protocol.MemoryCase, bool) {

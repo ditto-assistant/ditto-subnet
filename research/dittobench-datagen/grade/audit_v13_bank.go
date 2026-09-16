@@ -186,8 +186,10 @@ var V13ProvenanceBank = []V13ProvenanceVector{
 			Harness:    []string{v13BankQuestion, "Records: " + v13BankRecords[0] + " " + v13BankRecords[1]},
 			Completion: []string{"The approved figure was $5,200.00 and the settled payment $1,089.33."},
 		}},
-		Records:            v13BankRecords,
-		WantCredited:       true,
+		Records: v13BankRecords,
+		// Typed v13 grading already rejects the locally composed slot when
+		// the model's prose asserts only the operands, not the answer.
+		WantCredited:       false,
 		WantModelEmitted:   false,
 		WantAnswerInPrompt: false,
 	},

@@ -466,10 +466,23 @@ func ClaimAlternatives(mc protocol.MemoryCase) [][]string {
 		group(forms...)
 	case protocol.AnswerMoney:
 		if major, ok := MoneyMajorForm(mc.ExpectedAnswer); ok {
-			group(major)
+			forms := []string{major}
+			if mc.BenchVersion >= protocol.BenchVersionV13 {
+				if lex, ok := lexiconFor(mc.Language); ok && requestedUnitV13(mc, lex) == protocol.AnswerUnitMinor {
+					forms = append(forms, mc.ExpectedAnswer)
+				}
+			}
+			group(forms...)
 		}
+	case protocol.AnswerDate:
+		group(append([]string{mc.ExpectedAnswer}, mc.AcceptAny...)...)
 	case protocol.AnswerDirection:
-		group(DirectionPhrases(mc.ExpectedAnswer)...)
+		forms := DirectionPhrases(mc.ExpectedAnswer)
+		if mc.BenchVersion >= protocol.BenchVersionV13 {
+			forms = append(forms, mc.ExpectedAnswer)
+			forms = append(forms, mc.AcceptAny...)
+		}
+		group(forms...)
 	case protocol.AnswerList, protocol.AnswerOrderedList:
 		for i, item := range mc.AnswerItems {
 			forms := []string{item}
