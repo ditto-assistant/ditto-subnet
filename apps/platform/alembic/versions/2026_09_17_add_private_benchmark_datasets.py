@@ -1,7 +1,7 @@
 """Immutable private benchmark artifacts; no live routing change.
 
 Revision ID: 61ef904ca8d2
-Revises: f2c8d41a6b90
+Revises: b63d4c1f820a
 """
 
 import sqlalchemy as sa
@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "61ef904ca8d2"
-down_revision = "f2c8d41a6b90"
+down_revision = "b63d4c1f820a"
 branch_labels = None
 depends_on = None
 
