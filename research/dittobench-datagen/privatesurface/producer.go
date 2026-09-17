@@ -64,7 +64,7 @@ func (p Profile) Digest() (string, error) {
 			return "", errors.New("private producer: invalid reasoning profile")
 		}
 	}
-	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "five-total-candidates-including-transient-retries-backoff-1s", "exact-byte-identity-validation-v1", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
+	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "five-total-candidates-including-transient-retries-backoff-1s", "exact-byte-identity-validation-v1", "schema-bound-final-preservation-v1", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
 	return digest(raw), nil
 }
 
@@ -244,13 +244,15 @@ func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, at
 		return "", SurfaceReceipt{}, err
 	}
 	prompt := rewritePrompt + contextPrompt
+	rewriteKind := "string"
 	if attempt > 0 {
 		prompt += retryPrompt
 	}
 	if attempt == maxSurfaceAttempts-1 {
 		prompt += preservationPrompt
+		rewriteKind = "null"
 	}
-	content, rewrite, err := c.complete(ctx, c.profile.RewriteModel, c.profile.RewriteProvider, prompt, map[string]any{"text": masked, "reference_text": req.Text, "protected": markers}, "text", "string", 0.7)
+	content, rewrite, err := c.complete(ctx, c.profile.RewriteModel, c.profile.RewriteProvider, prompt, map[string]any{"text": masked, "reference_text": req.Text, "protected": markers}, "text", rewriteKind, 0.7)
 	if err != nil {
 		return "", SurfaceReceipt{}, err
 	}
@@ -259,6 +261,9 @@ func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, at
 	}
 	if decodeSingleField(content, "text", &rewritten.Text) != nil {
 		return "", SurfaceReceipt{}, errors.New("private producer: malformed rewrite")
+	}
+	if rewriteKind == "null" && rewritten.Text != nil {
+		return "", SurfaceReceipt{}, errors.New("private producer: malformed preservation decision")
 	}
 	// Null is an explicit, schema-bound preservation decision by the writer,
 	// never a fallback on provider/parse failure. Restore the original masked

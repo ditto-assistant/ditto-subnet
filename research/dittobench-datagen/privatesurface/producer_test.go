@@ -248,15 +248,22 @@ func TestProduceSemanticRetriesAreBoundedAndRetained(t *testing.T) {
 		if strings.Contains(prompt, preservationPrompt) != (calls == 2*maxSurfaceAttempts-1) {
 			t.Error("preservation prompt must only be the final bounded candidate")
 		}
+		if calls == 2*maxSurfaceAttempts-1 {
+			format := request["response_format"].(map[string]any)["json_schema"].(map[string]any)["schema"].(map[string]any)
+			if format["properties"].(map[string]any)["text"].(map[string]any)["type"] != "null" {
+				t.Error("preservation must be schema-bound")
+			}
+			return 200, completion(`{"text":null}`)
+		}
 		return 200, completion(`{"text":"changed text"}`)
 	})
 	base := gen.DatasetArtifact{BenchVersion: 13, SurfaceSalt: 1, ToolCases: []protocol.ToolCase{{ID: "t", Prompt: "source text"}}}
 	var diagnostics []Diagnostic
 	data, receipt, err := c.ProduceWithDiagnostics(context.Background(), base, 1, func(d Diagnostic) { diagnostics = append(diagnostics, d) })
-	if err == nil || data != nil || receipt != nil || calls != 2*maxSurfaceAttempts {
+	if err == nil || data != nil || receipt != nil || calls != 2*maxSurfaceAttempts-1 {
 		t.Fatalf("retry boundary failed: calls=%d err=%v", calls, err)
 	}
-	if len(diagnostics) != 1 || len(diagnostics[0].Receipt.Rejected) != maxSurfaceAttempts {
+	if len(diagnostics) != 1 || len(diagnostics[0].Receipt.Rejected) != maxSurfaceAttempts-1 {
 		t.Fatal("missing rejected-call provenance")
 	}
 }
