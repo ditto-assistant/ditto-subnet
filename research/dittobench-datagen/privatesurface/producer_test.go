@@ -109,8 +109,9 @@ func TestRewriteHasIndependentValidationAndDigestReceipt(t *testing.T) {
 func TestRewriteReferenceContainsOnlyTheSameSource(t *testing.T) {
 	source := "Lois gos by Kit."
 	c := fakeClient(t, func(n int, request map[string]any) (int, any) {
-		if n == 2 {
-			return 200, completion(`{"accepted":true}`)
+		if n != 1 {
+			t.Error("exact identity must not call a probabilistic judge")
+			return 200, completion(`{"accepted":false}`)
 		}
 		messages := request["messages"].([]any)
 		var input map[string]any
@@ -121,9 +122,12 @@ func TestRewriteReferenceContainsOnlyTheSameSource(t *testing.T) {
 		out, _ := json.Marshal(map[string]any{"text": input["text"]})
 		return 200, completion(string(out))
 	})
-	after, _, err := c.RewriteOne(context.Background(), gen.PrivateSurfaceRequest{Location: "x", Text: source, Protected: []string{"Lois", "gos", "Kit"}})
+	after, receipt, err := c.RewriteOne(context.Background(), gen.PrivateSurfaceRequest{Location: "x", Text: source, Protected: []string{"Lois", "gos", "Kit"}})
 	if err != nil || after != source {
 		t.Fatalf("source-preserving candidate failed: %v", err)
+	}
+	if receipt.ValidationMethod != "exact-byte-identity-v1" || receipt.Validation.ID != "" || receipt.BeforeSHA256 != receipt.AfterSHA256 {
+		t.Fatal("identity proof must be explicit and never claim an LLM validation")
 	}
 }
 

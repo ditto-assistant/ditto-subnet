@@ -25,8 +25,10 @@ never receives answer values absent from that source. This prevents spelling-
 correcting a benchmark feature. A semantic rejection permits at most five
 candidates, each subject to the same judge. The receipt retains rejected-call
 provenance; exhausted retries still fail. The last candidate explicitly requests
-verbatim source preservation, but still goes through the independent judge and
-all artifact checks. Before/after hashes expose unchanged surfaces; they must
+verbatim source preservation. Exact byte equality is validated deterministically
+and recorded as `exact-byte-identity-v1`, without claiming an LLM validation.
+Every actual change still requires the independent judge; all candidates still
+pass the mechanical and artifact checks. Before/after hashes expose unchanged surfaces; they must
 not be counted as demonstrated private coverage. A completely unchanged artifact
 still fails. Transient network errors and provider 429/502/503/504 responses
 share the same five-total-candidate budget, with bounded cancellation-aware

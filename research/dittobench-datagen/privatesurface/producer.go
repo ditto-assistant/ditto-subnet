@@ -64,7 +64,7 @@ func (p Profile) Digest() (string, error) {
 			return "", errors.New("private producer: invalid reasoning profile")
 		}
 	}
-	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "five-total-candidates-including-transient-retries-backoff-1s", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
+	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "five-total-candidates-including-transient-retries-backoff-1s", "exact-byte-identity-validation-v1", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
 	return digest(raw), nil
 }
 
@@ -80,13 +80,14 @@ type CompletionReceipt struct {
 }
 
 type SurfaceReceipt struct {
-	LocationSHA256  string            `json:"location_sha256"`
-	BeforeSHA256    string            `json:"before_sha256"`
-	AfterSHA256     string            `json:"after_sha256"`
-	Rewrite         CompletionReceipt `json:"rewrite"`
-	Validation      CompletionReceipt `json:"validation"`
-	Rejected        []SurfaceReceipt  `json:"rejected,omitempty"`
-	RejectedReasons []string          `json:"rejected_reasons,omitempty"`
+	LocationSHA256   string            `json:"location_sha256"`
+	BeforeSHA256     string            `json:"before_sha256"`
+	AfterSHA256      string            `json:"after_sha256"`
+	Rewrite          CompletionReceipt `json:"rewrite"`
+	Validation       CompletionReceipt `json:"validation"`
+	ValidationMethod string            `json:"validation_method,omitempty"`
+	Rejected         []SurfaceReceipt  `json:"rejected,omitempty"`
+	RejectedReasons  []string          `json:"rejected_reasons,omitempty"`
 }
 
 type Receipt struct {
@@ -263,8 +264,14 @@ func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, at
 	if check != nil && check(req.Text, text) != nil {
 		return text, SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(text)), Rewrite: rewrite}, errProtected
 	}
+	// Exact byte identity proves semantic preservation without a probabilistic
+	// judge. This is explicitly not transformation/privacy evidence; Produce
+	// still rejects an entirely unchanged artifact and retains per-surface hashes.
+	if text == req.Text {
+		return text, SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(text)), Rewrite: rewrite, ValidationMethod: "exact-byte-identity-v1"}, nil
+	}
 	content, validation, err := c.complete(ctx, c.profile.ValidatorModel, c.profile.ValidatorProvider, validatePrompt, map[string]any{"before": req.Text, "after": *rewritten.Text, "protected": req.Protected}, "accepted", "boolean", 0)
-	receipt := SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(*rewritten.Text)), Rewrite: rewrite, Validation: validation}
+	receipt := SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(*rewritten.Text)), Rewrite: rewrite, Validation: validation, ValidationMethod: "independent-model-v1"}
 	if err != nil {
 		return *rewritten.Text, receipt, err
 	}
