@@ -14,15 +14,24 @@ design checklist; its foundation-only descriptions predate those later layers.
 
 Actual qualification remains blocked:
 
-- The 40-seed, full-profile public GIH control scored 0.237 on tool prompts and
-  0.7792607803 on quantity, below the required 0.90 per-slice floor. Registered
-  family names and successful report generation do not establish parser quality.
-  Report SHA-256: `3686b2b5d3b4421e4d088be54b541a60fd612e165242a4879e5749d0fbe27202`.
-- Bounded real small-profile producer runs have not yielded an accepted artifact.
-  Failures include altered protected text and semantic rejection. One run passed
-  all 205 individual semantic checks but failed the final global protected-value
-  check; that check now also runs before each semantic judgment. Failures remain
-  rejected and diagnostics remain private.
+- The repaired 40-seed, full-profile public GIH control scored 0.4105 on tool
+  prompts (previously 0.237) and 0.7792607803 on quantity, still below the required
+  0.90 per-slice floor. This report includes catalog-bound decoys, link reads and
+  unexpected-shape families; later discovery-response controls have focused
+  41-seed coverage, not a new complete control report. The parser diagnostic is
+  not the full runtime grader or honest-agent calibration.
+- A real small-profile candidate now passed generation and exact-byte decoder
+  replay using the same reserved seed/salt as a prior rejected run: 205 surfaces,
+  171 changed and 34 unchanged, approximately $0.88 reported completion usage.
+  This is not full-profile qualification. Failed candidates remain rejected and
+  diagnostics remain private. A final schema-bound explicit preservation choice
+  avoids corrupting protected values; provider failures never imply preservation.
+- Contract audit found ambiguous restraint triplets: semantically equivalent
+  requests for the same entity have contradictory per-member prerequisites, but
+  the scorer seeds all prerequisites into one shared graph before tool execution.
+  The request carries no visible case-to-record binding. A fair correction needs
+  an explicit versioning decision; do not use hidden expected answers or pair
+  mappings to make the control pass. Existing benchmark contracts are immutable.
 - Exact byte-identical candidates now use a deterministic identity proof. Actual
   rewrites still require independent semantic validation. Identity proofs and
   unchanged surfaces must not be counted as private-surface resistance.
@@ -51,8 +60,10 @@ Grading metadata, graph identities, fixtures, catalog and ordering remain fixed.
 
 `gen.DecodePrivateArtifact` checks exact downloaded bytes against an independently
 trusted lease SHA, identity/profile, and immutable fields against the salted base
-generator. It returns the received artifact, not a regenerated public substitute.
-It is a consumer integrity primitive, not yet wired into the running scorer.
+generator. It overlays only the verified stored text onto the generated contract
+to retain JSON-excluded grading claims, restraint rules and mutation dependencies.
+Stored text is never regenerated or silently replaced by public text. The scorer
+layer consumes this verified artifact; that integration is not yet deployed.
 
 Neither primitive proves semantic equivalence or resistance to inversion. A
 whitespace-only rewrite can pass mechanical checks. Test callbacks explicitly
