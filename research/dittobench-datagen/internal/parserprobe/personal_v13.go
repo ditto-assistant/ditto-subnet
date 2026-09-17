@@ -70,6 +70,9 @@ func answerPersonalV13(st *store, question string) derived {
 }
 
 func answerV13(st *store, question string) derived {
+	if d := answerBookedSeatsV13(st, question); d.ok {
+		return d
+	}
 	if d := answerStoryV13(st, question); d.ok {
 		return d
 	}
@@ -87,6 +90,24 @@ func answerV13(st *store, question string) derived {
 	}
 	if d := answerInjectionV13(st, question); d.ok {
 		return d
+	}
+	return derived{}
+}
+
+func answerBookedSeatsV13(st *store, question string) derived {
+	q := compileFrame("How many seats were actually booked for the %s event?")
+	q.literalBudget = 3
+	slots, ok := q.match(question)
+	if !ok {
+		return derived{}
+	}
+	r := compileFrame("Note on the %s event: if the larger venue had been approved we would have booked %s seats, but it was rejected. The number actually booked is %s seats.")
+	r.literalBudget = 3
+	for _, pair := range st.pairs {
+		values, matched := r.match(pair.Prompt)
+		if matched && fuzzyName(values[0], slots[0]) {
+			return derived{kind: protocol.AnswerNumber, value: values[2], family: "parser-divergence-hypothetical", ok: true}
+		}
 	}
 	return derived{}
 }

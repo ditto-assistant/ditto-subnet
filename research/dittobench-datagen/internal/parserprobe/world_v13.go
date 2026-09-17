@@ -33,6 +33,7 @@ var apRecordV13 = regexp.MustCompile(`\bAP-[A-Z0-9]+\b`)
 func matchV13(patterns []businessFrame, text string) map[string]string {
 	text = strings.ReplaceAll(text, ";", ",")
 	for _, p := range patterns {
+		p.frame.literalBudget = 3
 		if slots, ok := p.frame.match(text); ok {
 			values := map[string]string{}
 			for i, role := range p.roles {
@@ -52,10 +53,15 @@ func (s *store) ingestWorldV13(p protocol.MemoryPair) bool {
 		return false
 	}
 	for _, lead := range []string{"Oh, ", "So — ", "Quick one: ", "By the way, ", "Right, ", ""} {
-		if lead != "" && !strings.HasPrefix(text, lead) {
-			continue
+		patterns := make([]businessFrame, len(personIdentityV13))
+		for i, p := range personIdentityV13 {
+			patterns[i] = p
+			if lead != "" {
+				prefix := compileFrame(lead)
+				patterns[i].frame.tokens = append(prefix.tokens, p.frame.tokens...)
+			}
 		}
-		values := matchV13(personIdentityV13, strings.TrimPrefix(text, lead))
+		values := matchV13(patterns, text)
 		if values != nil {
 			pe := s.upsertPerson(values["name"])
 			pe.nickname, pe.relation = values["nick"], values["relation"]
@@ -67,8 +73,11 @@ func (s *store) ingestWorldV13(p protocol.MemoryPair) bool {
 		// A project identity consists of 3–4 public clauses in arbitrary order.
 		// Try complete sentence spans, including the one two-sentence variant.
 		parts := strings.SplitAfter(text, ".")
-		for i := range parts {
-			for j := i + 1; j <= len(parts) && j <= i+2; j++ {
+		// Prefer every one-sentence identity before trying two-sentence spans.
+		// Otherwise a leading vendor clause can become part of a name slot.
+		for width := 1; width <= 2; width++ {
+			for i := 0; i+width <= len(parts); i++ {
+				j := i + width
 				values := matchV13(projectIdentityV13, strings.TrimSpace(strings.Join(parts[i:j], "")))
 				if values == nil {
 					continue
@@ -86,11 +95,11 @@ func (s *store) ingestWorldV13(p protocol.MemoryPair) bool {
 	}
 	// Existing world frames still apply, but composed v13 typo projection can
 	// spend more than the legacy budget. Canonicalize only matched literals.
-	banks := [][]frame{personWorkFrames, personEmailFrames, personCorrFrames, projectLedgerFrames, projectCorrFrames, tripContextFrames, tripPlanFrames, tripCorrFrames}
+	banks := [][]frame{personWorkFrames, personEmailFrames, personCorrFrames, personToolNoteFrames, projectLedgerFrames, projectCorrFrames, projectToolNoteFrames, tripContextFrames, tripPlanFrames, tripCorrFrames, preferenceFrames}
 	for _, bank := range banks {
 		for _, base := range bank {
 			f := base
-			f.literalBudget = 2
+			f.literalBudget = 3
 			if slots, ok := f.match(text); ok {
 				var words []string
 				n := 0

@@ -134,14 +134,20 @@ func (f frame) match(text string) ([]string, bool) {
 				n = limit + 1 - attempt
 			}
 			first, last := words[wi], words[wi+n-1]
-			if !strings.HasPrefix(first, tok.prefix) {
+			prefix := tok.prefix
+			if f.literalBudget >= 3 && strings.HasSuffix(prefix, "-") && !strings.HasPrefix(first, prefix) {
+				if cut := strings.Index(first, "-"); cut >= 0 && fuzzyWordBudget(strings.ToLower(strings.TrimSuffix(prefix, "-")), strings.ToLower(first[:cut]), f.literalBudget) {
+					prefix = first[:cut+1]
+				}
+			}
+			if !strings.HasPrefix(first, prefix) {
 				break
 			}
 			if !strings.HasSuffix(last, tok.suffix) {
 				continue
 			}
 			value := strings.Join(words[wi:wi+n], " ")
-			value = strings.TrimPrefix(value, tok.prefix)
+			value = strings.TrimPrefix(value, prefix)
 			value = strings.TrimSuffix(value, tok.suffix)
 			if strings.TrimSpace(value) == "" {
 				continue
@@ -212,6 +218,20 @@ func fuzzyWordBudget(literal, word string, extraBudget int) bool {
 		return false
 	}
 	if lc == wc {
+		return true
+	}
+	// V13 composes noise independently on each word of a hyphenated term.
+	// Keep the legacy budget and punctuation behavior unchanged.
+	if extraBudget >= 3 && strings.Contains(lc, "-") {
+		left, right := strings.Split(lc, "-"), strings.Split(wc, "-")
+		if len(left) != len(right) {
+			return false
+		}
+		for i := range left {
+			if !fuzzyWordBudget(left[i], right[i], extraBudget) {
+				return false
+			}
+		}
 		return true
 	}
 	if eq, ok := grammarEquivalents[wc]; ok && eq == lc {

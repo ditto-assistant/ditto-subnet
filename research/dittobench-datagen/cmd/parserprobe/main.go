@@ -25,6 +25,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -73,6 +75,17 @@ func main() {
 			if !protocol.SupportedBenchVersion(a.BenchVersion) {
 				fmt.Fprintf(os.Stderr, "parserprobe: %s carries unsupported bench_version %d\n", path, a.BenchVersion)
 				os.Exit(2)
+			}
+			if a.SurfaceSalt != 0 {
+				// JSON omits claims, restraint rules and effect answers. Restore
+				// them from the current contract while retaining exact private text.
+				// This local content hash is not an external qualification approval.
+				h := sha256.Sum256(raw)
+				a, err = gen.DecodePrivateArtifact(raw, hex.EncodeToString(h[:]), a.Seed, *runSize)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "parserprobe: private artifact contract rejected")
+					os.Exit(2)
+				}
 			}
 			opts.Artifacts = append(opts.Artifacts, a)
 			opts.BenchVersion = a.BenchVersion

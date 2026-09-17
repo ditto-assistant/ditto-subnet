@@ -1,6 +1,7 @@
 package datagen
 
 import (
+	"fmt"
 	"sort"
 
 	"github.com/ditto-assistant/dittobench-datagen/persona"
@@ -42,6 +43,100 @@ type ToolSurface struct {
 type ToolIntent struct {
 	Prompt string
 	Value  string
+}
+
+// NamedToolGrammar exposes public rendering rules, never a sampled seed or
+// grading value. Slot captures must be resolved from delivered prompt/records.
+type NamedToolGrammar struct {
+	Category string
+	Grammar  persona.Grammar
+	Slots    []string
+	Value    string
+}
+
+func V13NamedToolGrammars() []NamedToolGrammar {
+	out := []NamedToolGrammar{
+		{"world_contact_research_email_result_usage", v13WorldContactEmailGrammar, []string{"subject", "nickname", "relation", "city", "context"}, ""},
+		{"world_theme_discover_set", v13WorldThemeDiscoverGrammar, []string{"accent"}, ""},
+		{"world_business_workflow", v13WorldBusinessWorkflowGrammar, []string{"alias", "client", "nickname"}, ""},
+		{"v10_state_dependent_routing", v13RoutingAskGrammar, []string{"alias"}, ""},
+		{V13StateDependentCalendarCategory, persona.Grammar{"root": {
+			"Get the \"#alias#\" review onto my calendar for #day# afternoon.",
+			"Make sure the \"#alias#\" review is on my calendar for #day#.",
+			"I want the \"#alias#\" review on my calendar #day# — sort that out.",
+		}}, []string{"alias", "day"}, ""},
+		{V13StateDependentEmailCategory, persona.Grammar{"root": {
+			"Get back to them on the \"#alias#\" numbers.",
+			"Send them the \"#alias#\" numbers now.",
+			"The \"#alias#\" figures are ready — get them out to them.",
+		}}, []string{"alias"}, ""},
+	}
+	for _, intent := range v13ArgIntentGrammars["set_effort"] {
+		out = append(out, NamedToolGrammar{"set_effort", intent.grammar, nil, intent.value})
+	}
+	for _, pair := range v13Unknowables {
+		for i, leads := range [][]string{v13UnknowableLeads, v13AnswerableLeads} {
+			var roots []string
+			for _, lead := range leads {
+				text := lead + pair[i] + "?"
+				if i == 1 {
+					text = v13Sentence(lead + pair[i])
+				}
+				roots = append(roots, text)
+			}
+			tool := ""
+			if i == 1 {
+				tool = "search_web"
+			}
+			out = append(out, NamedToolGrammar{V13RestraintCategoryPrefix + string(v13FamilyAbstention), persona.Grammar{"root": roots}, nil, tool})
+		}
+	}
+	for _, noun := range []string{"accent", "chat font", "color mode"} {
+		var roots []string
+		for _, lead := range v13LeadIns {
+			for _, verb := range []string{"make sure", "double-check that", "confirm", "see to it that", "check that"} {
+				for _, tail := range v13Trailers {
+					roots = append(roots, v13Sentence(lead+verb+" my Ditto "+noun+" is #value#"+tail))
+				}
+			}
+		}
+		out = append(out, NamedToolGrammar{V13RestraintCategoryPrefix + string(v13FamilyDeclarative), persona.Grammar{"root": roots}, []string{"value"}, noun})
+	}
+	for _, entry := range []struct {
+		category        string
+		patterns, roles []string
+	}{
+		{"world_memory_update", v13UpdatePrompts, []string{"alias", "client", "day"}},
+		{"world_memory_delete", v13DeletePrompts, []string{"nickname", "context", "relation", "employer"}},
+	} {
+		var roots []string
+		args := make([]any, len(entry.roles))
+		for i, role := range entry.roles {
+			args[i] = "#" + role + "#"
+		}
+		for _, pattern := range entry.patterns {
+			root := fmt.Sprintf(pattern, args...)
+			roots = append(roots, root)
+			if entry.category == "world_memory_update" {
+				for _, tail := range v13UpdateSecondFacts {
+					roots = append(roots, root+fmt.Sprintf(tail, "#reviewer#"))
+				}
+			}
+		}
+		roles := append([]string(nil), entry.roles...)
+		if entry.category == "world_memory_update" {
+			roles = append(roles, "reviewer")
+		}
+		out = append(out, NamedToolGrammar{entry.category, persona.Grammar{"root": roots}, roles, ""})
+	}
+	for i := range out {
+		copy := persona.Grammar{}
+		for key, values := range out[i].Grammar {
+			copy[key] = append([]string(nil), values...)
+		}
+		out[i].Grammar = copy
+	}
+	return out
 }
 
 // ToolSurfacesForVersion returns the category prompt banks the generator uses
