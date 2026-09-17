@@ -28,3 +28,29 @@ This layer contains the queue and real-PostgreSQL fencing tests only. Worker
 deployment, caller integration, bounded enqueue admission, Backroom readiness,
 qualification and safe closure/reveal are separate work. Nothing here turns on
 private V13 generation, issues a canary, or activates a benchmark.
+# Trusted producer worker
+
+`python -m ditto.private_benchmark_worker` prepares at most one queued artifact,
+then exits. It is not started by API boot. It checks the approved native binary
+SHA-256 and its `-profile-sha` output before claiming, then commits the claim
+before invoking inference. Completion and the immutable dataset pin commit in
+one fenced transaction. Cancellation leaves the claim recoverable; a known
+producer rejection is terminal and is not automatically retried.
+
+The separate worker environment requires `DITTO_PRIVATE_PRODUCER_EXECUTABLE`,
+`EXECUTABLE_SHA256`, `PROFILE_SHA256`, `WORK_ROOT`, `REWRITE_MODEL`,
+`REWRITE_PROVIDER`, `VALIDATOR_MODEL`, and `VALIDATOR_PROVIDER` (all with the
+same `DITTO_PRIVATE_PRODUCER_` prefix), plus `OPENROUTER_API_KEY` and ordinary
+Platform database configuration. Optional prefixed `REWRITE_REASONING`,
+`VALIDATOR_REASONING`, and `CONCURRENCY` bind explicit producer settings.
+No database/admin environment is inherited by the child. Profile inspection
+receives no provider credential. Child stdout/stderr are not forwarded.
+
+Deployment must separately provide a dedicated non-root UID, an owner-only
+0700 absolute work root with no symlink components, immutable approved binary,
+network restrictions, memory/CPU and disk quotas, private diagnostic retention,
+and bounded queue admission/billing. The worker itself has a two-hour deadline,
+kills its producer process group, and validates owner-only bounded regular
+output files. It retains private files for diagnosis; do not publish them as CI
+artifacts or expose them to miners. This layer is not production provisioning,
+qualification, lease authorization, or activation.

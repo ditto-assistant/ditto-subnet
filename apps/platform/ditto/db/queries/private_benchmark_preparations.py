@@ -66,9 +66,13 @@ async def request_private_preparation(
 ) -> UUID:
     """Idempotently reserve entropy once. Caller must commit before returning."""
     digest = identity.digest()
-    salt = secrets.token_bytes(8)
-    while salt == bytes(8):
+    salt = bytes(8)
+    for _ in range(2):
         salt = secrets.token_bytes(8)
+        if salt != bytes(8):
+            break
+    if salt == bytes(8):
+        raise PrivateDatasetError("private preparation entropy unavailable")
     try:
         await session.execute(
             insert(PrivateBenchmarkPreparation)
@@ -165,7 +169,10 @@ async def _owned_claim(
 ) -> PrivateBenchmarkPreparation:
     _time(now)
     row = await session.get(
-        PrivateBenchmarkPreparation, claim.preparation_id, with_for_update=True
+        PrivateBenchmarkPreparation,
+        claim.preparation_id,
+        with_for_update=True,
+        populate_existing=True,
     )
     if (
         row is None
