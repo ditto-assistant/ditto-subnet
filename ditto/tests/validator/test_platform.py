@@ -1787,6 +1787,71 @@ async def test_report_ticket_failed_raises_typed_error_on_rejection() -> None:
             ).report_ticket_failed(job, "scoring_error")
 
 
+# A non-200 on the artifact fetch used to be one undifferentiated
+# ``PlatformError``, which the worker's ``(DittobenchError, PlatformError)``
+# branch reports as ``scoring_error`` -- consuming one of the miner's finite
+# attempts. This call happens strictly before ``docker run``, so a Platform 5xx
+# charges them for an outage the harness never even reached: agent ``6d0aa2f5``
+# drove two validators to ``retry_budget_exhausted`` that way. Mirrors the split
+# ``submit_score`` already makes.
+@pytest.mark.parametrize("status", [500, 502, 503, 504, 408, 429])
+async def test_artifact_fetch_outage_is_platform_infrastructure(status: int) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status, json={"error_code": 3000, "message": "internal server error"}
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="artifact rejected"):
+            await PlatformClient(config, http, keypair).get_artifact(agent_id)  # type: ignore[arg-type]
+
+
+# The other half: a 4xx is deterministic in what this validator asked for, so it
+# must stay chargeable. A no-fault verdict here would re-lease a permanently
+# broken request without bound.
+@pytest.mark.parametrize("status", [400, 403, 404, 409, 422])
+async def test_artifact_fetch_client_refusal_stays_a_plain_platform_error(
+    status: int,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"message": "nope"})
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformError, match="artifact rejected") as captured:
+            await PlatformClient(config, http, keypair).get_artifact(agent_id)  # type: ignore[arg-type]
+    assert not isinstance(captured.value, PlatformInfrastructureError)
+
+
+async def test_artifact_fetch_transport_failure_is_platform_infrastructure() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="artifact fetch failed"):
+            await PlatformClient(config, http, keypair).get_artifact(agent_id)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     "invalid_image_fields",
     [
