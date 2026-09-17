@@ -229,7 +229,13 @@ func TestStoryProgramsAreInterpersonalComposedAndAnswerSafe(t *testing.T) {
 	}
 }
 
-func TestStoryBalanceIsComputedAndLessonAcceptsEquivalentPhrasing(t *testing.T) {
+// TestStoryV8BalanceIsComputedAndLessonAcceptsEquivalentPhrasing is the
+// grader-level proof for the frozen v8 story oracles (bench 8–12): computed
+// balances never appear verbatim in the evidence, every computed answer and
+// lesson equivalent grades 1, and the distractors grade 0. The v13 story v2
+// oracles are covered by TestStoryOraclesAreTypedAndLessonClaimSetsAccept in
+// story_v2_test.go; this one pins the immutable path.
+func TestStoryV8BalanceIsComputedAndLessonAcceptsEquivalentPhrasing(t *testing.T) {
 	w := Generate(44332211, 3)
 	pairs := storyPairMap(w)
 	seen := map[string]bool{}

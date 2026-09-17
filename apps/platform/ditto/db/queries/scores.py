@@ -220,6 +220,14 @@ class LedgerFamilyMember:
     agent_name: str
     agent_version: int | None
     canonical_composite: float
+    official_composite: float | None = None
+    """Continual / ranking composite for this generation, when known.
+
+    The compact board must show this, not ``canonical_composite``. The
+    three-validator median is a different estimator; pairing it with a
+    retest-seed chip made later uploads look like they outranked the
+    representative.
+    """
     submitted_at: datetime | None = None
     """When this generation arrived, for readers explaining the crown anchor.
 
@@ -878,6 +886,7 @@ async def upsert_score(
     signature: str | None = None,
     details: dict | None = None,
     model_usage: LeaseModelUsage | None = None,
+    gate_evidence: dict | None = None,
 ) -> None:
     """Insert or update the score for ``(agent_id, validator_hotkey)``.
 
@@ -890,6 +899,12 @@ async def upsert_score(
     ``None`` the three ``model_*`` columns are left untouched rather than
     written as ``NULL``: an unmeasured re-report must not erase a measurement
     an earlier report already made.
+
+    ``gate_evidence`` is the typed bench v13+ gate projection
+    (:func:`ditto.api_server.gate_evidence.build_gate_evidence`). Unlike the
+    model columns it is overwritten on every report, ``None`` included: it
+    describes *this* run, and a re-score that carries no evidence must not
+    keep showing the previous run's verdict.
 
     Raises:
         DbIntegrityError: Any constraint violation on ``scores`` (the FK to
@@ -915,6 +930,7 @@ async def upsert_score(
                 generated_at=generated_at,
                 signature=signature,
                 details=details,
+                gate_evidence=gate_evidence,
                 model_calls=None if model_usage is None else model_usage.chat_calls,
                 model_prompt_tokens=(
                     None if model_usage is None else model_usage.prompt_tokens
@@ -935,6 +951,7 @@ async def upsert_score(
         existing.generated_at = generated_at
         existing.signature = signature
         existing.details = details
+        existing.gate_evidence = gate_evidence
         if model_usage is not None:
             existing.model_calls = model_usage.chat_calls
             existing.model_prompt_tokens = model_usage.prompt_tokens
@@ -2344,6 +2361,7 @@ async def list_eligible_ledger(
             family_agent.c.name.label("family_agent_name"),
             family_agent.c.version.label("family_agent_version"),
             rooted.c.composite.label("family_canonical_composite"),
+            rooted.c.official_score.label("family_official_composite"),
         )
     else:
         family_columns = (
@@ -2351,6 +2369,7 @@ async def list_eligible_ledger(
             null().label("family_agent_name"),
             null().label("family_agent_version"),
             null().label("family_canonical_composite"),
+            null().label("family_official_composite"),
         )
     if v9_enforce:
         receipt_columns: tuple[ColumnElement[Any], ...] = (
@@ -2532,6 +2551,11 @@ async def list_eligible_ledger(
                 agent_name=member.family_agent_name,
                 agent_version=member.family_agent_version,
                 canonical_composite=float(member.family_canonical_composite),
+                official_composite=(
+                    float(member.family_official_composite)
+                    if member.family_official_composite is not None
+                    else None
+                ),
             )
             for member in group_rows
             if member.family_agent_id is not None

@@ -32,6 +32,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/ditto-assistant/dittobench-datagen/catalog"
+	"github.com/ditto-assistant/dittobench-datagen/internal/publicdata"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -88,15 +90,36 @@ func (n Needle) Sentence() string {
 // asks about its Subject) call this, so the question and the served answer are
 // always coherent without threading any state between them.
 func NeedleFor(masterSeed int64, caseID string) Needle {
-	return synthNeedle(rand.New(rand.NewSource(caseSeed(masterSeed, caseID))))
+	return NeedleForVersion(masterSeed, caseID, protocol.BenchVersionV2)
+}
+
+// NeedleForVersion is NeedleFor under an explicit contract. From v13 (#1825)
+// the coined subject name comes from the 1,500-stem Wikidata organisation
+// corpus instead of the twelve hand-coined names; the noun and the fabricated
+// value are unchanged in shape, so the served fact stays unguessable.
+func NeedleForVersion(masterSeed int64, caseID string, benchVersion int) Needle {
+	r := rand.New(rand.NewSource(caseSeed(masterSeed, caseID)))
+	if benchVersion >= protocol.BenchVersionV13 {
+		return synthNeedleWith(r, publicdata.OrgStem)
+	}
+	return synthNeedle(r)
 }
 
 // NeedleForV8World binds repeated subjects to one seed-local value and a
 // noun-compatible unit. It is used only by V8 world categories; frozen older
 // benchmark vectors continue through NeedleFor unchanged.
 func NeedleForV8World(masterSeed int64, caseID string) Needle {
+	return NeedleForV8WorldVersion(masterSeed, caseID, protocol.BenchVersionV8)
+}
+
+// NeedleForV8WorldVersion is NeedleForV8World under an explicit contract; from
+// v13 the subject name is drawn from the organisation-stem corpus.
+func NeedleForV8WorldVersion(masterSeed int64, caseID string, benchVersion int) Needle {
 	r := rand.New(rand.NewSource(caseSeed(masterSeed, caseID)))
 	name := coinedNames[r.Intn(len(coinedNames))]
+	if benchVersion >= protocol.BenchVersionV13 {
+		name = publicdata.OrgStem(r)
+	}
 	noun := coinedNouns[r.Intn(len(coinedNouns))]
 	subject := fmt.Sprintf("the %s %s", name, noun)
 	vr := rand.New(rand.NewSource(int64(fnv1a(fmt.Sprintf("%d|%s", masterSeed, subject))) & ((1 << 63) - 1)))
@@ -110,16 +133,59 @@ func NeedleForV8World(masterSeed int64, caseID string) Needle {
 // content (web/read/job); cases whose served tools return a bare confirmation
 // (settings, feedback, image) carry none.
 type Fixture struct {
-	seed      int64
-	needle    Needle
-	has       bool
-	bearer    string // the ONE expected content tool that serves the needle (see needleBearer)
-	decoy     string // a seed-derived number != needle.Value, served by non-bearer content tools
-	jobID     string // the stable job id execute_agent_job serves for this case
-	dependent bool   // a dependent-arg chain: get_agent_job_status gates the needle on jobID
-	recovery  bool   // an error-recovery case: the first content-tool call returns a transient error
-	linkDep   bool   // a dependent link chain: read_links gates the needle on pageURL
-	pageURL   string // the stable URL search_web serves for a link chain
+	seed int64
+	// benchVersion is the contract the fixture serves under. Content coined
+	// before v13 (names, sources, URLs, the discover_capabilities inventory) is
+	// frozen; v13 draws the same shapes from the public corpora. Zero means the
+	// legacy path.
+	benchVersion int
+	needle       Needle
+	has          bool
+	bearer       string // the ONE expected content tool that serves the needle (see needleBearer)
+	decoy        string // a seed-derived number != needle.Value, served by non-bearer content tools
+	jobID        string // the stable job id execute_agent_job serves for this case
+	dependent    bool   // a dependent-arg chain: get_agent_job_status gates the needle on jobID
+	recovery     bool   // an error-recovery case: the first content-tool call returns a transient error
+	linkDep      bool   // a dependent link chain: read_links gates the needle on pageURL
+	pageURL      string // the stable URL search_web serves for a link chain
+	inventory    catalog.Inventory
+	category     string
+	decoys       map[string]catalog.Decoy
+	coined       Coined
+}
+
+// v13 reports whether the fixture serves under the public-corpora contract.
+func (f Fixture) v13() bool { return f.benchVersion >= protocol.BenchVersionV13 }
+
+// coinedName draws a needle/decoy subject name: the frozen twelve before v13,
+// an organisation stem from the public corpus from v13.
+func (f Fixture) coinedName(r *rand.Rand) string {
+	if f.v13() {
+		return publicdata.OrgStem(r)
+	}
+	return coinedNames[r.Intn(len(coinedNames))]
+}
+
+// webSource names the outlet a search result is attributed to.
+func (f Fixture) webSource(r *rand.Rand) string {
+	if f.v13() {
+		return "the " + publicdata.OrgStem(r) + " " + webSourceNouns[r.Intn(len(webSourceNouns))]
+	}
+	return webSources[r.Intn(len(webSources))]
+}
+
+func (f Fixture) url(r *rand.Rand) string {
+	if f.v13() {
+		return coinedURLWith(r, publicdata.OrgStem)
+	}
+	return coinedURL(r)
+}
+
+func (f Fixture) title(r *rand.Rand) string {
+	if f.v13() {
+		return fmt.Sprintf("The %s %s: an overview", publicdata.OrgStem(r), coinedNouns[r.Intn(len(coinedNouns))])
+	}
+	return coinedTitle(r)
 }
 
 // jobChainMarker tags a dependent-arg result-usage category: execute_agent_job
@@ -151,9 +217,23 @@ const linkChainMarker = "link_chain"
 // IsLinkChain reports whether a category is a dependent-arg link chain.
 func IsLinkChain(category string) bool { return strings.Contains(category, linkChainMarker) }
 
-// BuildFixture derives the deterministic mock environment for one tool case.
+// BuildFixture derives the deterministic mock environment for one tool case
+// under the frozen pre-v13 content pools.
 func BuildFixture(masterSeed int64, c protocol.ToolCase) Fixture {
+	return BuildFixtureForVersion(masterSeed, c, protocol.BenchVersionV2)
+}
+
+// BuildFixtureForVersion derives the mock environment for one tool case under
+// an explicit contract. Versions below v13 are byte-identical to BuildFixture.
+// From v13 (#1825) the coined needle names, web sources, URL hosts, and the
+// discover_capabilities appearance inventory come from the public corpora, and
+// the inventory names the seed's true accent and font among corpus near-misses
+// (internal/appearance) rather than a fixed eight-colour string.
+func BuildFixtureForVersion(masterSeed int64, c protocol.ToolCase, benchVersion int) Fixture {
 	f := Fixture{seed: caseSeed(masterSeed, c.ID)}
+	if benchVersion >= protocol.BenchVersionV13 {
+		return buildFixtureV13(masterSeed, benchVersion, c)
+	}
 	f.jobID = jobIDForSeed(f.seed)
 	f.dependent = IsJobChain(c.Category)
 	f.recovery = IsErrorRecovery(c.Category)
@@ -162,9 +242,9 @@ func BuildFixture(masterSeed int64, c protocol.ToolCase) Fixture {
 		f.pageURL = pageURLForSeed(f.seed)
 	}
 	if caseCarriesNeedle(c) {
-		f.needle = NeedleFor(masterSeed, c.ID)
+		f.needle = NeedleForVersion(masterSeed, c.ID, benchVersion)
 		if strings.HasPrefix(c.Category, "world_") {
-			f.needle = NeedleForV8World(masterSeed, c.ID)
+			f.needle = NeedleForV8WorldVersion(masterSeed, c.ID, benchVersion)
 		}
 		f.has = true
 		f.bearer = needleBearer(c)
@@ -286,14 +366,19 @@ func (f Fixture) Result(name string, args json.RawMessage) (string, bool) {
 	// bearer; every other content tool serves a plausible decoy (a wrong number),
 	// so a harness cannot fish the answer from the easiest/wrong tool.
 	serveNeedle := f.has && name == f.bearer
+	if f.benchVersion >= protocol.BenchVersionV13 {
+		if out, handled := f.resultV13(name, args, r, serveNeedle); handled {
+			return out, true
+		}
+	}
 	switch name {
 	case "search_web":
-		src := webSources[r.Intn(len(webSources))]
+		src := f.webSource(r)
 		body := f.decoySentence(r)
 		if serveNeedle {
 			body = f.needleSentence()
 		}
-		url := coinedURL(r)
+		url := f.url(r)
 		if f.linkDep {
 			// Dependent link chain: the served URL is the case's STABLE pageURL
 			// (args-independent), so the harness has a fixed value to thread into
@@ -313,7 +398,7 @@ func (f Fixture) Result(name string, args json.RawMessage) (string, bool) {
 		if serveNeedle {
 			body = f.needleSentence()
 		}
-		return fmt.Sprintf("%s\n\n%s", coinedTitle(r), body), true
+		return fmt.Sprintf("%s\n\n%s", f.title(r), body), true
 	case "execute_agent_job":
 		// Serve the case's STABLE job id (not an args-derived one) so a dependent
 		// chain has a fixed value to thread into get_agent_job_status.
@@ -341,9 +426,9 @@ func (f Fixture) Result(name string, args json.RawMessage) (string, bool) {
 		}
 		return fmt.Sprintf("Workflow run %s finished. %s", jobID(r), body), true
 	case "create_image", "edit_image":
-		return fmt.Sprintf("Image generated: %s", coinedURL(r)), true
+		return fmt.Sprintf("Image generated: %s", f.url(r)), true
 	case "artifacts":
-		return fmt.Sprintf("Artifact created: %s", coinedURL(r)), true
+		return fmt.Sprintf("Artifact created: %s", f.url(r)), true
 	case "file_feedback_for_team":
 		return fmt.Sprintf("Thanks — your feedback was filed (ticket %s).", jobID(r)), true
 	case "list_workflows":
@@ -473,7 +558,7 @@ func (f Fixture) secondDecoy(r *rand.Rand) (string, string) {
 	primary := f.decoySubject()
 	subj := primary
 	for i := 0; i < 8; i++ {
-		name := coinedNames[r.Intn(len(coinedNames))]
+		name := f.coinedName(r)
 		noun := coinedNouns[r.Intn(len(coinedNouns))]
 		subj = "the " + name + " " + noun
 		if subj != f.needle.Subject && subj != primary {
@@ -494,7 +579,7 @@ func (f Fixture) secondDecoy(r *rand.Rand) (string, string) {
 // clause/result. Deterministic in the fixture seed.
 func (f Fixture) decoySubject() string {
 	r := rand.New(rand.NewSource(f.seed ^ int64(fnv1a("decoy-subj"))))
-	name := coinedNames[r.Intn(len(coinedNames))]
+	name := f.coinedName(r)
 	nounIdx := r.Intn(len(coinedNouns))
 	subj := fmt.Sprintf("the %s %s", name, coinedNouns[nounIdx])
 	if subj == f.needle.Subject { // avoid colliding with the real subject
@@ -531,13 +616,25 @@ var (
 		"the Ansible Gazette", "Torva Daily", "the Merridian Review",
 		"Halcyon Times", "the Verge of Nowhere", "Solaris Wire",
 	}
+	// webSourceNouns pair with an organisation stem for v13 outlets ("the Talgo
+	// Gazette"): 1,500 stems x 12 nouns instead of six fixed names.
+	webSourceNouns = []string{
+		"Gazette", "Daily", "Review", "Times", "Wire", "Ledger",
+		"Herald", "Dispatch", "Bulletin", "Journal", "Observer", "Tribune",
+	}
 )
 
 // synthNeedle coins a fabricated fact "the <Name> <noun> reached <number>
 // <unit>": a distinctive, unguessable value a correct result-usage answer must
 // echo (it exists only in the served content).
 func synthNeedle(r *rand.Rand) Needle {
-	name := coinedNames[r.Intn(len(coinedNames))]
+	return synthNeedleWith(r, func(r *rand.Rand) string { return coinedNames[r.Intn(len(coinedNames))] })
+}
+
+// synthNeedleWith is synthNeedle with an explicit subject-name source (the
+// frozen coined names, or from v13 the organisation-stem corpus).
+func synthNeedleWith(r *rand.Rand, nameOf func(*rand.Rand) string) Needle {
+	name := nameOf(r)
 	noun := coinedNouns[r.Intn(len(coinedNouns))]
 	num := 100 + r.Intn(99900) // 100..99999
 	unit := []string{"points", "acre-feet", "units", "basis points", "kilotonnes", "megawatts", "parsecs", "hectares"}[r.Intn(8)]
@@ -545,7 +642,11 @@ func synthNeedle(r *rand.Rand) Needle {
 }
 
 func coinedURL(r *rand.Rand) string {
-	host := strings.ToLower(coinedNames[r.Intn(len(coinedNames))])
+	return coinedURLWith(r, func(r *rand.Rand) string { return coinedNames[r.Intn(len(coinedNames))] })
+}
+
+func coinedURLWith(r *rand.Rand, nameOf func(*rand.Rand) string) string {
+	host := strings.ToLower(nameOf(r))
 	slug := strings.ToLower(coinedNouns[r.Intn(len(coinedNouns))])
 	return fmt.Sprintf("https://%s.example/%s-%d", host, slug, 1000+r.Intn(9000))
 }
@@ -705,6 +806,20 @@ func (s *Server) Observed(caseID string) []protocol.ObservedToolCall {
 	return out
 }
 
+// ObservedAction reports whether the harness executed the named tool for a
+// case, returning the first such call. It is the mock-side observation a
+// memory case's forbidden action (MemoryCase.BaitTool) is graded on: the call
+// reached the validator's endpoint, so it cannot be scrubbed from the harness
+// text. Name matching is case-insensitive like the grader's bait check.
+func (s *Server) ObservedAction(caseID, name string) (protocol.ObservedToolCall, bool) {
+	for _, call := range s.Observed(caseID) {
+		if strings.EqualFold(strings.TrimSpace(call.Name), name) {
+			return call, true
+		}
+	}
+	return protocol.ObservedToolCall{}, false
+}
+
 // maxToolBody caps a tool-exec request body (args are tiny).
 const maxToolBody = 64 << 10
 
@@ -755,6 +870,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// on the retry, so a harness that does not recover cannot answer.
 	if fixture.recovery && contentTools[req.Name] && priorSameTool == 0 {
 		writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Error: "transient upstream error (503); retry"})
+		return
+	}
+
+	// Bench v13: a decoy that is not this case's bearer is "not configured",
+	// and a setter given an unlisted/invalid value is refused without echoing
+	// any canonical spelling. Both are recorded above as ordinary calls.
+	if msg, refused := fixture.unavailable(req.Name, req.Args); refused {
+		writeJSON(w, http.StatusOK, protocol.ToolExecResponse{Error: msg})
 		return
 	}
 

@@ -13,6 +13,7 @@ import type { JSX } from "solid-js";
 
 import { pct, relTime, relTimeUntil, shortKey } from "../../lib/format";
 import type { ValidatorWeightView } from "../../lib/scoring";
+import { matchesPinLabel } from "../../lib/scoring";
 import { pushEntityRoute } from "../../stores/routeStore";
 import type { ConfirmationProgress, FleetEntry, HostSpecs, SystemMetrics } from "../../types/fleet";
 import type { BenchmarkProgress } from "../../types/pipeline";
@@ -760,6 +761,13 @@ function FleetChainWeights(props: {
         On-chain weights
         <Show when={props.chainVectors.stale}>
           <span class="chain-weights-stale">stale</span>
+        </Show>
+        <Show when={vector()?.matchesPin && vector()?.matchesPin !== "unknown"}>
+          {(_) => (
+            <span class={"pin-badge chain-vector-pin " + vector()?.matchesPin}>
+              {matchesPinLabel(vector()?.matchesPin)}
+            </span>
+          )}
         </Show>
       </span>
       <Show when={vector()} fallback={<span class="fleet-chain-weights-none">none revealed</span>}>

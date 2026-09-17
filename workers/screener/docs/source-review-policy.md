@@ -11,9 +11,24 @@ operator may reject a submission. Historical v9 findings retain their original
 wire identity and are not silently reinterpreted; v10 applies to new or
 explicitly rescreened attempts.
 
-## Policy v12 (in place, activation pending)
+## Policy v13 (published, activation pending)
 
-Policy v12 is the second scheduled activation under the bench-scaling loop. It
+Policy v13 replaces identifier-oriented review guidance with the mechanism-based
+white and black checklist in [policy-v13.md](policy-v13.md). It adds I8
+evaluation independence, explicit final-field and capability-removal rules,
+lifecycle security coverage, role-based opaque-component verification, and two
+final operator outcomes: `CLEAR` and `REJECT`. Screening outcomes such as pass,
+quarantine, retry, and inconclusive remain processing evidence rather than final
+operator dispositions.
+
+The built-in version does not activate itself. Activation requires a separately
+recorded schedule plus the readiness, transition, and emission-gate conditions
+listed in the v13 document. Historical policy-v10-v12 invariant assessments keep
+their seven-decision schema; policy v13 signs the eight-decision I1-I8 schema.
+
+## Policy v12 (activated 2026-09-06)
+
+Policy v12 was the second scheduled activation under the bench-scaling loop. It
 was triggered by the 2026-09-06 review of the aceron_v13/aceron_v14 lineage and
 the wider board: about ten of the top eighteen agents post-process the graded
 `answer` slot after the deciding model has spoken because the bench v12 money
@@ -229,12 +244,14 @@ Synthetic source fixtures must encode the adjudicated top-five patterns:
   re-screen is the fair mechanism, not retroactive enforcement.
 
 A deterministic source-review step, read, token, or cost budget exhaustion is
-not infrastructure failure and must not retry forever. After archive, build,
-runtime, isolation, duplicate/oracle, and other cheap fail-closed gates pass, the
-screener may emit a signed `pass_inconclusive` with bounded accounting. The
-platform admits the artifact for scoring and can claim a separate deep review
-when its score or rank warrants one. Concrete cheap-gate violations remain
-authoritative; only the exhausted deep review is deferred.
+not infrastructure failure and must not retry forever. Historical v10-v12
+attempts may emit a signed `pass_inconclusive` with bounded accounting after the
+cheap fail-closed gates pass. Policy v13 instead transports the same unresolved
+review as signed, non-passing `inconclusive` processing evidence; it cannot
+admit the artifact. The published retry/deadline finalizer must later record
+`REJECT` with `violation_proven: false` and the correct V1/V2/V3 failure domain
+if verification still cannot complete. Concrete cheap-gate violations remain
+authoritative.
 
 ## Allowed optimization
 
@@ -482,6 +499,28 @@ path, never automatic bans: `prompt_tokens: 0`, `VERIFIED RESULT`,
 hit is a search prompt. Apply the two-limb and production-engine tests
 before citing a finding. Absence of older names such as `asks_outstanding`
 is not a pass if these compilers remain reachable.
+
+The publicly released keep/declarative-preference compiler (policy v13 I5
+`benchmark_semantic_compiler` rejections of aceron_v17, aceron_v20,
+aceron_v21, TeaCUP v3, and TeaCUP v4) has two static leads:
+
+- `declarative-preference-turn-directive` (high) fires when a
+  preference/keep/no-change gate, or a `ToolRequirement::Candidate` /
+  `NotNeeded` gate, selects fixed no-change prose within six lines ("DECLARATIVE
+  PREFERENCE TURN", "Nothing in this request asks for a change", "asks to
+  preserve a state, without asking for an immediate transition").
+- `keep-continuity-capability-rekey` (medium) fires when a leading `keep`
+  command test, a candidate-tool probe for an `effort` property or a
+  persist/operational description, and a `Required`/`Candidate` requirement
+  transition co-occur within forty lines (the aceron_v21 re-key).
+
+The "my normal"/"my usual" cue list, the habitual-word list, and the
+`keep_as_preference` / `declarative_preference` classifier are deliberately
+not leads by themselves: a cleared fork kept the classifier verbatim while its
+acknowledgement prompt was `#[cfg(test)]` and the classifier only reordered
+tools. Both leads skip Rust items restricted to the test build. A hit is a
+review lead, never a reject: trace the gate to the served `/run` prompt or
+routing effect before citing I5.
 
 Live schema-driven retrieval/reranking, runtime-described semantics, generic
 state reconstruction, and bounded shape-only correction remain allowed through

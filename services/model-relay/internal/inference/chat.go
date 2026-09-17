@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ditto-assistant/model-relay/internal/config"
 	"github.com/ditto-assistant/model-relay/internal/postgres"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
 	"github.com/ditto-assistant/model-relay/internal/traces"
@@ -366,8 +367,23 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// finally). The deferred copy is a no-op when the explicit call ran.
 	defer settle()
 
-	recovered, exhausted := completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model,
-		reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
+	var recovered *chatCompletionResult
+	var exhausted *chatProviderExhausted
+	// Ditto Router dogfood: only when the competition lane is explicitly on
+	// and this agent's miner linked a consenting Ditto account. Everyone else
+	// keeps the centralized OpenRouter path below, byte for byte.
+	if d.Cfg != nil && d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
+		if onBehalfOf, linked := d.dittoRouterOnBehalfOf(ctx, reservedGrant.AgentID); linked {
+			recovered, exhausted = completeChatViaDittoRouter(ctx, d.Upstream, cfg, d.Cfg.DittoRouter,
+				upstreamPayload, model, onBehalfOf, d.sleep())
+		} else {
+			recovered, exhausted = completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model,
+				reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
+		}
+	} else {
+		recovered, exhausted = completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model,
+			reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
+	}
 	if exhausted != nil {
 		if status, overloaded := receiptFreeOverload(
 			exhausted.phases, model, reservedGrant.RouteProvider.String,

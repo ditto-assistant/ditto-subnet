@@ -32,7 +32,8 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
-from ditto.chain.models import NeuronInfo
+from ditto.chain.errors import ChainConnectionError
+from ditto.chain.models import EpochSchedule, NeuronInfo
 from ditto.db.models import (
     Agent,
     BenchmarkRollout,
@@ -766,6 +767,288 @@ class TestScoringLedger:
         assert resp.json()["error_code"] == ERROR_CODE_VALIDATOR_AUTH
 
 
+def _schedule(epoch_index: int, *, block: int) -> EpochSchedule:
+    """SN118's real shape: tempo 360, boundary two blocks before ``block``."""
+    return EpochSchedule(
+        netuid=118,
+        subnet_epoch_index=epoch_index,
+        last_epoch_block=block - 2,
+        pending_epoch_at=0,
+        tempo=360,
+        blocks_since_last_step=2,
+        block=block,
+        block_hash="0x" + "ab" * 32,
+        block_timestamp=1_789_000_000,
+        next_epoch_block=block - 2 + 360,
+    )
+
+
+def _install_epoch_chain(app: FastAPI, schedule: EpochSchedule | None) -> AsyncMock:
+    """The pin reads the chain through app.state, not the request dependency."""
+    read = (
+        AsyncMock(return_value=schedule)
+        if schedule is not None
+        else AsyncMock(side_effect=ChainConnectionError("archive node down"))
+    )
+    app.state.chain = SimpleNamespace(read_epoch_schedule=read)
+    return read
+
+
+class TestEpochPinnedLedger:
+    """One frozen ledger per chain epoch; every validator gets the same bytes."""
+
+    async def test_two_validators_in_one_epoch_receive_identical_pinned_bytes(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert body["epoch_index"] == 25_028
+        assert body["pinned_block"] == 9_033_471
+        assert body["stale"] is False
+        assert len(body["ledger_digest"]) == 64
+        assert body.get("crown_mode") is None
+        assert "crown_incumbent_agent_id" not in body
+        assert [entry["miner_hotkey"] for entry in body["entries"]] == [_MINER]
+
+        # A ledger change inside the epoch is invisible until the next pin ...
+        await _seed_scored(
+            session_maker,
+            miner="5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+            composite=0.95,
+        )
+        second = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert second.status_code == 200
+        assert second.json()["entries"] == body["entries"]
+        assert second.json()["ledger_digest"] == body["ledger_digest"]
+        # ... and the cached pin is served without another chain read per call.
+        assert read.await_count == 2  # one schedule read per request, no rebuild
+
+        # The next chain epoch takes a fresh pin that carries the change.
+        read.return_value = _schedule(25_029, block=9_033_831)
+        third = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert third.status_code == 200
+        assert third.json()["epoch_index"] == 25_029
+        assert len(third.json()["entries"]) == 2
+        assert third.json()["ledger_digest"] != body["ledger_digest"]
+
+    async def test_unreadable_chain_serves_the_previous_pin_flagged_stale(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        pinned = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert pinned.status_code == 200 and pinned.json()["epoch_index"] == 25_028
+
+        _install_epoch_chain(app, None)
+        fallback = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert fallback.status_code == 200
+        body = fallback.json()
+        assert body["epoch_index"] == 25_028
+        assert body["stale"] is True
+        assert body["ledger_digest"] == pinned.json()["ledger_digest"]
+        # Every validator gets that same answer, never a live read for some.
+        again = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert again.json()["ledger_digest"] == body["ledger_digest"]
+
+    async def test_no_pin_yet_falls_through_to_the_live_read(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        _install_epoch_chain(app, None)
+        live = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert live.status_code == 200
+        body = live.json()
+        assert "epoch_index" not in body
+        assert "ledger_digest" not in body
+        assert body["stale"] is False
+        assert [entry["miner_hotkey"] for entry in body["entries"]] == [_MINER]
+
+    async def test_live_mode_bypasses_the_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        settings = ContinualRetestSettings(ledger_pin_mode="live").model_dump(
+            mode="json"
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="roll the ledger back to the live read",
+                    actor="operator@example.com",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.continual_retest_settings.invalidate()
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        live = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert live.status_code == 200
+        assert "epoch_index" not in live.json()
+        read.assert_not_awaited()
+
+    async def test_policy_flip_lands_at_the_next_pin_not_mid_epoch(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        initial = app.state.config.efficiency_bonus
+        resolve = AsyncMock(return_value=initial)
+        monkeypatch.setattr(app.state.efficiency_settings, "resolve", resolve)
+
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert first.status_code == 200
+        resolve.return_value = replace(initial, cap=initial.cap + 0.01)
+        same_epoch = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert same_epoch.json()["ledger_digest"] == first.json()["ledger_digest"]
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        next_epoch = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert next_epoch.json()["epoch_index"] == 25_029
+        # The context stored on the new pin reflects the flipped policy.
+        async with session_maker() as session:
+            from ditto.db.queries.ledger_epochs import get_pin
+
+            pin = await get_pin(session, netuid=118, epoch_index=25_029)
+        assert pin is not None
+        assert pin.champion_agent_id is not None
+
+
+class TestCrownIncumbencyMarker:
+    """The marker rides the pin and is withheld until protocol 27 is fleet-wide."""
+
+    async def _enable(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+        *,
+        protocol_version: int,
+    ) -> None:
+        now = datetime.now(UTC)
+        settings = ContinualRetestSettings(
+            crown_incumbent_mode="fleet_ready"
+        ).model_dump(mode="json")
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="defend the crown from the served incumbent",
+                    actor="operator@example.com",
+                )
+            )
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.250.0",
+                    protocol_version=protocol_version,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.continual_retest_settings.invalidate()
+
+    async def test_marker_requires_protocol_27_fleet_and_a_previous_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        await self._enable(app, session_maker, protocol_version=26)
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200, mixed.text
+        assert mixed.json().get("crown_mode") is None
+        assert "crown_incumbent_agent_id" not in mixed.json()
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 27
+        app.state.continual_retest_settings.invalidate()
+        # The pin already taken this epoch stays as frozen: no marker mid-epoch.
+        same_epoch = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert same_epoch.json().get("crown_mode") is None
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        armed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        body = armed.json()
+        assert body["epoch_index"] == 25_029
+        assert body["crown_mode"] == "incumbent"
+        # The previous pin's champion, resolved into this pool, is the incumbent.
+        assert body["crown_incumbent_agent_id"] == body["entries"][0]["agent_id"]
+
+    async def test_first_pin_under_the_marker_has_no_incumbent_to_serve(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        await self._enable(app, session_maker, protocol_version=27)
+        _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        body = first.json()
+        assert body["epoch_index"] == 25_028
+        # Bootstrap: the fleet is ready but no previous pin exists, so the fold
+        # runs the classic walk this epoch. The id is never served alone.
+        assert body["crown_mode"] == "incumbent"
+        assert "crown_incumbent_agent_id" not in body
+
+
 class TestScoringLiveness:
     """Serve-last-known + staleness policy on a transient DB failure."""
 
@@ -1335,3 +1618,183 @@ class TestLedgerBurnShare:
         assert stale.status_code == 200
         assert stale.json()["stale"] is True
         assert stale.json()["burn_share"] == 0.5
+
+
+class TestLedgerConfirmationSeedAnchors:
+    """Bench v13+ pinned reign anchors ride the ledger to the whole fleet.
+
+    Every validator's ``reign_seed_planning`` / ``version_seed_planning`` keys
+    off this field, so a bug here (an unpinned row leaking, the snapshot
+    dropping the tuple) would silently defer every validator-derived lane.
+    """
+
+    @staticmethod
+    async def _seed_anchor(
+        maker: async_sessionmaker[AsyncSession],
+        *,
+        name: str,
+        bench_version: int,
+        ready_block: int,
+        block_hash: str | None,
+    ) -> UUID:
+        from ditto.api_server.crn import CRN_ANCHOR_BLOCK_DELTA
+        from ditto.db.models import ConfirmationSeedAnchor
+
+        agent_id = uuid4()
+        async with maker() as s, s.begin():
+            s.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=f"5Anchor{name}",
+                    name=name,
+                    sha256=f"{len(name):02d}" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=datetime.now(UTC),
+                )
+            )
+            await s.flush()
+            s.add(
+                ConfirmationSeedAnchor(
+                    champion_agent_id=agent_id,
+                    bench_version=bench_version,
+                    ready_block=ready_block,
+                    anchor_block=ready_block + CRN_ANCHOR_BLOCK_DELTA,
+                    anchor_block_hash=block_hash,
+                    pinned_at=datetime.now(UTC) if block_hash else None,
+                )
+            )
+        return agent_id
+
+    async def _seed_reigns(
+        self, maker: async_sessionmaker[AsyncSession]
+    ) -> tuple[UUID, UUID]:
+        """Two pinned reigns of the active version (younger first, to prove the
+        order is by anchor block), one waiting reign, one other-version reign."""
+        later = await self._seed_anchor(
+            maker,
+            name="later",
+            bench_version=_BENCH_VERSION,
+            ready_block=500,
+            block_hash="0x" + "cd" * 32,
+        )
+        earlier = await self._seed_anchor(
+            maker,
+            name="earlier",
+            bench_version=_BENCH_VERSION,
+            ready_block=100,
+            block_hash="0x" + "ab" * 32,
+        )
+        await self._seed_anchor(
+            maker,
+            name="waiting",
+            bench_version=_BENCH_VERSION,
+            ready_block=1,
+            block_hash=None,
+        )
+        await self._seed_anchor(
+            maker,
+            name="other",
+            bench_version=_BENCH_VERSION + 1,
+            ready_block=2,
+            block_hash="0x" + "ef" * 32,
+        )
+        return earlier, later
+
+    async def test_pinned_anchors_of_the_active_version_are_served_oldest_first(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server import crn as crn_mod
+        from ditto.api_server.crn import CRN_ANCHOR_BLOCK_DELTA
+
+        # The fixture era is v7; the floor is read at call time.
+        monkeypatch.setattr(
+            crn_mod, "CRN_BLOCK_BINDING_MIN_BENCH_VERSION", _BENCH_VERSION
+        )
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        earlier, later = await self._seed_reigns(session_maker)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert resp.status_code == 200, resp.text
+        # Pinned rows of the active version only, oldest anchor block first: no
+        # waiting row (it would carry an empty hash), no other-version row.
+        assert resp.json()["confirmation_seed_anchors"] == [
+            {
+                "champion_agent_id": str(earlier),
+                "bench_version": _BENCH_VERSION,
+                "anchor_block": 100 + CRN_ANCHOR_BLOCK_DELTA,
+                "anchor_block_hash": "0x" + "ab" * 32,
+            },
+            {
+                "champion_agent_id": str(later),
+                "bench_version": _BENCH_VERSION,
+                "anchor_block": 500 + CRN_ANCHOR_BLOCK_DELTA,
+                "anchor_block_hash": "0x" + "cd" * 32,
+            },
+        ]
+
+    async def test_stale_snapshot_replays_the_pinned_anchors(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Pins are chain facts fixed once per reign: the last-known-good path
+        must replay them, or an outage would defer every bound lane fleet-wide."""
+        from ditto.api_server import crn as crn_mod
+
+        monkeypatch.setattr(
+            crn_mod, "CRN_BLOCK_BINDING_MIN_BENCH_VERSION", _BENCH_VERSION
+        )
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        earlier, later = await self._seed_reigns(session_maker)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        ok = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ok.status_code == 200, ok.text
+        fresh_anchors = ok.json()["confirmation_seed_anchors"]
+        assert [a["champion_agent_id"] for a in fresh_anchors] == [
+            str(earlier),
+            str(later),
+        ]
+
+        app.state.ledger_snapshot.generated_at -= timedelta(
+            seconds=scoring_mod._FRESH_SNAPSHOT_SECONDS + 1
+        )
+
+        async def _boom(_session: object, **_kwargs: object) -> list:
+            raise OperationalError("SELECT ...", {}, Exception("db down"))
+
+        monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _boom)
+        stale = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert stale.status_code == 200, stale.text
+        assert stale.json()["stale"] is True
+        assert stale.json()["confirmation_seed_anchors"] == fresh_anchors
+
+    async def test_below_the_binding_floor_no_anchor_is_served(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Legacy versions plan the unbound family; a pinned row (which the lane
+        never creates below the floor) must not reach them either."""
+        from ditto.api_server import crn as crn_mod
+
+        assert _BENCH_VERSION < crn_mod.CRN_BLOCK_BINDING_MIN_BENCH_VERSION
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        await self._seed_reigns(session_maker)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["confirmation_seed_anchors"] == []

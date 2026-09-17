@@ -34,7 +34,15 @@
           "hotkey": "5HdaZEUn2CmoBZe37a3MuSEuoSJBhWjDSPHkVsundR8byvFb",
           "value": 4033
         }
-      ]
+      ],
+      "matches_pin": "current",
+      "fold": {
+        "epoch_index": 24281,
+        "ledger_digest": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+        "vector_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "champion_agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "folded_at": 1785492000
+      }
     },
     {
       "validator_uid": 34,
@@ -65,7 +73,9 @@
           "hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
           "value": 10082
         }
-      ]
+      ],
+      "matches_pin": "current",
+      "fold": null
     },
     {
       "validator_uid": 45,
@@ -96,7 +106,15 @@
           "hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
           "value": 10082
         }
-      ]
+      ],
+      "matches_pin": "previous",
+      "fold": {
+        "epoch_index": 24281,
+        "ledger_digest": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+        "vector_digest": "0000000000000000000000000000000000000000000000000000000000000002",
+        "champion_agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "folded_at": 1785492000
+      }
     },
     {
       "validator_uid": 70,
@@ -127,7 +145,9 @@
           "hotkey": "5F6jYt7RfT7UEeBZtGBenpi1hTasbfPfstnskB4wa41zFB1o",
           "value": 4033
         }
-      ]
+      ],
+      "matches_pin": "current",
+      "fold": null
     },
     {
       "validator_uid": 71,
@@ -158,7 +178,15 @@
           "hotkey": "5Cm6iCsYZfLZ5xiEfQ9WHnJsRNBLCFGuJwvbuCrERRpDsVtA",
           "value": 4033
         }
-      ]
+      ],
+      "matches_pin": "current",
+      "fold": {
+        "epoch_index": 24281,
+        "ledger_digest": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+        "vector_digest": "0000000000000000000000000000000000000000000000000000000000000004",
+        "champion_agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "folded_at": 1785492000
+      }
     },
     {
       "validator_uid": 72,
@@ -189,7 +217,9 @@
           "hotkey": "5F6jYt7RfT7UEeBZtGBenpi1hTasbfPfstnskB4wa41zFB1o",
           "value": 4033
         }
-      ]
+      ],
+      "matches_pin": "previous",
+      "fold": null
     },
     {
       "validator_uid": 82,
@@ -200,7 +230,15 @@
           "hotkey": "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz",
           "value": 65535
         }
-      ]
+      ],
+      "matches_pin": "current",
+      "fold": {
+        "epoch_index": 24281,
+        "ledger_digest": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+        "vector_digest": "0000000000000000000000000000000000000000000000000000000000000006",
+        "champion_agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "folded_at": 1785492000
+      }
     },
     {
       "validator_uid": 92,
@@ -231,7 +269,9 @@
           "hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
           "value": 10082
         }
-      ]
+      ],
+      "matches_pin": "current",
+      "fold": null
     },
     {
       "validator_uid": 134,
@@ -262,7 +302,15 @@
           "hotkey": "5F6jYt7RfT7UEeBZtGBenpi1hTasbfPfstnskB4wa41zFB1o",
           "value": 4033
         }
-      ]
+      ],
+      "matches_pin": "previous",
+      "fold": {
+        "epoch_index": 24281,
+        "ledger_digest": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+        "vector_digest": "0000000000000000000000000000000000000000000000000000000000000008",
+        "champion_agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "folded_at": 1785492000
+      }
     },
     {
       "validator_uid": 139,
@@ -293,7 +341,9 @@
           "hotkey": "5HdaZEUn2CmoBZe37a3MuSEuoSJBhWjDSPHkVsundR8byvFb",
           "value": 4033
         }
-      ]
+      ],
+      "matches_pin": "current",
+      "fold": null
     },
     {
       "validator_uid": 145,
@@ -324,7 +374,15 @@
           "hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
           "value": 10082
         }
-      ]
+      ],
+      "matches_pin": "current",
+      "fold": {
+        "epoch_index": 24281,
+        "ledger_digest": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+        "vector_digest": "000000000000000000000000000000000000000000000000000000000000000a",
+        "champion_agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "folded_at": 1785492000
+      }
     },
     {
       "validator_uid": 187,
@@ -355,7 +413,9 @@
           "hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
           "value": 10082
         }
-      ]
+      ],
+      "matches_pin": "previous",
+      "fold": null
     }
   ],
   "stale": false,
@@ -372,5 +432,11 @@
     "commit_reveal_enabled": true,
     "reveal_period_epochs": 1,
     "weights_rate_limit_blocks": 100
+  },
+  "pin_agreement": {
+    "epoch_index": 24281,
+    "previous_epoch_index": 24280,
+    "matching": 8,
+    "total": 12
   }
 }

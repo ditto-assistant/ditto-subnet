@@ -1,5 +1,47 @@
 import '@tanstack/react-start/server-only'
 
+import { benchmarkCanarySchema, issueBenchmarkCanaryInputSchema,
+  getBenchmarkCanaryInputSchema, cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema,
+} from '../lib/benchmark-canary.schemas'
+
+export async function listBenchmarkCanaries(rawInput: unknown) {
+  const input = listBenchmarkCanariesInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(`/api/v1/admin/benchmark-canaries?limit=${input.limit}&offset=${input.offset}`)
+  return benchmarkCanarySchema.array().parse(payload)
+}
+
+export async function getBenchmarkCanary(rawInput: unknown) {
+  const input = getBenchmarkCanaryInputSchema.parse(rawInput)
+  return benchmarkCanarySchema.parse(await platformAdminRequest(
+    `/api/v1/admin/benchmark-canaries/${input.canaryId}`,
+  ))
+}
+
+export async function issueBenchmarkCanary(actor: string, rawInput: unknown) {
+  const input = issueBenchmarkCanaryInputSchema.parse(rawInput)
+  return benchmarkCanarySchema.parse(await platformAdminRequest(
+    '/api/v1/admin/benchmark-canaries', {
+      method: 'POST', actor, timeoutMs: 120_000,
+      body: { actor, canary_id: input.canaryId, agent_id: input.agentId,
+        bench_version: input.benchVersion, validator_hotkey: input.validatorHotkey,
+        slot_id: input.slotId, expected_artifact_sha256: input.expectedArtifactSha256,
+        expected_screened_image_sha256: input.expectedScreenedImageSha256,
+        expected_active_version: input.expectedActiveVersion,
+        reason: input.reason, confirmation: input.confirmation },
+    },
+  ))
+}
+
+export async function cancelBenchmarkCanary(actor: string, rawInput: unknown) {
+  const input = cancelBenchmarkCanaryInputSchema.parse(rawInput)
+  return benchmarkCanarySchema.parse(await platformAdminRequest(
+    `/api/v1/admin/benchmark-canaries/${input.canaryId}/cancel`, {
+      method: 'POST', actor,
+      body: { actor, reason: input.reason, confirmation: input.confirmation },
+    },
+  ))
+}
+
 import type { operations as PlatformOperations } from '../generated/platform-api'
 
 import {
@@ -18,6 +60,11 @@ import {
   openAthReviewInputSchema,
   searchAthPrecedentsInputSchema,
   openAthReviewResponseSchema,
+  athRulingsUploadResponseSchema,
+  previewAthRulingsBatchInputSchema,
+  athRulingsPreviewResponseSchema,
+  executeAthRulingsBatchInputSchema,
+  athRulingsExecuteResponseSchema,
   resolveCopyReviewInputSchema,
   resolveCopyReviewResponseSchema,
   baselineDiffFileDetailSchema,
@@ -156,6 +203,7 @@ import {
   burnSettingsRevisionSchema,
   setBurnSettingsInputSchema,
   continualRetestSettingsForPlatform,
+  ledgerEpochSnapshotsSchema,
   parseContinualRetestSettingsControl,
   setContinualRetestSettingsInputSchema,
   inferenceConcurrencySettingsControlSchema,
@@ -189,12 +237,16 @@ import {
   unbanHotkeyInputSchema,
   screenerReviewControlSchema,
   screenerReviewRevisionSchema,
+  screenerFanoutShadowInputSchema,
+  screenerFanoutShadowResponseSchema,
   screenerPolicyManifestControlSchema,
   copyCourtControlSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRevisionSchema,
   copyCourtRecommendationListSchema,
   copyCourtRecommendationsInputSchema,
+  confirmationSeedAnchorListSchema,
+  confirmationSeedAnchorsInputSchema,
   screenerCapacityViewSchema,
   createScreenerBootstrapGrantInputSchema,
   screenerBootstrapGrantResponseSchema,
@@ -481,9 +533,34 @@ export async function fetchScreenerReviewControl() {
   return screenerReviewControlSchema.parse(payload)
 }
 
+export async function fetchScreenerFanoutShadow(rawInput: unknown = {}) {
+  const input = screenerFanoutShadowInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.status !== undefined) params.set('status', input.status)
+  params.set('limit', String(input.limit))
+  params.set('offset', String(input.offset))
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-fanout-shadow?${params.toString()}`,
+  )
+  return screenerFanoutShadowResponseSchema.parse(payload)
+}
+
 export async function fetchCopyCourtControl() {
   const payload = await platformAdminRequest('/api/v1/admin/copy-court/settings')
   return copyCourtControlSchema.parse(payload)
+}
+
+export async function fetchConfirmationSeedAnchors(rawInput: unknown) {
+  const input = confirmationSeedAnchorsInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.benchVersion !== undefined) {
+    params.set('bench_version', String(input.benchVersion))
+  }
+  params.set('limit', String(input.limit))
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/confirmation-seed-anchors?${params.toString()}`,
+  )
+  return confirmationSeedAnchorListSchema.parse(payload)
 }
 
 export async function fetchCopyCourtRecommendations(rawInput: unknown) {
@@ -945,6 +1022,8 @@ export async function fetchConfirmationLaneDiagnosis(rawInput: unknown = {}) {
       dailyBundleCap: settings.effective.settings.daily_bundle_cap,
       dailyDollarCapMicrousd: settings.effective.settings.daily_dollar_cap_microusd,
       profileRevision: settings.effective.settings.profile_revision,
+      profileInstalled: settings.effective.profile_installed,
+      installedProfiles: settings.effective.installed_profiles,
       fleet,
       pages,
     }),
@@ -1422,6 +1501,15 @@ export async function fetchValidatorFleetObservability() {
   return validatorFleetObservabilitySchema.parse(payload)
 }
 
+export async function fetchLedgerEpochSnapshots(limit = 24) {
+  const bounded = Math.min(100, Math.max(1, Math.trunc(limit)))
+  const payload = await platformAdminRequest(`/api/v1/public/ledger-epochs?limit=${bounded}`, {
+    timeoutMs: 15_000,
+    retries: 1,
+  })
+  return ledgerEpochSnapshotsSchema.parse(payload)
+}
+
 export async function fetchValidatorWeightDiagnostics(rawInput: unknown) {
   const input = validatorWeightDiagnosticsInputSchema.parse(rawInput)
   const suffix = input.validatorUid === undefined ? '' : `?validator_uid=${input.validatorUid}`
@@ -1730,6 +1818,47 @@ export async function openAthReview(rawInput: unknown, actor: string) {
   )
   invalidateCopyReviewsCache()
   return openAthReviewResponseSchema.parse(payload)
+}
+
+export async function createAthRulingsUpload(actor: string) {
+  const payload = await platformAdminRequest('/api/v1/admin/ath-rulings/upload-url', {
+    method: 'POST',
+    actor,
+    body: {},
+  })
+  return athRulingsUploadResponseSchema.parse(payload)
+}
+
+export async function previewAthRulingsBatch(rawInput: unknown, actor: string) {
+  const input = previewAthRulingsBatchInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/ath-rulings/batch-preview', {
+    method: 'POST',
+    actor,
+    body: {
+      upload_key: input.uploadKey ?? null,
+      rulings: input.rulings ?? null,
+      source: input.source ?? null,
+    },
+    // Fifty rows each re-read the board; give the dry run room.
+    timeoutMs: 60_000,
+  })
+  return athRulingsPreviewResponseSchema.parse(payload)
+}
+
+export async function executeAthRulingsBatch(rawInput: unknown, actor: string) {
+  const input = executeAthRulingsBatchInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/ath-rulings/batch-execute', {
+    method: 'POST',
+    actor,
+    body: {
+      preview_token: input.previewToken,
+      confirmation: input.confirmation,
+      rulings: input.rulings ?? null,
+    },
+    timeoutMs: 120_000,
+  })
+  invalidateCopyReviewsCache()
+  return athRulingsExecuteResponseSchema.parse(payload)
 }
 
 export async function fetchScreeningSubmissions(
@@ -2940,6 +3069,13 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
     const composites = rows.map((row) => row.composite)
     const medianComposite = median(composites)
     const generatedAt = rows.map((row) => row.generated_at).sort()
+    // Bench v13+ gate verdicts, over the rows that carry one. A mixed posture
+    // across validators is reported as null rather than picking a winner.
+    const gated = rows.flatMap((row) => (row.gate_evidence ? [row.gate_evidence] : []))
+    const postures = new Set(gated.map((evidence) => evidence.posture ?? null))
+    const shares = gated.flatMap((evidence) =>
+      typeof evidence.flagged_case_share === 'number' ? [evidence.flagged_case_share] : [],
+    )
     const version = {
       bench_version: benchVersion,
       score_count: rows.length,
@@ -2954,6 +3090,8 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
       seeds: [...new Set(rows.map((row) => row.seed))],
       composite_delta_vs_previous:
         previousMedian === null ? null : medianComposite - previousMedian,
+      gate_posture: postures.size === 1 ? ([...postures][0] ?? null) : null,
+      median_flagged_case_share: shares.length ? median(shares) : null,
     }
     previousMedian = medianComposite
     return version

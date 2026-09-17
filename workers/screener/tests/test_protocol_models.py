@@ -12,6 +12,7 @@ from ditto_screening_protocol import (
     ScreenEvidenceItem,
     ScreenResultOutcome,
     ScreenResultRequest,
+    ScreenReviewAudit,
     SourceReviewFinding,
     SourceReviewNote,
     source_review_notes_digest,
@@ -19,6 +20,18 @@ from ditto_screening_protocol import (
 from ditto_screening_protocol.private_failure import private_failure_text
 
 _HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+
+
+def _review_audit() -> ScreenReviewAudit:
+    return ScreenReviewAudit(
+        stage="l1",
+        reason_code="source-review-step-budget-exhausted",
+        prompt_revision="source-review-v24-policy-v13",
+        max_steps=20,
+        steps_used=20,
+        max_read_bytes=2_000_000,
+        read_bytes_used=123_456,
+    )
 
 
 def _finding() -> SourceReviewFinding:
@@ -177,6 +190,49 @@ def test_policy_v8_retains_legacy_untyped_outcome() -> None:
         finding=None,
     )
     assert request.outcome is None
+
+
+def test_policy_v13_rejects_pass_inconclusive_wire_outcome() -> None:
+    audit = _review_audit()
+
+    with pytest.raises(ValidationError, match="cannot admit pass-inconclusive"):
+        _pass_request(
+            outcome=ScreenResultOutcome.PASS_INCONCLUSIVE,
+            manifest_digest="ab" * 32,
+            reason_code="source-review-inconclusive",
+            review_audit=audit,
+            review_audit_digest=audit.canonical_digest(),
+        )
+
+
+def test_policy_v12_retains_pass_inconclusive_wire_compatibility() -> None:
+    audit = _review_audit()
+
+    request = _pass_request(
+        policy_version=12,
+        outcome=ScreenResultOutcome.PASS_INCONCLUSIVE,
+        manifest_digest="ab" * 32,
+        reason_code="source-review-inconclusive",
+        review_audit=audit,
+        review_audit_digest=audit.canonical_digest(),
+    )
+
+    assert request.passed is True
+    assert request.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+
+
+def test_policy_v13_inconclusive_preserves_signed_review_audit() -> None:
+    audit = _review_audit()
+
+    request = _request(
+        outcome=ScreenResultOutcome.INCONCLUSIVE,
+        review_audit=audit,
+        review_audit_digest=audit.canonical_digest(),
+    )
+
+    assert request.passed is False
+    assert request.outcome == ScreenResultOutcome.INCONCLUSIVE
+    assert request.review_audit == audit
 
 
 def test_legacy_outcome_rejects_image_metadata() -> None:

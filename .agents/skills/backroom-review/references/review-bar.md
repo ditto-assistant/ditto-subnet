@@ -3,7 +3,51 @@
 Apply this bar to every scored or live high-rank agent. A high score is a
 reason to inspect, not evidence of cheating.
 
-Use the screening policy recorded on the exact submission. Policy v9 and
+## Policy-version routing
+
+Use the screening policy recorded on the exact submission/attempt and verify
+the applicable activation record through Backroom. A benchmark version, the
+built-in screener version, or this document's date does not establish policy
+activation. Do not reinterpret a historical decision under a newer policy
+without the explicit versioned rescreen.
+
+For **policy v13**, read the complete
+[published checklist](../../../../workers/screener/docs/policy-v13.md) and
+[opaque-verification companion](../../../../workers/screener/docs/policy-v13-opaque-verification.md).
+These govern over the historical examples below:
+
+- Evaluate I1–I8 and S1–S3 independently, with exact-artifact evidence and all
+  applicable safe harbors and mandatory verification requirements.
+- I8 can independently reject substantive evaluation-dependent retrieval,
+  routing, capabilities, authority, execution, or output. A published
+  compatibility branch alone does not breach I8; prove the reachable effect.
+- I7 permits a declared authoritative model planner satisfying W9, including
+  faithful staged execution. An advisory planner must remain overridable.
+  Do not carry the historical blanket forced-planner rule into v13.
+- W5/W6 permit qualifying calculators and model-authored programs, including
+  explicit semantic delegation. I5 needs a proven benchmark-shaped semantic
+  mechanism; formulas, labels, or prescriptive prose alone are insufficient.
+- I4/W8 govern finalized fields and protocol-defined overflow. Historical
+  references to slot-length caps do not authorize arbitrary field deletion,
+  relocation, rescaling, or vocabulary mapping.
+- Final eligibility outcomes are CLEAR or REJECT. CLEAR requires the complete
+  mandatory verification, not merely a refuted finding or an operator release.
+  V1–V3 verification failures follow the published retry/deadline procedure
+  and record `violation_proven: false` and the failure domain; they are not
+  cheating findings. Check authoritative artifact-bound evidence before
+  treating an omitted compact-projection field as missing proof.
+
+Leaving a row unchanged during a bounded fire is escalation, not a final v13
+outcome or clearance. If required evidence, the published retry/deadline
+procedure, or a supported audited decision path cannot be established, report
+the blocker for the operator; do not invent requirements, deadlines, verdict
+fields, or production mutations. This document does not activate a policy.
+
+## Historical policy v9–v12 guidance
+
+The remainder records historical calibration and precedent. Apply it only
+under the matching policy, or as an investigation lead that must independently
+satisfy the applicable v13 checklist above. Policy v9 and
 earlier retain the historical holdings below. Policy v10 scores I1–I7
 independently; I3/I4/I5/I7 are each fatal. Do not silently reinterpret
 historical clears without an explicit v10 rescreen.
@@ -51,6 +95,12 @@ average a mixed-looking I4/I7 into a keep when I3 or I5 still fails.
 `screening_policy_version=10` is a wire stamp. `deferred-mechanical-admission`
 with L2 off / deferred_source_review bypass means Luna/L2 never reviewed the
 source. ATH still inspects this SHA.
+
+A `deferred_source_review` hold whose reason is the top-five integrity
+double-check (`algorithm_provenance.trigger=integrity_double_check`) already
+passed the full pre-score screen. The pinned `integrity-double-check` posture
+could not clear it, so read `original_evidence.deep_review_result` first. A
+passed pre-score screen is not a clear.
 
 Excluding an optional `measure` / `Program` solver (`cfg(measure)` off,
 `--no-default-features`) is a credit, not a keep. Trace the default shipped
@@ -167,11 +217,14 @@ re-adjudicated by the scheduled v11 rescreen with every other cohort member.
   pattern. Grammar routing alone is not a reject basis — it needs a
   companion violation (a forced plan, a family compiler, a two-limb failure)
   on the same served path.
-- **`bench_version` switching — warning sign only.** Branching behavior on
+- **Historical v10-v12 `bench_version` switching — warning sign only.**
+  Branching behavior on
   `bench_version` (e.g. enabling bench-only retrieval modes or classifier
   paths when `bench_version >= 9`, `lets_v609` `baseline.py:2471-2475,
   2890-2895`) warrants a second look but is never an independent reject.
-  Require a companion violation.
+  Require a companion violation under those historical policies. For v13,
+  apply I8 and W16 instead; a complete source-proven I8 breach needs no
+  companion invariant.
 - **Single-success duplicate suppression — production behavior.** Suppressing
   a repeat call after a genuine first successful side effect (read-only tools
   exempt) is not trajectory manipulation.

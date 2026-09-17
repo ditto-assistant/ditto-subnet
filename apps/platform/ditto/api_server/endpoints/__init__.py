@@ -5,6 +5,9 @@ from __future__ import annotations
 from ditto.api_server.endpoints.admin_artifact_release_settings import (
     router as admin_artifact_release_settings_router,
 )
+from ditto.api_server.endpoints.admin_ath_rulings import (
+    router as admin_ath_rulings_router,
+)
 from ditto.api_server.endpoints.admin_attestation import (
     router as admin_attestation_router,
 )
@@ -37,6 +40,9 @@ from ditto.api_server.endpoints.admin_coding_ticket_sets import (
 )
 from ditto.api_server.endpoints.admin_confirmation_bundles import (
     router as admin_confirmation_bundles_router,
+)
+from ditto.api_server.endpoints.admin_confirmation_seed_anchors import (
+    router as admin_confirmation_seed_anchors_router,
 )
 from ditto.api_server.endpoints.admin_continual_retest_settings import (
     router as admin_continual_retest_settings_router,
@@ -92,6 +98,9 @@ from ditto.api_server.endpoints.admin_scoring_readiness import (
 from ditto.api_server.endpoints.admin_screener_capacity import (
     router as admin_screener_capacity_router,
 )
+from ditto.api_server.endpoints.admin_screener_fanout_shadow import (
+    router as admin_screener_fanout_shadow_router,
+)
 from ditto.api_server.endpoints.admin_screener_policy_activation import (
     router as admin_screener_policy_activation_router,
 )
@@ -117,11 +126,18 @@ from ditto.api_server.endpoints.admin_validator_weights import (
     router as admin_validator_weights_router,
 )
 from ditto.api_server.endpoints.attestation import router as attestation_router
+from ditto.api_server.endpoints.ditto_callback_challenge import (
+    router as ditto_callback_challenge_router,
+)
+from ditto.api_server.endpoints.feedback_track import router as feedback_track_router
 from ditto.api_server.endpoints.health import router as health_router
 from ditto.api_server.endpoints.inference import router as inference_router
 from ditto.api_server.endpoints.metrics import router as metrics_router
 from ditto.api_server.endpoints.miner_auth import router as miner_auth_router
 from ditto.api_server.endpoints.miner_avatars import router as miner_avatars_router
+from ditto.api_server.endpoints.miner_ditto_link import (
+    router as miner_ditto_link_router,
+)
 from ditto.api_server.endpoints.miner_mcp import router as miner_mcp_router
 from ditto.api_server.endpoints.miner_me import router as miner_me_router
 from ditto.api_server.endpoints.name_claims import router as name_claims_router
@@ -166,6 +182,7 @@ __all__ = [
     "health_router",
     "inference_router",
     "admin_artifact_release_settings_router",
+    "admin_ath_rulings_router",
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
@@ -179,6 +196,7 @@ __all__ = [
     "admin_leaderboard_router",
     "admin_validator_weights_router",
     "admin_lease_revocations_router",
+    "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
     "admin_copy_review_router",
     "admin_coding_certifications_router",
@@ -197,6 +215,7 @@ __all__ = [
     "admin_retirement_router",
     "admin_scoring_readiness_router",
     "admin_screener_review_settings_router",
+    "admin_screener_fanout_shadow_router",
     "admin_screener_capacity_router",
     "admin_screener_policy_activation_router",
     "admin_submission_settings_router",
@@ -206,6 +225,9 @@ __all__ = [
     "metrics_router",
     "miner_auth_router",
     "miner_avatars_router",
+    "miner_ditto_link_router",
+    "feedback_track_router",
+    "ditto_callback_challenge_router",
     "miner_mcp_router",
     "miner_me_router",
     "public_router",

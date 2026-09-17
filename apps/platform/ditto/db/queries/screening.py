@@ -3,17 +3,32 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, case, exists, false, func, or_, select
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    case,
+    exists,
+    false,
+    func,
+    or_,
+    select,
+    true,
+)
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import ScalarSelect
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contracts
-from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.screener_review_settings import (
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
+    ScreenerReviewSettings,
+    integrity_double_check_posture_error,
+)
 from ditto.db.models import (
     Agent,
     AthReview,
@@ -38,6 +53,10 @@ from ditto.db.queries.benchmark_admission import (
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
 from ditto.db.queries.scores import SCORING_QUORUM
+from ditto.db.queries.screening_retry import (
+    failed_screening_retry_authorized,
+    latest_screening_attempt_id,
+)
 from ditto.screener_policy_state import (
     effective_rescreen_scored,
     effective_scored_rescreen_activation_revision,
@@ -66,6 +85,11 @@ MAX_SCREENING_EXPIRIES = 5
 # set: an owner still being screened is handled by deferring the claim
 # (earlier_pending), not by flagging, so the race resolves before either is
 # judged.
+logger = logging.getLogger(__name__)
+# Mirrors ``ditto.api_server.deferred_source_review.INTEGRITY_DOUBLE_CHECK_TRIGGER``
+# without importing the API layer into queries.
+_INTEGRITY_DOUBLE_CHECK_TRIGGER = "integrity_double_check"
+
 _USABLE_OWNER_STATUSES = (
     AgentStatus.EVALUATING,
     AgentStatus.SCORED,
@@ -117,6 +141,24 @@ _SCREENER_HEARTBEAT_FRESHNESS = timedelta(minutes=5)
 _EXHAUSTED_MANIFEST_DIGEST = hashlib.sha256(
     b"ditto:repeatedly-inconclusive:v1"
 ).hexdigest()
+_SCREENING_CLAIM_LOCK_KEY = 0x445554544F534352
+
+
+async def try_acquire_screening_claim_lock(session: AsyncSession) -> bool:
+    """Acquire the claim serializer without queueing behind another poller.
+
+    Exact-hash ownership and shared-hotkey capacity are decided across several
+    rows, so claims still need one transaction-wide critical section. Polling
+    workers do not need to wait for it: a busy gate means another claim is
+    already making progress, and returning an empty claim avoids a lock convoy.
+    """
+    if session.get_bind().dialect.name != "postgresql":
+        return True
+    return bool(
+        await session.scalar(
+            select(func.pg_try_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
+        )
+    )
 
 
 def screening_score_count() -> ScalarSelect[int]:
@@ -329,7 +371,10 @@ async def expire_screening_attempts(session: AsyncSession, *, now: datetime) -> 
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.deadline < now,
             )
-            .with_for_update()
+            # A verdict already committing this attempt owns the outcome. An
+            # expiry sweep must skip it instead of waiting and delaying that
+            # verdict; the next sweep can reconsider any row left running.
+            .with_for_update(skip_locked=True)
         )
     )
     for attempt in attempts:
@@ -376,19 +421,25 @@ async def fail_orphaned_screening_attempts(
     ``failed`` so they retry immediately without consuming the five-expiry
     adjudication budget.
     """
-    attempts = list(
-        await session.scalars(
-            select(ScreeningAttempt)
-            .where(
-                ScreeningAttempt.screener_hotkey == screener_hotkey,
-                ScreeningAttempt.status == "running",
-                ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
-                ScreeningAttempt.deadline > now,
+    candidates = list(
+        (
+            await session.execute(
+                select(
+                    ScreeningAttempt.attempt_id,
+                    ScreeningAttempt.agent_id,
+                    ScreeningAttempt.started_at,
+                ).where(
+                    ScreeningAttempt.screener_hotkey == screener_hotkey,
+                    ScreeningAttempt.status == "running",
+                    ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
+                    ScreeningAttempt.deadline > now,
+                )
             )
-            .with_for_update()
         )
+        .tuples()
+        .all()
     )
-    if not attempts:
+    if not candidates:
         return 0
     heartbeats = list(
         await session.scalars(
@@ -400,12 +451,11 @@ async def fail_orphaned_screening_attempts(
     )
     if not heartbeats:
         return 0
-
     in_flight_builds = set(
         await session.scalars(
             select(SubmissionImageBuild.attempt_id).where(
                 SubmissionImageBuild.attempt_id.in_(
-                    [attempt.attempt_id for attempt in attempts]
+                    [attempt_id for attempt_id, _, _ in candidates]
                 ),
                 SubmissionImageBuild.status.in_(
                     ("queued", "leased", "running", "succeeded")
@@ -415,8 +465,8 @@ async def fail_orphaned_screening_attempts(
     )
 
     failed = 0
-    for attempt in attempts:
-        started_at = attempt.started_at
+    for attempt_id, agent_id, candidate_started_at in candidates:
+        started_at = candidate_started_at
         if started_at.tzinfo is None:
             started_at = started_at.replace(tzinfo=UTC)
         observed_after_claim = any(
@@ -429,15 +479,69 @@ async def fail_orphaned_screening_attempts(
             for heartbeat in heartbeats
         )
         still_active = any(
-            heartbeat.state == "screening"
-            and heartbeat.active_agent_id == attempt.agent_id
+            heartbeat.state == "screening" and heartbeat.active_agent_id == agent_id
             for heartbeat in heartbeats
         )
-        if (
-            not observed_after_claim
-            or still_active
-            or attempt.attempt_id in in_flight_builds
-        ):
+        if not observed_after_claim or still_active or attempt_id in in_flight_builds:
+            continue
+
+        # Only a row that currently looks orphaned is locked. Re-read all
+        # positive liveness evidence after obtaining that row lock so a stale
+        # candidate snapshot cannot fail an attempt that resumed meanwhile.
+        attempt = await session.scalar(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.attempt_id == attempt_id,
+                ScreeningAttempt.screener_hotkey == screener_hotkey,
+                ScreeningAttempt.status == "running",
+                ScreeningAttempt.started_at <= now - _ORPHANED_ATTEMPT_GRACE,
+                ScreeningAttempt.deadline > now,
+            )
+            .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
+        )
+        if attempt is None:
+            continue
+        fresh_heartbeats = list(
+            await session.scalars(
+                select(ScreenerHeartbeat)
+                .where(
+                    ScreenerHeartbeat.screener_hotkey == screener_hotkey,
+                    ScreenerHeartbeat.seen_at >= now - _SCREENER_HEARTBEAT_FRESHNESS,
+                )
+                .execution_options(populate_existing=True)
+            )
+        )
+        attempt_started_at = attempt.started_at
+        if attempt_started_at.tzinfo is None:
+            attempt_started_at = attempt_started_at.replace(tzinfo=UTC)
+        observed_after_lock = any(
+            (
+                heartbeat.seen_at
+                if heartbeat.seen_at.tzinfo is not None
+                else heartbeat.seen_at.replace(tzinfo=UTC)
+            )
+            > attempt_started_at
+            for heartbeat in fresh_heartbeats
+        )
+        active_after_lock = any(
+            heartbeat.state == "screening"
+            and heartbeat.active_agent_id == attempt.agent_id
+            for heartbeat in fresh_heartbeats
+        )
+        build_after_lock = bool(
+            await session.scalar(
+                select(
+                    exists().where(
+                        SubmissionImageBuild.attempt_id == attempt.attempt_id,
+                        SubmissionImageBuild.status.in_(
+                            ("queued", "leased", "running", "succeeded")
+                        ),
+                    )
+                )
+            )
+        )
+        if not observed_after_lock or active_after_lock or build_after_lock:
             continue
         attempt.status = "failed"
         attempt.finished_at = now
@@ -649,6 +753,18 @@ async def _park_repeatedly_inconclusive(
     agent.screening_reason_code = _EXHAUSTED_REASON_CODE
 
 
+async def latest_integrity_double_check_posture(
+    session: AsyncSession,
+) -> ScreenerReviewSettingsRevision | None:
+    """Return the reviewer revision a double-check deep pass is pinned to."""
+    return await session.scalar(
+        select(ScreenerReviewSettingsRevision)
+        .where(ScreenerReviewSettingsRevision.scope == INTEGRITY_DOUBLE_CHECK_SCOPE)
+        .order_by(ScreenerReviewSettingsRevision.revision.desc())
+        .limit(1)
+    )
+
+
 async def claim_screening_attempts(
     session: AsyncSession,
     *,
@@ -658,9 +774,11 @@ async def claim_screening_attempts(
     limit: int,
     netuid: int = 118,
     deferred_review_mode: str = "off",
+    integrity_double_check_mode: str = "off",
     review_settings_binding: tuple[int, str, str, str] | None = None,
     review_settings_enrolled_node_id: str | None = None,
     canary_policy_version: int | None = None,
+    claim_lock_held: bool = False,
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
     """Claim completion-lane contenders, then least-scored eligible work.
 
@@ -673,6 +791,14 @@ async def claim_screening_attempts(
     review -- that stays eligible in every mode, or a mode change would strand
     the holds open when it was made.
 
+    ``integrity_double_check_mode`` is
+    ``queue_policy_settings.deferred_source_review.integrity_double_check_mode``.
+    A deep pass for a hold opened by the double-check is always pinned to the
+    ``integrity-double-check`` reviewer posture, in every mode, and is skipped
+    (left pending) while that posture is missing or unusable. In ``enforce`` a
+    mechanically admitted top-five row's deferred pass takes the same posture
+    when it is usable, and otherwise keeps the worker's normal posture.
+
     When at least one instance is heartbeating this shared hotkey, concurrent
     running leases cannot exceed that live instance count. That keeps
     leftover GCE pets from stacking and orphaning Targon-first Kaniko builds
@@ -683,8 +809,10 @@ async def claim_screening_attempts(
     # workers cannot skip-lock sibling rows with the same hash and admit both.
     # SQLite serializes writes itself and does not provide advisory locks.
     bind = session.get_bind()
-    if bind.dialect.name == "postgresql":
-        await session.execute(select(func.pg_advisory_xact_lock(0x445554544F534352)))
+    if bind.dialect.name == "postgresql" and not claim_lock_held:
+        await session.execute(
+            select(func.pg_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
+        )
     # A REJECTED agent is deliberately absent above. It re-enters screening only
     # through the operator appeal (POST /screening-submissions/{id}/rescreen),
     # which moves it to SCREENING_FAILED. Re-queueing it on a policy bump instead
@@ -826,27 +954,52 @@ async def claim_screening_attempts(
     # a time by hand. Draining an already-open queue is bounded work that ends;
     # stranding a miner is not. The mode decides whether NEW holds open, never
     # whether existing ones can be settled.
-    latest_attempt_id = (
-        select(ScreeningAttempt.attempt_id)
-        .where(ScreeningAttempt.agent_id == Agent.agent_id)
-        .order_by(
-            ScreeningAttempt.started_at.desc(),
-            ScreeningAttempt.attempt_id.desc(),
-        )
-        .limit(1)
-        .correlate(Agent)
-        .scalar_subquery()
-    )
-    manual_failed_retry = exists(
-        select(ScreeningRetryOverride.override_id).where(
-            ScreeningRetryOverride.attempt_id == latest_attempt_id
-        )
-    )
+    latest_attempt_id = latest_screening_attempt_id()
+    manual_failed_retry = failed_screening_retry_authorized()
     latest_attempt_build_only = (
         select(ScreeningAttempt.build_only)
         .where(ScreeningAttempt.attempt_id == latest_attempt_id)
         .correlate(Agent)
         .scalar_subquery()
+    )
+    # Resolved before selection: a double-check hold without a usable posture
+    # (or claimed by a worker that cannot bind one) must not be selected at
+    # all, or it would sit at the head of every claim and starve the queue.
+    double_check_posture: tuple[int, str, str] | None = None
+    posture_row = await latest_integrity_double_check_posture(session)
+    if (
+        posture_row is not None
+        and integrity_double_check_posture_error(
+            ScreenerReviewSettings.model_validate(posture_row.settings)
+        )
+        is None
+    ):
+        double_check_posture = (
+            posture_row.revision,
+            posture_row.scope,
+            posture_row.checksum,
+        )
+    double_check_claimable = (
+        double_check_posture is not None and review_settings_binding is not None
+    )
+    # A double-check hold lands on an agent whose latest attempt is its full
+    # pre-score deep screen, not a build-only admission. What makes any
+    # deferred hold claimable is that no attempt has started since it opened;
+    # after one has, only an exact operator retry re-leases it.
+    no_attempt_since_hold = exists(
+        select(AthReview.review_id).where(
+            AthReview.agent_id == Agent.agent_id,
+            AthReview.status == "pending",
+            AthReview.algorithm_provenance["review_kind"].as_string()
+            == "deferred_source_review",
+            ~exists(
+                select(ScreeningAttempt.attempt_id).where(
+                    ScreeningAttempt.agent_id == Agent.agent_id,
+                    ScreeningAttempt.started_at
+                    >= func.coalesce(AthReview.reopened_at, AthReview.opened_at),
+                )
+            ),
+        )
     )
     deferred_ath_eligible = (
         (Agent.status == AgentStatus.ATH_PENDING_REVIEW)
@@ -854,7 +1007,20 @@ async def claim_screening_attempts(
         & (
             latest_attempt_id.is_(None)
             | latest_attempt_build_only.is_(True)
+            | no_attempt_since_hold
             | manual_failed_retry
+        )
+        & (
+            true()
+            if double_check_claimable
+            else ~exists(
+                select(AthReview.review_id).where(
+                    AthReview.agent_id == Agent.agent_id,
+                    AthReview.status == "pending",
+                    AthReview.algorithm_provenance["trigger"].as_string()
+                    == _INTEGRITY_DOUBLE_CHECK_TRIGGER,
+                )
+            )
         )
     )
     eligible = or_(
@@ -1193,6 +1359,37 @@ async def claim_screening_attempts(
                 canary_settings.scope,
                 canary_settings.checksum,
             )
+        if deferred_deep_review and canary_review_settings_revision is None:
+            pending_hold = await session.scalar(
+                select(AthReview).where(
+                    AthReview.agent_id == agent.agent_id,
+                    AthReview.status == "pending",
+                )
+            )
+            double_check_hold = bool(
+                pending_hold is not None
+                and pending_hold.algorithm_provenance.get("trigger")
+                == _INTEGRITY_DOUBLE_CHECK_TRIGGER
+            )
+            if double_check_hold or integrity_double_check_mode == "enforce":
+                if double_check_posture is not None and review_settings_binding:
+                    attempt_review_settings_binding = (
+                        double_check_posture[0],
+                        review_settings_binding[1],
+                        double_check_posture[1],
+                        double_check_posture[2],
+                    )
+                elif double_check_hold:
+                    # Unreachable while selection excludes these holds; kept so
+                    # a race with a posture write can never run the double-check
+                    # on the normal posture it already passed.
+                    logger.warning(
+                        "integrity double-check for agent_id=%s is waiting on a "
+                        "usable %s reviewer posture",
+                        agent.agent_id,
+                        INTEGRITY_DOUBLE_CHECK_SCOPE,
+                    )
+                    continue
         # ``enforce`` defers the deep review to the submissions that qualify;
         # ``bypass`` never runs it at all. Both admit on the same cheap
         # build-only pass, so the pre-score depth is one predicate over the two.

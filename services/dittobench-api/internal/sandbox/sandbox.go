@@ -14,8 +14,8 @@
 // Isolation: resource caps (memory/cpu/pids) + auto-remove + no-new-privileges,
 // plus opt-in hardening for untrusted (on-chain) submissions — `--cap-drop ALL`
 // (Harden) and an egress allowlist via a restricted network + forward proxy
-// (EgressNetwork/EgressProxy; see the Sandbox egress section in
-// docs/model-lock.md). Production requires either an operator-owned rootless
+// (EgressNetwork/EgressProxy; see docs/sandbox-egress.md, the egress proof).
+// Production requires either an operator-owned rootless
 // endpoint or the release-owned, credential-empty nested daemon used by the
 // managed stack; a host rootful Docker socket remains explicitly incompatible
 // with the hardened boundary.
@@ -239,8 +239,8 @@ type LocalDocker struct {
 	// EgressNetwork, when set, attaches the container to this user-defined docker
 	// network — the egress-restricted sandbox network (allowlisting proxy + host
 	// firewall) — instead of the default full-egress bridge. Empty = today's
-	// behavior. Env DITTOBENCH_SANDBOX_EGRESS_NETWORK. See the Sandbox egress
-	// section in docs/model-lock.md.
+	// behavior. Env DITTOBENCH_SANDBOX_EGRESS_NETWORK. See
+	// docs/sandbox-egress.md (the egress proof).
 	EgressNetwork string
 	// EgressProxy, when set, is injected as HTTPS_PROXY/HTTP_PROXY so the harness's
 	// outbound calls are forced through the allowlisting forward proxy (loopback +
@@ -636,8 +636,8 @@ func (d *LocalDocker) runArgsForNetwork(image string, env map[string]string, net
 	}
 	if network != "" {
 		// The egress-restricted sandbox network (allowlisting proxy + host
-		// firewall) instead of the default full-egress bridge. See the Sandbox
-		// egress section in docs/model-lock.md.
+		// firewall) instead of the default full-egress bridge. See
+		// docs/sandbox-egress.md.
 		args = append(args, "--network", network)
 	}
 	// Let the harness reach only the trusted ticket broker at the documented

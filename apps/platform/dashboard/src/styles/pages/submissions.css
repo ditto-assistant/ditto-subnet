@@ -1212,6 +1212,11 @@
   font-size: 12.5px;
   line-height: 1.55;
   text-wrap: pretty;
+  white-space: pre-wrap;
+}
+.attempt-resolution-reason {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .screening-review-categories {
   display: flex;

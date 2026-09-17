@@ -25,6 +25,7 @@ from ditto.api_server.koth import (
     emission_set,
     emission_shares,
     indistinguishable_from,
+    koth_entries_from_ledger,
     project_koth,
     retest_cohort,
     tempo_index,
@@ -1200,3 +1201,84 @@ class TestCeilingCappedBand:
         defense = champion_defense(entries, projection, ceiling_band_clamp=True)
         assert defense is not None
         assert defense.required_score < defense.score_ceiling
+
+
+class TestCrownIncumbency:
+    """The projection must open the walk from the served incumbent, like the fold.
+
+    The 2026-09-09 flap: a senior lineage inside the band retook the crown on
+    every read as the continual mean wobbled. With an incumbent the senior
+    lineage must clear the band to take it back.
+    """
+
+    def _flap(self) -> tuple[KothEntry, KothEntry]:
+        senior = _entry(1, 0.7981, minutes=0, bench_version=12)
+        holder = _entry(2, 0.8010, minutes=60, bench_version=12)
+        return senior, holder
+
+    def test_classic_walk_crowns_the_senior_lineage(self) -> None:
+        senior, holder = self._flap()
+        projection = project_koth([holder, senior])
+        assert projection is not None
+        assert projection.champion.agent_id == senior.agent_id
+
+    def test_incumbent_holds_inside_the_band(self) -> None:
+        senior, holder = self._flap()
+        projection = project_koth(
+            [holder, senior],
+            ceiling_band_clamp=True,
+            incumbent_agent_id=holder.agent_id,
+        )
+        assert projection is not None
+        assert projection.champion.agent_id == holder.agent_id
+        assert projection.raw_leader.agent_id == holder.agent_id
+        defense = champion_defense(
+            [holder, senior], projection, ceiling_band_clamp=True
+        )
+        assert defense is not None and not defense.dethrones
+
+    def test_senior_lineage_retakes_by_clearing_the_band(self) -> None:
+        holder = _entry(2, 0.8010, minutes=60, bench_version=12)
+        senior = _entry(1, 0.8300, minutes=0, bench_version=12)
+        projection = project_koth([holder, senior], incumbent_agent_id=holder.agent_id)
+        assert projection is not None
+        assert projection.champion.agent_id == senior.agent_id
+
+    def test_unknown_incumbent_is_the_classic_walk(self) -> None:
+        senior, holder = self._flap()
+        projection = project_koth([holder, senior], incumbent_agent_id=UUID(int=99))
+        assert projection is not None
+        assert projection.champion.agent_id == senior.agent_id
+
+    def test_wire_entries_lift_into_the_same_decision(self) -> None:
+        """``koth_entries_from_ledger`` must not change the crown the pin records."""
+        from datetime import UTC, datetime
+
+        from ditto.api_models import LedgerEntry
+
+        def wire(marker: int, composite: float, minutes: int) -> LedgerEntry:
+            return LedgerEntry.model_validate(
+                {
+                    "miner_hotkey": "5" + str(marker) * 47,
+                    "agent_id": str(UUID(int=marker)),
+                    "composite": composite,
+                    "n": 120,
+                    "first_seen": (
+                        datetime(2026, 9, 1, tzinfo=UTC) + timedelta(minutes=minutes)
+                    ).isoformat(),
+                    "sha256": "ab" * 32,
+                    "run_id": "run",
+                    "seed": 1,
+                    "validator_hotkey": "5" + "9" * 47,
+                    "status": "scored",
+                    "bench_version": 12,
+                }
+            )
+
+        lifted = koth_entries_from_ledger([wire(2, 0.8010, 60), wire(1, 0.7981, 0)])
+        assert [entry.raw_rank for entry in lifted] == [1, 2]
+        classic = project_koth(lifted)
+        held = project_koth(lifted, incumbent_agent_id=UUID(int=2))
+        assert classic is not None and held is not None
+        assert classic.champion.agent_id == UUID(int=1)
+        assert held.champion.agent_id == UUID(int=2)

@@ -56,6 +56,7 @@ from ditto.api_server.dashboard_seo import (
     sitemap_xml,
 )
 from ditto.api_server.datapipeline import create_generator
+from ditto.api_server.ditto_link import DittoLinkClient
 from ditto.api_server.efficiency import EfficiencyStateMaterializer
 from ditto.api_server.efficiency_settings import (
     DEFAULT_SETTINGS_TTL_SECONDS,
@@ -64,6 +65,7 @@ from ditto.api_server.efficiency_settings import (
 from ditto.api_server.embedding import create_embedder
 from ditto.api_server.endpoints import (
     admin_artifact_release_settings_router,
+    admin_ath_rulings_router,
     admin_attestation_router,
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
@@ -75,6 +77,7 @@ from ditto.api_server.endpoints import (
     admin_coding_reconciliation_router,
     admin_coding_ticket_sets_router,
     admin_confirmation_bundles_router,
+    admin_confirmation_seed_anchors_router,
     admin_continual_retest_settings_router,
     admin_copy_court_router,
     admin_copy_review_router,
@@ -93,6 +96,7 @@ from ditto.api_server.endpoints import (
     admin_retirement_router,
     admin_scoring_readiness_router,
     admin_screener_capacity_router,
+    admin_screener_fanout_shadow_router,
     admin_screener_policy_activation_router,
     admin_screener_review_settings_router,
     admin_submission_deposit_address_router,
@@ -102,11 +106,14 @@ from ditto.api_server.endpoints import (
     admin_validator_slot_settings_router,
     admin_validator_weights_router,
     attestation_router,
+    ditto_callback_challenge_router,
+    feedback_track_router,
     health_router,
     inference_router,
     metrics_router,
     miner_auth_router,
     miner_avatars_router,
+    miner_ditto_link_router,
     miner_mcp_router,
     miner_me_router,
     name_claims_router,
@@ -127,6 +134,9 @@ from ditto.api_server.endpoints import (
     validator_confirmation_router,
     validator_router,
 )
+from ditto.api_server.endpoints.admin_benchmark_canary import (
+    router as admin_benchmark_canary_router,
+)
 from ditto.api_server.endpoints.validator_coding_hosted import HostedCodingControl
 from ditto.api_server.endpoints.validator_coding_hosted import (
     router as validator_coding_hosted_router,
@@ -139,6 +149,7 @@ from ditto.api_server.inference_concurrency_settings import (
     InferenceConcurrencySettingsResolver,
 )
 from ditto.api_server.inference_routing import ProviderRouteRefresher
+from ditto.api_server.ledger_pin import LedgerPinLoop, LedgerPinMaterializer
 from ditto.api_server.middleware import (
     AuthPassThroughMiddleware,
     PublicCacheMiddleware,
@@ -304,6 +315,23 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 else None
             )
 
+            # Shadow router-track ledger relay: reads the ledger the offloaded
+            # dittobench-api scorer publishes so validators can fold it via
+            # GET /scoring/router-ledger. None (unconfigured) → the endpoint
+            # serves an empty ledger, the safe shadow default (zero emission).
+            from ditto.api_server.router_ledger_relay import (
+                create_router_ledger_reader_from_env,
+            )
+
+            router_ledger_reader = (
+                create_router_ledger_reader_from_env()
+                if _process_role() == PLATFORM_ROLE
+                else None
+            )
+            if router_ledger_reader is not None:
+                stack.push_async_callback(router_ledger_reader.aclose)
+            app.state.router_ledger_reader = router_ledger_reader
+
             from ditto.api_server.hippius import (
                 create_hippius_client,
                 parse_traces_hippius_config_from_env,
@@ -384,6 +412,19 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await copy_court.start()
             app.state.copy_hold_court = copy_court
+            # The epoch pin must land at the chain boundary even when no
+            # validator is reading; the request path pins on demand as well and
+            # the table's unique key makes the race harmless. Singleton for the
+            # same reason as the janitor: one loop per deployment is enough.
+            ledger_pin_loop = LedgerPinLoop(
+                app_state=app.state,
+                session_maker=app.state.session_maker,
+                materializer=app.state.ledger_pin_materializer,
+            )
+            stack.push_async_callback(ledger_pin_loop.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await ledger_pin_loop.start()
+            app.state.ledger_pin_loop = ledger_pin_loop
 
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
@@ -542,6 +583,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         ttl_seconds=_efficiency_settings_ttl_seconds(),
     )
     app.state.efficiency_materializer = EfficiencyStateMaterializer()
+    # Epoch-pinned validator ledger: one immutable fold input per chain epoch.
+    app.state.ledger_pin_materializer = LedgerPinMaterializer()
     # Operator-owned share of miner emission routed to the owner burn hotkey.
     # Served on the scoring ledger, so a change reaches the fleet on its next
     # poll instead of on a validator release.
@@ -569,6 +612,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # snapshot path is synchronous and disabled by default; production lifespan
     # starts the optional background refresher without blocking API startup.
     app.state.validator_names = create_validator_names(config.validator_names)
+    # Sign in with Ditto relying party. Inert (every route answers 503) until
+    # DITTO_LINK_* names the DittoBench app; tests swap in a mock transport.
+    app.state.ditto_link = DittoLinkClient(config.ditto_link)
 
     # Starlette inserts each middleware at position 0, so the LAST
     # add_middleware call ends up outermost on the wire. RequestIDMiddleware
@@ -602,7 +648,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(miner_avatars_router, prefix="/api/v1")
     app.include_router(miner_auth_router, prefix="/api/v1")
     app.include_router(miner_me_router, prefix="/api/v1")
+    app.include_router(miner_ditto_link_router, prefix="/api/v1")
+    app.include_router(feedback_track_router, prefix="/api/v1")
     app.include_router(miner_mcp_router)
+    # Root path (no /api/v1): Ditto fetches the challenge at the origin root.
+    app.include_router(ditto_callback_challenge_router)
     app.include_router(upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
@@ -624,6 +674,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_artifact_release_settings_router, prefix="/api/v1")
     app.include_router(admin_attestation_router, prefix="/api/v1")
     app.include_router(admin_benchmark_rollout_router, prefix="/api/v1")
+    app.include_router(admin_benchmark_canary_router, prefix="/api/v1")
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
@@ -642,11 +693,14 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_validator_slot_settings_router, prefix="/api/v1")
     app.include_router(admin_scoring_readiness_router, prefix="/api/v1")
     app.include_router(admin_screener_review_settings_router, prefix="/api/v1")
+    app.include_router(admin_screener_fanout_shadow_router, prefix="/api/v1")
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
     app.include_router(admin_submission_settings_router, prefix="/api/v1")
     app.include_router(admin_submission_deposit_address_router, prefix="/api/v1")
     app.include_router(admin_copy_review_router, prefix="/api/v1")
+    app.include_router(admin_ath_rulings_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
+    app.include_router(admin_confirmation_seed_anchors_router, prefix="/api/v1")
     app.include_router(admin_coding_certifications_router, prefix="/api/v1")
     app.include_router(admin_coding_control_plane_router, prefix="/api/v1")
     app.include_router(admin_coding_catalog_router, prefix="/api/v1")

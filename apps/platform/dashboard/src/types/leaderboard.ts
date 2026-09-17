@@ -71,6 +71,77 @@ export interface EmissionsFold {
   allocation_mode?: "ranked" | "score_ceiling_pool";
   score_ceiling_pool_size?: number;
   recipients?: EmissionRecipient[];
+  /** Protocol 27: whether the fold defends the crown from the previous pin's
+   * champion instead of re-deriving it from the earliest lineage each read. */
+  crown_incumbent_active?: boolean;
+  crown_incumbent_required_protocol?: number;
+  crown_incumbent_agent_id?: string | null;
+  /** The crown the next epoch pin would record from the live board. */
+  next_pin_projection?: NextPinProjection | null;
+  /** The epoch-pinned ledger validators are folding right now. */
+  ledger_pin?: LedgerPin | null;
+}
+
+/** `emissions.ledger_pin`: identity of the frozen ledger the fleet folds this
+ * chain epoch. The board above it is live and can move within the epoch;
+ * weights only move at the next pin. */
+export interface LedgerPin {
+  mode?: "epoch" | "live";
+  epoch_index?: number;
+  last_epoch_block?: number;
+  pinned_block?: number;
+  pinned_at?: string;
+  next_epoch_block?: number | null;
+  bench_version?: number;
+  entry_count?: number;
+  ledger_digest?: string;
+  champion_agent_id?: string | null;
+  incumbent_agent_id?: string | null;
+  crown_mode?: "incumbent" | null;
+}
+
+export interface NextPinProjection {
+  champion_agent_id?: string;
+  champion_miner_hotkey?: string;
+  incumbent_agent_id?: string | null;
+  changes_crown?: boolean;
+  decision?: RawLeaderDecision | null;
+}
+
+// ── Pinned ledger history (/public/ledger-epochs) ────────────
+
+export interface LedgerEpochActor {
+  agent_id: string;
+  miner_hotkey: string;
+  agent_name?: string | null;
+  agent_version?: number | null;
+}
+
+export interface LedgerEpochRecipient extends LedgerEpochActor {
+  role: "champion" | "joint_champion" | "tail";
+  share_of_miner_pool: number;
+}
+
+export interface LedgerEpoch {
+  epoch_index: number;
+  last_epoch_block?: number;
+  pinned_block?: number;
+  pinned_at?: string;
+  bench_version?: number;
+  entry_count?: number;
+  ledger_digest?: string;
+  crown_mode?: "incumbent" | null;
+  champion?: LedgerEpochActor | null;
+  incumbent?: LedgerEpochActor | null;
+  crown_changed?: boolean;
+  recipients?: LedgerEpochRecipient[];
+}
+
+export interface LedgerEpochsPayload {
+  generated_at?: string;
+  mode?: "epoch" | "live";
+  count?: number;
+  epochs?: LedgerEpoch[];
 }
 
 export interface PerCategoryScore {
@@ -128,6 +199,8 @@ export interface LeaderboardFamilyMember {
   agent_name: string;
   agent_version?: number | null;
   canonical_composite: number;
+  /** Same estimator as the parent KOTH row. Prefer this over canonical_composite. */
+  official_composite?: number | null;
   /** Match against the entry's crown_first_seen to find the generation that
    * supplies the fold anchor. May sit on a different hotkey than the winner. */
   submitted_at?: string | null;
@@ -185,6 +258,12 @@ export interface LeaderboardEntry {
   /** Display-only LongMemEval mean from completed confirmation evidence. */
   v9_longmem_mean_composite?: number | null;
   v9_confirmation_evidence_sha256?: string | null;
+  /** Display-only shadow router-track efficiency composite (dittobench router
+   * shadow ledger). Never ranks, never earns emissions; weight_eligible is
+   * always false on the router track. */
+  router_shadow_composite?: number | null;
+  /** Router shadow measurement phase for the muted placeholder vs. value. */
+  router_shadow_status?: "queued" | "running" | "measured" | null;
   /** Authoritative quality and primary ranking key after continual aggregation. */
   official_composite?: number | null;
   /** Score after continual aggregation but before relative efficiency. */
@@ -282,16 +361,104 @@ export interface V9AuthoritativeToolGate {
 
 /** Privacy-safe subset of the signature-bound v9 base evidence.
  *
- * The evidence stack was carried forward to v10 (#859) and v11 (#861); this
- * union must track `V9EvidenceBenchVersion` in the shared protocol package.
+ * The evidence stack was carried forward to v10 (#859), v11 (#861), v12 (#932)
+ * and v13 (#1519); this union must track `V9EvidenceBenchVersion` in the shared
+ * protocol package (`ditto/tests/test_bench_version_pins.py` diffs it).
  */
 export interface V9BaseEvidence {
-  bench_version: 9 | 10 | 11 | 12;
+  bench_version: 9 | 10 | 11 | 12 | 13;
   score_gates: {
     rollout_mode: "shadow" | "enforce";
     model_use: V9ModelUseGate;
     authoritative_tool: V9AuthoritativeToolGate;
   };
+}
+
+/** Posture a bench v13+ gate ran under. `observe` is the twin post-pass's
+ * name for shadow. */
+export type GatePosture = "off" | "shadow" | "observe" | "enforce";
+
+/** Run-level catalog-present gate summary (`details.catalog_gate`, sanitised). */
+export interface CatalogGateSummary {
+  posture?: GatePosture | null;
+  tool_cases?: number;
+  attributed_cases?: number;
+  incomplete_capture_cases?: number;
+  lower_bound_cases?: number;
+  no_completion_cases?: number;
+  catalog_absent_cases?: number;
+  catalog_suppression_rate?: number | null;
+  safe_harbor_cases?: number;
+  restraint_without_offer?: number;
+  expected_tool_not_offered?: number;
+  swallowed_model_call?: number;
+  zeroed_cases?: number;
+  claim_uncorroborated_cases?: number;
+  attribution_coverage_bps?: number | null;
+}
+
+/** Run-level claim-span / causal gate summary (`details.claim_provenance`). */
+export interface ClaimProvenanceSummary {
+  posture?: GatePosture | null;
+  memory_cases?: number;
+  attributed_cases?: number;
+  applicable_cases?: number;
+  settled_cases?: number;
+  not_model_emitted_cases?: number;
+  answer_in_prompt_cases?: number;
+  no_model_completion_cases?: number;
+  unsettled_cases?: number;
+  zeroed_cases?: number;
+  attribution_coverage_bps?: number | null;
+}
+
+/** Run-level twin / counterfactual post-pass summary (`details.twin_post_pass`). */
+export interface TwinPostPassSummary {
+  posture?: GatePosture | null;
+  rule_requested?: string | null;
+  rule?: string | null;
+  honest_concordant_error_rate?: number | null;
+  auto_fallback?: boolean;
+  twin_groups?: number;
+  twin_groups_concordant?: number;
+  counterfactual_pairs?: number;
+  counterfactual_insensitive?: number;
+  cases_affected?: number;
+  cases_affected_share?: number | null;
+  applied?: boolean;
+}
+
+/** Run-level shadow cost-factor summary (`details.inference_cost`). */
+export interface InferenceCostSummary {
+  posture?: GatePosture | null;
+  applied?: boolean;
+  floor_bps?: number | null;
+  cases?: number;
+  attributed_cases?: number;
+  cases_below_full_factor?: number;
+  mean_factor_bps?: number | null;
+}
+
+/** Run-level bench v13+ gate verdict published beside a validator's score.
+ *
+ * Aggregates only: the per-case notes behind these counts are owner-only
+ * (`/me/agents/{id}/gate-notes`). `posture` is the most severe posture any
+ * gate ran under; `flagged_case_count` / `flagged_case_share` are the cases
+ * the gates would zero at enforce (or did) plus those the shadow cost factor
+ * would discount. Null below v13 and for a scorer that emitted no gate
+ * telemetry. Mirrors `PublicGateEvidence`. */
+export interface GateEvidence {
+  bench_version: number;
+  posture?: GatePosture | null;
+  catalog_gate?: CatalogGateSummary | null;
+  claim_provenance?: ClaimProvenanceSummary | null;
+  twin_post_pass?: TwinPostPassSummary | null;
+  inference_cost?: InferenceCostSummary | null;
+  catalog_suppression_rate?: number | null;
+  flagged_case_count?: number;
+  flagged_case_share?: number | null;
+  /** Gate finding -> cases it fired on (closed vocabulary). */
+  gate_counts?: Record<string, number>;
 }
 
 /** Board-level state of the relative-efficiency adjustment.
@@ -324,6 +491,10 @@ export interface LeaderboardPayload {
   entries?: LeaderboardEntry[];
   /** Active confirmation policy; only enforce changes rank and emissions authority. */
   v9_confirmation_mode?: "shadow" | "enforce" | null;
+  /** Router track is shadow-only; present when any row carries a router shadow
+   * measurement. It never changes rank or emissions — display-only, like the
+   * LongMemEval shadow surface. */
+  router_shadow_mode?: "shadow" | null;
   available_bench_versions?: number[];
   active_bench_version?: number | null;
   desired_bench_version?: number | null;
@@ -369,10 +540,33 @@ export interface ChainWeight {
   uid: number;
 }
 
+/** Whether a revealed vector matches the fold the current pin prescribes. */
+export type PinAgreement = "current" | "previous" | "diverged" | "unknown";
+
+/** What a validator reported folding on its latest signed heartbeat. */
+export interface WeightsFold {
+  epoch_index?: number | null;
+  ledger_digest?: string | null;
+  vector_digest?: string;
+  champion_agent_id?: string | null;
+  folded_at?: number;
+}
+
 export interface ChainWeightVector {
   validator_uid?: number;
   validator_hotkey?: string;
   weights?: ChainWeight[];
+  fold?: WeightsFold | null;
+  matches_pin?: PinAgreement;
+}
+
+/** `/public/weights` `pin_agreement`: how many revealed vectors match the
+ * current pin's fold. Null until a pin exists. */
+export interface PinAgreementSummary {
+  epoch_index: number;
+  previous_epoch_index?: number | null;
+  matching: number;
+  total: number;
 }
 
 /** /public/weights `epoch` — the subnet's position in its tempo cycle.
@@ -405,6 +599,7 @@ export interface ChainWeightsSnapshot {
   vectors?: ChainWeightVector[];
   owner_hotkey?: string | null;
   block?: number;
+  pin_agreement?: PinAgreementSummary | null;
   /** Absent when the hyperparameter reads failed; the matrix is the endpoint's
    * contract and this decorates it, so its absence hides only the countdown. */
   epoch?: ChainEpoch | null;

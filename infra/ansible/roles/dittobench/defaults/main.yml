@@ -105,7 +105,7 @@ dittobench_docker_apt_arch: amd64
 # and is reached over INPUT via a scoped UFW allow (below) — moving the sandbox
 # off the default docker0 bridge takes it outside the pre-existing 172.17.0.0/16
 # Ollama allow, so C-ISO must re-grant it for the sandbox subnet.
-# See dittobench-api docs/sandbox-egress-hardening.md.
+# See services/dittobench-api/docs/sandbox-egress.md.
 #
 # Default OFF so a plain converge preserves today's full-egress behavior; the
 # validator host_vars turn it on. The three DITTOBENCH_SANDBOX_* values are

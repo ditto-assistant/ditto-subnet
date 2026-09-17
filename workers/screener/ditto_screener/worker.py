@@ -51,10 +51,12 @@ from ditto_screener.review_settings import (
     ShadowReviewUsage,
     bootstrap_review_settings,
 )
+from ditto_screener.router_screen import build_signed_router_source_screen
 from ditto_screener.signing import sign_heartbeat, sign_verdict
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
     ScreenerQueueItem,
     ScreenEvidenceItem,
     ScreenResultOutcome,
@@ -549,6 +551,7 @@ class ScreenerWorker:
                     code=EXACT_CROSS_MINER_DUPLICATE,
                     summary="artifact is an exact cross-miner duplicate",
                     detail="exact cross-miner duplicate",
+                    policy_version=policy_version,
                 )
             else:
                 screen_deadline = self._active_lease_deadline
@@ -566,6 +569,7 @@ class ScreenerWorker:
                         code="lease-budget-exhausted",
                         summary="insufficient screening lease budget at claim",
                         detail="screener error: insufficient lease budget at claim",
+                        policy_version=policy_version,
                     )
                 else:
                     artifact = await self._platform.get_artifact(
@@ -661,6 +665,10 @@ class ScreenerWorker:
                         deferred_source_review=item.deferred_source_review,
                         policy_version=policy_version,
                     )
+            if result.policy_version != policy_version:
+                raise PlatformError(
+                    "screening decision policy version does not match the claim"
+                )
             shadow_review = self._gate.pop_shadow_review(attempt_id)
             if shadow_review is not None:
                 await self._submit_shadow_review(
@@ -668,6 +676,13 @@ class ScreenerWorker:
                     attempt_id=attempt_id,
                     artifact_sha256=item.sha256.lower(),
                     result=shadow_review,
+                )
+            if screened_image is not None:
+                await self._emit_router_source_screen(
+                    agent_id=agent_id,
+                    agent_artifact_sha256=item.sha256.lower(),
+                    screened_image_sha256=screened_image.sha256.lower(),
+                    policy_version=policy_version,
                 )
             # Typed non-verdicts still complete and park the attempt. Reporting
             # removes the false "running" state; Platform requires an exact
@@ -704,6 +719,7 @@ class ScreenerWorker:
             is_quarantine = typed_outcome == ScreenResultOutcome.QUARANTINE
             is_audited_result = typed_outcome in {
                 ScreenResultOutcome.QUARANTINE,
+                ScreenResultOutcome.INCONCLUSIVE,
                 ScreenResultOutcome.PASS_INCONCLUSIVE,
             }
             has_review_notes = bool(result.review_notes)
@@ -766,7 +782,13 @@ class ScreenerWorker:
             )
             review_audit = (
                 ScreenReviewAudit.model_validate(result.review_audit)
-                if typed_outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+                if (
+                    typed_outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+                    or (
+                        policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                        and typed_outcome == ScreenResultOutcome.INCONCLUSIVE
+                    )
+                )
                 and result.review_audit is not None
                 else None
             )
@@ -1121,6 +1143,51 @@ class ScreenerWorker:
                 attempt_id,
                 error,
             )
+
+    async def _emit_router_source_screen(
+        self,
+        *,
+        agent_id: UUID,
+        agent_artifact_sha256: str,
+        screened_image_sha256: str,
+        policy_version: int,
+    ) -> None:
+        """Best-effort shadow router-track source screen. Verdict-neutral.
+
+        Produces a signed, content-addressed router source-screen evidence next
+        to the memory verdict. It is shadow-only (``weight_eligible=False``) and
+        can never deny a submission or change its signed result. No paired
+        held-out router arm is produced today, so ``sample=None`` maps to the
+        benign ``INFRASTRUCTURE`` outcome — the opt-in / yes-and default. A future
+        held-out arm producer feeds a real sample here without any other change.
+        Only the content-addressed digest is logged; never the key or findings.
+        """
+        settings = self._review_settings_status
+        if settings is None or settings.mode != "shadow" or settings.revision < 1:
+            return
+        try:
+            evidence, signature = build_signed_router_source_screen(
+                keypair=self._keypair,
+                screener_hotkey=self._config.screener_hotkey,
+                agent_artifact_sha256=agent_artifact_sha256,
+                screened_image_sha256=screened_image_sha256,
+                policy_version=policy_version,
+                sample=None,
+            )
+        except Exception as error:  # noqa: BLE001 - shadow track must never raise
+            logger.warning(
+                "router source screen not produced agent_id=%s: %s",
+                agent_id,
+                error,
+            )
+            return
+        logger.info(
+            "router source screen agent_id=%s outcome=%s evidence_sha256=%s sig_len=%d",
+            agent_id,
+            evidence.outcome.value,
+            evidence.evidence_sha256,
+            len(signature),
+        )
 
     async def _sleep_or_stop(self, stop: asyncio.Event, seconds: float) -> None:
         """Sleep up to ``seconds``, waking early if ``stop`` is set."""

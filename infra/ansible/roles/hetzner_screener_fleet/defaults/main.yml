@@ -117,3 +117,8 @@ screener_fleet_base_image: "{{ screener_fleet_images_dir }}/debian-12-docker.qco
 # The registration token is consumed and deleted by ditto-screener-enroll.
 screener_fleet_registration_token: ""
 screener_fleet_source_review_api_key: ""
+
+# Optional shared-host partition; zero admission caps retain Platform limits.
+screener_fleet_local_sandbox_slots: 0
+screener_fleet_local_source_review_slots: 0
+screener_fleet_resource_slice: ''

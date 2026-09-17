@@ -113,6 +113,7 @@ V9GateResult = Literal[
     "latency_implausible",
     "answer_stuffed",
     "review_required",
+    "claim_provenance_flagged",
 ]
 
 
@@ -134,7 +135,9 @@ def _apply_gate_factor_micros(ordinary_micros: int, factor_bps: int) -> int:
         return ordinary_micros
     return (ordinary_micros * factor_bps + _BASIS_POINTS // 2) // _BASIS_POINTS
 
-V9EvidenceBenchVersion = Literal[9, 10, 11, 12]
+
+
+V9EvidenceBenchVersion = Literal[9, 10, 11, 12, 13]
 """Benchmark epochs whose scores carry the signed v9 base-evidence stack.
 
 Every layer that parses, re-derives, or *projects* that evidence must pin this
@@ -143,6 +146,14 @@ alias rather than restate the versions: the stack was carried forward to v10
 projection in Platform kept its own ``Literal[9]`` and 500'd on the first v10
 score a carried-forward validator reported. Extend the alias when the evidence
 contract reaches a new epoch, and every consumer moves with it.
+
+This is the ONE hand-typed version enumeration in the Python stack. The
+validator's executable set, the weight fold's receipt set, the Platform and
+Backroom ``bench_version`` enums, and the ``bench_versions.json`` contract
+golden that ``ditto/tests/test_bench_version_pins.py`` diffs against the Go,
+Rust, and TypeScript layers all derive from it (#1519). v13 (#1518) joined it
+with the typed-semantic contract; the v13 gates ship behind shadow switches and
+activation stays a separate Platform rollout step.
 """
 
 V9_EVIDENCE_BENCH_VERSIONS: tuple[int, ...] = get_args(V9EvidenceBenchVersion)
@@ -168,6 +179,37 @@ had not.
 
 MIN_CONFIRMATION_BENCH_VERSION: int = min(CONFIRMATION_BENCH_VERSIONS)
 """Floor of the contract. Schema-level guards use this; policy uses membership."""
+
+
+MAX_SUPPORTED_BENCH_VERSION: int = max(V9_EVIDENCE_BENCH_VERSIONS)
+"""Newest contract every layer of this release can execute, derived from the alias.
+
+The scorer advertises up to this version once its contract is complete, the
+validator intersects its own executable set with that advertisement, and the
+starter kit range-checks ``/run`` against the same ceiling. Every layer that
+cannot import this module (Go, Rust, TypeScript) is diffed against it by
+``ditto/tests/test_bench_version_pins.py``.
+"""
+
+MIN_EXECUTABLE_BENCH_VERSION: int = 8
+"""Oldest contract the live scorer still administers.
+
+A floor, not a mirror of the active version: v8 predates the signed evidence
+stack, so it is executable but neither confirmable nor gate-scored. Raised by
+hand only when an era is retired for good.
+"""
+
+SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = tuple(
+    range(MIN_EXECUTABLE_BENCH_VERSION, MAX_SUPPORTED_BENCH_VERSION + 1)
+)
+"""Every contract a current validator may execute, derived from the two bounds.
+
+The validator imports this rather than retyping it: bench v11 shipped with the
+scorer and Platform advertising it while the validator's own hand-written copy
+stayed at ``(8, 9, 10)``, so the fleet advertised zero v11-capable validators
+until a follow-up release. Contiguity is asserted by the contract test, so a
+retired middle version would need an explicit design change, not a gap.
+"""
 
 
 def supports_confirmation(bench_version: int | None) -> bool:
@@ -494,6 +536,79 @@ class V12AnswerStuffingGate(BaseModel):
         return self
 
 
+class V13ClaimProvenanceGate(BaseModel):
+    """Bench v13 claim-span provenance + causal answer_in_prompt gate summary.
+
+    Mirror of ``internal/scoregates.ClaimProvenanceEvidence``. Present on every
+    bench_version>=13 digest (the scorer attaches it to every v13 run). The
+    factor is ALWAYS full: the gates act per claim (a flagged case's own score
+    is zeroed under enforce), so the run-level term is an identity that keeps
+    the signed schema uniform. ``flagged_cases`` is the UNION of the two flagged
+    subsets; ``unattributed_call_cases`` is the subset of ``unsettled_cases``
+    the harness caused by making case-less completions under concurrency (fail
+    closed under enforce, so they count toward ``zeroed_cases``).
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    administered_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    eligible_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    not_model_emitted_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    answer_in_prompt_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    flagged_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    unattributed_call_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    unsettled_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    zeroed_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    attribution_complete: bool
+    posture: Literal["shadow", "enforce"]
+    flagged_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+    result: V9GateResult
+    factor_bps: Literal[10000]
+
+    @model_validator(mode="after")
+    def _validate_derived_evidence(self) -> V13ClaimProvenanceGate:
+        if self.eligible_cases + self.unsettled_cases > self.administered_cases:
+            raise ValueError(
+                "claim-provenance eligible and unsettled cases exceed administered"
+            )
+        if (
+            self.not_model_emitted_cases > self.eligible_cases
+            or self.answer_in_prompt_cases > self.eligible_cases
+        ):
+            raise ValueError("claim-provenance flagged cases exceed eligible cases")
+        lower = max(self.not_model_emitted_cases, self.answer_in_prompt_cases)
+        upper = min(
+            self.not_model_emitted_cases + self.answer_in_prompt_cases,
+            self.eligible_cases,
+        )
+        if not lower <= self.flagged_cases <= upper:
+            raise ValueError("claim-provenance flagged_cases is not the union")
+        if self.unattributed_call_cases > self.unsettled_cases:
+            raise ValueError("claim-provenance unattributed calls exceed unsettled")
+        if self.zeroed_cases > self.flagged_cases + self.unattributed_call_cases:
+            raise ValueError("claim-provenance zeroed cases exceed flagged cases")
+        if self.posture == "shadow" and self.zeroed_cases != 0:
+            raise ValueError("claim-provenance shadow posture cannot zero cases")
+        if self.attribution_complete != (self.unsettled_cases == 0):
+            raise ValueError(
+                "claim-provenance attribution_complete contradicts unsettled_cases"
+            )
+        flagged_bps = 0
+        if self.eligible_cases > 0:
+            flagged_bps = _coverage_bps(self.flagged_cases, self.eligible_cases)
+        if not self.attribution_complete:
+            result: V9GateResult = "insufficient_evidence"
+        elif self.eligible_cases == 0:
+            result = "not_applicable"
+        elif self.flagged_cases > 0:
+            result = "claim_provenance_flagged"
+        else:
+            result = "passed"
+        if (self.flagged_bps, self.result) != (flagged_bps, result):
+            raise ValueError("claim-provenance derived evidence is inconsistent")
+        return self
+
+
 class V9ScoreGateEvidence(BaseModel):
     """Complete typed mirror of ``internal/scoregates.Evidence``."""
 
@@ -508,6 +623,7 @@ class V9ScoreGateEvidence(BaseModel):
     model_dependence: V12ModelDependenceGate | None = None
     inference_latency: V12InferenceLatencyGate | None = None
     answer_stuffing: V12AnswerStuffingGate | None = None
+    claim_provenance: V13ClaimProvenanceGate | None = None
 
     @model_validator(mode="after")
     def _validate_versioned_gates(self) -> V9ScoreGateEvidence:
@@ -520,14 +636,16 @@ class V9ScoreGateEvidence(BaseModel):
             or self.answer_stuffing is not None
         ):
             raise ValueError("pre-v12 score gates must omit v12 gates")
+        v13 = self.bench_version >= 13
+        if v13 and self.claim_provenance is None:
+            raise ValueError("v13 score gates require claim_provenance")
+        if not v13 and self.claim_provenance is not None:
+            raise ValueError("pre-v13 score gates must omit claim_provenance")
         return self
 
     def combined_factor_bps(self) -> int:
         """Mirror Go ``Evidence.CombinedFactorBPS``."""
-        if (
-            self.model_use.factor_bps == 0
-            or self.authoritative_tool.factor_bps == 0
-        ):
+        if self.model_use.factor_bps == 0 or self.authoritative_tool.factor_bps == 0:
             return 0
         if (
             self.bench_version >= 12
@@ -541,6 +659,8 @@ class V9ScoreGateEvidence(BaseModel):
                 combined = combined * self.inference_latency.factor_bps // _BASIS_POINTS
             if self.answer_stuffing is not None:
                 combined = combined * self.answer_stuffing.factor_bps // _BASIS_POINTS
+        if self.bench_version >= 13 and self.claim_provenance is not None:
+            combined = combined * self.claim_provenance.factor_bps // _BASIS_POINTS
         return combined
 
     def canonical_bytes(self) -> bytes:
@@ -642,6 +762,30 @@ class V9ScoreGateEvidence(BaseModel):
                     f"answer_stuffing.result={stuffing.result}\n"
                     f"answer_stuffing.factor_bps={stuffing.factor_bps}\n"
                 )
+        # Key order mirrors Go ``Evidence.CanonicalBytes``; the bit-paired
+        # fixture services/dittobench-api/internal/scoregates/testdata/
+        # v13_claim_provenance_evidence.json pins the digest both sides produce.
+        claim = self.claim_provenance
+        if self.bench_version >= 13 and claim is not None:
+            body += (
+                f"claim_provenance.administered_cases={claim.administered_cases}\n"
+                f"claim_provenance.eligible_cases={claim.eligible_cases}\n"
+                "claim_provenance.not_model_emitted_cases="
+                f"{claim.not_model_emitted_cases}\n"
+                "claim_provenance.answer_in_prompt_cases="
+                f"{claim.answer_in_prompt_cases}\n"
+                f"claim_provenance.flagged_cases={claim.flagged_cases}\n"
+                "claim_provenance.unattributed_call_cases="
+                f"{claim.unattributed_call_cases}\n"
+                f"claim_provenance.unsettled_cases={claim.unsettled_cases}\n"
+                f"claim_provenance.zeroed_cases={claim.zeroed_cases}\n"
+                "claim_provenance.attribution_complete="
+                f"{_go_bool(claim.attribution_complete)}\n"
+                f"claim_provenance.posture={claim.posture}\n"
+                f"claim_provenance.flagged_bps={claim.flagged_bps}\n"
+                f"claim_provenance.result={claim.result}\n"
+                f"claim_provenance.factor_bps={claim.factor_bps}\n"
+            )
         return body.encode()
 
     def digest_hex(self) -> str:

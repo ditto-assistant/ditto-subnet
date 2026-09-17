@@ -392,6 +392,14 @@ func MetamorphicConsistency(perCase []protocol.CaseScore) *float64 {
 		if strings.HasPrefix(cs.TwinGroup, persona.InjectionTwinPrefix) {
 			continue
 		}
+		// v13 restraint groups (decision_twin, tool cases) are scored by their
+		// own group rule (ApplyV13RestraintGroupRule); their members are tool
+		// scores with no Correct verdict and would read as a trivially
+		// consistent family here. Relation is populated only for v13, so this
+		// is a no-op for every earlier report.
+		if cs.Relation == protocol.TwinRelationDecision {
+			continue
+		}
 		// An undelivered sibling makes the whole family unusable: a 3-member group
 		// with one timeout would otherwise read as split and charge phrasing
 		// brittleness for a transport failure.
@@ -1225,6 +1233,14 @@ var memoryTools = map[string]bool{
 	"search_subjects":             true,
 	"fetch_memories":              true,
 	"search_memories_in_subjects": true,
+}
+
+// IsMemoryTool reports whether name is one of the catalog's memory-retrieval
+// tools (harness-internal, never served by the mock endpoint). The v13 catalog
+// capture uses it to decide whether an offered catalog left the model in a
+// position to ACT.
+func IsMemoryTool(name string) bool {
+	return memoryTools[name]
 }
 
 // allMemoryTools reports whether every expected tool is a memory-retrieval tool

@@ -1,0 +1,17 @@
+---
+# Applies only to the Terraform-labelled native Coding host (role=coding_hosted).
+# Connection settings only: no secret, wallet, Platform, provider or database
+# configuration belongs here. Every coding_hosted_* role stays default-off.
+gcp_project: ditto-app-dev
+gcp_region: us-central1
+gcp_zone: us-central1-a
+
+# The host has no public address; reach its private IP only through IAP.
+# Set GCP_OSLOGIN_USER to your OS Login username
+# (`gcloud compute os-login describe-profile`).
+ansible_user: "{{ lookup('env', 'GCP_OSLOGIN_USER') | default('', true) }}"
+ansible_ssh_common_args: >-
+  -o StrictHostKeyChecking=accept-new
+  -o ProxyCommand="gcloud compute start-iap-tunnel {{ inventory_hostname }} 22
+  --listen-on-stdin --zone={{ gcp_zone }} --project={{ gcp_project }}
+  --verbosity=warning"

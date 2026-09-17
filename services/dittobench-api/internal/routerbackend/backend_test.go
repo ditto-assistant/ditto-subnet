@@ -64,8 +64,9 @@ func TestDispatcherDispatchesWhenIncluded(t *testing.T) {
 	if !incl.Included {
 		t.Fatalf("expected included, got %+v", incl)
 	}
-	// v1 shadow: adapters are stubs, so every slice forfeits -> combined 0, and
-	// the entry is never weight-eligible.
+	// v1 shadow: the LocalBackend replays the embedded offline corpus, so the
+	// harnesses ARE operational and produce a real, non-zero shadow composite —
+	// but the entry stays never-weight-eligible and its folded CombinedScore is 0.
 	if entry.MinerHotkey != "hk" || entry.AgentID != "11111111-1111-1111-1111-111111111111" {
 		t.Errorf("entry identity not stamped: %+v", entry)
 	}
@@ -76,18 +77,44 @@ func TestDispatcherDispatchesWhenIncluded(t *testing.T) {
 		t.Error("shadow entry must never be weight-eligible")
 	}
 	if entry.CombinedScore != 0 {
-		t.Errorf("v1 shadow stub must fold to 0, got %v", entry.CombinedScore)
+		t.Errorf("shadow entry must fold to 0 (no emission impact), got %v", entry.CombinedScore)
+	}
+	// The measured aggregate rides ShadowComposite and must be a real, non-zero
+	// number the replay produced (the dashboard's router_shadow_composite).
+	if entry.ShadowComposite <= 0 || entry.ShadowComposite > 1 {
+		t.Errorf("shadow composite = %v, want a real value in (0,1]", entry.ShadowComposite)
 	}
 	if len(entry.Harnesses) != len(routerharness.Harnesses()) {
 		t.Errorf("want one slice per harness, got %d", len(entry.Harnesses))
 	}
+	operational := 0
 	for _, h := range entry.Harnesses {
 		if h.Operational {
-			t.Errorf("harness %q should be non-operational in the v1 stub", h.Harness)
+			operational++
+			if h.Efficiency <= 0 || h.Efficiency > 1 {
+				t.Errorf("operational harness %q efficiency = %v, want (0,1]", h.Harness, h.Efficiency)
+			}
 		}
+	}
+	if operational != len(routerharness.Harnesses()) {
+		t.Errorf("replay corpus should make every harness operational, got %d/%d", operational, len(routerharness.Harnesses()))
 	}
 	if !first.Equal(entry.FirstSeen) {
 		t.Errorf("first_seen not carried: %v", entry.FirstSeen)
+	}
+
+	// Determinism: replaying the same corpus yields an identical composite.
+	_, entry2, err := d.Run(context.Background(), RouterSubmission{
+		MinerHotkey:   "hk",
+		AgentID:       "11111111-1111-1111-1111-111111111111",
+		RouterBaseURL: "http://127.0.0.1:8080",
+		FirstSeen:     first,
+	})
+	if err != nil {
+		t.Fatalf("second replay errored: %v", err)
+	}
+	if entry2.ShadowComposite != entry.ShadowComposite {
+		t.Errorf("replay not deterministic: %v vs %v", entry2.ShadowComposite, entry.ShadowComposite)
 	}
 }
 

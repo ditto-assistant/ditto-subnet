@@ -74,6 +74,18 @@ _CONTRACTS = {
     # operator rollout target; it does not open a rollout or change active
     # benchmark authority (activation remains a deliberate POST).
     12: BenchmarkContract(12, 9, True, False),
+    # v13 is the typed-semantic bump on the v9..v12 evidence stack (#1518): it
+    # keeps LongMemEval, the trusted token-efficiency path and every v12 score
+    # gate while grading through grader-only claim sets, a bounded monetary
+    # share and an unregenerable surface pass; its own gates (catalog-present,
+    # provenance, causal, cost factor, twin rule) ship behind shadow switches.
+    # It retains the same policy-9 screened-image and post-v7 route
+    # prerequisites as v12. Shipping this contract exposes a guarded operator
+    # rollout target so the Platform can count v13-capable validators during
+    # calibration; it does not open a rollout or change active benchmark
+    # authority (activation remains a deliberate POST after the v13
+    # qualification report).
+    13: BenchmarkContract(13, 9, True, False),
 }
 
 

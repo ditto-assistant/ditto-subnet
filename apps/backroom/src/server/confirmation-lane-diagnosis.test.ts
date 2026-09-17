@@ -247,6 +247,50 @@ function itStates() {
     expect(diagnosis.likely_cause.code).toBe('issuance_disabled')
   })
 
+  it('reports profile_not_installed when the pinned profile is absent from the release', () => {
+    // Production revision 39 pinned v7 after the release moved to v8: mode read
+    // shadow while every claim returned no work.
+    const diagnosis = diagnoseConfirmationLane(
+      baseInput({
+        issuanceActive: false,
+        profileRevision: 'v9-confirmation-shadow-bounded-2026-08-25-zdr-v7',
+        profileInstalled: false,
+        installedProfiles: [
+          {
+            revision: 'v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8',
+            checksum: '8e5be01e3efd17dbf6cc21e79b9d53d82d842b1563d403b0318f2a272d6297af',
+          },
+        ],
+      }),
+    )
+    expect(diagnosis.likely_cause.code).toBe('profile_not_installed')
+    expect(diagnosis.likely_cause.evidence).toContain('profile_installed=false')
+    expect(diagnosis.likely_cause.evidence).toContain(
+      'installed_profiles=v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8@8e5be01e',
+    )
+    expect(diagnosis.policy).toMatchObject({
+      profile_installed: false,
+      installed_profiles: [
+        expect.objectContaining({
+          revision: 'v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8',
+        }),
+      ],
+    })
+  })
+
+  it('keeps issuance_inactive for an older Platform that does not report profile installation', () => {
+    const diagnosis = diagnoseConfirmationLane(baseInput({ issuanceActive: false }))
+    expect(diagnosis.likely_cause.code).toBe('issuance_inactive')
+    expect(diagnosis.policy).toMatchObject({ profile_installed: null, installed_profiles: null })
+  })
+
+  it('does not report profile_not_installed while mode is off', () => {
+    const diagnosis = diagnoseConfirmationLane(
+      baseInput({ mode: 'off', issuanceActive: false, profileInstalled: false }),
+    )
+    expect(diagnosis.likely_cause.code).toBe('issuance_disabled')
+  })
+
   it('reports healthy when completed evidence exists and no failures are sampled', () => {
     const diagnosis = diagnoseConfirmationLane(
       baseInput({

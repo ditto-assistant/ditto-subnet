@@ -52,7 +52,7 @@ from sqlalchemy import and_, func, or_, select
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
@@ -169,6 +169,7 @@ async def desired_era_work_outstanding(
         .select_from(ValidatorTicket)
         .where(
             ValidatorTicket.agent_id == Agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == bench_version,
             or_(
                 ValidatorTicket.status == TicketStatus.SCORED,
@@ -190,6 +191,7 @@ async def desired_era_work_outstanding(
         select(func.count(func.distinct(ValidatorTicket.validator_hotkey)))
         .where(
             ValidatorTicket.agent_id == Agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.validator_hotkey.in_(hotkeys),
             or_(

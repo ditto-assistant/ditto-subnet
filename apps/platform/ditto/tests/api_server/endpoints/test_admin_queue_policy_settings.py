@@ -13,8 +13,13 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from ditto.api_models.screener_review_settings import (
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
+    ScreenerReviewSettings,
+    review_settings_checksum,
+)
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import BenchmarkRollout
+from ditto.db.models import BenchmarkRollout, ScreenerReviewSettingsRevision
 
 pytestmark = pytest.mark.asyncio
 
@@ -73,6 +78,7 @@ def _settings(**overrides: object) -> dict[str, object]:
         },
         "deferred_source_review": {
             "mode": "off",
+            "integrity_double_check_mode": "off",
             "min_cohort_size": 8,
             "composite_mad_multiplier": 6.0,
             "axis_mad_multiplier": 6.0,
@@ -408,6 +414,7 @@ class TestWholePolicyWrites:
         _install(app, settings_maker)
         deferred = {
             "mode": "bypass",
+            "integrity_double_check_mode": "off",
             "min_cohort_size": 8,
             "composite_mad_multiplier": 6.0,
             "axis_mad_multiplier": 6.0,
@@ -440,6 +447,7 @@ class TestWholePolicyWrites:
             json=_payload(
                 deferred_source_review={
                     "mode": "disabled",
+                    "integrity_double_check_mode": "off",
                     "min_cohort_size": 8,
                     "composite_mad_multiplier": 6.0,
                     "axis_mad_multiplier": 6.0,
@@ -653,3 +661,115 @@ class TestLaneModulusIsLockedDuringARollout:
             json=_payload(lane_cycle_size=6, fresh_submission_slots=[0, 1, 2, 4]),
         )
         assert response.status_code == 200, response.text
+
+
+class TestIntegrityDoubleCheckPosture:
+    """Enforce is refused until a screener could actually run the double-check.
+
+    A hold nobody can claim pulls a top-five row off the emission ledger with
+    no review able to release it, so the posture must exist first.
+    """
+
+    @staticmethod
+    def _enforce_body() -> dict[str, object]:
+        body = _settings()
+        deferred = dict(body["deferred_source_review"])  # type: ignore[call-overload]
+        deferred["integrity_double_check_mode"] = "enforce"
+        body["deferred_source_review"] = deferred
+        return _payload(settings=body)
+
+    @staticmethod
+    async def _posture(
+        maker: async_sessionmaker[AsyncSession], settings: ScreenerReviewSettings
+    ) -> None:
+        async with maker() as session, session.begin():
+            session.add(
+                ScreenerReviewSettingsRevision(
+                    parent_revision=0,
+                    scope=INTEGRITY_DOUBLE_CHECK_SCOPE,
+                    settings=settings.model_dump(mode="json"),
+                    checksum=review_settings_checksum(settings),
+                    reason="stronger top-five posture",
+                    actor="backroom:test",
+                )
+            )
+
+    async def test_enforce_without_a_posture_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
+        assert response.status_code == 409
+        assert INTEGRITY_DOUBLE_CHECK_SCOPE in response.text
+        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []
+
+    async def test_enforce_on_a_posture_that_skips_l2_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        await self._posture(settings_maker, ScreenerReviewSettings(mode="shadow"))
+        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
+        assert response.status_code == 409
+        assert "enforce" in response.text
+
+    async def test_enforce_with_a_stronger_posture_is_accepted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        await self._posture(
+            settings_maker,
+            ScreenerReviewSettings(
+                mode="enforce",
+                l2_model="openai/gpt-5.6-sol",
+                l2_fallback_models=("openai/gpt-5.6-terra",),
+                l2_always_escalate=True,
+                timeout_seconds=900,
+                max_steps=20,
+                policy_manifest_profile="l1_l2",
+            ),
+        )
+        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
+        assert response.status_code == 200, response.text
+        board = (await client.get(_URL, headers=_HEADERS)).json()
+        deferred = board["effective"]["settings"]["deferred_source_review"]
+        assert deferred["integrity_double_check_mode"] == "enforce"
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"l2_always_escalate": False},
+            {"timeout_seconds": 1200},
+            {"max_steps": 32},
+            {"critic_reasoning_effort": "high"},
+        ],
+    )
+    async def test_enforce_rejects_unrunnable_or_conditional_posture(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+        override: dict[str, object],
+    ) -> None:
+        _install(app, settings_maker)
+        posture = ScreenerReviewSettings(
+            mode="enforce",
+            l2_always_escalate=True,
+            timeout_seconds=900,
+            max_steps=20,
+        )
+        await self._posture(
+            settings_maker,
+            ScreenerReviewSettings.model_validate({**posture.model_dump(), **override}),
+        )
+        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
+        assert response.status_code == 409, response.text
+        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []

@@ -45,6 +45,23 @@ submission the validator allocator no longer leases is never rescreened for a
 bump alone and projects as `not_queued`, keeping the `waiting_screening`
 backlog the capacity controller scales on honest.
 
+Policy 13 preserves the historical seven-invariant payload as nested assessment
+schema version 1 and adds I8 evaluation independence through schema version 2.
+Workers carrying v13 still serve policy v10-v12 during a scheduled transition;
+their exact-version tool schemas require seven decisions for old policies and
+eight for v13. Shipping the built-in version does not activate it. The separate
+`SCREENING_ACTIVATION_CEILING_POLICY_VERSION` is the highest version the
+scheduling API presents as activation-ready, so fleet adoption alone can never
+be mistaken for readiness. It stayed at v12 while v13 code was distributed
+(#1801) and moved to v13 on 2026-09-14, after the strict two-outcome contract
+shipped and both production screeners reported builtin policy 13 on release
+0.264.0. Raising the ceiling only makes v13 schedulable: the queue still
+requires the floor until an operator schedules an activation window and
+`activate_at` passes. Move the ceiling again only after the readiness,
+retry/deadline, transition, opaque-component verification, and exact-artifact
+emission rules in `workers/screener/docs/policy-v13.md` are satisfied for the
+next version.
+
 ## Provider-routed screening jobs
 
 Build, runtime smoke, and source review have independent revisioned provider

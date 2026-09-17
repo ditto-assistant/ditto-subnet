@@ -115,6 +115,10 @@ from ditto.api_models.validator_updater import (
     ValidatorUpdaterStatus,
     validator_updater_status_signing_token,
 )
+from ditto.api_models.validator_weights_fold import (
+    WeightsFold,
+    weights_fold_signing_token,
+)
 from ditto.api_server.anti_copy_comparison import ANTI_COPY_ALGORITHM_VERSION
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import expected_netuid
@@ -124,6 +128,14 @@ from ditto.api_server.benchmark_rollout import (
 from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.confirmation_candidate_reconciliation import (
     reconcile_confirmation_candidates,
+)
+from ditto.api_server.confirmation_seed_anchor import (
+    LEGACY_PLANNING,
+    bind_confirmation_seed,
+    list_reign_seed_anchors,
+    prefetch_finalized_anchor_hashes,
+    reign_seed_planning,
+    resolve_reign_seed_anchor,
 )
 from ditto.api_server.continual_retest_settings import (
     ContinualRetestSettingsResolver,
@@ -138,8 +150,15 @@ from ditto.api_server.deferred_source_review import (
     DEFERRED_MECHANICAL_REASON,
     DEFERRED_REVIEW_KIND,
     DEFERRED_REVIEW_REASON,
+    INTEGRITY_DOUBLE_CHECK_ACTOR,
+    INTEGRITY_DOUBLE_CHECK_ALGORITHM,
+    INTEGRITY_DOUBLE_CHECK_AUDIT_KIND,
+    INTEGRITY_DOUBLE_CHECK_REASON,
+    INTEGRITY_DOUBLE_CHECK_TRIGGER,
+    TOP_FIVE_SIZE,
     DeferredReviewDecision,
     evaluate_deferred_review,
+    evaluate_integrity_double_check,
 )
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -153,6 +172,7 @@ from ditto.api_server.efficiency import (
 )
 from ditto.api_server.endpoints.retrieval import AgentNotFoundError
 from ditto.api_server.fingerprint import reference_corpus_provenance
+from ditto.api_server.gate_evidence import build_gate_evidence, persisted_case_dump
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.inference_routing import record_ticket_route_quality
 from ditto.api_server.koth import (
@@ -205,6 +225,7 @@ from ditto.db.models import (
     ConfirmationScore,
     InferenceGrant,
     Score,
+    ScoreAuditEntry,
     ScreeningAttempt,
     ScreeningQuarantine,
     ValidatorHeartbeat,
@@ -229,6 +250,7 @@ from ditto.db.queries.audit import (
     get_latest_score_retest_event,
 )
 from ditto.db.queries.benchmark_admission import activated_rollout_for_version
+from ditto.db.queries.benchmark_canaries import canary_for_lease, finish_canary
 from ditto.db.queries.benchmark_carryover import carryover_agent_ids
 from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
@@ -600,10 +622,36 @@ async def _record_deferred_review_decision(
     screening_attempt: ScreeningAttempt | None,
     score_count: int,
     now: datetime,
+    bench_version: int | None = None,
+    double_check: bool = False,
 ) -> None:
-    """Persist an observe record or enforce an idempotent reward hold."""
+    """Persist an observe record or enforce an idempotent reward hold.
+
+    ``double_check`` records the hold as a top-five integrity double-check: the
+    same ``deferred_source_review`` lifecycle, with its own reason, actor and
+    ``trigger`` provenance so the screener claim pins the stronger posture, and
+    an ``enforced`` score-audit marker that survives later reopens of the
+    agent's single review row and suppresses a second double-check.
+    """
     if not decision.triggered:
         return
+    audit_kind = (
+        INTEGRITY_DOUBLE_CHECK_AUDIT_KIND if double_check else DEFERRED_REVIEW_KIND
+    )
+    reason = INTEGRITY_DOUBLE_CHECK_REASON if double_check else DEFERRED_REVIEW_REASON
+    actor = (
+        INTEGRITY_DOUBLE_CHECK_ACTOR
+        if double_check
+        else "platform:deferred-source-review"
+    )
+    trigger_provenance: dict[str, object] = (
+        {"trigger": INTEGRITY_DOUBLE_CHECK_TRIGGER} if double_check else {}
+    )
+    algorithm_version = (
+        INTEGRITY_DOUBLE_CHECK_ALGORITHM
+        if double_check
+        else "deferred-source-review-v1"
+    )
     retained_review: ScreeningQuarantine | None = None
     if screening_attempt is not None:
         retained_review = await session.scalar(
@@ -618,6 +666,7 @@ async def _record_deferred_review_decision(
         "deferred_review": {
             **decision.evidence,
             "mode": mode,
+            "bench_version": bench_version,
             "screening_attempt_id": (
                 str(screening_attempt.attempt_id)
                 if screening_attempt is not None
@@ -650,7 +699,7 @@ async def _record_deferred_review_decision(
             validator_hotkey=None,
             event=EVENT_AUDIT,
             payload={
-                "audit_kind": DEFERRED_REVIEW_KIND,
+                "audit_kind": audit_kind,
                 "enforced": False,
                 "qualified": True,
                 "trigger_kinds": list(decision.triggers),
@@ -661,6 +710,20 @@ async def _record_deferred_review_decision(
 
     if existing is not None and existing.status == "pending":
         return
+    if double_check:
+        await append_audit_entry(
+            session,
+            agent_id=agent.agent_id,
+            validator_hotkey=None,
+            event=EVENT_AUDIT,
+            payload={
+                "audit_kind": audit_kind,
+                "enforced": True,
+                "qualified": True,
+                "trigger_kinds": list(decision.triggers),
+            },
+            recorded_at=now,
+        )
 
     previous_status = agent.status.value
     if existing is None:
@@ -670,16 +733,21 @@ async def _record_deferred_review_decision(
                 agent_id=agent.agent_id,
                 status="pending",
                 opened_at=now,
-                original_reason=DEFERRED_REVIEW_REASON,
+                original_reason=reason,
                 original_policy_version=agent.screening_policy_version,
                 original_evidence=evidence,
                 algorithm_provenance={
                     "snapshot": "score-finalization",
                     "review_kind": DEFERRED_REVIEW_KIND,
-                    "algorithm_version": "deferred-source-review-v1",
+                    "algorithm_version": algorithm_version,
                     "opened_by": "platform",
                     "backfilled": False,
-                    "opened_at_source": "deferred-review-enforce",
+                    "opened_at_source": (
+                        "integrity-double-check-enforce"
+                        if double_check
+                        else "deferred-review-enforce"
+                    ),
+                    **trigger_provenance,
                 },
             )
         )
@@ -710,7 +778,7 @@ async def _record_deferred_review_decision(
         existing.resolved_by = None
         existing.resolution = None
         existing.resolution_reason = None
-        existing.original_reason = DEFERRED_REVIEW_REASON
+        existing.original_reason = reason
         # The reopened lifecycle is a deferred source review, which has no
         # matched agent. ``agent.duplicate_of`` is cleared below, and
         # ``resolve_copy_review`` refuses to resolve while the two disagree, so
@@ -728,19 +796,24 @@ async def _record_deferred_review_decision(
         existing.algorithm_provenance = {
             "snapshot": "score-finalization",
             "review_kind": DEFERRED_REVIEW_KIND,
-            "algorithm_version": "deferred-source-review-v1",
+            "algorithm_version": algorithm_version,
             "opened_by": "platform",
             "backfilled": False,
-            "opened_at_source": "deferred-review-reopen",
+            "opened_at_source": (
+                "integrity-double-check-reopen"
+                if double_check
+                else "deferred-review-reopen"
+            ),
             "prior_review_kind": prior_provenance.get("review_kind"),
+            **trigger_provenance,
         }
         session.add(
             AthReviewAction(
                 action_id=uuid4(),
                 review_id=existing.review_id,
                 action="reopen",
-                reason=DEFERRED_REVIEW_REASON,
-                actor="platform:deferred-source-review",
+                reason=reason,
+                actor=actor,
                 evidence={
                     "sha256": agent.sha256,
                     "score_count": score_count,
@@ -752,7 +825,7 @@ async def _record_deferred_review_decision(
     await preserve_desired_authority(session, now=now)
     agent.status = AgentStatus.ATH_PENDING_REVIEW
     agent.duplicate_of = None
-    agent.review_reason = DEFERRED_REVIEW_REASON
+    agent.review_reason = reason
 
 
 async def _evaluate_and_record_deferred_review(
@@ -810,6 +883,7 @@ async def _evaluate_and_record_deferred_review(
             screening_attempt=None,
             score_count=score_count,
             now=now,
+            bench_version=bench_version,
         )
         return
 
@@ -864,6 +938,150 @@ async def _evaluate_and_record_deferred_review(
             screening_attempt=admission_attempt,
             score_count=score_counts.get(row.agent_id, 0),
             now=now,
+            bench_version=bench_version,
+        )
+
+
+async def _held_post_score_review_composites(
+    session: AsyncSession, *, bench_version: int
+) -> list[float]:
+    """Composites of rows the canonical ledger dropped for a deep-review hold.
+
+    Read from each pending hold's own qualification snapshot, which is the
+    ledger composite it held at. A snapshot from before the benchmark version
+    was recorded is counted: it still occupies a slot on the only board it
+    could have come from, and over-counting only delays a hold.
+    """
+    composites: list[float] = []
+    for evidence in await session.scalars(
+        select(AthReview.original_evidence)
+        .join(Agent, Agent.agent_id == AthReview.agent_id)
+        .where(
+            AthReview.status == "pending",
+            Agent.status == AgentStatus.ATH_PENDING_REVIEW,
+            AthReview.algorithm_provenance["review_kind"].as_string()
+            == DEFERRED_REVIEW_KIND,
+        )
+    ):
+        snapshot = (
+            evidence.get("deferred_review") if isinstance(evidence, dict) else None
+        )
+        if not isinstance(snapshot, dict):
+            continue
+        held_version = snapshot.get("bench_version")
+        if held_version is not None and held_version != bench_version:
+            continue
+        candidate = snapshot.get("candidate")
+        composite = candidate.get("composite") if isinstance(candidate, dict) else None
+        if isinstance(composite, int | float) and not isinstance(composite, bool):
+            composites.append(float(composite))
+    return composites
+
+
+async def _evaluate_and_record_integrity_double_check(
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    settings: DeferredSourceReviewSettings,
+    now: datetime,
+) -> None:
+    """Hold each new top-five row once for a stronger integrity double-check.
+
+    Runs after ``_evaluate_and_record_deferred_review`` on every canonical
+    ledger mutation, independent of its ``mode``: that path only reaches
+    mechanically admitted rows, while this one also covers rows that already
+    passed the full pre-score screen. A row is skipped when its agent has any
+    deferred review lifecycle (pending, or resolved by an operator or a deep
+    pass -- never reopened) or an enforced double-check audit marker (which
+    survives a later copy reopen of the agent's single review row).
+    """
+    mode = settings.integrity_double_check_mode
+    if mode == "off":
+        return
+    await session.flush()
+    ledger = await list_eligible_ledger(
+        session,
+        bench_version=bench_version,
+        include_fingerprints=False,
+        include_details=False,
+    )
+    top_ids = [row.agent_id for row in ledger[:TOP_FIVE_SIZE] if row.eligible]
+    if not top_ids:
+        return
+    candidates = {
+        candidate.agent_id: candidate
+        for candidate in await session.scalars(
+            select(Agent).where(
+                Agent.agent_id.in_(top_ids),
+                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+            )
+        )
+    }
+    if not candidates:
+        return
+    reviewed_ids = set(
+        await session.scalars(
+            select(AthReview.agent_id).where(
+                AthReview.agent_id.in_(tuple(candidates)),
+                AthReview.algorithm_provenance["review_kind"].as_string()
+                == DEFERRED_REVIEW_KIND,
+            )
+        )
+    )
+    # An enforced marker suppresses in every mode. In observe, any earlier
+    # record does too: the ledger mutates on every finalization, and one
+    # would-be hold per agent is the evidence, not one per mutation.
+    audited = (
+        await session.execute(
+            select(ScoreAuditEntry.agent_id, ScoreAuditEntry.payload).where(
+                ScoreAuditEntry.agent_id.in_(tuple(candidates)),
+                ScoreAuditEntry.event == EVENT_AUDIT,
+                ScoreAuditEntry.payload["audit_kind"].as_string()
+                == INTEGRITY_DOUBLE_CHECK_AUDIT_KIND,
+            )
+        )
+    ).all()
+    checked_ids = {
+        audited_id
+        for audited_id, payload in audited
+        if mode == "observe"
+        or (isinstance(payload, dict) and payload.get("enforced") is True)
+    }
+    score_counts = {
+        candidate_id: int(count)
+        for candidate_id, count in (
+            await session.execute(
+                select(Score.agent_id, func.count())
+                .where(
+                    Score.agent_id.in_(tuple(candidates)),
+                    Score.bench_version == bench_version,
+                )
+                .group_by(Score.agent_id)
+            )
+        ).all()
+    }
+    # Snapshot once: the ledger above still ranks rows this loop holds, so
+    # adding them to ``held`` as well would count each one twice.
+    held = await _held_post_score_review_composites(
+        session, bench_version=bench_version
+    )
+    for agent_id in top_ids:
+        candidate = candidates.get(agent_id)
+        if candidate is None or agent_id in reviewed_ids or agent_id in checked_ids:
+            continue
+        decision = evaluate_integrity_double_check(
+            agent_id=agent_id, ledger=ledger, held_composites=held
+        )
+        await _record_deferred_review_decision(
+            session,
+            agent=candidate,
+            decision=decision,
+            mode=mode,
+            screening_attempt=None,
+            score_count=score_counts.get(agent_id, 0),
+            now=now,
+            bench_version=bench_version,
+            double_check=True,
         )
 
 
@@ -1042,6 +1260,7 @@ async def _fresh_submission_lane_due(
             ValidatorTicket.validator_hotkey == validator_hotkey,
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.created_at >= rollout_started_at,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             or_(
                 ValidatorTicket.status == TicketStatus.SCORED,
                 (
@@ -1760,11 +1979,14 @@ _JOB_REQUEST_MAX_AGE = timedelta(minutes=2)
 # A leased seed of ``None`` is meaningful (a legacy bundle lease), so "this
 # validator holds no lease" needs a sentinel distinct from it.
 _MISSING_LEASE: Any = object()
-# Throttle + timeout for the post-commit on-chain weight-confirmation sweep that
-# arms a king's public source-release window. Bounds how often the score path
-# reads the revealed weight matrix while any king still awaits confirmation.
+# Throttle for the post-commit on-chain weight-confirmation sweep that arms a
+# king's public source-release window. The score path prefers the already-warm
+# public weights cache; a chain read is a fallback.
 _KING_WEIGHT_CHECK_INTERVAL = timedelta(minutes=5)
-_KING_WEIGHT_CHECK_TIMEOUT_SECONDS = 5.0
+# Same budget as the public weights panel. `get_weights` opens a fresh
+# substrate websocket and exhausts two storage maps; that measured 10-21s in
+# prod, so a 5s cap cancelled every attempt and left kings unstamped for days.
+_KING_WEIGHT_CHECK_TIMEOUT_SECONDS = 30.0
 _QUALIFICATION_REFRESH_INTERVAL_SECONDS = 30.0
 _qualification_refresh_due = 0.0
 
@@ -2031,7 +2253,12 @@ def _score_details(
     if report.base_evidence_sha256 is not None:
         details["base_evidence_sha256"] = report.base_evidence_sha256
     if report.per_case:
-        details["per_case"] = [item.model_dump(mode="json") for item in report.per_case]
+        # Era-aware: v<=12 rows keep the exact pre-v13 per-case shape; v13+
+        # rows keep the whole record (see ``persisted_case_dump``).
+        details["per_case"] = [
+            persisted_case_dump(item, bench_version=bench_version)
+            for item in report.per_case
+        ]
     return details
 
 
@@ -2225,8 +2452,11 @@ def _heartbeat_signing_message(
     benchmark_capacity: BenchmarkCapacity | None = None,
     confirmation_progress: list[ConfirmationProgress] | None = None,
     updater_status: ValidatorUpdaterStatus | None = None,
+    weights_fold: WeightsFold | None = None,
 ) -> bytes:
     """Canonical heartbeat payload, mirrored by ``ditto-subnet``."""
+    if weights_fold is not None and protocol_version < 27:
+        raise ValueError("weights fold requires heartbeat protocol v27")
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
     if benchmark_capacity is not None and protocol_version < 10:
@@ -2248,6 +2478,23 @@ def _heartbeat_signing_message(
             if updater_status is None:
                 raise ValueError("heartbeat protocol v23 requires updater status")
             active = str(active_agent_id) if active_agent_id is not None else ""
+            # Mirrors the validator: the fold report changes the signed bytes
+            # only when present, so a fold-less v27 heartbeat stays on v23.
+            if weights_fold is not None:
+                return (
+                    "ditto-validator-heartbeat:v27:"
+                    f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                    f"{code_digest}:{state}:{active}:"
+                    f"{system_metrics_signing_token(system_metrics)}:"
+                    f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                    f"{validator_identity_signing_token(capabilities, stack)}:"
+                    f"{validator_stack_health_signing_token(stack_health)}:"
+                    f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                    f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                    f"{validator_updater_status_signing_token(updater_status)}:"
+                    f"{weights_fold_signing_token(weights_fold)}:"
+                    f"{timestamp}"
+                ).encode()
             return (
                 "ditto-validator-heartbeat:v23:"
                 f"{validator_hotkey}:{software_version}:{protocol_version}:"
@@ -2819,6 +3066,7 @@ async def heartbeat(
         benchmark_capacity=request_body.benchmark_capacity,
         confirmation_progress=request_body.confirmation_progress,
         updater_status=request_body.updater_status,
+        weights_fold=request_body.weights_fold,
     )
     if not _verify_signature(validator_hotkey, payload, request_body.signature):
         raise ValidatorAuthError("heartbeat signature verification failed")
@@ -2902,6 +3150,11 @@ async def heartbeat(
             updater_status=(
                 request_body.updater_status.model_dump(mode="json", exclude_none=True)
                 if request_body.updater_status is not None
+                else None
+            ),
+            weights_fold=(
+                request_body.weights_fold.model_dump(mode="json", exclude_none=True)
+                if request_body.weights_fold is not None
                 else None
             ),
             benchmark_capacity=(
@@ -3241,6 +3494,76 @@ async def request_job(
                 slot_id=slot_id,
             )
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        canary_ticket = await session.scalar(
+            select(ValidatorTicket)
+            .where(
+                ValidatorTicket.validator_hotkey == payload.validator_hotkey,
+                ValidatorTicket.slot_id == slot_id,
+                ValidatorTicket.purpose == TicketPurpose.BENCHMARK_CANARY,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.deadline > now,
+            )
+            .with_for_update()
+        )
+        if canary_ticket is not None:
+            canary = await canary_for_lease(
+                session,
+                agent_id=canary_ticket.agent_id,
+                validator_hotkey=payload.validator_hotkey,
+                deadline=canary_ticket.deadline,
+            )
+            agent = await get_agent_by_id(session, agent_id=canary_ticket.agent_id)
+            if (
+                canary is None
+                or canary.status != "issued"
+                or agent is None
+                or agent.sha256 != canary.artifact_sha256
+                or agent.screened_image_sha256 != canary.screened_image_sha256
+                or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+                or heartbeat is None
+                or not heartbeat_supports_version(
+                    heartbeat, now=now, version=canary_ticket.bench_version
+                )
+            ):
+                raise HTTPException(
+                    409, "canary target or validator capability changed"
+                )
+            grant = await session.scalar(
+                select(InferenceGrant).where(
+                    InferenceGrant.agent_id == canary.agent_id,
+                    InferenceGrant.bench_version == canary.bench_version,
+                    InferenceGrant.validator_hotkey == payload.validator_hotkey,
+                    InferenceGrant.ticket_deadline == canary.deadline,
+                    InferenceGrant.status.in_(("pending", "active")),
+                )
+            )
+            if grant is None:
+                raise HTTPException(409, "canary inference capability is unavailable")
+            contract = benchmark_contract(canary.bench_version)
+            return JobResponse(
+                agent_id=canary.agent_id,
+                miner_hotkey=agent.miner_hotkey,
+                slot_id=canary.slot_id,
+                sha256=canary.artifact_sha256,
+                deadline=canary.deadline,
+                seed=canary.seed,
+                seed_scope="validator",
+                dataset_sha256=canary.dataset_sha256,
+                run_size=canary.run_size,
+                dataset_seed_block=canary_ticket.seed_block,
+                dataset_seed_block_hash=canary_ticket.seed_block_hash,
+                bench_version=canary.bench_version,
+                minimum_screening_policy_version=contract.minimum_screening_policy_version,
+                requires_screened_image=contract.requires_screened_image,
+                benchmark_runtime=(
+                    inference_settings.benchmark_runtime
+                    if canary.bench_version >= 10
+                    else None
+                ),
+                inference=_inference_grant_offer(
+                    request=request, grant=grant, bench_version=canary.bench_version
+                ),
+            )
         if rollout is not None:
             # A shadow/mismatched v9 score cannot satisfy rollout activation,
             # so its operator-authorized replacement is rollout work rather
@@ -3864,6 +4187,15 @@ async def _current_koth_entries(
         for rank, row in enumerate(raw_rows, start=1)
     ]
     raw_members = emission_set(project_koth(raw_entries))
+    fold_block_hash, fold_allow_fresh_seeds = (
+        await reign_seed_planning(
+            session,
+            champion_agent_id=raw_members[0].agent_id,
+            bench_version=canonical_version,
+        )
+        if raw_members
+        else LEGACY_PLANNING
+    )
     eligible_seeds = fold_eligible_seeds_by_agent(
         member_ids=[member.agent_id for member in raw_members],
         seeds_by_agent={
@@ -3877,6 +4209,8 @@ async def _current_koth_entries(
                 seeds_by_agent={
                     agent_id: values.keys() for agent_id, values in history.items()
                 },
+                block_hash=fold_block_hash,
+                allow_fresh_seeds=fold_allow_fresh_seeds,
             )
             if raw_members
             else None
@@ -4069,6 +4403,79 @@ async def _current_retest_cohort(
     return emission_members, wave_members, combined_cohort
 
 
+def _revealed_weighted_hotkeys(app_state: Any) -> set[str] | None:
+    """Hotkeys with a positive revealed weight, from the public panel's cache.
+
+    The dashboard already refreshes ``app_state.public_chain_weights`` off the
+    request path with a 30s budget. Reusing it avoids opening a second substrate
+    websocket on every score. ``None`` means the cache is cold, not that nobody
+    has weight.
+    """
+    cached = getattr(app_state, "public_chain_weights", None)
+    payload = getattr(cached, "payload", None)
+    vectors = getattr(payload, "vectors", None)
+    if vectors is None:
+        return None
+    hotkeys: set[str] = set()
+    for vector in vectors:
+        for weight in getattr(vector, "weights", ()):
+            hotkey = getattr(weight, "hotkey", None)
+            value = getattr(weight, "value", None)
+            if isinstance(hotkey, str) and isinstance(value, (int, float)) and value:
+                hotkeys.add(hotkey)
+    return hotkeys
+
+
+async def _stamp_confirmed_kings(
+    session: AsyncSession,
+    pending: list[tuple[UUID, str]],
+    weighted_hotkeys: set[str],
+    now: datetime,
+) -> None:
+    confirmed = [agent_id for agent_id, hotkey in pending if hotkey in weighted_hotkeys]
+    if not confirmed:
+        return
+    async with session.begin():
+        for agent_id in confirmed:
+            await record_weight_confirmed(session, agent_id=agent_id, now=now)
+
+
+def _schedule_king_weight_refresh(
+    app_state: Any,
+    chain: ChainClient,
+    pending: list[tuple[UUID, str]],
+    now: datetime,
+) -> None:
+    """Read the matrix off the score path when the public cache is cold."""
+    existing = getattr(app_state, "king_weight_refresh_task", None)
+    if isinstance(existing, asyncio.Task) and not existing.done():
+        return
+    session_maker = getattr(app_state, "session_maker", None)
+    if session_maker is None:
+        return
+
+    async def _refresh() -> None:
+        try:
+            snapshot = await asyncio.wait_for(
+                chain.get_weights(app_state.config.chain.netuid),
+                timeout=_KING_WEIGHT_CHECK_TIMEOUT_SECONDS,
+            )
+            weighted = {
+                weight.hotkey
+                for vector in snapshot.vectors
+                for weight in vector.weights
+            }
+            async with session_maker() as session:
+                await _stamp_confirmed_kings(session, pending, weighted, now)
+        except Exception:
+            logger.warning(
+                "king weight-confirmation background read failed", exc_info=True
+            )
+
+    task = asyncio.create_task(_refresh())
+    app_state.king_weight_refresh_task = task
+
+
 async def _confirm_king_onchain_weights(
     app_state: Any,
     chain: ChainClient,
@@ -4081,33 +4488,35 @@ async def _confirm_king_onchain_weights(
     Reads the REVEALED weight matrix (post commit-reveal) and stamps
     ``weight_confirmed_at`` for every ever-king miner that now has validator
     weight set on it. Erring toward weights, not realized emission magnitude, so
-    a genuine king is never trapped private. Throttled via ``app_state`` so the
-    score path reads the chain at most once per interval while a king is pending;
-    once no king is unconfirmed, it does zero chain work. The caller wraps this
-    best-effort so a chain hiccup never fails an already-committed score.
+    a genuine king is never trapped private. Prefers the public weights cache so
+    the score path does not wait on a 10-21s substrate read; a cold cache
+    refreshes in the background. Throttled via ``app_state`` so a pending king
+    does not spawn a chain read per score. The caller wraps this best-effort so
+    a chain hiccup never fails an already-committed score.
     """
     last_checked = getattr(app_state, "king_weight_checked_at", None)
     if last_checked is not None and (now - last_checked) < _KING_WEIGHT_CHECK_INTERVAL:
         return
     app_state.king_weight_checked_at = now
     pending = await list_unconfirmed_kings(session)
-    # Release the read transaction so the (potentially multi-second) chain call
-    # never holds a DB transaction open, and so the write below can open its own.
+    # Release the read transaction so a chain fallback never holds a DB
+    # transaction open, and so the write below can open its own.
     await session.rollback()
     if not pending:
         return
-    netuid = app_state.config.chain.netuid
-    snapshot = await asyncio.wait_for(
-        chain.get_weights(netuid), timeout=_KING_WEIGHT_CHECK_TIMEOUT_SECONDS
-    )
-    weighted_hotkeys = {
-        weight.hotkey for vector in snapshot.vectors for weight in vector.weights
-    }
-    confirmed = [agent_id for agent_id, hotkey in pending if hotkey in weighted_hotkeys]
-    if confirmed:
-        async with session.begin():
-            for agent_id in confirmed:
-                await record_weight_confirmed(session, agent_id=agent_id, now=now)
+    weighted_hotkeys = _revealed_weighted_hotkeys(app_state)
+    if weighted_hotkeys is None:
+        if getattr(app_state, "session_maker", None) is not None:
+            _schedule_king_weight_refresh(app_state, chain, pending, now)
+            return
+        snapshot = await asyncio.wait_for(
+            chain.get_weights(app_state.config.chain.netuid),
+            timeout=_KING_WEIGHT_CHECK_TIMEOUT_SECONDS,
+        )
+        weighted_hotkeys = {
+            weight.hotkey for vector in snapshot.vectors for weight in vector.weights
+        }
+    await _stamp_confirmed_kings(session, pending, weighted_hotkeys, now)
 
 
 async def _champion_anchored_seed_set(
@@ -4128,11 +4537,18 @@ async def _champion_anchored_seed_set(
         agent_ids=tuple(member.agent_id for member in members),
         bench_version=canonical_version,
     )
+    block_hash, allow_fresh_seeds = await reign_seed_planning(
+        session,
+        champion_agent_id=members[0].agent_id,
+        bench_version=canonical_version,
+    )
     return frozenset(
         bounded_continual_seed_set(
             members[0].agent_id,
             version=canonical_version,
             composites_by_agent=history,
+            block_hash=block_hash,
+            allow_fresh_seeds=allow_fresh_seeds,
         )
     )
 
@@ -4145,8 +4561,14 @@ async def _top5_confirmation_seed_plan(
     wave_member_ids: tuple[UUID, ...],
     cohort_member_ids: tuple[UUID, ...] = (),
     canonical_version: int,
+    seed_planning: tuple[str | None, bool] | None = None,
 ) -> tuple[int, ...]:
     """Every seed this member still owes: its backlog first, then wave growth.
+
+    ``seed_planning`` is the reign's ``(block_hash, allow_fresh_seeds)`` from
+    :mod:`ditto.api_server.confirmation_seed_anchor`; ``None`` reads it. At a
+    binding version with no pinned anchor yet, growth is withheld and only
+    catch-up over recorded coverage comes back.
 
     Which seed is open is decided by the emission set alone, never by the wider
     retest cohort. An extended member that never gets leased (or fails) must not
@@ -4175,10 +4597,19 @@ async def _top5_confirmation_seed_plan(
         bench_version=canonical_version,
     )
     wave_history = {agent_id: history.get(agent_id, {}) for agent_id in wave_member_ids}
+    if seed_planning is None:
+        seed_planning = await reign_seed_planning(
+            session,
+            champion_agent_id=champion_agent_id,
+            bench_version=canonical_version,
+        )
+    block_hash, allow_fresh_seeds = seed_planning
     target_seeds = bounded_continual_seed_set(
         champion_agent_id,
         version=canonical_version,
         composites_by_agent=wave_history,
+        block_hash=block_hash,
+        allow_fresh_seeds=allow_fresh_seeds,
     )
     seeds_by_agent = {agent_id: values.keys() for agent_id, values in history.items()}
     # Catch-up spans the whole retest cohort, not just the emission set. It used
@@ -4301,10 +4732,15 @@ async def _unserved_catchup_members(
     history = await confirmation_composites_by_seed(
         session, agent_ids=members, bench_version=canonical_version
     )
+    block_hash, allow_fresh_seeds = await reign_seed_planning(
+        session, champion_agent_id=champion_agent_id, bench_version=canonical_version
+    )
     target_seeds = bounded_continual_seed_set(
         champion_agent_id,
         version=canonical_version,
         composites_by_agent=history,
+        block_hash=block_hash,
+        allow_fresh_seeds=allow_fresh_seeds,
     )
     seeds_by_agent = {agent_id: values.keys() for agent_id, values in history.items()}
     leases = await _live_retest_leases(
@@ -4585,6 +5021,14 @@ async def request_top5_confirmation_job(
         getattr(request.app.state, "session_maker", None)
     )
     slot_settings = await _validator_slot_settings(request)
+    # Bench v13+: read the finalized hash of any reign anchor whose height the
+    # head has reached BEFORE the write transaction opens. The Substrate read
+    # is a fresh websocket and three RPCs; holding a Platform row lock across
+    # it is how a slow endpoint takes public reads dark. The transaction below
+    # pins from this map and never touches the chain itself.
+    finalized_anchor_hashes = await prefetch_finalized_anchor_hashes(
+        session, chain, latest_block=block.number
+    )
 
     async with session.begin():
         await _assert_validator_compatible(
@@ -4849,6 +5293,22 @@ async def request_top5_confirmation_job(
             )
         champion = await get_agent_by_id(session, agent_id=champion_agent_id)
         assert champion is not None
+        # Bench v13+: the reign's confirmation family binds to the finalized
+        # hash of ``B_ready + Δ``. First claim of a reign creates the anchor
+        # (unpinned); a later claim pins it from the hash prefetched above once
+        # the height is finalized. Until then the plan below withholds fresh
+        # seeds and serves catch-up only.
+        reign_anchor = await resolve_reign_seed_anchor(
+            session,
+            champion_agent_id=champion_agent_id,
+            bench_version=canonical_version,
+            ready_block=block.number,
+            now=now,
+            finalized_hashes=finalized_anchor_hashes,
+        )
+        seed_planning = (
+            reign_anchor.planning if reign_anchor is not None else LEGACY_PLANNING
+        )
         crown_block = champion.dataset_seed_block or block.number
         scheduled_round = top5_round_is_due(
             block.number,
@@ -4954,6 +5414,7 @@ async def request_top5_confirmation_job(
                 wave_member_ids=wave_member_ids,
                 cohort_member_ids=member_ids,
                 canonical_version=canonical_version,
+                seed_planning=seed_planning,
             )
             if not seeds:
                 legacy_decline = (
@@ -5004,6 +5465,16 @@ async def request_top5_confirmation_job(
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
         confirmation_datasets: list[ConfirmationDatasetPin] = []
+        # The seed's finalized-block binding, so the validator can re-derive it
+        # and refuse a seed inconsistent with the pin it is told about (the
+        # validator trusts the pin as served; it reads no chain). Searched
+        # across every pinned reign of the version: a catch-up seed introduced
+        # under an earlier champion still binds to that champion's block.
+        seed_binding = bind_confirmation_seed(
+            await list_reign_seed_anchors(session, bench_version=canonical_version),
+            seed=selected_wave_seed,
+            bench_version=canonical_version,
+        )
         if canonical_version >= 3:
             if generator.run_size is None:
                 raise HTTPException(
@@ -5017,6 +5488,22 @@ async def request_top5_confirmation_job(
                         selected_wave_seed, bench_version=canonical_version
                     ),
                     run_size=generator.run_size,
+                    anchor_agent_id=(
+                        seed_binding.anchor_agent_id
+                        if seed_binding is not None
+                        else None
+                    ),
+                    seed_index=(
+                        seed_binding.seed_index if seed_binding is not None else None
+                    ),
+                    seed_block=(
+                        seed_binding.seed_block if seed_binding is not None else None
+                    ),
+                    seed_block_hash=(
+                        seed_binding.seed_block_hash
+                        if seed_binding is not None
+                        else None
+                    ),
                 )
             ]
         # Place this retest on a real execution slot. The lane occupies one
@@ -5069,6 +5556,12 @@ async def request_top5_confirmation_job(
                     "validator has another live assignment or this retest is deferred"
                 ),
             )
+        if seed_binding is not None and ticket.seed == selected_wave_seed:
+            # Record the binding on the lease itself, the same columns the
+            # canonical lane pins, so the seed's provenance is auditable from
+            # the ticket without replaying reign history.
+            ticket.seed_block = seed_binding.seed_block
+            ticket.seed_block_hash = seed_binding.seed_block_hash
         agent = await get_agent_by_id(session, agent_id=ticket.agent_id)
         assert agent is not None
         dataset = await session.get(
@@ -5425,6 +5918,30 @@ async def fail_job(
             raise HTTPException(
                 status_code=409, detail="job-fail nonce has already been used"
             ) from exc
+        canary = await canary_for_lease(
+            session,
+            agent_id=payload.agent_id,
+            validator_hotkey=payload.validator_hotkey,
+            deadline=payload.ticket_deadline,
+            for_update=False,
+        )
+        if canary is not None:
+            canary_ticket = await session.get(
+                ValidatorTicket,
+                (canary.agent_id, canary.bench_version, canary.validator_hotkey),
+                with_for_update=True,
+            )
+            if canary_ticket is None:
+                raise HTTPException(409, "canary ticket is missing")
+            await session.refresh(canary, with_for_update=True)
+            await finish_canary(
+                session,
+                canary=canary,
+                ticket=canary_ticket,
+                now=now,
+                failure=f"{payload.reason}: {payload.failure_detail or ''}",
+            )
+            return FailJobResponse(agent_id=payload.agent_id, reopened=False)
         failure_gate = await lock_provider_work_gate(
             session,
             now=now,
@@ -5752,6 +6269,21 @@ async def agent_artifact(
                     "(never issued, expired, or already scored)"
                 ),
             )
+        if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+            canary = await canary_for_lease(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=x_validator_hotkey,
+                deadline=ticket.deadline,
+                for_update=False,
+            )
+            if (
+                canary is None
+                or canary.status != "issued"
+                or agent.sha256 != canary.artifact_sha256
+                or agent.screened_image_sha256 != canary.screened_image_sha256
+            ):
+                raise HTTPException(409, "canary artifact identity changed")
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
@@ -5907,6 +6439,30 @@ async def submit_score(
             (agent_id, report_version, payload.validator_hotkey),
             with_for_update=True,
         )
+        canary = await canary_for_lease(
+            session,
+            agent_id=agent_id,
+            validator_hotkey=payload.validator_hotkey,
+            deadline=payload.ticket_deadline,
+        )
+        if canary is not None:
+            if (
+                prior_ticket is None
+                or agent.sha256 != canary.artifact_sha256
+                or agent.screened_image_sha256 != canary.screened_image_sha256
+            ):
+                raise HTTPException(409, "canary artifact or ticket changed")
+            await finish_canary(
+                session,
+                canary=canary,
+                ticket=prior_ticket,
+                now=datetime.now(UTC),
+                report=report,
+                signature=payload.signature,
+            )
+            return SubmitScoreResponse(
+                agent_id=agent_id, status=agent.status, accepted=True
+            )
         if prior_ticket is not None and prior_ticket.status == TicketStatus.SCORED:
             prior_score = await session.get(
                 Score, (agent_id, report_version, payload.validator_hotkey)
@@ -6139,6 +6695,13 @@ async def submit_score(
             else "model_use"
         )
         score_details[model_use_key] = model_use.as_public_dict()
+        # Bench v13+ per-case gate findings and the run's shadow verdict,
+        # projected from the per-case ``catalog`` / ``claim_provenance`` /
+        # ``inference_cost`` records, the twin markers in ``notes`` and the
+        # four ``details`` gate summaries onto their own column. ``None`` below
+        # the v13 floor and for a v13+ scorer that emitted none, so v<=12 rows
+        # are byte-identical.
+        gate_evidence = build_gate_evidence(report, bench_version=ticket.bench_version)
         await upsert_score(
             session,
             agent_id=agent_id,
@@ -6155,6 +6718,7 @@ async def submit_score(
             signature=payload.signature,
             details=score_details or None,
             model_usage=model_usage,
+            gate_evidence=gate_evidence,
         )
         await record_ticket_route_quality(
             session,
@@ -6207,6 +6771,12 @@ async def submit_score(
                 agent=agent,
                 bench_version=ticket.bench_version,
                 score_count=len(replacement_scores),
+                settings=queue_policy.deferred_source_review,
+                now=audit_now,
+            )
+            await _evaluate_and_record_integrity_double_check(
+                session,
+                bench_version=ticket.bench_version,
                 settings=queue_policy.deferred_source_review,
                 now=audit_now,
             )
@@ -6613,6 +7183,12 @@ async def submit_score(
                     agent=agent,
                     bench_version=ticket.bench_version,
                     score_count=len(agent_scores),
+                    settings=deferred_settings,
+                    now=audit_now,
+                )
+                await _evaluate_and_record_integrity_double_check(
+                    session,
+                    bench_version=ticket.bench_version,
                     settings=deferred_settings,
                     now=audit_now,
                 )

@@ -4,7 +4,9 @@ The deployed build implements every policy version up to
 ``SCREENING_POLICY_VERSION`` (its dual-text workers can screen under any of
 them), but the version the queue REQUIRES rises only when a scheduled
 activation is due — miners get equal notice that the rules changed, per the
-subnet's bench-scaling loop. Until then the queue requires
+subnet's bench-scaling loop. A separately published activation ceiling keeps
+distributed-but-incomplete policy versions from governing even if an older
+Platform build accepted a future schedule row for them. Until then the queue requires
 ``SCREENING_FLOOR_POLICY_VERSION`` and workers screen under that older text,
 stamping outcomes with the version they actually screened under.
 
@@ -31,6 +33,7 @@ from ditto.db.queries.screener_policy_activation import (
 )
 from ditto.screener_policy_state import update_effective_screener_policy
 from ditto_screening_protocol import (
+    SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
 )
@@ -138,7 +141,11 @@ class ScreenerPolicyActivationResolver:
                 return self._cache.policy
             async with session_maker() as session:
                 governing = await governing_screener_policy_activation(
-                    session, now=datetime.now(UTC)
+                    session,
+                    now=datetime.now(UTC),
+                    maximum_policy_version=(
+                        SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+                    ),
                 )
                 latest = await latest_screener_policy_activation(session)
             if governing is not None:
@@ -188,7 +195,9 @@ async def resolve_screener_policy_activation(
 ) -> EffectiveScreenerPolicy:
     """Uncached read for admin endpoints and tests (session already open)."""
     governing = await governing_screener_policy_activation(
-        session, now=datetime.now(UTC)
+        session,
+        now=datetime.now(UTC),
+        maximum_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     )
     latest = await latest_screener_policy_activation(session)
     if governing is not None:

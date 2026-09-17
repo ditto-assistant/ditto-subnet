@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from datetime import UTC, datetime, timedelta
@@ -21,6 +20,7 @@ from ditto.api_models.screener_review_settings import (
     ScreenerPolicyManifestView,
     ScreenerReviewSettings,
     policy_manifest_digest,
+    review_settings_checksum,
 )
 from ditto.api_models.screener_review_settings import (
     ScreenerReviewSettingsRevision as RevisionModel,
@@ -43,10 +43,7 @@ _APPLIED_FRESHNESS = timedelta(minutes=5)
 
 
 def _checksum(settings: ScreenerReviewSettings) -> str:
-    encoded = json.dumps(
-        settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    ).encode()
-    return hashlib.sha256(encoded).hexdigest()
+    return review_settings_checksum(settings)
 
 
 def _revision(row: ScreenerReviewSettingsRevision) -> RevisionModel:

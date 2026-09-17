@@ -575,6 +575,7 @@ class SubmissionSourceReviewSourceResponse(BaseModel):
 
     source_url_b64: str
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    policy_version: Annotated[int, Field(ge=1, le=1_000)]
 
 
 class SubmissionSourceReviewCompleteRequest(BaseModel):

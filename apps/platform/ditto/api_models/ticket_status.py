@@ -39,3 +39,4 @@ class TicketPurpose(StrEnum):
     LEGACY_UNCLASSIFIED = "legacy_unclassified"
     CANONICAL_QUORUM = "canonical_quorum"
     CONTINUAL_RETEST = "continual_retest"
+    BENCHMARK_CANARY = "benchmark_canary"

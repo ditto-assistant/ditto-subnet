@@ -6,6 +6,7 @@ ignored_paths = [
   "localstack/**",
   "preview/**",
   "scripts/preview",
+  "scripts/hippius-probe/**", # Operator-only probe dependencies; no service release
   "scripts/preview-restore-snapshot.sh",
   ".env.example",
   ".agents/**",
@@ -58,6 +59,7 @@ paths = [
   "ditto/api_models/attestation.py",
   "ditto/api_models/health.py",
   "ditto/api_models/miner_avatar.py",
+  "ditto/api_models/miner_ditto_link.py",
   "ditto/api_models/miner_logs.py",
   "ditto/api_models/miner_session.py",
   "ditto/api_models/name_claim.py",
@@ -105,6 +107,7 @@ paths = [
   "ditto/api_models/validator_capabilities.py",
   "ditto/api_models/validator_confirmation.py",
   "ditto/api_models/validator_updater.py",
+  "ditto/api_models/validator_weights_fold.py",
   "packages/dittobench-coding-contract/**",
   "scripts/install-validator-stack-auto-update.sh",
   "scripts/test-validator-stack-auto-update-e2e.sh",

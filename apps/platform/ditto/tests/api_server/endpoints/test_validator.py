@@ -94,6 +94,10 @@ from ditto.api_models.validator_updater import (
     ValidatorUpdaterStatus,
     validator_updater_status_signing_token,
 )
+from ditto.api_models.validator_weights_fold import (
+    WeightsFold,
+    weights_fold_signing_token,
+)
 from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -617,6 +621,7 @@ def _heartbeat_payload(
     benchmark_capacity: dict[str, object] | None = None,
     confirmation_progress: list[dict[str, object]] | None = None,
     updater_status: dict[str, object] | None = None,
+    weights_fold: dict[str, object] | None = None,
 ) -> dict[str, object]:
     ts = timestamp if timestamp is not None else int(datetime.now(UTC).timestamp())
     hotkey = keypair.ss58_address
@@ -654,8 +659,14 @@ def _heartbeat_payload(
                     typed_updater = ValidatorUpdaterStatus.model_validate(
                         updater_status
                     )
+                    domain = "v27" if weights_fold is not None else "v23"
+                    fold_token = (
+                        f"{weights_fold_signing_token(WeightsFold.model_validate(weights_fold))}:"
+                        if weights_fold is not None
+                        else ""
+                    )
                     message = (
-                        f"ditto-validator-heartbeat:v23:{hotkey}:0.1.0:"
+                        f"ditto-validator-heartbeat:{domain}:{hotkey}:0.1.0:"
                         f"{protocol_version}:{code_digest}:{state}:"
                         f"{active_agent_id or ''}:"
                         f"{system_metrics_signing_token(metrics)}:"
@@ -664,7 +675,8 @@ def _heartbeat_payload(
                         f"{validator_stack_health_signing_token(typed_health)}:"
                         f"{benchmark_capacity_signing_token(typed_capacity)}:"
                         f"{confirmation_progress_signing_token(typed_confirmation)}:"
-                        f"{validator_updater_status_signing_token(typed_updater)}:{ts}"
+                        f"{validator_updater_status_signing_token(typed_updater)}:"
+                        f"{fold_token}{ts}"
                     )
                 else:
                     message = (
@@ -775,6 +787,8 @@ def _heartbeat_payload(
         payload["benchmark_capacity"] = benchmark_capacity
     if confirmation_progress is not None:
         payload["confirmation_progress"] = confirmation_progress
+    if weights_fold is not None:
+        payload["weights_fold"] = weights_fold
     if updater_status is not None:
         payload["updater_status"] = updater_status
     return payload
@@ -1925,6 +1939,100 @@ class TestHeartbeat:
             row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
             assert row is not None
             assert row.updater_status == updater
+
+    async def test_v27_persists_and_publishes_the_weights_fold(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        timestamp = int(datetime.now(UTC).timestamp())
+        updater = {
+            "enabled": True,
+            "channel": "compat-2",
+            "state": "idle",
+            "current_descriptor": (
+                "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "a" * 64
+            ),
+            "current_version": "0.250.0",
+            "candidate_descriptor": None,
+            "candidate_version": None,
+            "failed_candidate_count": 0,
+            "retry_after": None,
+            "suppressed": False,
+            "last_failure_at": None,
+            "last_failure_reason": None,
+            "observed_at": timestamp,
+            "self_refresh_installed": False,
+        }
+        fold = {
+            "epoch_index": 25_028,
+            "ledger_digest": "cd" * 32,
+            "vector_digest": "ef" * 32,
+            "champion_agent_id": str(UUID(int=43)),
+            "folded_at": timestamp - 5,
+        }
+        common: dict[str, Any] = {
+            "timestamp": timestamp,
+            "protocol_version": 27,
+            "capabilities": _quorum_capabilities(),
+            "stack": _V7_STACK,
+            "stack_health": _V9_STACK_HEALTH,
+            "benchmark_capacity": _IDLE_CAPACITY,
+            "confirmation_progress": [],
+            "updater_status": updater,
+        }
+        # A v27 validator that has not folded yet signs on the v23 domain.
+        without = await client.post(
+            "/api/v1/validator/heartbeat",
+            headers=_AUTH_HEADER,
+            json=_heartbeat_payload(**common),
+        )
+        assert without.status_code == 200, without.text
+
+        with_fold = await client.post(
+            "/api/v1/validator/heartbeat",
+            headers=_AUTH_HEADER,
+            json=_heartbeat_payload(
+                **{**common, "timestamp": timestamp + 1}, weights_fold=fold
+            ),
+        )
+        assert with_fold.status_code == 200, with_fold.text
+        async with session_maker() as session:
+            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert row is not None
+            assert row.weights_fold == fold
+
+        fleet = (await client.get("/api/v1/public/validators")).json()
+        member = next(
+            item
+            for item in fleet["validators"]
+            if item["validator_hotkey"] == _VALIDATOR_HOTKEY
+        )
+        assert member["weights_fold"] == fold
+
+        # The fold is signed: a tampered digest fails verification.
+        tampered = _heartbeat_payload(
+            **{**common, "timestamp": timestamp + 2}, weights_fold=fold
+        )
+        tampered["weights_fold"] = {**fold, "vector_digest": "00" * 32}
+        rejected = await client.post(
+            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=tampered
+        )
+        assert rejected.status_code == 401
+
+        # A fold on a pre-v27 protocol is a contract violation, not a heartbeat.
+        old = _heartbeat_payload(
+            **{**common, "protocol_version": 26, "timestamp": timestamp + 3},
+            weights_fold=fold,
+        )
+        assert (
+            await client.post(
+                "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=old
+            )
+        ).status_code in (401, 422)
 
     async def test_pre_v23_heartbeat_remains_valid_without_updater_state(
         self,
@@ -9861,6 +9969,44 @@ def test_infra_retry_backoff_doubles_and_caps() -> None:
         prev = current
 
 
+def _install_chain_with_finalized_hash(
+    app: FastAPI,
+    *,
+    block_number: int,
+    finalized_hash: str | Exception,
+) -> MagicMock:
+    """Like :func:`_install_chain_with_block`, plus one answer for the
+    confirmation seed anchor's ``get_finalized_block_hash`` read: a hash once
+    the anchor height is finalized, or the chain error the wait sees before."""
+    from ditto.chain.models import BlockInfo
+
+    neurons = [
+        NeuronInfo(
+            hotkey=keypair.ss58_address,
+            coldkey="5GReceiverColdkeyPlaceholderXXXXXXXXXXXXXXXXXXX",
+            uid=uid,
+            stake=1000.0,
+            validator_permit=True,
+        )
+        for uid, keypair in enumerate(_KEYPAIRS, start=1)
+    ]
+    chain = MagicMock()
+    chain.get_recent_neurons = AsyncMock(return_value=neurons)
+    chain.get_latest_block = AsyncMock(
+        return_value=BlockInfo(number=block_number, hash="00" * 32, timestamp=0)
+    )
+    if isinstance(finalized_hash, Exception):
+        chain.get_finalized_block_hash = AsyncMock(side_effect=finalized_hash)
+    else:
+        chain.get_finalized_block_hash = AsyncMock(return_value=finalized_hash)
+
+    async def _chain() -> MagicMock:
+        return chain
+
+    app.dependency_overrides[get_chain_client] = _chain
+    return chain
+
+
 def _install_chain_with_block(
     app: FastAPI,
     *,
@@ -10160,6 +10306,158 @@ class TestTop5ConfirmationLane:
         assert routed.status_code == 200, routed.text
         assert UUID(routed.json()["agent_id"]) in set(members)
         assert routed.json()["slot_id"] == "slot-0"
+
+    async def test_binding_version_withholds_fresh_seeds_until_the_anchor_pins(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Bench v13+ lane: first claim opens the reign's anchor and issues
+        nothing until ``B_ready + Δ`` is finalized; then every fresh seed is
+        the block-bound family and the lease carries its binding."""
+        from ditto.api_server import crn as crn_mod
+        from ditto.api_server.crn import (
+            CRN_ANCHOR_BLOCK_DELTA,
+            champion_anchored_seeds,
+        )
+        from ditto.chain import ExtrinsicNotFoundError
+        from ditto.db.models import ConfirmationSeedAnchor
+
+        # The fixture era is v7; the floor is read at call time, so lower it
+        # to the era instead of standing up a v13 fixture stack.
+        monkeypatch.setattr(
+            crn_mod, "CRN_BLOCK_BINDING_MIN_BENCH_VERSION", _BENCH_VERSION
+        )
+        members = await _seed_top5_emission_set(session_maker)
+        champion = members[0]
+        _install_db(app, session_maker)
+        _install_chain_with_finalized_hash(
+            app,
+            block_number=100,
+            finalized_hash=ExtrinsicNotFoundError("block 110 is not finalized"),
+        )
+
+        waiting = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_auto_top5_job_payload("slot-0"),
+        )
+        assert waiting.status_code == 204, waiting.text
+        async with session_maker() as session:
+            anchors = (await session.scalars(select(ConfirmationSeedAnchor))).all()
+            tickets = (await session.scalars(select(ValidatorTicket))).all()
+        assert [
+            (a.champion_agent_id, a.bench_version, a.ready_block, a.anchor_block)
+            for a in anchors
+        ] == [(champion, _BENCH_VERSION, 100, 100 + CRN_ANCHOR_BLOCK_DELTA)]
+        assert anchors[0].anchor_block_hash is None
+        assert tickets == []
+
+        block_hash = "0x" + "ab" * 32
+        _install_chain_with_finalized_hash(
+            app, block_number=130, finalized_hash=block_hash
+        )
+        issued = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_auto_top5_job_payload("slot-0"),
+        )
+        assert issued.status_code == 200, issued.text
+        body = issued.json()
+        assert body["agent_id"] == str(champion)
+        bound_family = champion_anchored_seeds(
+            champion, version=_BENCH_VERSION, max_seeds=15, block_hash=block_hash
+        )
+        assert body["confirmation_datasets"] == [
+            {
+                "seed": bound_family[0],
+                "dataset_sha256": hashlib.sha256(
+                    f"{_BENCH_VERSION}:{bound_family[0]}".encode()
+                ).hexdigest(),
+                "run_size": "full",
+                "anchor_agent_id": str(champion),
+                "seed_index": 0,
+                "seed_block": 100 + CRN_ANCHOR_BLOCK_DELTA,
+                "seed_block_hash": block_hash,
+            }
+        ]
+        # The unbound legacy family is what a miner could precompute from the
+        # public board; it is not what was issued.
+        assert (
+            bound_family[0]
+            != champion_anchored_seeds(champion, version=_BENCH_VERSION, max_seeds=1)[0]
+        )
+        async with session_maker() as session:
+            anchor = await session.get(
+                ConfirmationSeedAnchor, (champion, _BENCH_VERSION)
+            )
+            assert anchor is not None
+            # The anchor did not move with the newer head observed at claim time.
+            assert (anchor.ready_block, anchor.anchor_block) == (
+                100,
+                100 + CRN_ANCHOR_BLOCK_DELTA,
+            )
+            assert anchor.anchor_block_hash == block_hash
+            ticket = await session.scalar(
+                select(ValidatorTicket).where(
+                    ValidatorTicket.agent_id == champion,
+                    ValidatorTicket.validator_hotkey == _VALIDATOR_HOTKEY,
+                )
+            )
+        assert ticket is not None
+        assert ticket.seed == bound_family[0]
+        assert ticket.seed_block == 100 + CRN_ANCHOR_BLOCK_DELTA
+        assert ticket.seed_block_hash == block_hash
+
+    async def test_legacy_version_issues_unbound_seeds_and_pins_no_anchor(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Below the floor the lane is byte-identical to before: the unbound
+        champion-anchored seed, no binding fields, no anchor row."""
+        from ditto.api_server.crn import champion_anchored_seeds
+        from ditto.db.models import ConfirmationSeedAnchor
+
+        champion, *_ = await _seed_top5_emission_set(session_maker)
+        _install_db(app, session_maker)
+        chain = _install_chain_with_finalized_hash(
+            app, block_number=1, finalized_hash="0x" + "ab" * 32
+        )
+
+        response = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_auto_top5_job_payload("slot-0"),
+        )
+
+        assert response.status_code == 200, response.text
+        (pin,) = response.json()["confirmation_datasets"]
+        assert (
+            pin["seed"]
+            == champion_anchored_seeds(champion, version=_BENCH_VERSION, max_seeds=1)[0]
+        )
+        assert {
+            key: pin[key]
+            for key in (
+                "anchor_agent_id",
+                "seed_index",
+                "seed_block",
+                "seed_block_hash",
+            )
+        } == dict.fromkeys(
+            ("anchor_agent_id", "seed_index", "seed_block", "seed_block_hash")
+        )
+        chain.get_finalized_block_hash.assert_not_awaited()
+        async with session_maker() as session:
+            assert (await session.scalars(select(ConfirmationSeedAnchor))).all() == []
+            ticket = await session.scalar(
+                select(ValidatorTicket).where(ValidatorTicket.agent_id == champion)
+            )
+        assert ticket is not None and ticket.seed_block is None
 
     async def test_paused_validator_gets_no_new_continual_retest(
         self,

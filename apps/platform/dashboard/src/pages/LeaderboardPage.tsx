@@ -8,6 +8,7 @@
 // this page's promise is every column at every viewport.
 import type { JSX } from "solid-js";
 
+import { CrownHistory } from "../components/board/CrownHistory";
 import { LeaderboardBlock } from "../components/board/LeaderboardBlock";
 
 export function LeaderboardPage(): JSX.Element {
@@ -15,6 +16,7 @@ export function LeaderboardPage(): JSX.Element {
     <section class="page active" data-page="leaderboard">
       <div id="leaderboard-page-host">
         <LeaderboardBlock mode="page" />
+        <CrownHistory mode="page" />
       </div>
     </section>
   );

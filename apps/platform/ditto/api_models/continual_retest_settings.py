@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -42,6 +43,29 @@ MAX_RETEST_ELIGIBILITY_Z = 3.0
 DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 
 
+# The first validator heartbeat protocol whose fold reads ``crown_mode`` and
+# ``crown_incumbent_agent_id`` off the ledger. Exposing the marker to an older
+# fleet would fold two different champions, so it is withheld until every
+# recently-live weight setter reports at least this.
+CROWN_INCUMBENT_PROTOCOL = 27
+
+
+class LedgerPinStatus(BaseModel):
+    """Identity of the epoch-pinned ledger currently served to validators."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    epoch_index: int
+    last_epoch_block: int
+    pinned_block: int
+    pinned_at: datetime
+    bench_version: int
+    ledger_digest: str
+    entry_count: int
+    champion_agent_id: UUID | None = None
+    incumbent_agent_id: UUID | None = None
+
+
 class ContinualRetestSettings(BaseModel):
     """Complete subnet-global continual-retest policy stored per revision."""
 
@@ -57,6 +81,32 @@ class ContinualRetestSettings(BaseModel):
     weight-setting validator reports the protocol that understands the ledger
     marker. There is deliberately no unconditional override: unlike background
     retest planning, a mixed weight fold is a consensus split.
+    """
+
+    ledger_pin_mode: Literal["live", "epoch"] = "epoch"
+    """Whether ``GET /scoring/scores`` serves one pinned ledger per chain epoch.
+
+    ``epoch`` (the default) freezes the fold input once per
+    ``SubnetEpochIndex`` so every validator reading during that epoch folds
+    byte-identical entries and markers; a ledger change lands for everyone at
+    the next pin instead of splitting the fleet on who read first. ``live`` is
+    the exact rollback to the time-based read and is a serving change only --
+    the fold itself is untouched by this switch, which is why it needs no
+    fleet-protocol gate.
+    """
+
+    crown_incumbent_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Whether the KOTH fold defends the crown from the served incumbent.
+
+    ``disabled`` is the historical fold and the exact rollback: every read
+    re-derives the champion from the earliest lineage anchor, so a senior
+    claimant sitting inside the dethrone band retakes the crown whenever the
+    holder's official lead dips under it. ``fleet_ready`` serves the previous
+    pin's champion (resolved through its owner family) as ``crown_mode:
+    incumbent`` and the fold only moves the crown when a challenger clears the
+    band over that incumbent. Like tie weighting it activates only after every
+    recently-live weight-setting validator reports the protocol that reads the
+    marker, and there is deliberately no unconditional override.
     """
 
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP
@@ -226,6 +276,12 @@ class EffectiveContinualRetestSettings(BaseModel):
     aggregate_active: bool
     tie_weighting_fleet_ready: bool = False
     tie_weighting_active: bool = False
+    crown_incumbent_fleet_ready: bool = False
+    crown_incumbent_active: bool = False
+    crown_incumbent_required_protocol: int = CROWN_INCUMBENT_PROTOCOL
+    ledger_pin: LedgerPinStatus | None = None
+    """The pin validators are folding right now, or ``None`` when no pin has
+    ever been taken (bootstrap) or the mode is ``live``."""
     max_age_seconds: float
     open_rollout_desired_version: int | None = None
     rollout_standdown_active: bool = False

@@ -12,10 +12,13 @@ from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
 from ditto.api_server.deferred_source_review import (
     DeferredReviewDecision,
     evaluate_deferred_review,
+    evaluate_integrity_double_check,
 )
 from ditto.api_server.endpoints.validator import (
     _deferred_screening_attempt,
     _evaluate_and_record_deferred_review,
+    _evaluate_and_record_integrity_double_check,
+    _held_post_score_review_composites,
     _record_deferred_review_decision,
 )
 from ditto.db.models import (
@@ -670,3 +673,215 @@ async def test_copy_hold_survives_every_deferred_mode(
     assert review.resolution is None
     assert review.original_duplicate_of == matched
     assert review.algorithm_provenance["review_kind"] == "copy"
+
+
+def test_double_check_counts_held_rows_so_holds_cannot_cascade() -> None:
+    """Held rows vanish from the ledger but keep their slot.
+
+    With #1-#5 held, the old #6 is ledger rank one. Without the held
+    composites it would be held too, then #7, and so on down the board.
+    """
+    ledger = [_row(index, 0.80 - index / 100) for index in range(6)]
+    held = [0.95, 0.94, 0.93, 0.92, 0.91]
+
+    demoted = evaluate_integrity_double_check(
+        agent_id=ledger[0].agent_id, ledger=ledger, held_composites=held
+    )
+    assert demoted.triggered is False
+    assert demoted.rank == 6
+    assert demoted.evidence["ledger_rank"] == 1
+    assert demoted.evidence["held_above"] == 5
+
+    # A genuinely better score still outranks the held rows.
+    leader = _row(9, 0.99)
+    promoted = evaluate_integrity_double_check(
+        agent_id=leader.agent_id, ledger=[leader, *ledger], held_composites=held
+    )
+    assert promoted.triggered is True
+    assert promoted.rank == 1
+    assert promoted.triggers == ("top_five",)
+
+
+def _scored(row: LedgerRow) -> Agent:
+    return Agent(
+        agent_id=row.agent_id,
+        miner_hotkey=row.miner_hotkey,
+        name=f"ranked-{row.agent_id.int}",
+        sha256=row.sha256,
+        status=AgentStatus.SCORED,
+        screening_policy_version=SCREENING_POLICY_VERSION,
+    )
+
+
+@pytest.mark.asyncio
+async def test_stale_review_rows_do_not_reserve_top_five_slots(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC)
+    statuses = (
+        AgentStatus.REJECTED,
+        AgentStatus.SCORED,
+        AgentStatus.ATH_PENDING_REVIEW,
+    )
+    async with session.begin():
+        for index, status in enumerate(statuses):
+            agent = _scored(_row(index, 0.9))
+            agent.status = status
+            session.add(agent)
+            session.add(
+                AthReview(
+                    review_id=uuid4(),
+                    agent_id=agent.agent_id,
+                    status="pending",
+                    opened_at=now,
+                    original_reason="historical deferred review",
+                    original_policy_version=13,
+                    original_evidence={
+                        "deferred_review": {"candidate": {"composite": 0.9}}
+                    },
+                    algorithm_provenance={"review_kind": "deferred_source_review"},
+                )
+            )
+    assert await _held_post_score_review_composites(session, bench_version=8) == [0.9]
+
+
+@pytest.mark.asyncio
+async def test_double_check_holds_fully_reviewed_top_five_once(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """eval -> top five -> integrity double-check, even after a full screen."""
+    now = datetime.now(UTC)
+    ledger = [_row(index, 0.90 - index / 100) for index in range(7)]
+    agents = [_scored(row) for row in ledger]
+    async with session.begin():
+        session.add_all(agents)
+
+    async def _ledger(*_args: object, **_kwargs: object) -> list[LedgerRow]:
+        return ledger
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.validator.list_eligible_ledger", _ledger
+    )
+    settings = DeferredSourceReviewSettings(integrity_double_check_mode="enforce")
+    async with session.begin():
+        await _evaluate_and_record_integrity_double_check(
+            session, bench_version=8, settings=settings, now=now
+        )
+
+    assert [agent.status for agent in agents] == [
+        *([AgentStatus.ATH_PENDING_REVIEW] * 5),
+        AgentStatus.SCORED,
+        AgentStatus.SCORED,
+    ]
+    review = await session.scalar(
+        select(AthReview).where(AthReview.agent_id == agents[0].agent_id)
+    )
+    assert review is not None and review.status == "pending"
+    assert review.algorithm_provenance["review_kind"] == "deferred_source_review"
+    assert review.algorithm_provenance["trigger"] == "integrity_double_check"
+    assert review.original_evidence["deferred_review"]["bench_version"] == 8
+    assert review.original_evidence["deferred_review"]["rank"] == 1
+    assert agents[0].review_reason == review.original_reason
+    markers = list(
+        await session.scalars(
+            select(ScoreAuditEntry).where(
+                ScoreAuditEntry.agent_id == agents[0].agent_id
+            )
+        )
+    )
+    assert [entry.payload["audit_kind"] for entry in markers] == [
+        "integrity_double_check"
+    ]
+    assert markers[0].payload["enforced"] is True
+    await session.commit()
+
+    # The next mutation reads a ledger without the five holds. Their snapshot
+    # composites keep #6 and #7 out of the top five.
+    async def _after(*_args: object, **_kwargs: object) -> list[LedgerRow]:
+        return ledger[5:]
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.validator.list_eligible_ledger", _after
+    )
+    async with session.begin():
+        await _evaluate_and_record_integrity_double_check(
+            session, bench_version=8, settings=settings, now=now
+        )
+    assert agents[5].status == AgentStatus.SCORED
+    assert agents[6].status == AgentStatus.SCORED
+
+    # A clean deep pass restores the row. It is never double-checked again,
+    # even once its review row is later reopened for an unrelated copy hold.
+    async with session.begin():
+        review.status = "resolved"
+        review.resolution = "clear"
+        review.resolved_at = now
+        review.resolved_by = "platform:deferred-source-review"
+        review.resolution_reason = "Deferred source review completed cleanly"
+        review.algorithm_provenance = {"review_kind": "copy"}
+        agents[0].status = AgentStatus.SCORED
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.validator.list_eligible_ledger", _ledger
+    )
+    async with session.begin():
+        await _evaluate_and_record_integrity_double_check(
+            session, bench_version=8, settings=settings, now=now
+        )
+    assert agents[0].status == AgentStatus.SCORED
+
+
+@pytest.mark.asyncio
+async def test_double_check_observe_records_once_and_holds_nothing(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime.now(UTC)
+    ledger = [_row(index, 0.90 - index / 100) for index in range(2)]
+    agents = [_scored(row) for row in ledger]
+    async with session.begin():
+        session.add_all(agents)
+
+    async def _ledger(*_args: object, **_kwargs: object) -> list[LedgerRow]:
+        return ledger
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.validator.list_eligible_ledger", _ledger
+    )
+    settings = DeferredSourceReviewSettings(integrity_double_check_mode="observe")
+    for _mutation in range(2):
+        async with session.begin():
+            await _evaluate_and_record_integrity_double_check(
+                session, bench_version=8, settings=settings, now=now
+            )
+
+    entries = list(
+        await session.scalars(
+            select(ScoreAuditEntry).where(
+                ScoreAuditEntry.agent_id.in_([agent.agent_id for agent in agents])
+            )
+        )
+    )
+    assert sorted(entry.payload["enforced"] for entry in entries) == [False, False]
+    assert all(agent.status == AgentStatus.SCORED for agent in agents)
+    assert await session.scalar(select(AthReview)) is None
+
+
+@pytest.mark.asyncio
+async def test_double_check_off_reads_nothing(
+    session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fail(*_args: object, **_kwargs: object) -> list[LedgerRow]:
+        raise AssertionError("off must not read the canonical ledger")
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.validator.list_eligible_ledger", _fail
+    )
+    async with session.begin():
+        await _evaluate_and_record_integrity_double_check(
+            session,
+            bench_version=8,
+            settings=DeferredSourceReviewSettings(),
+            now=datetime.now(UTC),
+        )

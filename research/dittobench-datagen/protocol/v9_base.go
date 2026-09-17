@@ -151,6 +151,24 @@ type V9AnswerStuffingGateEvidence struct {
 	FactorBPS               int    `json:"factor_bps"`
 }
 
+// V13ClaimProvenanceGateEvidence preserves the signature-bound claim summary.
+// The gate acts per case; its aggregate factor is always the identity factor.
+type V13ClaimProvenanceGateEvidence struct {
+	AdministeredCases     int    `json:"administered_cases"`
+	EligibleCases         int    `json:"eligible_cases"`
+	NotModelEmittedCases  int    `json:"not_model_emitted_cases"`
+	AnswerInPromptCases   int    `json:"answer_in_prompt_cases"`
+	FlaggedCases          int    `json:"flagged_cases"`
+	UnattributedCallCases int    `json:"unattributed_call_cases"`
+	UnsettledCases        int    `json:"unsettled_cases"`
+	ZeroedCases           int    `json:"zeroed_cases"`
+	AttributionComplete   bool   `json:"attribution_complete"`
+	Posture               string `json:"posture"`
+	FlaggedBPS            int    `json:"flagged_bps"`
+	Result                string `json:"result"`
+	FactorBPS             int    `json:"factor_bps"`
+}
+
 type V9ScoreGateEvidence struct {
 	SchemaVersion     int                             `json:"schema_version"`
 	BenchVersion      int                             `json:"bench_version"`
@@ -171,4 +189,7 @@ type V9ScoreGateEvidence struct {
 	// administered; the zero value is omitted for v9..v11 (and for a v12 run built
 	// without the gate) so their wire JSON and struct equality stay byte-identical.
 	AnswerStuffing V9AnswerStuffingGateEvidence `json:"answer_stuffing,omitzero"`
+	// ClaimProvenance is emitted for v13 only. A zero value remains omitted so
+	// historical v9..v12 wire bytes do not change.
+	ClaimProvenance V13ClaimProvenanceGateEvidence `json:"claim_provenance,omitzero"`
 }

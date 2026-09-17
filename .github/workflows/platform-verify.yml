@@ -271,10 +271,12 @@ jobs:
       - name: Start MinIO
         if: matrix.object_storage
         run: |
+          # Docker Hub archived minio/minio and now rejects its digest-only pull.
+          # MinIO's official Quay repositories retain these exact manifests.
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minio \
             -e MINIO_ROOT_PASSWORD=miniominio \
-            minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
+            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
           for _ in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
               break
@@ -283,7 +285,7 @@ jobs:
           done
           curl -sf http://localhost:9000/minio/health/live >/dev/null
           docker run --rm --network host --entrypoint sh \
-            minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727 -c \
+            quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727 -c \
             'mc alias set local http://localhost:9000 minio miniominio && \
              mc mb --ignore-existing local/ditto-agents'
 

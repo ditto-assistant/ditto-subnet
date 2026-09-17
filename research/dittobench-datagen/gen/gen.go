@@ -129,6 +129,18 @@ var profilesV10 = map[string]Profile{
 	"full":   {Tools: 100, Mem: 225, Waves: 5, RawPairsFrac: 0.5, IsoCases: 9},
 }
 
+// profilesV13 is the envelope-rebalance profile (docs/bench-versions.md, Bench
+// v13). Full keeps 100 tool cases and spends Mem 224 + 9 isolation cases on the
+// published 250-case memory slot table in gen/memory_v2.go (v13EnvelopeFor); the
+// slot table, not Mem, is the contract, and Mem is pinned so a future version
+// must still make an explicit profile decision. Medium and small are pinned
+// alongside so every public run size has a v13 envelope.
+var profilesV13 = map[string]Profile{
+	"small":  {Tools: 6, Mem: 6, Waves: 1, RawPairsFrac: 0, IsoCases: 0},
+	"medium": {Tools: 48, Mem: 64, Waves: 4, RawPairsFrac: 0.45, IsoCases: 5},
+	"full":   {Tools: 100, Mem: 224, Waves: 5, RawPairsFrac: 0.5, IsoCases: 9},
+}
+
 // ProfileFor returns the Profile for a run_size, defaulting to small. Uses the
 // historical (v2/v3/v4) sizes; canonical versioned callers use ProfileForVersion.
 func ProfileFor(runSize string) (Profile, bool) {
@@ -157,9 +169,11 @@ func ProfileForVersion(runSize string, benchVersion int) (Profile, bool) {
 	case protocol.BenchVersionV9:
 		profiles = profilesV9
 	case protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12:
-		// v11 and v12 keep v10's run-size envelopes; their difficulty comes from
-		// the generator contract, not from scale.
+		// v11 and v12 keep v10's run-size envelopes; their difficulty comes
+		// from the generator contract, not from scale.
 		profiles = profilesV10
+	case protocol.BenchVersionV13:
+		profiles = profilesV13
 	default:
 		return Profile{}, false
 	}

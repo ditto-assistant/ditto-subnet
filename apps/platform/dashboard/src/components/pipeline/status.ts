@@ -290,24 +290,6 @@ export function validationDetail(e: ActivityStatusEntry): string {
       attempt.status === "issued" &&
       benchmarkVersionKey(attempt.bench_version) === benchmarkVersionKey(e.active_bench_version),
   ).length;
-  if (count >= quorum) {
-    const retests = retestAttemptCounts(
-      (e.validation_attempts || []).filter(
-        (attempt) =>
-          benchmarkVersionKey(attempt.bench_version) ===
-          benchmarkVersionKey(e.active_bench_version),
-      ),
-    );
-    const retestCopy: string[] = [];
-    if (retests.running) retestCopy.push(retests.running + " running");
-    if (retests.assigned) retestCopy.push(retests.assigned + " assigned");
-    return (
-      "Canonical validation complete. The official result uses the median of " +
-      quorum +
-      " independent scores." +
-      (retestCopy.length ? " Continual top-five retesting: " + retestCopy.join(", ") + "." : "")
-    );
-  }
   if (e.status === "below_score_floor") {
     const provisionalScores = e.provisional_scores || [];
     const scoreFloor = Number(e.score_floor);
@@ -347,7 +329,29 @@ export function validationDetail(e: ActivityStatusEntry): string {
     return "Queued for a screener to claim under the current policy.";
   if (e.status === "screening") return "A screener is currently checking this submission.";
   if (e.status === "under_review")
-    return "Automated processing is paused while an operator reviews this submission. No screener or validator is currently working on it.";
+    return "This submission is held for integrity review. Existing scores do not clear the hold. The screening history below shows whether a deep review is running or an operator decision is pending.";
+  if (e.status === "rejected")
+    return "Screening or integrity review rejected this submission. Existing scores remain as history; see the review result for the policy version and reason.";
+  if (e.status === "screening_failed")
+    return "Screening could not complete. This is not a submission rejection. Check the admission retry status below for whether a retry is authorized or operator action is needed.";
+  if (count >= quorum) {
+    const retests = retestAttemptCounts(
+      (e.validation_attempts || []).filter(
+        (attempt) =>
+          benchmarkVersionKey(attempt.bench_version) ===
+          benchmarkVersionKey(e.active_bench_version),
+      ),
+    );
+    const retestCopy: string[] = [];
+    if (retests.running) retestCopy.push(retests.running + " running");
+    if (retests.assigned) retestCopy.push(retests.assigned + " assigned");
+    return (
+      "Canonical validation complete. The official result uses the median of " +
+      quorum +
+      " independent scores." +
+      (retestCopy.length ? " Continual top-five retesting: " + retestCopy.join(", ") + "." : "")
+    );
+  }
   if (e.status === "waiting_validator") {
     const waiting = Math.max(0, quorum - count - assignments);
     const assignmentCopy =
@@ -378,10 +382,6 @@ export function validationDetail(e: ActivityStatusEntry): string {
       "."
     );
   }
-  if (e.status === "rejected")
-    return "Screening completed and rejected this submission. See the screener result for the policy version and reason.";
-  if (e.status === "screening_failed")
-    return "Screening could not complete reliably. This is retryable and is distinct from a submission rejection.";
   return "Validation starts after the submission passes screening.";
 }
 

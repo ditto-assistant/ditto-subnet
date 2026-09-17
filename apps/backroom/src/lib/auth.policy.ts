@@ -1,8 +1,9 @@
 export const OMNIAURA_EMAIL_DOMAIN = '@omniaura.ai'
 
 // Staff sessions are fixed-lifetime: no silent renew. Write access is still
-// re-derived from BACKROOM_ADMIN_EMAILS on every request. This bound is the
-// remaining read-access window after a Workspace account is disabled, and it
+// re-derived from BACKROOM_ADMIN_EMAILS and BACKROOM_BLOCKED_EMAILS on every
+// request. This bound is the remaining read-access window after a Workspace
+// account is disabled without adding it to the explicit blocklist, and it
 // matches the MCP refresh-token TTL so console and agent grants die together.
 export const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
 export const SESSION_MAX_AGE_SECONDS = SESSION_LIFETIME_MS / 1000
@@ -20,9 +21,25 @@ export function parseAdminEmails(value: string | undefined) {
   )
 }
 
-export function accessLevelForEmail(email: string, configuredAdmins: string | undefined) {
+export function parseBlockedEmails(value: string | undefined) {
+  return new Set(
+    (value ?? '')
+      .split(',')
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  )
+}
+
+export function accessLevelForEmail(
+  email: string,
+  configuredAdmins: string | undefined,
+  configuredBlocked: string | undefined = undefined,
+) {
   const normalized = email.trim().toLowerCase()
-  if (!isVerifiedOmniauraEmail(normalized, true)) {
+  if (
+    !isVerifiedOmniauraEmail(normalized, true) ||
+    parseBlockedEmails(configuredBlocked).has(normalized)
+  ) {
     throw new Error('This account is not authorized to enter Backroom')
   }
   return parseAdminEmails(configuredAdmins).has(normalized) ? 'write' : 'read'

@@ -37,7 +37,11 @@ from ditto.api_models.screener import (
     SourceReviewEvidenceItem,
     SourceReviewFinding,
 )
-from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.screener_review_settings import (
+    FANOUT_SHADOW_SETTINGS_FIELDS,
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
+    ScreenerReviewSettings,
+)
 from ditto.api_models.system_health import (
     SystemMetrics,
     system_metrics_signing_token,
@@ -52,6 +56,7 @@ from ditto.api_server.dependencies import (
 )
 from ditto.api_server.endpoints.public import screening_dispute_signing_message
 from ditto.api_server.endpoints.screener import (
+    _fanout_response_model_matches,
     _heartbeat_signing_message,
     _public_screening_reason,
     _review_settings_checksum,
@@ -85,7 +90,9 @@ from ditto.db.models import (
     ScreenedImageUpload,
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
+    ScreenerFanoutShadowReview,
     ScreenerHeartbeat,
+    ScreenerNode,
     ScreenerNodeChannelSettingsRevision,
     ScreenerPolicyActivation,
     ScreenerProviderSettingsRevision,
@@ -104,6 +111,7 @@ from ditto.db.models import (
 from ditto.db.queries.attestation import record_attestation
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.screening import (
+    _SCREENING_CLAIM_LOCK_KEY,
     MAX_SCREENING_EXPIRIES,
     POLICY_ONLY_RESCREEN_REASON,
 )
@@ -128,6 +136,62 @@ SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _SCREENER_HOTKEY = _KEYPAIR.ss58_address
+
+
+@pytest.mark.parametrize("response_model", ["z-ai/glm-5.3-flash", "glm-5.3-flash"])
+def test_fanout_response_model_accepts_only_verified_router_ids(response_model):
+    assert _fanout_response_model_matches("z-ai/glm-5.3-flash", response_model)
+
+
+@pytest.mark.parametrize(
+    "response_model",
+    ["openai/gpt-5.6-luna", "provider/glm-5.3-flash", "glm-5.3-flash-preview"],
+)
+def test_fanout_response_model_rejects_unverified_ids(response_model):
+    assert not _fanout_response_model_matches("z-ai/glm-5.3-flash", response_model)
+
+
+def test_inactive_fanout_checksum_keeps_the_pre_fanout_wire_shape() -> None:
+    settings = ScreenerReviewSettings(
+        fanout_shadow_image_source_sha="1" * 40,
+        fanout_shadow_max_requests=12,
+        fanout_shadow_daily_cost_usd=5,
+    )
+    legacy = settings.model_dump(mode="json")
+    for field in FANOUT_SHADOW_SETTINGS_FIELDS:
+        legacy.pop(field)
+    legacy.pop("l2_always_escalate")
+    expected = hashlib.sha256(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert _review_settings_checksum(settings) == expected
+
+
+def test_always_escalate_is_bound_into_the_checksum_only_when_enabled() -> None:
+    """Workers predating the control verify every normal posture unchanged,
+    while a posture that requires escalation cannot be served without it."""
+    normal = ScreenerReviewSettings(mode="enforce")
+    escalating = normal.model_copy(update={"l2_always_escalate": True})
+    shape = escalating.model_dump(mode="json")
+    for field in FANOUT_SHADOW_SETTINGS_FIELDS:
+        shape.pop(field)
+    expected = hashlib.sha256(
+        json.dumps(shape, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert _review_settings_checksum(escalating) == expected
+    assert _review_settings_checksum(escalating) != _review_settings_checksum(normal)
+
+
+def test_enabled_fanout_checksum_binds_every_fanout_field() -> None:
+    first = ScreenerReviewSettings(
+        fanout_shadow_mode="shadow",
+        fanout_shadow_image_source_sha="1" * 40,
+        fanout_shadow_max_requests=12,
+    )
+    changed = first.model_copy(update={"fanout_shadow_max_requests": 13})
+    assert _review_settings_checksum(first) != _review_settings_checksum(changed)
+
+
 _MINER_HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _SHA256 = "ab" * 32
 # A fixed block the mocked chain returns for on-chain seed derivation.
@@ -762,6 +826,40 @@ _CLAIM_URL = f"/api/v1/screener/claim?policy_version={SCREENING_POLICY_VERSION}"
 _CONTROLLER_TOKEN = "test-controller-token-at-least-32-characters"
 
 
+async def _seed_screener_node(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    node_id: str,
+    hotkey: str,
+    token: str,
+    screening_concurrency: int,
+) -> None:
+    async with maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id=node_id,
+                provider="test",
+                provider_resource_id=f"test-resource-{node_id}",
+                screener_hotkey=hotkey,
+                token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+                status="active",
+                capacity=screening_concurrency,
+            )
+        )
+        session.add(
+            ScreenerNodeChannelSettingsRevision(
+                environment="prod",
+                node_id=node_id,
+                parent_revision=0,
+                settings={"screening_concurrency": screening_concurrency},
+                reason="Exercise endpoint claim concurrency",
+                actor="test",
+            )
+        )
+
+
 def _bounded_review_audit(*, steps_used: int = 6) -> ScreenReviewAudit:
     return ScreenReviewAudit(
         stage="l1",
@@ -960,6 +1058,55 @@ class TestFederatedScreenerNodes:
         )
         assert source.status_code == 200, source.text
         assert source.json()["artifact_sha256"] == _SHA256
+        async with session_maker() as session:
+            source_attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
+            assert source_attempt is not None
+            expected_policy_version = source_attempt.policy_version
+        assert source.json()["policy_version"] == expected_policy_version
+        mismatched = await client.post(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
+            headers=job_headers,
+            json={
+                "observation": {
+                    "ok": False,
+                    "categories": [],
+                    "adjudication": {
+                        "decision": "escalate",
+                        "reason": "test policy mismatch",
+                        "model": "test-model",
+                        "prompt_revision": "adjudicator-v3-policy-v999",
+                        "policy_version": expected_policy_version + 1,
+                        "escalation_code": "test-policy-mismatch",
+                    },
+                }
+            },
+        )
+        assert mismatched.status_code == 409, mismatched.text
+        assert mismatched.json()["message"] == (
+            "source-review adjudication policy mismatch"
+        )
+        mismatched_prompt = await client.post(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
+            headers=job_headers,
+            json={
+                "observation": {
+                    "ok": False,
+                    "categories": [],
+                    "adjudication": {
+                        "decision": "escalate",
+                        "reason": "test prompt mismatch",
+                        "model": "test-model",
+                        "prompt_revision": "adjudicator-v3-policy-v999",
+                        "policy_version": expected_policy_version,
+                        "escalation_code": "test-policy-mismatch",
+                    },
+                }
+            },
+        )
+        assert mismatched_prompt.status_code == 409, mismatched_prompt.text
+        assert mismatched_prompt.json()["message"] == (
+            "source-review adjudication policy mismatch"
+        )
         complete = await client.post(
             f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
             headers=job_headers,
@@ -3781,6 +3928,138 @@ class TestQueue:
 
 
 class TestClaim:
+    async def test_busy_claim_gate_returns_before_node_row_lock(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        node_id = "claim-gate-node"
+        hotkey = "5ClaimGateNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "claim-gate-node-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id=node_id,
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=2,
+        )
+        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+
+        async with session_maker() as owner, owner.begin():
+            # Reproduce both locks that the old endpoint took in the opposite
+            # order: the node row and the global screening claim lock.
+            await owner.execute(
+                select(ScreenerNode)
+                .where(ScreenerNode.node_id == node_id)
+                .with_for_update()
+            )
+            await owner.execute(
+                select(func.pg_advisory_xact_lock(_SCREENING_CLAIM_LOCK_KEY))
+            )
+
+            response = await asyncio.wait_for(
+                client.post(
+                    _CLAIM_URL,
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        "X-Screener-Hotkey": hotkey,
+                    },
+                ),
+                timeout=0.5,
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["items"] == []
+
+    async def test_concurrent_node_claims_obey_node_limit_not_heartbeat_count(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        now = datetime.now(UTC)
+        node_id = "bounded-claim-node"
+        hotkey = "5BoundedClaimNodeHotkeyXXXXXXXXXXXXXXXXXXXXXXXXX"
+        token = "bounded-claim-node-token-at-least-32-characters"
+        await _seed_screener_node(
+            session_maker,
+            node_id=node_id,
+            hotkey=hotkey,
+            token=token,
+            screening_concurrency=2,
+        )
+        async with session_maker() as session, session.begin():
+            session.add_all(
+                [
+                    Agent(
+                        agent_id=uuid4(),
+                        miner_hotkey=f"5HK-endpoint-concurrent-{index}",
+                        name=f"endpoint-concurrent-{index}",
+                        sha256=f"{index + 1:02x}" * 32,
+                        status=AgentStatus.UPLOADED,
+                        created_at=now + timedelta(seconds=index),
+                    )
+                    for index in range(6)
+                ]
+                + [
+                    ScreenerHeartbeat(
+                        screener_hotkey=hotkey,
+                        instance_id=f"bounded-worker-{index}",
+                        software_version="0.21.0",
+                        protocol_version=4,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        state="polling",
+                        first_seen_at=now - timedelta(days=1),
+                        reported_at=now - timedelta(seconds=5),
+                        seen_at=now - timedelta(seconds=5),
+                        signature="ab" * 64,
+                    )
+                    for index in range(4)
+                ]
+            )
+        _install_db(app, session_maker)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "X-Screener-Hotkey": hotkey,
+        }
+
+        first_wave = await asyncio.gather(
+            *(client.post(_CLAIM_URL, headers=headers) for _ in range(4))
+        )
+        admitted = [
+            item for response in first_wave for item in response.json()["items"]
+        ]
+        # Every contender may observe a busy gate before the first transaction
+        # commits. Fill any remaining configured slot through the same endpoint.
+        for _ in range(2 - len(admitted)):
+            response = await client.post(_CLAIM_URL, headers=headers)
+            assert response.status_code == 200, response.text
+            admitted.extend(response.json()["items"])
+
+        blocked_wave = await asyncio.gather(
+            *(client.post(_CLAIM_URL, headers=headers) for _ in range(4))
+        )
+
+        assert all(response.status_code == 200 for response in first_wave)
+        assert len(admitted) == 2
+        assert len({item["agent_id"] for item in admitted}) == 2
+        assert all(response.json()["items"] == [] for response in blocked_wave)
+        async with session_maker() as session:
+            running = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(ScreeningAttempt)
+                    .where(
+                        ScreeningAttempt.screener_hotkey == hotkey,
+                        ScreeningAttempt.status == "running",
+                    )
+                )
+                or 0
+            )
+        assert running == 2
+
     async def test_legacy_gcp_claim_waits_for_fenced_overflow_capacity(
         self,
         app: FastAPI,
@@ -3931,7 +4210,9 @@ class TestClaim:
             "ditto.api_server.endpoints.screener.resolve_queue_policy_settings",
             AsyncMock(
                 return_value=SimpleNamespace(
-                    deferred_source_review=SimpleNamespace(mode="enforce")
+                    deferred_source_review=SimpleNamespace(
+                        mode="enforce", integrity_double_check_mode="off"
+                    )
                 )
             ),
         )
@@ -4568,7 +4849,10 @@ class TestClaim:
         attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
         adjudication = SourceReviewAdjudication(
             decision="reject",
-            reason="served code fixes the graded answer family at src/main.rs:6",
+            reason=(
+                "Served code fixes the graded answer family at src/main.rs:6.\n\n"
+                + "The deciding model cannot override the host-selected answer. " * 30
+            ),
             reject_invariant="i5_production_engine",
             citations=[{"path": "src/main.rs", "line": 6}],
             notes_considered=1,
@@ -4606,7 +4890,9 @@ class TestClaim:
             )
             assert agent is not None and agent.status == AgentStatus.REJECTED
             assert agent.screening_reason == adjudication.reason
+            assert len(adjudication.reason) > 600
             assert attempt is not None and attempt.status == "rejected"
+            assert attempt.public_reason == adjudication.reason
             assert retained is not None and retained.status == "resolved"
             assert retained.evidence is not None
             assert retained.evidence[-1]["code"] == ("adjudicated-source-review-reject")
@@ -4681,6 +4967,149 @@ class TestClaim:
             assert attempt is not None
             assert attempt.review_settings_revision == claimed_revision_id
             assert attempt.review_settings_checksum == claimed_checksum
+
+    async def test_integrity_double_check_runs_on_the_pinned_stronger_posture(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A top-five double-check leases on, and only accepts, its own posture."""
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.ATH_PENDING_REVIEW,
+            name="top-five-double-check",
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        normal = ScreenerReviewSettings(mode="enforce")
+        normal_checksum = _review_settings_checksum(normal)
+        stronger = ScreenerReviewSettings(
+            mode="enforce",
+            l2_model="openai/gpt-5.6-sol",
+            l2_fallback_models=("openai/gpt-5.6-terra",),
+            l2_always_escalate=True,
+            timeout_seconds=900,
+            max_steps=20,
+            policy_manifest_profile="l1_l2",
+        )
+        stronger_checksum = _review_settings_checksum(stronger)
+        opened_at = datetime.now(UTC) - timedelta(minutes=1)
+        async with session_maker() as session, session.begin():
+            normal_row = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=normal.model_dump(mode="json"),
+                checksum=normal_checksum,
+                reason="fleet posture",
+                actor="test",
+            )
+            stronger_row = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope=INTEGRITY_DOUBLE_CHECK_SCOPE,
+                settings=stronger.model_dump(mode="json"),
+                checksum=stronger_checksum,
+                reason="stronger top-five posture",
+                actor="test",
+            )
+            session.add_all([normal_row, stronger_row])
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="passed",
+                    started_at=opened_at - timedelta(days=1),
+                    deadline=opened_at - timedelta(hours=23),
+                    finished_at=opened_at - timedelta(hours=23),
+                    build_only=False,
+                )
+            )
+            session.add(
+                AthReview(
+                    review_id=uuid4(),
+                    agent_id=agent_id,
+                    status="pending",
+                    opened_at=opened_at,
+                    original_reason=(
+                        "Top-five rank qualified this submission for an "
+                        "integrity double-check"
+                    ),
+                    original_policy_version=SCREENING_POLICY_VERSION,
+                    original_evidence={
+                        "previous_status": AgentStatus.SCORED.value,
+                        "score_count": 3,
+                    },
+                    algorithm_provenance={
+                        "review_kind": "deferred_source_review",
+                        "trigger": "integrity_double_check",
+                    },
+                )
+            )
+            await session.flush()
+            normal_id = normal_row.revision
+            stronger_id = stronger_row.revision
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        claimed = await client.post(
+            "/api/v1/screener/claim",
+            params={
+                "policy_version": SCREENING_POLICY_VERSION,
+                "review_settings_revision": normal_id,
+                "review_settings_instance_id": "ditto-screener-fleet-test",
+                "review_settings_scope": "*",
+                "review_settings_checksum": normal_checksum,
+            },
+        )
+        assert claimed.status_code == 200, claimed.text
+        [item] = claimed.json()["items"]
+        assert item["build_only"] is False
+        assert item["review_settings_override"] == {
+            "revision": stronger_id,
+            "scope": INTEGRITY_DOUBLE_CHECK_SCOPE,
+            "checksum": stronger_checksum,
+        }
+        attempt_id = UUID(item["attempt_id"])
+
+        def verdict(revision: int, scope: str, checksum: str) -> dict:
+            return _result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="quarantine",
+                manifest_digest="12" * 32,
+                reason_code="agentic-source-review-tripwire",
+                review_settings_revision=revision,
+                review_settings_instance_id="ditto-screener-fleet-test",
+                review_settings_scope=scope,
+                review_settings_checksum=checksum,
+            )
+
+        # The normal posture cannot answer for a double-check claim.
+        weaker = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=verdict(normal_id, "*", normal_checksum),
+        )
+        assert weaker.status_code >= 400
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=verdict(stronger_id, INTEGRITY_DOUBLE_CHECK_SCOPE, stronger_checksum),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.ATH_PENDING_REVIEW
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            review = await session.scalar(
+                select(AthReview).where(AthReview.agent_id == agent_id)
+            )
+            assert attempt is not None and attempt.status == "quarantined"
+            assert attempt.review_settings_scope == INTEGRITY_DOUBLE_CHECK_SCOPE
+            assert review is not None and review.status == "pending"
+            assert review.original_evidence["deep_review_result"]["attempt_id"] == (
+                str(attempt_id)
+            )
 
     async def test_claim_rejects_stale_review_settings_before_leasing(
         self,
@@ -10249,3 +10678,476 @@ class TestQuarantineBaselineDiff:
             headers=headers,
         )
         assert response.status_code == 422
+
+
+def _final_shadow_policy_review(risk="low"):
+    from ditto_screening_protocol.models import source_review_invariants_for_policy
+
+    return SourceReviewFinding.model_validate(
+        {
+            "artifact_sha256": "a" * 64,
+            "prompt_revision": "source-review-v24-policy-v12",
+            "risk_level": risk,
+            "confidence": 0.9,
+            "categories": ["none"] if risk == "low" else ["benchmark_emulation"],
+            "evidence": []
+            if risk == "low"
+            else [
+                {"path": "main.py", "line": i, "category": "benchmark_emulation"}
+                for i in [1, 2]
+            ],
+            "summary": "Independent source review completed.",
+            "invariant_assessment": {
+                "decisions": [
+                    {
+                        "invariant": invariant.value,
+                        "disposition": "breach"
+                        if risk != "low" and invariant.value == "i5_production_engine"
+                        else "pass",
+                        "pass_clause": None
+                        if risk != "low" and invariant.value == "i5_production_engine"
+                        else "unreachable_nonruntime_code",
+                        "evidence_indices": [0, 1]
+                        if risk != "low" and invariant.value == "i5_production_engine"
+                        else [],
+                        "summary": "Source locations independently examined.",
+                    }
+                    for invariant in source_review_invariants_for_policy(12)
+                ]
+            },
+        }
+    ).model_dump(mode="json")
+
+
+def _complete_specialist_adjudication_report():
+    return {
+        "partition": "specialists",
+        "artifact_sha256": "a" * 64,
+        "policy_version": 12,
+        "requested_model": "z-ai/glm-5.3-flash",
+        "revision": "fanout-source-review-v4",
+        "mode": "shadow_report_only",
+        "outcome": "no_findings",
+        "coverage_scope": "source_review",
+        "coverage_protocol": "five-specialists-adjudicator-v2",
+        "exhaustive_file_audit": False,
+        "file_plan": None,
+        "passes": [
+            {
+                "name": name,
+                "outcome": "provisional",
+                # Specialists need not agree, or make globally consistent claims.
+                "raw_review": {"risk_level": "low", "uncertainty": "unresolved"},
+                "response_models": ["glm-5.3-flash"],
+                "notes": [],
+                "error_code": None,
+            }
+            for name in [
+                "generalist",
+                "answer_authority",
+                "benchmark_engine",
+                "tool_fidelity",
+                "evasion_scope",
+            ]
+        ],
+        "candidates": [],
+        "critic": {
+            "name": "adjudicator",
+            "revision": "fanout-adjudicator-v2",
+            "outcome": "no_findings",
+            "final_review": _final_shadow_policy_review(),
+            "response_models": ["glm-5.3-flash"],
+            "clearance_certified": True,
+            "evidence_verified": True,
+            "candidate_assessments": [],
+            "pass_context_count": 5,
+            "error_code": None,
+        },
+    }
+
+
+def test_specialist_protocol_requires_fresh_adjudication_even_without_candidates():
+    from copy import deepcopy
+
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    assert _fanout_protocol_complete(report, "no_findings")
+    no_adjudicator = deepcopy(report)
+    no_adjudicator["critic"] = None
+    assert not _fanout_protocol_complete(no_adjudicator, "no_findings")
+    old = deepcopy(report)
+    old["revision"] = "fanout-source-review-v3"
+    assert not _fanout_protocol_complete(old, "no_findings")
+    assert not _fanout_protocol_complete(report, "candidate")
+    for field, invalid in [
+        ("clearance_certified", False),
+        ("evidence_verified", False),
+        ("error_code", "TimeoutError"),
+        ("final_review", None),
+        ("pass_context_count", 4),
+        ("outcome", "candidate"),
+        ("candidate_assessments", [{"candidate_id": "invented"}]),
+    ]:
+        broken = deepcopy(report)
+        broken["critic"][field] = invalid
+        assert not _fanout_protocol_complete(broken, "no_findings"), field
+
+
+def test_specialist_protocol_requires_every_provisional_handoff():
+    from copy import deepcopy
+
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    for field, value in [
+        ("outcome", "incomplete"),
+        ("raw_review", None),
+        ("error_code", "unmetered-response"),
+        ("notes", None),
+        ("name", "generalist"),
+    ]:
+        broken = deepcopy(report)
+        broken["passes"][-1][field] = value
+        assert not _fanout_protocol_complete(broken, "no_findings"), field
+    report["passes"].pop()
+    assert not _fanout_protocol_complete(report, "no_findings")
+
+
+def test_specialist_protocol_binds_minority_candidate_to_final_decision():
+    from copy import deepcopy
+
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    report["candidates"] = [
+        {
+            "candidate_id": "candidate-001",
+            "source_pass": "benchmark_engine",
+            "basis": ["failed_invariant"],
+            "finding": {"risk_level": "high"},
+        }
+    ]
+    report["critic"]["candidate_assessments"] = [
+        {
+            "candidate_id": "candidate-001",
+            "source_pass": "benchmark_engine",
+            "disposition": "supported",
+        }
+    ]
+    # Four quiet specialists and a low final verdict cannot erase a supported lead.
+    assert not _fanout_protocol_complete(report, "no_findings")
+    report["critic"]["final_review"] = _final_shadow_policy_review("high")
+    report["outcome"] = report["critic"]["outcome"] = "critic_also_flagged"
+    assert _fanout_protocol_complete(report, "critic_also_flagged")
+    for field, value in [
+        ("candidate_id", "candidate-999"),
+        ("source_pass", "generalist"),
+        ("disposition", "majority-clear"),
+    ]:
+        broken = deepcopy(report)
+        broken["critic"]["candidate_assessments"][0][field] = value
+        assert not _fanout_protocol_complete(broken, "critic_also_flagged"), field
+    # A central discovery is valid without a preexisting specialist candidate.
+    report["candidates"] = []
+    report["critic"]["candidate_assessments"] = []
+    report["outcome"] = report["critic"]["outcome"] = "candidate"
+    assert _fanout_protocol_complete(report, "candidate")
+
+
+def test_specialist_protocol_distinguishes_refutation_from_uncertainty():
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    report["candidates"] = [
+        {
+            "candidate_id": "candidate-001",
+            "source_pass": "answer_authority",
+            "basis": ["concern_note"],
+            "finding": {"summary": "uncertain lead"},
+        }
+    ]
+    assessment = {
+        "candidate_id": "candidate-001",
+        "source_pass": "answer_authority",
+        "disposition": "unresolved",
+    }
+    report["critic"]["candidate_assessments"] = [assessment]
+    assert not _fanout_protocol_complete(report, "no_findings")
+    report["outcome"] = report["critic"]["outcome"] = "unresolved_candidate"
+    assert _fanout_protocol_complete(report, "unresolved_candidate")
+    assessment["disposition"] = "refuted"
+    report["outcome"] = report["critic"]["outcome"] = "no_findings"
+    assert _fanout_protocol_complete(report, "no_findings")
+    report["critic"]["candidate_assessments"].append(dict(assessment))
+    assert not _fanout_protocol_complete(report, "no_findings")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_adjudicator", [True, False])
+async def test_fanout_completion_requires_adjudicator_without_mutating_authority(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    has_adjudicator: bool,
+) -> None:
+    _install_db(app, session_maker)
+    now = datetime.now(UTC)
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    attempt_id, shadow_id = uuid4(), uuid4()
+    token = "source-only-shadow-test-token"
+    report = _complete_specialist_adjudication_report()
+    report.update(
+        {
+            "artifact_sha256": "a" * 64,
+            "policy_version": 12,
+            "policy_manifest_profile": "l1_l2",
+            "policy_manifest_rotation_id": "test-rotation",
+            "policy_manifest_digest": "b" * 64,
+            "requested_model": "z-ai/glm-5.3-flash",
+            "usage": {"reported_cost_usd": 0.04},
+        }
+    )
+    for item in report["passes"]:
+        item["response_models"] = ["glm-5.3-flash"]
+    if not has_adjudicator:
+        report["critic"] = None
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerReviewSettingsRevision(
+                revision=1,
+                parent_revision=0,
+                scope="*",
+                settings=ScreenerReviewSettings().model_dump(mode="json"),
+                checksum="c" * 64,
+                reason="shadow adjudication regression",
+                actor="test",
+            )
+        )
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=12,
+                status="passed",
+                started_at=now - timedelta(minutes=1),
+                deadline=now,
+                finished_at=now,
+            )
+        )
+        await session.flush()
+        session.add(
+            ScreenerFanoutShadowReview(
+                shadow_id=shadow_id,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                environment="prod",
+                artifact_sha256="a" * 64,
+                policy_version=12,
+                policy_manifest_profile="l1_l2",
+                policy_manifest_rotation_id="test-rotation",
+                policy_manifest_digest="b" * 64,
+                settings_revision=1,
+                settings_scope="*",
+                settings_checksum="c" * 64,
+                status="running",
+                baseline={"outcome": "quarantine"},
+                provider="gcp",
+                reserved_cost_microusd=3_000_000,
+                job_token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                job_token_expires_at=now + timedelta(minutes=10),
+                lease_expires_at=now + timedelta(minutes=10),
+            )
+        )
+    response = await client.post(
+        f"/api/v1/screener/fanout-shadow-reviews/{shadow_id}/complete",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"status": "succeeded", "outcome": "no_findings", "report": report},
+    )
+    assert response.status_code == 200, response.text
+    async with session_maker() as session:
+        row = await session.get(ScreenerFanoutShadowReview, shadow_id)
+        assert row is not None
+        assert row.status == ("succeeded" if has_adjudicator else "incomplete")
+        assert row.coverage_complete is has_adjudicator
+        assert row.disagrees_with_baseline is (True if has_adjudicator else None)
+        assert row.error_code == (
+            None if has_adjudicator else "fanout-review-protocol-incomplete"
+        )
+        assert row.report == report
+        assert row.job_token_hash is None
+        assert row.reserved_cost_microusd == 3_000_000
+        assert row.reported_cost_microusd == 40_000
+        agent = await session.get(Agent, agent_id)
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert agent is not None and agent.status == AgentStatus.UPLOADED
+        assert attempt is not None and attempt.status == "passed"
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "minimal",
+        "artifact",
+        "policy",
+        "missing_invariant",
+        "contradiction",
+        "critic_model",
+        "specialist_model",
+    ],
+)
+def test_shadow_final_review_must_be_canonical_and_individually_model_bound(fault):
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    finding = report["critic"]["final_review"]
+    if fault == "minimal":
+        report["critic"]["final_review"] = {"risk_level": "low"}
+    elif fault == "artifact":
+        finding["artifact_sha256"] = "b" * 64
+    elif fault == "policy":
+        finding["prompt_revision"] = "source-review-v24-policy-v13"
+    elif fault == "missing_invariant":
+        finding["invariant_assessment"]["decisions"].pop()
+    elif fault == "contradiction":
+        decision = finding["invariant_assessment"]["decisions"][0]
+        decision["disposition"] = "inconclusive"
+        decision["pass_clause"] = None
+    elif fault == "critic_model":
+        report["critic"]["response_models"] = []
+    else:
+        report["passes"][0]["response_models"] = ["other-model"]
+    assert not _fanout_protocol_complete(report, "no_findings")
+
+
+@pytest.mark.parametrize(
+    "outer,critic,accepted",
+    [
+        ("fanout-source-review-v4", "fanout-adjudicator-v2", True),
+        ("fanout-source-review-v5", "fanout-adjudicator-v3", True),
+        ("fanout-source-review-v6", "fanout-adjudicator-v4", True),
+        ("fanout-source-review-v4", "fanout-adjudicator-v3", False),
+        ("fanout-source-review-v5", "fanout-adjudicator-v2", False),
+        ("fanout-source-review-v6", "fanout-adjudicator-v3", False),
+    ],
+)
+def test_specialist_protocol_accepts_only_explicit_revision_pairs(
+    outer, critic, accepted
+):
+    from copy import deepcopy
+
+    from ditto.api_server.endpoints.screener import _fanout_protocol_complete
+
+    report = _complete_specialist_adjudication_report()
+    report["revision"] = outer
+    report["critic"]["revision"] = critic
+    if outer == "fanout-source-review-v6":
+        report["review_obligations"] = []
+        report["critic"]["obligation_resolutions"] = []
+        report["critic"]["obligation_evidence_verified"] = True
+    assert _fanout_protocol_complete(report, "no_findings") is accepted
+    for field, value in [
+        ("evidence_verified", False),
+        ("clearance_certified", False),
+        ("final_review", None),
+        ("candidate_assessments", [{"candidate_id": "invented"}]),
+    ]:
+        broken = deepcopy(report)
+        broken["critic"][field] = value
+        assert not _fanout_protocol_complete(broken, "no_findings")
+    report["passes"].pop()
+    assert not _fanout_protocol_complete(report, "no_findings")
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "omitted",
+        "unresolved",
+        "unrelated",
+        "duplicate",
+        "unverified",
+        "wrong_source",
+        "bad_disposition",
+    ],
+)
+def test_shadow_obligations_cannot_disappear_into_clearance(fault):
+    from ditto.api_server.endpoints.screener import _fanout_obligations_complete
+
+    report = _complete_specialist_adjudication_report()
+    report["passes"][2]["raw_review"]["invariants"] = [
+        {
+            "invariant": "i4_derived_value_authority",
+            "disposition": "inconclusive",
+            # Invalid provisional pass clause must not erase its concern.
+            "pass_clause": "untrusted_candidate_channel",
+            "summary": "Post-model writer needs provenance tracing.",
+        }
+    ]
+    report["review_obligations"] = [
+        {
+            "obligation_id": "obligation-001",
+            "source_pass": "benchmark_engine",
+            "kind": "inconclusive_invariant",
+            "invariant": "i4_derived_value_authority",
+            "summary": "Post-model writer needs provenance tracing.",
+            "locations": [{"path": "src/runtime.rs", "line": 80}],
+        }
+    ]
+    report["critic"]["obligation_evidence_verified"] = True
+    report["critic"]["obligation_resolutions"] = [
+        {
+            "obligation_id": "obligation-001",
+            "disposition": "resolved",
+            "summary": "Writer traced independently.",
+            "source_evidence": [{"path": "src/runtime.rs", "line": 80}],
+        }
+    ]
+    resolutions = report["critic"]["obligation_resolutions"]
+    if fault == "omitted":
+        report["review_obligations"] = []
+        report["critic"]["obligation_resolutions"] = []
+    elif fault == "unresolved":
+        resolutions[0]["disposition"] = "unresolved"
+    elif fault == "unrelated":
+        resolutions[0]["source_evidence"][0]["line"] = 3
+    elif fault == "duplicate":
+        resolutions.append(resolutions[0])
+    elif fault == "unverified":
+        report["critic"]["obligation_evidence_verified"] = False
+    elif fault == "wrong_source":
+        report["review_obligations"][0]["source_pass"] = "generalist"
+    elif fault == "bad_disposition":
+        resolutions[0]["disposition"] = []
+    assert _fanout_obligations_complete(report, "low") is (fault is None)
+
+
+@pytest.mark.parametrize(
+    "fault", [None, "missing", "duplicate", "unknown", "malformed"]
+)
+def test_shadow_v13_clearance_requires_complete_specialist_invariant_shapes(fault):
+    from ditto.api_server.endpoints.screener import _fanout_obligations_complete
+    from ditto_screening_protocol.models import source_review_invariants_for_policy
+
+    report = _complete_specialist_adjudication_report()
+    report["policy_version"] = 13
+    for source in report["passes"]:
+        source["raw_review"]["invariants"] = [
+            {"invariant": item.value, "disposition": "pass"}
+            for item in source_review_invariants_for_policy(13)
+        ]
+    report["review_obligations"] = []
+    report["critic"]["obligation_resolutions"] = []
+    report["critic"]["obligation_evidence_verified"] = True
+    rows = report["passes"][0]["raw_review"]["invariants"]
+    if fault == "missing":
+        rows.pop()
+    elif fault == "duplicate":
+        rows[-1] = rows[0]
+    elif fault == "unknown":
+        rows[0]["invariant"] = "invented"
+    elif fault == "malformed":
+        rows[0] = None
+    assert _fanout_obligations_complete(report, "low") is (fault is None)

@@ -140,6 +140,10 @@ export const PAGE_SCOPED_PARAMS: string[] = [
   "code",
   "login",
   "complete",
+  // Sign in with Ditto callback result, consumed once by the sign-in page.
+  "ditto",
+  "reason",
+  "attempt",
 ];
 
 // The config knobs allowed to appear in the real query string.

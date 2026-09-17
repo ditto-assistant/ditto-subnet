@@ -370,6 +370,62 @@ export function V9ConfirmationChip(props: {
 }
 
 /**
+ * Display-only shadow router-track state (dittobench router shadow ledger),
+ * mirroring the LongMemEval shadow treatment: a measured efficiency composite
+ * when the ledger has one, muted running/queued placeholders otherwise. The
+ * router track never ranks or earns emissions, so the chip exists only to
+ * show the measurement — it renders at all only in shadow mode.
+ */
+export function RouterShadowChip(props: {
+  entry: BoardEntry;
+  mode: "shadow" | null | undefined;
+}): JSX.Element {
+  const composite = () => props.entry.router_shadow_composite;
+  const status = () => props.entry.router_shadow_status;
+  const state = (): { label: string; class: string; tip: string } | null => {
+    if (props.mode !== "shadow") return null;
+    if (composite() != null) {
+      return {
+        label: "Router " + composite()!.toFixed(3),
+        class: "settled",
+        tip:
+          "Router shadow measured: replay efficiency composite " +
+          composite()!.toFixed(3) +
+          ". Shadow does not change ranking or emissions.",
+      };
+    }
+    switch (status()) {
+      case "running":
+        return {
+          label: "Router shadow running",
+          class: "partial",
+          tip: "Router shadow measurement is in progress. Shadow mode does not change this agent's ranking or emissions.",
+        };
+      case "queued":
+        return {
+          label: "Router shadow queued",
+          class: "pending",
+          tip: "A router shadow measurement is queued for this agent. Shadow mode keeps the ordinary base score authoritative for ranking and emissions.",
+        };
+      default:
+        return null;
+    }
+  };
+  return (
+    <Show when={state()}>
+      {(value) => (
+        <TipTarget
+          class={"rollout-chip router-shadow-chip tip-chip " + value().class}
+          text={value().tip}
+        >
+          {value().label}
+        </TipTarget>
+      )}
+    </Show>
+  );
+}
+
+/**
  * Mid-rollout settlement state for the row (rolloutChip, 5662–5680): the
  * agent's median on the incoming benchmark version so far and how many of
  * the 3 independent scores are in. Empty outside a rollout.

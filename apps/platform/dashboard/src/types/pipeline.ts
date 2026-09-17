@@ -3,7 +3,13 @@
 // /public/agent/{id}/pipeline, and the digest-verified transcript telemetry
 // sidecar).
 
-import type { CaseResult, NameHandle, V9BaseEvidence } from "./leaderboard";
+import type {
+  CaseResult,
+  CodingShadowScore,
+  GateEvidence,
+  NameHandle,
+  V9BaseEvidence,
+} from "./leaderboard";
 
 // ── Activity / submissions (/public/activity) ────────────────
 
@@ -14,10 +20,15 @@ export interface ActivityEntry {
   avatar_url?: string | null;
   version?: number | null;
   miner_hotkey?: string;
+  /** Submitting miner's current SN118 UID; null when unregistered or when the
+   * chain snapshot was unavailable. Decoration only — never a status or score. */
+  miner_uid?: number | null;
   /** Submission status slug, e.g. "waiting_screening" | "scored" | "rejected". */
   status?: string;
   submitted_at?: string;
   score_count?: number | null;
+  /** Exact-artifact aggregate only; parallel shadow work never gates this lifecycle. */
+  coding_shadow?: CodingShadowScore | null;
   quorum?: number | null;
   score_floor?: number | null;
   review_reason?: string | null;
@@ -133,6 +144,14 @@ export interface ScreeningReviewFinding {
   categories?: string[];
   locations?: ScreeningReviewLocation[];
   reviewer_revision?: string;
+  invariant_assessment?: {
+    decisions: {
+      invariant: string;
+      disposition: string;
+      summary: string;
+      evidence_indices: number[];
+    }[];
+  } | null;
 }
 
 export interface ScreeningReviewEvidence {
@@ -155,6 +174,15 @@ export interface ScreeningAttempt {
   quarantine_resolved_at?: string | null;
   review_finding?: ScreeningReviewFinding | null;
   review_evidence?: ScreeningReviewEvidence[] | null;
+  review_notes?:
+    | {
+        kind: "concern" | "cleared" | "observation";
+        stage: string;
+        summary: string;
+        path?: string | null;
+        line?: number | null;
+      }[]
+    | null;
 }
 
 export interface ValidationAttempt {
@@ -217,6 +245,8 @@ export interface AcceptedScore {
   transcript_sha256?: string | null;
   v9_base?: V9BaseEvidence | null;
   case_results?: CaseResult[];
+  /** Bench v13+ run-level gate verdict (aggregates only). */
+  gate_evidence?: GateEvidence | null;
 }
 
 /** A shared-seed continual top-five retest result. */
@@ -229,6 +259,10 @@ export interface ConfirmationScore {
 }
 
 export interface Dispute {
+  /** "screening" appeals a rejected quarantine; "gate_notes" appeals cited
+   * bench v13+ gate notes on a scored submission (either resolution only
+   * records the verdict). Absent on pre-v13 records: screening. */
+  kind?: "screening" | "gate_notes";
   /** "pending" or resolved. */
   status?: string;
   /** "release" means accepted; anything else reads as upheld. */

@@ -140,6 +140,9 @@ it does not turn an ambiguous attempt into a fresh run or a successful terminal.
 
 ## Verification and remaining deployment work
 
+Derive and launch-check the task-bound execution and grading profiles with
+[`dittobench-coding-hosted-profiles`](coding-hosted-profiles-v2.md) before review.
+
 Tests cover configuration/hash/authority rejection, protected files, concurrent
 single-use consumption, partial markers, environment replacement in a subprocess,
 bounded finalization retries, cancellation, cleanup failure and command-output

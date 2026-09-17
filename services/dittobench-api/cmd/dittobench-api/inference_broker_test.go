@@ -235,8 +235,10 @@ func TestConfirmationCaseSnapshotAttributesAgentReaderRejection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// An over-bound max_tokens is clamped and served now; a streaming ask is
+	// still refused before reservation and carries the provenance marker.
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
-		`{"model":"ignored","max_tokens":1001,"messages":[{"role":"user","content":"query"}]}`,
+		`{"model":"ignored","stream":true,"messages":[{"role":"user","content":"query"}]}`,
 	))
 	request.RemoteAddr = "127.0.0.1:4321"
 	response := httptest.NewRecorder()

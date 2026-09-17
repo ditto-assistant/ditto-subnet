@@ -360,12 +360,18 @@ func rewriteReaderRequest(raw []byte, policy ProviderPolicy, route string) ([]by
 	if err != nil {
 		return nil, providerReservation{}, err
 	}
-	if !explicit {
+	// The per-request completion bound is a property of the frozen profile,
+	// not of the request. A harness that asks for more (the starter-kit
+	// derived 4096 ceiling, say) is clamped to the frozen bound rather than
+	// refused: the budget rail is identical either way, and refusing left
+	// every reader call of such a harness a pre-reservation 400 it never
+	// acted on, so the whole bundle scored an official zero without one
+	// provider request. The Platform relay clamps the same over-ask
+	// (outputTokenLimit); this keeps the two hops in agreement.
+	if !explicit || completion > completionLimit {
 		completion = completionLimit
 		body["max_tokens"] = json.Number(strconv.FormatUint(completion, 10))
-	}
-	if completion > completionLimit {
-		return nil, providerReservation{}, errors.New("reader request completion bound exceeds the frozen per-request limit")
+		delete(body, "max_completion_tokens")
 	}
 	if count, exists := body["n"]; exists {
 		value, err := requestUint(count)
