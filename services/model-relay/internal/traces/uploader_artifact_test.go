@@ -263,3 +263,43 @@ func TestValidCompressedAcceptsRealOutputAndRejectsHusks(t *testing.T) {
 		t.Fatal("size disagreeing with the sidecar must be rejected")
 	}
 }
+
+func TestValidCompressedRejectsSkippableOnlyArtifact(t *testing.T) {
+	body := []byte{0x50, 0x2a, 0x4d, 0x18, 5, 0, 0, 0, 'h', 'u', 's', 'k', '!'}
+	dst := filepath.Join(t.TempDir(), "skip.zst")
+	if err := os.WriteFile(dst, body, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(body)
+	if err := validCompressed(dst, &sidecar{Bytes: int64(len(body)), SHA256: hex.EncodeToString(sum[:])}); err == nil {
+		t.Fatal("skippable-only artifact must not authorize deleting retained traces")
+	}
+}
+
+func TestShipRebuildsArtifactWithStaleDigestAndCompletedSinks(t *testing.T) {
+	dir := t.TempDir()
+	s3 := newFakeS3(t)
+	up := newTestUploader(t, dir, s3)
+	rf := plantReadyFile(t, dir, 40)
+	zstPath := rf.path + ".zst"
+	_, size, err := compressFile(rf.path, zstPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSidecar(rf.path+".sinks.json", &sidecar{
+		Key: objectKey("traces/v1", rf), SHA256: strings.Repeat("0", 64), Bytes: size,
+		Completed: map[string]string{"hippius": "stale receipt"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := up.ship(context.Background(), rf); err != nil {
+		t.Fatal(err)
+	}
+	keys := s3.keys()
+	if len(keys) != 1 {
+		t.Fatalf("stale receipt skipped rebuilt upload: keys=%v", keys)
+	}
+	if records := s3.decode(t, keys[0]); len(records) != 40 {
+		t.Fatalf("records=%d, want 40", len(records))
+	}
+}

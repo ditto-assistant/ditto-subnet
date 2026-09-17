@@ -294,8 +294,12 @@ func validFrame(path string, size int64) error {
 		return fmt.Errorf("open artifact for verification: %w", err)
 	}
 	defer dec.Close()
-	if _, err := io.Copy(io.Discard, dec); err != nil {
+	decoded, err := io.Copy(io.Discard, dec)
+	if err != nil {
 		return fmt.Errorf("artifact does not decode: %w", err)
+	}
+	if decoded == 0 {
+		return fmt.Errorf("artifact contains no trace data")
 	}
 	return nil
 }
@@ -308,7 +312,24 @@ func validCompressed(path string, side *sidecar) error {
 	if info.Size() != side.Bytes {
 		return fmt.Errorf("artifact is %d bytes, sidecar says %d", info.Size(), side.Bytes)
 	}
-	return validFrame(path, info.Size())
+	if err := validFrame(path, info.Size()); err != nil {
+		return err
+	}
+	// Completed sink receipts describe these exact bytes. A decodable file
+	// with a stale digest must not let ship skip upload and delete the source.
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, f); err != nil {
+		return err
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != side.SHA256 {
+		return fmt.Errorf("artifact checksum disagrees with sidecar")
+	}
+	return nil
 }
 
 func objectKey(prefix string, rf *readyFile) string {
@@ -328,6 +349,7 @@ func compressFile(src, dst string) (string, int64, error) {
 	}
 	defer in.Close()
 	tmp := dst + ".tmp"
+	defer os.Remove(tmp) // also cover sync, stat, and rename failures
 	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
 	if err != nil {
 		return "", 0, err
