@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,11 +27,40 @@ class ArtifactReleaseSettingsRevision(BaseModel):
     created_at: datetime | None
 
 
+class SourceReleaseEligibilityRow(BaseModel):
+    """Bounded receipt metadata, without raw validator payloads or source."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    agent_id: UUID
+    artifact_sha256: str
+    crowned_at: datetime
+    weight_confirmed_at: datetime | None
+    emission_confirmed_at: datetime | None
+    emission_block: int | None
+    emission_block_hash: str | None
+    emission_epoch_index: int | None
+    emission_ledger_digest: str | None
+
+
+class SourceReleaseGateStatus(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    version: str
+    automatic_confirmation_enabled: Literal[False] = False
+    pending_kings: int
+    confirmed_kings: int
+    rows: Annotated[list[SourceReleaseEligibilityRow], Field(max_length=25)]
+    rows_limit: int = 25
+    rows_has_more: bool
+
+
 class AdminArtifactReleaseSettingsResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: ArtifactReleaseSettingsRevision
     history: list[ArtifactReleaseSettingsRevision]
+    release_gate: SourceReleaseGateStatus
 
 
 class AdminArtifactReleaseSettingsRequest(BaseModel):

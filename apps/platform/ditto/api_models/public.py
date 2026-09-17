@@ -466,9 +466,19 @@ class PublicArtifactRelease(BaseModel):
             default=None,
             description=(
                 "When validators' revealed on-chain weights (post commit-reveal) "
-                "were first seen set on this king. Source release is king-only and "
-                "the embargo window is measured from this instant; null while a "
-                "king still awaits on-chain confirmation."
+                "were first seen set on this king. This is not proof of earnings "
+                "and does not start the disclosure embargo."
+            ),
+        ),
+    ] = None
+    emission_confirmed_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "Finalized block time of verified winner emissions for this exact "
+                "submission in a completed tempo. The embargo starts here; null "
+                "until actual earnings are confirmed."
             ),
         ),
     ] = None

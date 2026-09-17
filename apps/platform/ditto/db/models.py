@@ -5797,16 +5797,10 @@ class UploadAdmissionReservation(Base):
 
 
 class AgentKingship(Base):
-    """King-reign ledger gating public source release, in two write-once stages.
+    """King-only source release, anchored to proven completed winner emissions.
 
-    ``first_crowned_at`` marks that the agent was ever the KOTH champion
-    (eligibility). ``weight_confirmed_at`` marks the first time validators'
-    REVEALED on-chain weights (post commit-reveal) were seen set on this miner;
-    it is ``NULL`` until then. The public window is king-only and measured from
-    ``weight_confirmed_at`` -- so a genuine, on-chain-backed king reveals one
-    window later, while an agent that merely touched the crown off-chain waits
-    until the chain confirms it. Both timestamps are write-once and never move.
-    Written on the validator score path (post-commit); the gate only reads them.
+    Legacy revealed weights are retained as diagnostics, never as payout proof.
+    The emission anchor and its evidence are written once for this exact agent.
     """
 
     __tablename__ = "agent_kingship"
@@ -5819,8 +5813,49 @@ class AgentKingship(Base):
         TIMESTAMP(timezone=True), nullable=True
     )
 
+    emission_confirmed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    emission_block: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    emission_block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    emission_epoch_index: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    emission_ledger_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    emission_evidence: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+
     __table_args__ = (
         ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+    )
+
+
+class ValidatorWeightsFoldHistory(Base):
+    """Immutable authenticated weight-fold reports for payout attribution."""
+
+    __tablename__ = "validator_weights_fold_history"
+
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    fold_digest: Mapped[str] = mapped_column(Text, primary_key=True)
+    folded_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    vector_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    epoch_index: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    ledger_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    champion_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    weights_fold: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    signed_heartbeat: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+
+    __table_args__ = (
+        Index(
+            "validator_weights_fold_history_lookup_idx", "validator_hotkey", "folded_at"
+        ),
     )
 
 

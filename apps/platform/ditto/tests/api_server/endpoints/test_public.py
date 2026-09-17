@@ -10567,10 +10567,11 @@ async def _crown(
     agent_id: str,
     first_crowned_at: datetime,
     weight_confirmed_at: datetime | None | object = _UNSET,
+    emission_confirmed_at: datetime | None | object = _UNSET,
 ) -> None:
     """Mark an agent as having held the KOTH crown.
 
-    By default the on-chain weight confirmation is stamped at the same instant
+    By default both weight and emission confirmations are stamped at the same instant
     (a fully armed king). Pass ``weight_confirmed_at=None`` for an ever-king that
     has not yet been confirmed on-chain, so its window has not started.
     """
@@ -10583,6 +10584,11 @@ async def _crown(
                 agent_id=UUID(agent_id),
                 first_crowned_at=first_crowned_at,
                 weight_confirmed_at=confirmed,
+                emission_confirmed_at=(
+                    confirmed
+                    if emission_confirmed_at is _UNSET
+                    else emission_confirmed_at
+                ),
             )
         )
 
@@ -11035,8 +11041,10 @@ class TestPublicArtifactRelease:
         assert "embargoed until" in response.json()["message"]
         storage.presigned_get_url.assert_not_awaited()
 
-    async def test_ever_king_awaiting_onchain_weight_stays_embargoed(
+    @pytest.mark.parametrize("weights_observed", [False, True])
+    async def test_king_without_completed_earnings_stays_embargoed(
         self,
+        weights_observed: bool,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
@@ -11045,13 +11053,15 @@ class TestPublicArtifactRelease:
         agent_id = await _seed_k3(
             session_maker, miner=_MINER_A, composites=[0.7, 0.8, 0.9]
         )
-        # Touched the crown 49h ago, but the chain has not yet confirmed weights
-        # were set on it: the window has NOT started, even though 48h elapsed.
+        # Neither a crown nor legacy revealed weights establish completed earnings.
         await _crown(
             session_maker,
             agent_id=agent_id,
             first_crowned_at=now - timedelta(hours=49),
-            weight_confirmed_at=None,
+            weight_confirmed_at=(
+                now - timedelta(hours=49) if weights_observed else None
+            ),
+            emission_confirmed_at=None,
         )
         _install_db(app, session_maker)
         storage = AsyncMock()
@@ -11068,10 +11078,11 @@ class TestPublicArtifactRelease:
         assert release["download_available"] is False
         assert release["available_at"] is None
         assert release["crowned_at"] is not None
-        assert release["weight_confirmed_at"] is None
+        assert (release["weight_confirmed_at"] is not None) is weights_observed
+        assert release["emission_confirmed_at"] is None
         response = await client.get(f"/api/v1/public/agent/{agent_id}/artifact")
         assert response.status_code == 425
-        assert "on-chain" in response.json()["message"]
+        assert "confirmed winner emissions" in response.json()["message"]
         storage.presigned_get_url.assert_not_awaited()
 
 

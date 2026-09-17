@@ -1141,7 +1141,13 @@ describe("async agent evidence", () => {
     await waitFor(() => expect(document.getElementById("pipeline-current-title")).toBeTruthy());
     expect(document.querySelector(".artifact-release-card")?.textContent).toContain("Awaiting 3/3");
     resolvePipeline?.(
-      pipelineResponse({ artifact_release: { status: "available", embargo_hours: 48 } }),
+      pipelineResponse({
+        artifact_release: {
+          status: "available",
+          embargo_hours: 48,
+          emission_confirmed_at: "2026-09-15T12:00:00Z",
+        },
+      }),
     );
     await waitFor(() =>
       expect(document.querySelector(".artifact-release-card")?.textContent).toContain(

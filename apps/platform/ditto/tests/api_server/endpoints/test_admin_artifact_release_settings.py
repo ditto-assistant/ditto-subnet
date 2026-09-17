@@ -2,6 +2,8 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -12,6 +14,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from ditto.api_server.dependencies import get_session
+from ditto.db.models import Agent, AgentKingship, AgentStatus
 
 pytestmark = pytest.mark.asyncio
 
@@ -314,3 +317,60 @@ async def test_omitting_disclosure_keeps_the_write_public(
     )
     assert legacy.status_code == 200, legacy.text
     assert legacy.json()["disclosure"] == "public"
+
+
+async def test_release_gate_reports_real_receipts_and_bounded_pending_rows(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    now = datetime(2026, 9, 17, tzinfo=UTC)
+    confirmed_id = uuid4()
+    async with session_maker() as session, session.begin():
+        for index in range(27):
+            agent_id = confirmed_id if index == 0 else uuid4()
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=f"5receipt{index}",
+                    name=f"receipt{index}",
+                    sha256="ab" * 32,
+                    size_bytes=1024,
+                    status=AgentStatus.SCORED,
+                )
+            )
+            await session.flush()
+            session.add(
+                AgentKingship(
+                    agent_id=agent_id,
+                    first_crowned_at=now - timedelta(hours=27 - index),
+                    weight_confirmed_at=now - timedelta(hours=26 - index),
+                    emission_confirmed_at=now if index == 0 else None,
+                    emission_block=9000000 if index == 0 else None,
+                    emission_block_hash="0x" + "12" * 32 if index == 0 else None,
+                    emission_epoch_index=25000 if index == 0 else None,
+                    emission_ledger_digest="34" * 32 if index == 0 else None,
+                    emission_evidence={"private_raw_payload": "not exported"}
+                    if index == 0
+                    else None,
+                )
+            )
+    response = await client.get(
+        "/api/v1/admin/artifact-release-settings",
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200
+    gate = response.json()["release_gate"]
+    assert gate["version"] == "completed-winner-emission-v1"
+    assert gate["automatic_confirmation_enabled"] is False
+    assert gate["confirmed_kings"] == 1
+    assert gate["pending_kings"] == 26
+    assert gate["rows_limit"] == 25
+    assert gate["rows_has_more"] is True
+    assert len(gate["rows"]) == 25
+    assert gate["rows"][0]["agent_id"] == str(confirmed_id)
+    assert gate["rows"][0]["artifact_sha256"] == "ab" * 32
+    assert gate["rows"][0]["emission_block"] == 9000000
+    assert "private_raw_payload" not in response.text
+    assert all(row["emission_confirmed_at"] is None for row in gate["rows"][1:])

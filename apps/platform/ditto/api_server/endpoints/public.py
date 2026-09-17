@@ -1040,13 +1040,9 @@ def _public_artifact_release(
 ) -> PublicArtifactRelease:
     """Project source visibility without mutating a public GET request.
 
-    Source release is **king-only** and gated by on-chain weights: an agent's
-    source is revealed only once it has (1) held the KOTH crown and (2) had
-    validators' revealed on-chain weights set on it (post commit-reveal). The
-    embargo window is measured from that on-chain confirmation
-    (``king_reveal.weight_confirmed_at``), not from the score quorum. An agent
-    that touched the crown but is not yet chain-confirmed stays ``embargoed``
-    with no unlock time; one that never reigned stays ``unavailable`` forever.
+    Source release requires a crown and verified completed winner emissions for
+    this exact submission. The embargo starts at ``emission_confirmed_at``;
+    revealed weights alone never establish earnings or an unlock time.
 
     Subnet policy short-circuits all of that. It is checked first, ahead of
     even the rejected/banned branch, because it is the one input whose answer
@@ -1065,9 +1061,12 @@ def _public_artifact_release(
     weight_confirmed_at = (
         king_reveal.weight_confirmed_at if king_reveal is not None else None
     )
+    emission_confirmed_at = (
+        king_reveal.emission_confirmed_at if king_reveal is not None else None
+    )
     available_at = (
-        weight_confirmed_at + timedelta(hours=policy.embargo_hours)
-        if weight_confirmed_at is not None
+        emission_confirmed_at + timedelta(hours=policy.embargo_hours)
+        if emission_confirmed_at is not None
         else None
     )
     release_status: Literal[
@@ -1083,8 +1082,7 @@ def _public_artifact_release(
         # Never held the crown: the source stays private (king-only release).
         release_status = "unavailable"
     elif available_at is None:
-        # Ever king, but on-chain weights not yet confirmed: withheld with no
-        # unlock time until commit-reveal confirms validators backed this miner.
+        # A crown or revealed weights alone do not establish completed earnings.
         release_status = "embargoed"
     else:
         release_status = "available" if now >= available_at else "embargoed"
@@ -1099,6 +1097,7 @@ def _public_artifact_release(
         finalized_at=finalized_at,
         crowned_at=first_crowned_at,
         weight_confirmed_at=weight_confirmed_at,
+        emission_confirmed_at=emission_confirmed_at,
         available_at=(
             available_at if release_status in ("embargoed", "available") else None
         ),
@@ -7484,10 +7483,10 @@ async def agent_artifact(
     )
     if release.status != "available" or score_quorum is None:
         detail = "source is awaiting a three-validator score quorum"
-        if king_reveal.weight_confirmed_at is None:
+        if king_reveal.emission_confirmed_at is None:
             detail = (
-                "source is awaiting on-chain confirmation that validator weights "
-                "were set on this king (commit-reveal)"
+                "source is awaiting confirmed winner emissions from a completed "
+                "tempo for this submission"
             )
         elif release.available_at is not None:
             detail = f"source is embargoed until {release.available_at.isoformat()}"

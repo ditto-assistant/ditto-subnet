@@ -167,6 +167,8 @@ from ditto.db.queries.confirmation_scores import (
     append_confirmation_scores,
 )
 from ditto.db.queries.king_reign import (
+    KingEmissionProof,
+    record_emission_confirmed,
     record_first_crowned,
     record_weight_confirmed,
 )
@@ -2004,6 +2006,14 @@ class TestHeartbeat:
             row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
             assert row is not None
             assert row.weights_fold == fold
+            from ditto.db.models import ValidatorWeightsFoldHistory
+
+            history = (await session.scalars(select(ValidatorWeightsFoldHistory))).all()
+            assert len(history) == 1
+            assert history[0].weights_fold == fold
+            assert history[0].signed_heartbeat is not None
+            assert history[0].signed_heartbeat["weights_fold"] == fold
+            assert history[0].signature == history[0].signed_heartbeat["signature"]
 
         fleet = (await client.get("/api/v1/public/validators")).json()
         member = next(
@@ -2022,6 +2032,11 @@ class TestHeartbeat:
             "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=tampered
         )
         assert rejected.status_code == 401
+        async with session_maker() as session:
+            assert (
+                len((await session.scalars(select(ValidatorWeightsFoldHistory))).all())
+                == 1
+            )
 
         # A fold on a pre-v27 protocol is a contract violation, not a heartbeat.
         old = _heartbeat_payload(
@@ -9362,6 +9377,17 @@ class TestAntiCopyGate:
                 s, agent_id=incumbent, now=confirmed_at - timedelta(hours=1)
             )
             await record_weight_confirmed(s, agent_id=incumbent, now=confirmed_at)
+            await record_emission_confirmed(
+                s,
+                agent_id=incumbent,
+                proof=KingEmissionProof(
+                    confirmed_at=confirmed_at,
+                    block=100,
+                    block_hash="0x" + "ab" * 32,
+                    epoch_index=1,
+                    ledger_digest="cd" * 32,
+                ),
+            )
         # Uploaded after the 120-hour window elapsed: the source was public.
         derived = await _seed_agent(
             session_maker,

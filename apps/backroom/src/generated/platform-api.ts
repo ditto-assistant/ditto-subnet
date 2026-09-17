@@ -6592,6 +6592,7 @@ export interface components {
             current: components["schemas"]["ArtifactReleaseSettingsRevision"];
             /** History */
             history: components["schemas"]["ArtifactReleaseSettingsRevision"][];
+            release_gate: components["schemas"]["SourceReleaseGateStatus"];
         };
         /**
          * AdminAthRuling
@@ -19700,6 +19701,11 @@ export interface components {
              * @default 6
              */
             embargo_hours: number;
+            /**
+             * Emission Confirmed At
+             * @description Finalized block time of verified winner emissions for this exact submission in a completed tempo. The embargo starts here; null until actual earnings are confirmed.
+             */
+            emission_confirmed_at?: string | null;
             /** Finalized At */
             finalized_at?: string | null;
             /**
@@ -19714,7 +19720,7 @@ export interface components {
             status: "awaiting_quorum" | "under_review" | "embargoed" | "available" | "unavailable" | "withheld";
             /**
              * Weight Confirmed At
-             * @description When validators' revealed on-chain weights (post commit-reveal) were first seen set on this king. Source release is king-only and the embargo window is measured from this instant; null while a king still awaits on-chain confirmation.
+             * @description When validators' revealed on-chain weights (post commit-reveal) were first seen set on this king. This is not proof of earnings and does not start the disclosure embargo.
              */
             weight_confirmed_at?: string | null;
         };
@@ -26296,6 +26302,60 @@ export interface components {
          * @enum {string}
          */
         SourceDisclosure: "public" | "never";
+        /**
+         * SourceReleaseEligibilityRow
+         * @description Bounded receipt metadata, without raw validator payloads or source.
+         */
+        SourceReleaseEligibilityRow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Crowned At
+             * Format: date-time
+             */
+            crowned_at: string;
+            /** Emission Block */
+            emission_block: number | null;
+            /** Emission Block Hash */
+            emission_block_hash: string | null;
+            /** Emission Confirmed At */
+            emission_confirmed_at: string | null;
+            /** Emission Epoch Index */
+            emission_epoch_index: number | null;
+            /** Emission Ledger Digest */
+            emission_ledger_digest: string | null;
+            /** Weight Confirmed At */
+            weight_confirmed_at: string | null;
+        };
+        /** SourceReleaseGateStatus */
+        SourceReleaseGateStatus: {
+            /**
+             * Automatic Confirmation Enabled
+             * @default false
+             * @constant
+             */
+            automatic_confirmation_enabled: false;
+            /** Confirmed Kings */
+            confirmed_kings: number;
+            /** Pending Kings */
+            pending_kings: number;
+            /** Rows */
+            rows: components["schemas"]["SourceReleaseEligibilityRow"][];
+            /** Rows Has More */
+            rows_has_more: boolean;
+            /**
+             * Rows Limit
+             * @default 25
+             */
+            rows_limit: number;
+            /** Version */
+            version: string;
+        };
         /**
          * SourceReviewAdjudication
          * @description Terminal clear/reject decision on a review that would otherwise hold.

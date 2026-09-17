@@ -1150,6 +1150,33 @@ describe('artifact release administration', () => {
     )
   })
 
+  it('preserves served gate evidence without inventing it for older releases', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const release_gate = {
+      version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
+      pending_kings: 2,
+      confirmed_kings: 1,
+      rows_limit: 25,
+      rows_has_more: false,
+      rows: [{
+        agent_id: '11111111-1111-4111-8111-111111111111',
+        artifact_sha256: 'ab'.repeat(32),
+        crowned_at: '2026-09-17T00:00:00Z',
+        weight_confirmed_at: '2026-09-17T00:01:00Z',
+        emission_confirmed_at: '2026-09-17T01:00:00Z',
+        emission_block: 9000000,
+        emission_block_hash: '0x' + '12'.repeat(32),
+        emission_epoch_index: 25000,
+        emission_ledger_digest: '34'.repeat(32),
+      }],
+    }
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ ...control, release_gate }))
+      .mockResolvedValueOnce(Response.json(control)))
+    expect((await fetchArtifactReleaseControl()).release_gate).toEqual(release_gate)
+    expect((await fetchArtifactReleaseControl()).release_gate).toBeUndefined()
+  })
+
   it('writes CAS, reason, confirmation, and operator attribution before refreshing', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi

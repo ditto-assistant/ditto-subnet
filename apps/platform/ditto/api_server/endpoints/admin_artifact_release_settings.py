@@ -5,13 +5,15 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.artifact_release_settings import (
     AdminArtifactReleaseSettingsRequest,
     AdminArtifactReleaseSettingsResponse,
+    SourceReleaseEligibilityRow,
+    SourceReleaseGateStatus,
 )
 from ditto.api_models.artifact_release_settings import (
     ArtifactReleaseSettingsRevision as RevisionModel,
@@ -19,12 +21,13 @@ from ditto.api_models.artifact_release_settings import (
 from ditto.api_models.source_disclosure import SourceDisclosure, release_confirmation
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import ArtifactReleaseSettingsRevision
+from ditto.db.models import Agent, AgentKingship, ArtifactReleaseSettingsRevision
 from ditto.db.queries.artifact_release_settings import (
     DEFAULT_ARTIFACT_RELEASE_DISCLOSURE,
     DEFAULT_ARTIFACT_RELEASE_EMBARGO_HOURS,
     latest_artifact_release_settings,
 )
+from ditto.db.queries.king_reign import SOURCE_RELEASE_GATE_VERSION
 
 router = APIRouter(prefix="/admin/artifact-release-settings", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -67,9 +70,49 @@ async def get_settings(
             .limit(100)
         )
     )
+    total, confirmed = (
+        await session.execute(
+            select(
+                func.count(AgentKingship.agent_id),
+                func.count(AgentKingship.emission_confirmed_at),
+            )
+        )
+    ).one()
+    kings = (
+        await session.execute(
+            select(AgentKingship, Agent.sha256)
+            .join(Agent, Agent.agent_id == AgentKingship.agent_id)
+            .order_by(
+                AgentKingship.emission_confirmed_at.desc().nullslast(),
+                AgentKingship.first_crowned_at.desc(),
+                AgentKingship.agent_id,
+            )
+            .limit(25)
+        )
+    ).all()
     return AdminArtifactReleaseSettingsResponse(
         current=_revision(rows[0]) if rows else _default_revision(),
         history=[_revision(row) for row in rows],
+        release_gate=SourceReleaseGateStatus(
+            version=SOURCE_RELEASE_GATE_VERSION,
+            pending_kings=total - confirmed,
+            confirmed_kings=confirmed,
+            rows=[
+                SourceReleaseEligibilityRow(
+                    agent_id=king.agent_id,
+                    artifact_sha256=sha256,
+                    crowned_at=king.first_crowned_at,
+                    weight_confirmed_at=king.weight_confirmed_at,
+                    emission_confirmed_at=king.emission_confirmed_at,
+                    emission_block=king.emission_block,
+                    emission_block_hash=king.emission_block_hash,
+                    emission_epoch_index=king.emission_epoch_index,
+                    emission_ledger_digest=king.emission_ledger_digest,
+                )
+                for king, sha256 in kings
+            ],
+            rows_has_more=total > 25,
+        ),
     )
 
 

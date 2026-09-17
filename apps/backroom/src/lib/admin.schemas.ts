@@ -885,9 +885,31 @@ export const artifactReleaseRevisionSchema = z.object({
   created_at: z.string().nullable(),
 })
 
+export const sourceReleaseGateSchema = z.object({
+  version: z.string(),
+  automatic_confirmation_enabled: z.boolean(),
+  pending_kings: z.number().int().nonnegative(),
+  confirmed_kings: z.number().int().nonnegative(),
+  rows_limit: z.literal(25),
+  rows_has_more: z.boolean(),
+  rows: z.array(z.object({
+    agent_id: z.string().uuid(),
+    artifact_sha256: z.string(),
+    crowned_at: z.string(),
+    weight_confirmed_at: z.string().nullable(),
+    emission_confirmed_at: z.string().nullable(),
+    emission_block: z.number().int().nonnegative().nullable(),
+    emission_block_hash: z.string().nullable(),
+    emission_epoch_index: z.number().int().nonnegative().nullable(),
+    emission_ledger_digest: z.string().nullable(),
+  })).max(25),
+})
+
 export const artifactReleaseControlSchema = z.object({
   current: artifactReleaseRevisionSchema,
   history: z.array(artifactReleaseRevisionSchema).max(100),
+  // Absent on older Platform releases; never synthesize proof of gate rollout.
+  release_gate: sourceReleaseGateSchema.optional(),
 })
 
 // `z.object` strips what it does not declare, and this board stores a whole

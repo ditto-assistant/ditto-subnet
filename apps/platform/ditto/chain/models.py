@@ -330,6 +330,38 @@ class ChainWeightsSnapshot:
     """Unix seconds of ``block``, the anchor a countdown is measured from."""
 
 
+@dataclass(frozen=True)
+class ChainMinerEarning:
+    """Miner incentive credited as stake/collateral, excluding owner recycling."""
+
+    uid: int
+    hotkey: str
+    amount_rao: int
+
+
+@dataclass(frozen=True)
+class ChainMinerEmissionReceipt:
+    """Finalized successful distribution and its unambiguous consumed matrix.
+
+    This proves hotkey earnings, not which off-chain submission earned them.
+    Consumers must bind every relevant validator vector to an immutable ledger.
+    Timestamps are Unix seconds. All vectors are retained conservatively; this
+    reader does not infer that an offline validator contributed zero stake.
+    """
+
+    netuid: int
+    block: int
+    block_hash: str
+    block_timestamp: int
+    epoch_index: int
+    previous_distribution_block: int
+    owner_hotkey: str
+    earnings: tuple[ChainMinerEarning, ...]
+    vectors: tuple[ChainWeightVector, ...]
+    validator_last_updates: tuple[tuple[int, int], ...]
+    validator_last_update_timestamps: tuple[tuple[int, int], ...]
+
+
 def _axon_info_to_dict(axon: Any) -> dict[str, Any]:
     """Flatten a Pylon ``AxonInfo`` (Pydantic model) into a plain dict.
 

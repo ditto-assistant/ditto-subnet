@@ -11,6 +11,9 @@ export interface ArtifactRelease {
   bench_version?: number | null;
   embargo_hours?: number | null;
   available_at?: string | null;
+  emission_confirmed_at?: string | null;
+  /** Historical telemetry only; never starts the disclosure clock. */
+  weight_confirmed_at?: string | null;
   download_available?: boolean | null;
 }
 
@@ -26,6 +29,19 @@ export function artifactReleaseCopy(
   if (!release) return null;
   const hours = embargoHours(release);
   const bench = release.bench_version == null ? "" : " on Bench v" + release.bench_version;
+  const earned = Boolean(
+    release.emission_confirmed_at && Number.isFinite(Date.parse(release.emission_confirmed_at)),
+  );
+  if (["available", "embargoed"].includes(release.status ?? "") && !earned) {
+    return {
+      state: "unavailable",
+      label: "Awaiting winner earnings",
+      detail:
+        "Source stays private until this exact submission earns winner emissions in a completed tempo. A crown or positive revealed weights alone does not start the " +
+        hours +
+        "-hour privacy window.",
+    };
+  }
   if (release.status === "available") {
     return {
       state: "available",
@@ -35,7 +51,7 @@ export function artifactReleaseCopy(
         bench +
         " cleared its " +
         hours +
-        "-hour public window after on-chain weights were set on it. The download link lasts five minutes.",
+        "-hour privacy window after this submission earned winner emissions in a completed tempo. The download link lasts five minutes.",
     };
   }
   if (release.status === "embargoed") {
@@ -47,21 +63,23 @@ export function artifactReleaseCopy(
           relTimeUntil(release.available_at) +
           ", " +
           hours +
-          " hours after validators' on-chain weights were set on this king" +
+          " hours after this submission earned winner emissions in a completed tempo" +
           bench +
           "."
         : "King-only source: unlocks " +
           hours +
-          " hours after validators' on-chain weights are confirmed on this miner (commit-reveal). Awaiting that on-chain confirmation.",
+          " hours after confirmed winner emissions in a completed tempo. Awaiting a release deadline.",
     };
   }
   if (release.status === "under_review") {
-    const elapsed = Boolean(release.available_at && Date.parse(release.available_at) <= Date.now());
+    const elapsed = Boolean(
+      earned && release.available_at && Date.parse(release.available_at) <= Date.now(),
+    );
     return {
       state: "under_review",
       label: "Held for review",
       detail:
-        "Source stays private while review is active. If cleared, its king reveal timing still applies" +
+        "Source stays private while review is active. If cleared, its privacy window after confirmed winner earnings still applies" +
         (elapsed ? ", so this source will be public immediately." : "."),
     };
   }
@@ -77,7 +95,7 @@ export function artifactReleaseCopy(
     state: "unavailable",
     label: "Source private",
     detail:
-      "Source is private: only the leaderboard king's source is ever released, and only after on-chain weights confirm its reign. This submission has not qualified.",
+      "Source is private: only the leaderboard king's source is ever released, and only after it earns winner emissions in a completed tempo and its privacy window ends. This submission has not qualified.",
   };
 }
 

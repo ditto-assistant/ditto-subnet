@@ -19,6 +19,8 @@ from ditto.chain.models import (
     BlockInfo,
     ChainConfig,
     ChainEpoch,
+    ChainMinerEarning,
+    ChainMinerEmissionReceipt,
     ChainWeight,
     ChainWeightsSnapshot,
     ChainWeightVector,
@@ -513,6 +515,242 @@ class ChainClient:
             epoch=epoch,
             block_timestamp=block_timestamp,
         )
+
+    async def get_miner_emission_receipt(
+        self, netuid: int, *, target_hotkeys: frozenset[str] | None = None
+    ) -> ChainMinerEmissionReceipt:
+        """Read one finalized successful miner distribution, or fail closed.
+
+        Positive weights are only inputs. The runtime's miner-incentive event
+        proves server emission was calculated; successful mechanism completion
+        proves distribution ran. Owner and associated hotkeys are excluded
+        because that incentive is recycled/burned. Other miner incentive is
+        credited to stake or collateral (including an auto-stake destination).
+
+        The event is emitted during initialization. Read identities and weights
+        at its parent block and reject matrix changes during the payout block:
+        reveals during initialization and later extrinsics otherwise make the
+        consumed matrix ambiguous. No unsupported event/schema is guessed.
+        ``target_hotkeys`` bounds historical timestamp reads to validators whose
+        vectors affect pending submissions; all vectors/update blocks remain.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        try:
+            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+                finalized_hash = await substrate.get_chain_finalised_head()
+                finalized = _block_number_from_header(
+                    await substrate.get_block_header(block_hash=finalized_hash)
+                )
+
+                async def read(name: str, at: str, params: list[Any]) -> Any:
+                    return _unwrap_substrate_value(
+                        await substrate.query(
+                            module=_SUBTENSOR_MODULE,
+                            storage_function=name,
+                            params=params,
+                            block_hash=at,
+                        )
+                    )
+
+                block = _receipt_uint(
+                    await read(_LAST_STEP_STORAGE, finalized_hash, [netuid])
+                )
+                if not 0 < block <= finalized:
+                    raise ValueError("no finalized successful distribution")
+                block_hash = await substrate.get_block_hash(block)
+                parent_hash = await substrate.get_block_hash(block - 1)
+                if not block_hash or not parent_hash:
+                    raise ValueError("missing distribution block hashes")
+                for at in (parent_hash, block_hash):
+                    if (
+                        _receipt_uint(await read("MechanismCountCurrent", at, [netuid]))
+                        != 1
+                    ):
+                        raise ValueError("unsupported multi-mechanism emission")
+                previous = _receipt_uint(
+                    await read(_LAST_STEP_STORAGE, parent_hash, [netuid])
+                )
+                if (
+                    previous >= block
+                    or _receipt_uint(
+                        await read(_LAST_STEP_STORAGE, block_hash, [netuid])
+                    )
+                    != block
+                ):
+                    raise ValueError("invalid successful distribution boundary")
+                epoch_index = _receipt_uint(
+                    await read(_SUBNET_EPOCH_INDEX_STORAGE, block_hash, [netuid])
+                )
+                owner = await read("SubnetOwner", parent_hash, [netuid])
+                owner_hotkey = await read(
+                    _SUBNET_OWNER_HOTKEY_STORAGE, parent_hash, [netuid]
+                )
+                owned = await read("OwnedHotkeys", parent_hash, [owner])
+                if (
+                    not isinstance(owner, str)
+                    or not owner
+                    or not isinstance(owner_hotkey, str)
+                    or not owner_hotkey
+                ):
+                    raise ValueError("missing subnet ownership")
+                if not isinstance(owned, list) or any(
+                    not isinstance(h, str) for h in owned
+                ):
+                    raise ValueError("invalid owner-associated hotkeys")
+                excluded = {*owned, owner_hotkey}
+
+                async def mapping(name: str, at: str) -> list[tuple[Any, Any]]:
+                    result = await substrate.query_map(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=name,
+                        params=[netuid],
+                        block_hash=at,
+                        fully_exhaust=True,
+                    )
+                    return [(k, v) async for k, v in result]
+
+                key_rows = await mapping(_KEYS_STORAGE, parent_hash)
+                hotkeys: dict[int, str] = {}
+                for uid_raw, hotkey in key_rows:
+                    uid = _receipt_uint(uid_raw)
+                    if uid in hotkeys or not isinstance(hotkey, str) or not hotkey:
+                        raise ValueError("invalid UID mapping")
+                    hotkeys[uid] = hotkey
+                if len(set(hotkeys.values())) != len(hotkeys):
+                    raise ValueError("duplicate registered hotkey")
+                raw_weights = await mapping(_WEIGHTS_STORAGE, parent_hash)
+                if raw_weights != await mapping(_WEIGHTS_STORAGE, block_hash):
+                    raise ValueError("weights changed during distribution block")
+                updates = await read("LastUpdate", parent_hash, [netuid])
+                if not isinstance(updates, list) or updates != await read(
+                    "LastUpdate", block_hash, [netuid]
+                ):
+                    raise ValueError("weight updates changed during distribution block")
+                events = _unwrap_substrate_value(
+                    await substrate.query(
+                        module=_SYSTEM_MODULE,
+                        storage_function="Events",
+                        block_hash=block_hash,
+                    )
+                )
+                if not isinstance(events, list) or any(
+                    not isinstance(e, dict) for e in events
+                ):
+                    raise ValueError("invalid emission events")
+                amounts = None
+                for event in events:
+                    if (
+                        event.get("module_id") != _SUBTENSOR_MODULE
+                        or event.get("event_id") != "IncentiveAlphaEmittedToMiners"
+                    ):
+                        continue
+                    payload = event.get("event")
+                    attrs = (
+                        payload.get("attributes") if isinstance(payload, dict) else None
+                    )
+                    if not isinstance(attrs, dict) or set(attrs) != {
+                        "netuid",
+                        "emissions",
+                    }:
+                        raise ValueError("unsupported miner emission event schema")
+                    if _receipt_uint(attrs["netuid"]) != netuid:
+                        continue
+                    if amounts is not None or event.get("phase") != "Initialization":
+                        raise ValueError("ambiguous miner emission event")
+                    amounts = attrs["emissions"]
+                if not isinstance(amounts, list) or set(hotkeys) != set(
+                    range(len(amounts))
+                ):
+                    raise ValueError("missing emission event or incomplete UID mapping")
+                earnings = tuple(
+                    ChainMinerEarning(uid, hotkeys[uid], _receipt_uint(amount))
+                    for uid, amount in enumerate(amounts)
+                    if _receipt_uint(amount) > 0 and hotkeys[uid] not in excluded
+                )
+                vectors: list[ChainWeightVector] = []
+                last_updates: list[tuple[int, int]] = []
+                timestamps: list[tuple[int, int]] = []
+                timestamp_cache: dict[int, int] = {}
+                seen: set[int] = set()
+                for uid_raw, raw_vector in raw_weights:
+                    uid = _receipt_uint(uid_raw)
+                    if (
+                        uid in seen
+                        or uid not in hotkeys
+                        or not isinstance(raw_vector, list)
+                    ):
+                        raise ValueError("invalid validator matrix")
+                    seen.add(uid)
+                    weights: list[ChainWeight] = []
+                    destinations: set[int] = set()
+                    for item in raw_vector:
+                        if not isinstance(item, (list, tuple)) or len(item) != 2:
+                            raise ValueError("invalid validator weight")
+                        target, value = (_receipt_uint(v) for v in item)
+                        if (
+                            target not in hotkeys
+                            or target in destinations
+                            or value > 65535
+                        ):
+                            raise ValueError("invalid validator weight destination")
+                        destinations.add(target)
+                        if value:
+                            weights.append(ChainWeight(target, hotkeys[target], value))
+                    if not weights:
+                        continue
+                    update = _receipt_uint(updates[uid])
+                    if not 0 < update < block:
+                        raise ValueError("invalid validator update block")
+                    vectors.append(ChainWeightVector(uid, hotkeys[uid], tuple(weights)))
+                    last_updates.append((uid, update))
+                    if target_hotkeys is not None and not any(
+                        weight.hotkey in target_hotkeys for weight in weights
+                    ):
+                        continue
+                    if update not in timestamp_cache:
+                        update_hash = await substrate.get_block_hash(update)
+                        timestamp = await self._read_block_timestamp(
+                            substrate, update_hash
+                        )
+                        if timestamp is None and update_hash:
+                            # Old, still-revealed vectors can outlive live-node
+                            # state retention. The existing provider fallback
+                            # bounds each archive request and keeps secrets safe.
+                            timestamp = await self.get_block_timestamp(update_hash)
+                        if timestamp is None or timestamp <= 0:
+                            raise ValueError("missing validator update timestamp")
+                        timestamp_cache[update] = timestamp
+                    timestamps.append((uid, timestamp_cache[update]))
+                timestamp = await self._read_block_timestamp(substrate, block_hash)
+                if (
+                    timestamp is None
+                    or timestamp <= 0
+                    or any(t > timestamp for _, t in timestamps)
+                ):
+                    raise ValueError("invalid distribution timestamp")
+                return ChainMinerEmissionReceipt(
+                    netuid,
+                    block,
+                    str(block_hash),
+                    timestamp,
+                    epoch_index,
+                    previous,
+                    owner_hotkey,
+                    earnings,
+                    tuple(vectors),
+                    tuple(last_updates),
+                    tuple(timestamps),
+                )
+        except TimeoutError as e:
+            raise ChainTimeoutError(
+                f"get_miner_emission_receipt({netuid}) timed out"
+            ) from e
+        except Exception as e:
+            raise ChainConnectionError(
+                f"get_miner_emission_receipt({netuid}) failed: "
+                f"{self._safe_rpc_error(e)}"
+            ) from e
 
     async def read_epoch_schedule(self, netuid: int) -> EpochSchedule:
         """Read the subnet's stateful epoch position at the current head.
@@ -1084,3 +1322,11 @@ def _as_int(result: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _receipt_uint(value: Any) -> int:
+    """Reject lossy/coerced evidence: SCALE integer storage must decode as int."""
+    value = _unwrap_substrate_value(value)
+    if type(value) is not int or value < 0:
+        raise ValueError("invalid unsigned emission evidence integer")
+    return value
