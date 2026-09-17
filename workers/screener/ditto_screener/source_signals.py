@@ -12,6 +12,8 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from ditto_screener.rust_test_items import is_rust_test_only_attribute
+
 _MAX_LEADS = 32
 _MAX_LEADS_PER_RULE_FILE = 4
 _WINDOW_LINES = 18
@@ -68,7 +70,10 @@ class _Fingerprint:
     to source files whose tell is language-specific (e.g. the sync/async answer
     distinction only exists where model calls are awaited). ``scan`` selects the
     comment-masked code view (``"code"``) or the raw view that also sees comments
-    and strings (``"raw"``).
+    and strings (``"raw"``). ``skip_test_items`` blanks Rust items that an
+    attribute affirmatively restricts to the test build (``#[test]``,
+    ``#[cfg(test)]``) before matching, for tells whose honest look-alike is the
+    same text parked in a test-only helper that ``/run`` never reaches.
     """
 
     kind: str
@@ -79,6 +84,7 @@ class _Fingerprint:
     scan: str = "code"
     languages: frozenset[str] = frozenset()
     min_hits: int = 1
+    skip_test_items: bool = False
 
 
 def _words(value: str) -> re.Pattern[str]:
@@ -1600,6 +1606,94 @@ _EMULATION_FINGERPRINTS = (
         window=40,
         scan="code",
     ),
+    _Fingerprint(
+        # declarative-preference-turn-directive (policy v13 I5
+        # benchmark_semantic_compiler: aceron_v17/v20/v21, TeaCUP v3/v4,
+        # 2026-09-16): the publicly released keep/declarative-preference
+        # compiler classifies "keep my usual/normal X" as a stated preference,
+        # clears the requested actions, and serves a fixed directive telling the
+        # deciding model that nothing asks for a change ("DECLARATIVE PREFERENCE
+        # TURN", "Nothing in this request asks for a change to be made", "The
+        # request asks to preserve a state, without asking for an immediate
+        # transition"). The classifier alone is shared verbatim with a cleared
+        # fork whose acknowledgement prompt is test-only, so the served effect
+        # anchors the lead: a preference/keep/no-change gate immediately
+        # selecting that no-change prose. Test-only Rust items are skipped.
+        kind="declarative-preference-turn-directive",
+        severity="high",
+        roles=(
+            _Role(
+                "preference-turn-gate",
+                re.compile(
+                    r"\bif\b[^\n{]*?(?:nothing|declarative|preference|preserve|"
+                    r"continuity|keep|candidate|habitual|standing|usual|normal)"
+                    r"|\bif\b[^\n]*Requirement::(?:Candidate|NotNeeded)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "no-change-directive-literal",
+                re.compile(
+                    r"\bnothing in (?:this|the) (?:request|message|turn) asks\b"
+                    r"|\bnot an instruction to (?:change|store|update|act)\b"
+                    r"|\basks? to preserve (?:a|the|an existing) state\b"
+                    r"|\bwithout asking for an immediate "
+                    r"(?:transition|change|settings? change)\b"
+                    r"|\bdid not request an immediate (?:external )?"
+                    r"(?:settings? )?change\b"
+                    r"|\bdeclarative preference turn\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=6,
+        scan="code",
+        skip_test_items=True,
+    ),
+    _Fingerprint(
+        # keep-continuity-capability-rekey (aceron_v21, 2026-09-16): the same
+        # compiler re-keyed from phrase cues to a leading "keep" command plus a
+        # probe of the first candidate tool for a persistent/operational
+        # description or an `effort` property, which escalates the routing to a
+        # required or merely candidate tool turn. The keep command, the
+        # capability probe, and the requirement transition co-occur in one
+        # routing block. A lead: an honest reasoning-effort setter can share
+        # the probe, so the reviewer must trace what the transition serves.
+        kind="keep-continuity-capability-rekey",
+        severity="medium",
+        roles=(
+            _Role(
+                "leading-keep-command",
+                re.compile(
+                    r"\b(?:same_word|fuzzy_word|fuzzy_eq|distance_within|"
+                    r"eq_ignore_ascii_case|starts_with|startswith|startsWith|"
+                    r"HasPrefix|EqualFold)\s*\([^\n]*[\"']keep[\"']"
+                    r"|(?:==|===)\s*[\"']keep[\"']"
+                    r"|[\"']keep[\"']\s*(?:==|===)",
+                ),
+            ),
+            _Role(
+                "persistent-policy-capability-probe",
+                re.compile(
+                    r"\b(?:contains_key|hasOwnProperty|has)\s*\(\s*[\"']effort[\"']"
+                    r"|[\"']effort[\"']\s+in\s+[A-Za-z0-9_.]*"
+                    r"|\.contains\(\s*[\"'](?:persist|operational)[\"']\s*\)"
+                    r"|[\"'](?:persist|operational)[\"']\s+in\s+[A-Za-z0-9_.]*",
+                ),
+            ),
+            _Role(
+                "tool-requirement-escalation",
+                re.compile(
+                    r"\b[A-Za-z]*Requirement::(?:Required|Candidate)\b"
+                    r"|\b(?:tool_)?requirement\s*=\s*[\"'](?:required|candidate)[\"']",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=40,
+        scan="code",
+        skip_test_items=True,
+    ),
 )
 
 
@@ -1798,19 +1892,66 @@ def find_benchmark_emulation_fingerprints(
             continue
         code_lines = _mask_comments(text).splitlines()
         code_lines.extend([""] * (len(raw_lines) - len(code_lines)))
+        test_item_lines: frozenset[int] | None = None
         for fingerprint in _EMULATION_FINGERPRINTS:
             if fingerprint.languages and language not in fingerprint.languages:
                 continue
             scan_lines = code_lines if fingerprint.scan == "code" else raw_lines
+            fingerprint_raw_lines = raw_lines
+            if fingerprint.skip_test_items and language == "rust":
+                if test_item_lines is None:
+                    test_item_lines = _rust_test_item_lines(code_lines)
+                if test_item_lines:
+                    scan_lines = _blank_lines(scan_lines, test_item_lines)
+                    fingerprint_raw_lines = _blank_lines(raw_lines, test_item_lines)
             if fingerprint.min_hits > 1:
                 findings.extend(_aggregate_fingerprint(fingerprint, path, scan_lines))
             else:
                 findings.extend(
-                    _cooccurrence_fingerprint(fingerprint, path, scan_lines, raw_lines)
+                    _cooccurrence_fingerprint(
+                        fingerprint, path, scan_lines, fingerprint_raw_lines
+                    )
                 )
             if len(findings) >= _MAX_FINGERPRINT_FINDINGS:
                 return findings[:_MAX_FINGERPRINT_FINDINGS]
     return findings
+
+
+def _rust_test_item_lines(code_lines: list[str]) -> frozenset[int]:
+    """1-based lines of Rust items an attribute restricts to the test build.
+
+    Braces are counted on the comment-masked view so a brace inside a comment
+    cannot open or close an item. Only attributes that affirmatively require
+    ``test`` count; ``cfg(not(test))`` and ``cfg(any(test, feature = ...))``
+    stay production-visible. A brace-less item (``mod tests;``, ``include!``)
+    ends at its semicolon, so the production item after it stays visible.
+    """
+    marked: set[int] = set()
+    for index, line in enumerate(code_lines):
+        if not is_rust_test_only_attribute(line):
+            continue
+        depth = 0
+        opened = False
+        for cursor in range(index, len(code_lines)):
+            marked.add(cursor + 1)
+            depth += code_lines[cursor].count("{")
+            depth -= code_lines[cursor].count("}")
+            if "{" in code_lines[cursor]:
+                opened = True
+            if opened and depth <= 0:
+                break
+            if not opened and (
+                code_lines[cursor].rstrip().endswith(";") or cursor > index + 8
+            ):
+                break
+    return frozenset(marked)
+
+
+def _blank_lines(lines: list[str], marked: frozenset[int]) -> list[str]:
+    return [
+        "" if line_number in marked else line
+        for line_number, line in enumerate(lines, 1)
+    ]
 
 
 def _fingerprint_finding(

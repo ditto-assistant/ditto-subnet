@@ -500,6 +500,28 @@ hit is a search prompt. Apply the two-limb and production-engine tests
 before citing a finding. Absence of older names such as `asks_outstanding`
 is not a pass if these compilers remain reachable.
 
+The publicly released keep/declarative-preference compiler (policy v13 I5
+`benchmark_semantic_compiler` rejections of aceron_v17, aceron_v20,
+aceron_v21, TeaCUP v3, and TeaCUP v4) has two static leads:
+
+- `declarative-preference-turn-directive` (high) fires when a
+  preference/keep/no-change gate, or a `ToolRequirement::Candidate` /
+  `NotNeeded` gate, selects fixed no-change prose within six lines ("DECLARATIVE
+  PREFERENCE TURN", "Nothing in this request asks for a change", "asks to
+  preserve a state, without asking for an immediate transition").
+- `keep-continuity-capability-rekey` (medium) fires when a leading `keep`
+  command test, a candidate-tool probe for an `effort` property or a
+  persist/operational description, and a `Required`/`Candidate` requirement
+  transition co-occur within forty lines (the aceron_v21 re-key).
+
+The "my normal"/"my usual" cue list, the habitual-word list, and the
+`keep_as_preference` / `declarative_preference` classifier are deliberately
+not leads by themselves: a cleared fork kept the classifier verbatim while its
+acknowledgement prompt was `#[cfg(test)]` and the classifier only reordered
+tools. Both leads skip Rust items restricted to the test build. A hit is a
+review lead, never a reject: trace the gate to the served `/run` prompt or
+routing effect before citing I5.
+
 Live schema-driven retrieval/reranking, runtime-described semantics, generic
 state reconstruction, and bounded shape-only correction remain allowed through
 their published pass clauses. Prompt specialization and tool routing do not

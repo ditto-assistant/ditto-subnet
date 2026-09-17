@@ -3192,6 +3192,8 @@ def test_written_policy_makes_policy_v10_invariants_implementable() -> None:
         "reply_restates_story_ingredient_money",
         "LINKED_CALCULATION_AUDIT_PROMPT",
         "planned_deck",
+        "declarative-preference-turn-directive",
+        "keep-continuity-capability-rekey",
     }
 
     assert all(fragment in policy for fragment in required)
