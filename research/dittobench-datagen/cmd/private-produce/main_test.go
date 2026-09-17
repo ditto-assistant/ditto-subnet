@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ditto-assistant/dittobench-datagen/privatesurface"
 )
 
 func TestReservedSalt(t *testing.T) {
@@ -36,6 +39,33 @@ func TestReservedSalt(t *testing.T) {
 				t.Fatal("invalid entropy accepted")
 			}
 		})
+	}
+}
+
+func TestBudgetCheckpointIsPrivateAndReplaced(t *testing.T) {
+	dir := t.TempDir()
+	for _, charged := range []float64{0, 1.5, .001} {
+		want := privatesurface.BudgetSnapshot{LimitUSD: 10, ChargedUSD: charged}
+		if err := writeBudgetCheckpoint(dir, want); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "spend.json")
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatal("checkpoint not private", err)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got privatesurface.BudgetSnapshot
+		if err := json.Unmarshal(raw, &got); err != nil || got != want {
+			t.Fatalf("bad checkpoint: %+v %v", got, err)
+		}
+		entries, _ := os.ReadDir(dir)
+		if len(entries) != 1 {
+			t.Fatal("left temporary checkpoint")
+		}
 	}
 }
 

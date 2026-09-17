@@ -109,6 +109,7 @@ type Client struct {
 	http       *http.Client
 	url        string
 	retryDelay time.Duration
+	budget     *spendBudget
 }
 
 func NewClient(profile Profile, apiKey string) (*Client, error) {
@@ -155,6 +156,15 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 		payload["reasoning"] = map[string]any{"effort": reasoning, "exclude": true}
 	}
 	body, _ := json.Marshal(payload)
+	reserved := 0.0
+	if c.budget != nil {
+		payload["provider"].(map[string]any)["max_price"] = map[string]float64{"prompt": priceCeilingPerMillion, "completion": priceCeilingPerMillion}
+		body, _ = json.Marshal(payload)
+		reserved, err = c.budget.reserve(len(body))
+		if err != nil {
+			return nil, CompletionReceipt{}, err
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
 	if err != nil {
 		return fail("request construction failed")
@@ -192,13 +202,18 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 			Message      struct{ Content string } `json:"message"`
 		} `json:"choices"`
 		Usage struct {
-			Prompt int64   `json:"prompt_tokens"`
-			Output int64   `json:"completion_tokens"`
-			Cost   float64 `json:"cost"`
+			Prompt int64    `json:"prompt_tokens"`
+			Output int64    `json:"completion_tokens"`
+			Cost   *float64 `json:"cost"`
 		} `json:"usage"`
 	}
 	if json.Unmarshal(raw, &result) != nil || len(result.Choices) != 1 {
 		return fail("malformed provider envelope")
+	}
+	if c.budget != nil {
+		if err := c.budget.settle(reserved, result.Usage.Cost); err != nil {
+			return nil, CompletionReceipt{}, err
+		}
 	}
 	if result.Choices[0].FinishReason != "stop" {
 		switch result.Choices[0].FinishReason {
@@ -219,7 +234,11 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 	if !json.Valid(content) {
 		return fail("invalid structured response")
 	}
-	return content, CompletionReceipt{ID: result.ID, Model: result.Model, Provider: result.Provider, RequestSHA256: digest(body), ResponseSHA256: digest(raw), PromptTokens: result.Usage.Prompt, OutputTokens: result.Usage.Output, CostUSD: result.Usage.Cost}, nil
+	cost := 0.0
+	if result.Usage.Cost != nil {
+		cost = *result.Usage.Cost
+	}
+	return content, CompletionReceipt{ID: result.ID, Model: result.Model, Provider: result.Provider, RequestSHA256: digest(body), ResponseSHA256: digest(raw), PromptTokens: result.Usage.Prompt, OutputTokens: result.Usage.Output, CostUSD: cost}, nil
 }
 
 // RewriteOne is a diagnostic surface probe, not an artifact approval. The full

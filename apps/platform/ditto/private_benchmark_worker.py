@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import re
 import signal
@@ -53,6 +54,7 @@ class ProducerConfig:
     rewrite_reasoning: str = ""
     validator_reasoning: str = ""
     concurrency: int = 4
+    max_cost_usd: float = 10
     timeout_seconds: float = 7200
 
     def arguments(self) -> list[str]:
@@ -71,6 +73,8 @@ class ProducerConfig:
             self.validator_reasoning,
             "-concurrency",
             str(self.concurrency),
+            "-max-cost-usd",
+            str(self.max_cost_usd),
         ]
 
 
@@ -110,6 +114,8 @@ def _check_config(config: ProducerConfig) -> None:
             not re.fullmatch(r"[0-9a-f]{64}", config.executable_sha256)
             or not re.fullmatch(r"[0-9a-f]{64}", config.profile_sha256)
             or not 1 <= config.concurrency <= 16
+            or not math.isfinite(config.max_cost_usd)
+            or not 0 < config.max_cost_usd <= 1000
             or not 0 < config.timeout_seconds <= 7200
             or not config.api_key.strip()
             or any(c in config.api_key for c in "\r\n\x00")
@@ -275,6 +281,7 @@ def config_from_env() -> ProducerConfig:
             rewrite_reasoning=os.environ.get(prefix + "REWRITE_REASONING", ""),
             validator_reasoning=os.environ.get(prefix + "VALIDATOR_REASONING", ""),
             concurrency=int(os.environ.get(prefix + "CONCURRENCY", "4")),
+            max_cost_usd=float(os.environ[prefix + "MAX_COST_USD"]),
         )
     except (KeyError, ValueError):
         raise PrivateWorkerError("private worker environment incomplete") from None

@@ -67,6 +67,13 @@ Platform database configuration. Optional prefixed `REWRITE_REASONING`,
 No database/admin environment is inherited by the child. Profile inspection
 receives no provider credential. Child stdout/stderr are not forwarded.
 
+`DITTO_PRIVATE_PRODUCER_MAX_COST_USD` is also required and bounds one producer
+invocation. Allocate it from the remaining approved total, including failed
+attempts. The producer persists reservations and settled costs in private
+`spend.json`; unknown charges retain their full reservation. See
+`research/dittobench-datagen/docs/private-producer-budget.md` for supported routes
+and the account-wide quota boundary. Queue dataset counts are not dollar caps.
+
 Deployment must separately provide a dedicated non-root UID, an owner-only
 0700 absolute work root with no symlink components, immutable approved binary,
 network restrictions, memory/CPU and disk quotas, private diagnostic retention,

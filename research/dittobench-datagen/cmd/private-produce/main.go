@@ -41,6 +41,7 @@ func run() error {
 	validatorReasoning := flag.String("validator-reasoning", "", "explicit independent-validator reasoning effort")
 	saltFile := flag.String("salt-file", "", "private regular 8-byte big-endian reserved entropy file")
 	profileOnly := flag.Bool("profile-sha", false, "print profile digest without inference or artifacts")
+	maxCost := flag.Float64("max-cost-usd", 0, "required per-invocation allocation from the remaining total spending budget")
 	flag.Parse()
 	profile := privatesurface.Profile{RewriteModel: *rewriteModel, RewriteProvider: *rewriteProvider, ValidatorModel: *validatorModel, ValidatorProvider: *validatorProvider, RewriteReasoning: *rewriteReasoning, ValidatorReasoning: *validatorReasoning}
 	if *profileOnly {
@@ -87,6 +88,11 @@ func run() error {
 	}
 	if err := os.Mkdir(*out, 0700); err != nil {
 		return errors.New("private producer: output must be a new directory")
+	}
+	if err := client.EnableBudget(*maxCost, func(snapshot privatesurface.BudgetSnapshot) error {
+		return writeBudgetCheckpoint(*out, snapshot)
+	}); err != nil {
+		return err
 	}
 	if err := writePrivate(*out, "base.json", baseBytes); err != nil {
 		return err
@@ -173,6 +179,38 @@ func readReservedSalt(path string) (uint64, error) {
 		return 0, errors.New("private producer: invalid reserved entropy")
 	}
 	return salt, nil
+}
+
+func writeBudgetCheckpoint(out string, snapshot privatesurface.BudgetSnapshot) error {
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(out, ".spend-*")
+	if err != nil {
+		return err
+	}
+	name := file.Name()
+	defer os.Remove(name)
+	if _, err = file.Write(raw); err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if err := os.Rename(name, filepath.Join(out, "spend.json")); err != nil {
+		return err
+	}
+	dir, err := os.Open(out)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
 }
 
 func writePrivate(dir, name string, data []byte) error {

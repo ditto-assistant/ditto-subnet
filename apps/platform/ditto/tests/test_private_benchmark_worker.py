@@ -43,6 +43,7 @@ if mode == "reject":
     print("PRIVATE RESPONSE AND CREDENTIAL", file=sys.stderr)
     sys.exit(1)
 def arg(name): return args[args.index(name) + 1]
+assert float(arg("-max-cost-usd")) == 10
 salt = int.from_bytes(pathlib.Path(arg("-salt-file")).read_bytes(), "big")
 common = {{"seed": int(arg("-seed")), "bench_version": 13, "surface_salt": salt}}
 base = json.dumps({{**common, "prompt": "base"}}).encode()
@@ -126,6 +127,9 @@ async def test_worker_failure_is_terminal_and_never_pins(
         ("profile_sha256", "b" * 64),
         ("timeout_seconds", 10801),
         ("concurrency", 17),
+        ("max_cost_usd", 0),
+        ("max_cost_usd", float("nan")),
+        ("max_cost_usd", float("inf")),
     ],
 )
 async def test_bad_approval_never_claims(tmp_path, session_maker, field, value):
