@@ -4983,6 +4983,8 @@ class TestClaim:
             l2_model="openai/gpt-5.6-sol",
             l2_fallback_models=("openai/gpt-5.6-terra",),
             l2_always_escalate=True,
+            timeout_seconds=900,
+            max_steps=20,
             policy_manifest_profile="l1_l2",
         )
         stronger_checksum = _review_settings_checksum(stronger)

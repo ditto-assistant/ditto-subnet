@@ -63,8 +63,10 @@ eval -> top five -> integrity double-check -> clear or reject
   clear), and larger budgets there. With `enforce`, a mechanically admitted
   top-five row's deferred pass takes the same posture.
 - **Fail closed.** Platform refuses `integrity_double_check_mode=enforce` (409)
-  until that scope holds an `enforce` revision with `l3_enabled` and the
-  `l1_l2` manifest. If the posture later becomes unusable, or the claimant
+  until that scope holds an `enforce` revision with `l2_always_escalate`,
+  `l3_enabled`, and the `l1_l2` manifest. Worker compatibility also requires
+  `timeout_seconds <= 900`, `max_steps <= 20`, and low or medium critic
+  reasoning. If the posture later becomes unusable, or the claimant
   cannot bind one (a legacy worker or the platform-owned Targon lane), the
   claim query leaves double-check holds unselected. They stay pending and
   visible here and cannot starve other screening work.

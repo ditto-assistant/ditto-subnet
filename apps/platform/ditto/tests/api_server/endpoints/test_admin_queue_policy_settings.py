@@ -732,6 +732,8 @@ class TestIntegrityDoubleCheckPosture:
                 l2_model="openai/gpt-5.6-sol",
                 l2_fallback_models=("openai/gpt-5.6-terra",),
                 l2_always_escalate=True,
+                timeout_seconds=900,
+                max_steps=20,
                 policy_manifest_profile="l1_l2",
             ),
         )
@@ -740,3 +742,34 @@ class TestIntegrityDoubleCheckPosture:
         board = (await client.get(_URL, headers=_HEADERS)).json()
         deferred = board["effective"]["settings"]["deferred_source_review"]
         assert deferred["integrity_double_check_mode"] == "enforce"
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"l2_always_escalate": False},
+            {"timeout_seconds": 1200},
+            {"max_steps": 32},
+            {"critic_reasoning_effort": "high"},
+        ],
+    )
+    async def test_enforce_rejects_unrunnable_or_conditional_posture(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+        override: dict[str, object],
+    ) -> None:
+        _install(app, settings_maker)
+        posture = ScreenerReviewSettings(
+            mode="enforce",
+            l2_always_escalate=True,
+            timeout_seconds=900,
+            max_steps=20,
+        )
+        await self._posture(
+            settings_maker,
+            ScreenerReviewSettings.model_validate({**posture.model_dump(), **override}),
+        )
+        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
+        assert response.status_code == 409, response.text
+        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []

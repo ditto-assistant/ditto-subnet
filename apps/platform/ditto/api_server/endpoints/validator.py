@@ -954,8 +954,11 @@ async def _held_post_score_review_composites(
     """
     composites: list[float] = []
     for evidence in await session.scalars(
-        select(AthReview.original_evidence).where(
+        select(AthReview.original_evidence)
+        .join(Agent, Agent.agent_id == AthReview.agent_id)
+        .where(
             AthReview.status == "pending",
+            Agent.status == AgentStatus.ATH_PENDING_REVIEW,
             AthReview.algorithm_provenance["review_kind"].as_string()
             == DEFERRED_REVIEW_KIND,
         )

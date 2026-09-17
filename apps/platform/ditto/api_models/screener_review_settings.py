@@ -326,8 +326,18 @@ def integrity_double_check_posture_error(
     """
     if settings.mode != "enforce":
         return f"posture mode must be enforce, not {settings.mode}"
+    if not settings.l2_always_escalate:
+        return "posture must always escalate to L2"
     if not settings.l3_enabled:
         return "posture must enable the L3 critic"
     if settings.policy_manifest_profile != "l1_l2":
         return "posture must use the l1_l2 policy manifest profile"
+    # Match the deployed worker's narrower settings contract. A valid
+    # Platform revision alone does not prove a worker can deserialize it.
+    if settings.timeout_seconds > 900:
+        return "posture timeout_seconds must be at most 900 for worker compatibility"
+    if settings.max_steps > 20:
+        return "posture max_steps must be at most 20 for worker compatibility"
+    if settings.critic_reasoning_effort not in ("low", "medium"):
+        return "posture critic_reasoning_effort must be low or medium"
     return None

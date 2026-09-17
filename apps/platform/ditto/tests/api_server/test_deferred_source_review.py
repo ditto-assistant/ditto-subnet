@@ -18,6 +18,7 @@ from ditto.api_server.endpoints.validator import (
     _deferred_screening_attempt,
     _evaluate_and_record_deferred_review,
     _evaluate_and_record_integrity_double_check,
+    _held_post_score_review_composites,
     _record_deferred_review_decision,
 )
 from ditto.db.models import (
@@ -710,6 +711,38 @@ def _scored(row: LedgerRow) -> Agent:
         status=AgentStatus.SCORED,
         screening_policy_version=SCREENING_POLICY_VERSION,
     )
+
+
+@pytest.mark.asyncio
+async def test_stale_review_rows_do_not_reserve_top_five_slots(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC)
+    statuses = (
+        AgentStatus.REJECTED,
+        AgentStatus.SCORED,
+        AgentStatus.ATH_PENDING_REVIEW,
+    )
+    async with session.begin():
+        for index, status in enumerate(statuses):
+            agent = _scored(_row(index, 0.9))
+            agent.status = status
+            session.add(agent)
+            session.add(
+                AthReview(
+                    review_id=uuid4(),
+                    agent_id=agent.agent_id,
+                    status="pending",
+                    opened_at=now,
+                    original_reason="historical deferred review",
+                    original_policy_version=13,
+                    original_evidence={
+                        "deferred_review": {"candidate": {"composite": 0.9}}
+                    },
+                    algorithm_provenance={"review_kind": "deferred_source_review"},
+                )
+            )
+    assert await _held_post_score_review_composites(session, bench_version=8) == [0.9]
 
 
 @pytest.mark.asyncio
