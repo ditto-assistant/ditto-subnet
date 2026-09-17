@@ -581,7 +581,26 @@ func v13Sentence(s string) string {
 // v13BuildRestraintMember renders one member of a restraint group. ask marks
 // the restraint half; the act half is the grounded action. Both halves share
 // the family grammar; only the seeded record differs.
-func v13BuildRestraintMember(seed int64, world universe.World, family v13RestraintFamily, group, member int, ask bool, caseID string) protocol.ToolCase {
+func v13BuildRestraintMember(seed int64, world universe.World, family v13RestraintFamily, group, member int, ask bool, caseID string) (result protocol.ToolCase) {
+	// All tool prerequisites coexist in one user graph. A decision twin must
+	// therefore name its own visible context, not rely on the grader's hidden
+	// case-to-record attachment. The context is independent of ask/act and
+	// carries no outcome: the agent must still retrieve and interpret the note.
+	// Apply the same scope to request and record, including the response, and
+	// protect the reference through public noise and private paraphrasing.
+	defer func() {
+		if len(result.PrerequisitePairs) == 0 {
+			return
+		}
+		ref := protocol.OpaqueCaseID(seed, "v13-planning-context:"+string(family), group*256+member)
+		result.Prompt = fmt.Sprintf("For planning context %s: %s", ref, result.Prompt)
+		for i := range result.PrerequisitePairs {
+			pair := &result.PrerequisitePairs[i]
+			pair.Prompt = fmt.Sprintf("This note applies only to planning context %s. %s", ref, pair.Prompt)
+			pair.Response = fmt.Sprintf("For planning context %s only: %s", ref, pair.Response)
+		}
+		result.WritingProtected = append(result.WritingProtected, ref)
+	}()
 	salt := fmt.Sprintf("%s:g%d:m%d", family, group, member)
 	pairID := protocol.OpaqueCaseID(seed, "v13-restraint-record:"+string(family), group*256+member)
 	sessionID := protocol.OpaqueCaseID(seed, "v13-restraint-session", group*256+member)

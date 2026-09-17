@@ -9,7 +9,7 @@ import (
 
 // v13PublishedKnownVector is the value TestV13KnownVector pins; the README
 // known-vector table and docs/bench-versions.md must publish the same string.
-const v13PublishedKnownVector = "4ac6913c55b59a8ed4ed99e05278de4d003f1161ce8a711afb9eb6b469e535db"
+const v13PublishedKnownVector = "133153f4f16c126b1759a4a125db474c9cb4288a4001b6f32f43492ce4b0f9a0"
 
 // TestV13KnownVectorIsPublishedConsistently keeps the published v13 vector
 // from drifting away from the pinned test constant: the README row for

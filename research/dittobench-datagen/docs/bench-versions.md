@@ -933,9 +933,22 @@ surface slice; missing parser coverage cannot be reported as resistance.
 
 ### Known vector
 
+Prelaunch correction authorized by the owner on 2026-09-17: V13 had only
+diagnostic canaries, not public rollout. Record-grounded restraint members now
+carry distinct visible planning-context references in both request and note.
+All prerequisites share one graph; previously contradictory sibling notes had
+no visible request-to-record binding. References are independent of the ask/act
+decision and protected through surface randomization. Agents still retrieve the
+note and either act on sufficient evidence or receive credit for grounded
+clarification when it is insufficient. No cases are silently removed from the
+denominator. This deliberately replaces the prelaunch V13 vector, not a V12 or
+earlier contract. Old V13 canary results and private preparation artifacts are
+not qualification evidence for this corrected contract; compare exact dataset
+and scorer revision, and generate fresh artifacts before another canary.
+
 `TestV13KnownVector` (#1848) in `gen/publicvector_test.go` pins seed
 `123456789`, full profile:
-`4ac6913c55b59a8ed4ed99e05278de4d003f1161ce8a711afb9eb6b469e535db`.
+`133153f4f16c126b1759a4a125db474c9cb4288a4001b6f32f43492ce4b0f9a0`.
 This integrated pin includes every dedicated slot generator, opaque session
 ids and jittered timestamps, explicit-year calendar records, and story swap
 arithmetic rendered into the records rather than held only in hidden state.
