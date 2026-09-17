@@ -58,7 +58,7 @@ _PROJECTION_EXCEPTIONS = {
     (
         "api_server/endpoints/validator.py",
         "if ticket.bench_version == 13 and ticket.seed is None:",
-    ): "Require private dataset capability and seed binding before new V13 preparation.",
+    ): "Require private capability and seed binding before new V13 preparation.",
     (
         "api_server/endpoints/public.py",
         "if dataset_bench_version == 13:",
