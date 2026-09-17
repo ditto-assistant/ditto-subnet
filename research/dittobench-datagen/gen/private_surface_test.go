@@ -198,3 +198,31 @@ func TestPrivateSurfaceRealArtifactPreservesNonSurfaceFields(t *testing.T) {
 		t.Fatal("private transformation changed non-surface bytes")
 	}
 }
+
+func TestPrivateSurfacePlanMatchesExecutionWithoutMutatingInput(t *testing.T) {
+	profile, _ := ProfileForVersion("full", 13)
+	input, err := GenerateDatasetWithSurface(4242, profile, 13, SurfaceOptions{Salt: 91})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := mustMarshal(t, input)
+	requests, err := PrivateSurfaceRequests(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index := 0
+	transform := privateTransformFunc(func(_ context.Context, request PrivateSurfaceRequest) (string, error) {
+		if index >= len(requests) || !reflect.DeepEqual(request, requests[index]) {
+			t.Fatal("plan differs from execution")
+		}
+		index++
+		return request.Text + "\n", nil
+	})
+	if _, err := ApplyPrivateSurface(context.Background(), input, transform, acceptPrivateFixture); err != nil {
+		t.Fatal(err)
+	}
+	if index != len(requests) || string(before) != string(mustMarshal(t, input)) {
+		t.Fatal("incomplete plan or mutated input")
+	}
+	t.Logf("full profile: %d unique surfaces, %d artifact bytes", len(requests), len(before))
+}

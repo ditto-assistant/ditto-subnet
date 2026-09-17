@@ -151,7 +151,7 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 			Cost   float64 `json:"cost"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal(raw, &result) != nil || len(result.Choices) != 1 || result.Choices[0].FinishReason != "stop" || result.ID == "" || result.Model == "" || result.Provider == "" {
+	if json.Unmarshal(raw, &result) != nil || len(result.Choices) != 1 || result.Choices[0].FinishReason != "stop" || result.ID == "" || result.Model == "" || result.Provider == "" || len(result.ID) > 256 || len(result.Model) > 256 || len(result.Provider) > 256 {
 		return fail("incomplete provider response")
 	}
 	content := json.RawMessage(result.Choices[0].Message.Content)
@@ -164,6 +164,16 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 // RewriteOne is a diagnostic surface probe, not an artifact approval. The full
 // producer below also applies the generator's protected-value and shape checks.
 func (c *Client) RewriteOne(ctx context.Context, req gen.PrivateSurfaceRequest) (string, SurfaceReceipt, error) {
+	after, receipt, err := c.ProbeOne(ctx, req)
+	if err != nil {
+		return "", SurfaceReceipt{}, err
+	}
+	return after, receipt, nil
+}
+
+// ProbeOne retains rejected candidate text for PRIVATE operator diagnostics.
+// Non-nil error always means rejected; callers must never issue these bytes.
+func (c *Client) ProbeOne(ctx context.Context, req gen.PrivateSurfaceRequest) (string, SurfaceReceipt, error) {
 	content, rewrite, err := c.complete(ctx, c.profile.RewriteModel, c.profile.RewriteProvider, rewritePrompt, map[string]any{"text": req.Text, "protected": req.Protected}, "text", "string", 0.7)
 	if err != nil {
 		return "", SurfaceReceipt{}, err
@@ -175,16 +185,17 @@ func (c *Client) RewriteOne(ctx context.Context, req gen.PrivateSurfaceRequest) 
 		return "", SurfaceReceipt{}, errors.New("private producer: malformed rewrite")
 	}
 	content, validation, err := c.complete(ctx, c.profile.ValidatorModel, c.profile.ValidatorProvider, validatePrompt, map[string]any{"before": req.Text, "after": *rewritten.Text, "protected": req.Protected}, "accepted", "boolean", 0)
+	receipt := SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(*rewritten.Text)), Rewrite: rewrite, Validation: validation}
 	if err != nil {
-		return "", SurfaceReceipt{}, err
+		return *rewritten.Text, receipt, err
 	}
 	var verdict struct {
 		Accepted *bool `json:"accepted"`
 	}
 	if decodeSingleField(content, "accepted", &verdict.Accepted) != nil || verdict.Accepted == nil || !*verdict.Accepted {
-		return "", SurfaceReceipt{}, errors.New("private producer: semantic validation rejected")
+		return *rewritten.Text, receipt, errors.New("private producer: semantic validation rejected")
 	}
-	return *rewritten.Text, SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(*rewritten.Text)), Rewrite: rewrite, Validation: validation}, nil
+	return *rewritten.Text, receipt, nil
 }
 
 type cachedResults map[string]struct{ before, after string }
@@ -275,7 +286,7 @@ func (c *Client) Produce(ctx context.Context, base gen.DatasetArtifact, concurre
 	}
 	profile, _ := c.profile.Digest()
 	receipt, err := json.Marshal(Receipt{Schema: "private-surface-validation-v1", Accepted: true, BaseSHA256: digest(baseBytes), DatasetSHA256: digest(output), ProfileSHA256: profile, Profile: c.profile, CreatedAt: time.Now().UTC(), Surfaces: receipts})
-	if err != nil || len(receipt) > 1<<20 {
+	if err != nil || len(receipt) > 4<<20 {
 		return nil, nil, errors.New("private producer: invalid receipt size")
 	}
 	return output, receipt, nil

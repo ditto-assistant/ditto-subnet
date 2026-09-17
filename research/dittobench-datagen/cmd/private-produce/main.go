@@ -81,6 +81,8 @@ func run() error {
 		count := min(*probe, len(requests))
 		type sample struct {
 			Index   int                            `json:"index"`
+			Before  string                         `json:"before"`
+			After   string                         `json:"after"`
 			Error   string                         `json:"error,omitempty"`
 			Receipt *privatesurface.SurfaceReceipt `json:"receipt,omitempty"`
 		}
@@ -88,12 +90,11 @@ func run() error {
 		accepted := 0
 		for i := 0; i < count; i++ {
 			index := i * len(requests) / count
-			_, receipt, err := client.RewriteOne(ctx, requests[index])
-			row := sample{Index: index}
+			after, receipt, err := client.ProbeOne(ctx, requests[index])
+			row := sample{Index: index, Before: requests[index].Text, After: after, Receipt: &receipt}
 			if err != nil {
 				row.Error = err.Error()
 			} else {
-				row.Receipt = &receipt
 				accepted++
 			}
 			rows = append(rows, row)
