@@ -574,6 +574,88 @@
     ],
     "type": "object"
   },
+  "ConfirmationDatasetPin": {
+    "properties": {
+      "anchor_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dataset_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "private_dataset_mode": {
+        "anyOf": [
+          {
+            "const": "platform-private-v1",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "run_size": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "seed": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "seed_block": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed_block_hash": {
+        "anyOf": [
+          {
+            "pattern": "^(0x)?[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed_index": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "seed",
+      "dataset_sha256",
+      "run_size"
+    ],
+    "type": "object"
+  },
   "FailJobRequest": {
     "properties": {
       "agent_id": {
@@ -657,6 +739,359 @@
     "required": [
       "agent_id",
       "reopened"
+    ],
+    "type": "object"
+  },
+  "JobResponse": {
+    "$defs": {
+      "BenchmarkRuntimeSettings": {
+        "properties": {
+          "case_concurrency": {
+            "default": 4,
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "relay_delay_fingerprint_max_ms": {
+            "default": 250,
+            "maximum": 5000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relay_delay_fingerprint_min_ms": {
+            "default": 25,
+            "maximum": 5000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relay_delay_fingerprint_mode": {
+            "default": "off",
+            "enum": [
+              "off",
+              "shadow"
+            ],
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ConfirmationDatasetPin": {
+        "properties": {
+          "anchor_agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "dataset_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "private_dataset_mode": {
+            "anyOf": [
+              {
+                "const": "platform-private-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "run_size": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "seed_block": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "seed_block_hash": {
+            "anyOf": [
+              {
+                "pattern": "^(0x)?[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "seed_index": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "seed",
+          "dataset_sha256",
+          "run_size"
+        ],
+        "type": "object"
+      },
+      "InferenceGrantOffer": {
+        "properties": {
+          "allowed_models": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "type": "array"
+          },
+          "exchange_url": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "grant_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "profile_revision": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "proxy_url": {
+            "type": "string"
+          },
+          "request_budget": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "token_budget": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "grant_id",
+          "exchange_url",
+          "proxy_url",
+          "allowed_models",
+          "request_budget",
+          "token_budget",
+          "expires_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "bench_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "benchmark_runtime": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BenchmarkRuntimeSettings"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_datasets": {
+        "items": {
+          "$ref": "#/$defs/ConfirmationDatasetPin"
+        },
+        "type": "array"
+      },
+      "dataset_seed_block": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dataset_seed_block_hash": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dataset_sha256": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "inference": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/InferenceGrantOffer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "minimum_screening_policy_version": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "private_dataset_mode": {
+        "anyOf": [
+          {
+            "const": "platform-private-v1",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "requires_screened_image": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "run_size": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed_scope": {
+        "default": "agent",
+        "enum": [
+          "agent",
+          "validator"
+        ],
+        "type": "string"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "slot_id": {
+        "default": "slot-0",
+        "pattern": "^slot-[0-7]$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id",
+      "miner_hotkey",
+      "sha256",
+      "deadline"
     ],
     "type": "object"
   },
@@ -5136,6 +5571,43 @@
     ],
     "type": "object"
   },
+  "PrivateDatasetRequest": {
+    "properties": {
+      "dataset_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "signature": {
+        "pattern": "^[0-9a-f]{128}$",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "dataset_sha256",
+      "deadline",
+      "nonce",
+      "requested_at",
+      "signature"
+    ],
+    "type": "object"
+  },
   "ScoreReport": {
     "$defs": {
       "CaseScore": {
@@ -6903,6 +7375,10 @@
               }
             ],
             "default": null
+          },
+          "private_datasets": {
+            "default": false,
+            "type": "boolean"
           },
           "probe": {
             "anyOf": [

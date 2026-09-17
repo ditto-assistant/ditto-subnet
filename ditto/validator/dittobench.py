@@ -12,6 +12,7 @@ wire contract is identical by design), so it round-trips straight back into
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import logging
@@ -1060,6 +1061,11 @@ class DittobenchClient:
         try:
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
+                private_datasets=(
+                    13 in observed_versions
+                    and isinstance(payload.get("features"), list)
+                    and "platform-private-v1" in payload["features"]
+                ),
                 supported_bench_versions=observed_versions,
                 observed_at=observed_at,
                 software_version=software_version,
@@ -1172,6 +1178,8 @@ class DittobenchClient:
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
+        private_dataset_bytes: bytes | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -1214,6 +1222,8 @@ class DittobenchClient:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         if self._config.dittobench_mock:
             self.last_details = {}
+            if private_dataset_mode is not None or private_dataset_bytes is not None:
+                raise DittobenchError("private datasets cannot use mock scoring")
             self.last_transcript = None
             return self._mock_report()
         run_id = await self._submit(
@@ -1221,6 +1231,8 @@ class DittobenchClient:
             tarball_sha256=tarball_sha256,
             seed=seed,
             dataset_sha256=dataset_sha256,
+            private_dataset_mode=private_dataset_mode,
+            private_dataset_bytes=private_dataset_bytes,
             run_size=run_size,
             bench_version=bench_version,
             screened_image_url=screened_image_url,
@@ -1267,6 +1279,8 @@ class DittobenchClient:
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
+        private_dataset_bytes: bytes | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         screened_image_url: str | None = None,
@@ -1361,6 +1375,20 @@ class DittobenchClient:
                 f"benchmark v{bench_version} requires a pinned dataset"
             )
         body["dataset_sha256"] = dataset_sha256
+        if private_dataset_mode is not None or private_dataset_bytes is not None:
+            if (
+                private_dataset_mode != "platform-private-v1"
+                or bench_version != 13
+                or not private_dataset_bytes
+                or len(private_dataset_bytes) > 32 << 20
+            ):
+                raise DittobenchError("private dataset input is incomplete")
+            if hashlib.sha256(private_dataset_bytes).hexdigest() != dataset_sha256:
+                raise DittobenchError("private dataset digest mismatch")
+            body["private_dataset_mode"] = private_dataset_mode
+            body["private_dataset_bytes"] = base64.b64encode(
+                private_dataset_bytes
+            ).decode("ascii")
         body["bench_version"] = bench_version
         if benchmark_runtime is not None:
             body["benchmark_runtime"] = benchmark_runtime.model_dump(mode="json")

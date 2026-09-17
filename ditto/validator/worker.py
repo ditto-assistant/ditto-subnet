@@ -2873,6 +2873,7 @@ class ValidatorWorker:
                         expected_sha256,
                         seed=dataset.seed,
                         dataset_sha256=dataset.dataset_sha256,
+                        private_dataset_mode=dataset.private_dataset_mode,
                         run_size=dataset.run_size,
                         bench_version=bench_version,
                         progress_callback=self._on_dittobench_progress,
@@ -3702,6 +3703,7 @@ class ValidatorWorker:
                 job.miner_hotkey,
                 seed=job.seed,
                 dataset_sha256=job.dataset_sha256,
+                private_dataset_mode=job.private_dataset_mode,
                 run_size=job.run_size,
                 bench_version=job.bench_version,
                 ticket_deadline=job.deadline,
@@ -3723,6 +3725,7 @@ class ValidatorWorker:
         *,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -3749,6 +3752,7 @@ class ValidatorWorker:
                 expected_sha256,
                 seed=seed,
                 dataset_sha256=dataset_sha256,
+                private_dataset_mode=private_dataset_mode,
                 run_size=run_size,
                 bench_version=bench_version,
                 progress_callback=progress_callback,
@@ -3773,6 +3777,7 @@ class ValidatorWorker:
         *,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -3814,11 +3819,25 @@ class ValidatorWorker:
                 f"benchmark v{bench_version} artifact for agent {agent_id} is "
                 "not backed by screening policy 9 and a verified image"
             )
+        private_dataset_bytes = None
+        if private_dataset_mode is not None:
+            if (
+                private_dataset_mode != "platform-private-v1"
+                or bench_version != 13
+                or not dataset_sha256
+                or ticket_deadline is None
+            ):
+                raise PlatformError("private dataset lease identity is incomplete")
+            private_dataset_bytes = await self._platform.get_private_dataset(
+                agent_id, dataset_sha256=dataset_sha256, deadline=ticket_deadline
+            )
         report = await self._dittobench.score_tarball(
             tarball_url=artifact.download_url,
             tarball_sha256=artifact.sha256,
+            private_dataset_bytes=private_dataset_bytes,
             seed=seed,
             dataset_sha256=dataset_sha256,
+            private_dataset_mode=private_dataset_mode,
             run_size=run_size,
             bench_version=bench_version,
             progress_callback=progress_callback,
@@ -3956,6 +3975,7 @@ class ValidatorWorker:
         *,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         ticket_deadline: datetime | None = None,
@@ -3972,6 +3992,7 @@ class ValidatorWorker:
                 expected_sha256,
                 seed=seed,
                 dataset_sha256=dataset_sha256,
+                private_dataset_mode=private_dataset_mode,
                 run_size=run_size,
                 bench_version=bench_version,
             )
@@ -3991,6 +4012,7 @@ class ValidatorWorker:
                 expected_sha256,
                 seed=seed,
                 dataset_sha256=dataset_sha256,
+                private_dataset_mode=private_dataset_mode,
                 run_size=run_size,
                 bench_version=bench_version,
                 progress_callback=self._on_dittobench_progress,

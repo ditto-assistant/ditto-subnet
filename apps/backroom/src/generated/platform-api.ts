@@ -5572,6 +5572,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/agent/{agent_id}/private-dataset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Download Private Dataset */
+        post: operations["download_private_dataset_api_v1_validator_agent__agent_id__private_dataset_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/agent/{agent_id}/score": {
         parameters: {
             query?: never;
@@ -15398,6 +15415,8 @@ export interface components {
             anchor_agent_id?: string | null;
             /** Dataset Sha256 */
             dataset_sha256: string;
+            /** Private Dataset Mode */
+            private_dataset_mode?: "platform-private-v1" | null;
             /** Run Size */
             run_size: string;
             /** Seed */
@@ -17859,6 +17878,8 @@ export interface components {
             miner_hotkey: string;
             /** Minimum Screening Policy Version */
             minimum_screening_policy_version?: number | null;
+            /** Private Dataset Mode */
+            private_dataset_mode?: "platform-private-v1" | null;
             /** Requires Screened Image */
             requires_screened_image?: boolean | null;
             /**
@@ -19308,6 +19329,30 @@ export interface components {
              * @default true
              */
             require_desired_era_drained: boolean;
+        };
+        /** PrivateDatasetRequest */
+        PrivateDatasetRequest: {
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /** ProviderCircuitSnapshot */
         ProviderCircuitSnapshot: {
@@ -24595,6 +24640,11 @@ export interface components {
         ScorerBenchmarkCapability: {
             /** Observed At */
             observed_at?: number | null;
+            /**
+             * Private Datasets
+             * @default false
+             */
+            private_datasets: boolean;
             probe?: components["schemas"]["ScorerLivenessProbe"] | null;
             /** Software Version */
             software_version?: string | null;
@@ -39423,6 +39473,39 @@ export interface operations {
             };
             /** @description Authority, deadline, or immutable result conflict. */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_private_dataset_api_v1_validator_agent__agent_id__private_dataset_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PrivateDatasetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };

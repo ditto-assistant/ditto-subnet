@@ -7572,6 +7572,12 @@ async def agent_dataset(
         if row.scores
         else await active_bench_version(session)
     )
+    if dataset_bench_version == 13:
+        response.headers["Cache-Control"] = "no-store"
+        raise HTTPException(
+            status_code=409,
+            detail="V13 dataset reveal requires private work-set closure",
+        )
     try:
         artifact, sha = await generator.fetch_dataset(
             row.dataset_seed, row.dataset_run_size, dataset_bench_version

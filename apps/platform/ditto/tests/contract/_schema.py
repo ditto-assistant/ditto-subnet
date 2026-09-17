@@ -24,6 +24,9 @@ from typing import Any
 # The validator request/response models that cross the platform <-> validator
 # HTTP boundary. Both repos must keep their copies structurally identical.
 SHARED_MODELS = [
+    "JobResponse",
+    "ConfirmationDatasetPin",
+    "PrivateDatasetRequest",
     "ArtifactResponse",
     "CaseScore",
     "ScoreReport",

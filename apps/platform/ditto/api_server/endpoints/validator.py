@@ -234,6 +234,7 @@ from ditto.db.models import (
     ConfirmationBundleTicket,
     ConfirmationScore,
     InferenceGrant,
+    PrivateBenchmarkDataset,
     Score,
     ScoreAuditEntry,
     ScreeningAttempt,
@@ -373,6 +374,35 @@ if TYPE_CHECKING:
     from ditto.chain import ChainClient
 
 logger = logging.getLogger(__name__)
+
+
+async def _private_dataset_mode(
+    session: AsyncSession,
+    dataset_sha256: str | None,
+    heartbeat: ValidatorHeartbeat | None,
+) -> Literal["platform-private-v1"] | None:
+    if dataset_sha256 is None:
+        return None
+    dataset_id = await session.scalar(
+        select(PrivateBenchmarkDataset.dataset_id)
+        .where(PrivateBenchmarkDataset.dataset_sha256 == dataset_sha256)
+        .limit(1)
+    )
+    if dataset_id is None:
+        return None
+    capabilities = heartbeat.capabilities if heartbeat is not None else None
+    scorer = (
+        capabilities.get("scorer_benchmarks")
+        if isinstance(capabilities, dict)
+        else None
+    )
+    if (
+        not isinstance(scorer, dict)
+        or scorer.get("private_datasets") is not True
+        or scorer.get("status") != "fresh_verified"
+    ):
+        raise HTTPException(503, "validator cannot execute private datasets")
+    return "platform-private-v1"
 
 
 def _inference_grant_offer(
@@ -3672,6 +3702,9 @@ async def request_job(
                 seed=canary.seed,
                 seed_scope="validator",
                 dataset_sha256=canary.dataset_sha256,
+                private_dataset_mode=await _private_dataset_mode(
+                    session, canary.dataset_sha256, heartbeat
+                ),
                 run_size=canary.run_size,
                 dataset_seed_block=canary_ticket.seed_block,
                 dataset_seed_block_hash=canary_ticket.seed_block_hash,
@@ -4121,6 +4154,9 @@ async def request_job(
                 )
             job = JobResponse(
                 agent_id=agent.agent_id,
+                private_dataset_mode=await _private_dataset_mode(
+                    session, ticket.dataset_sha256, heartbeat
+                ),
                 slot_id=ticket.slot_id,
                 miner_hotkey=agent.miner_hotkey,
                 sha256=agent.sha256,
@@ -5629,6 +5665,10 @@ async def request_top5_confirmation_job(
                     ),
                 )
             ]
+        for pin in confirmation_datasets:
+            pin.private_dataset_mode = await _private_dataset_mode(
+                session, pin.dataset_sha256, heartbeat
+            )
         # Place this retest on a real execution slot. The lane occupies one
         # slot exactly like a canonical lease, so it answers the same two
         # questions the canonical lane already answers: which slots is this
@@ -7611,6 +7651,11 @@ async def _publish_finalized_run(
     if storage.public_bucket is None:
         return
     bench_version = scores[0].bench_version if scores else None
+    if bench_version == 13:
+        # V13 private work can share a CRN artifact beyond this agent's
+        # finalization. Full-detail mirrors require work-set closure first.
+        # Public aggregate/signed digest projections remain available.
+        return
     record = {
         "agent_id": str(agent.agent_id),
         "miner_hotkey": agent.miner_hotkey,
@@ -7801,7 +7846,22 @@ async def submit_transcript(
     # Preserve the optional anonymous mirror for offline auditors. A mirror
     # outage must not discard the authoritative transcript after score
     # acceptance.
-    if storage.public_bucket is not None:
+    dataset_sha = (
+        score.details.get("dataset_sha256") if isinstance(score.details, dict) else None
+    )
+    private_dataset = (
+        await session.scalar(
+            select(PrivateBenchmarkDataset.dataset_id)
+            .where(PrivateBenchmarkDataset.dataset_sha256 == dataset_sha)
+            .limit(1)
+        )
+        if dataset_sha
+        else None
+    )
+    # Private transcripts can expose answers while another CRN member still
+    # needs the dataset. Retain privately; a later explicit closure/reveal
+    # operation must establish that no future work can reuse this artifact.
+    if storage.public_bucket is not None and private_dataset is None:
         try:
             if not await storage.object_exists(key=key, bucket=storage.public_bucket):
                 await storage.put_object(

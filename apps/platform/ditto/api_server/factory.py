@@ -132,6 +132,7 @@ from ditto.api_server.endpoints import (
     validator_coding_harness_router,
     validator_coding_inference_router,
     validator_confirmation_router,
+    validator_private_dataset,
     validator_router,
 )
 from ditto.api_server.endpoints.admin_benchmark_canary import (
@@ -666,6 +667,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
+    app.include_router(validator_private_dataset.router, prefix="/api/v1")
     app.include_router(validator_coding_certification_router, prefix="/api/v1")
     app.include_router(validator_coding_certification_leases_router, prefix="/api/v1")
     app.include_router(validator_coding_claims_router, prefix="/api/v1")

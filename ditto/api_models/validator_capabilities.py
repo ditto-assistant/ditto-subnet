@@ -155,6 +155,7 @@ class ScorerBenchmarkCapability(BaseModel):
     software_version: Annotated[str | None, Field(pattern=_VERSION_PATTERN)] = None
     source_revision: Annotated[str | None, Field(pattern=_REVISION_PATTERN)] = None
     v7_calibration: V7InferenceCalibration | None = None
+    private_datasets: bool = Field(default=False, exclude_if=lambda value: not value)
     # Additive and optional so a validator that predates heartbeat protocol v15
     # produces the exact same signing bytes it always did. Absent means "this
     # validator cannot report probe evidence", never "the probe succeeded".
@@ -163,6 +164,10 @@ class ScorerBenchmarkCapability(BaseModel):
     @model_validator(mode="after")
     def support_matches_verified_identity(self) -> ScorerBenchmarkCapability:
         versions = self.supported_bench_versions
+        if self.private_datasets and (
+            self.status != "fresh_verified" or 13 not in versions
+        ):
+            raise ValueError("private datasets require verified v13 scorer support")
         if tuple(sorted(set(versions))) != versions:
             raise ValueError("supported benchmark versions must be unique and sorted")
         if self.status == "fresh_verified":

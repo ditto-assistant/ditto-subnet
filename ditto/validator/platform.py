@@ -8,6 +8,7 @@ signature. It never touches the platform DB directly.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -76,6 +77,7 @@ from ditto.api_models.receipt_diagnostics import (
     SubmitReceiptDiagnostics,
     diagnostic_signing_message,
 )
+from ditto.api_models.private_dataset import PrivateDatasetRequest
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.validator import (
     ArtifactResponse,
@@ -2048,6 +2050,39 @@ class PlatformClient:
             return RouterLedgerResponse.model_validate(resp.json())
         except (ValidationError, ValueError) as e:
             raise PlatformError("router ledger response was invalid") from e
+
+    async def get_private_dataset(
+        self, agent_id: UUID, *, dataset_sha256: str, deadline: datetime
+    ) -> bytes:
+        payload = PrivateDatasetRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            dataset_sha256=dataset_sha256,
+            deadline=deadline,
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+            signature="0" * 128,
+        )
+        payload.signature = self._keypair.sign(payload.signing_message(agent_id)).hex()
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/private-dataset"
+        try:
+            async with self._client.stream(
+                "POST", url, headers=self._headers, json=payload.model_dump(mode="json")
+            ) as response:
+                if response.status_code != 200:
+                    raise PlatformError("private dataset download rejected")
+                parts = []
+                total = 0
+                async for chunk in response.aiter_bytes(65536):
+                    total += len(chunk)
+                    if total > 32 << 20:
+                        raise PlatformError("private dataset exceeds size limit")
+                    parts.append(chunk)
+                body = b"".join(parts)
+        except httpx.HTTPError:
+            raise PlatformError("private dataset transport failed") from None
+        if not body or hashlib.sha256(body).hexdigest() != dataset_sha256:
+            raise PlatformError("private dataset digest mismatch")
+        return body
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
         """Get a presigned tarball URL with fresh proof of hotkey ownership."""

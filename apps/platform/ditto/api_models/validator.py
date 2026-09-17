@@ -54,6 +54,9 @@ from ditto.api_models.confirmation_progress import (
 )
 from ditto.api_models.inference import InferenceGrantOffer
 from ditto.api_models.inference_concurrency_settings import BenchmarkRuntimeSettings
+from ditto.api_models.private_dataset import (
+    PrivateDatasetRequest as PrivateDatasetRequest,
+)
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import SystemMetrics
 from ditto.api_models.upload import (
@@ -290,6 +293,7 @@ class ConfirmationDatasetPin(BaseModel):
     """
 
     seed: Annotated[int, Field(ge=0)]
+    private_dataset_mode: Literal["platform-private-v1"] | None = None
     dataset_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     run_size: Annotated[str, Field(min_length=1)]
     anchor_agent_id: Annotated[
@@ -354,6 +358,7 @@ class JobResponse(BaseModel):
     """
 
     agent_id: Annotated[UUID, Field(description="Agent this ticket is for.")]
+    private_dataset_mode: Literal["platform-private-v1"] | None = None
     slot_id: Annotated[str, Field(pattern=r"^slot-[0-7]$")] = "slot-0"
     miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
     sha256: Annotated[
