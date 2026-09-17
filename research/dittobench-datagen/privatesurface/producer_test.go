@@ -189,6 +189,11 @@ func TestProduceSemanticRetriesAreBoundedAndRetained(t *testing.T) {
 		if request["model"] == "validator-v1" {
 			return 200, completion(`{"accepted":false}`)
 		}
+		messages := request["messages"].([]any)
+		prompt := messages[0].(map[string]any)["content"].(string)
+		if strings.Contains(prompt, preservationPrompt) != (calls == 2*maxSurfaceAttempts-1) {
+			t.Error("preservation prompt must only be the final bounded candidate")
+		}
 		return 200, completion(`{"text":"changed text"}`)
 	})
 	base := gen.DatasetArtifact{BenchVersion: 13, SurfaceSalt: 1, ToolCases: []protocol.ToolCase{{ID: "t", Prompt: "source text"}}}
