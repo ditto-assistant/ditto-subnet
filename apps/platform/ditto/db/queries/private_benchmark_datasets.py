@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.db.models import PrivateBenchmarkDataset
 
 MAX_ARTIFACT_BYTES = 32 << 20
-MAX_RECEIPT_BYTES = 1 << 20
+MAX_RECEIPT_BYTES = 4 << 20
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 

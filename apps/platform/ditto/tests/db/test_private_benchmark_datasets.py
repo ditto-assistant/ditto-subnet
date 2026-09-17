@@ -65,6 +65,23 @@ async def test_retry_and_restart_reuse_exact_bytes(session_maker):
         assert "private" not in repr(first).split("dataset_sha256")[1]
 
 
+async def test_full_profile_receipt_capacity_is_bounded(session_maker):
+    key = identity()
+    values = candidate(key)
+    receipt = json.loads(values["validation_receipt_bytes"])
+    receipt["surface_provenance"] = "x" * (2 << 20)
+    values["validation_receipt_bytes"] = json.dumps(receipt).encode()
+    async with session_maker() as session, session.begin():
+        result = await pin_private_dataset(session, identity=key, **values)
+    async with session_maker() as session:
+        assert await find_private_dataset(session, identity=key) == result
+    receipt["surface_provenance"] = "x" * (4 << 20)
+    values["validation_receipt_bytes"] = json.dumps(receipt).encode()
+    async with session_maker() as session, session.begin():
+        with pytest.raises(PrivateDatasetError):
+            await pin_private_dataset(session, identity=key, **values)
+
+
 async def test_concurrent_candidates_have_one_winner(session_maker):
     key = identity()
 
