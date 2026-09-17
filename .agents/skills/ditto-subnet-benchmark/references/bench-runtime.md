@@ -10,11 +10,13 @@ Source review of a miner harness is `$backroom-review`. The scorer contract is
 
 The scorer POSTs overlapping `/run`. Each carries a case-scoped
 `inference_base_url` minted by the validator; using it attributes that case's
-model calls exactly under concurrency. It is attribution only -- no exclusive
+model calls exactly under concurrency. Below v13 it is attribution only -- no exclusive
 case window, no admission or scoring change -- and it is revoked when the case
 ends, so it must not become a shared client for the next case. The
 **process-wide inference URL** remains supported for harnesses that ignore the
-field. `case_scoped_inference_v1` is ignored.
+field. From v13 the existing `/run/<case_id>` route is preserved for
+claim-provenance and catalog capture; missing attribution under concurrency
+is a harness fault under the v13 contract. `case_scoped_inference_v1` is ignored.
 
 Kept: per-case `tool_endpoint`, ticket-scope `model_use`, memory wave barriers
 (seed wave *w*, run those cases, then *w+1*).

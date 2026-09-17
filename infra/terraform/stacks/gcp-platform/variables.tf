@@ -186,22 +186,17 @@ variable "ssh_users" {
     "user:nickanderson@omniaura.ai",
     "user:peyton@omniaura.ai",
     "user:omar@omniaura.ai",
-    "user:brian@omniaura.ai",
   ]
 }
 
 variable "debug_operators" {
   description = "Operators granted the minimum GCP IAM used by repo debug skills: unconditioned compute.viewer (gcloud compute ssh needs compute.projects.get), IAP sudo SSH on platform-dev/prod plus leftover screener/validator/fleet VMs (query_prod_db.sh, py-spy, pprofctl), and secretAccessor on TARGON_API_KEY (query_targon.sh). Not project Editor, not postgres SSH, not other secrets. Platform SSH already covered by ssh_users is not duplicated."
   type        = list(string)
-  default = [
-    "user:brian@omniaura.ai",
-  ]
+  default     = []
 }
 
 variable "local_openrouter_secret_users" {
   description = "Developers granted secretAccessor on LOCAL_OPENROUTER_API_KEY for repo-local real-inference testing. This does not grant access to the production validator-openrouter-key secret."
   type        = list(string)
-  default = [
-    "user:brian@omniaura.ai",
-  ]
+  default     = []
 }

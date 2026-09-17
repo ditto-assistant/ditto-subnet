@@ -14,12 +14,13 @@ import (
 // runCaseWithModelAttribution runs one scored case over the run-wide inference
 // session. Exclusive per-case windows (beginCaseSnapshot plus a case-scoped
 // inference URL) forced serial /run, and concurrent scoring does not reopen
-// them: no case window, snapshot or generation is opened here. It does hand the
+// them: no case window, snapshot or generation is opened here. Below v13 it hands the
 // harness a case-scoped URL minted under the session's own base, as
 // inference_base_url on this /run. That URL names the case for trace capture
 // and nothing else, and lives only as long as this /run -- the deferred
 // endRunCase revokes it, so a harness that keeps serving one case through
 // another case's URL gets 401 and should fall back to the process-wide URL.
+// v13 retains the caller-provided /run/<case_id> URL for provenance capture.
 // Ticket-scope model_use carries model-use anti-cheat; v10+ tool credit is
 // carried by session-scoped tool provenance: the broker forwards a
 // tool_endpoint request only after consuming a matching model-emitted tool call
@@ -41,12 +42,20 @@ func (s *server) runCaseWithModelAttribution(
 	if inferenceSessionID != "" && s.broker != nil {
 		if caseURL, started := s.broker.beginRunCase(inferenceSessionID, caseID); started {
 			defer s.broker.endRunCase(inferenceSessionID, caseID)
-			opts.InferenceBaseURL = caseURL
+			if caseURL != "" {
+				opts.InferenceBaseURL = caseURL
+			}
 		}
 	}
 	response, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
 	if opts.BenchVersion >= protocol.BenchVersionV10 && inferenceSessionID != "" && s.broker != nil {
 		execution.ToolProvenance = s.broker.sessionToolProvenance(inferenceSessionID, caseID)
+	}
+	// Bench v13 catalog evidence: what the harness offered the model for this
+	// case, read after /run returned (every attributed completion is booked under
+	// the session lock before its response is released to the harness).
+	if opts.BenchVersion >= protocol.BenchVersionV13 && inferenceSessionID != "" && s.broker != nil {
+		execution.Catalog = s.broker.sessionCatalogEvidence(inferenceSessionID, caseID)
 	}
 	return response, execution, runErr
 }
@@ -124,6 +133,15 @@ func applyV9BaseEvidence(
 	gates, err := v9base.BuildGateEvidence(req.BenchVersion, perCase, model, true, dependence...)
 	if err != nil {
 		return protocol.ScoreReport{}, fmt.Errorf("build v9 score-gate evidence: %w", err)
+	}
+	// Bench v13 layers the claim-span provenance + causal gate summary onto the
+	// signed evidence (identity factor; the gates act per case). Attached after
+	// Build so v9..v12 evidence bytes are untouched.
+	if req.BenchVersion >= protocol.BenchVersionV13 {
+		gates, err = scoregates.AttachClaimProvenance(gates, v13ClaimProvenanceGateInput(v13ClaimProvenancePosture, perCase))
+		if err != nil {
+			return protocol.ScoreReport{}, fmt.Errorf("attach v13 claim-provenance evidence: %w", err)
+		}
 	}
 	details, digest, effective, err := v9base.Build(v9base.Inputs{
 		RunID: report.RunID, BenchVersion: req.BenchVersion, ArtifactSHA256: artifactSHA256,

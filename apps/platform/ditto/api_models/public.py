@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ditto.api_models.benchmark_capacity import BenchmarkAdmission
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_progress import ConfirmationProgressStage
+from ditto.api_models.gate_evidence import PublicGateEvidence
 from ditto.api_models.name_claim import PublicNameHandle
 from ditto.api_models.retry_state import RetryState
 from ditto.api_models.screener import ScreenerProgressStage, ScreenerRuntimeState
@@ -516,6 +517,22 @@ class PublicLeaderboardFamilyMember(BaseModel):
     agent_name: str
     agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
     canonical_composite: Annotated[float, Field(ge=_MIN_DISPLAY_COMPOSITE, le=1.0)]
+    official_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=_MIN_DISPLAY_COMPOSITE,
+            le=1.0,
+            description=(
+                "The same ranking composite the parent KOTH row uses: the "
+                "continual mean of the quorum scores plus shared retest seeds "
+                "when that estimator is active, otherwise the canonical "
+                "median. The expander must render this, not "
+                "``canonical_composite``, or a later upload's three-validator "
+                "median looks like it outranks the representative."
+            ),
+        ),
+    ] = None
     submitted_at: Annotated[
         datetime | None,
         Field(
@@ -865,6 +882,24 @@ class PublicLeaderboardEntry(BaseModel):
             exclude_if=lambda value: value is None,
             description="Signed full-confirmation evidence root digest.",
         ),
+    ] = None
+    router_shadow_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Display-only shadow router-track efficiency composite from the "
+                "published router ledger. Never ranked or weighted while the "
+                "router track is shadow."
+            ),
+        ),
+    ] = None
+    router_shadow_status: Annotated[
+        Literal["queued", "running", "measured"] | None,
+        Field(default=None, exclude_if=lambda value: value is None),
     ] = None
     aggregate_method: Literal["canonical_median", "continual_mean"] = "canonical_median"
     pre_efficiency_composite: Annotated[
@@ -1562,6 +1597,203 @@ class PublicKothEmissions(BaseModel):
         ),
     ] = None
     recipients: list[PublicEmissionRecipient] = Field(default_factory=list)
+    crown_incumbent_active: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether the displayed fold defends the crown from the previous "
+                "pin's champion (crown_mode incumbent) instead of re-deriving it "
+                "from the earliest lineage on every read."
+            ),
+        ),
+    ] = False
+    crown_incumbent_required_protocol: Annotated[
+        int,
+        Field(
+            default=27,
+            ge=1,
+            description="Minimum fleet heartbeat protocol for crown incumbency.",
+        ),
+    ] = 27
+    crown_incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description=(
+                "The incumbent the live fold defended, when incumbency is active "
+                "and the current pin named one. Null otherwise."
+            ),
+        ),
+    ] = None
+    next_pin_projection: Annotated[
+        PublicNextPinProjection | None,
+        Field(
+            default=None,
+            description=(
+                "What the next epoch pin would record if it were taken from the "
+                "live board right now: the fold over the current rows with the "
+                "current pin's champion as incumbent. Read changes_crown to know "
+                "whether weights will move at the next pin."
+            ),
+        ),
+    ] = None
+    ledger_pin: Annotated[
+        PublicLedgerPin | None,
+        Field(
+            default=None,
+            description=(
+                "The epoch-pinned ledger validators are folding right now. The "
+                "board above is live and can move within an epoch; weights only "
+                "move at the next pin, so this is the snapshot any on-chain "
+                "vector should be read against. Null while pinning is switched "
+                "off or before the first pin was taken."
+            ),
+        ),
+    ] = None
+
+
+class PublicNextPinProjection(BaseModel):
+    """The crown the next epoch pin would record from the live board."""
+
+    champion_agent_id: UUID
+    champion_miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description="The current pin's champion the projection defended from.",
+        ),
+    ] = None
+    changes_crown: Annotated[
+        bool,
+        Field(
+            description=(
+                "True when the projected champion differs from the current pin's "
+                "champion, i.e. the 65% slot moves at the next pin."
+            )
+        ),
+    ]
+    decision: Annotated[
+        PublicDethroneDecision | None,
+        Field(
+            default=None,
+            description=(
+                "The dethrone decision for the strongest rival against the "
+                "projected champion; null when there is no rival."
+            ),
+        ),
+    ] = None
+
+
+class PublicLedgerPin(BaseModel):
+    """Identity of one epoch-pinned validator ledger."""
+
+    mode: Annotated[
+        Literal["epoch", "live"],
+        Field(
+            description=(
+                "epoch: validators fold one frozen ledger per chain epoch; live: "
+                "the historical time-based read (the rollback)."
+            )
+        ),
+    ]
+    epoch_index: Annotated[
+        int, Field(ge=0, description="Chain SubnetEpochIndex the pin belongs to.")
+    ]
+    last_epoch_block: Annotated[int, Field(ge=0)]
+    pinned_block: Annotated[
+        int, Field(ge=0, description="Head block the pin's schedule was read at.")
+    ]
+    pinned_at: Annotated[datetime, Field(description="When the pin was taken (UTC).")]
+    next_epoch_block: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="Boundary that ends the pinned epoch, when it was known.",
+        ),
+    ] = None
+    bench_version: Annotated[int, Field(ge=1)]
+    entry_count: Annotated[int, Field(ge=0)]
+    ledger_digest: Annotated[
+        str,
+        Field(
+            pattern=r"^[0-9a-f]{64}$",
+            description=(
+                "SHA-256 of the pinned entries plus fold markers; every validator "
+                "folding this pin holds this digest."
+            ),
+        ),
+    ]
+    champion_agent_id: UUID | None = None
+    incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description=(
+                "The previous pin's champion resolved into this pool, which the "
+                "incumbency fold defends when crown_mode is incumbent."
+            ),
+        ),
+    ] = None
+    crown_mode: Annotated[
+        Literal["incumbent"] | None,
+        Field(
+            default=None,
+            description="Fold marker frozen into the pin; null means the classic walk.",
+        ),
+    ] = None
+
+
+class PublicLedgerActor(BaseModel):
+    """One agent named by a pin: the champion, the incumbent, or a recipient."""
+
+    agent_id: UUID
+    miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    agent_name: str | None = None
+    agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
+
+
+class PublicLedgerEpochRecipient(PublicLedgerActor):
+    role: Literal["champion", "joint_champion", "tail"]
+    share_of_miner_pool: Annotated[float, Field(gt=0.0, le=1.0)]
+
+
+class PublicLedgerEpoch(BaseModel):
+    """One pinned epoch and the crown decision the fold derived from it."""
+
+    epoch_index: Annotated[int, Field(ge=0)]
+    last_epoch_block: Annotated[int, Field(ge=0)]
+    pinned_block: Annotated[int, Field(ge=0)]
+    pinned_at: datetime
+    bench_version: Annotated[int, Field(ge=1)]
+    entry_count: Annotated[int, Field(ge=0)]
+    ledger_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    crown_mode: Literal["incumbent"] | None = None
+    champion: PublicLedgerActor | None = None
+    incumbent: PublicLedgerActor | None = None
+    crown_changed: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "True when this pin's champion differs from the previous pin's. "
+                "A run of false across retest waves is the stability the pin "
+                "and the incumbency mode exist to produce."
+            ),
+        ),
+    ] = False
+    recipients: list[PublicLedgerEpochRecipient] = Field(default_factory=list)
+
+
+class PublicLedgerEpochsResponse(BaseModel):
+    """Newest-first history of epoch pins: what the fleet folded, epoch by epoch."""
+
+    generated_at: datetime
+    mode: Literal["epoch", "live"]
+    count: Annotated[int, Field(ge=0)]
+    epochs: list[PublicLedgerEpoch] = Field(default_factory=list)
 
 
 class PublicEfficiencyStatus(BaseModel):
@@ -1917,6 +2149,19 @@ class PublicLeaderboardResponse(BaseModel):
             ),
         ),
     ] = None
+    router_shadow_mode: Annotated[
+        Literal["shadow"] | None,
+        Field(
+            default=None,
+            description=(
+                "Router track measurement phase. ``shadow`` is present only "
+                "when the published router ledger carries at least one "
+                "measurement; the board's router surface is display-only and "
+                "never changes ranking or emissions. Null means the router "
+                "surface is off."
+            ),
+        ),
+    ] = None
     continual_aggregate_active: Annotated[
         bool,
         Field(
@@ -1979,12 +2224,60 @@ class PublicChainWeight(BaseModel):
     value: Annotated[int, Field(gt=0, le=65535)]
 
 
+PinAgreement = Literal["current", "previous", "diverged", "unknown"]
+
+
+class PublicWeightsFold(BaseModel):
+    """What a validator reported folding, from its latest signed heartbeat."""
+
+    epoch_index: Annotated[int | None, Field(default=None, ge=0)] = None
+    ledger_digest: Annotated[
+        str | None, Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    ] = None
+    vector_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    champion_agent_id: UUID | None = None
+    folded_at: Annotated[int, Field(ge=0)]
+
+
+class PublicPinAgreement(BaseModel):
+    """How many revealed vectors match the fold the current pin prescribes."""
+
+    epoch_index: Annotated[int, Field(ge=0)]
+    previous_epoch_index: Annotated[int | None, Field(default=None, ge=0)] = None
+    matching: Annotated[int, Field(ge=0)]
+    total: Annotated[int, Field(ge=0)]
+
+
 class PublicValidatorWeightVector(BaseModel):
     """One validator's latest publicly revealed on-chain weights."""
 
     validator_uid: Annotated[int, Field(ge=0)]
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     weights: list[PublicChainWeight] = Field(default_factory=list)
+    fold: Annotated[
+        PublicWeightsFold | None,
+        Field(
+            default=None,
+            description=(
+                "The pinned ledger this validator reported folding on its latest "
+                "heartbeat; null for validators that do not heartbeat to the "
+                "Platform or predate heartbeat protocol v27."
+            ),
+        ),
+    ] = None
+    matches_pin: Annotated[
+        PinAgreement,
+        Field(
+            default="unknown",
+            description=(
+                "Whether this revealed vector's recipients and shares match the "
+                "fold prescribed by the current epoch pin (current), the previous "
+                "pin (previous: one epoch behind, the normal reveal lag), neither "
+                "(diverged), or could not be compared (unknown: no pin yet or an "
+                "empty vector)."
+            ),
+        ),
+    ] = "unknown"
 
 
 class PublicChainEpoch(BaseModel):
@@ -2122,6 +2415,16 @@ class PublicChainWeightsResponse(BaseModel):
     block_hash: Annotated[str, Field(pattern=r"^0x[0-9a-fA-F]{64}$")]
     owner_hotkey: Annotated[str | None, Field(default=None, pattern=_SS58_PATTERN)]
     vectors: list[PublicValidatorWeightVector] = Field(default_factory=list)
+    pin_agreement: Annotated[
+        PublicPinAgreement | None,
+        Field(
+            default=None,
+            description=(
+                "Count of revealed vectors matching the current pin's fold, or "
+                "null when no pin exists to compare against."
+            ),
+        ),
+    ] = None
     stale: Annotated[
         bool,
         Field(
@@ -2311,6 +2614,19 @@ class PublicValidatorScore(BaseModel):
             ),
         ),
     ]
+    gate_evidence: Annotated[
+        PublicGateEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ gate verdict for this run: posture, composite with "
+                "and without the gates, the gate-induced loss and per-gate "
+                "counts. Aggregates only -- the per-case notes are owner-only "
+                "(``GET /me/agents/{agent_id}/gate-notes``). Null below v13 "
+                "and for a scorer that emitted no gate telemetry."
+            ),
+        ),
+    ] = None
 
 
 class PublicSubmissionScores(BaseModel):
@@ -2551,6 +2867,19 @@ class PublicActivityEntry(BaseModel):
     miner_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Submitting miner's SS58 hotkey.")
     ]
+    miner_uid: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Submitting miner's current UID on this subnet; null when the "
+                "hotkey is not registered or the chain snapshot is unavailable. "
+                "Registration decorates the submission: it never changes the "
+                "row's status or score."
+            ),
+        ),
+    ] = None
     name: Annotated[str, Field(description="Miner-provided agent display name.")]
     name_handle: PublicNameHandle | None = Field(
         default=None,
@@ -2685,6 +3014,15 @@ class PublicActivityEntry(BaseModel):
         int,
         Field(ge=0, description="Independent validator scores recorded so far."),
     ]
+    coding_shadow: PublicCodingShadowScore | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Latest aggregate Coding-shadow status for this exact submission "
+            "artifact, screened image, and active benchmark. Display-only; never "
+            "changes pipeline state, rank, score, weights, or emissions."
+        ),
+    )
     provisional_composite: Annotated[
         float | None,
         Field(
@@ -2901,6 +3239,34 @@ class PublicScreeningReviewLocation(BaseModel):
     category: Annotated[str, Field(min_length=1, max_length=64)]
 
 
+class PublicScreeningReviewNote(BaseModel):
+    """Allowlisted public fields; future private protocol fields stay private."""
+
+    model_config = ConfigDict(extra="ignore")
+    kind: Literal["concern", "cleared", "observation"]
+    category: str
+    path: str | None = None
+    line: int | None = None
+    summary: str
+    confidence: float | None = None
+    stage: Literal["l1", "l2", "l3"]
+
+
+class PublicScreeningInvariantDecision(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    invariant: str
+    disposition: Literal["pass", "breach", "inconclusive"]
+    pass_clause: str | None = None
+    summary: str
+    evidence_indices: list[int]
+
+
+class PublicScreeningInvariantAssessment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    schema_version: int
+    decisions: list[PublicScreeningInvariantDecision]
+
+
 class PublicScreeningReviewFinding(BaseModel):
     """Digest-verified final finding safe for public rejected-attempt feedback."""
 
@@ -2915,6 +3281,7 @@ class PublicScreeningReviewFinding(BaseModel):
         list[PublicScreeningReviewLocation], Field(default_factory=list, max_length=16)
     ]
     summary: Annotated[str, Field(min_length=1, max_length=240)]
+    invariant_assessment: PublicScreeningInvariantAssessment | None = None
 
 
 class PublicScreeningAttempt(BaseModel):
@@ -2936,6 +3303,7 @@ class PublicScreeningAttempt(BaseModel):
     quarantine_resolution_reason: str | None = None
     review_evidence: list[PublicScreeningReviewEvidence] = Field(default_factory=list)
     review_finding: PublicScreeningReviewFinding | None = None
+    review_notes: list[PublicScreeningReviewNote] = Field(default_factory=list)
 
 
 class PublicAdmissionRetry(BaseModel):
@@ -2959,6 +3327,18 @@ class PublicAdmissionRetry(BaseModel):
 class PublicScreeningDispute(BaseModel):
     """Public-safe appeal state; the miner's private message is never exposed."""
 
+    kind: Annotated[
+        Literal["screening", "gate_notes"],
+        Field(
+            default="screening",
+            description=(
+                "``screening``: appeals a rejected quarantine decision (release "
+                "returns the submission to evaluation). ``gate_notes``: appeals "
+                "cited bench v13+ gate notes on a scored submission; either "
+                "resolution only records the operator's verdict."
+            ),
+        ),
+    ] = "screening"
     status: Literal["pending", "resolved"]
     submitted_at: datetime
     resolved_at: datetime | None = None
@@ -2966,12 +3346,26 @@ class PublicScreeningDispute(BaseModel):
 
 
 class CreateScreeningDisputeRequest(BaseModel):
-    """One signed appeal of a rejected screening decision."""
+    """One signed appeal: of a rejected screening decision, or -- for a scored,
+    live, evaluating or held submission -- of the bench v13+ gate notes cited
+    in ``gate_note_ids``. A submission gets exactly one either way."""
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     message: Annotated[str, Field(min_length=20, max_length=1000)]
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
+    gate_note_ids: Annotated[
+        list[Annotated[str, Field(pattern=r"^[0-9a-f]{16}$")]] | None,
+        Field(
+            default=None,
+            max_length=64,
+            description=(
+                "Bench v13+ gate ``note_id`` values this dispute contests, as "
+                "listed on ``GET /me/agents/{agent_id}/gate-notes``. Every id "
+                "must belong to this submission's own accepted scores."
+            ),
+        ),
+    ] = None
 
 
 class CreateScreeningDisputeResponse(BaseModel):
@@ -3223,6 +3617,16 @@ class PublicProvisionalScore(BaseModel):
             ),
         ),
     ]
+    gate_evidence: Annotated[
+        PublicGateEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ run-level gate verdict (aggregates only); see "
+                "``PublicValidatorScore.gate_evidence``."
+            ),
+        ),
+    ] = None
     transcript_sha256: Annotated[
         str | None,
         Field(
@@ -3975,6 +4379,17 @@ class PublicValidatorHeartbeat(BaseModel):
             description=(
                 "Signed sanitized managed-updater state. Null for validators "
                 "older than heartbeat protocol v23."
+            ),
+        ),
+    ] = None
+    weights_fold: Annotated[
+        PublicWeightsFold | None,
+        Field(
+            default=None,
+            description=(
+                "Which pinned ledger this validator last folded and the digest of "
+                "the vector it committed. Null before the first fold or for "
+                "validators older than heartbeat protocol v27."
             ),
         ),
     ] = None

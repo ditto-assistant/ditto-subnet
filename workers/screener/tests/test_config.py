@@ -127,7 +127,7 @@ def test_remote_build_timeout_is_independent_and_configurable(
         ("SCREENER_L2_MAX_INPUT_TOKENS", "1000001", "1000000"),
         ("SCREENER_L2_MAX_COST_USD", "20", r"in \(0, 10\]"),
         ("SCREENER_L2_ANALYST_REASONING_EFFORT", "high", "model_default"),
-        ("SCREENER_L2_CRITIC_REASONING_EFFORT", "none", "low or medium"),
+        ("SCREENER_L2_CRITIC_REASONING_EFFORT", "none", "low, medium, or high"),
         (
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS",
             "60",
@@ -300,3 +300,25 @@ def test_openrouter_stays_the_default_review_gateway(monkeypatch) -> None:
     cfg = parse_screener_config_from_env()
     assert cfg.review_inference_provider == "openrouter"
     assert cfg.source_review_base_url == "https://openrouter.ai/api/v1"
+
+
+def test_platform_review_budget_limits_are_accepted(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_L2_MAX_STEPS", "48")
+    monkeypatch.setenv("SCREENER_L2_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("SCREENER_L2_CRITIC_REASONING_EFFORT", "high")
+    config = parse_screener_config_from_env()
+    assert config.l2_max_steps == 48
+    assert config.l2_timeout_seconds == 1800
+    assert config.l2_critic_reasoning_effort == "high"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [("SCREENER_L2_MAX_STEPS", "49"), ("SCREENER_L2_TIMEOUT_SECONDS", "1801")],
+)
+def test_review_budgets_remain_bounded(monkeypatch, name, value):
+    _base_env(monkeypatch)
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ScreenerConfigError):
+        parse_screener_config_from_env()

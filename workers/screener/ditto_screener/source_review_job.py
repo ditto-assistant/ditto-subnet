@@ -34,6 +34,8 @@ from ditto_screener.l2_review import (
 from ditto_screener.review_provider import default_review_base_url
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import (
+    SCREENING_FLOOR_POLICY_VERSION,
+    SCREENING_POLICY_VERSION,
     SourceReviewAdjudication,
     SourceReviewNote,
     SourceReviewObservationPayload,
@@ -298,6 +300,15 @@ async def _amain() -> int:
             source = source_response.json()
             if source.get("artifact_sha256") != expected_sha256:
                 raise ValueError("Platform source binding changed")
+            policy_version = source.get("policy_version")
+            if (
+                not isinstance(policy_version, int)
+                or isinstance(policy_version, bool)
+                or not SCREENING_FLOOR_POLICY_VERSION
+                <= policy_version
+                <= SCREENING_POLICY_VERSION
+            ):
+                raise ValueError("Platform source policy is unsupported")
             source_url = base64.b64decode(
                 str(source["source_url_b64"]), validate=True
             ).decode()
@@ -311,6 +322,7 @@ async def _amain() -> int:
                 artifact_sha256=expected_sha256,
                 attempt_id=attempt_id,
                 deadline=asyncio.get_running_loop().time() + timeout_seconds,
+                policy_version=policy_version,
             )
             payload = SourceReviewObservationPayload(
                 ok=observation.ok,

@@ -797,6 +797,26 @@ CREATE FUNCTION public.guard_validator_ticket_purpose() RETURNS trigger
         $$;
 
 
+--
+-- Name: reject_benchmark_canary_score(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_benchmark_canary_score() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM validator_tickets t
+              WHERE t.agent_id = NEW.agent_id
+                AND t.bench_version = NEW.bench_version
+                AND t.validator_hotkey = NEW.validator_hotkey
+                AND t.purpose = 'benchmark_canary') THEN
+            RAISE EXCEPTION 'benchmark canary cannot write authoritative scores';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -1021,6 +1041,35 @@ CREATE TABLE public.banned_hotkeys (
     hotkey text NOT NULL,
     reason text,
     banned_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: benchmark_canaries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.benchmark_canaries (
+    canary_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    slot_id text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    screened_image_sha256 text NOT NULL,
+    seed bigint NOT NULL,
+    dataset_sha256 text NOT NULL,
+    run_size text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    deadline timestamp with time zone NOT NULL,
+    status text NOT NULL,
+    finished_at timestamp with time zone,
+    result jsonb,
+    signature text,
+    failure_detail text,
+    CONSTRAINT ck_benchmark_canaries_benchmark_canaries_status CHECK ((status = ANY (ARRAY['issued'::text, 'completed'::text, 'failed'::text, 'cancelled'::text]))),
+    CONSTRAINT ck_benchmark_canaries_benchmark_canaries_version_seed CHECK (((bench_version > 0) AND (seed >= 0)))
 );
 
 
@@ -2316,6 +2365,25 @@ CREATE TABLE public.confirmation_scores (
 
 
 --
+-- Name: confirmation_seed_anchors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.confirmation_seed_anchors (
+    champion_agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    ready_block bigint NOT NULL,
+    anchor_block bigint NOT NULL,
+    anchor_block_hash text,
+    pinned_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__187e CHECK (((ready_block >= 0) AND (anchor_block > ready_block))),
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__18b7 CHECK (((anchor_block_hash IS NULL) OR (anchor_block_hash ~ '^0x[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__bb97 CHECK ((bench_version > 0)),
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__c2e5 CHECK (((anchor_block_hash IS NULL) = (pinned_at IS NULL)))
+);
+
+
+--
 -- Name: continual_retest_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2625,6 +2693,29 @@ CREATE TABLE public.evaluation_payments (
 
 
 --
+-- Name: feedback_track_contributions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.feedback_track_contributions (
+    contribution_id uuid NOT NULL,
+    ditto_user_id text NOT NULL,
+    source text NOT NULL,
+    external_ref text NOT NULL,
+    kind text NOT NULL,
+    weight numeric(12,6),
+    note text,
+    recorded_by text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_external_ref_len CHECK (((length(external_ref) >= 1) AND (length(external_ref) <= 200))),
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_kind_check CHECK ((kind = ANY (ARRAY['report'::text, 'follow_up'::text, 'shipped'::text]))),
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_source_check CHECK ((source = 'ditto_feedback'::text)),
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_user_id_len CHECK (((length(ditto_user_id) >= 1) AND (length(ditto_user_id) <= 128))),
+    CONSTRAINT ck_feedback_track_contributions_feedback_track_weight_nonneg CHECK (((weight IS NULL) OR (weight >= (0)::numeric)))
+);
+
+
+--
 -- Name: hotkey_ban_audit; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2876,6 +2967,32 @@ CREATE TABLE public.inference_routing_policies (
 
 
 --
+-- Name: ledger_epoch_snapshots; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.ledger_epoch_snapshots (
+    snapshot_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    epoch_index bigint NOT NULL,
+    last_epoch_block bigint NOT NULL,
+    pinned_block bigint NOT NULL,
+    pinned_block_hash text NOT NULL,
+    pinned_at timestamp with time zone NOT NULL,
+    bench_version integer NOT NULL,
+    entries jsonb NOT NULL,
+    context jsonb NOT NULL,
+    champion_agent_id uuid,
+    champion_owner_root text,
+    incumbent_agent_id uuid,
+    ledger_digest text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_ledger_epoch_snapshots_ledger_epoch_snapshots_digest_check CHECK ((length(ledger_digest) = 64)),
+    CONSTRAINT ck_ledger_epoch_snapshots_ledger_epoch_snapshots_epoch__f05e CHECK ((epoch_index >= 0)),
+    CONSTRAINT ck_ledger_epoch_snapshots_ledger_epoch_snapshots_pinned_2bb4 CHECK ((pinned_block >= last_epoch_block))
+);
+
+
+--
 -- Name: miner_avatar_nonces; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2927,6 +3044,55 @@ CREATE TABLE public.miner_device_grants (
     CONSTRAINT ck_miner_device_grants_miner_device_grants_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'expired'::text, 'denied'::text, 'consumed'::text]))),
     CONSTRAINT ck_miner_device_grants_miner_device_grants_ttl_range CHECK (((ttl_seconds >= 3600) AND (ttl_seconds <= 2592000))),
     CONSTRAINT ck_miner_device_grants_miner_device_grants_user_code_fmt CHECK ((user_code ~ '^[A-Z0-9]{4}-[A-Z0-9]{4}$'::text))
+);
+
+
+--
+-- Name: miner_ditto_link_attempts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_ditto_link_attempts (
+    attempt_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    session_id uuid NOT NULL,
+    state_hash text NOT NULL,
+    nonce text NOT NULL,
+    code_verifier text NOT NULL,
+    client text NOT NULL,
+    return_to text,
+    status text NOT NULL,
+    error text,
+    ditto_user_id text,
+    ditto_email text,
+    accept_token_hash text,
+    accept_expires_at timestamp with time zone,
+    user_accepted_at timestamp with time zone,
+    browser_binding_hash text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__a335 CHECK ((length(state_hash) = 64)),
+    CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__dbac CHECK ((status = ANY (ARRAY['pending'::text, 'identity_verified'::text, 'authenticated'::text, 'linked'::text, 'failed'::text, 'expired'::text]))),
+    CONSTRAINT ck_miner_ditto_link_attempts_miner_ditto_link_attempts__f3b8 CHECK ((client = ANY (ARRAY['dashboard'::text, 'cli'::text])))
+);
+
+
+--
+-- Name: miner_ditto_links; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_ditto_links (
+    miner_hotkey text NOT NULL,
+    ditto_user_id text NOT NULL,
+    ditto_email text,
+    miner_coldkey text,
+    linked_via text NOT NULL,
+    session_id uuid,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    revoked_at timestamp with time zone,
+    CONSTRAINT ck_miner_ditto_links_miner_ditto_links_linked_via_check CHECK ((linked_via = ANY (ARRAY['dashboard'::text, 'cli'::text]))),
+    CONSTRAINT ck_miner_ditto_links_miner_ditto_links_user_id_len CHECK (((length(ditto_user_id) >= 1) AND (length(ditto_user_id) <= 128)))
 );
 
 
@@ -3279,7 +3445,9 @@ CREATE TABLE public.scores (
     model_calls integer,
     model_prompt_tokens bigint,
     model_completion_tokens bigint,
+    gate_evidence jsonb,
     CONSTRAINT ck_scores_scores_bench_version_positive CHECK ((bench_version > 0)),
+    CONSTRAINT ck_scores_scores_gate_evidence_bench_floor CHECK (((gate_evidence IS NULL) OR (bench_version >= 13))),
     CONSTRAINT scores_composite_check CHECK (((composite >= (0)::double precision) AND (composite <= (1)::double precision))),
     CONSTRAINT scores_median_ms_check CHECK ((median_ms >= 0)),
     CONSTRAINT scores_memory_mean_check CHECK (((memory_mean >= (0)::double precision) AND (memory_mean <= (1)::double precision))),
@@ -3364,6 +3532,57 @@ CREATE TABLE public.screener_capacity_snapshots (
     CONSTRAINT ck_screener_capacity_snapshots_screener_capacity_snapsh_b27a CHECK ((controller_source_sha ~ '^[0-9a-f]{40}$'::text)),
     CONSTRAINT ck_screener_capacity_snapshots_screener_capacity_snapsh_d0c8 CHECK (((runnable_backlog >= 0) AND (active_leases >= 0) AND (desired_slots >= 0) AND (global_cap >= 0))),
     CONSTRAINT ck_screener_capacity_snapshots_screener_capacity_snapsh_e2bb CHECK ((targon_capability = ANY (ARRAY['go'::text, 'nogo'::text, 'unknown'::text])))
+);
+
+
+--
+-- Name: screener_fanout_shadow_reviews; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_fanout_shadow_reviews (
+    shadow_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    attempt_id uuid NOT NULL,
+    environment text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    policy_version integer NOT NULL,
+    policy_manifest_profile text NOT NULL,
+    policy_manifest_rotation_id text NOT NULL,
+    policy_manifest_digest text NOT NULL,
+    settings_revision integer NOT NULL,
+    settings_scope text NOT NULL,
+    settings_checksum text NOT NULL,
+    status text DEFAULT 'queued'::text NOT NULL,
+    outcome text,
+    baseline jsonb NOT NULL,
+    report jsonb,
+    disagrees_with_baseline boolean,
+    coverage_complete boolean,
+    error_code text,
+    provider text,
+    provider_resource_id text,
+    controller_epoch text,
+    lease_expires_at timestamp with time zone,
+    job_token_hash text,
+    job_token_expires_at timestamp with time zone,
+    reserved_cost_microusd bigint DEFAULT '0'::bigint NOT NULL,
+    reported_cost_microusd bigint,
+    reserved_at timestamp with time zone,
+    unmetered boolean DEFAULT false NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_00df CHECK ((policy_manifest_digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_2240 CHECK ((policy_manifest_profile = ANY (ARRAY['core'::text, 'l1'::text, 'l1_l2'::text]))),
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_3683 CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text])))),
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_5b99 CHECK ((settings_checksum ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_66e9 CHECK (((outcome IS NULL) OR (outcome = ANY (ARRAY['no_findings'::text, 'candidate'::text, 'unresolved_candidate'::text, 'critic_also_flagged'::text, 'incomplete'::text, 'skipped'::text])))),
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_8f5d CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'incomplete'::text, 'skipped'::text]))),
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_9b4a CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_b781 CHECK (((reserved_cost_microusd >= 0) AND (reported_cost_microusd >= 0))),
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_dbe8 CHECK (((job_token_hash IS NULL) OR (job_token_hash ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_screener_fanout_shadow_reviews_screener_fanout_shado_dd87 CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text))
 );
 
 
@@ -3684,7 +3903,7 @@ CREATE TABLE public.screening_attempts (
 CREATE TABLE public.screening_disputes (
     dispute_id uuid NOT NULL,
     agent_id uuid NOT NULL,
-    quarantine_id uuid NOT NULL,
+    quarantine_id uuid,
     miner_hotkey text NOT NULL,
     message text NOT NULL,
     status text DEFAULT 'pending'::text NOT NULL,
@@ -3693,6 +3912,11 @@ CREATE TABLE public.screening_disputes (
     resolved_by text,
     resolution text,
     resolution_reason text,
+    gate_note_ids jsonb,
+    kind text DEFAULT 'screening'::text NOT NULL,
+    CONSTRAINT ck_screening_disputes_screening_disputes_gate_notes_cited_check CHECK (((kind <> 'gate_notes'::text) OR (gate_note_ids IS NOT NULL))),
+    CONSTRAINT ck_screening_disputes_screening_disputes_kind_check CHECK ((kind = ANY (ARRAY['screening'::text, 'gate_notes'::text]))),
+    CONSTRAINT ck_screening_disputes_screening_disputes_screening_quar_efb8 CHECK (((kind <> 'screening'::text) OR (quarantine_id IS NOT NULL))),
     CONSTRAINT screening_disputes_message_check CHECK (((length(message) >= 20) AND (length(message) <= 1000))),
     CONSTRAINT screening_disputes_resolution_check CHECK (((resolution IS NULL) OR (resolution = ANY (ARRAY['release'::text, 'uphold'::text])))),
     CONSTRAINT screening_disputes_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'resolved'::text])))
@@ -4051,6 +4275,7 @@ CREATE TABLE public.validator_heartbeats (
     claimed_slots jsonb,
     confirmation_progress jsonb,
     updater_status jsonb,
+    weights_fold jsonb,
     CONSTRAINT validator_heartbeats_code_digest_length_check CHECK ((length(code_digest) = 64)),
     CONSTRAINT validator_heartbeats_protocol_version_check CHECK ((protocol_version > 0)),
     CONSTRAINT validator_heartbeats_signature_length_check CHECK ((length(signature) = 128)),
@@ -4249,7 +4474,7 @@ CREATE TABLE public.validator_tickets (
     CONSTRAINT ck_validator_tickets_validator_tickets_failure_reason CHECK (((failure_reason IS NULL) OR (failure_reason = ANY (ARRAY['infrastructure'::text, 'scoring_error'::text, 'sandbox_oom'::text])))),
     CONSTRAINT ck_validator_tickets_validator_tickets_infra_retry_gran_aa85 CHECK ((infra_retry_grants >= 0)),
     CONSTRAINT ck_validator_tickets_validator_tickets_purpose_revision_df08 CHECK ((purpose_revision >= 0)),
-    CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text]))),
+    CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text, 'benchmark_canary'::text]))),
     CONSTRAINT ck_validator_tickets_validator_tickets_seed_nonnegative CHECK (((seed IS NULL) OR (seed >= 0))),
     CONSTRAINT ck_validator_tickets_validator_tickets_slot_id CHECK ((slot_id = ANY (ARRAY['slot-0'::text, 'slot-1'::text, 'slot-2'::text, 'slot-3'::text, 'slot-4'::text, 'slot-5'::text, 'slot-6'::text, 'slot-7'::text]))),
     CONSTRAINT validator_tickets_attempt_count_positive CHECK ((attempt_count > 0)),
@@ -4469,6 +4694,14 @@ ALTER TABLE ONLY public.ath_reviews
 
 ALTER TABLE ONLY public.banned_hotkeys
     ADD CONSTRAINT banned_hotkeys_pkey PRIMARY KEY (hotkey);
+
+
+--
+-- Name: benchmark_canaries benchmark_canaries_lease_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.benchmark_canaries
+    ADD CONSTRAINT benchmark_canaries_lease_key UNIQUE (agent_id, bench_version, validator_hotkey, deadline);
 
 
 --
@@ -5080,6 +5313,14 @@ ALTER TABLE ONLY public.confirmation_scores
 
 
 --
+-- Name: confirmation_seed_anchors confirmation_seed_anchors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_seed_anchors
+    ADD CONSTRAINT confirmation_seed_anchors_pkey PRIMARY KEY (champion_agent_id, bench_version);
+
+
+--
 -- Name: confirmation_bundle_settings_revisions confirmation_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5208,6 +5449,14 @@ ALTER TABLE ONLY public.evaluation_payments
 
 
 --
+-- Name: feedback_track_contributions feedback_track_dedupe_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.feedback_track_contributions
+    ADD CONSTRAINT feedback_track_dedupe_key UNIQUE (source, external_ref, kind);
+
+
+--
 -- Name: hotkey_ban_audit hotkey_ban_audit_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5237,6 +5486,14 @@ ALTER TABLE ONLY public.inference_grants
 
 ALTER TABLE ONLY public.inference_provider_routes
     ADD CONSTRAINT inference_provider_profile_key UNIQUE (profile_revision);
+
+
+--
+-- Name: ledger_epoch_snapshots ledger_epoch_snapshots_epoch_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ledger_epoch_snapshots
+    ADD CONSTRAINT ledger_epoch_snapshots_epoch_key UNIQUE (netuid, epoch_index);
 
 
 --
@@ -5285,6 +5542,14 @@ ALTER TABLE ONLY public.miner_device_grants
 
 ALTER TABLE ONLY public.miner_device_grants
     ADD CONSTRAINT miner_device_grants_user_code_key UNIQUE (user_code);
+
+
+--
+-- Name: miner_ditto_link_attempts miner_ditto_link_attempts_state_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_ditto_link_attempts
+    ADD CONSTRAINT miner_ditto_link_attempts_state_key UNIQUE (state_hash);
 
 
 --
@@ -5421,6 +5686,14 @@ ALTER TABLE ONLY public.artifact_release_settings_revisions
 
 ALTER TABLE ONLY public.ath_copy_court_recommendations
     ADD CONSTRAINT pk_ath_copy_court_recommendations PRIMARY KEY (recommendation_id);
+
+
+--
+-- Name: benchmark_canaries pk_benchmark_canaries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.benchmark_canaries
+    ADD CONSTRAINT pk_benchmark_canaries PRIMARY KEY (canary_id);
 
 
 --
@@ -5688,6 +5961,14 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 
 --
+-- Name: feedback_track_contributions pk_feedback_track_contributions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.feedback_track_contributions
+    ADD CONSTRAINT pk_feedback_track_contributions PRIMARY KEY (contribution_id);
+
+
+--
 -- Name: inference_concurrency_settings_revisions pk_inference_concurrency_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5736,6 +6017,30 @@ ALTER TABLE ONLY public.inference_routing_policies
 
 
 --
+-- Name: ledger_epoch_snapshots pk_ledger_epoch_snapshots; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.ledger_epoch_snapshots
+    ADD CONSTRAINT pk_ledger_epoch_snapshots PRIMARY KEY (snapshot_id);
+
+
+--
+-- Name: miner_ditto_link_attempts pk_miner_ditto_link_attempts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_ditto_link_attempts
+    ADD CONSTRAINT pk_miner_ditto_link_attempts PRIMARY KEY (attempt_id);
+
+
+--
+-- Name: miner_ditto_links pk_miner_ditto_links; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_ditto_links
+    ADD CONSTRAINT pk_miner_ditto_links PRIMARY KEY (miner_hotkey);
+
+
+--
 -- Name: queue_policy_settings_revisions pk_queue_policy_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -5781,6 +6086,14 @@ ALTER TABLE ONLY public.screener_capacity_events
 
 ALTER TABLE ONLY public.screener_capacity_snapshots
     ADD CONSTRAINT pk_screener_capacity_snapshots PRIMARY KEY (environment);
+
+
+--
+-- Name: screener_fanout_shadow_reviews pk_screener_fanout_shadow_reviews; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_fanout_shadow_reviews
+    ADD CONSTRAINT pk_screener_fanout_shadow_reviews PRIMARY KEY (shadow_id);
 
 
 --
@@ -6005,6 +6318,14 @@ ALTER TABLE public.scores
 
 ALTER TABLE ONLY public.scores
     ADD CONSTRAINT scores_pkey PRIMARY KEY (agent_id, bench_version, validator_hotkey);
+
+
+--
+-- Name: screener_fanout_shadow_reviews screener_fanout_shadow_reviews_attempt_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_fanout_shadow_reviews
+    ADD CONSTRAINT screener_fanout_shadow_reviews_attempt_key UNIQUE (attempt_id);
 
 
 --
@@ -6704,6 +7025,13 @@ CREATE INDEX confirmation_scores_agent_version_idx ON public.confirmation_scores
 
 
 --
+-- Name: confirmation_seed_anchors_version_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_seed_anchors_version_idx ON public.confirmation_seed_anchors USING btree (bench_version, anchor_block);
+
+
+--
 -- Name: confirmation_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6802,6 +7130,13 @@ CREATE INDEX evaluation_payments_miner_hotkey_idx ON public.evaluation_payments 
 
 
 --
+-- Name: feedback_track_user_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX feedback_track_user_idx ON public.feedback_track_contributions USING btree (ditto_user_id, recorded_at);
+
+
+--
 -- Name: hotkey_ban_audit_hotkey_recorded_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6858,6 +7193,13 @@ CREATE INDEX inference_routing_audit_history_idx ON public.inference_routing_aud
 
 
 --
+-- Name: ledger_epoch_snapshots_recent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ledger_epoch_snapshots_recent_idx ON public.ledger_epoch_snapshots USING btree (netuid, epoch_index DESC);
+
+
+--
 -- Name: miner_avatar_nonces_hotkey_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -6869,6 +7211,20 @@ CREATE INDEX miner_avatar_nonces_hotkey_idx ON public.miner_avatar_nonces USING 
 --
 
 CREATE INDEX miner_device_grants_status_idx ON public.miner_device_grants USING btree (status, expires_at);
+
+
+--
+-- Name: miner_ditto_link_attempts_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_ditto_link_attempts_hotkey_idx ON public.miner_ditto_link_attempts USING btree (miner_hotkey, created_at);
+
+
+--
+-- Name: miner_ditto_links_user_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_ditto_links_user_idx ON public.miner_ditto_links USING btree (ditto_user_id);
 
 
 --
@@ -7002,6 +7358,27 @@ CREATE INDEX screened_image_uploads_status_expires_idx ON public.screened_image_
 --
 
 CREATE INDEX screener_capacity_events_environment_created_idx ON public.screener_capacity_events USING btree (environment, created_at);
+
+
+--
+-- Name: screener_fanout_shadow_reviews_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screener_fanout_shadow_reviews_created_idx ON public.screener_fanout_shadow_reviews USING btree (created_at, shadow_id);
+
+
+--
+-- Name: screener_fanout_shadow_reviews_queue_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screener_fanout_shadow_reviews_queue_idx ON public.screener_fanout_shadow_reviews USING btree (environment, status, created_at);
+
+
+--
+-- Name: screener_fanout_shadow_reviews_reserved_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screener_fanout_shadow_reviews_reserved_idx ON public.screener_fanout_shadow_reviews USING btree (reserved_at);
 
 
 --
@@ -7516,6 +7893,13 @@ CREATE TRIGGER confirmation_dimension_evidence_append_only_guard BEFORE DELETE O
 
 
 --
+-- Name: confirmation_scores confirmation_scores_reject_benchmark_canary; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER confirmation_scores_reject_benchmark_canary BEFORE INSERT OR UPDATE ON public.confirmation_scores FOR EACH ROW EXECUTE FUNCTION public.reject_benchmark_canary_score();
+
+
+--
 -- Name: confirmation_bundle_subjects confirmation_subject_authority_guard; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -7534,6 +7918,13 @@ CREATE TRIGGER efficiency_bonuses_curve_guard BEFORE INSERT OR UPDATE OF agent_i
 --
 
 CREATE TRIGGER efficiency_cohort_snapshots_curve_guard BEFORE INSERT OR UPDATE ON public.efficiency_cohort_snapshots FOR EACH ROW EXECUTE FUNCTION public.guard_efficiency_snapshot_curve();
+
+
+--
+-- Name: scores scores_reject_benchmark_canary; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER scores_reject_benchmark_canary BEFORE INSERT OR UPDATE ON public.scores FOR EACH ROW EXECUTE FUNCTION public.reject_benchmark_canary_score();
 
 
 --
@@ -7895,6 +8286,14 @@ ALTER TABLE ONLY public.confirmation_scores
 
 
 --
+-- Name: confirmation_seed_anchors confirmation_seed_anchors_champion_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_seed_anchors
+    ADD CONSTRAINT confirmation_seed_anchors_champion_fkey FOREIGN KEY (champion_agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
 -- Name: confirmation_bundle_subjects confirmation_subjects_agent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8004,6 +8403,14 @@ ALTER TABLE ONLY public.ath_copy_court_recommendations
 
 ALTER TABLE ONLY public.ath_copy_court_recommendations
     ADD CONSTRAINT fk_ath_copy_court_recommendations_settings_revision_cop_511a FOREIGN KEY (settings_revision) REFERENCES public.copy_court_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: benchmark_canaries fk_benchmark_canaries_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.benchmark_canaries
+    ADD CONSTRAINT fk_benchmark_canaries_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id);
 
 
 --
@@ -8183,6 +8590,30 @@ ALTER TABLE ONLY public.inference_requests
 
 
 --
+-- Name: screener_fanout_shadow_reviews fk_screener_fanout_shadow_reviews_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_fanout_shadow_reviews
+    ADD CONSTRAINT fk_screener_fanout_shadow_reviews_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screener_fanout_shadow_reviews fk_screener_fanout_shadow_reviews_attempt_id_screening_attempts; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_fanout_shadow_reviews
+    ADD CONSTRAINT fk_screener_fanout_shadow_reviews_attempt_id_screening_attempts FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screener_fanout_shadow_reviews fk_screener_fanout_shadow_reviews_settings_revision_scr_a1a2; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_fanout_shadow_reviews
+    ADD CONSTRAINT fk_screener_fanout_shadow_reviews_settings_revision_scr_a1a2 FOREIGN KEY (settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
 -- Name: miner_device_grants miner_device_grants_client_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8196,6 +8627,14 @@ ALTER TABLE ONLY public.miner_device_grants
 
 ALTER TABLE ONLY public.miner_device_grants
     ADD CONSTRAINT miner_device_grants_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.miner_sessions(session_id) ON DELETE SET NULL;
+
+
+--
+-- Name: miner_ditto_link_attempts miner_ditto_link_attempts_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_ditto_link_attempts
+    ADD CONSTRAINT miner_ditto_link_attempts_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.miner_sessions(session_id) ON DELETE CASCADE;
 
 
 --

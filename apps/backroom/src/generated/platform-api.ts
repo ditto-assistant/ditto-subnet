@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/.well-known/ditto-callback-challenge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Ditto Callback Challenge */
+        get: operations["ditto_callback_challenge__well_known_ditto_callback_challenge_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/.well-known/mcp/server.json": {
         parameters: {
             query?: never;
@@ -216,6 +233,128 @@ export interface paths {
          *     revision and the exact confirmation phrase.
          */
         post: operations["create_settings_revision_api_v1_admin_artifact_release_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ath-rulings/batch-execute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Execute Ath Rulings Batch
+         * @description Apply the exact previewed rulings; each item is audited on its own.
+         *
+         *     Refuses an item whose identity guards moved, or whose crown outcome
+         *     (``would_change_crown``, champion, raw leader) differs from the preview.
+         *     Failures never hide successful rows.
+         */
+        post: operations["execute_ath_rulings_batch_api_v1_admin_ath_rulings_batch_execute_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ath-rulings/batch-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview Ath Rulings Batch
+         * @description Dry-run every ruling against live state; this never mutates.
+         */
+        post: operations["preview_ath_rulings_batch_api_v1_admin_ath_rulings_batch_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/ath-rulings/upload-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Ath Rulings Upload
+         * @description Issue a five-minute presigned PUT for one rulings document.
+         */
+        post: operations["create_ath_rulings_upload_api_v1_admin_ath_rulings_upload_url_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/benchmark-canaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Benchmark Canaries */
+        get: operations["list_benchmark_canaries_api_v1_admin_benchmark_canaries_get"];
+        put?: never;
+        /**
+         * Issue Benchmark Canary
+         * @description Reserve one existing protocol lease, with a separate diagnostic receipt.
+         *
+         *     No mutable BenchmarkDataset, Score, Agent or Rollout fields are written.
+         *     Reject existing ticket identities rather than replacing any production work.
+         */
+        post: operations["issue_benchmark_canary_api_v1_admin_benchmark_canaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/benchmark-canaries/{canary_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Benchmark Canary */
+        get: operations["get_benchmark_canary_api_v1_admin_benchmark_canaries__canary_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/benchmark-canaries/{canary_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Benchmark Canary */
+        post: operations["cancel_benchmark_canary_api_v1_admin_benchmark_canaries__canary_id__cancel_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -612,6 +751,30 @@ export interface paths {
         put?: never;
         /** Authorize Confirmation Retest */
         post: operations["authorize_confirmation_retest_api_v1_admin_confirmation_bundles__bundle_id__authorize_retest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/confirmation-seed-anchors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Admin Confirmation Seed Anchors
+         * @description List every reign anchor of one version -- pinned and still waiting.
+         *
+         *     Defaults to the active benchmark. The ledger serves only pinned anchors,
+         *     so a reign in its finality wait is visible only here; a binding version
+         *     with zero rows means no continual-retest claim has opened a reign yet.
+         */
+        get: operations["list_admin_confirmation_seed_anchors_api_v1_admin_confirmation_seed_anchors_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1438,6 +1601,26 @@ export interface paths {
          * @description Return controller state, enrolled nodes, and recent redacted audit events.
          */
         get: operations["screener_capacity_api_v1_admin_screener_capacity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-fanout-shadow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screener Fanout Shadow
+         * @description Return exact baseline/fan-out pairs and bounded fleet-wide metrics.
+         */
+        get: operations["get_screener_fanout_shadow_api_v1_admin_screener_fanout_shadow_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2772,6 +2955,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/feedback-track/contributions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Contribution
+         * @description Operator write. Idempotent on (source, external_ref, kind).
+         */
+        post: operations["record_contribution_api_v1_feedback_track_contributions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/inference/chat/completions": {
         parameters: {
             query?: never;
@@ -2890,6 +3093,34 @@ export interface paths {
         patch: operations["update_me_api_v1_me_patch"];
         trace?: never;
     };
+    "/api/v1/me/agents/{agent_id}/gate-notes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Gate Notes
+         * @description Return this miner's bench v13+ per-case gate notes for one of their agents.
+         *
+         *     The public per-score record carries only the run-level aggregate (posture,
+         *     composite with/without gates, gate-induced loss). The per-case notes -- which
+         *     case tripped which gate, the twin/pair relation outcome, the shadow cost
+         *     factor -- are owner-only, so a miner can see a shadow verdict before it
+         *     enforces and cite the ``note_id`` values in a dispute. Same ownership rule
+         *     as the other ``/me/agents`` reads: unknown and other-miners' agents are the
+         *     same 404.
+         */
+        get: operations["my_gate_notes_api_v1_me_agents__agent_id__gate_notes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/agents/{agent_id}/harness-logs": {
         parameters: {
             query?: never;
@@ -2959,6 +3190,101 @@ export interface paths {
         };
         /** My Commands */
         get: operations["my_commands_api_v1_me_commands_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/ditto-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Link */
+        get: operations["current_link_api_v1_me_ditto_link_get"];
+        put?: never;
+        post?: never;
+        /** Unlink */
+        delete: operations["unlink_api_v1_me_ditto_link_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/ditto-link/attempts/{attempt_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Link Attempt */
+        get: operations["link_attempt_api_v1_me_ditto_link_attempts__attempt_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/ditto-link/attempts/{attempt_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm Link
+         * @description Write the link. Only the holder of the miner session that started the
+         *     attempt can do this, and only for an attempt Ditto has authenticated.
+         *
+         *     The callback is reachable by whoever holds the authorize URL, so it must
+         *     never pair an account with a hotkey on its own: an attacker could start an
+         *     attempt for their hotkey and trick a victim into signing in on it. The
+         *     pairing is confirmed here, by the hotkey side, after seeing who signed in.
+         */
+        post: operations["confirm_link_api_v1_me_ditto_link_attempts__attempt_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/ditto-link/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Link */
+        post: operations["start_link_api_v1_me_ditto_link_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/feedback-track": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Contributions */
+        get: operations["my_contributions_api_v1_me_feedback_track_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3064,6 +3390,30 @@ export interface paths {
         put?: never;
         /** Poll Device Post */
         post: operations["poll_device_post_api_v1_miner_auth_device__user_code__status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/miner-auth/ditto/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Accept Link Page
+         * @description The Ditto-side half of the pairing: show WHICH hotkey wants this account.
+         */
+        get: operations["accept_link_page_api_v1_miner_auth_ditto_accept_get"];
+        put?: never;
+        /**
+         * Accept Link Decide
+         * @description Consume the single-use accept token: accept → authenticated, else failed.
+         */
+        post: operations["accept_link_decide_api_v1_miner_auth_ditto_accept_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3306,7 +3656,14 @@ export interface paths {
         put?: never;
         /**
          * Create Screening Dispute
-         * @description Record the submitting hotkey's single appeal of a quarantine rejection.
+         * @description Record the submitting hotkey's single appeal.
+         *
+         *     Two kinds share the one-per-submission slot. A rejected submission with a
+         *     rejected quarantine files a ``screening`` dispute (optionally citing gate
+         *     notes). A scored, live, evaluating or held submission that cites bench
+         *     v13+ ``gate_note_ids`` files a ``gate_notes`` dispute against those exact
+         *     notes -- the appeal path the shadow verdict exists for, so a would-be zero
+         *     can be contested before any gate enforces. Anything else is a 409.
          */
         post: operations["create_screening_dispute_api_v1_public_agent__agent_id__dispute_post"];
         delete?: never;
@@ -3601,6 +3958,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/feedback-track/{hotkey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Contributions
+         * @description Counts by kind for one hotkey. Never names the account.
+         */
+        get: operations["public_contributions_api_v1_public_feedback_track__hotkey__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/health": {
         parameters: {
             query?: never;
@@ -3637,6 +4014,33 @@ export interface paths {
          * @description Best score per payment-time coldkey, with colliding handles stricken.
          */
         get: operations["leaderboard_api_v1_public_leaderboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/ledger-epochs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Ledger Epochs
+         * @description Per-epoch history of the pinned ledger and the crown it produced.
+         *
+         *     Newest first. Each row is one immutable pin: the fold input every validator
+         *     received for that chain epoch, the champion the fold derived from it under
+         *     its frozen markers, the incumbent it was handed, and the recipient shares.
+         *     ``crown_changed`` compares consecutive pins, so a quiet column across
+         *     retest waves is the stability the pin exists to produce. Live mode still
+         *     lists historical pins but reports ``mode: live``.
+         */
+        get: operations["ledger_epochs_api_v1_public_ledger_epochs_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3906,6 +4310,44 @@ export interface paths {
          * @description Return the minimal lifecycle status for ``agent_id``, or 404.
          */
         get: operations["agent_status_api_v1_retrieval_agent__agent_id__status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/scoring/router-ledger": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Router Ledger
+         * @description Relay the shadow router-track ledger the offloaded scorer publishes.
+         *
+         *     The router eval never runs on a validator: one trusted ``dittobench-api``
+         *     scorer drives the coding harnesses against each miner's router, scores it,
+         *     and publishes a ledger; this endpoint relays that published ledger to any
+         *     permitted validator behind the same signed proof-of-possession as
+         *     :func:`scores`. The validator only reads and folds it, so no provider secret
+         *     or harness container ever touches a validator.
+         *
+         *     Shadow-only: every relayed entry stays ``weight_eligible=False`` with folded
+         *     ``combined_score=0`` (the real measurement rides ``shadow_composite``), so a
+         *     served ledger contributes zero emission — identical to the empty default.
+         *
+         *     Fail-closed to empty: when no scorer feed is configured, or a live read
+         *     fails with no fresh last-known snapshot, an **empty** ledger is served
+         *     (``count=0``), which folds to zero router emission. The validator's
+         *     :class:`PlatformRouterLedgerSource` also degrades any error here to empty, so
+         *     the two layers agree: a router-track problem can never distort the memory
+         *     fold or the on-chain weight vector.
+         */
+        get: operations["router_ledger_api_v1_scoring_router_ledger_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4600,6 +5042,46 @@ export interface paths {
          * @description Keep trusted Kaniko deletion failures visible after zero-replica suspension.
          */
         post: operations["record_trusted_image_build_cleanup_api_v1_screener_controller_trusted_image_builds__build_id__cleanup_required_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/fanout-shadow-reviews/{shadow_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Complete Fanout Shadow Review
+         * @description Persist comparison evidence without touching screening authority.
+         */
+        post: operations["complete_fanout_shadow_review_api_v1_screener_fanout_shadow_reviews__shadow_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/fanout-shadow-reviews/{shadow_id}/source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Fanout Shadow Source
+         * @description Mint one digest-bound source URL for an admitted shadow-only job.
+         */
+        get: operations["get_fanout_shadow_source_api_v1_screener_fanout_shadow_reviews__shadow_id__source_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -5897,7 +6379,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /** Case Set Sha256 */
             case_set_sha256: string;
             /** Contract Version */
@@ -6110,6 +6592,250 @@ export interface components {
             current: components["schemas"]["ArtifactReleaseSettingsRevision"];
             /** History */
             history: components["schemas"]["ArtifactReleaseSettingsRevision"][];
+        };
+        /**
+         * AdminAthRuling
+         * @description One guarded ruling: the same guards ``open_ath_review`` takes.
+         *
+         *     ``reason`` is public and miner-visible; it is deliberately unbounded above
+         *     so a detailed citation-bearing reason survives every validation surface.
+         */
+        AdminAthRuling: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "open" | "clear" | "reject";
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Evidence References */
+            evidence_references?: string[];
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminAthRulingExecuteItem */
+        AdminAthRulingExecuteItem: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "open" | "clear" | "reject";
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status?: string | null;
+            /**
+             * Annotated
+             * @default false
+             */
+            annotated: boolean;
+            /** Index */
+            index: number;
+            /** Message */
+            message: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "applied" | "already_applied" | "failed";
+            /** Steps Applied */
+            steps_applied?: ("open" | "clear" | "reject")[];
+            /** Would Change Crown */
+            would_change_crown: boolean;
+        };
+        /** AdminAthRulingPreviewItem */
+        AdminAthRulingPreviewItem: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "open" | "clear" | "reject";
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Status */
+            agent_status?: string | null;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Artifact Sha256 */
+            artifact_sha256?: string | null;
+            /** Conflict Reason */
+            conflict_reason?: string | null;
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "ready" | "already_applied" | "stale_guard" | "conflict" | "not_found" | "invalid";
+            /** Evidence References */
+            evidence_references?: string[];
+            /** Index */
+            index: number;
+            /** Message */
+            message: string;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /** Ok */
+            ok: boolean;
+            /** Reason */
+            reason: string;
+            /** Score Count */
+            score_count?: number | null;
+            /** Stale Guard */
+            stale_guard: boolean;
+            /** Steps */
+            steps?: ("open" | "clear" | "reject")[];
+            /** Would Change Crown */
+            would_change_crown: boolean;
+        };
+        /**
+         * AdminAthRulingsBoardProjection
+         * @description The crown arithmetic the batch was previewed (or executed) against.
+         *
+         *     Read from the validator-equivalent KOTH fold (eligible ledger with stderr,
+         *     quorum, confirmation and efficiency inputs) under the same fleet-gated tie
+         *     weighting and ceiling-band-clamp flags the public leaderboard's
+         *     ``emissions`` block applies, so the champion here is the one the board
+         *     shows.
+         */
+        AdminAthRulingsBoardProjection: {
+            /** Bench Version */
+            bench_version: number;
+            /** Champion Agent Id */
+            champion_agent_id: string | null;
+            /** Champion Hotkey */
+            champion_hotkey: string | null;
+            /** Champion Score */
+            champion_score: number | null;
+            /** Fingerprint */
+            fingerprint: string;
+            /** Ranked Count */
+            ranked_count: number;
+            /** Raw Leader Agent Id */
+            raw_leader_agent_id: string | null;
+            /** Raw Leader Score */
+            raw_leader_score: number | null;
+            /**
+             * Read At
+             * Format: date-time
+             */
+            read_at: string;
+        };
+        /** AdminAthRulingsExecuteRequest */
+        AdminAthRulingsExecuteRequest: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "APPLY ATH RULINGS BATCH";
+            /** Preview Token */
+            preview_token: string;
+            /** Rulings */
+            rulings?: components["schemas"]["AdminAthRuling"][] | null;
+        };
+        /** AdminAthRulingsExecuteResponse */
+        AdminAthRulingsExecuteResponse: {
+            /** Already Applied Count */
+            already_applied_count: number;
+            /** Applied Count */
+            applied_count: number;
+            /**
+             * Batch Id
+             * Format: uuid
+             */
+            batch_id: string;
+            board_after: components["schemas"]["AdminAthRulingsBoardProjection"];
+            board_before: components["schemas"]["AdminAthRulingsBoardProjection"];
+            /** Failed Count */
+            failed_count: number;
+            /** Items */
+            items: components["schemas"]["AdminAthRulingExecuteItem"][];
+            /** Rulings Sha256 */
+            rulings_sha256: string;
+            /** Upload Key */
+            upload_key?: string | null;
+        };
+        /**
+         * AdminAthRulingsPreviewRequest
+         * @description Exactly one of ``upload_key`` (presigned upload) or inline ``rulings``.
+         */
+        AdminAthRulingsPreviewRequest: {
+            /** Rulings */
+            rulings?: components["schemas"]["AdminAthRuling"][] | null;
+            /** Source */
+            source?: string | null;
+            /** Upload Key */
+            upload_key?: string | null;
+        };
+        /** AdminAthRulingsPreviewResponse */
+        AdminAthRulingsPreviewResponse: {
+            /** Already Applied Count */
+            already_applied_count: number;
+            /** Blocked Count */
+            blocked_count: number;
+            board: components["schemas"]["AdminAthRulingsBoardProjection"];
+            /** Crown Moving Count */
+            crown_moving_count: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Items */
+            items: components["schemas"]["AdminAthRulingPreviewItem"][];
+            /** Preview Token */
+            preview_token: string;
+            /** Ready Count */
+            ready_count: number;
+            /** Rulings Sha256 */
+            rulings_sha256: string;
+            /** Source */
+            source?: string | null;
+            /** Upload Key */
+            upload_key?: string | null;
+        };
+        /** AdminAthRulingsUploadRequest */
+        AdminAthRulingsUploadRequest: {
+            /**
+             * Content Type
+             * @default application/json
+             * @constant
+             */
+            content_type: "application/json";
+        };
+        /** AdminAthRulingsUploadResponse */
+        AdminAthRulingsUploadResponse: {
+            /** Bucket */
+            bucket: string;
+            /** Content Type */
+            content_type: string;
+            /** Expires In */
+            expires_in: number;
+            /** Key */
+            key: string;
+            /** Max Bytes */
+            max_bytes: number;
+            /**
+             * Method
+             * @default PUT
+             * @constant
+             */
+            method: "PUT";
+            /** Url */
+            url: string;
         };
         /**
          * AdminAttestationRevokeRequest
@@ -6780,6 +7506,60 @@ export interface components {
             /** History */
             history: components["schemas"]["ConfirmationBundleSettingsRevision"][];
         };
+        /**
+         * AdminConfirmationSeedAnchor
+         * @description One ``(champion, bench_version)`` reign anchor, pinned or still waiting.
+         */
+        AdminConfirmationSeedAnchor: {
+            /** Anchor Block */
+            anchor_block: number;
+            /** Anchor Block Hash */
+            anchor_block_hash?: string | null;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Champion Agent Id
+             * Format: uuid
+             */
+            champion_agent_id: string;
+            /** Champion Miner Hotkey */
+            champion_miner_hotkey?: string | null;
+            /** Champion Name */
+            champion_name?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Pinned */
+            pinned: boolean;
+            /** Pinned At */
+            pinned_at?: string | null;
+            /** Ready Block */
+            ready_block: number;
+        };
+        /**
+         * AdminConfirmationSeedAnchorList
+         * @description Every anchor of one bench version, oldest anchor block first.
+         */
+        AdminConfirmationSeedAnchorList: {
+            /** Anchor Block Delta */
+            anchor_block_delta: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Binding Active */
+            binding_active: boolean;
+            /** Binding Floor Bench Version */
+            binding_floor_bench_version: number;
+            /** Count */
+            count: number;
+            /** Items */
+            items?: components["schemas"]["AdminConfirmationSeedAnchor"][];
+            /** Pinned Count */
+            pinned_count: number;
+            /** Waiting Count */
+            waiting_count: number;
+        };
         /** AdminContinualRetestSettingsRequest */
         AdminContinualRetestSettingsRequest: {
             /**
@@ -7430,6 +8210,126 @@ export interface components {
              * @default false
              */
             idempotent: boolean;
+        };
+        /** AdminFanoutShadowMetrics */
+        AdminFanoutShadowMetrics: {
+            /** Compared */
+            compared: number;
+            /** Disagreements */
+            disagreements: number;
+            /** Incomplete */
+            incomplete: number;
+            /** Incomplete Coverage */
+            incomplete_coverage: number;
+            /** Queued */
+            queued: number;
+            /** Rolling 24H Reported Cost Usd */
+            rolling_24h_reported_cost_usd: number;
+            /** Rolling 24H Reserved Cost Usd */
+            rolling_24h_reserved_cost_usd: number;
+            /** Rolling 24H Unmetered */
+            rolling_24h_unmetered: number;
+            /** Running */
+            running: number;
+            /** Skipped */
+            skipped: number;
+            /** Succeeded */
+            succeeded: number;
+            /** Total */
+            total: number;
+        };
+        /** AdminFanoutShadowResponse */
+        AdminFanoutShadowResponse: {
+            /** Count */
+            count: number;
+            /** Has More */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["AdminFanoutShadowReview"][];
+            /** Limit */
+            limit: number;
+            metrics: components["schemas"]["AdminFanoutShadowMetrics"];
+            /** Offset */
+            offset: number;
+            /** Returned */
+            returned: number;
+        };
+        /** AdminFanoutShadowReview */
+        AdminFanoutShadowReview: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Baseline */
+            baseline: {
+                [key: string]: unknown;
+            };
+            /** Completed At */
+            completed_at: string | null;
+            /** Coverage Complete */
+            coverage_complete: boolean | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Disagrees With Baseline */
+            disagrees_with_baseline: boolean | null;
+            /** Error Code */
+            error_code: string | null;
+            /** Outcome */
+            outcome: ("no_findings" | "candidate" | "unresolved_candidate" | "critic_also_flagged" | "incomplete" | "skipped") | null;
+            /** Policy Manifest Digest */
+            policy_manifest_digest: string;
+            /**
+             * Policy Manifest Profile
+             * @enum {string}
+             */
+            policy_manifest_profile: "core" | "l1" | "l1_l2";
+            /** Policy Manifest Rotation Id */
+            policy_manifest_rotation_id: string;
+            /** Policy Version */
+            policy_version: number;
+            /** Provider */
+            provider: string | null;
+            /** Report */
+            report: {
+                [key: string]: unknown;
+            } | null;
+            /** Reported Cost Usd */
+            reported_cost_usd: number | null;
+            /** Reserved At */
+            reserved_at: string | null;
+            /** Reserved Cost Usd */
+            reserved_cost_usd: number;
+            /** Settings Checksum */
+            settings_checksum: string;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Settings Scope */
+            settings_scope: string;
+            /**
+             * Shadow Id
+             * Format: uuid
+             */
+            shadow_id: string;
+            /** Started At */
+            started_at: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "running" | "succeeded" | "incomplete" | "skipped";
+            /** Unmetered */
+            unmetered: boolean;
         };
         /** AdminHotkeyBanAuditEntry */
         AdminHotkeyBanAuditEntry: {
@@ -8797,17 +9697,22 @@ export interface components {
              * Format: uuid
              */
             dispute_id: string;
+            /** Gate Note Ids */
+            gate_note_ids?: string[] | null;
+            /**
+             * Kind
+             * @default screening
+             * @enum {string}
+             */
+            kind: "screening" | "gate_notes";
             /** Message */
             message: string;
             /** Miner Hotkey */
             miner_hotkey: string;
             /** Original Reason */
             original_reason: string | null;
-            /**
-             * Quarantine Id
-             * Format: uuid
-             */
-            quarantine_id: string;
+            /** Quarantine Id */
+            quarantine_id: string | null;
             /** Resolution */
             resolution: ("release" | "uphold") | null;
             /** Resolution Reason */
@@ -10028,7 +10933,7 @@ export interface components {
              * @default legacy_unclassified
              * @enum {string}
              */
-            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
+            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
             /** Retry After */
             retry_after: string | null;
             /** Retry Budget Exhausted */
@@ -10081,7 +10986,7 @@ export interface components {
              * @default legacy_unclassified
              * @enum {string}
              */
-            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
+            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
             /** Score Count */
             score_count: number;
             /**
@@ -10841,6 +11746,105 @@ export interface components {
              */
             thinking: boolean;
         };
+        /** BenchmarkCanaryCancel */
+        BenchmarkCanaryCancel: {
+            /** Actor */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
+        /** BenchmarkCanaryIssue */
+        BenchmarkCanaryIssue: {
+            /** Actor */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Canary Id
+             * Format: uuid
+             */
+            canary_id: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Active Version */
+            expected_active_version: number;
+            /** Expected Artifact Sha256 */
+            expected_artifact_sha256: string;
+            /** Expected Screened Image Sha256 */
+            expected_screened_image_sha256: string;
+            /** Reason */
+            reason: string;
+            /** Slot Id */
+            slot_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** BenchmarkCanaryView */
+        BenchmarkCanaryView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Authoritative
+             * @default false
+             * @constant
+             */
+            authoritative: false;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Canary Id
+             * Format: uuid
+             */
+            canary_id: string;
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /** Failure Detail */
+            failure_detail: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Reason */
+            reason: string;
+            /** Result */
+            result: {
+                [key: string]: unknown;
+            } | null;
+            /** Run Size */
+            run_size: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Seed */
+            seed: string;
+            /** Slot Id */
+            slot_id: string;
+            /** Status */
+            status: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
         /**
          * BenchmarkCapacity
          * @description Authoritative admission and per-slot progress advertised by a validator.
@@ -11010,6 +12014,18 @@ export interface components {
          */
         CaseScore: {
             /**
+             * Allow Extra Tools
+             * @description True when extra tool calls were not penalised on this case.
+             * @default false
+             */
+            allow_extra_tools: boolean;
+            /**
+             * Audit Half
+             * @description ``base`` | ``transform`` for the two halves of a transform-audit pair; empty for every other case.
+             * @default
+             */
+            audit_half: string;
+            /**
              * Called
              * @description Tool names the agent called.
              */
@@ -11019,11 +12035,15 @@ export interface components {
              * @description Stable id of the scored case.
              */
             case_id: string;
+            /** @description Bench v13+ relay record of the tool catalog the harness offered the model, with the catalog-gate findings; null before v13. */
+            catalog?: components["schemas"]["CatalogEvidence"] | null;
             /**
              * Category
              * @description Case category, e.g. ``web_search``.
              */
             category: string;
+            /** @description Bench v13+ claim-span provenance and causal answer_in_prompt verdict for a memory case; null before v13. */
+            claim_provenance?: components["schemas"]["ClaimProvenanceEvidence"] | null;
             /**
              * Confidence
              * @description Harness self-reported confidence echoed for Brier calibration (None = not reported; distinct from 0.0).
@@ -11040,6 +12060,8 @@ export interface components {
              * @description Tool names the case expected.
              */
             expected?: string[];
+            /** @description Bench v13+ per-case inference cost record and shadow cost factor; null before v13. */
+            inference_cost?: components["schemas"]["InferenceCostEvidence"] | null;
             /**
              * Injection
              * @description True when the grader flagged injection compliance on this case.
@@ -11075,6 +12097,12 @@ export interface components {
              */
             quality: number;
             /**
+             * Relation
+             * @description Bench v13+: the generator's metamorphic / counterfactual relation for this case (e.g. ``base``, ``causal_counterfactual``); empty below v13.
+             * @default
+             */
+            relation: string;
+            /**
              * Result Usage
              * @description Result-usage half of an observed tool case: did the final answer incorporate the value only the executed tool served.
              * @default 0
@@ -11085,6 +12113,8 @@ export interface components {
              * @description Per-case composite in [0,1].
              */
             score: number;
+            /** @description Bench v10+ broker-to-endpoint tool provenance; null before. */
+            tool_provenance?: components["schemas"]["ToolProvenanceEvidence"] | null;
             /**
              * Tool Score
              * @description Per-case tool accuracy in [0,1].
@@ -11096,6 +12126,213 @@ export interface components {
              * @default
              */
             twin_group: string;
+            /**
+             * Undelivered
+             * @description True when the case never reached the harness.
+             * @default false
+             */
+            undelivered: boolean;
+            /**
+             * Validator Fault
+             * @description True when an undelivered case was the validator's fault.
+             * @default false
+             */
+            validator_fault: boolean;
+        };
+        /**
+         * CatalogCompletion
+         * @description Relay metadata of one attributed chat completion (bench v13 catalog gate).
+         */
+        CatalogCompletion: {
+            /**
+             * After Last Tool Result
+             * @default false
+             */
+            after_last_tool_result: boolean;
+            /**
+             * Attribution Source
+             * @default
+             */
+            attribution_source: string;
+            /**
+             * Catalog Sha256
+             * @default
+             */
+            catalog_sha256: string;
+            /**
+             * Claim Corroborated
+             * @default false
+             */
+            claim_corroborated: boolean;
+            /** Model Emitted Tool Calls */
+            model_emitted_tool_calls?: string[];
+            /**
+             * System Span Sha256
+             * @default
+             */
+            system_span_sha256: string;
+            /**
+             * Tool Choice
+             * @default
+             */
+            tool_choice: string;
+            /**
+             * Tools Choosable
+             * @default 0
+             */
+            tools_choosable: number;
+            /**
+             * Tools Offered
+             * @default 0
+             */
+            tools_offered: number;
+        };
+        /**
+         * CatalogEvidence
+         * @description Bench v13 per-case relay record of the offered tool catalog (``catalog``).
+         *
+         *     Mirrors the DittoBench ``CatalogEvidence`` wire shape (bench_version >= 13;
+         *     nil before). Digests and counts only -- no prompt or completion text.
+         *     ``findings`` names the catalog-gate rule outcomes for the case.
+         */
+        CatalogEvidence: {
+            /**
+             * Catalog Present
+             * @default false
+             */
+            catalog_present: boolean;
+            /**
+             * Catalog Present Lower Bound
+             * @default false
+             */
+            catalog_present_lower_bound: boolean;
+            /**
+             * Claim Attributed Completions
+             * @default 0
+             */
+            claim_attributed_completions: number;
+            /**
+             * Claim Corroborated Completions
+             * @default 0
+             */
+            claim_corroborated_completions: number;
+            /**
+             * Complete
+             * @default false
+             */
+            complete: boolean;
+            /** Completions */
+            completions?: components["schemas"]["CatalogCompletion"][];
+            /**
+             * Completions After Last Tool Result
+             * @default 0
+             */
+            completions_after_last_tool_result: number;
+            /** Completions Total */
+            completions_total?: number | null;
+            /**
+             * Completions With Catalog
+             * @default 0
+             */
+            completions_with_catalog: number;
+            /** Findings */
+            findings?: string[];
+            /** Harness System Span Sha256 */
+            harness_system_span_sha256?: string[];
+            /** Model Emitted Tool Calls */
+            model_emitted_tool_calls?: string[];
+            /**
+             * Overlap Completions
+             * @default 0
+             */
+            overlap_completions: number;
+            /**
+             * Overlap Completions With Catalog
+             * @default 0
+             */
+            overlap_completions_with_catalog: number;
+            /**
+             * Tool Choice Suppressed Completions
+             * @default 0
+             */
+            tool_choice_suppressed_completions: number;
+            /** Tools Offered */
+            tools_offered?: components["schemas"]["OfferedTool"][];
+        };
+        /**
+         * CatalogGateSummary
+         * @description Run-level catalog-gate record (``details.catalog_gate``), sanitised.
+         *
+         *     Counts, not rates, where they pool; ``catalog_suppression_rate`` is the
+         *     published run-level metric (catalog absent / attributed tool cases).
+         */
+        CatalogGateSummary: {
+            /**
+             * Attributed Cases
+             * @default 0
+             */
+            attributed_cases: number;
+            /** Attribution Coverage Bps */
+            attribution_coverage_bps?: number | null;
+            /**
+             * Catalog Absent Cases
+             * @default 0
+             */
+            catalog_absent_cases: number;
+            /** Catalog Suppression Rate */
+            catalog_suppression_rate?: number | null;
+            /**
+             * Claim Uncorroborated Cases
+             * @default 0
+             */
+            claim_uncorroborated_cases: number;
+            /**
+             * Expected Tool Not Offered
+             * @default 0
+             */
+            expected_tool_not_offered: number;
+            /**
+             * Incomplete Capture Cases
+             * @default 0
+             */
+            incomplete_capture_cases: number;
+            /**
+             * Lower Bound Cases
+             * @default 0
+             */
+            lower_bound_cases: number;
+            /**
+             * No Completion Cases
+             * @default 0
+             */
+            no_completion_cases: number;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /**
+             * Restraint Without Offer
+             * @default 0
+             */
+            restraint_without_offer: number;
+            /**
+             * Safe Harbor Cases
+             * @default 0
+             */
+            safe_harbor_cases: number;
+            /**
+             * Swallowed Model Call
+             * @default 0
+             */
+            swallowed_model_call: number;
+            /**
+             * Tool Cases
+             * @default 0
+             */
+            tool_cases: number;
+            /**
+             * Zeroed Cases
+             * @default 0
+             */
+            zeroed_cases: number;
         };
         /**
          * CategoryStat
@@ -11126,6 +12363,104 @@ export interface components {
              * @default 0
              */
             std_err: number;
+        };
+        /**
+         * ClaimProvenanceEvidence
+         * @description Bench v13 per-case claim-span provenance + causal verdict (``claim_provenance``).
+         *
+         *     Mirrors the DittoBench ``ClaimProvenanceEvidence`` wire shape
+         *     (bench_version >= 13; nil before). Hash-derived verdicts and counts only.
+         *     ``findings`` names the settled gate outcomes for the case.
+         */
+        ClaimProvenanceEvidence: {
+            /** Answer In Prompt */
+            answer_in_prompt?: boolean | null;
+            /**
+             * Claim Tokens
+             * @default 0
+             */
+            claim_tokens: number;
+            /**
+             * Complete
+             * @default false
+             */
+            complete: boolean;
+            /** Completions */
+            completions?: number | null;
+            /** Findings */
+            findings?: string[];
+            /** Model Emitted */
+            model_emitted?: boolean | null;
+            /**
+             * Posture
+             * @default
+             */
+            posture: string;
+            /**
+             * Tool Results
+             * @default 0
+             */
+            tool_results: number;
+            /**
+             * Unattributed Calls
+             * @default 0
+             */
+            unattributed_calls: number;
+        };
+        /**
+         * ClaimProvenanceSummary
+         * @description Run-level claim-span / causal gate record (``details.claim_provenance``).
+         */
+        ClaimProvenanceSummary: {
+            /**
+             * Answer In Prompt Cases
+             * @default 0
+             */
+            answer_in_prompt_cases: number;
+            /**
+             * Applicable Cases
+             * @default 0
+             */
+            applicable_cases: number;
+            /**
+             * Attributed Cases
+             * @default 0
+             */
+            attributed_cases: number;
+            /** Attribution Coverage Bps */
+            attribution_coverage_bps?: number | null;
+            /**
+             * Memory Cases
+             * @default 0
+             */
+            memory_cases: number;
+            /**
+             * No Model Completion Cases
+             * @default 0
+             */
+            no_model_completion_cases: number;
+            /**
+             * Not Model Emitted Cases
+             * @default 0
+             */
+            not_model_emitted_cases: number;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /**
+             * Settled Cases
+             * @default 0
+             */
+            settled_cases: number;
+            /**
+             * Unsettled Cases
+             * @default 0
+             */
+            unsettled_cases: number;
+            /**
+             * Zeroed Cases
+             * @default 0
+             */
+            zeroed_cases: number;
         };
         /**
          * CodeFingerprint
@@ -14005,14 +15340,42 @@ export interface components {
         /**
          * ConfirmationDatasetPin
          * @description One platform-generated dataset used by a continual confirmation lease.
+         *
+         *     The four optional fields are the seed's **finalized-block binding** (bench
+         *     v13+): ``seed == crn_seed([anchor_agent_id], version=bench_version,
+         *     k=seed_index, block_hash=seed_block_hash)``. The validator re-derives and
+         *     refuses a lease whose seed is not consistent with the pin Platform served
+         *     (it does not read the pinned hash back from the chain). Absent on legacy
+         *     versions and on seeds no pinned reign anchor derives; the lease is then
+         *     accepted as before.
          */
         ConfirmationDatasetPin: {
+            /**
+             * Anchor Agent Id
+             * @description Champion the seed family is anchored on (bench v13+).
+             */
+            anchor_agent_id?: string | null;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Run Size */
             run_size: string;
             /** Seed */
             seed: number;
+            /**
+             * Seed Block
+             * @description Finalized chain block the family is bound to.
+             */
+            seed_block?: number | null;
+            /**
+             * Seed Block Hash
+             * @description Hash of ``seed_block``; the derivation input.
+             */
+            seed_block_hash?: string | null;
+            /**
+             * Seed Index
+             * @description Replicate index ``k`` of this seed within the family.
+             */
+            seed_index?: number | null;
         };
         /**
          * ConfirmationDimension
@@ -14098,7 +15461,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -14143,7 +15506,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /** Checksum */
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
@@ -14233,6 +15596,16 @@ export interface components {
             route_provider: string;
             /** Token Budget */
             token_budget: number;
+        };
+        /**
+         * ConfirmationProfileIdentity
+         * @description One exact frozen confirmation profile installed in this Platform release.
+         */
+        ConfirmationProfileIdentity: {
+            /** Checksum */
+            checksum: string;
+            /** Revision */
+            revision: string;
         };
         /**
          * ConfirmationProgress
@@ -14347,6 +15720,28 @@ export interface components {
             validator_hotkey: string;
         };
         /**
+         * ConfirmationSeedAnchorPin
+         * @description One reign's pinned finalized-block anchor, served on the ledger.
+         *
+         *     Lets every validator re-derive the champion-anchored confirmation family
+         *     for ``bench_version`` (``crn_seed(..., block_hash=anchor_block_hash)``) and
+         *     agree fleet-wide without a chain read. Only pinned anchors are served; a
+         *     reign still in its finality wait is simply absent.
+         */
+        ConfirmationSeedAnchorPin: {
+            /** Anchor Block */
+            anchor_block: number;
+            /** Anchor Block Hash */
+            anchor_block_hash: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Champion Agent Id
+             * Format: uuid
+             */
+            champion_agent_id: string;
+        };
+        /**
          * ConfirmationShadowCalibrationView
          * @description Measured shadow economics derived only from settled Platform rows.
          *
@@ -14420,10 +15815,22 @@ export interface components {
              */
             aggregate_mode: "disabled" | "fleet_ready" | "enabled";
             /**
+             * Crown Incumbent Mode
+             * @default disabled
+             * @enum {string}
+             */
+            crown_incumbent_mode: "disabled" | "fleet_ready";
+            /**
              * Idle Retests Enabled
              * @default false
              */
             idle_retests_enabled: boolean;
+            /**
+             * Ledger Pin Mode
+             * @default epoch
+             * @enum {string}
+             */
+            ledger_pin_mode: "live" | "epoch";
             /**
              * Retest Cohort Max Size
              * @default 25
@@ -14704,9 +16111,16 @@ export interface components {
         };
         /**
          * CreateScreeningDisputeRequest
-         * @description One signed appeal of a rejected screening decision.
+         * @description One signed appeal: of a rejected screening decision, or -- for a scored,
+         *     live, evaluating or held submission -- of the bench v13+ gate notes cited
+         *     in ``gate_note_ids``. A submission gets exactly one either way.
          */
         CreateScreeningDisputeRequest: {
+            /**
+             * Gate Note Ids
+             * @description Bench v13+ gate ``note_id`` values this dispute contests, as listed on ``GET /me/agents/{agent_id}/gate-notes``. Every id must belong to this submission's own accepted scores.
+             */
+            gate_note_ids?: string[] | null;
             /** Message */
             message: string;
             /** Signature */
@@ -14750,6 +16164,12 @@ export interface components {
              * @default 6
              */
             composite_mad_multiplier: number;
+            /**
+             * Integrity Double Check Mode
+             * @default off
+             * @enum {string}
+             */
+            integrity_double_check_mode: "off" | "observe" | "enforce";
             /**
              * Min Axis Delta
              * @default 0.15
@@ -14824,6 +16244,8 @@ export interface components {
             checksum: string | null;
             /** Configured */
             configured: boolean;
+            /** Installed Profiles */
+            installed_profiles?: components["schemas"]["ConfirmationProfileIdentity"][];
             /** Issuance Active */
             issuance_active: boolean;
             /**
@@ -14851,6 +16273,11 @@ export interface components {
              * @default 10
              */
             max_top_n: number;
+            /**
+             * Profile Installed
+             * @default false
+             */
+            profile_installed: boolean;
             /** Revision */
             revision: number;
             /** Scope */
@@ -14868,6 +16295,21 @@ export interface components {
             aggregate_active: boolean;
             /** Checksum */
             checksum: string;
+            /**
+             * Crown Incumbent Active
+             * @default false
+             */
+            crown_incumbent_active: boolean;
+            /**
+             * Crown Incumbent Fleet Ready
+             * @default false
+             */
+            crown_incumbent_fleet_ready: boolean;
+            /**
+             * Crown Incumbent Required Protocol
+             * @default 27
+             */
+            crown_incumbent_required_protocol: number;
             /** Eligible Agent Count */
             eligible_agent_count?: number | null;
             /**
@@ -14877,6 +16319,7 @@ export interface components {
             emission_set_size: number;
             /** Fleet Protocol Ready */
             fleet_protocol_ready: boolean;
+            ledger_pin?: components["schemas"]["LedgerPinStatus"] | null;
             /** Max Age Seconds */
             max_age_seconds: number;
             /**
@@ -15309,6 +16752,124 @@ export interface components {
              */
             reopened: boolean;
         };
+        /** FanoutShadowCompleteRequest */
+        FanoutShadowCompleteRequest: {
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Outcome
+             * @enum {string}
+             */
+            outcome: "no_findings" | "candidate" | "unresolved_candidate" | "critic_also_flagged" | "incomplete" | "skipped";
+            /** Report */
+            report: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "succeeded" | "incomplete";
+        };
+        /** FanoutShadowCompleteResponse */
+        FanoutShadowCompleteResponse: {
+            /** Accepted */
+            accepted: boolean;
+        };
+        /** FanoutShadowSourceResponse */
+        FanoutShadowSourceResponse: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Policy Manifest Digest */
+            policy_manifest_digest: string;
+            /**
+             * Policy Manifest Profile
+             * @enum {string}
+             */
+            policy_manifest_profile: "core" | "l1" | "l1_l2";
+            /** Policy Manifest Rotation Id */
+            policy_manifest_rotation_id: string;
+            /** Policy Version */
+            policy_version: number;
+            /** Source Url B64 */
+            source_url_b64: string;
+        };
+        /**
+         * FeedbackTrackContributionRequest
+         * @description One contribution recorded by the Ditto backend (operator bearer).
+         */
+        FeedbackTrackContributionRequest: {
+            /** Ditto User Id */
+            ditto_user_id: string;
+            /** External Ref */
+            external_ref: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "report" | "follow_up" | "shipped";
+            /** Note */
+            note?: string | null;
+            /**
+             * Source
+             * @default ditto_feedback
+             * @constant
+             */
+            source: "ditto_feedback";
+            /** Weight */
+            weight?: number | string | null;
+        };
+        /** FeedbackTrackContributionResponse */
+        FeedbackTrackContributionResponse: {
+            contribution: components["schemas"]["FeedbackTrackContributionView"];
+            /** Created */
+            created: boolean;
+        };
+        /** FeedbackTrackContributionView */
+        FeedbackTrackContributionView: {
+            /**
+             * Contribution Id
+             * Format: uuid
+             */
+            contribution_id: string;
+            /** External Ref */
+            external_ref: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "report" | "follow_up" | "shipped";
+            /** Note */
+            note?: string | null;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /**
+             * Source
+             * @constant
+             */
+            source: "ditto_feedback";
+            /** Weight */
+            weight?: string | null;
+        };
+        /**
+         * FeedbackTrackMeResponse
+         * @description The signed-in miner's contributions, via the account linked to the hotkey.
+         */
+        FeedbackTrackMeResponse: {
+            /** Contributions */
+            contributions: components["schemas"]["FeedbackTrackContributionView"][];
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Ditto User Id */
+            ditto_user_id?: string | null;
+            /** Linked */
+            linked: boolean;
+        };
         /**
          * FleetRelease
          * @description Which build a screener worker is, as distinct from which policy it screens.
@@ -15707,6 +17268,108 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["InferenceConcurrencySettings"];
+        };
+        /**
+         * InferenceCostEvidence
+         * @description Bench v13 per-case inference cost record + shadow factor (``inference_cost``).
+         *
+         *     Mirrors the DittoBench ``InferenceCostEvidence`` wire shape (bench_version
+         *     >= 13; nil before). ``factor_bps`` is the cost factor the v13 rule WOULD
+         *     apply, in basis points; it is reported only, never multiplied into a
+         *     score, in v13.0. The wire key ``class`` is a Python keyword, hence the
+         *     aliased ``case_class`` (serialised back under its wire name).
+         */
+        InferenceCostEvidence: {
+            /**
+             * Attributed
+             * @default false
+             */
+            attributed: boolean;
+            /**
+             * Attribution
+             * @default
+             */
+            attribution: string;
+            /**
+             * Budget Tokens
+             * @default 0
+             */
+            budget_tokens: number;
+            /**
+             * Choices Total
+             * @default 0
+             */
+            choices_total: number;
+            /**
+             * Class
+             * @default
+             */
+            class: string;
+            /**
+             * Completions
+             * @default 0
+             */
+            completions: number;
+            /**
+             * Excess Tokens
+             * @default 0
+             */
+            excess_tokens: number;
+            /**
+             * Factor Bps
+             * @default 10000
+             */
+            factor_bps: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
+            /**
+             * Usage Unavailable
+             * @default 0
+             */
+            usage_unavailable: number;
+        };
+        /**
+         * InferenceCostSummary
+         * @description Run-level shadow cost-factor record (``details.inference_cost``).
+         *
+         *     ``mean_factor_bps`` is the mean factor the v13 cost rule WOULD have
+         *     applied over the attributable cases; ``applied`` is always false in v13.0.
+         */
+        InferenceCostSummary: {
+            /**
+             * Applied
+             * @default false
+             */
+            applied: boolean;
+            /**
+             * Attributed Cases
+             * @default 0
+             */
+            attributed_cases: number;
+            /**
+             * Cases
+             * @default 0
+             */
+            cases: number;
+            /**
+             * Cases Below Full Factor
+             * @default 0
+             */
+            cases_below_full_factor: number;
+            /** Floor Bps */
+            floor_bps?: number | null;
+            /** Mean Factor Bps */
+            mean_factor_bps?: number | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
         };
         /** InferenceExchangeRequest */
         InferenceExchangeRequest: {
@@ -16253,6 +17916,33 @@ export interface components {
             validator_hotkey: string;
         };
         /**
+         * LedgerPinStatus
+         * @description Identity of the epoch-pinned ledger currently served to validators.
+         */
+        LedgerPinStatus: {
+            /** Bench Version */
+            bench_version: number;
+            /** Champion Agent Id */
+            champion_agent_id?: string | null;
+            /** Entry Count */
+            entry_count: number;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Incumbent Agent Id */
+            incumbent_agent_id?: string | null;
+            /** Last Epoch Block */
+            last_epoch_block: number;
+            /** Ledger Digest */
+            ledger_digest: string;
+            /**
+             * Pinned At
+             * Format: date-time
+             */
+            pinned_at: string;
+            /** Pinned Block */
+            pinned_block: number;
+        };
+        /**
          * LedgerResponse
          * @description Returned by ``GET /scoring/scores``.
          *
@@ -16303,6 +17993,11 @@ export interface components {
              */
             burn_share: number;
             /**
+             * Confirmation Seed Anchors
+             * @description Pinned finalized-block anchors of the active version's confirmation seed families (bench v13+), oldest first. A validator derives the champion-anchored CRN family from the anchor whose champion_agent_id matches its fold's champion; with no matching pin at a binding version it introduces no fresh confirmation seed. Empty on older platforms and below the floor.
+             */
+            confirmation_seed_anchors?: components["schemas"]["ConfirmationSeedAnchorPin"][];
+            /**
              * Continual Retest Cohort Size
              * @description How many ranked agents the operator currently has the continual retest lane covering: 5 (the emission set) up to 25. Advisory planning input for the validator's shared-seed round — the platform still enforces membership when it issues the lease, so a validator that ignores this field simply keeps planning the top five and loses nothing but the extra coverage. Emissions, the weight fold, and wave completion are always the top five, whatever this says.
              * @default 5
@@ -16314,6 +18009,16 @@ export interface components {
              */
             count: number;
             /**
+             * Crown Incumbent Agent Id
+             * @description The incumbent the fold defends when crown_mode is incumbent; always one of entries. Absent whenever crown_mode is absent.
+             */
+            crown_incumbent_agent_id?: string | null;
+            /**
+             * Crown Mode
+             * @description Consensus activation marker for crown incumbency. When set to incumbent, the fold starts its champion walk from crown_incumbent_agent_id (the previous epoch's champion, resolved through its owner family) and moves the crown only when a challenger clears the dethrone band over it. Absent keeps the historical earliest-lineage walk, in which a senior claimant inside the band retakes the crown on every read.
+             */
+            crown_mode?: "incumbent" | null;
+            /**
              * Dethrone Band Mode
              * @description Consensus activation marker for the ceiling-aware dethrone band. When set to headroom_capped, the KOTH indifference band is capped at a fixed share of the score the challenger can still gain, so a near-perfect incumbent can never require more than the benchmark can deliver. Absent keeps the uncapped decayed band.
              */
@@ -16324,10 +18029,30 @@ export interface components {
              */
             entries: components["schemas"]["LedgerEntry"][];
             /**
+             * Epoch Index
+             * @description Chain SubnetEpochIndex this ledger was pinned for. Present only when the platform served an epoch-pinned ledger: every validator reading during that epoch receives byte-identical entries and markers, so a ledger change lands for the whole fleet at the next pin instead of splitting it on who read first. Absent on a live (unpinned) read.
+             */
+            epoch_index?: number | null;
+            /**
              * Generated At
              * @description When these entries were read from the DB (UTC). On a served last-known-good snapshot this is the age of the cached read, not 'now'.
              */
             generated_at?: string | null;
+            /**
+             * Ledger Digest
+             * @description SHA-256 over the canonical JSON of entries plus the served fold markers. Two validators folding the same pin hold the same digest; it is what a validator echoes back so the platform can show which snapshot each weight vector came from.
+             */
+            ledger_digest?: string | null;
+            /**
+             * Pinned At
+             * @description When the pin was taken (UTC); equals generated_at on a pin.
+             */
+            pinned_at?: string | null;
+            /**
+             * Pinned Block
+             * @description Head block the pin's epoch schedule was read at.
+             */
+            pinned_block?: number | null;
             /**
              * Stale
              * @description True when the live DB read failed and this is a served last-known-good snapshot. A fold may still use it (the ledger is durable and slow-moving) but should treat it as advisory.
@@ -16450,7 +18175,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /** Case Set Digest */
             case_set_digest: string;
             /** Dataset Revision */
@@ -16671,6 +18396,95 @@ export interface components {
             /** User Code */
             user_code: string;
         };
+        /**
+         * MinerDittoLinkAttemptResponse
+         * @description One attempt. ``identity_verified`` means Ditto signed someone in but
+         *     that person has not yet accepted the hotkey; ``authenticated`` carries who
+         *     accepted, so the miner can confirm the pairing before anything is written.
+         *     Identity fields are only present once the Ditto side has accepted.
+         */
+        MinerDittoLinkAttemptResponse: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Ditto Email */
+            ditto_email?: string | null;
+            /** Ditto User Id */
+            ditto_user_id?: string | null;
+            /** Error */
+            error?: string | null;
+            link?: components["schemas"]["MinerDittoLinkView"] | null;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "identity_verified" | "authenticated" | "linked" | "failed" | "expired";
+        };
+        /** MinerDittoLinkResponse */
+        MinerDittoLinkResponse: {
+            /** Enabled */
+            enabled: boolean;
+            link?: components["schemas"]["MinerDittoLinkView"] | null;
+        };
+        /** MinerDittoLinkStartRequest */
+        MinerDittoLinkStartRequest: {
+            /**
+             * Client
+             * @default dashboard
+             * @enum {string}
+             */
+            client: "dashboard" | "cli";
+            /** Return To */
+            return_to?: string | null;
+        };
+        /** MinerDittoLinkStartResponse */
+        MinerDittoLinkStartResponse: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Authorize Url */
+            authorize_url: string;
+            /** Expires In */
+            expires_in: number;
+        };
+        /**
+         * MinerDittoLinkView
+         * @description One hotkey's Ditto account link as the miner sees it.
+         *
+         *     ``ditto_user_id`` is the verified OIDC subject; nothing here was supplied
+         *     by the caller.
+         */
+        MinerDittoLinkView: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Ditto Email */
+            ditto_email?: string | null;
+            /** Ditto User Id */
+            ditto_user_id: string;
+            /**
+             * Linked Via
+             * @enum {string}
+             */
+            linked_via: "dashboard" | "cli";
+            /** Miner Coldkey */
+            miner_coldkey?: string | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** MinerFeeDay */
         MinerFeeDay: {
             /**
@@ -16686,6 +18500,113 @@ export interface components {
             paid_submissions: number;
             /** Priced Submissions */
             priced_submissions: number;
+        };
+        /**
+         * MinerGateNote
+         * @description One gate note on one case, with the id a dispute can cite.
+         */
+        MinerGateNote: {
+            /** Gate */
+            gate: string;
+            /** Note Id */
+            note_id: string;
+            /**
+             * Zeroing
+             * @description Whether this finding zeroes the case when its gate runs in enforce (a would-be zero in shadow).
+             */
+            zeroing: boolean;
+        };
+        /**
+         * MinerGateNoteCase
+         * @description One flagged case's gate outcome, as shown to the owning miner.
+         */
+        MinerGateNoteCase: {
+            /**
+             * Case Id
+             * @description Seed-derived case id. The seed of every accepted score is already published on the submission's pipeline record, so the owner always sees it.
+             */
+            case_id?: string | null;
+            /** Case Index */
+            case_index?: number | null;
+            /** Catalog Present */
+            catalog_present?: boolean | null;
+            /** Category */
+            category?: string | null;
+            /** Cost Factor */
+            cost_factor?: number | null;
+            /** Kind */
+            kind?: string | null;
+            /** Notes */
+            notes?: components["schemas"]["MinerGateNote"][];
+            /** Relation */
+            relation?: string | null;
+            /** Score */
+            score?: number | null;
+            /** Tools Offered */
+            tools_offered?: number | null;
+        };
+        /**
+         * MinerGateNotesResponse
+         * @description Every accepted run's v13 gate notes for one of the miner's own agents.
+         */
+        MinerGateNotesResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /**
+             * Dispute Submit Url
+             * @description Where the submission's one dispute is filed. A rejected submission disputes its quarantine decision; a scored, live, evaluating or held submission disputes the gate notes it cites by passing their ``note_id`` values as ``gate_note_ids``.
+             * @default /api/v1/public/agent/{agent_id}/dispute
+             */
+            dispute_submit_url: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Runs */
+            runs?: components["schemas"]["MinerGateNotesRun"][];
+        };
+        /**
+         * MinerGateNotesRun
+         * @description One validator run's gate verdict and its per-case notes (owner only).
+         */
+        MinerGateNotesRun: {
+            /** Bench Version */
+            bench_version: number;
+            /** Cases */
+            cases?: components["schemas"]["MinerGateNoteCase"][];
+            catalog_gate?: components["schemas"]["CatalogGateSummary"] | null;
+            /** Catalog Suppression Rate */
+            catalog_suppression_rate?: number | null;
+            claim_provenance?: components["schemas"]["ClaimProvenanceSummary"] | null;
+            /** Composite */
+            composite: number;
+            /**
+             * Flagged Case Count
+             * @default 0
+             */
+            flagged_case_count: number;
+            /** Flagged Case Share */
+            flagged_case_share?: number | null;
+            /** Gate Counts */
+            gate_counts?: {
+                [key: string]: number;
+            };
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            inference_cost?: components["schemas"]["InferenceCostSummary"] | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /** Run Id */
+            run_id: string;
+            twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /**
          * MinerHarnessLogAttempt
@@ -17078,6 +18999,19 @@ export interface components {
             version?: string | null;
         };
         /**
+         * OfferedTool
+         * @description One tool the harness offered the model: wire name + schema digest.
+         */
+        OfferedTool: {
+            /** Name */
+            name: string;
+            /**
+             * Schema Sha256
+             * @default
+             */
+            schema_sha256: string;
+        };
+        /**
          * OwnerLinkProof
          * @description One endpoint's proof that it consents to the link.
          *
@@ -17371,6 +19305,8 @@ export interface components {
              * @description Public URL for this miner's signed profile picture, if set.
              */
             avatar_url?: string | null;
+            /** @description Latest aggregate Coding-shadow status for this exact submission artifact, screened image, and active benchmark. Display-only; never changes pipeline state, rank, score, weights, or emissions. */
+            coding_shadow?: components["schemas"]["PublicCodingShadowScore"] | null;
             /**
              * Duplicate Hotkey
              * @description Hotkey of the matched submission. Equal to miner_hotkey when this hold is a same-miner rename or re-upload of that earlier row, not a comparison against someone else's agent.
@@ -17401,6 +19337,11 @@ export interface components {
              * @description Submitting miner's SS58 hotkey.
              */
             miner_hotkey: string;
+            /**
+             * Miner Uid
+             * @description Submitting miner's current UID on this subnet; null when the hotkey is not registered or the chain snapshot is unavailable. Registration decorates the submission: it never changes the row's status or score.
+             */
+            miner_uid?: number | null;
             /**
              * Name
              * @description Miner-provided agent display name.
@@ -18590,6 +20531,8 @@ export interface components {
             netuid: number;
             /** Owner Hotkey */
             owner_hotkey?: string | null;
+            /** @description Count of revealed vectors matching the current pin's fold, or null when no pin exists to compare against. */
+            pin_agreement?: components["schemas"]["PublicPinAgreement"] | null;
             /**
              * Stale
              * @description True when the most recent attempt to re-read the matrix failed and this is the last known good one. The block it pins is real chain state, just older than a normal response; a reader should label it rather than treat the matrix as absent.
@@ -18716,7 +20659,7 @@ export interface components {
              * @default 9
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /**
              * Bundle Id
              * Format: uuid
@@ -19152,6 +21095,67 @@ export interface components {
             shared_seed_confirmations: number;
         };
         /**
+         * PublicFeedbackTrackResponse
+         * @description Counts only. Never the account, the email, or the report text.
+         */
+        PublicFeedbackTrackResponse: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Linked */
+            linked: boolean;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Total */
+            total: number;
+        };
+        /**
+         * PublicGateEvidence
+         * @description Run-level v13 gate verdict, published beside a validator's score.
+         *
+         *     Aggregates only: the posture the gates ran under, the four gate summaries
+         *     (counts and rates), how many cases the gates would zero, and per-finding
+         *     counts. The per-case notes behind these counts are owner-only
+         *     (``GET /me/agents/{agent_id}/gate-notes``).
+         */
+        PublicGateEvidence: {
+            /** Bench Version */
+            bench_version: number;
+            catalog_gate?: components["schemas"]["CatalogGateSummary"] | null;
+            /**
+             * Catalog Suppression Rate
+             * @description Share of attributed tool cases that offered no tool catalog.
+             */
+            catalog_suppression_rate?: number | null;
+            claim_provenance?: components["schemas"]["ClaimProvenanceSummary"] | null;
+            /**
+             * Flagged Case Count
+             * @description Cases a v13 gate would zero at enforce (or did), plus cases the shadow cost factor would discount.
+             * @default 0
+             */
+            flagged_case_count: number;
+            /**
+             * Flagged Case Share
+             * @description ``flagged_case_count`` over the cases the run scored.
+             */
+            flagged_case_share?: number | null;
+            /**
+             * Gate Counts
+             * @description Gate finding -> number of cases it fired on (closed vocabulary; zeroing and informational findings alike).
+             */
+            gate_counts?: {
+                [key: string]: number;
+            };
+            inference_cost?: components["schemas"]["InferenceCostSummary"] | null;
+            /**
+             * Posture
+             * @description The most severe posture any v13 gate ran under: ``enforce`` means at least one gate changed scores; ``shadow`` means every gate only recorded what it would have done. Per-gate postures are on the gate summaries.
+             */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
+        };
+        /**
          * PublicHealthResponse
          * @description Aggregate subnet-health rollup for the public dashboard.
          *
@@ -19337,13 +21341,34 @@ export interface components {
             champion_miner_hotkey: string;
             /** Champion Share */
             champion_share: number;
+            /**
+             * Crown Incumbent Active
+             * @description Whether the displayed fold defends the crown from the previous pin's champion (crown_mode incumbent) instead of re-deriving it from the earliest lineage on every read.
+             * @default false
+             */
+            crown_incumbent_active: boolean;
+            /**
+             * Crown Incumbent Agent Id
+             * @description The incumbent the live fold defended, when incumbency is active and the current pin named one. Null otherwise.
+             */
+            crown_incumbent_agent_id?: string | null;
+            /**
+             * Crown Incumbent Required Protocol
+             * @description Minimum fleet heartbeat protocol for crown incumbency.
+             * @default 27
+             */
+            crown_incumbent_required_protocol: number;
             /** Dethrone Z */
             dethrone_z: number;
+            /** @description The epoch-pinned ledger validators are folding right now. The board above is live and can move within an epoch; weights only move at the next pin, so this is the snapshot any on-chain vector should be read against. Null while pinning is switched off or before the first pin was taken. */
+            ledger_pin?: components["schemas"]["PublicLedgerPin"] | null;
             /**
              * Margin
              * @description Base composite-point lead before versioned high-score band scaling.
              */
             margin: number;
+            /** @description What the next epoch pin would record if it were taken from the live board right now: the fold over the current rows with the current pin's champion as incumbent. Read changes_crown to know whether weights will move at the next pin. */
+            next_pin_projection?: components["schemas"]["PublicNextPinProjection"] | null;
             /** Rank Shares */
             rank_shares: number[];
             /**
@@ -19721,6 +21746,13 @@ export interface components {
              */
             rollout_score_count?: number | null;
             /**
+             * Router Shadow Composite
+             * @description Display-only shadow router-track efficiency composite from the published router ledger. Never ranked or weighted while the router track is shadow.
+             */
+            router_shadow_composite?: number | null;
+            /** Router Shadow Status */
+            router_shadow_status?: ("queued" | "running" | "measured") | null;
+            /**
              * Score Count
              * @description Accepted independent validator scores currently available.
              * @default 3
@@ -19821,6 +21853,11 @@ export interface components {
              */
             miner_hotkey?: string | null;
             /**
+             * Official Composite
+             * @description The same ranking composite the parent KOTH row uses: the continual mean of the quorum scores plus shared retest seeds when that estimator is active, otherwise the canonical median. The expander must render this, not ``canonical_composite``, or a later upload's three-validator median looks like it outranks the representative.
+             */
+            official_composite?: number | null;
+            /**
              * Submitted At
              * @description When this generation arrived (UTC). The family's earliest arrival within the dethrone margin of the winner is what the KOTH fold orders on, so this is what lets a reader locate the generation supplying the winner's ``crown_first_seen`` rather than infer it.
              */
@@ -19889,6 +21926,11 @@ export interface components {
              */
             registration_stale: boolean;
             /**
+             * Router Shadow Mode
+             * @description Router track measurement phase. ``shadow`` is present only when the published router ledger carries at least one measurement; the board's router surface is display-only and never changes ranking or emissions. Null means the router surface is off.
+             */
+            router_shadow_mode?: "shadow" | null;
+            /**
              * Selection Mode
              * @description authoritative is the pool that drives validator weights: pinned to active_bench_version while a rollout is collecting (the desired version takes over only at rollout activation); historical is a requested single version.
              * @enum {string}
@@ -19899,6 +21941,155 @@ export interface components {
              * @description Active Bench v9 confirmation policy. Shadow publishes measured LongMemEval and ablation evidence without changing ranking or emissions. Enforce makes full confirmation authoritative and suppresses base-only or provisional rows. Null means off.
              */
             v9_confirmation_mode?: ("shadow" | "enforce") | null;
+        };
+        /**
+         * PublicLedgerActor
+         * @description One agent named by a pin: the champion, the incumbent, or a recipient.
+         */
+        PublicLedgerActor: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+        };
+        /**
+         * PublicLedgerEpoch
+         * @description One pinned epoch and the crown decision the fold derived from it.
+         */
+        PublicLedgerEpoch: {
+            /** Bench Version */
+            bench_version: number;
+            champion?: components["schemas"]["PublicLedgerActor"] | null;
+            /**
+             * Crown Changed
+             * @description True when this pin's champion differs from the previous pin's. A run of false across retest waves is the stability the pin and the incumbency mode exist to produce.
+             * @default false
+             */
+            crown_changed: boolean;
+            /** Crown Mode */
+            crown_mode?: "incumbent" | null;
+            /** Entry Count */
+            entry_count: number;
+            /** Epoch Index */
+            epoch_index: number;
+            incumbent?: components["schemas"]["PublicLedgerActor"] | null;
+            /** Last Epoch Block */
+            last_epoch_block: number;
+            /** Ledger Digest */
+            ledger_digest: string;
+            /**
+             * Pinned At
+             * Format: date-time
+             */
+            pinned_at: string;
+            /** Pinned Block */
+            pinned_block: number;
+            /** Recipients */
+            recipients?: components["schemas"]["PublicLedgerEpochRecipient"][];
+        };
+        /** PublicLedgerEpochRecipient */
+        PublicLedgerEpochRecipient: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "champion" | "joint_champion" | "tail";
+            /** Share Of Miner Pool */
+            share_of_miner_pool: number;
+        };
+        /**
+         * PublicLedgerEpochsResponse
+         * @description Newest-first history of epoch pins: what the fleet folded, epoch by epoch.
+         */
+        PublicLedgerEpochsResponse: {
+            /** Count */
+            count: number;
+            /** Epochs */
+            epochs?: components["schemas"]["PublicLedgerEpoch"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "epoch" | "live";
+        };
+        /**
+         * PublicLedgerPin
+         * @description Identity of one epoch-pinned validator ledger.
+         */
+        PublicLedgerPin: {
+            /** Bench Version */
+            bench_version: number;
+            /** Champion Agent Id */
+            champion_agent_id?: string | null;
+            /**
+             * Crown Mode
+             * @description Fold marker frozen into the pin; null means the classic walk.
+             */
+            crown_mode?: "incumbent" | null;
+            /** Entry Count */
+            entry_count: number;
+            /**
+             * Epoch Index
+             * @description Chain SubnetEpochIndex the pin belongs to.
+             */
+            epoch_index: number;
+            /**
+             * Incumbent Agent Id
+             * @description The previous pin's champion resolved into this pool, which the incumbency fold defends when crown_mode is incumbent.
+             */
+            incumbent_agent_id?: string | null;
+            /** Last Epoch Block */
+            last_epoch_block: number;
+            /**
+             * Ledger Digest
+             * @description SHA-256 of the pinned entries plus fold markers; every validator folding this pin holds this digest.
+             */
+            ledger_digest: string;
+            /**
+             * Mode
+             * @description epoch: validators fold one frozen ledger per chain epoch; live: the historical time-based read (the rollback).
+             * @enum {string}
+             */
+            mode: "epoch" | "live";
+            /**
+             * Next Epoch Block
+             * @description Boundary that ends the pinned epoch, when it was known.
+             */
+            next_epoch_block?: number | null;
+            /**
+             * Pinned At
+             * Format: date-time
+             * @description When the pin was taken (UTC).
+             */
+            pinned_at: string;
+            /**
+             * Pinned Block
+             * @description Head block the pin's schedule was read at.
+             */
+            pinned_block: number;
         };
         /**
          * PublicMetricDoc
@@ -20024,6 +22215,31 @@ export interface components {
             stem: string;
         };
         /**
+         * PublicNextPinProjection
+         * @description The crown the next epoch pin would record from the live board.
+         */
+        PublicNextPinProjection: {
+            /**
+             * Champion Agent Id
+             * Format: uuid
+             */
+            champion_agent_id: string;
+            /** Champion Miner Hotkey */
+            champion_miner_hotkey: string;
+            /**
+             * Changes Crown
+             * @description True when the projected champion differs from the current pin's champion, i.e. the 65% slot moves at the next pin.
+             */
+            changes_crown: boolean;
+            /** @description The dethrone decision for the strongest rival against the projected champion; null when there is no rival. */
+            decision?: components["schemas"]["PublicDethroneDecision"] | null;
+            /**
+             * Incumbent Agent Id
+             * @description The current pin's champion the projection defended from.
+             */
+            incumbent_agent_id?: string | null;
+        };
+        /**
          * PublicOperationsResponse
          * @description One cacheable operations snapshot shared by pipeline and fleet views.
          */
@@ -20112,6 +22328,20 @@ export interface components {
             state: "still_running" | "indeterminate";
         };
         /**
+         * PublicPinAgreement
+         * @description How many revealed vectors match the fold the current pin prescribes.
+         */
+        PublicPinAgreement: {
+            /** Epoch Index */
+            epoch_index: number;
+            /** Matching */
+            matching: number;
+            /** Previous Epoch Index */
+            previous_epoch_index?: number | null;
+            /** Total */
+            total: number;
+        };
+        /**
          * PublicProvisionalScore
          * @description One score the platform accepted toward a submission's quorum.
          *
@@ -20161,6 +22391,8 @@ export interface components {
              * @description Pinned hash of the exact generated dataset, when recorded.
              */
             dataset_sha256?: string | null;
+            /** @description Bench v13+ run-level gate verdict (aggregates only); see ``PublicValidatorScore.gate_evidence``. */
+            gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             model_use?: components["schemas"]["PublicModelUse"] | null;
             /**
              * Raw Composite
@@ -20441,6 +22673,8 @@ export interface components {
             /** Review Evidence */
             review_evidence?: components["schemas"]["PublicScreeningReviewEvidence"][];
             review_finding?: components["schemas"]["PublicScreeningReviewFinding"] | null;
+            /** Review Notes */
+            review_notes?: components["schemas"]["PublicScreeningReviewNote"][];
             /** Screener Hotkey */
             screener_hotkey: string;
             /**
@@ -20456,6 +22690,13 @@ export interface components {
          * @description Public-safe appeal state; the miner's private message is never exposed.
          */
         PublicScreeningDispute: {
+            /**
+             * Kind
+             * @description ``screening``: appeals a rejected quarantine decision (release returns the submission to evaluation). ``gate_notes``: appeals cited bench v13+ gate notes on a scored submission; either resolution only records the operator's verdict.
+             * @default screening
+             * @enum {string}
+             */
+            kind: "screening" | "gate_notes";
             /** Resolution */
             resolution?: ("release" | "uphold") | null;
             /** Resolved At */
@@ -20470,6 +22711,29 @@ export interface components {
              * Format: date-time
              */
             submitted_at: string;
+        };
+        /** PublicScreeningInvariantAssessment */
+        PublicScreeningInvariantAssessment: {
+            /** Decisions */
+            decisions: components["schemas"]["PublicScreeningInvariantDecision"][];
+            /** Schema Version */
+            schema_version: number;
+        };
+        /** PublicScreeningInvariantDecision */
+        PublicScreeningInvariantDecision: {
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "pass" | "breach" | "inconclusive";
+            /** Evidence Indices */
+            evidence_indices: number[];
+            /** Invariant */
+            invariant: string;
+            /** Pass Clause */
+            pass_clause?: string | null;
+            /** Summary */
+            summary: string;
         };
         /**
          * PublicScreeningReviewEvidence
@@ -20492,6 +22756,7 @@ export interface components {
             categories: string[];
             /** Confidence */
             confidence: number;
+            invariant_assessment?: components["schemas"]["PublicScreeningInvariantAssessment"] | null;
             /** Locations */
             locations?: components["schemas"]["PublicScreeningReviewLocation"][];
             /** Reviewer Revision */
@@ -20515,6 +22780,32 @@ export interface components {
             line: number;
             /** Path */
             path: string;
+        };
+        /**
+         * PublicScreeningReviewNote
+         * @description Allowlisted public fields; future private protocol fields stay private.
+         */
+        PublicScreeningReviewNote: {
+            /** Category */
+            category: string;
+            /** Confidence */
+            confidence?: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "concern" | "cleared" | "observation";
+            /** Line */
+            line?: number | null;
+            /** Path */
+            path?: string | null;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "l1" | "l2" | "l3";
+            /** Summary */
+            summary: string;
         };
         /**
          * PublicSubmissionFamily
@@ -21012,7 +23303,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**
@@ -21242,6 +23533,8 @@ export interface components {
              * @description Validator's public hotkey.
              */
             validator_hotkey: string;
+            /** @description Which pinned ledger this validator last folded and the digest of the vector it committed. Null before the first fold or for validators older than heartbeat protocol v27. */
+            weights_fold?: components["schemas"]["PublicWeightsFold"] | null;
         };
         /**
          * PublicValidatorHeartbeatsResponse
@@ -21342,6 +23635,8 @@ export interface components {
              */
             composite: number;
             composite_breakdown?: components["schemas"]["PublicCompositeBreakdown"] | null;
+            /** @description Bench v13+ gate verdict for this run: posture, composite with and without the gates, the gate-induced loss and per-gate counts. Aggregates only -- the per-case notes are owner-only (``GET /me/agents/{agent_id}/gate-notes``). Null below v13 and for a scorer that emitted no gate telemetry. */
+            gate_evidence?: components["schemas"]["PublicGateEvidence"] | null;
             /**
              * Generated At
              * Format: date-time
@@ -21438,12 +23733,37 @@ export interface components {
          * @description One validator's latest publicly revealed on-chain weights.
          */
         PublicValidatorWeightVector: {
+            /** @description The pinned ledger this validator reported folding on its latest heartbeat; null for validators that do not heartbeat to the Platform or predate heartbeat protocol v27. */
+            fold?: components["schemas"]["PublicWeightsFold"] | null;
+            /**
+             * Matches Pin
+             * @description Whether this revealed vector's recipients and shares match the fold prescribed by the current epoch pin (current), the previous pin (previous: one epoch behind, the normal reveal lag), neither (diverged), or could not be compared (unknown: no pin yet or an empty vector).
+             * @default unknown
+             * @enum {string}
+             */
+            matches_pin: "current" | "previous" | "diverged" | "unknown";
             /** Validator Hotkey */
             validator_hotkey: string;
             /** Validator Uid */
             validator_uid: number;
             /** Weights */
             weights?: components["schemas"]["PublicChainWeight"][];
+        };
+        /**
+         * PublicWeightsFold
+         * @description What a validator reported folding, from its latest signed heartbeat.
+         */
+        PublicWeightsFold: {
+            /** Champion Agent Id */
+            champion_agent_id?: string | null;
+            /** Epoch Index */
+            epoch_index?: number | null;
+            /** Folded At */
+            folded_at: number;
+            /** Ledger Digest */
+            ledger_digest?: string | null;
+            /** Vector Digest */
+            vector_digest: string;
         };
         /**
          * QueuePolicySettings
@@ -21457,6 +23777,7 @@ export interface components {
              * @default {
              *       "axis_mad_multiplier": 6,
              *       "composite_mad_multiplier": 6,
+             *       "integrity_double_check_mode": "off",
              *       "min_axis_delta": 0.15,
              *       "min_cohort_size": 8,
              *       "min_composite_delta": 0.1,
@@ -21664,6 +23985,140 @@ export interface components {
             sample_count: number;
             /** Tool Accuracy */
             tool_accuracy: number;
+        };
+        /**
+         * RouterHarness
+         * @description The big-four third-party coding harnesses the router must power.
+         *
+         *     The string values are the stable ledger keys; the centralized scorer and the
+         *     validator's failure classifier both key per-harness state on them.
+         * @enum {string}
+         */
+        RouterHarness: "claude_code" | "codex" | "opencode" | "grok";
+        /**
+         * RouterHarnessResult
+         * @description One harness's outcome for one miner router, as decided by the scorer.
+         *
+         *     ``operational`` (the router powered the harness end-to-end) and ``floor_pass``
+         *     (the run cleared the deterministic frontier-quality correctness floor) are the
+         *     two gates; ``efficiency`` is the token-cost-dominant rank term in ``(0, 1]``,
+         *     and ``upstream_token_cost_micros`` is the router's *upstream* provider token
+         *     cost for the harness's tasks (informational — what compression bought). A
+         *     harness contributes to the combined score only when both gates hold.
+         */
+        RouterHarnessResult: {
+            /**
+             * Efficiency
+             * @description Token-cost-dominant efficiency score in [0, 1] the scorer assigned this harness slice (eff_h). Only meaningful when the harness was operational and cleared the floor.
+             */
+            efficiency: number;
+            /**
+             * Floor Pass
+             * @description The run cleared the deterministic correctness floor at the frontier-quality bar (task build/tests). The gate, not the rank.
+             */
+            floor_pass: boolean;
+            harness: components["schemas"]["RouterHarness"];
+            /**
+             * Operational
+             * @description The miner router powered this harness end-to-end.
+             */
+            operational: boolean;
+            /**
+             * Upstream Token Cost Micros
+             * @description Router's upstream provider token cost for this harness's tasks, in micro-units of the canonical cost model. Informational: the basis for the dominant token axis of eff_h.
+             */
+            upstream_token_cost_micros: number;
+        };
+        /**
+         * RouterLedgerEntry
+         * @description One miner's router-track result, published by the centralized scorer.
+         *
+         *     ``combined_score`` is the scorer's soft, per-harness-weighted, floor-gated
+         *     aggregate in ``[0, 1]`` (``Σ_h weight_h × (eff_h if operational and floor else
+         *     0)``). A failed harness forfeits only its slice, so the weight destination is
+         *     always this ``miner_hotkey`` and the fold ranks by this one number.
+         */
+        RouterLedgerEntry: {
+            /**
+             * Agent Id
+             * Format: uuid
+             * @description The miner's scored router agent.
+             */
+            agent_id: string;
+            /**
+             * Combined Score
+             * @description Soft per-harness-weighted, floor-gated aggregate in [0, 1]. The raw double the scorer reported (never rounded), the sole rank key. Forced 0 in shadow (v1): the validator folds this, so a shadow feed contributes zero emission by construction.
+             */
+            combined_score: number;
+            /**
+             * First Seen
+             * Format: date-time
+             * @description First-seen tie-break (UTC): when this miner's router lineage first reached the score it defends. The scorer resolves it; the validator folds it as served, so the original beats a later copy.
+             */
+            first_seen: string;
+            /**
+             * Harnesses
+             * @description Per-harness outcomes (one entry per harness the scorer ran). Read by the validator's failure classifier for telemetry; the combined score already reflects any soft-forfeited slices.
+             */
+            harnesses: components["schemas"]["RouterHarnessResult"][];
+            /**
+             * Miner Hotkey
+             * @description Miner's SS58 hotkey.
+             */
+            miner_hotkey: string;
+            /**
+             * Router Contract Version
+             * @constant
+             */
+            router_contract_version: 1;
+            /**
+             * Shadow Composite
+             * @description The real measured, floor-gated aggregate in [0, 1] the scorer computed for this router — carried separately from combined_score so a shadow feed can report a genuine number the dashboard shows while combined_score stays 0 and folds to zero emission. In shadow (v1) this holds the measurement and combined_score is 0; at promotion the two converge. Never a weight input on its own.
+             * @default 0
+             */
+            shadow_composite: number;
+            /**
+             * Weight Eligible
+             * @description Whether this router result may contribute emissions. False in shadow (v1). Tightened at promotion; the validator's track state is the authority, this is a defensive echo.
+             */
+            weight_eligible: boolean;
+        };
+        /**
+         * RouterLedgerResponse
+         * @description Published by the centralized router scorer; read by every validator.
+         *
+         *     Ordered highest-``combined_score`` first (ties broken by ``first_seen`` then
+         *     ``agent_id``), the same deterministic order the router fold uses, so the
+         *     exposed pool and the computed router weights agree by construction.
+         */
+        RouterLedgerResponse: {
+            /**
+             * Count
+             * @description Number of entries returned.
+             * @default 0
+             */
+            count: number;
+            /**
+             * Entries
+             * @description One router result per miner, highest combined score first. Empty (or an older feed that omits it) folds to zero router emission, identical to the shadow state.
+             */
+            entries?: components["schemas"]["RouterLedgerEntry"][];
+            /**
+             * Generated At
+             * @description When the router ledger was produced (UTC).
+             */
+            generated_at?: string | null;
+            /**
+             * Router Contract Version
+             * @description Router contract version this feed was scored under. None means the responding scorer predates the field.
+             */
+            router_contract_version?: number | null;
+            /**
+             * Stale
+             * @description True when the scorer served a last-known-good snapshot because a live read failed. The fold may still use it but should log it.
+             * @default false
+             */
+            stale: boolean;
         };
         /**
          * RoutingPolicyRequest
@@ -22054,7 +24509,7 @@ export interface components {
          * @example {
          *       "detail": "",
          *       "passed": true,
-         *       "policy_version": 12,
+         *       "policy_version": 13,
          *       "screener_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
          *       "signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
          *     }
@@ -22280,6 +24735,8 @@ export interface components {
             missing_fields: string[];
             /** Policy Ok */
             policy_ok: boolean;
+            /** Sha256 */
+            sha256?: string | null;
             /** Verified */
             verified: boolean;
         };
@@ -22665,8 +25122,9 @@ export interface components {
          *
          *     ``builtin_policy_version`` above is the Platform build; this is the fleet.
          *     A worker on an older build fails closed when the required version exceeds
-         *     its builtin, so ``safe_to_schedule_up_to`` is the highest target that would
-         *     not pause any fresh reporting worker. Workers below heartbeat protocol v7
+         *     its builtin. ``safe_to_schedule_up_to`` is additionally capped by the
+         *     published activation ceiling, so distributed-but-incomplete policy code is
+         *     never presented as activation-ready. Workers below heartbeat protocol v7
          *     cannot announce a build and are listed separately.
          */
         ScreenerFleetPolicyReadinessView: {
@@ -23384,7 +25842,7 @@ export interface components {
          *       "items": [
          *         {
          *           "agent_id": "550e8400-e29b-41d4-a716-446655440000",
-         *           "bench_version": 12,
+         *           "bench_version": 13,
          *           "created_at": "2026-06-08T12:00:00Z",
          *           "miner_hotkey": "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
          *           "name": "alpha-agent",
@@ -23464,6 +25922,79 @@ export interface components {
              * @enum {string}
              */
             critic_reasoning_effort: "low" | "medium" | "high";
+            /**
+             * Fanout Shadow Concurrency
+             * @default 2
+             */
+            fanout_shadow_concurrency: number;
+            /**
+             * Fanout Shadow Daily Cost Usd
+             * @default 20
+             */
+            fanout_shadow_daily_cost_usd: number;
+            /**
+             * Fanout Shadow Global Concurrency
+             * @default 1
+             * @constant
+             */
+            fanout_shadow_global_concurrency: 1;
+            /**
+             * Fanout Shadow Image Source Sha
+             * @default 0000000000000000000000000000000000000000
+             */
+            fanout_shadow_image_source_sha: string;
+            /**
+             * Fanout Shadow Max Cost Usd
+             * @default 3
+             */
+            fanout_shadow_max_cost_usd: number;
+            /**
+             * Fanout Shadow Max Groups
+             * @default 4
+             */
+            fanout_shadow_max_groups: number;
+            /**
+             * Fanout Shadow Max Requests
+             * @default 40
+             */
+            fanout_shadow_max_requests: number;
+            /**
+             * Fanout Shadow Max Steps
+             * @default 4
+             */
+            fanout_shadow_max_steps: number;
+            /**
+             * Fanout Shadow Max Total Tokens
+             * @default 1500000
+             */
+            fanout_shadow_max_total_tokens: number;
+            /**
+             * Fanout Shadow Mode
+             * @default off
+             * @enum {string}
+             */
+            fanout_shadow_mode: "off" | "shadow";
+            /**
+             * Fanout Shadow Model
+             * @default z-ai/glm-5.3-flash
+             * @constant
+             */
+            fanout_shadow_model: "z-ai/glm-5.3-flash";
+            /**
+             * Fanout Shadow Reserved Targon Slots
+             * @default 1
+             */
+            fanout_shadow_reserved_targon_slots: number;
+            /**
+             * Fanout Shadow Timeout Seconds
+             * @default 900
+             */
+            fanout_shadow_timeout_seconds: number;
+            /**
+             * L2 Always Escalate
+             * @default false
+             */
+            l2_always_escalate: boolean;
             /**
              * L2 Fallback Models
              * @default [
@@ -23797,7 +26328,7 @@ export interface components {
             notes_considered: number;
             /**
              * Policy Version
-             * @default 12
+             * @default 13
              */
             policy_version: number;
             /** Prompt Revision */
@@ -23811,7 +26342,7 @@ export interface components {
          * @description Bounded ways served code can make genuine model/tool output non-authoritative.
          * @enum {string}
          */
-        SourceReviewAuthorityTransition: "model_skipped" | "model_output_overwritten" | "tool_execution_bypassed" | "tool_trajectory_fabricated" | "selective_model_disablement" | "scorer_field_rewritten" | "derived_value_authoritative" | "family_compiler_authoritative" | "tool_selection_predetermined";
+        SourceReviewAuthorityTransition: "model_skipped" | "model_output_overwritten" | "tool_execution_bypassed" | "tool_trajectory_fabricated" | "selective_model_disablement" | "scorer_field_rewritten" | "derived_value_authoritative" | "family_compiler_authoritative" | "tool_selection_predetermined" | "evaluation_identity_authoritative";
         /**
          * SourceReviewCausalEvidence
          * @description Opt-in v2 causal evidence carried alongside the legacy location list.
@@ -23902,13 +26433,16 @@ export interface components {
         };
         /**
          * SourceReviewInvariant
-         * @description Policy-v10 source-review invariants, evaluated independently.
+         * @description Versioned source-review invariants, evaluated independently.
          * @enum {string}
          */
-        SourceReviewInvariant: "i1_model_invocation" | "i2_evidence_retention" | "i3_model_dissent" | "i4_derived_value_authority" | "i5_production_engine" | "i6_tool_execution_fidelity" | "i7_model_tool_planning";
+        SourceReviewInvariant: "i1_model_invocation" | "i2_evidence_retention" | "i3_model_dissent" | "i4_derived_value_authority" | "i5_production_engine" | "i6_tool_execution_fidelity" | "i7_model_tool_planning" | "i8_evaluation_independence";
         /**
          * SourceReviewInvariantAssessment
-         * @description Complete policy-v10 sweep; omission cannot silently clear an invariant.
+         * @description Complete versioned sweep; omission cannot silently clear an invariant.
+         *
+         *     Schema v1 is the byte-compatible policy-v10-v12 I1-I7 assessment. Schema
+         *     v2 adds policy-v13 I8 without making stored historical findings invalid.
          */
         SourceReviewInvariantAssessment: {
             /** Decisions */
@@ -23916,9 +26450,9 @@ export interface components {
             /**
              * Schema Version
              * @default 1
-             * @constant
+             * @enum {integer}
              */
-            schema_version: 1;
+            schema_version: 1 | 2;
         };
         /**
          * SourceReviewInvariantDecision
@@ -24014,7 +26548,7 @@ export interface components {
          * @description Published false-positive clauses that can refute a matching breach.
          * @enum {string}
          */
-        SourceReviewPassClause: "genuine_model_result" | "no_premodel_response" | "full_records_on_deciding_turn" | "non_authoritative_preliminary_pass" | "shape_only_validation" | "model_dissent_preserved" | "no_derived_value" | "untrusted_candidate_channel" | "runtime_described_generic_engine" | "no_family_compiler" | "model_selected_executed_tool" | "no_reported_tool_calls" | "no_tool_planning" | "policy_capability_filter_only" | "natural_singleton_class" | "unreachable_nonruntime_code";
+        SourceReviewPassClause: "genuine_model_result" | "no_premodel_response" | "full_records_on_deciding_turn" | "non_authoritative_preliminary_pass" | "shape_only_validation" | "model_dissent_preserved" | "no_derived_value" | "untrusted_candidate_channel" | "runtime_described_generic_engine" | "no_family_compiler" | "model_selected_executed_tool" | "no_reported_tool_calls" | "no_tool_planning" | "policy_capability_filter_only" | "natural_singleton_class" | "evaluation_independent_runtime" | "no_evaluation_identity_branch" | "unreachable_nonruntime_code";
         /**
          * SourceReviewScorerVisibleEffect
          * @description Concrete graded field or validator-owned outcome changed by a transition.
@@ -24421,6 +26955,8 @@ export interface components {
         SubmissionSourceReviewSourceResponse: {
             /** Artifact Sha256 */
             artifact_sha256: string;
+            /** Policy Version */
+            policy_version: number;
             /** Source Url B64 */
             source_url_b64: string;
         };
@@ -24754,7 +27290,48 @@ export interface components {
          * @description Authoritative reason the platform issued the current ticket lease.
          * @enum {string}
          */
-        TicketPurpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
+        TicketPurpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest" | "benchmark_canary";
+        /**
+         * ToolProvenanceEvidence
+         * @description Per-case v10+ broker-to-endpoint tool provenance (``tool_provenance``).
+         *
+         *     Mirrors the DittoBench ``ToolProvenanceEvidence`` wire shape. Advisory
+         *     audit context only.
+         */
+        ToolProvenanceEvidence: {
+            /**
+             * Complete
+             * @default false
+             */
+            complete: boolean;
+            /**
+             * Endpoint Attempts
+             * @default 0
+             */
+            endpoint_attempts: number;
+            /** Findings */
+            findings?: string[];
+            /**
+             * Matched
+             * @default 0
+             */
+            matched: number;
+            /**
+             * Model Emitted
+             * @default 0
+             */
+            model_emitted: number;
+            /**
+             * Model Selected Not Executed
+             * @default 0
+             */
+            model_selected_not_executed: number;
+            /**
+             * Unmatched
+             * @default 0
+             */
+            unmatched: number;
+        };
         /**
          * Top5ConfirmationJobRequest
          * @description Fresh signed claim for the top-5 shared-seed rescore lane.
@@ -25042,6 +27619,62 @@ export interface components {
             updated_at: string;
         };
         /**
+         * TwinPostPassSummary
+         * @description Run-level twin / counterfactual post-pass record (``details.twin_post_pass``).
+         *
+         *     ``rule_requested`` is the operator selection; ``rule`` is the rule that
+         *     ran (they differ only after the calibration auto-fallback from
+         *     ``concordant_zero`` to ``pair_product``). ``applied`` is true only when
+         *     the posture was ``enforce`` and at least one score changed.
+         */
+        TwinPostPassSummary: {
+            /**
+             * Applied
+             * @default false
+             */
+            applied: boolean;
+            /**
+             * Auto Fallback
+             * @default false
+             */
+            auto_fallback: boolean;
+            /**
+             * Cases Affected
+             * @default 0
+             */
+            cases_affected: number;
+            /** Cases Affected Share */
+            cases_affected_share?: number | null;
+            /**
+             * Counterfactual Insensitive
+             * @default 0
+             */
+            counterfactual_insensitive: number;
+            /**
+             * Counterfactual Pairs
+             * @default 0
+             */
+            counterfactual_pairs: number;
+            /** Honest Concordant Error Rate */
+            honest_concordant_error_rate?: number | null;
+            /** Posture */
+            posture?: ("off" | "shadow" | "observe" | "enforce") | null;
+            /** Rule */
+            rule?: string | null;
+            /** Rule Requested */
+            rule_requested?: string | null;
+            /**
+             * Twin Groups
+             * @default 0
+             */
+            twin_groups: number;
+            /**
+             * Twin Groups Concordant
+             * @default 0
+             */
+            twin_groups_concordant: number;
+        };
+        /**
          * UploadAgentResponse
          * @description Returned by ``POST /upload/agent`` on a successful upload.
          *
@@ -25176,7 +27809,7 @@ export interface components {
              * Result
              * @enum {string}
              */
-            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required" | "claim_provenance_flagged";
             /** Review Required */
             review_required: boolean;
             /** Review Share Threshold Bps */
@@ -25214,7 +27847,7 @@ export interface components {
              * Result
              * @enum {string}
              */
-            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required" | "claim_provenance_flagged";
             /** Sub Floor Bps */
             sub_floor_bps: number;
             /** Threshold Bps */
@@ -25243,11 +27876,61 @@ export interface components {
              * Result
              * @enum {string}
              */
-            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required" | "claim_provenance_flagged";
             /** Slice Attribution Complete */
             slice_attribution_complete: boolean;
             /** Threshold Bps */
             threshold_bps: number;
+        };
+        /**
+         * V13ClaimProvenanceGate
+         * @description Bench v13 claim-span provenance + causal answer_in_prompt gate summary.
+         *
+         *     Mirror of ``internal/scoregates.ClaimProvenanceEvidence``. Present on every
+         *     bench_version>=13 digest (the scorer attaches it to every v13 run). The
+         *     factor is ALWAYS full: the gates act per claim (a flagged case's own score
+         *     is zeroed under enforce), so the run-level term is an identity that keeps
+         *     the signed schema uniform. ``flagged_cases`` is the UNION of the two flagged
+         *     subsets; ``unattributed_call_cases`` is the subset of ``unsettled_cases``
+         *     the harness caused by making case-less completions under concurrency (fail
+         *     closed under enforce, so they count toward ``zeroed_cases``).
+         */
+        V13ClaimProvenanceGate: {
+            /** Administered Cases */
+            administered_cases: number;
+            /** Answer In Prompt Cases */
+            answer_in_prompt_cases: number;
+            /** Attribution Complete */
+            attribution_complete: boolean;
+            /** Eligible Cases */
+            eligible_cases: number;
+            /**
+             * Factor Bps
+             * @constant
+             */
+            factor_bps: 10000;
+            /** Flagged Bps */
+            flagged_bps: number;
+            /** Flagged Cases */
+            flagged_cases: number;
+            /** Not Model Emitted Cases */
+            not_model_emitted_cases: number;
+            /**
+             * Posture
+             * @enum {string}
+             */
+            posture: "shadow" | "enforce";
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required" | "claim_provenance_flagged";
+            /** Unattributed Call Cases */
+            unattributed_call_cases: number;
+            /** Unsettled Cases */
+            unsettled_cases: number;
+            /** Zeroed Cases */
+            zeroed_cases: number;
         };
         /** V7InferenceCalibration */
         V7InferenceCalibration: {
@@ -25280,7 +27963,7 @@ export interface components {
              * Result
              * @enum {string}
              */
-            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required" | "claim_provenance_flagged";
             /** Threshold Bps */
             threshold_bps: number;
             /** Unexpected Executions */
@@ -25299,7 +27982,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -25392,7 +28075,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -25485,7 +28168,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
             /**
              * Bundle Id
              * Format: uuid
@@ -25769,7 +28452,7 @@ export interface components {
              * Result
              * @enum {string}
              */
-            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required" | "claim_provenance_flagged";
             /** Successful Inference Cases */
             successful_inference_cases: number;
             /** Successful Requests */
@@ -25798,7 +28481,8 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11 | 12;
+            bench_version: 9 | 10 | 11 | 12 | 13;
+            claim_provenance?: components["schemas"]["V13ClaimProvenanceGate"] | null;
             inference_latency?: components["schemas"]["V12InferenceLatencyGate"] | null;
             model_dependence?: components["schemas"]["V12ModelDependenceGate"] | null;
             model_use: components["schemas"]["V9ModelUseGate"];
@@ -25984,6 +28668,8 @@ export interface components {
              * @description Reporting validator hotkey.
              */
             validator_hotkey: string;
+            /** @description Which pinned ledger this validator last folded and the digest of the weight vector it committed, under heartbeat protocol v27. Null before the first fold of the process or on older validators. */
+            weights_fold?: components["schemas"]["WeightsFold"] | null;
         };
         /**
          * ValidatorHeartbeatResponse
@@ -26233,8 +28919,17 @@ export interface components {
         };
         /** ValidatorWeightObservation */
         ValidatorWeightObservation: {
+            /** @description The pinned ledger this validator reported folding on its latest heartbeat; null for validators that do not heartbeat to the Platform or predate heartbeat protocol v27. */
+            fold?: components["schemas"]["PublicWeightsFold"] | null;
             /** Last Update Block */
             last_update_block: number;
+            /**
+             * Matches Pin
+             * @description Whether this revealed vector's recipients and shares match the fold prescribed by the current epoch pin (current), the previous pin (previous: one epoch behind, the normal reveal lag), neither (diverged), or could not be compared (unknown: no pin yet or an empty vector).
+             * @default unknown
+             * @enum {string}
+             */
+            matches_pin: "current" | "previous" | "diverged" | "unknown";
             /** Validator Hotkey */
             validator_hotkey: string;
             /** Validator Trust */
@@ -26253,6 +28948,37 @@ export interface components {
             /** Value */
             value: number;
         };
+        /**
+         * WeightsFold
+         * @description Signed summary of one validator weight fold, under heartbeat protocol v27.
+         */
+        WeightsFold: {
+            /**
+             * Champion Agent Id
+             * @description The champion this fold derived, if any.
+             */
+            champion_agent_id?: string | null;
+            /**
+             * Epoch Index
+             * @description Chain SubnetEpochIndex of the pinned ledger that was folded; null when the ledger served was a live (unpinned) read.
+             */
+            epoch_index?: number | null;
+            /**
+             * Folded At
+             * @description Unix timestamp (UTC) the fold was submitted.
+             */
+            folded_at: number;
+            /**
+             * Ledger Digest
+             * @description The served ledger_digest, replayed verbatim.
+             */
+            ledger_digest?: string | null;
+            /**
+             * Vector Digest
+             * @description SHA-256 of the canonical JSON of the [hotkey, weight] pairs handed to Pylon, sorted by hotkey.
+             */
+            vector_digest: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -26262,6 +28988,26 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    ditto_callback_challenge__well_known_ditto_callback_challenge_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+        };
+    };
     mcp_server_metadata__well_known_mcp_server_json_get: {
         parameters: {
             query?: never;
@@ -26591,6 +29337,253 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ArtifactReleaseSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_ath_rulings_batch_api_v1_admin_ath_rulings_batch_execute_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthRulingsExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthRulingsExecuteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_ath_rulings_batch_api_v1_admin_ath_rulings_batch_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthRulingsPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthRulingsPreviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_ath_rulings_upload_api_v1_admin_ath_rulings_upload_url_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthRulingsUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthRulingsUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_benchmark_canaries_api_v1_admin_benchmark_canaries_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkCanaryView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    issue_benchmark_canary_api_v1_admin_benchmark_canaries_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkCanaryIssue"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkCanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_benchmark_canary_api_v1_admin_benchmark_canaries__canary_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                canary_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkCanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_benchmark_canary_api_v1_admin_benchmark_canaries__canary_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                canary_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BenchmarkCanaryCancel"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BenchmarkCanaryView"];
                 };
             };
             /** @description Validation Error */
@@ -27474,6 +30467,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminConfirmationBundleRetestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_admin_confirmation_seed_anchors_api_v1_admin_confirmation_seed_anchors_get: {
+        parameters: {
+            query?: {
+                bench_version?: number | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminConfirmationSeedAnchorList"];
                 };
             };
             /** @description Validation Error */
@@ -29000,6 +32027,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreenerCapacityView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screener_fanout_shadow_api_v1_admin_screener_fanout_shadow_get: {
+        parameters: {
+            query?: {
+                status?: ("queued" | "leased" | "running" | "succeeded" | "incomplete" | "skipped") | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminFanoutShadowResponse"];
                 };
             };
             /** @description Validation Error */
@@ -31495,6 +34557,41 @@ export interface operations {
             };
         };
     };
+    record_contribution_api_v1_feedback_track_contributions_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackTrackContributionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackTrackContributionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     proxy_chat_completions_api_v1_inference_chat_completions_post: {
         parameters: {
             query?: never;
@@ -31727,6 +34824,37 @@ export interface operations {
             };
         };
     };
+    my_gate_notes_api_v1_me_agents__agent_id__gate_notes_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerGateNotesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     my_harness_logs_api_v1_me_agents__agent_id__harness_logs_get: {
         parameters: {
             query?: never;
@@ -31858,6 +34986,159 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerCommand"][];
+                };
+            };
+        };
+    };
+    current_link_api_v1_me_ditto_link_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDittoLinkResponse"];
+                };
+            };
+        };
+    };
+    unlink_api_v1_me_ditto_link_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    link_attempt_api_v1_me_ditto_link_attempts__attempt_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDittoLinkAttemptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    confirm_link_api_v1_me_ditto_link_attempts__attempt_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDittoLinkAttemptResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_link_api_v1_me_ditto_link_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["MinerDittoLinkStartRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDittoLinkStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_contributions_api_v1_me_feedback_track_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FeedbackTrackMeResponse"];
                 };
             };
         };
@@ -32050,6 +35331,71 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerDeviceStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_link_page_api_v1_miner_auth_ditto_accept_get: {
+        parameters: {
+            query: {
+                attempt: string;
+                t: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/html": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    accept_link_decide_api_v1_miner_auth_ditto_accept_post: {
+        parameters: {
+            query: {
+                attempt: string;
+                t: string;
+                decision: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -32765,6 +36111,37 @@ export interface operations {
             };
         };
     };
+    public_contributions_api_v1_public_feedback_track__hotkey__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hotkey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicFeedbackTrackResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     health_api_v1_public_health_get: {
         parameters: {
             query?: never;
@@ -32803,6 +36180,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicLeaderboardResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    ledger_epochs_api_v1_public_ledger_epochs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicLedgerEpochsResponse"];
                 };
             };
             /** @description Validation Error */
@@ -33125,6 +36533,61 @@ export interface operations {
             };
             /** @description Malformed UUID path parameter. */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    router_ledger_api_v1_scoring_router_ledger_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+                "x-validator-ledger-nonce"?: string | null;
+                "x-validator-ledger-requested-at"?: string | null;
+                "x-validator-ledger-signature"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RouterLedgerResponse"];
+                };
+            };
+            /** @description Missing/invalid validator auth. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Stale or replayed ledger request proof. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Chain unavailable, or nonce store unavailable. */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -34584,6 +38047,76 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_fanout_shadow_review_api_v1_screener_fanout_shadow_reviews__shadow_id__complete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                shadow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FanoutShadowCompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FanoutShadowCompleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fanout_shadow_source_api_v1_screener_fanout_shadow_reviews__shadow_id__source_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                shadow_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FanoutShadowSourceResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

@@ -19,6 +19,7 @@ from fastapi import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.gate_evidence import MinerGateNotesResponse
 from ditto.api_models.miner_avatar import MinerAvatarResponse
 from ditto.api_models.miner_logs import MinerHarnessLogsResponse
 from ditto.api_models.miner_screening_feedback import MinerScreeningFeedbackResponse
@@ -37,6 +38,7 @@ from ditto.api_server.endpoints.miner_auth import (
     require_scope,
     resolve_miner_session,
 )
+from ditto.api_server.endpoints.miner_gate_notes import load_owned_gate_notes
 from ditto.api_server.endpoints.miner_logs import load_owned_agent_logs
 from ditto.api_server.endpoints.miner_screening_feedback import (
     load_owned_screening_feedback,
@@ -404,6 +406,36 @@ async def my_screening_feedback(
         row, _token = await resolve_miner_session(request, session)
         require_scope(row, "read")
         payload = await load_owned_screening_feedback(
+            session, hotkey=row.miner_hotkey, agent_id=agent_id
+        )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="no such agent for this hotkey")
+    return payload
+
+
+@router.get(
+    "/agents/{agent_id}/gate-notes",
+    response_model=MinerGateNotesResponse,
+)
+async def my_gate_notes(
+    agent_id: UUID,
+    request: Request,
+    session: SessionDep,
+) -> MinerGateNotesResponse:
+    """Return this miner's bench v13+ per-case gate notes for one of their agents.
+
+    The public per-score record carries only the run-level aggregate (posture,
+    composite with/without gates, gate-induced loss). The per-case notes -- which
+    case tripped which gate, the twin/pair relation outcome, the shadow cost
+    factor -- are owner-only, so a miner can see a shadow verdict before it
+    enforces and cite the ``note_id`` values in a dispute. Same ownership rule
+    as the other ``/me/agents`` reads: unknown and other-miners' agents are the
+    same 404.
+    """
+    async with session.begin():
+        row, _token = await resolve_miner_session(request, session)
+        require_scope(row, "read")
+        payload = await load_owned_gate_notes(
             session, hotkey=row.miner_hotkey, agent_id=agent_id
         )
     if payload is None:

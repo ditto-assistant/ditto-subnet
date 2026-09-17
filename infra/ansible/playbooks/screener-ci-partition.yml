@@ -1,0 +1,6 @@
+---
+- name: Primary screener resource partition for isolated sibling CI guest
+  hosts: screener_partition
+  become: true
+  roles:
+    - screener_partition

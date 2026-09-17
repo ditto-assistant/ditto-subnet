@@ -1,0 +1,7 @@
+---
+- name: Install the locked native Coding custody service template without starting it
+  hosts: role_coding_hosted
+  become: true
+  gather_facts: true
+  roles:
+    - coding_hosted_custody_service

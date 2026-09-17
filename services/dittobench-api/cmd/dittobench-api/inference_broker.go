@@ -36,6 +36,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/ablation"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/google/uuid"
 )
@@ -201,6 +202,14 @@ type brokerSession struct {
 	harnessBase   string
 	urlCases      map[string]string
 	urlCaseTokens map[string]string
+	// caseCosts is the Bench v13 per-case inference cost ledger (issue #1850):
+	// successful completions, sampled choices, and output tokens bound to one
+	// /run case exactly (case-scoped capability route or a serial /run window).
+	// unattributedCost collects the completions that overlapped several
+	// in-flight cases; they are reported at run level, never guessed onto a
+	// case. Shadow evidence: never an admission or accounting input.
+	caseCosts        map[string]brokerCaseCost
+	unattributedCost brokerCaseCost
 	// Session-scoped v10+ tool provenance. Concurrent /run opens no exclusive
 	// case windows, so every ordinary chat completion is admitted at
 	// caseGeneration 0: its model-emitted tool calls are recorded here,
@@ -219,12 +228,34 @@ type brokerSession struct {
 	// the SAME pointers keyed by wire case id so the scorer can read one case's
 	// log post-run. Both are populated only for bench_version>=12, so v9..v11 are
 	// byte-identical and unaffected.
-	answerIO              map[uint64]*caseModelIOLog
-	answerIOByCaseID      map[string]*caseModelIOLog
-	embeddingPhaseStarted bool
-	embeddingPhaseActive  bool
-	embeddingInFlight     int
-	embeddingConcurrency  int
+	answerIO         map[uint64]*caseModelIOLog
+	answerIOByCaseID map[string]*caseModelIOLog
+	// Bench v13 claim-span capture (claim_span_capture.go): per wire case, the
+	// value-token hashes of every harness-authored request span and every
+	// model-emitted completion span the relay attributed to the case, plus the
+	// tool_endpoint results it served the case, and the run-wide completion
+	// counts. Populated only for bench_version>=13, so v9..v12 are
+	// byte-identical and unaffected.
+	claimSpanCases        map[string]*brokerClaimSpanLedger
+	claimSpanCompletions  uint64
+	claimSpanUnattributed uint64
+	// claimSpanSessionCompletion is the union of every v13 completion's value
+	// tokens across the whole session (all cases, attributed or not); it exempts
+	// assistant-role prompt spans from the causal gate.
+	claimSpanSessionCompletion scoregates.TokenSet
+	// Bench v13 catalog capture (catalog_capture.go): per wire case, what the
+	// harness OFFERED the model on each attributed chat completion, plus the
+	// run-wide counters. Populated only for bench_version>=13, so v9..v12 are
+	// byte-identical and unaffected.
+	catalogCases                   map[string]*brokerCatalogLedger
+	catalogCompletions             uint64
+	catalogCompletionsWithCatalog  uint64
+	catalogUnattributedCompletions uint64
+	catalogUnattributedAdmitted    uint64
+	embeddingPhaseStarted          bool
+	embeddingPhaseActive           bool
+	embeddingInFlight              int
+	embeddingConcurrency           int
 	// embeddingQueueChanged wakes calls waiting behind this session's local
 	// lane whenever capacity is released or the phase is revoked. Excess
 	// harness concurrency is queued inside the trusted broker instead of being
@@ -497,8 +528,9 @@ func (b *inferenceBroker) beginAblationCase(
 	// confirmation session is never a counterfactual even at v12 — otherwise its
 	// embedding ablation lane (below) would be rejected. A confirmation session
 	// runs the paired inference+embedding ablation under the frozen v9-named
-	// contract at any supported confirmation version ({9, 12}); the v9 branch's
-	// admission is unchanged (v9 short-circuits before the confirmation clause).
+	// contract at any supported confirmation instrument version (v9, >= v12 up
+	// to the accepted set); the v9 branch's admission is unchanged (v9
+	// short-circuits before the confirmation clause).
 	counterfactual := session.benchVersion >= ablation.BenchVersionV12 && !session.confirmationSession
 	allowedVersion := session.benchVersion == ablation.BenchVersionV9 || counterfactual ||
 		(session.confirmationSession && ablation.ConfirmationBenchVersionSupported(session.benchVersion))
@@ -1606,7 +1638,45 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 	forwarded := r.Clone(r.Context())
 	forwarded.URL.Path = "/tool"
 	forwarded.URL.RawQuery = ""
-	route.handler.ServeHTTP(w, forwarded)
+	if !b.claimSpanCaptureEnabledFor(route.provenanceSessionID) {
+		// v9..v12 sessions (and routes with no provenance session) stream the
+		// tool response through untouched: nothing is allocated below v13.
+		route.handler.ServeHTTP(w, forwarded)
+		return
+	}
+	// Bench v13 claim-span capture: the result the validator serves this case is
+	// exempt from the causal answer_in_prompt gate, so book its value tokens on
+	// the case ledger. The recorder is bounded.
+	recorder := &toolResultRecorder{ResponseWriter: w, limit: claimSpanMaxToolResultBytes}
+	route.handler.ServeHTTP(recorder, forwarded)
+	if recorder.status == 0 || recorder.status == http.StatusOK {
+		b.recordClaimSpanToolResult(route.provenanceSessionID, caseID, recorder.body.Bytes())
+	}
+}
+
+// toolResultRecorder mirrors a bounded prefix of a tool_endpoint response body
+// while passing every byte through to the harness unchanged.
+type toolResultRecorder struct {
+	http.ResponseWriter
+	body   bytes.Buffer
+	limit  int
+	status int
+}
+
+func (r *toolResultRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *toolResultRecorder) Write(p []byte) (int, error) {
+	if remaining := r.limit - r.body.Len(); remaining > 0 {
+		if len(p) > remaining {
+			r.body.Write(p[:remaining])
+		} else {
+			r.body.Write(p)
+		}
+	}
+	return r.ResponseWriter.Write(p)
 }
 
 func (r registeredToolRoute) endpoint(baseURL, caseID, userID string) string {
@@ -1744,6 +1814,7 @@ func (b *inferenceBroker) consumeModelToolCall(
 		session.caseToolCalls[generation] = calls
 		snapshot.MatchedToolCalls++
 		session.caseSnapshots[generation] = snapshot
+		recordCatalogToolResultLocked(session, caseID, call.Name)
 		return true
 	}
 	snapshot.UnmatchedToolCalls++
@@ -1845,6 +1916,7 @@ func consumeSessionModelToolCallLocked(
 		candidate.consumed = true
 		session.sessionToolConsumed++
 		ledger.MatchedToolCalls++
+		recordCatalogToolResultLocked(session, caseID, name)
 		return true
 	}
 	ledger.UnmatchedToolCalls++
@@ -2837,6 +2909,18 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		rest = "/" + strings.TrimLeft(parts[1], "/")
+	}
+	// Bench v13 case-scoped inference_base_url: `/run/<case_id>/...` names the
+	// case the completion serves. It is the same advisory claim as
+	// X-Ditto-Case-Id (verified only against the cases in flight; never an
+	// admission, scoring, or accounting input), so a header-less client built
+	// from the per-run URL stays attributable under concurrent /run.
+	if claimedCase, remainder, ok := splitClaimSpanCasePath(rest); ok {
+		rest = remainder
+		if r.Header.Get(harnessCaseHeader) == "" {
+			r = r.Clone(r.Context())
+			r.Header.Set(harnessCaseHeader, claimedCase)
+		}
 	}
 	if rest == "/health" && r.Method == http.MethodGet {
 		b.health(w, session)
@@ -3915,7 +3999,16 @@ func (b *inferenceBroker) proxy(
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	currentChargeUpperBound := platformChatChargeUpperBound(body, maxOutputTokens)
-	traceCtx := traceContextLocked(session, caseGeneration, "", r.Header.Get(harnessCaseHeader), urlCaseID)
+	claimedCaseID := boundedHarnessCaseClaim(r.Header.Get(harnessCaseHeader))
+	traceCtx := traceContextLocked(session, caseGeneration, "", claimedCaseID, urlCaseID)
+	// Bench v13 claim-span capture resolves WHICH case this completion serves at
+	// admission, from the same evidence the trace context uses; the booking
+	// itself happens on the success path below. No-op for bench_version<13.
+	claimSpanAttribution := beginClaimSpanCompletionLocked(session, caseGeneration, claimedCaseID)
+	// Bench v13 catalog capture resolves WHICH case this completion serves at
+	// admission, from the same evidence the trace context uses; the booking
+	// itself happens on the success path below. No-op for bench_version<13.
+	catalogAttribution := beginCatalogCompletionLocked(session, caseGeneration, claimedCaseID)
 	session.requests++
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
@@ -4155,6 +4248,13 @@ func (b *inferenceBroker) proxy(
 		Usage *struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
+			// Bench v13 cost ledger: OpenRouter folds reasoning tokens into
+			// completion_tokens on the agent-selected reasoning route and
+			// reports them here; the ledger books them separately from the
+			// answer output. Absent on providers/routes without reasoning.
+			CompletionTokensDetails *struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 	}
 	usageOK := json.Unmarshal(responseBody, &decoded) == nil && decoded.Usage != nil && decoded.Usage.PromptTokens >= 0 && decoded.Usage.CompletionTokens >= 0
@@ -4187,14 +4287,35 @@ func (b *inferenceBroker) proxy(
 	// input and completion value tokens in call order. `body` is the normalized
 	// model INPUT; `responseBody` is the COMPLETION. No-op for bench_version<12.
 	recordAnswerIOLocked(session, caseGeneration, body, responseBody)
+	// Bench v13 claim-span capture: the harness-authored request spans and the
+	// model-emitted completion spans, as value-token hashes on the attributed
+	// case. No-op for bench_version<13.
+	recordClaimSpanCompletionLocked(session, claimSpanAttribution, body, responseBody)
+	// Bench v13 catalog capture: what the harness OFFERED (request tools[],
+	// tool_choice, system-span digest) paired with what the model CHOSE.
+	// Metadata only; no-op for bench_version<13.
+	recordCatalogCompletionLocked(session, catalogAttribution, body, responseBody)
 	session.providerLatency += totalLatency
+	completionTokens, reasoningTokens := uint64(0), uint64(0)
 	if usageOK {
 		session.usageAvailable++
 		session.promptTokens += uint64(decoded.Usage.PromptTokens)
 		session.completionTokens += uint64(decoded.Usage.CompletionTokens)
+		completionTokens = uint64(decoded.Usage.CompletionTokens)
+		if details := decoded.Usage.CompletionTokensDetails; details != nil && details.ReasoningTokens > 0 {
+			reasoningTokens = uint64(details.ReasoningTokens)
+			if reasoningTokens > completionTokens {
+				reasoningTokens = completionTokens
+			}
+		}
 	} else {
 		session.usageUnavailable++
 	}
+	// Bench v13 cost ledger: book this successful completion's choices and
+	// answer output tokens (reasoning tokens recorded separately) on the case
+	// it can be bound to -- capability route, verified X-Ditto-Case-Id claim,
+	// or serial window. No-op for bench_version<13.
+	recordInferenceCostLocked(session, caseGeneration, claimedCaseID, responseBody, usageOK, completionTokens, reasoningTokens)
 	session.mu.Unlock()
 	if injectedDelay > 0 {
 		// Hold the completed upstream response for the scheduled fingerprint
@@ -4428,6 +4549,17 @@ func (b *inferenceBroker) beginRunCase(id, caseID string) (caseURL string, start
 		session.runCases = make(map[string]int)
 	}
 	session.runCases[caseID]++
+	// Bench v13: a registered case owns a ledger from registration, so a case
+	// whose harness never calls the model settles as an empty, complete ledger
+	// (no_model_completion) rather than reading as "no capture". No-op below v13.
+	if claimSpanCaptureEnabled(session) {
+		ensureClaimSpanLedgerLocked(session, caseID)
+	}
+	// v13 already supplies a claim-bearing route used by provenance capture.
+	// Keep that route intact; opaque URLs below are trace-only.
+	if session.benchVersion >= protocol.BenchVersionV13 {
+		return "", true
+	}
 	token := session.urlCaseTokens[caseID]
 	if token == "" {
 		token = randomCaseToken()

@@ -2,6 +2,7 @@ import '@tanstack/react-start/server-only'
 
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
 import { WorkerEntrypoint } from 'cloudflare:workers'
+import { accessLevelForEmail } from '../lib/auth.policy'
 import {
   BACKROOM_READ_SCOPE,
   createBackroomMcpServer,
@@ -23,6 +24,18 @@ export class BackroomMcpHandler extends WorkerEntrypoint<
 > {
   async fetch(request: Request) {
     const props = this.ctx.props
+    try {
+      accessLevelForEmail(
+        props.session.email,
+        this.env.BACKROOM_ADMIN_EMAILS,
+        this.env.BACKROOM_BLOCKED_EMAILS,
+      )
+    } catch {
+      return Response.json(
+        { error: 'access_denied', error_description: 'This account is not authorized' },
+        { status: 403, headers: { 'Cache-Control': 'no-store' } },
+      )
+    }
     if (!hasReadAccess(props)) {
       return insufficientScopeResponse(request, BACKROOM_READ_SCOPE)
     }

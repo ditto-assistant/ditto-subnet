@@ -11,6 +11,7 @@ from urllib.parse import quote, urlsplit
 from ditto.chain.errors import (
     ChainAuthError,
     ChainConnectionError,
+    ChainError,
     ChainTimeoutError,
     ExtrinsicNotFoundError,
 )
@@ -21,6 +22,7 @@ from ditto.chain.models import (
     ChainWeight,
     ChainWeightsSnapshot,
     ChainWeightVector,
+    EpochSchedule,
     ExtrinsicInfo,
     NeuronInfo,
 )
@@ -70,6 +72,10 @@ _BLOCKS_SINCE_STEP_STORAGE = "BlocksSinceLastStep"
 _COMMIT_REVEAL_ENABLED_STORAGE = "CommitRevealWeightsEnabled"
 _REVEAL_PERIOD_STORAGE = "RevealPeriodEpochs"
 _WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
+# Stateful epoch scheduler storage, keyed by netuid; the pinned ledger's clock.
+_LAST_EPOCH_BLOCK_STORAGE = "LastEpochBlock"
+_PENDING_EPOCH_AT_STORAGE = "PendingEpochAt"
+_SUBNET_EPOCH_INDEX_STORAGE = "SubnetEpochIndex"
 
 
 class ChainClient:
@@ -506,6 +512,88 @@ class ChainClient:
             vectors=tuple(vectors),
             epoch=epoch,
             block_timestamp=block_timestamp,
+        )
+
+    async def read_epoch_schedule(self, netuid: int) -> EpochSchedule:
+        """Read the subnet's stateful epoch position at the current head.
+
+        Five storage reads at one block hash -- ``LastEpochBlock``,
+        ``PendingEpochAt``, ``SubnetEpochIndex``, ``Tempo`` and
+        ``BlocksSinceLastStep`` -- plus the block's own timestamp. This is the
+        identity the epoch-pinned ledger keys on, so unlike :meth:`_read_epoch`
+        it fails loud: a pin taken against a half-read schedule would be worse
+        than no pin. It deliberately does not read the timelocked commit map
+        (``read_weight_diagnostics`` does; that is a diagnostic, not a clock).
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        from ditto.chain.weight_diagnostics import predict_next_epoch_block
+
+        try:
+            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+                block_hash = await substrate.get_chain_head()
+                header = await substrate.get_block_header(block_hash=block_hash)
+                block = _block_number_from_header(header)
+
+                async def read(name: str) -> int | None:
+                    return _as_int(
+                        await substrate.query(
+                            module=_SUBTENSOR_MODULE,
+                            storage_function=name,
+                            params=[netuid],
+                            block_hash=block_hash,
+                        )
+                    )
+
+                last_epoch, pending_at, index, tempo, since = await asyncio.gather(
+                    read(_LAST_EPOCH_BLOCK_STORAGE),
+                    read(_PENDING_EPOCH_AT_STORAGE),
+                    read(_SUBNET_EPOCH_INDEX_STORAGE),
+                    read(_TEMPO_STORAGE),
+                    read(_BLOCKS_SINCE_STEP_STORAGE),
+                )
+                block_timestamp = await self._read_block_timestamp(
+                    substrate, block_hash
+                )
+        except TimeoutError as e:
+            raise ChainTimeoutError(f"read_epoch_schedule({netuid}) timed out") from e
+        except ChainError:
+            raise
+        except Exception as e:
+            raise ChainConnectionError(
+                f"read_epoch_schedule({netuid}) failed: {e}"
+            ) from e
+        if (
+            last_epoch is None
+            or pending_at is None
+            or index is None
+            or tempo is None
+            or since is None
+            or not tempo
+            or last_epoch > block
+        ):
+            raise ChainConnectionError(
+                f"epoch schedule for netuid={netuid} is unusable "
+                f"(last_epoch={last_epoch} pending={pending_at} index={index} "
+                f"tempo={tempo} since={since} block={block})"
+            )
+        return EpochSchedule(
+            netuid=netuid,
+            subnet_epoch_index=index,
+            last_epoch_block=last_epoch,
+            pending_epoch_at=pending_at,
+            tempo=tempo,
+            blocks_since_last_step=since,
+            block=block,
+            block_hash=str(block_hash),
+            block_timestamp=block_timestamp,
+            next_epoch_block=predict_next_epoch_block(
+                last_epoch_block=last_epoch,
+                pending_epoch_at=pending_at,
+                tempo=tempo,
+                blocks_since_last_step=since,
+                current_block=block,
+            ),
         )
 
     async def _read_epoch(

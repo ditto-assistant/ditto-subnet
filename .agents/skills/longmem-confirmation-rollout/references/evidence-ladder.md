@@ -30,6 +30,11 @@ dimension row count, evidence root/signature/verification state
 Keep raw submitted content, endpoint URLs, credentials, case IDs, and arbitrary
 exception text out of shared logs and reports.
 
+Add the grant ledger per lane (`confirmation_inference_grants` for the ticket:
+request_count, prompt/completion tokens, cost) and, for a completed zero, the
+validator's `confirmation/longmem_received_failure_*` W&B keys: together they say
+whether the harness reached the reader at all and, if not, at which boundary.
+
 ## Accepted-attempt handoff
 
 The final handoff should contain:

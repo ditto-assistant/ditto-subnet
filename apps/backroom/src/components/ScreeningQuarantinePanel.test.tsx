@@ -263,6 +263,7 @@ const submission: ScreeningSubmission = {
 const dispute: ScreeningDispute = {
   dispute_id: '88888888-8888-4888-8888-888888888888',
   agent_id: quarantine.agent_id,
+  kind: 'screening',
   quarantine_id: quarantine.quarantine_id,
   miner_hotkey: quarantine.miner_hotkey,
   agent_name: 'Disputed agent',

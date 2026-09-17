@@ -70,10 +70,10 @@ describe("status vocabulary (row 10)", () => {
     expect(ACTIVITY_FILTER_LABELS.waiting_validator).toBe("Waiting for validators");
   });
 
-  it("explains an operator review as paused automation", () => {
+  it("explains a review hold without claiming the screener is idle", () => {
     expect(validationDetail({ status: "under_review" })).toBe(
-      "Automated processing is paused while an operator reviews this submission. " +
-        "No screener or validator is currently working on it.",
+      "This submission is held for integrity review. Existing scores do not clear the hold. " +
+        "The screening history below shows whether a deep review is running or an operator decision is pending.",
     );
   });
 

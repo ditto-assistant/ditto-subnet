@@ -192,6 +192,7 @@ jobs:
       action: ${{ github.event.action }}
       bundle_result: ${{ needs.dashboard-bundle.result }}
       pr: ${{ github.event.pull_request.number }}
+      profiles: ${{ needs.plan.outputs.profiles }}
       proof_result: ${{ needs.cheatcodes.result }}
       repo: ${{ github.event.pull_request.head.repo.full_name }}
       sha: ${{ github.event.pull_request.head.sha }}

@@ -57,6 +57,9 @@ export type ConfirmationLaneDiagnosisInput = {
   dailyBundleCap: number
   dailyDollarCapMicrousd: number
   profileRevision: string | null
+  // Older Platforms omit these; undefined means "not reported", not "missing".
+  profileInstalled?: boolean
+  installedProfiles?: Array<{ revision: string; checksum: string }>
   fleet: {
     generated_at: string
     active_bench_version: number | null | undefined
@@ -73,6 +76,7 @@ export type ConfirmationLaneDiagnosisInput = {
 
 export type ConfirmationLaneLikelyCauseCode =
   | 'issuance_disabled'
+  | 'profile_not_installed'
   | 'issuance_inactive'
   | 'budget_blocked'
   | 'leftover_validator_v9_identity_pin'
@@ -257,6 +261,9 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
   const likelyCause = deriveLikelyCause({
     mode: input.mode,
     issuanceActive: input.issuanceActive,
+    profileRevision: input.profileRevision,
+    profileInstalled: input.profileInstalled,
+    installedProfiles: input.installedProfiles ?? [],
     dailyBundleCap: input.dailyBundleCap,
     counts,
     completed: shadow?.completed_bundle_count ?? counts.completed,
@@ -280,6 +287,8 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
       daily_bundle_cap: input.dailyBundleCap,
       daily_dollar_cap_microusd: input.dailyDollarCapMicrousd,
       profile_revision: input.profileRevision,
+      profile_installed: input.profileInstalled ?? null,
+      installed_profiles: input.installedProfiles ?? null,
     },
     budget,
     counts,
@@ -321,6 +330,9 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
 function deriveLikelyCause(input: {
   mode: 'off' | 'shadow' | 'enforce'
   issuanceActive: boolean
+  profileRevision: string | null
+  profileInstalled: boolean | undefined
+  installedProfiles: Array<{ revision: string; checksum: string }>
   dailyBundleCap: number
   counts: Record<ConfirmationLaneState, number>
   completed: number
@@ -339,6 +351,27 @@ function deriveLikelyCause(input: {
       code: 'issuance_disabled',
       summary: 'Confirmation mode is off, so Platform will not issue LongMem work.',
       evidence: [`mode=${input.mode}`],
+    }
+  }
+  if (input.profileInstalled === false) {
+    // The policy pins a profile this Platform release did not install: every
+    // validator claim returns no work while the mode still reads shadow/enforce.
+    return {
+      code: 'profile_not_installed',
+      summary:
+        'The pinned confirmation profile is not installed in the running Platform release, so no LongMem work can issue. Re-freeze the policy on an installed profile identity.',
+      evidence: [
+        `mode=${input.mode}`,
+        `profile_revision=${input.profileRevision ?? 'null'}`,
+        'profile_installed=false',
+        `installed_profiles=${
+          input.installedProfiles.length === 0
+            ? 'none'
+            : input.installedProfiles
+                .map((profile) => `${profile.revision}@${profile.checksum.slice(0, 8)}`)
+                .join(',')
+        }`,
+      ],
     }
   }
   if (!input.issuanceActive) {

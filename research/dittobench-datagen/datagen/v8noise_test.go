@@ -14,7 +14,7 @@ func TestV8ToolWritingNoiseCoversEverySemanticDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases, _ := GenerateCasesWithFillersForVersion(rand.New(rand.NewSource(rotated)), seed, 100, protocol.BenchVersionV8)
-	coverage := applyV8WritingNoise(seed+1, cases)
+	coverage := applyV8WritingNoise(seed+1, cases, nil)
 	for _, domain := range []string{"personal", "business", "research", "settings", "general"} {
 		if got := coverage["prompt:"+domain]; got < 2 {
 			t.Errorf("V8 noisy tool prompts for %s=%d, want at least 2; all=%v", domain, got, coverage)

@@ -59,6 +59,7 @@ import { CasesSection } from "./Cases";
 import { ScreeningDispute } from "./DisputeForm";
 import { ScreeningReview } from "./ScreeningReview";
 import { TelemetryLoader } from "./Telemetry";
+import { GateEvidencePanel } from "./GateEvidence";
 import { V9GateEvidence } from "./V9GateEvidence";
 import {
   benchmarkCohorts,
@@ -277,7 +278,10 @@ function screeningMetaRest(a: ScreeningAttempt, isOld: boolean): string {
   if (a.quarantine_resolution === "release") {
     meta += " · Operator released this submission from quarantine.";
   } else if (a.quarantine_resolution === "rescreen") {
-    meta += " · Operator sent this submission through screening again.";
+    meta +=
+      a.status === "rejected"
+        ? " · Screening rejected this submission."
+        : " · Operator sent this submission through screening again.";
   } else if (a.quarantine_resolution === "reject") {
     meta += " · Operator rejected this submission after quarantine review.";
   } else if (isOld && a.status === "expired") {
@@ -318,7 +322,7 @@ function ScreeningAttemptRow(props: { attempt: ScreeningAttempt; isOld: boolean 
         <Show when={a().quarantine_resolution_reason}>
           {(reason) => (
             <div class="attempt-resolution-reason">
-              <b>Operator reason:</b> {reason()}
+              <b>Review reason:</b> {reason()}
             </div>
           )}
         </Show>
@@ -433,6 +437,7 @@ function AcceptedScoreView(props: {
           </div>
         </Show>
         <Show when={score().v9_base}>{(evidence) => <V9GateEvidence evidence={evidence()} />}</Show>
+        <GateEvidencePanel evidence={score().gate_evidence} />
       </div>
       <CasesSection caseResults={score().case_results} glossary={props.glossary} />
     </div>
@@ -1175,6 +1180,9 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
                   agentId={agentId()}
                   status={detail().status}
                   dispute={detail().dispute}
+                  gateNotes={(detail().provisional_scores ?? []).some((score) =>
+                    Boolean(score.gate_evidence),
+                  )}
                   onSubmitted={retryPipeline}
                 />
                 <section class="pipeline-section" aria-labelledby="pipeline-screening-history">

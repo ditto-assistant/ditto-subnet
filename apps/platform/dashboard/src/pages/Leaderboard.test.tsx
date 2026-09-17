@@ -9,6 +9,8 @@ import {
   resetBoardState,
   setLeaderboardVersionView,
 } from "../components/board/board-state";
+import { CodingShadowSummary } from "../components/board/CodingShadowSummary";
+import type { LeaderboardStore } from "../components/board/leaderboard-data";
 import { fx, fxScore, num } from "../lib/format";
 import { dethroneFloor, displayComposite, rankEntries } from "../lib/scoring";
 import { syncFromLocation } from "../stores/routeStore";
@@ -21,6 +23,8 @@ const leaderboardCss = readFileSync(
   join(HERE, "..", "styles", "pages", "leaderboard.css"),
   "utf-8",
 );
+const tokenCss = readFileSync(join(HERE, "..", "styles", "tokens.css"), "utf-8");
+const widgetCss = readFileSync(join(HERE, "..", "styles", "widgets.css"), "utf-8");
 const cssNorm = leaderboardCss.replace(/\s+/g, " ");
 
 const leaderboard = loadFixture<LeaderboardPayload>("leaderboard");
@@ -99,6 +103,24 @@ async function waitForBoard(): Promise<void> {
 // column set lives here, un-hidden at every width by the page-scoped
 // tri-state CSS.
 describe("dedicated leaderboard page (row 3 slice)", () => {
+  it("does not report zero Coding coverage before leaderboard data is available", () => {
+    const store = {
+      entries: () => [],
+      payload: () => null,
+      unavailable: () => true,
+    } as unknown as LeaderboardStore;
+    render(() => <CodingShadowSummary store={store} />);
+    const summary = document.querySelector(".coding-shadow-summary");
+    expect(summary).toHaveAttribute("aria-busy", "true");
+    expect(summary?.querySelector('[data-coding-summary="complete"]')).toHaveTextContent("–");
+    expect(summary?.querySelector('[data-coding-summary="collecting"]')).toHaveTextContent("–");
+    expect(summary?.querySelector('[data-coding-summary="scheduled"]')).toHaveTextContent("–");
+    expect(summary?.querySelector('[data-coding-summary="stale"]')).toHaveTextContent("–");
+    expect(summary?.querySelector('[data-coding-summary="quorum"]')).toHaveTextContent(
+      "3 validators",
+    );
+  });
+
   it("hosts the single leaderboard block in #leaderboard-page-host", async () => {
     renderPage();
     await waitForBoard();
@@ -284,6 +306,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     const coding = document.querySelector("#rows tr[data-i]:first-child .coding-shadow-row");
     expect(coding).toHaveTextContent("not evaluated");
     expect(coding?.querySelector(".bar.coding")).toBeNull();
+    expect(coding?.querySelector(".coding-shadow-details-toggle")).toBeNull();
     // Emissions is present but deliberately not sortable; its tip explains
     // the KOTH role.
     expect(el("emissions-col-tip").closest("th")?.hasAttribute("data-sort")).toBe(false);
@@ -322,11 +345,21 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
       const coding = document.querySelector("#rows tr[data-i]:first-child .coding-shadow-row");
       expect(coding?.querySelector(".mval")).toHaveTextContent("0.000");
       expect(coding?.querySelector<HTMLElement>(".bar.coding")?.style.width).toBe("0%");
+      expect(coding?.querySelector(".barwrap")).toHaveClass("coding-measured-zero");
       expect(coding?.querySelector(".coding-shadow-label")).toHaveAttribute(
         "data-tooltip",
         expect.stringContaining("does not affect composite, rank, weights, or emissions"),
       );
     });
+  });
+
+  it("uses one dedicated Coding encoding in both modes without faking a zero fill", () => {
+    expect(tokenCss.match(/--coding:/g)).toHaveLength(2);
+    expect(widgetCss).toMatch(/\.bar\.coding\s*\{\s*background: var\(--coding\);\s*\}/);
+    expect(widgetCss).toMatch(
+      /\.coding-measured-zero::after\s*\{[^}]*background: var\(--coding\)/s,
+    );
+    expect(widgetCss).not.toMatch(/\.bar\.coding\s*\{[^}]*min-width/s);
   });
 
   it("keeps collecting and stale Coding states distinct from scores", async () => {
@@ -376,6 +409,122 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
       expect(rows[1]).toHaveTextContent("stale");
       expect(rows[1]?.querySelector(".bar.coding")).toBeNull();
     });
+  });
+
+  it("summarizes and filters every Coding shadow state without adding a Coding sort", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        const states = ["complete", "collecting", "scheduled", "stale", null] as const;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).slice(0, states.length).map((entry, index) => {
+            const state = states[index] ?? null;
+            return {
+              ...entry,
+              finalized: true,
+              score_count: 3,
+              score_quorum: 3,
+              coding_shadow:
+                state === null
+                  ? null
+                  : {
+                      status: state,
+                      score: state === "complete" ? 0.625 : null,
+                      result_count:
+                        state === "complete" || state === "stale"
+                          ? 3
+                          : state === "collecting"
+                            ? 1
+                            : 0,
+                      score_quorum: 3,
+                      bench_version: state === "stale" ? 11 : 12,
+                      coding_contract_version: 1,
+                      completed_at: state === "complete" ? "2026-09-10T20:00:00Z" : null,
+                      shadow_only: true,
+                      weight_eligible: false,
+                    },
+            };
+          }),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => {
+      expect(document.querySelector('[data-coding-summary="complete"]')).toHaveTextContent("1/5");
+      expect(document.querySelector('[data-coding-summary="collecting"]')).toHaveTextContent("1");
+      expect(document.querySelector('[data-coding-summary="scheduled"]')).toHaveTextContent("1");
+      expect(document.querySelector('[data-coding-summary="stale"]')).toHaveTextContent("1");
+      expect(document.querySelector('[data-coding-summary="quorum"]')).toHaveTextContent(
+        "3 validators",
+      );
+    });
+    expect(document.querySelector('th[data-sort="coding"]')).toBeNull();
+    const complete = document.querySelector<HTMLButtonElement>('[data-coding-filter="complete"]');
+    const inProgress = document.querySelector<HTMLButtonElement>(
+      '[data-coding-filter="in_progress"]',
+    );
+    const notEvaluated = document.querySelector<HTMLButtonElement>(
+      '[data-coding-filter="not_evaluated"]',
+    );
+    expect(complete).toHaveTextContent("Complete 1");
+    expect(inProgress).toHaveTextContent("In progress 2");
+    expect(notEvaluated).toHaveTextContent("Not evaluated 1");
+
+    fireEvent.click(inProgress as HTMLButtonElement);
+    await waitFor(() => expect(document.querySelectorAll("#rows tr[data-i]")).toHaveLength(2));
+    expect(inProgress).toHaveAttribute("aria-pressed", "true");
+    const visible = [...document.querySelectorAll("#rows tr[data-i] .coding-shadow-row")];
+    expect(visible[0]).toHaveTextContent("1/3");
+    expect(visible[1]).toHaveTextContent("scheduled");
+
+    fireEvent.click(notEvaluated as HTMLButtonElement);
+    await waitFor(() => expect(document.querySelectorAll("#rows tr[data-i]")).toHaveLength(1));
+    expect(document.querySelector("#rows tr[data-i] .coding-shadow-row")).toHaveTextContent(
+      "not evaluated",
+    );
+  });
+
+  it("expands aggregate-only Coding details without activating the miner row", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).slice(0, 1).map((entry) => ({
+            ...entry,
+            coding_shadow: {
+              status: "complete",
+              score: 0.625,
+              result_count: 3,
+              score_quorum: 3,
+              bench_version: 12,
+              coding_contract_version: 1,
+              completed_at: "2026-09-10T20:00:00Z",
+              shadow_only: true,
+              weight_eligible: false,
+            },
+          })),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    const toggle = document.querySelector<HTMLButtonElement>(".coding-shadow-details-toggle");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-label", expect.stringContaining("Coding shadow details"));
+    const routeBefore = location.href;
+    fireEvent.click(toggle as HTMLButtonElement);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    const details = document.querySelector(".coding-shadow-details");
+    expect(details).toHaveTextContent("Status 0.625");
+    expect(details).toHaveTextContent("Evidence 3/3 validators");
+    expect(details).toHaveTextContent("Contract Coding v1 · Bench v12");
+    expect(details).toHaveTextContent("Artifact exact current match");
+    expect(details).toHaveTextContent("never ranking, weight, or emission authority");
+    expect(details?.querySelector('[title="2026-09-10T20:00:00Z"]')).toBeTruthy();
+    expect(location.href).toBe(routeBefore);
   });
 
   it("keeps a miner's picture on the same line as the name it belongs to", async () => {
@@ -713,6 +862,7 @@ describe("board view controls (row 1 slice)", () => {
                         agent_name: "prior-version",
                         agent_version: 4,
                         canonical_composite: 0.91,
+                        official_composite: 0.786333,
                         confirmation_seed_depth: 1,
                       },
                     ],
@@ -739,6 +889,9 @@ describe("board view controls (row 1 slice)", () => {
     });
     expect(chip).toHaveClass("settled");
     expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("this exact submission"));
+    const score = document.querySelector(".family-child:not([hidden]) .family-member-score");
+    expect(score?.textContent).toBe("0.786333");
+    expect(score).toHaveAttribute("title", expect.stringContaining("Official composite"));
   });
 
   it("labels all v9 confirmation states and suppresses pending rows in enforce mode", async () => {
@@ -877,6 +1030,108 @@ describe("board view controls (row 1 slice)", () => {
       (row) => row.querySelector(".score-stack-label")?.textContent === "LongMem",
     );
     expect(longmemRow?.querySelector(".mval")?.textContent).toBe("0.000");
+  });
+
+  it("shows router shadow placeholders while measurements are queued or running", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          router_shadow_mode: "shadow",
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index < 2
+              ? {
+                  ...entry,
+                  router_shadow_status: index === 0 ? "queued" : "running",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelectorAll(".router-shadow-chip")).toHaveLength(2));
+    expect(el("leaderboard-notice")).toHaveTextContent("Router shadow is active");
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("#rows tr[data-i]"));
+    for (const label of ["Router shadow queued", "Router shadow running"]) {
+      const row = rows.find((candidate) => candidate.textContent?.includes(label));
+      expect(row).toBeTruthy();
+    }
+    const routerRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "Router",
+    );
+    expect(routerRow?.querySelector(".mval")?.textContent).toBe("queued");
+    expect(routerRow?.querySelector(".bar.router")).toBeNull();
+  });
+
+  it("shows the measured router shadow composite with chip, bar, and no weight language", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          router_shadow_mode: "shadow",
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? {
+                  ...entry,
+                  router_shadow_composite: 0.333333,
+                  router_shadow_status: "measured",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(document.querySelector(".router-shadow-chip")?.textContent).toBe("Router 0.333"),
+    );
+    const chip = document.querySelector(".router-shadow-chip");
+    expect(chip?.className).toContain("settled");
+    expect(chip?.getAttribute("data-tooltip")).toContain("does not change ranking or emissions");
+    const routerRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "Router",
+    );
+    expect(routerRow?.querySelector(".mval")?.textContent).toBe("0.333");
+    expect(routerRow?.querySelector(".bar.router")).toBeTruthy();
+  });
+
+  it("renders no router chip, placeholder, or notice outside router shadow mode", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index < 2
+              ? {
+                  ...entry,
+                  router_shadow_status: index === 0 ? "queued" : "running",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelector(".router-shadow-chip")).toBeNull());
+    expect(el("leaderboard-notice").textContent).not.toContain("Router shadow is active");
+    const routerRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "Router",
+    );
+    // Like LongMem, a measured composite renders data-driven regardless of
+    // mode, but unmetered rows only ever appear via the shadow-mode gate.
+    expect(routerRow).toBeUndefined();
+  });
+
+  it("keeps a dedicated router bar encoding in both modes", () => {
+    expect(tokenCss.match(/--router:/g)).toHaveLength(2);
+    expect(widgetCss).toMatch(/\.bar\.router\s*\{\s*background: var\(--router\);\s*\}/);
   });
 
   it("defaults to the Scored tab with live counts (provisional is pre-quorum feedback)", async () => {
@@ -1581,5 +1836,48 @@ describe("tooltip description ids", () => {
 
     expect(referenced.size).toBeGreaterThan(20);
     expect(ambiguous).toEqual([]);
+  });
+
+  it("names the pinned ledger, the next-pin verdict, and fleet agreement from the fold", async () => {
+    renderPage();
+    await waitForBoard();
+    await waitFor(() => expect(el("emissions-next-pin").classList.contains("show")).toBe(true));
+    const line = el("emissions-next-pin").textContent ?? "";
+    // Identity comes off emissions.ledger_pin; the verdict off next_pin_projection.
+    expect(line).toContain("Validators are folding pin #24,281 · block 8,741,511.");
+    expect(line).toContain("crown holds");
+    expect(line).toContain("defended from the previous pin");
+    await waitFor(() =>
+      expect(el("chain-pin-agreement").textContent).toContain(
+        "8 of 12 validator vectors match pin #24,281",
+      ),
+    );
+    // The per-epoch record renders under the board on this page.
+    await waitFor(() => expect(el("crown-history").textContent).toContain("pin #24,281"));
+  });
+
+  it("says nothing about pins on a board that predates them", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name === "leaderboard") {
+          const payload = body as { emissions?: Record<string, unknown> };
+          if (payload.emissions) {
+            delete payload.emissions.ledger_pin;
+            delete payload.emissions.next_pin_projection;
+            delete payload.emissions.crown_incumbent_active;
+          }
+        }
+        if (name === "weights") {
+          const payload = body as { pin_agreement?: unknown };
+          delete payload.pin_agreement;
+        }
+        return body;
+      },
+    });
+    await waitForBoard();
+    // The store is module-scoped, so the previous case's payload may still be
+    // on screen until this case's fetch lands; wait for the new board.
+    await waitFor(() => expect(el("emissions-next-pin").classList.contains("show")).toBe(false));
+    await waitFor(() => expect(document.getElementById("chain-pin-agreement")).toBeNull());
   });
 });

@@ -656,6 +656,63 @@ describe("terminal screening review cards (row 23)", () => {
     expect(SUBMISSIONS_CSS).toContain(".screening-review-location code");
     expect(SUBMISSIONS_CSS).toContain("grid-column: 1 / -1");
   });
+
+  it("restores historical v13 observations without presenting them as final findings", () => {
+    render(() => (
+      <ScreeningReview
+        attempt={{
+          status: "rejected",
+          policy_version: 13,
+          quarantine_resolution: "rescreen",
+          review_finding: null,
+          review_notes: [
+            {
+              kind: "concern",
+              stage: "l1",
+              path: "src/answer.rs",
+              line: 37,
+              summary: "The fallback replaces the model-authored answer.",
+            },
+            { kind: "cleared", stage: "l2", summary: "The retrieval path keeps complete records." },
+          ],
+        }}
+      />
+    ));
+    const card = document.querySelector(".screening-review");
+    expect(card?.textContent).toContain("Review observations");
+    expect(card?.textContent).toContain("not separate rejection findings");
+    expect(card?.textContent).toContain("L1 · concern");
+    expect(card?.textContent).toContain("L2 · cleared");
+    expect(card?.textContent).toContain("src/answer.rs:37");
+    expect(card?.textContent).not.toContain("Verified finding");
+  });
+
+  it("links each policy check to its own cited source locations", () => {
+    render(() => (
+      <ScreeningReview
+        attempt={{
+          ...attempt,
+          review_finding: {
+            ...attempt.review_finding,
+            invariant_assessment: {
+              decisions: [
+                {
+                  invariant: "I3_model_dissent",
+                  disposition: "breach",
+                  summary: "The response ignores model dissent.",
+                  evidence_indices: [0],
+                },
+              ],
+            },
+          },
+        }}
+      />
+    ));
+    const card = document.querySelector(".screening-review");
+    expect(card?.textContent).toContain("Policy checks");
+    expect(card?.textContent).toContain("The response ignores model dissent.");
+    expect(card?.textContent).toContain("agent/main.py:42");
+  });
 });
 
 describe("screening policy summary badges", () => {
@@ -815,6 +872,31 @@ describe("screening dispute form", () => {
 describe("async agent evidence", () => {
   const summary = loadFixture<AgentSummaryPayload>("agent-top-summary");
 
+  it.each([
+    ["rejected", 2, "rejected this submission"],
+    ["rejected", 3, "rejected this submission"],
+    ["screening_failed", 3, "not a submission rejection"],
+    ["under_review", 3, "held for integrity review"],
+    ["screening", 3, "currently checking"],
+  ])("shows %s ahead of %i historical scores", async (status, score_count, expected) => {
+    render(() => (
+      <AgentEvidence
+        entry={{ ...summary, status, score_count }}
+        pipeline={() => undefined}
+        pipelineLoading={() => true}
+        pipelineFetching={() => true}
+        pipelineError={() => null}
+        retryPipeline={() => undefined}
+      />
+    ));
+    await waitFor(() => {
+      const text = document.querySelector(".pipeline-current-message")?.textContent;
+      expect(text).toContain(expected);
+      expect(text).not.toContain("Canonical validation complete");
+      expect(text).not.toContain("Waiting for");
+    });
+  });
+
   function body(): HTMLElement {
     return document.querySelector("[data-agent-history-body]") as HTMLElement;
   }
@@ -832,6 +914,38 @@ describe("async agent evidence", () => {
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }
+
+  it("does not describe a historical adjudicated rejection as a new rescreen", async () => {
+    stubPipelineFetch(() =>
+      Promise.resolve(
+        pipelineResponse({
+          screening_attempts: [
+            {
+              policy_version: 13,
+              status: "rejected",
+              quarantine_resolution: "rescreen",
+              reason: "The served fallback overrides the model answer.",
+              quarantine_resolution_reason: "The served fallback overrides the model answer.",
+              review_notes: [
+                {
+                  kind: "concern",
+                  stage: "l1",
+                  summary: "A host override is reachable.",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    render(() => <AgentEvidence entry={summary} />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("A host override is reachable."),
+    );
+    expect(document.body.textContent).toContain("Screening rejected this submission.");
+    expect(document.body.textContent).not.toContain("sent this submission through screening again");
+    expect(document.body.textContent).toContain("Review reason:");
+  });
 
   it("paints the summary while the evidence record loads automatically", async () => {
     let resolvePipeline: ((response: Response) => void) | undefined;

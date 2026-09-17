@@ -75,6 +75,67 @@ def test_no_wire_key_is_silently_dropped() -> None:
         assert not unknown, f"CategoryStat silently drops wire keys: {sorted(unknown)}"
 
 
+def test_v13_relation_round_trips() -> None:
+    # bench_version >= 13 report-only field (Go ``CaseScore.Relation``,
+    # ``omitempty``): the fixture carries it on one memory case and the Python
+    # mirror must declare it or ``extra="ignore"`` drops it silently.
+    report = ScoreReport.model_validate(_fixture())
+    assert "relation" in type(report.per_case[0]).model_fields
+    relations = {case.relation for case in report.per_case}
+    assert "decision_twin" in relations
+    assert "" in relations
+
+
+def test_v13_inference_cost_round_trips() -> None:
+    # bench_version >= 13 shadow cost record (Go ``CaseScore.InferenceCost``,
+    # ``omitempty``): declared as a typed mirror so the #1850 telemetry the
+    # calibration reads from Platform is not dropped by ``extra="ignore"``.
+    report = ScoreReport.model_validate(_fixture())
+    assert "inference_cost" in type(report.per_case[0]).model_fields
+    costed = [case for case in report.per_case if case.inference_cost is not None]
+    assert len(costed) == 1
+    cost = costed[0].inference_cost
+    assert cost is not None
+    assert cost.case_class == "memory"
+    assert cost.attribution == "verified_claim"
+    assert cost.completions == 3 and cost.usage_unavailable == 1
+    assert cost.output_tokens == 700
+    assert cost.reasoning_tokens == 1900
+    assert cost.factor_bps == 10_000
+    # Alias round-trips as the Go wire key, not the Python attribute name.
+    dumped = cost.model_dump(by_alias=True)
+    assert dumped["class"] == "memory" and "case_class" not in dumped
+
+
+def test_v13_unknown_evidence_is_not_persisted() -> None:
+    raw = _fixture_v13()
+    raw["per_case"][0]["inference_cost"]["future_field"] = {"authoritative": True}
+    raw["per_case"][1]["claim_provenance"]["unattributed_calls"] = 2
+    raw["per_case"][1]["claim_provenance"]["future_field"] = True
+    dumped = ScoreReport.model_validate(raw).model_dump(mode="json")
+    assert "future_field" not in dumped["per_case"][0]["inference_cost"]
+    provenance = dumped["per_case"][1]["claim_provenance"]
+    assert provenance["unattributed_calls"] == 2
+    assert "future_field" not in provenance
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("output_tokens", -1),
+        ("reasoning_tokens", -1),
+        ("completions", -1),
+        ("factor_bps", 5999),
+        ("factor_bps", 10001),
+    ],
+)
+def test_v13_known_cost_fields_are_bounded(field: str, value: int) -> None:
+    raw = _fixture_v13()
+    raw["per_case"][0]["inference_cost"][field] = value
+    with pytest.raises(ValidationError):
+        ScoreReport.model_validate(raw)
+
+
 def test_v3_audit_fields_round_trip() -> None:
     report = ScoreReport.model_validate(_fixture())
     assert set(type(report.per_case[0]).model_fields) >= V3_CASE_AUDIT_FIELDS
@@ -188,3 +249,93 @@ def test_nonzero_v9_evidence_still_rejects_omitted_stderr() -> None:
 
     with pytest.raises(ValidationError):
         ScoreReport.model_validate(raw)
+
+
+# ---------------------------------------------------------------------------
+# bench_version 13: the v10 tool-provenance record and the v13 gate records.
+# ``fixtures/score_report_v13.json`` is a ``protocol.ScoreReport`` marshalled
+# by the Go engine on the v13 scorer branches (catalog gate, claim provenance,
+# twins/cost) and unioned field-by-field -- so every key here is what the
+# scorer really emits, not a Python-side guess. Before this fixture existed,
+# ``tool_provenance`` / ``catalog`` / ``claim_provenance`` / ``inference_cost``
+# / ``relation`` were silently stripped at ingest (pydantic ``extra="ignore"``),
+# which is exactly the drift this test guards.
+
+FIXTURE_V13 = Path(__file__).parent / "fixtures" / "score_report_v13.json"
+
+V13_CASE_WIRE_FIELDS = {
+    "audit_half",
+    "undelivered",
+    "validator_fault",
+    "allow_extra_tools",
+    "relation",
+    "tool_provenance",
+    "catalog",
+    "claim_provenance",
+    "inference_cost",
+}
+
+
+def _fixture_v13() -> dict:
+    return json.loads(FIXTURE_V13.read_text())
+
+
+def test_v13_no_wire_key_is_silently_dropped() -> None:
+    raw = _fixture_v13()
+    report = ScoreReport.model_validate(raw)
+    assert not (set(raw) - set(ScoreReport.model_fields))
+    case_fields = set(type(report.per_case[0]).model_fields)
+    assert case_fields >= V13_CASE_WIRE_FIELDS
+    for case in raw["per_case"]:
+        unknown = set(case) - case_fields
+        assert not unknown, f"CaseScore silently drops wire keys: {sorted(unknown)}"
+
+
+def test_v13_gate_records_round_trip_by_value() -> None:
+    raw = _fixture_v13()
+    report = ScoreReport.model_validate(raw)
+    dumped = report.model_dump(mode="json")
+    for i, case in enumerate(raw["per_case"]):
+        for key, value in case.items():
+            if value is None:
+                continue
+            assert dumped["per_case"][i][key] == value, f"per_case[{i}].{key} mutated"
+    # The opaque details blob -- including the four v13 gate summaries -- is
+    # preserved verbatim.
+    assert dumped["details"] == raw["details"]
+    for key in ("catalog_gate", "claim_provenance", "twin_post_pass", "inference_cost"):
+        assert key in dumped["details"]
+
+    tool = report.per_case[0]
+    assert tool.catalog is not None
+    assert tool.catalog.findings == [
+        "catalog_absent",
+        "restraint_without_offer",
+        "swallowed_model_call",
+    ]
+    assert tool.catalog.completions_total == 2 and tool.catalog.catalog_present is False
+    assert tool.tool_provenance is not None
+    assert tool.tool_provenance.model_selected_not_executed == 1
+    assert tool.inference_cost is not None
+    # ``class`` is a Python keyword: aliased in, serialised back under its
+    # wire name.
+    assert tool.inference_cost.case_class == "single_tool"
+    assert tool.inference_cost.factor_bps == 8667
+    assert dumped["per_case"][0]["inference_cost"]["class"] == "single_tool"
+
+    memory = report.per_case[1]
+    assert memory.relation == "base" and memory.audit_half == "base"
+    assert memory.claim_provenance is not None
+    assert memory.claim_provenance.answer_in_prompt is True
+    assert memory.claim_provenance.findings == ["answer_in_prompt"]
+    assert "counterfactual_insensitive" in memory.notes
+
+    undelivered = report.per_case[5]
+    assert undelivered.undelivered is True and undelivered.validator_fault is True
+    assert report.per_case[3].allow_extra_tools is True
+    # A pre-v13 case carries none of it: the fields default to their omitted
+    # form, so the v3 fixture still validates and dumps as before.
+    legacy = ScoreReport.model_validate(_fixture()).per_case[0]
+    assert legacy.catalog is None and legacy.claim_provenance is None
+    assert legacy.inference_cost is None and legacy.tool_provenance is None
+    assert legacy.relation == ""

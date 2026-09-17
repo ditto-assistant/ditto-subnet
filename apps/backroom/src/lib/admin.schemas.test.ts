@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
@@ -14,9 +16,19 @@ import {
   validatorFleetSchema,
   copyReviewListSchema,
   openAthReviewInputSchema,
+  ATH_RULINGS_CONFIRMATION,
+  athRulingSchema,
+  athRulingPreviewItemSchema,
+  athRulingsPreviewResponseSchema,
+  athRulingsExecuteResponseSchema,
+  athRulingsUploadResponseSchema,
+  athRulingsBoardProjectionSchema,
+  previewAthRulingsBatchInputSchema,
+  executeAthRulingsBatchInputSchema,
   resolveCopyReviewInputSchema,
   resolveScreeningQuarantineInputSchema,
   screeningDisputeListSchema,
+  screeningDisputeSchema,
   screeningQuarantineListSchema,
   screeningQuarantineBatchExecuteInputSchema,
   screeningQuarantineBatchPreviewInputSchema,
@@ -598,6 +610,43 @@ describe('admin API schemas', () => {
 
     expect(result.items[0].message).toContain('generic routing')
     expect(result.items[0].original_reason).toContain('benchmark-specific')
+    // A pre-v13 row carries no kind: it is a screening dispute.
+    expect(result.items[0].kind).toBe('screening')
+  })
+
+  it('parses a bench v13 gate-notes dispute, which has no quarantine', () => {
+    const result = screeningDisputeListSchema.parse({
+      count: 1,
+      items: [
+        {
+          dispute_id: '44444444-4444-4444-8444-444444444445',
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          kind: 'gate_notes',
+          quarantine_id: null,
+          miner_hotkey: '5Miner',
+          agent_name: 'memory-agent',
+          agent_version: 3,
+          artifact_sha256: 'ab'.repeat(32),
+          message: 'The twin_concordant marker fired on twins the seeded history answers identically.',
+          status: 'pending',
+          created_at: '2026-09-13T12:00:00Z',
+          original_reason: null,
+          resolved_at: null,
+          resolved_by: null,
+          resolution: null,
+          resolution_reason: null,
+          gate_note_ids: ['0123456789abcdef', 'fedcba9876543210'],
+        },
+      ],
+    })
+
+    expect(result.items[0]).toMatchObject({
+      kind: 'gate_notes',
+      quarantine_id: null,
+      original_reason: null,
+      gate_note_ids: ['0123456789abcdef', 'fedcba9876543210'],
+    })
+    expect(() => screeningDisputeSchema.parse({ ...result.items[0], kind: 'appeal' })).toThrow()
   })
 
   it('parses rejected screening history and short-lived artifact access', () => {
@@ -731,6 +780,10 @@ function confirmationSettingsControl() {
       checksum: confirmationDigest,
       source: 'revision',
       configured: true,
+      profile_installed: true,
+      installed_profiles: [
+        { revision: 'v9-confirmation-shadow-1', checksum: confirmationDigest },
+      ],
       issuance_active: true,
       max_top_n: 10,
       max_daily_bundle_cap: 1_000,
@@ -1048,6 +1101,77 @@ describe('Bench v9 confirmation bundle schemas', () => {
     )
     expect(parsed.default.mode).toBe('off')
     expect(parsed.effective.issuance_active).toBe(true)
+    expect(parsed.effective.profile_installed).toBe(true)
+    expect(parsed.effective.installed_profiles).toEqual([
+      { revision: 'v9-confirmation-shadow-1', checksum: confirmationDigest },
+    ])
+  })
+
+  it('still parses an effective view from a Platform that predates installed_profiles', () => {
+    const control = confirmationSettingsControl()
+    const { profile_installed: _installed, installed_profiles: _profiles, ...older } =
+      control.effective
+    const parsed = confirmationBundleSettingsControlSchema.parse({
+      ...control,
+      effective: older,
+    })
+    expect(parsed.effective.profile_installed).toBeUndefined()
+    expect(parsed.effective.installed_profiles).toBeUndefined()
+  })
+
+  it('parses the pinned-but-uninstalled shape: shadow, configured, inactive', () => {
+    // Production revision 39 pinned v7 after the release moved to v8.
+    const control = confirmationSettingsControl()
+    const parsed = confirmationBundleSettingsControlSchema.parse({
+      ...control,
+      effective: {
+        ...control.effective,
+        profile_installed: false,
+        installed_profiles: [
+          {
+            revision: 'v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8',
+            checksum: '8e5be01e3efd17dbf6cc21e79b9d53d82d842b1563d403b0318f2a272d6297af',
+          },
+        ],
+        issuance_active: false,
+      },
+    })
+    expect(parsed.effective.configured).toBe(true)
+    expect(parsed.effective.profile_installed).toBe(false)
+    expect(parsed.effective.issuance_active).toBe(false)
+  })
+
+  it('rejects issuance_active=true when the pinned profile is not installed', () => {
+    const control = confirmationSettingsControl()
+    expect(() =>
+      confirmationBundleSettingsControlSchema.parse({
+        ...control,
+        effective: { ...control.effective, profile_installed: false, issuance_active: true },
+      }),
+    ).toThrow(/issuance_active contradicts/)
+  })
+
+  it('rejects issuance_active=false when the pinned profile is installed and mode is on', () => {
+    const control = confirmationSettingsControl()
+    expect(() =>
+      confirmationBundleSettingsControlSchema.parse({
+        ...control,
+        effective: { ...control.effective, profile_installed: true, issuance_active: false },
+      }),
+    ).toThrow(/issuance_active contradicts/)
+  })
+
+  it('rejects an installed profile identity without a canonical checksum', () => {
+    const control = confirmationSettingsControl()
+    expect(() =>
+      confirmationBundleSettingsControlSchema.parse({
+        ...control,
+        effective: {
+          ...control.effective,
+          installed_profiles: [{ revision: 'v9-confirmation-shadow-1', checksum: 'abc' }],
+        },
+      }),
+    ).toThrow()
   })
 
   it.each(['shadow', 'enforce'] as const)(
@@ -1717,6 +1841,41 @@ describe('source review causal evidence schema', () => {
     })).toThrow(/out of range/)
   })
 
+  it.each(['evaluation_independent_runtime', 'no_evaluation_identity_branch'] as const)(
+    'retains the complete policy-v13 sweep with %s', (passClause) => {
+      const assessment = {
+        schema_version: 2,
+        decisions: [...invariantAssessment.decisions, {
+          invariant: 'i8_evaluation_independence', disposition: 'pass',
+          pass_clause: passClause, summary: 'Runtime is independent of evaluation identity.',
+          evidence_indices: [],
+        }],
+      } satisfies GeneratedSourceReviewInvariantAssessment
+      const finding = { ...generatedFinding, invariant_assessment: assessment }
+      expect(sourceReviewFindingSchema.parse(finding).invariant_assessment).toEqual(assessment)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: { ...assessment, schema_version: 1 },
+      })).toThrow(/every policy-v10 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: assessment.decisions.slice(0, 7),
+        },
+      })).toThrow(/every policy-v13 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: [...assessment.decisions.slice(0, 7), assessment.decisions[0]],
+        },
+      })).toThrow(/every policy-v13 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: assessment.decisions.map((decision) => ({
+            ...decision, summary: 'x'.repeat(211),
+          })),
+        },
+      })).toThrow(/summaries exceed/)
+    },
+  )
+
   it('accepts the generated legacy shape when optional finding fields are absent', () => {
     const legacyFinding = {
       artifact_sha256: 'a'.repeat(64),
@@ -1804,6 +1963,34 @@ describe('screener review settings schemas', () => {
     expect(parsed.applied_instances[0]?.revision).toBe(42)
   })
 
+  it('parses the historical Platform policy manifest wire shape', () => {
+    const parsed = screenerReviewControlSchema.parse({
+      current: [],
+      history: [],
+      known_instances: [],
+      applied_instances: [],
+      shadow_observations: [],
+      policy_manifests: [{
+        revision: 106,
+        scope: 'subnet-screener-1',
+        policy_version: 13,
+        profile: 'l1_l2',
+        rotation_id: 'policy-v11-global-topdown',
+        digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+        reason: 'Preserve the existing policy manifest contract.',
+        actor: 'operator@example.com',
+        created_at: '2026-09-14T02:51:58.121154Z',
+      }],
+    })
+
+    expect(parsed.policy_manifests[0]).toMatchObject({
+      revision: 106,
+      profile: 'l1_l2',
+      rotation_id: 'policy-v11-global-topdown',
+      digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+    })
+  })
+
   it('fills L1 Luna budget defaults when older payloads omit them', () => {
     const {
       source_review_max_steps,
@@ -1825,6 +2012,23 @@ describe('screener review settings schemas', () => {
     expect(parsed.source_review_model).toBe('openai/gpt-5.6-luna')
     expect(parsed.source_review_timeout_seconds).toBe(1_800)
     expect(parsed.adjudicator_max_steps).toBe(128)
+  })
+
+  it('accepts Platform L2 budgets and preserves the upper bounds', () => {
+    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 48]]) {
+      const parsed = screenerReviewSettingsSchema.parse({
+        ...settings, timeout_seconds, max_steps, critic_reasoning_effort: 'high',
+      })
+      expect(parsed.timeout_seconds).toBe(timeout_seconds)
+      expect(parsed.max_steps).toBe(max_steps)
+      expect(parsed.critic_reasoning_effort).toBe('high')
+    }
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, timeout_seconds: 1801,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_steps: 49,
+    })).toThrow()
   })
 
   it('accepts the time-bound adjudicator step budget and rejects larger values', () => {
@@ -2239,6 +2443,7 @@ describe('queue policy settings schemas', () => {
     owner_concurrent_submission_limit: 2,
     deferred_source_review: {
       mode: 'off',
+      integrity_double_check_mode: 'off',
       min_cohort_size: 8,
       composite_mad_multiplier: 6,
       axis_mad_multiplier: 6,
@@ -3050,6 +3255,8 @@ describe('continual retest cohort sizing against an older platform', () => {
   })
   const legacySupport = {
     tie_weighting_mode: false,
+    ledger_pin_mode: false,
+    crown_incumbent_mode: false,
     retest_cohort_size: false,
     wave_membership: false,
     retest_eligibility_mode: false,
@@ -3064,6 +3271,8 @@ describe('continual retest cohort sizing against an older platform', () => {
   const legacyPolicy = {
     aggregate_mode: 'enabled' as const,
     tie_weighting_mode: 'disabled' as const,
+    ledger_pin_mode: 'live' as const,
+    crown_incumbent_mode: 'disabled' as const,
     idle_retests_enabled: true,
     rollout_standdown: 'all' as const,
     wave_membership: 'strict' as const,
@@ -3163,6 +3372,8 @@ describe('continual retest cohort sizing against an older platform', () => {
 
     expect(continualRetestFieldSupport(partial)).toEqual({
       tie_weighting_mode: false,
+      ledger_pin_mode: false,
+      crown_incumbent_mode: false,
       retest_cohort_size: false,
       wave_membership: true,
       retest_eligibility_mode: false,
@@ -3177,6 +3388,8 @@ describe('continual retest write contract', () => {
   const complete = {
     aggregate_mode: 'fleet_ready' as const,
     tie_weighting_mode: 'fleet_ready' as const,
+    ledger_pin_mode: 'epoch' as const,
+    crown_incumbent_mode: 'fleet_ready' as const,
     idle_retests_enabled: false,
     rollout_standdown: 'capable_validators' as const,
     wave_membership: 'strict' as const,
@@ -3194,6 +3407,8 @@ describe('continual retest write contract', () => {
     // collapsed cohort, a discarded tie band.
     for (const field of [
       'tie_weighting_mode',
+      'ledger_pin_mode',
+      'crown_incumbent_mode',
       'wave_membership',
       'retest_cohort_size',
       'retest_eligibility_mode',
@@ -3256,6 +3471,8 @@ describe('continual retest write contract', () => {
     ).toEqual({
       aggregate_mode: 'fleet_ready',
       tie_weighting_mode: 'disabled',
+      ledger_pin_mode: 'epoch',
+      crown_incumbent_mode: 'disabled',
       idle_retests_enabled: false,
       rollout_standdown: 'capable_validators',
       wave_membership: 'participants',
@@ -4168,5 +4385,134 @@ describe('public leaderboard rows that do not rank', () => {
     >().toMatchTypeOf<
       ZodInput<typeof publicLeaderboardSchema>['entries'][number]['rank']
     >()
+  })
+})
+
+describe('batched ATH rulings schemas', () => {
+  const ruling = {
+    action: 'reject',
+    agent_id: 'c25489aa-faf0-46fc-8b06-8e2240a5ac01',
+    expected_sha256: 'ab'.repeat(32),
+    expected_score_count: 3,
+    reason: 'Reject under screening policy v12 for I5',
+    evidence_references: ['routing.py:357-395', 'src/agent.rs:441'],
+  }
+
+  it('accepts the uploaded document shape inline and refuses ambiguous input', () => {
+    expect(previewAthRulingsBatchInputSchema.parse({ rulings: [ruling] }).rulings).toHaveLength(1)
+    expect(
+      previewAthRulingsBatchInputSchema.parse({
+        uploadKey: 'ath-rulings/v1/peyton-omniaura.ai/2026-09-13/x.json',
+      }).uploadKey,
+    ).toContain('ath-rulings/v1/')
+    expect(() => previewAthRulingsBatchInputSchema.parse({})).toThrow(/exactly one/)
+    expect(() =>
+      previewAthRulingsBatchInputSchema.parse({ uploadKey: 'k', rulings: [ruling] }),
+    ).toThrow(/exactly one/)
+    expect(() =>
+      previewAthRulingsBatchInputSchema.parse({ rulings: [ruling, { ...ruling, action: 'clear' }] }),
+    ).toThrow(/only once/)
+  })
+
+  it('keeps citations to path:line and reasons unbounded above', () => {
+    expect(() => athRulingSchema.parse({ ...ruling, evidence_references: ['no line'] })).toThrow()
+    expect(() => athRulingSchema.parse({ ...ruling, reason: 'no' })).toThrow()
+    expect(athRulingSchema.parse({ ...ruling, reason: 'x'.repeat(20_000) }).reason).toHaveLength(
+      20_000,
+    )
+    expect(athRulingSchema.parse({ ...ruling, evidence_references: undefined }).evidence_references).toEqual([])
+  })
+
+  it('binds execute to the exact confirmation phrase', () => {
+    const token = `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`
+    expect(
+      executeAthRulingsBatchInputSchema.parse({
+        previewToken: token,
+        confirmation: ATH_RULINGS_CONFIRMATION,
+      }).rulings,
+    ).toBeUndefined()
+    expect(() =>
+      executeAthRulingsBatchInputSchema.parse({ previewToken: token, confirmation: 'APPLY' }),
+    ).toThrow()
+    expect(() =>
+      executeAthRulingsBatchInputSchema.parse({ previewToken: 'short', confirmation: ATH_RULINGS_CONFIRMATION }),
+    ).toThrow()
+  })
+
+  // The drift guard: every Platform response field has an explicit validator
+  // and the key sets match the generated contract in both directions.
+  it('mirrors the generated Platform contract field-for-field', () => {
+    expectTypeOf<keyof ZodOutput<typeof athRulingsUploadResponseSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsUploadResponse']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingsBoardProjectionSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsBoardProjection']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingPreviewItemSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingPreviewItem']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingsPreviewResponseSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsPreviewResponse']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingsExecuteResponseSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsExecuteResponse']
+    >()
+    expectTypeOf<ZodInput<typeof athRulingSchema>>().toMatchTypeOf<
+      PlatformComponents['schemas']['AdminAthRuling']
+    >()
+    expect(
+      Object.keys(
+        athRulingPreviewItemSchema.parse({
+          index: 0,
+          action: 'reject',
+          agent_id: ruling.agent_id,
+          ok: true,
+          disposition: 'ready',
+          stale_guard: false,
+          would_change_crown: true,
+          reason: ruling.reason,
+          message: 'will open then reject',
+        }),
+      ).sort(),
+    ).toEqual([
+      'action',
+      'agent_id',
+      'agent_name',
+      'agent_status',
+      'agent_version',
+      'artifact_sha256',
+      'conflict_reason',
+      'disposition',
+      'evidence_references',
+      'index',
+      'message',
+      'miner_hotkey',
+      'ok',
+      'reason',
+      'score_count',
+      'stale_guard',
+      'steps',
+      'would_change_crown',
+    ])
+  })
+
+  it('parses the 2026-09-13 top-5 replay fixture the Platform tests execute', () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(
+          __dirname,
+          '../../../platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json',
+        ),
+        'utf8',
+      ),
+    ) as { source: string; rulings: Array<unknown> }
+    const parsed = previewAthRulingsBatchInputSchema.parse({
+      rulings: fixture.rulings,
+      source: fixture.source,
+    })
+    expect(parsed.rulings).toHaveLength(5)
+    expect(parsed.rulings?.every((item) => item.action === 'reject')).toBe(true)
+    expect(parsed.rulings?.every((item) => item.evidence_references.length > 0)).toBe(true)
+    expect(parsed.source).toBe('docs/sn118-top5-board-review-2026-09-13.json')
   })
 })

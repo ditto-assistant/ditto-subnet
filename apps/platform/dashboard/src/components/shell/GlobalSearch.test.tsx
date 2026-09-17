@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { shortKey } from "../../lib/format";
 import { rankEntries } from "../../lib/scoring";
 import { syncFromLocation } from "../../stores/routeStore";
 import { loadFixture } from "../../test-fixtures";
@@ -145,13 +146,46 @@ describe("GlobalSearch accessibility (row 32)", () => {
     el.focus();
     fireEvent.focus(el);
     expect(document.getElementById("search-meta")?.textContent).toBe(
-      "Search by hotkey, agent name, or ID",
+      "Search by hotkey, agent name, UID, or ID",
     );
     type("zzzznotathing");
     expect(document.getElementById("search-meta")?.textContent).toBe("No results");
     expect(document.querySelector(".search-empty")?.textContent).toContain(
       "No miner or submission matches",
     );
+  });
+
+  it('finds a miner by UID, bare or as "uid N", and names the UID on the match', () => {
+    renderSearch();
+    const uidMiner = miners.find((entry) => entry.miner_uid != null);
+    if (!uidMiner) throw new Error("fixture has no registered miner");
+    const title = shortKey(uidMiner.miner_hotkey);
+
+    type("uid " + uidMiner.miner_uid);
+    const match = options().find(
+      (opt) => opt.querySelector(".search-result-title")?.textContent === title,
+    );
+    expect(match).toBeTruthy();
+    expect(match?.querySelector(".search-result-detail")?.textContent).toContain(
+      "UID " + uidMiner.miner_uid,
+    );
+
+    type(String(uidMiner.miner_uid));
+    expect(
+      options().map((opt) => opt.querySelector(".search-result-title")?.textContent),
+    ).toContain(title);
+  });
+
+  it("finds a submission by its miner UID", () => {
+    const submission = submissions.find((entry) => entry.agent_id) as PipelineEntry;
+    render(() => (
+      <GlobalSearch miners={() => []} submissions={() => [{ ...submission, miner_uid: 4242 }]} />
+    ));
+
+    type("uid 4242");
+
+    expect(options()).toHaveLength(1);
+    expect(options()[0]?.querySelector(".search-result-kind")?.textContent).toBe("Submission");
   });
 
   it("dedupes submissions by agent id in the corpus", () => {

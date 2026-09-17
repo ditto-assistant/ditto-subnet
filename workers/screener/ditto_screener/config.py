@@ -192,6 +192,12 @@ class ScreenerConfig:
     l2_audit_retention_days: int
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
+    l2_always_escalate: bool = False
+    """Send every L1 result through L2/L3, even a certified low-risk clear.
+
+    Seeded from ``SCREENER_L2_ALWAYS_ESCALATE``; a bound reviewer revision can
+    only turn it on for one posture (the integrity double-check), never off.
+    """
     remote_build_mode: str = "off"
     """How the gate uses a prebuilt image archive.
 
@@ -434,6 +440,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         review_settings_max_stale_seconds=_parse_int(
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS", "900"
         ),
+        l2_always_escalate=os.environ.get("SCREENER_L2_ALWAYS_ESCALATE", "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"},
         remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off"),
         remote_build_timeout_seconds=_parse_float(
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1500"
@@ -548,11 +558,11 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         config.l2_workspace_root
     ):
         raise ScreenerConfigError("SCREENER_L2_WORKSPACE_ROOT must be absolute")
-    if not 1 <= config.l2_max_steps <= 20:
-        raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 20")
-    if not 30 <= config.l2_timeout_seconds <= 900:
+    if not 1 <= config.l2_max_steps <= 48:
+        raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 48")
+    if not 30 <= config.l2_timeout_seconds <= 1_800:
         raise ScreenerConfigError(
-            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 900"
+            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 1800"
         )
     if not 1 <= config.l2_max_output_tokens <= 128_000:
         raise ScreenerConfigError(
@@ -572,9 +582,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_ANALYST_REASONING_EFFORT must be model_default"
         )
-    if config.l2_critic_reasoning_effort not in {"low", "medium"}:
+    if config.l2_critic_reasoning_effort not in {"low", "medium", "high"}:
         raise ScreenerConfigError(
-            "SCREENER_L2_CRITIC_REASONING_EFFORT must be low or medium"
+            "SCREENER_L2_CRITIC_REASONING_EFFORT must be low, medium, or high"
         )
     if not 60 <= config.l2_cache_ttl_seconds <= 30 * 86_400:
         raise ScreenerConfigError(

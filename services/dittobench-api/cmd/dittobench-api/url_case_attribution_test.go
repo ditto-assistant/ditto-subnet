@@ -349,3 +349,42 @@ func claimBrokerSession(t *testing.T, broker *inferenceBroker, sessionID string,
 	}
 	return runID
 }
+
+// A trace-only route must never replace v13's claim-bearing route: v13's
+// provenance and catalog capture consume the latter for scoring evidence.
+func TestCaseURLPreservesV13ProvenanceRoute(t *testing.T) {
+	const caseID = "case-v13"
+	const gateway = "http://host.docker.internal:11436/v1/inference"
+	expected := v13CaseInferenceBaseURL(protocol.BenchVersionV13, gateway, caseID)
+	broker := &inferenceBroker{sessions: map[string]*brokerSession{
+		"session": {benchVersion: protocol.BenchVersionV13, harnessBase: gateway},
+	}}
+	received := make(chan string, 1)
+	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req protocol.RunRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode: %v", err)
+		}
+		received <- req.InferenceBaseURL
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"final_text":"ok"}`))
+	}))
+	defer harness.Close()
+	srv := &server{broker: broker}
+	_, _, err := srv.runCaseWithModelAttribution(runner.TrustSandbox(context.Background()),
+		"session", harness.URL, caseID, "question", nil,
+		runner.CaseOptions{BenchVersion: protocol.BenchVersionV13, InferenceBaseURL: expected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := <-received; got != expected {
+		t.Fatalf("v13 route = %q, want %q", got, expected)
+	}
+	session := broker.sessions["session"]
+	if len(session.runCases) != 0 || len(session.urlCases) != 0 || len(session.urlCaseTokens) != 0 {
+		t.Fatal("v13 must finish its run without minting opaque trace URLs")
+	}
+	if evidence, ok := broker.sessionClaimSpanEvidence("session", caseID); !ok || !evidence.Complete {
+		t.Fatalf("v13 case registration lost provenance ledger: %+v, ok=%v", evidence, ok)
+	}
+}

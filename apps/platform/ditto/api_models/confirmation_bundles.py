@@ -216,6 +216,15 @@ class ConfirmationBundleSettingsRevision(BaseModel):
     created_at: datetime
 
 
+class ConfirmationProfileIdentity(BaseModel):
+    """One exact frozen confirmation profile installed in this Platform release."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    revision: Annotated[str, Field(min_length=1)]
+    checksum: Sha256
+
+
 class EffectiveConfirmationBundleSettings(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -225,6 +234,12 @@ class EffectiveConfirmationBundleSettings(BaseModel):
     checksum: Sha256 | None
     source: Literal["default", "revision"]
     configured: bool
+    # The policy names a profile; the release installs profiles. Issuance needs
+    # both to agree, exactly as candidate reconciliation checks, or a pinned
+    # revision that this release no longer ships reads as "shadow" while every
+    # validator claim silently returns no work.
+    profile_installed: bool = False
+    installed_profiles: list[ConfirmationProfileIdentity] = Field(default_factory=list)
     issuance_active: bool
     max_top_n: int = MAX_CONFIRMATION_TOP_N
     max_daily_bundle_cap: int = MAX_DAILY_BUNDLE_CAP

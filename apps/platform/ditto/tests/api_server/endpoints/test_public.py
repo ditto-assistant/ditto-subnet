@@ -39,6 +39,7 @@ from ditto.api_models.confirmation_bundles import (
     ConfirmationBundleMode,
     ConfirmationBundleSettings,
 )
+from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.public import (
     PublicBenchmarkProgress,
     PublicLeaderboardEntry,
@@ -94,8 +95,10 @@ from ditto.db.models import (
     BenchmarkRolloutAudit,
     BenchmarkRolloutCarryover,
     BenchmarkRolloutMember,
+    ContinualRetestSettingsRevision,
     EvaluationPayment,
     InferenceGrant,
+    LedgerEpochSnapshot,
     OwnerAttestation,
     Score,
     ScreeningAttempt,
@@ -931,6 +934,61 @@ def test_public_leaderboard_serializes_shadow_longmem_zero() -> None:
     assert payload["v9_longmem_mean_composite"] == 0.0
 
 
+def test_public_leaderboard_serializes_router_shadow_state() -> None:
+    """The router shadow surface is display-only: measured composite keyed by
+    hotkey, queued marker when a ledger exists, nothing at all without one."""
+    row = LedgerRow(
+        miner_hotkey=_MINER_A,
+        agent_id=UUID(int=9),
+        composite=0.75,
+        tool_mean=0.75,
+        memory_mean=0.75,
+        first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+        sha256="ab" * 32,
+        size_bytes=123,
+        run_id="router-shadow-serialization",
+        seed=42,
+        validator_hotkey=_VALIDATOR_C,
+        signature=None,
+        status=AgentStatus.SCORED,
+        bench_version=9,
+        n=280,
+        eligible=True,
+    )
+    measured = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        finalized=True,
+        router_shadow_by_hotkey={_MINER_A: 0.4285},
+    ).model_dump(mode="json")
+    assert measured["router_shadow_composite"] == pytest.approx(0.4285)
+    assert measured["router_shadow_status"] == "measured"
+
+    queued = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        finalized=True,
+        router_shadow_by_hotkey={_MINER_B: 0.9},
+        router_shadow_queued=True,
+    ).model_dump(mode="json")
+    assert "router_shadow_composite" not in queued
+    assert queued["router_shadow_status"] == "queued"
+
+    off = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        finalized=True,
+    ).model_dump(mode="json")
+    assert "router_shadow_composite" not in off
+    assert "router_shadow_status" not in off
+
+
 def test_public_v9_base_projection_is_typed_and_fails_closed() -> None:
     vector_path = (
         Path(__file__).resolve().parents[6]
@@ -987,6 +1045,25 @@ _PASSING_V12_MODEL_DEPENDENCE = {
 }
 
 
+# Passing v13 claim-provenance summary: required on every bench_version>=13
+# digest (the scorer attaches it to every v13 run). Identity factor.
+_PASSING_V13_CLAIM_PROVENANCE = {
+    "administered_cases": 10,
+    "eligible_cases": 10,
+    "not_model_emitted_cases": 0,
+    "answer_in_prompt_cases": 0,
+    "flagged_cases": 0,
+    "unattributed_call_cases": 0,
+    "unsettled_cases": 0,
+    "zeroed_cases": 0,
+    "attribution_complete": True,
+    "posture": "shadow",
+    "flagged_bps": 0,
+    "result": "passed",
+    "factor_bps": 10000,
+}
+
+
 def _score_gates_for_version(score_gates: dict, bench_version: int) -> dict:
     """Rewrite a v9+ gate payload for another epoch of the same contract."""
     payload = dict(score_gates)
@@ -997,6 +1074,10 @@ def _score_gates_for_version(score_gates: dict, bench_version: int) -> dict:
         payload.pop("model_dependence", None)
         payload.pop("inference_latency", None)
         payload.pop("answer_stuffing", None)
+    if bench_version >= 13:
+        payload.setdefault("claim_provenance", dict(_PASSING_V13_CLAIM_PROVENANCE))
+    else:
+        payload.pop("claim_provenance", None)
     return payload
 
 
@@ -1643,6 +1724,350 @@ def _chain_epoch() -> ChainEpoch:
     )
 
 
+async def _seed_pin(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    epoch_index: int,
+    champion: tuple[UUID, str],
+    tail: tuple[UUID, str],
+    incumbent: UUID | None = None,
+    crown_mode: str | None = None,
+) -> None:
+    """One pin whose stored entries fold to ``champion`` then ``tail``."""
+    first_seen = datetime(2026, 9, 1, tzinfo=UTC)
+
+    def entry(agent_id: UUID, hotkey: str, composite: float, seen: datetime) -> dict:
+        return {
+            "miner_hotkey": hotkey,
+            "agent_id": str(agent_id),
+            "composite": composite,
+            "n": 120,
+            "first_seen": seen.isoformat(),
+            "sha256": "ab" * 32,
+            "run_id": "run",
+            "seed": 1,
+            "validator_hotkey": _VALIDATOR_C,
+            "status": "scored",
+            "bench_version": _ERA,
+        }
+
+    async with maker() as session, session.begin():
+        session.add(
+            LedgerEpochSnapshot(
+                snapshot_id=uuid4(),
+                netuid=118,
+                epoch_index=epoch_index,
+                last_epoch_block=epoch_index * 360,
+                pinned_block=epoch_index * 360 + 2,
+                pinned_block_hash="0x" + "ab" * 32,
+                pinned_at=datetime(2026, 9, 10, tzinfo=UTC),
+                bench_version=_ERA,
+                entries=[
+                    entry(champion[0], champion[1], 0.80, first_seen),
+                    entry(tail[0], tail[1], 0.79, first_seen + timedelta(hours=1)),
+                ],
+                context={
+                    "served": {"crown_mode": crown_mode, "burn_share": 0.0},
+                    "schedule": {"next_epoch_block": epoch_index * 360 + 360},
+                },
+                champion_agent_id=champion[0],
+                champion_owner_root="owner:" + champion[1],
+                incumbent_agent_id=incumbent,
+                ledger_digest=f"{epoch_index:064x}",
+            )
+        )
+
+
+class TestPublicLedgerEpochs:
+    async def test_lists_pins_newest_first_with_crown_changes(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        a, b = uuid4(), uuid4()
+        async with session_maker() as session, session.begin():
+            for agent_id, hotkey, name in (
+                (a, _MINER_A, "alpha"),
+                (b, _MINER_B, "beta"),
+            ):
+                session.add(
+                    Agent(
+                        agent_id=agent_id,
+                        miner_hotkey=hotkey,
+                        name=name,
+                        version=3,
+                        sha256="ab" * 32,
+                        size_bytes=1024,
+                        status=AgentStatus.SCORED,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_026,
+            champion=(a, _MINER_A),
+            tail=(b, _MINER_B),
+        )
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_027,
+            champion=(b, _MINER_B),
+            tail=(a, _MINER_A),
+            incumbent=a,
+            crown_mode="incumbent",
+        )
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_028,
+            champion=(b, _MINER_B),
+            tail=(a, _MINER_A),
+        )
+
+        response = await client.get("/api/v1/public/ledger-epochs?limit=2")
+        assert response.status_code == 200, response.text
+        assert (
+            response.headers["cache-control"]
+            == "public, max-age=30, stale-while-revalidate=120"
+        )
+        body = response.json()
+        assert body["mode"] == "epoch"
+        assert body["count"] == 2
+        newest, previous = body["epochs"]
+        assert [row["epoch_index"] for row in (newest, previous)] == [25_028, 25_027]
+        assert newest["champion"]["agent_id"] == str(b)
+        assert newest["champion"]["agent_name"] == "beta"
+        assert newest["champion"]["agent_version"] == 3
+        assert newest["crown_changed"] is False
+        assert newest["crown_mode"] is None
+        assert newest["pinned_block"] == 25_028 * 360 + 2
+        assert newest["ledger_digest"] == f"{25_028:064x}"
+        # 25_027 crowned b after 25_026 crowned a, with a as the served incumbent.
+        assert previous["crown_changed"] is True
+        assert previous["crown_mode"] == "incumbent"
+        assert previous["incumbent"]["agent_id"] == str(a)
+        roles = [(r["role"], r["agent_id"]) for r in newest["recipients"]]
+        assert roles[0] == ("champion", str(b))
+        assert roles[1][0] == "tail"
+        assert sum(
+            r["share_of_miner_pool"] for r in newest["recipients"]
+        ) == pytest.approx(1.0)
+
+    async def test_live_mode_reports_itself_and_board_omits_the_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        settings = ContinualRetestSettings(ledger_pin_mode="live").model_dump(
+            mode="json"
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="serve the live ledger read",
+                    actor="operator@example.com",
+                )
+            )
+        app.state.continual_retest_settings.invalidate()
+        response = await client.get("/api/v1/public/ledger-epochs")
+        assert response.status_code == 200
+        assert response.json() == {
+            "generated_at": response.json()["generated_at"],
+            "mode": "live",
+            "count": 0,
+            "epochs": [],
+        }
+
+    async def test_leaderboard_emissions_name_the_current_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_k3(session_maker, miner=_MINER_A, composites=[0.8, 0.8, 0.8])
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        a, b = uuid4(), uuid4()
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_028,
+            champion=(a, _MINER_A),
+            tail=(b, _MINER_B),
+        )
+        response = await client.get("/api/v1/public/leaderboard")
+        assert response.status_code == 200, response.text
+        pin = response.json()["emissions"]["ledger_pin"]
+        assert pin["mode"] == "epoch"
+        assert pin["epoch_index"] == 25_028
+        assert pin["next_epoch_block"] == 25_028 * 360 + 360
+        assert pin["entry_count"] == 2
+        assert pin["champion_agent_id"] == str(a)
+        assert pin["crown_mode"] is None
+
+
+class TestPublicNextPinProjection:
+    async def test_projection_names_the_crown_the_next_pin_will_record(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        holder = await _seed_k3(
+            session_maker, miner=_MINER_A, composites=[0.8, 0.8, 0.8]
+        )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_028,
+            champion=(UUID(str(holder)), _MINER_A),
+            tail=(uuid4(), _MINER_B),
+        )
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+        emissions = body["emissions"]
+        assert emissions["crown_incumbent_active"] is False
+        assert emissions["crown_incumbent_required_protocol"] == 27
+        assert emissions["crown_incumbent_agent_id"] is None
+        projection = emissions["next_pin_projection"]
+        assert projection["champion_agent_id"] == str(holder)
+        assert projection["incumbent_agent_id"] == str(holder)
+        assert projection["changes_crown"] is False
+
+    async def test_projection_flags_a_crown_move_against_the_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        live = await _seed_k3(session_maker, miner=_MINER_A, composites=[0.8, 0.8, 0.8])
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        departed = uuid4()
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_028,
+            champion=(departed, _MINER_B),
+            tail=(UUID(str(live)), _MINER_A),
+        )
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+        projection = body["emissions"]["next_pin_projection"]
+        assert projection["champion_agent_id"] == str(live)
+        assert projection["incumbent_agent_id"] == str(departed)
+        assert projection["changes_crown"] is True
+
+
+class TestPublicWeightsPinAgreement:
+    async def test_vectors_are_classified_against_the_current_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        a, b = uuid4(), uuid4()
+        # Pin 25_028 folds to A 65 / B 14; pin 25_027 was the other way around.
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_027,
+            champion=(b, _MINER_B),
+            tail=(a, _MINER_A),
+        )
+        await _seed_pin(
+            session_maker,
+            epoch_index=25_028,
+            champion=(a, _MINER_A),
+            tail=(b, _MINER_B),
+        )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_C,
+                    software_version="0.250.0",
+                    protocol_version=27,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    weights_fold={
+                        "epoch_index": 25_028,
+                        "ledger_digest": f"{25_028:064x}",
+                        "vector_digest": "ef" * 32,
+                        "folded_at": int(now.timestamp()),
+                    },
+                )
+            )
+        snapshot = ChainWeightsSnapshot(
+            netuid=118,
+            block=9_033_500,
+            block_hash="0x" + "ab" * 32,
+            owner_hotkey=None,
+            vectors=(
+                ChainWeightVector(
+                    validator_uid=25,
+                    validator_hotkey=_VALIDATOR_C,
+                    weights=(
+                        ChainWeight(uid=1, hotkey=_MINER_A, value=42598),
+                        ChainWeight(uid=2, hotkey=_MINER_B, value=9175),
+                    ),
+                ),
+                ChainWeightVector(
+                    validator_uid=26,
+                    validator_hotkey="5" + "D" * 47,
+                    weights=(
+                        ChainWeight(uid=2, hotkey=_MINER_B, value=42598),
+                        ChainWeight(uid=1, hotkey=_MINER_A, value=9175),
+                    ),
+                ),
+                ChainWeightVector(
+                    validator_uid=27,
+                    validator_hotkey="5" + "E" * 47,
+                    weights=(ChainWeight(uid=1, hotkey=_MINER_A, value=65535),),
+                ),
+            ),
+        )
+        app.state.chain = SimpleNamespace(get_weights=AsyncMock(return_value=snapshot))
+
+        body = (await client.get("/api/v1/public/weights")).json()
+        by_uid = {vector["validator_uid"]: vector for vector in body["vectors"]}
+        assert by_uid[25]["matches_pin"] == "current"
+        assert by_uid[25]["fold"]["epoch_index"] == 25_028
+        assert by_uid[26]["matches_pin"] == "previous"
+        assert by_uid[26]["fold"] is None
+        assert by_uid[27]["matches_pin"] == "diverged"
+        assert body["pin_agreement"] == {
+            "epoch_index": 25_028,
+            "previous_epoch_index": 25_027,
+            "matching": 1,
+            "total": 3,
+        }
+
+    async def test_without_a_pin_agreement_is_unknown(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        app.state.chain = SimpleNamespace(
+            get_weights=AsyncMock(return_value=_weights_snapshot())
+        )
+        body = (await client.get("/api/v1/public/weights")).json()
+        assert body["pin_agreement"] is None
+        assert body["vectors"][0]["matches_pin"] == "unknown"
+        assert body["vectors"][0]["fold"] is None
+
+
 class TestPublicValidationFailureCode:
     def test_exact_agent_and_infra_codes(self) -> None:
         assert (
@@ -1706,6 +2131,9 @@ class TestPublicChainWeights:
                 "validator_uid": 25,
                 "validator_hotkey": _VALIDATOR_C,
                 "weights": [{"uid": 169, "hotkey": _MINER_A, "value": 14745}],
+                # No pin and no heartbeat fold: stated absence, never a guess.
+                "fold": None,
+                "matches_pin": "unknown",
             }
         ]
         app.state.chain.get_weights.assert_awaited_once_with(118)
@@ -3908,6 +4336,7 @@ class TestPublicLeaderboard:
                     "agent_name": "agent",
                     "agent_version": None,
                     "canonical_composite": pytest.approx(0.958),
+                    "official_composite": pytest.approx(0.958),
                     # Published so a reader can tell which generation supplies
                     # the winner's crown_first_seen, and on whose hotkey.
                     "submitted_at": ANY,
@@ -3946,6 +4375,105 @@ class TestPublicLeaderboard:
                 "shared_seed_confirmations": 0,
             }
         ]
+
+    async def test_owner_family_child_publishes_official_not_just_canonical(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A later upload's 3-validator median must not be the expander score.
+
+        The parent KOTH row uses the continual mean. Publishing only the
+        canonical median next to a retest-seed chip made Arachne v31 look
+        like it outranked the v14 representative.
+        """
+        from ditto.db.queries.confirmation_scores import (
+            ConfirmationSeedScore,
+            append_confirmation_scores,
+        )
+
+        coldkey = "5FamilyOfficialScoreColdkey"
+        representative = await _seed_k3(
+            session_maker,
+            miner="5" + "A" * 47,
+            composites=[0.90, 0.90, 0.90],
+            details={"bench_version": _ERA},
+            created_at=datetime(2026, 6, 8, 12, 0, tzinfo=UTC),
+        )
+        hidden_generation = await _seed_k3(
+            session_maker,
+            miner="5" + "B" * 47,
+            composites=[0.96, 0.96, 0.96],
+            details={"bench_version": _ERA},
+            created_at=datetime(2026, 6, 8, 18, 0, tzinfo=UTC),
+        )
+        retest_seed = 424242
+        async with session_maker() as s, s.begin():
+            now = datetime.now(UTC)
+            s.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_C,
+                    software_version="0.28.0",
+                    protocol_version=14,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_ERA]),
+                )
+            )
+            await append_confirmation_scores(
+                s,
+                rows=[
+                    ConfirmationSeedScore(
+                        UUID(representative),
+                        _VALIDATOR_C,
+                        retest_seed,
+                        0.90,
+                        f"family-official-rep-{representative}",
+                        None,
+                    ),
+                    ConfirmationSeedScore(
+                        UUID(hidden_generation),
+                        _VALIDATOR_C,
+                        retest_seed,
+                        0.50,
+                        f"family-official-hid-{hidden_generation}",
+                        None,
+                    ),
+                ],
+                bench_version=_ERA,
+                created_at=now,
+            )
+        await _seed_payment(
+            session_maker,
+            agent_id=representative,
+            miner_hotkey="5" + "A" * 47,
+            miner_coldkey=coldkey,
+            index=51,
+        )
+        await _seed_payment(
+            session_maker,
+            agent_id=hidden_generation,
+            miner_hotkey="5" + "B" * 47,
+            miner_coldkey=coldkey,
+            index=52,
+        )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        assert board["continual_aggregate_active"] is True
+        entry = board["entries"][0]
+        assert entry["agent_id"] == representative
+        child = entry["submission_family"]["members"][0]
+        assert child["agent_id"] == str(hidden_generation)
+        assert child["canonical_composite"] == pytest.approx(0.96)
+        assert child["official_composite"] == pytest.approx((0.96 * 3 + 0.50) / 4)
+        assert child["official_composite"] < child["canonical_composite"]
+        assert child["confirmation_seed_depth"] == 1
 
     async def test_agent_detail_family_uses_current_factor_adjusted_representative(
         self,
@@ -4076,6 +4604,9 @@ class TestPublicLeaderboard:
         assert [member["canonical_composite"] for member in family_members] == [
             pytest.approx(0.0)
         ]
+        assert [member["official_composite"] for member in family_members] == [
+            pytest.approx(0.0)
+        ]
         # Unranked: a zero-score child is rendered, never listed as its own entry.
         assert zero_scored not in [listed["agent_id"] for listed in board["entries"]]
 
@@ -4144,6 +4675,7 @@ class TestPublicLeaderboard:
             "agent_name",
             "agent_version",
             "canonical_composite",
+            "official_composite",
             "submitted_at",
             "miner_hotkey",
         }
@@ -5611,6 +6143,86 @@ class TestPublicFleet:
 
 
 class TestPublicActivity:
+    async def test_activity_and_operations_project_only_exact_coding_aggregate(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _activate_era(session_maker)
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="coding-pipeline",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+        assert agent is not None and agent.screened_image_sha256 is not None
+        completed_at = datetime(2026, 7, 31, 14, 0, tzinfo=UTC)
+        bundle = cast(
+            CodingShadowRunBundle,
+            SimpleNamespace(
+                run=SimpleNamespace(
+                    artifact_sha256=agent.sha256,
+                    screened_image_sha256=agent.screened_image_sha256,
+                    bench_version=_ERA,
+                ),
+                tickets=[SimpleNamespace()] * 3,
+                results={
+                    UUID(int=index): SimpleNamespace(
+                        repair_mean_micros=0,
+                        created_at=completed_at + timedelta(seconds=index),
+                    )
+                    for index in range(1, 4)
+                },
+            ),
+        )
+        latest = AsyncMock(return_value={agent_id: bundle})
+        monkeypatch.setattr(public_endpoint, "latest_coding_shadow_runs", latest)
+        _install_db(app, session_maker)
+
+        activity = (await client.get("/api/v1/public/activity")).json()
+        operations = (await client.get("/api/v1/public/operations")).json()
+        expected = {
+            "status": "complete",
+            "score": 0.0,
+            "result_count": 3,
+            "score_quorum": 3,
+            "bench_version": _ERA,
+            "coding_contract_version": 1,
+            "completed_at": "2026-07-31T14:00:03Z",
+            "shadow_only": True,
+            "weight_eligible": False,
+        }
+        activity_entry = next(
+            entry for entry in activity["entries"] if entry["agent_id"] == str(agent_id)
+        )
+        operations_entry = next(
+            entry
+            for entry in operations["activity"]["entries"]
+            if entry["agent_id"] == str(agent_id)
+        )
+        assert activity_entry["coding_shadow"] == expected
+        assert operations_entry["coding_shadow"] == expected
+        encoded = json.dumps(operations_entry["coding_shadow"])
+        for forbidden in (
+            "run_row_id",
+            "ticket_id",
+            "task_id",
+            "release_id",
+            "evidence_sha256",
+            "object_key",
+            "artifact_sha256",
+            "screened_image_sha256",
+        ):
+            assert forbidden not in encoded
+        assert latest.await_count == 2
+
     async def test_agent_summary_is_a_targeted_glance_level_projection(
         self,
         app: FastAPI,
@@ -5776,8 +6388,9 @@ class TestPublicActivity:
         # Includes one bounded query for the independent live LongMem lane
         # and one for live handle-claim reservations plus attested owner roots
         # so operations badges classify family children correctly.
-        # Plus one bounded miner-avatar lookup for the page's hotkeys.
-        assert len(statements) <= 37
+        # Plus one bounded miner-avatar lookup for the page's hotkeys and one
+        # exact-agent Coding-shadow aggregate lookup for the parallel public lane.
+        assert len(statements) <= 38
         body = response.json()
         assert body["active_bench_version"] == _ERA
         assert body["desired_bench_version"] == _NEXT_ERA
@@ -6043,6 +6656,7 @@ class TestPublicActivity:
         assert set(body["entries"][0]) == {
             "agent_id",
             "miner_hotkey",
+            "miner_uid",
             "name",
             "name_handle",
             "avatar_url",
@@ -6765,6 +7379,83 @@ class TestPublicActivity:
             "rejected": 1,
         }
 
+    async def test_search_resolves_a_miner_uid_to_that_miner_submissions(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_agent(
+            session_maker,
+            miner=_MINER_A,
+            status=AgentStatus.UPLOADED,
+            name="registered miner agent",
+        )
+        await _seed_agent(
+            session_maker,
+            miner=_MINER_B,
+            status=AgentStatus.UPLOADED,
+            name="unregistered miner agent",
+        )
+        _install_db(app, session_maker)
+        app.state.chain = SimpleNamespace(
+            get_recent_neurons=AsyncMock(
+                return_value=[SimpleNamespace(hotkey=_MINER_A, uid=42)]
+            )
+        )
+
+        # "uid 42" cannot collide with a random agent id the way a bare number
+        # can, so this form is the one with an assertable exact result set.
+        labeled = await client.get("/api/v1/public/activity", params={"q": "uid 42"})
+
+        assert labeled.status_code == 200
+        body = labeled.json()
+        assert [entry["name"] for entry in body["entries"]] == [
+            "registered miner agent"
+        ]
+        assert body["total"] == 1
+        assert body["entries"][0]["miner_uid"] == 42
+
+        # The bare number is what people actually type; it stays additive on top
+        # of the existing name/id/hotkey text search rather than replacing it.
+        bare = await client.get("/api/v1/public/activity", params={"q": "42"})
+
+        assert bare.status_code == 200
+        assert "registered miner agent" in {
+            entry["name"] for entry in bare.json()["entries"]
+        }
+
+    async def test_activity_reports_no_uid_when_the_miner_is_unregistered(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_agent(
+            session_maker,
+            miner=_MINER_B,
+            status=AgentStatus.UPLOADED,
+            name="unregistered miner agent",
+        )
+        _install_db(app, session_maker)
+        app.state.chain = SimpleNamespace(
+            get_recent_neurons=AsyncMock(
+                return_value=[SimpleNamespace(hotkey=_MINER_A, uid=42)]
+            )
+        )
+
+        response = await client.get("/api/v1/public/activity")
+
+        assert response.status_code == 200
+        entries = response.json()["entries"]
+        assert [entry["miner_uid"] for entry in entries] == [None]
+
+        # An unheld UID narrows to nothing rather than falling back to every row.
+        missing = await client.get("/api/v1/public/activity", params={"q": "uid 42"})
+
+        assert missing.status_code == 200
+        assert missing.json()["entries"] == []
+
     async def test_rejects_unknown_public_status_filter(
         self,
         app: FastAPI,
@@ -7310,9 +8001,84 @@ class TestPublicActivity:
                 }
             ],
             "summary": finding.summary,
+            "invariant_assessment": None,
         }
         assert "artifact_sha256" not in attempt["review_finding"]
         assert "digest" not in attempt["review_evidence"][0]
+
+    async def test_historical_adjudicated_reject_publishes_notes_without_finding(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto_screening_protocol.models import (
+            SourceReviewNote,
+            source_review_notes_digest,
+        )
+
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.REJECTED,
+                screening_policy_version=13,
+            )
+        )
+        now, attempt_id = datetime.now(UTC), uuid4()
+        notes = [
+            SourceReviewNote(
+                kind="concern",
+                path="src/answer.rs",
+                line=37,
+                summary="The fallback replaces the model-authored answer.",
+            )
+        ]
+        async with session_maker() as session, session.begin():
+            session.add_all(
+                [
+                    ScreeningAttempt(
+                        attempt_id=attempt_id,
+                        agent_id=agent_id,
+                        screener_hotkey=_MINER_B,
+                        policy_version=13,
+                        status="rejected",
+                        started_at=now - timedelta(minutes=2),
+                        deadline=now + timedelta(minutes=28),
+                        finished_at=now,
+                        reason_code="adjudicated-source-review-reject",
+                        public_reason=(
+                            "The final reviewer confirmed an answer override."
+                        ),
+                    ),
+                    ScreeningQuarantine(
+                        quarantine_id=uuid4(),
+                        agent_id=agent_id,
+                        attempt_id=attempt_id,
+                        screener_hotkey=_MINER_B,
+                        policy_version=13,
+                        manifest_digest="ab" * 32,
+                        reason_code="adjudicated-source-review-reject",
+                        finding=None,
+                        status="resolved",
+                        resolution="rescreen",
+                        resolved_at=now,
+                        resolved_by="platform:deferred-source-review",
+                        review_notes=[note.model_dump(mode="json") for note in notes],
+                        review_notes_digest=source_review_notes_digest(notes),
+                    ),
+                ]
+            )
+        _install_db(app, session_maker)
+        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        assert response.status_code == 200
+        attempt = response.json()["screening_attempts"][0]
+        assert attempt["review_finding"] is None
+        assert attempt["reason"] == "The final reviewer confirmed an answer override."
+        assert attempt["review_notes"] == [
+            note.model_dump(mode="json") for note in notes
+        ]
+        assert "review_notes_digest" not in attempt
 
     async def test_evaluation_projects_live_work_from_validator_heartbeat(
         self,
@@ -8607,8 +9373,9 @@ class TestPublicActivity:
         # that a currently available validator can actually consume, plus
         # one live handle-claim reservation read and one attested-owner fold
         # so family children keep a reserved handle.
-        # Plus one bounded miner-avatar lookup for the page's hotkeys.
-        assert len(statements) <= 21
+        # Plus one bounded miner-avatar lookup for the page's hotkeys and one
+        # exact-agent Coding-shadow aggregate lookup for the parallel public lane.
+        assert len(statements) <= 22
         assert body["count"] == 1
         assert body["total"] == 2
         assert body["total_pages"] == 2

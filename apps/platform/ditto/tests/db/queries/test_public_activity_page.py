@@ -3,15 +3,143 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from uuid import uuid4
 
 from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from ditto.db.models import Agent
+from ditto.api_models.agent_status import AgentStatus
+from ditto.db.models import (
+    Agent,
+    ScreeningAttempt,
+    ScreeningRetryOverride,
+)
 from ditto.db.queries.agents import query_public_activity_page
 
 logger = logging.getLogger(__name__)
+
+
+async def test_failed_submission_is_demand_only_with_latest_attempt_override(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC)
+    parked = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5ParkedFailed",
+        name="parked-failed",
+        sha256="a1" * 32,
+        status=AgentStatus.SCREENING_FAILED,
+        screening_policy_version=9,
+    )
+    retry = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5AuthorizedRetry",
+        name="authorized-retry",
+        sha256="b2" * 32,
+        status=AgentStatus.SCREENING_FAILED,
+        screening_policy_version=9,
+    )
+    stale = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5StaleRetry",
+        name="stale-retry",
+        sha256="c3" * 32,
+        status=AgentStatus.SCREENING_FAILED,
+        screening_policy_version=9,
+    )
+    parked_attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=parked.agent_id,
+        screener_hotkey="5Screener",
+        policy_version=9,
+        status="failed",
+        started_at=now - timedelta(minutes=3),
+        deadline=now - timedelta(minutes=2),
+        finished_at=now - timedelta(minutes=2),
+    )
+    retry_attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=retry.agent_id,
+        screener_hotkey="5Screener",
+        policy_version=9,
+        status="failed",
+        started_at=now - timedelta(minutes=3),
+        deadline=now - timedelta(minutes=2),
+        finished_at=now - timedelta(minutes=2),
+    )
+    stale_attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=stale.agent_id,
+        screener_hotkey="5Screener",
+        policy_version=9,
+        status="failed",
+        started_at=now - timedelta(minutes=4),
+        deadline=now - timedelta(minutes=3),
+        finished_at=now - timedelta(minutes=3),
+    )
+    latest_stale_attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=stale.agent_id,
+        screener_hotkey="5Screener",
+        policy_version=9,
+        status="failed",
+        started_at=now - timedelta(minutes=2),
+        deadline=now - timedelta(minutes=1),
+        finished_at=now - timedelta(minutes=1),
+    )
+    session.add_all(
+        [
+            parked,
+            retry,
+            stale,
+            parked_attempt,
+            retry_attempt,
+            stale_attempt,
+            latest_stale_attempt,
+            ScreeningRetryOverride(
+                override_id=uuid4(),
+                agent_id=retry.agent_id,
+                attempt_id=retry_attempt.attempt_id,
+                artifact_sha256=retry.sha256,
+                expected_score_count=0,
+                reason="retry exact latest attempt",
+                actor="test",
+            ),
+            ScreeningRetryOverride(
+                override_id=uuid4(),
+                agent_id=stale.agent_id,
+                attempt_id=stale_attempt.attempt_id,
+                artifact_sha256=stale.sha256,
+                expected_score_count=0,
+                reason="stale earlier retry grant",
+                actor="test",
+            ),
+        ]
+    )
+    await session.commit()
+
+    result = await query_public_activity_page(
+        session,
+        bench_version=7,
+        page=1,
+        limit=10,
+        requested_statuses=set(),
+        downloadable_only=False,
+        downloadable_agent_ids=set(),
+        query=None,
+        ath_only=False,
+        active_validation_agent_ids=set(),
+        active_assignment_agent_ids=set(),
+        score_continuation_floor=None,
+    )
+
+    statuses = {row.agent.agent_id: row.public_status for row in result.rows}
+    assert statuses[parked.agent_id] == "not_queued"
+    assert statuses[retry.agent_id] == "waiting_screening"
+    assert statuses[stale.agent_id] == "not_queued"
+    assert result.status_counts == {"not_queued": 2, "waiting_screening": 1}
 
 
 async def _seed_large_activity(session: AsyncSession, *, count: int) -> None:

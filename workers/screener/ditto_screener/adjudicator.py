@@ -33,6 +33,7 @@ visible in Backroom and resolvable in one call; a silent admission is not.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 from collections.abc import Mapping, Sequence
@@ -56,6 +57,7 @@ from ditto_screening_protocol import (
     SourceReviewCitation,
     SourceReviewInvariant,
 )
+from ditto_screening_protocol.models import source_review_invariants_for_policy
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +74,9 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"{policy_version} is not implemented by this build "
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
-    return f"adjudicator-v3-policy-v{policy_version}"
+    if policy_version == 13:
+        return "adjudicator-v5-policy-v13"
+    return f"adjudicator-v4-policy-v{policy_version}"
 
 
 # Kept as the current-policy compatibility export for callers that only need
@@ -90,7 +94,9 @@ _MAX_COMPLETION_TOKENS = 6_000
 # healthy completion responsive and reserve one equal slice for a new
 # connection; an unresponsive provider must settle from retained notes, not
 # spend 150 seconds of a miner's lease.
-_MAX_COMPLETION_REQUEST_SECONDS = 90.0
+# Reasoning plus a verdict can exceed 90s with a 16k completion budget.
+# The outer request/lease deadline still bounds both attempts together.
+_MAX_COMPLETION_REQUEST_SECONDS = 180.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 # Bounded by the repository tools themselves; this only caps how many of
 # the served locations are remembered for citation checking.
@@ -234,6 +240,8 @@ you read.
 The reason field is shown to the miner. Make it specific and factual: what
 the served path does, at which file and line, and why that does or does not
 take authority over the graded answer.
+Use complete sentences and short paragraphs, up to 8000 characters. Do not
+include source text, prompts, credentials, private challenge values, or transcripts.
 """.strip()
 
 _POLICY_V11_PROMPT_TAIL = """
@@ -290,6 +298,53 @@ conversion recipe remains the I5 family compiler policy v11 already names.
 """
 
 
+_POLICY_V13_PROMPT_TAIL = """
+
+## Policy v13 additions
+
+Apply the mechanism-based Policy v13 checklist in docs/policy-v13.md. Decide an
+exact artifact and effective build, not its names, lineage, labels, comments,
+or dormant helpers. Conditionality is neither necessary nor sufficient for I5:
+an always-on benchmark-specific recipe is activated on every request. Require
+its generator-, fixture-, grader-, or evaluation-dependent assumption and
+substantive effect; ordinary formulas, domain vocabulary, routing, and
+prescriptive prose are insufficient.
+
+I2 needs the exact applicable evidence and discard path. I3 permits a declared
+genuine model critic/final selector with necessary evidence and real dissent
+authority, but not a host accept-until-preferred loop. I4 includes conditional
+deletion or relocation of answer fields, prose-derived abstention, currency
+rescaling, added equivalents, and grader-vocabulary mapping after final model
+authority. I7 includes unjustified removal of an applicable, authorized and
+available capability, including quoted-title, compound-request, negation-scope,
+setting-and-remember, and duplicate-call failures.
+
+I8 is evaluation independence. Reject a complete source-proven branch where
+case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
+markers, or `bench_version` alter substantive retrieval, capability ordering,
+authority, execution, or output beyond the published compatibility contract.
+Behavioral degradation alone cannot reject until the published
+post-commit controlled and replicated procedure attributes it to evaluation
+dependence.
+
+Opaque-file presence and feature-gated dead code are leads only. Establish the
+loaded role and effective lifecycle reachability. Build/security findings may
+end in unauthorized data access, disclosure, write, execution, persistence,
+privilege, or material availability effects without involving a model or
+scorer. Combine submission evidence with platform-supplied exact
+path-and-digest provenance. A matched official starter-kit component satisfies
+only the recorded fields and role; omission of its duplicate README or
+metadata sidecar is not V1. Reverify changed configuration, loaders, candidate
+boundaries, inputs, outputs, and downstream authority. A null compact score
+field does not prove artifact-bound screening evidence is absent. A missing
+predefined verification artifact or failed platform review
+is not a proven integrity breach. If mandatory verification is incomplete, do
+not manufacture a clear or a violation; withhold submit_adjudication so the host
+retains an escalate processing state for the operator's eventual CLEAR/REJECT
+decision.
+""".strip()
+
+
 def _system_prompt(policy_version: int) -> str:
     """Render the court doctrine bound to the submission's policy version."""
     # Validate through the same canonical revision helper so a new Platform
@@ -303,6 +358,11 @@ def _system_prompt(policy_version: int) -> str:
         return (
             f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
             f"{_POLICY_V12_PROMPT_TAIL}"
+        )
+    if policy_version == 13:
+        return (
+            f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
+            f"{_POLICY_V12_PROMPT_TAIL}\n\n{_POLICY_V13_PROMPT_TAIL}"
         )
     raise AssertionError("validated policy was not rendered")
 
@@ -359,7 +419,7 @@ _TOOLS: list[dict[str, object]] = [
                 "type": "object",
                 "properties": {
                     "decision": {"type": "string", "enum": ["clear", "reject"]},
-                    "reason": {"type": "string"},
+                    "reason": {"type": "string", "maxLength": 8000},
                     "reject_invariant": {
                         "type": "string",
                         "enum": [item.value for item in SourceReviewInvariant],
@@ -392,6 +452,26 @@ _TOOLS: list[dict[str, object]] = [
 # ``submit_adjudication`` is the final (and only decision-only) tool above.
 # Keep the selected schema object rather than retyping a second contract.
 _DECISION_ONLY_TOOLS = [_TOOLS[-1]]
+
+
+def _adjudicator_tools_for_policy(
+    policy_version: int, *, decision_only: bool = False
+) -> list[dict[str, object]]:
+    """Return a court schema restricted to the exact policy generation."""
+
+    tools = copy.deepcopy(_DECISION_ONLY_TOOLS if decision_only else _TOOLS)
+    submit = tools[-1]["function"]
+    assert isinstance(submit, dict)
+    parameters = submit["parameters"]
+    assert isinstance(parameters, dict)
+    properties = parameters["properties"]
+    assert isinstance(properties, dict)
+    reject_invariant = properties["reject_invariant"]
+    assert isinstance(reject_invariant, dict)
+    reject_invariant["enum"] = [
+        item.value for item in source_review_invariants_for_policy(policy_version)
+    ]
+    return tools
 
 
 @dataclass(frozen=True)
@@ -745,6 +825,21 @@ class SourceReviewAdjudicator:
                 notes=notes,
                 policy_version=policy_version,
             )
+        permitted_invariants = {
+            item.value for item in source_review_invariants_for_policy(policy_version)
+        }
+        if (
+            verdict.reject_invariant is not None
+            and verdict.reject_invariant not in permitted_invariants
+        ):
+            return _escalate(
+                "verdict-contract-failed",
+                "Automated adjudication named an invariant outside the applied "
+                "policy; held for operator review",
+                model=self._model,
+                notes=notes,
+                policy_version=policy_version,
+            )
         try:
             return SourceReviewAdjudication(
                 decision=verdict.decision,
@@ -829,7 +924,9 @@ class SourceReviewAdjudicator:
             },
         ]
         read_locations = set(preloaded_reads or ())
-        tools = _DECISION_ONLY_TOOLS if decision_only else _TOOLS
+        tools = _adjudicator_tools_for_policy(
+            policy_version, decision_only=decision_only
+        )
         max_steps = 1 if decision_only else self._max_steps
         async with httpx.AsyncClient(
             transport=self._transport, timeout=self._timeout_seconds
@@ -921,7 +1018,6 @@ class SourceReviewAdjudicator:
                 # while allowing the router to fail over between compatible
                 # healthy providers instead of timing out behind one endpoint.
                 "allow_fallbacks": True,
-                "sort": "throughput",
                 "zdr": True,
                 "data_collection": "deny",
                 "require_parameters": True,
@@ -961,6 +1057,26 @@ class SourceReviewAdjudicator:
 
 
 def _assistant_message(payload: object) -> dict[str, object]:
+    # Metadata only: never log private source, prompts, model text or arguments.
+    if isinstance(payload, dict):
+        choices = payload.get("choices")
+        choice = (
+            choices[0]
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+            else {}
+        )
+        message = choice.get("message") or {}
+        if isinstance(message, dict) and not message.get("tool_calls"):
+            usage = payload.get("usage") or {}
+            logger.warning(
+                "model response without tools model=%s finish=%s "
+                "content_chars=%s prompt_tokens=%s completion_tokens=%s",
+                payload.get("model"),
+                choice.get("finish_reason"),
+                len(str(message.get("content") or "")),
+                usage.get("prompt_tokens") if isinstance(usage, dict) else None,
+                usage.get("completion_tokens") if isinstance(usage, dict) else None,
+            )
     if not isinstance(payload, dict):
         raise ValueError("adjudicator response is not an object")
     choices = payload.get("choices")
@@ -1024,6 +1140,8 @@ def _verdict_from(arguments: Mapping[str, object]) -> _Verdict:
     reason = arguments.get("reason")
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("adjudicator decision has no reason")
+    if len(reason) > 8000:
+        raise ValueError("adjudicator reason exceeds 8000 characters")
     citations: list[tuple[str, int]] = []
     for item in _bounded_sequence(arguments.get("citations"), _MAX_CITATIONS):
         if not isinstance(item, Mapping):
@@ -1042,7 +1160,7 @@ def _verdict_from(arguments: Mapping[str, object]) -> _Verdict:
     clause = arguments.get("clear_clause")
     return _Verdict(
         decision=decision,
-        reason=" ".join(reason.split())[:600],
+        reason=reason.strip(),
         reject_invariant=invariant if isinstance(invariant, str) else None,
         clear_clause=clause if isinstance(clause, str) else None,
         citations=tuple(citations),

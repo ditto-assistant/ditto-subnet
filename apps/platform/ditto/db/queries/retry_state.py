@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import (
     Agent,
     BenchmarkRollout,
@@ -108,6 +108,7 @@ def resolve_bench_version(
         ticket
         for ticket in all_tickets
         if ticket.status in (TicketStatus.ISSUED, TicketStatus.EXPIRED)
+        and ticket.purpose != TicketPurpose.BENCHMARK_CANARY
     ]
     if work_tickets:
         return max(
@@ -563,7 +564,10 @@ async def classify_agent_retry_states(
     tickets_by_agent: dict[UUID, list[ValidatorTicket]] = {}
     for ticket in (
         await session.scalars(
-            select(ValidatorTicket).where(ValidatorTicket.agent_id.in_(id_subq))
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id.in_(id_subq),
+                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+            )
         )
     ).all():
         tickets_by_agent.setdefault(ticket.agent_id, []).append(ticket)

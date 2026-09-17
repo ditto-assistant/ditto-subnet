@@ -59,6 +59,9 @@ from ditto.validator.errors import (
     SandboxOomError,
     ValidatorInfrastructureError,
 )
+from ditto_screening_protocol.bench_v9 import (
+    SUPPORTED_BENCH_VERSIONS as _SHARED_SUPPORTED_BENCH_VERSIONS,
+)
 from ditto_screening_protocol.bench_v9 import supports_confirmation
 
 if TYPE_CHECKING:
@@ -172,10 +175,16 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 # track the dittobench-api ``supportedBenchVersions`` set: v11 shipped there and
 # in the Platform, but was omitted here, so validators advertised only [8, 9, 10]
 # and the Platform counted zero v11-capable validators while v8/9/10 kept working.
-# v12 (anti-KV-substrate contract + causal model-dependence score gate) is now
-# executable in the scorer, so it is advertised here too; on-chain activation
+#
+# It is therefore no longer retyped here. The shared protocol package derives it
+# from the one hand-typed epoch enumeration (``V9EvidenceBenchVersion``) and
+# ``ditto/tests/test_bench_version_pins.py`` diffs that derivation against the
+# scorer, datagen, Platform, starter-kit and Backroom pins, so a bump that
+# reaches the scorer but not this file fails CI instead of the fleet. Being
+# *ahead* of the scorer is harmless -- the intersection below drops what the
+# scorer does not offer -- being behind it is the outage. On-chain activation
 # remains a separate Platform rollout step.
-SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = (8, 9, 10, 11, 12)
+SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = _SHARED_SUPPORTED_BENCH_VERSIONS
 
 
 # Scorer identity faults. Both stop benchmark advertisement and both

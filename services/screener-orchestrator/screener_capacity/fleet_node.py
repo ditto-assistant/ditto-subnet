@@ -140,6 +140,9 @@ class Settings:
     vm_vcpus: int
     vm_disk_gib: int
     once: bool
+    local_sandbox_slots: int = 0
+    local_source_review_slots: int = 0
+    resource_slice: str = ""
 
 
 def _source_review_settings_environment(review: dict[str, Any]) -> dict[str, str]:
@@ -509,12 +512,14 @@ class KVMRunner:
         memory_mib: int,
         vcpus: int,
         disk_gib: int,
+        resource_slice: str = "",
     ) -> None:
         self.base_image = base_image
         self.jobs_root = jobs_root
         self.memory_mib = memory_mib
         self.vcpus = vcpus
         self.disk_gib = disk_gib
+        self.resource_slice = resource_slice
 
     def run(self, *, name: str, script: str, timeout_seconds: int) -> tuple[bool, str]:
         job_dir = Path(tempfile.mkdtemp(prefix=f"{name}-", dir=self.jobs_root))
@@ -580,6 +585,14 @@ class KVMRunner:
                     _GUEST_OSINFO,
                     "--import",
                     "--transient",
+                    *(
+                        [
+                            "--resource",
+                            f"partition=/{self.resource_slice.removesuffix('.slice')}",
+                        ]
+                        if self.resource_slice
+                        else []
+                    ),
                     "--noautoconsole",
                     "--graphics",
                     "none",
@@ -637,6 +650,7 @@ class FleetNode:
             memory_mib=settings.vm_memory_mib,
             vcpus=settings.vm_vcpus,
             disk_gib=settings.vm_disk_gib,
+            resource_slice=settings.resource_slice,
         )
         self.executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=settings.max_workers, thread_name_prefix="ditto-fleet"
@@ -757,6 +771,11 @@ class FleetNode:
             "ALL",
             "--security-opt",
             "no-new-privileges",
+            *(
+                ["--cgroup-parent", self.settings.resource_slice]
+                if self.settings.resource_slice
+                else []
+            ),
             "--pids-limit",
             "512",
             "--memory",
@@ -833,11 +852,17 @@ class FleetNode:
         counts = self._counts()
         handled = False
         sandbox_active = counts["build"] + counts["runtime"]
+        sandbox_slots = limits.sandbox_slots
+        review_slots = limits.source_review_concurrency
+        if self.settings.local_sandbox_slots:
+            sandbox_slots = min(sandbox_slots, self.settings.local_sandbox_slots)
+        if self.settings.local_source_review_slots:
+            review_slots = min(review_slots, self.settings.local_source_review_slots)
 
         # Finish already-built work before admitting another expensive build.
         while (
             counts["runtime"] < limits.runtime_concurrency
-            and sandbox_active < limits.sandbox_slots
+            and sandbox_active < sandbox_slots
         ):
             artifact = self.control.claim("runtime")
             if artifact is None:
@@ -850,7 +875,7 @@ class FleetNode:
 
         while (
             counts["build"] < limits.build_concurrency
-            and sandbox_active < limits.sandbox_slots
+            and sandbox_active < sandbox_slots
         ):
             build = self.control.claim("build")
             if build is None:
@@ -861,7 +886,7 @@ class FleetNode:
             sandbox_active += 1
             handled = True
 
-        while counts["source_review"] < limits.source_review_concurrency:
+        while counts["source_review"] < review_slots:
             review = self.control.claim("source_review")
             if review is None:
                 break
@@ -901,6 +926,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--vm-memory-mib", type=int, default=10240)
     parser.add_argument("--vm-vcpus", type=int, default=8)
     parser.add_argument("--vm-disk-gib", type=int, default=80)
+    parser.add_argument("--local-sandbox-slots", type=int, default=0)
+    parser.add_argument("--local-source-review-slots", type=int, default=0)
+    parser.add_argument("--resource-slice", default="")
     parser.add_argument("--once", action="store_true")
     return parser
 
@@ -917,6 +945,13 @@ def main() -> int:
     _read_secret_file(args.source_review_api_key_file)
     args.jobs_root.mkdir(parents=True, exist_ok=True, mode=0o770)
     os.chmod(args.jobs_root, 0o770)
+    if min(args.local_sandbox_slots, args.local_source_review_slots) < 0:
+        raise ControllerError("local admission limits must be nonnegative")
+    if (
+        args.resource_slice
+        and re.fullmatch(r"[a-z][a-z0-9]*\.slice", args.resource_slice) is None
+    ):
+        raise ControllerError("invalid resource slice")
     settings = Settings(
         platform_url=args.platform_url,
         credential_file=args.credential_file,
@@ -934,6 +969,9 @@ def main() -> int:
         vm_vcpus=min(16, max(2, args.vm_vcpus)),
         vm_disk_gib=min(160, max(32, args.vm_disk_gib)),
         once=args.once,
+        local_sandbox_slots=args.local_sandbox_slots,
+        local_source_review_slots=args.local_source_review_slots,
+        resource_slice=args.resource_slice,
     )
     node = FleetNode(settings)
     for handled_signal in (signal.SIGTERM, signal.SIGINT):

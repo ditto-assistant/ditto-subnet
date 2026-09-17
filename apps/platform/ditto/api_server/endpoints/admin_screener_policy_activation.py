@@ -18,10 +18,10 @@ the model cannot see:
   stored revision so two operators (or a stale Backroom tab) cannot schedule
   past each other; the write flushes inside the request transaction so the
   database's unique ``(parent_revision)`` constraint is the final arbiter.
-* **Fail-safe bounds.** ``target_policy_version`` must be at least the floor and
-  at most the version this build implements: scheduling a version no deployed
-  worker implements would fail the whole screening fleet closed at activation
-  time.
+* **Fail-safe bounds.** ``target_policy_version`` must be at least the floor, at
+  most the version this build implements, and no higher than the separately
+  published activation ceiling. Shipping review code is not authority to
+  activate an incomplete policy lifecycle.
 """
 
 from __future__ import annotations
@@ -82,6 +82,7 @@ from ditto.db.queries.screener_policy_activation import (
 )
 from ditto.db.queries.screening import prerequisite_screening_predicates
 from ditto_screening_protocol import (
+    SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
 )
@@ -150,7 +151,9 @@ async def _fleet_view(session: AsyncSession) -> ScreenerFleetPolicyReadinessView
         # Every fresh worker must be able to claim the target, so the safe
         # ceiling is the smallest builtin; unknown builds make it unknown.
         safe_to_schedule_up_to=(
-            min(builtins) if builtins and not without_release else None
+            min(min(builtins), SCREENING_ACTIVATION_CEILING_POLICY_VERSION)
+            if builtins and not without_release
+            else None
         ),
         lagging_instances=sorted(lagging),
         release_revisions=sorted(revisions),
@@ -591,6 +594,15 @@ async def schedule_activation(
                 f"the version this build implements "
                 f"({SCREENING_POLICY_VERSION}); deploy the build that "
                 "implements it, then schedule the activation"
+            ),
+        )
+    if payload.target_policy_version > SCREENING_ACTIVATION_CEILING_POLICY_VERSION:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"target_policy_version {payload.target_policy_version} is not "
+                "activation-ready; the published activation ceiling is "
+                f"{SCREENING_ACTIVATION_CEILING_POLICY_VERSION}"
             ),
         )
     if payload.canary_only and not payload.rescreen_scored:

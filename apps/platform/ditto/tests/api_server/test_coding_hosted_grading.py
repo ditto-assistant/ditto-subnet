@@ -8,6 +8,7 @@ import os
 import subprocess
 import time
 from types import SimpleNamespace
+from typing import Any
 from uuid import uuid4, uuid5
 
 import pytest
@@ -86,7 +87,6 @@ async def grading_fixture(tmp_path, session_maker, hosted_profile, grader_contra
             "image_digest": "sha256:" + "9" * 64,
             "grader_contract_sha256": grader_contract,
             "grader_bundle_sha256": artifacts["grader_bundle"],
-            "test_manifest_sha256": "8" * 64,
             "resource_policy": hosted_profile["profile"]["resource_policy"],
             "build": {
                 "Required": False,
@@ -353,6 +353,14 @@ async def test_connected_grading_seals_evidence_and_returns_signed_result(
     )
     with pytest.raises(HostedEvidenceError):
         validate_grading_result(changed, claim.binding)
+    # Hosted v2 binds no test manifest; neither the binding nor evidence may name one.
+    assert "test_manifest_sha256" not in claim.binding
+    changed = json.loads(body)
+    grader = changed["grader_result"]["result"]["grader"]
+    assert "test_manifest_sha256" not in grader
+    grader["test_manifest_sha256"] = grader["grader_bundle_sha256"]
+    with pytest.raises(HostedEvidenceError):
+        validate_grading_result(changed, claim.binding)
 
 
 async def test_hidden_read_requires_freeze_and_claim(grading_fixture, session_maker):
@@ -425,3 +433,40 @@ async def test_corrupt_terminal_readback_withholds_result_and_replays(
             PATH, json=request.model_dump(mode="json", by_alias=True)
         )
     ).status_code == 200
+
+
+def test_grading_profile_naming_a_test_manifest_is_refused():
+    profile = {
+        "schema": "dittobench-coding-hosted-grading-profile-v2",
+        "image_digest": "sha256:" + "9" * 64,
+        "grader_contract_sha256": "7" * 64,
+        "grader_bundle_sha256": "6" * 64,
+        "resource_policy": {},
+        "build": {},
+        "test_groups": [],
+        "execution_timeout": 1,
+    }
+
+    def control(value: dict) -> HostedGradingControl:
+        # Only the profile is inspected before any dependency is used.
+        unused: Any = None
+        return HostedGradingControl(
+            sessions=unused,
+            worker_id=uuid4(),
+            retriever=unused,
+            authoring_evidence=unused,
+            cipher_store=unused,
+            profile=canonical(value, 65536),
+        )
+
+    assert control(profile)._profile == profile
+    for key, value in (
+        ("test_manifest_sha256", "6" * 64),
+        ("unexpected", True),
+    ):
+        with pytest.raises(HostedEvidenceError):
+            control({**profile, key: value})
+    without_bundle = dict(profile)
+    del without_bundle["grader_bundle_sha256"]
+    with pytest.raises(HostedEvidenceError):
+        control(without_bundle)

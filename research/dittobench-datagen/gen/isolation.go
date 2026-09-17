@@ -229,12 +229,46 @@ func GenerateIsolationForVersion(seed int64, primaryN, nWaves, isoCases, benchVe
 // cities, events, full identities, work histories, nicknames, employers, and
 // addresses remain different, so the transcript does not manufacture two
 // near-clones merely to make the question text byte-identical.
-func generateV8WorldIsolation(seed int64, primaryN, isoCases, benchVersion int) (IsolationSuite, error) {
+// v8IsolationProjection draws the secondary world and projects its first
+// isoCases people onto the primary anchors exactly as generateV8WorldIsolation
+// seeds them. It is the single source of the other graph's identities, so the
+// v13 cross-user absence family asks about the same projected person the
+// isolation graph actually holds. Sources are the unprojected secondary people
+// each projection was derived from.
+func v8IsolationProjection(seed int64, primaryN, isoCases, benchVersion int) (primary, secondary universe.World, sources []universe.Person, err error) {
 	scale, _ := v8WorldProfile(primaryN)
-	primary := universe.Generate(seed, scale)
-	secondary := universe.Generate(seed^isolationSalt, scale)
+	primary = universe.GenerateForVersion(seed, scale, benchVersion)
+	secondary = universe.GenerateForVersion(seed^isolationSalt, scale, benchVersion)
 	if isoCases > len(primary.People) || isoCases > len(secondary.People) {
-		return IsolationSuite{}, fmt.Errorf("v8 world isolation needs %d people, generated %d", isoCases, len(primary.People))
+		return primary, secondary, nil, fmt.Errorf("v8 world isolation needs %d people, generated %d", isoCases, len(primary.People))
+	}
+	secondaryPeople := append([]universe.Person(nil), secondary.People...)
+	usedSecondaryPeople := make([]bool, len(secondaryPeople))
+	sources = make([]universe.Person, 0, isoCases)
+	for i := 0; i < isoCases; i++ {
+		anchor := primary.People[i]
+		sourceIndex, ok := selectIsolationSource(secondaryPeople, usedSecondaryPeople, anchor, i)
+		if !ok {
+			return primary, secondary, nil, fmt.Errorf("v8 world isolation person %d has no distinct city/event source", i)
+		}
+		usedSecondaryPeople[sourceIndex] = true
+		source := secondaryPeople[sourceIndex]
+		projected := projectIsolationPerson(source, anchor)
+		if benchVersion >= protocol.BenchVersionV9 {
+			projected = disambiguateIsolationPerson(projected, source, secondary.People, i)
+		}
+		// Pair identities are rewritten below by the caller; the person record
+		// carries the projected identity from here on.
+		secondary.People[i] = projected
+		sources = append(sources, source)
+	}
+	return primary, secondary, sources, nil
+}
+
+func generateV8WorldIsolation(seed int64, primaryN, isoCases, benchVersion int) (IsolationSuite, error) {
+	primary, secondary, sources, err := v8IsolationProjection(seed, primaryN, isoCases, benchVersion)
+	if err != nil {
+		return IsolationSuite{}, err
 	}
 
 	suite := IsolationSuite{
@@ -247,22 +281,11 @@ func generateV8WorldIsolation(seed int64, primaryN, isoCases, benchVersion int) 
 		pairByID[pair.PairID] = pair
 	}
 	secondary.Pairs = nil
-	secondaryPeople := append([]universe.Person(nil), secondary.People...)
-	usedSecondaryPeople := make([]bool, len(secondaryPeople))
 
 	pairGroups := make([][]protocol.MemoryPair, 3)
 	for i := 0; i < isoCases; i++ {
-		anchor := primary.People[i]
-		sourceIndex, ok := selectIsolationSource(secondaryPeople, usedSecondaryPeople, anchor, i)
-		if !ok {
-			return IsolationSuite{}, fmt.Errorf("v8 world isolation person %d has no distinct city/event source", i)
-		}
-		usedSecondaryPeople[sourceIndex] = true
-		source := secondaryPeople[sourceIndex]
-		projected := projectIsolationPerson(source, anchor)
-		if benchVersion >= protocol.BenchVersionV9 {
-			projected = disambiguateIsolationPerson(projected, source, secondary.People, i)
-		}
+		source := sources[i]
+		projected := secondary.People[i]
 
 		ids := []struct {
 			old     string
@@ -281,6 +304,12 @@ func generateV8WorldIsolation(seed int64, primaryN, isoCases, benchVersion int) 
 			}
 			pair.PairID = protocol.OpaqueCaseID(seed, "world-isolation-person-"+item.purpose, i)
 			pair.SessionID = fmt.Sprintf("isolation-person-%02d-%s", i, item.session)
+			if benchVersion >= protocol.BenchVersionV13 {
+				// v13 (#1827): "isolation-person-03-d" told a /seed reader this is
+				// the cross-user contamination graph, which person, and that the
+				// row is the address correction. The opaque id carries none of it.
+				pair.SessionID = protocol.OpaqueCaseID(seed, "v13-isolation-session", i*len(ids)+group)
+			}
 			pair.Prompt = projectIsolationPrompt(pair.Prompt, source, projected)
 			item.set(pair.PairID)
 			pairGroups[group] = append(pairGroups[group], pair)

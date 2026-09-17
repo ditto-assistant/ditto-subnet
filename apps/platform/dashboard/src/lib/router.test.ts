@@ -108,6 +108,9 @@ describe("PAGES registry", () => {
       "code",
       "login",
       "complete",
+      "ditto",
+      "reason",
+      "attempt",
     ]);
   });
 });

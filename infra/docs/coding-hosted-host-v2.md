@@ -4,14 +4,14 @@ This is a qualification-host foundation, not a deployed worker or an approved
 private execution environment. The reusable variable default remains
 `enable_coding_hosted_host = false`, which creates no native-v2 VM, network, NAT,
 service account, or operator grant. Production intent proposes one host with
-`coding_hosted_operators = ["user:brian@omniaura.ai"]`; this is not evidence that
+`coding_hosted_operators = ["user:peyton@omniaura.ai"]`; this is not evidence that
 the protected apply has run. The legacy `coding_executor_host_count = 0`, native
 `enable_coding_hosted_postgres = false`, and all execution gates remain unchanged.
 
-Brian (`brian@omniaura.ai`) is also the user-designated artifact/key approver.
-This records role designation only, not approval of any artifact, key operation,
-infrastructure plan or private execution. Artifact approval must independently
-review the builder's exact source/provenance and hashes before installation.
+The infrastructure operator designation is not approval of any artifact, key
+operation, infrastructure plan or private execution. Artifact approval must
+independently review the builder's exact source/provenance and hashes before
+installation.
 
 The [native-v2 trust decision](../../docs/coding-platform-private-execution-v2.md)
 places private execution under Platform custody. The old k=3 executor cohort
@@ -54,7 +54,8 @@ across the project's networks; retain that uniqueness as infrastructure changes.
 If the address is reused, reassigned or the host is replaced, review the binding
 again. Do not broaden it to a subnet or port-only condition. Successful mocked
 plans do not prove effective IAM or a working tunnel: after a separately approved
-apply, test Brian's actual IAP SSH access before host installation or qualification.
+apply, test the nominated operator's actual IAP SSH access before host installation
+or qualification.
 
 The host may download provisioning packages over HTTP(S) through NAT scoped to
 its subnet. Higher-priority egress rules deny RFC1918 and link-local destinations;

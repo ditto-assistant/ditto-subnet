@@ -331,6 +331,7 @@ export default function App(): JSX.Element {
           }}
           displayVersion={displayVersion()}
           epoch={() => latest(weights)?.epoch ?? null}
+          pin={() => latest(weights)?.pin_agreement ?? null}
           onRefresh={refreshAll}
         />
         <main class="main" id="main-content">

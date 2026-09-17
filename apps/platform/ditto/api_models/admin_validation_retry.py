@@ -79,9 +79,12 @@ class AdminValidationTicket(BaseModel):
     ``expired`` with nothing reported, and the triage feed could not tell that
     apart from an ordinary reported failure, so the incident ran unnoticed.
     """
-    purpose: Literal["legacy_unclassified", "canonical_quorum", "continual_retest"] = (
-        "legacy_unclassified"
-    )
+    purpose: Literal[
+        "legacy_unclassified",
+        "canonical_quorum",
+        "continual_retest",
+        "benchmark_canary",
+    ] = "legacy_unclassified"
     """Why this lease was issued. Continual-retest tickets on already-scored
     agents occupy a slot the same way a canonical quorum ticket does.
     """

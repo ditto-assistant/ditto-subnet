@@ -97,6 +97,7 @@ const (
 	cannedPassScore       = 0.5
 	cannedTargetShare     = 0.05
 	robustnessBankVersion = "v9-2"
+	robustnessBankV12     = "v12-1"
 )
 
 // cannedProbe is deliberately independent of the generated case. The suite is
@@ -118,25 +119,15 @@ var cannedProbes = []cannedProbe{
 	{Name: "generic-reversal", Response: protocol.RunResponse{FinalText: "I no longer do that."}},
 }
 
-// robustnessProbe is one public, deterministic no-retrieval strategy. Fixed
-// probes are wholly case-independent. Prompt-only probes may interpolate only
-// the public question; they never receive the expected answer, answer items,
-// distractors, case id, seed, or generated memory.
-type robustnessProbe struct {
-	Name         string
-	Fixed        protocol.RunResponse
-	PromptPrefix string
-	PromptSuffix string
-}
-
-func (p robustnessProbe) Response(question string) protocol.RunResponse {
-	if p.PromptPrefix == "" && p.PromptSuffix == "" {
-		return p.Fixed
-	}
-	return protocol.RunResponse{FinalText: p.PromptPrefix + question + p.PromptSuffix}
-}
-
-func (p robustnessProbe) PromptOnly() bool { return p.PromptPrefix != "" || p.PromptSuffix != "" }
+// The bank fixture types are the public grade.Audit* types so every versioned
+// bank (v9-2 and v12-1 here, v13-1 in grade/audit_v13_bank.go) shares one
+// evaluator.
+type (
+	robustnessProbe    = grade.AuditProbe
+	robustnessCase     = grade.AuditCase
+	robustnessNegative = grade.AuditNegative
+	robustnessLimit    = grade.AuditLimit
+)
 
 // robustnessProbesV1 deliberately extends beyond cannedProbes. It includes
 // held-out paraphrases and prompt-only templates so the launch check cannot be
@@ -167,13 +158,6 @@ var robustnessProbesV1 = []robustnessProbe{
 	{Name: "prompt-reversal", PromptPrefix: "You gave up this: ", PromptSuffix: ""},
 }
 
-type robustnessCase struct {
-	Name     string
-	Question string
-	Case     protocol.MemoryCase
-	Positive protocol.RunResponse
-}
-
 // robustnessCasesV1 is synthetic by design: generated V9 currently does not
 // emit every affected answer kind. These cases keep every kind under a
 // stable gate instead of letting absent kinds disappear into the aggregate.
@@ -189,12 +173,6 @@ var robustnessCasesV1 = []robustnessCase{
 	{Name: "money-budget", Question: "What was the approved budget?", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerMoney, ExpectedAnswer: "24500"}, Positive: protocol.RunResponse{FinalText: "$245.00"}},
 }
 
-type robustnessNegative struct {
-	Name     string
-	Case     protocol.MemoryCase
-	Response protocol.RunResponse
-}
-
 var robustnessNegativesV1 = []robustnessNegative{
 	{Name: "chitchat-forbidden-leak", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerChitchat, ForbiddenAnswer: "GAVOTU-8841"}, Response: protocol.RunResponse{FinalText: "GAVOTU-8841"}},
 	{Name: "acknowledge-is-not-decline", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerAcknowledge}, Response: protocol.RunResponse{FinalText: "I don't know.", Abstain: true}},
@@ -206,11 +184,6 @@ var robustnessNegativesV1 = []robustnessNegative{
 	{Name: "list-unrelated", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerList, AnswerItems: []string{"Osaka", "Lima"}}, Response: protocol.RunResponse{FinalText: "Cairo and Rome."}},
 	{Name: "number-boundary", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerNumber, ExpectedAnswer: "17"}, Response: protocol.RunResponse{FinalText: "117"}},
 	{Name: "money-wrong-amount", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerMoney, ExpectedAnswer: "24500"}, Response: protocol.RunResponse{FinalText: "$2.45"}},
-}
-
-type robustnessLimit struct {
-	MaxPassShare  float64
-	MaxMeanCredit float64
 }
 
 var robustnessLimitsV1 = map[string]robustnessLimit{
@@ -227,6 +200,135 @@ var robustnessLimitsV1 = map[string]robustnessLimit{
 	protocol.AnswerMoney:       {MaxPassShare: 0, MaxMeanCredit: 0},
 }
 
+// robustnessBankV9 wraps the frozen v9-2 fixtures. It is built on demand so a
+// test that swaps one fixture variable audits the swapped bank.
+func robustnessBankV9() grade.AuditBank {
+	return grade.AuditBank{
+		Version:              robustnessBankVersion,
+		FloorBenchVersion:    protocol.BenchVersionV9,
+		Probes:               robustnessProbesV1,
+		Cases:                robustnessCasesV1,
+		Negatives:            robustnessNegativesV1,
+		Limits:               robustnessLimitsV1,
+		InteractionOnlyKinds: []string{protocol.AnswerChitchat, protocol.AnswerAcknowledge, protocol.AnswerDecline},
+	}
+}
+
+// robustnessBankV12Bank is the v12 policy bank: the v9-2 strategy set plus
+// the slot-scoped distractor vectors the v12 policy introduced, so the v12
+// grading floor owns a bank of its own (the release gate requires one per
+// policy floor). Its exposure limits are the v9 limits: v12 changed the
+// negative scan scope, not what a generic strategy can pass.
+func robustnessBankV12Bank() grade.AuditBank {
+	bank := robustnessBankV9()
+	bank.Version = robustnessBankV12
+	bank.FloorBenchVersion = protocol.BenchVersionV12
+	reasoned := protocol.MemoryCase{ExpectedAnswer: "Lisbon", DistractorAnswers: []string{"Oslo"}}
+	bank.Negatives = append(append([]robustnessNegative(nil), robustnessNegativesV1...),
+		robustnessNegative{Name: "v12-distractor-in-slot", Case: reasoned, Response: protocol.RunResponse{Answer: "Oslo", FinalText: "You live in Oslo."}},
+		robustnessNegative{Name: "v12-slot-enumerates-distractor", Case: reasoned, Response: protocol.RunResponse{Answer: "Lisbon or Oslo", FinalText: "not sure which"}},
+		robustnessNegative{Name: "v12-prose-shotgun-without-slot", Case: reasoned, Response: protocol.RunResponse{FinalText: "It's either Lisbon or Oslo."}},
+	)
+	bank.Positives = []grade.AuditPositive{
+		{Name: "v12-slot-protects-shown-reasoning", Case: reasoned, Response: protocol.RunResponse{Answer: "Lisbon", FinalText: "You used to live in Oslo, but you moved to Lisbon last year."}},
+	}
+	return bank
+}
+
+// auditBanks lists every versioned bank, ascending by policy floor.
+func auditBanks() []grade.AuditBank {
+	return []grade.AuditBank{robustnessBankV9(), robustnessBankV12Bank(), grade.AuditBankV13()}
+}
+
+// bankForVersion resolves the bank auditing the grading policy that governs
+// benchVersion. It fails closed when that policy floor owns no bank, so a new
+// grading policy cannot ship without its robustness fixtures.
+func bankForVersion(benchVersion int) (grade.AuditBank, error) {
+	if !knownBenchVersion(benchVersion) {
+		return grade.AuditBank{}, fmt.Errorf("unsupported bench_version %d", benchVersion)
+	}
+	if benchVersion < grade.AuditBankFloor {
+		return grade.AuditBank{}, fmt.Errorf("no grader audit bank covers bench_version %d (banks start at bench_version %d)", benchVersion, grade.AuditBankFloor)
+	}
+	floor := grade.GradingPolicyFloor(benchVersion)
+	for _, bank := range auditBanks() {
+		if bank.FloorBenchVersion == floor {
+			return bank, nil
+		}
+	}
+	return grade.AuditBank{}, fmt.Errorf("grading policy floor bench_version %d (governing bench_version %d) has no audit bank", floor, benchVersion)
+}
+
+// knownBenchVersion reports whether v is a generatable contract or a grader
+// policy floor that exists ahead of its generation contract. Anything else is
+// not a bench version and is refused rather than silently mapped to a floor.
+func knownBenchVersion(v int) bool {
+	if protocol.SupportedBenchVersion(v) {
+		return true
+	}
+	for _, floor := range grade.GradingPolicyFloors() {
+		if floor == v {
+			return true
+		}
+	}
+	return false
+}
+
+// releaseGateVersions are the versions the release gate must cover: every
+// generator-supported version from the audit floor up, plus every grading
+// policy floor from the audit floor up (a grader-only version such as v13
+// before its generation contract lands).
+func releaseGateVersions() []int {
+	floors := grade.GradingPolicyFloors()
+	seen := map[int]bool{}
+	var out []int
+	add := func(v int) {
+		if v >= grade.AuditBankFloor && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	for v := grade.AuditBankFloor; v <= floors[len(floors)-1]+64; v++ {
+		if protocol.SupportedBenchVersion(v) {
+			add(v)
+		}
+	}
+	for _, v := range floors {
+		add(v)
+	}
+	sort.Ints(out)
+	return out
+}
+
+type releaseGateRow struct {
+	BenchVersion int    `json:"bench_version"`
+	PolicyFloor  int    `json:"policy_floor"`
+	BankVersion  string `json:"bank_version,omitempty"`
+	Generatable  bool   `json:"generatable"`
+	Error        string `json:"error,omitempty"`
+}
+
+// releaseGate fails closed unless every release-gate version resolves to a
+// bank whose floor is its own grading policy floor.
+func releaseGate() ([]releaseGateRow, error) {
+	var rows []releaseGateRow
+	var firstErr error
+	for _, v := range releaseGateVersions() {
+		row := releaseGateRow{BenchVersion: v, PolicyFloor: grade.GradingPolicyFloor(v), Generatable: protocol.SupportedBenchVersion(v)}
+		bank, err := bankForVersion(v)
+		if err != nil {
+			row.Error = err.Error()
+			if firstErr == nil {
+				firstErr = err
+			}
+		} else {
+			row.BankVersion = bank.Version
+		}
+		rows = append(rows, row)
+	}
+	return rows, firstErr
+}
+
 type cannedKindStat struct {
 	Kind       string  `json:"kind"`
 	Cases      int     `json:"cases"`
@@ -236,22 +338,42 @@ type cannedKindStat struct {
 	MeanCredit float64 `json:"mean_credit"`
 }
 
+// claimKindGate is the per-kind generated-corpus gate for one claim kind: the
+// share of cases a canned or public-question-only strategy can pass.
+type claimKindGate struct {
+	Kind     string  `json:"kind"`
+	Cases    int     `json:"cases"`
+	Passable int     `json:"passable"`
+	Share    float64 `json:"share"`
+	Target   float64 `json:"target_share"`
+	Within   bool    `json:"within_target"`
+}
+
 type cannedReport struct {
-	BenchVersion int              `json:"bench_version"`
-	RunSize      string           `json:"run_size"`
-	Seeds        int              `json:"seeds"`
-	SeedFirst    int64            `json:"seed_first"`
-	SeedLast     int64            `json:"seed_last"`
-	PassScore    float64          `json:"pass_score"`
-	TargetShare  float64          `json:"target_share"`
-	WithinTarget bool             `json:"within_target"`
-	TotalCases   int              `json:"total_cases"`
-	Passable     int              `json:"passable"`
-	Share        float64          `json:"share"`
-	ScoreMass    float64          `json:"score_mass"`
-	MeanCredit   float64          `json:"mean_credit"`
-	Probes       []string         `json:"probes"`
-	Kinds        []cannedKindStat `json:"kinds"`
+	BenchVersion int `json:"bench_version"`
+	// CorpusBenchVersion is the version the corpus was GENERATED at. It equals
+	// BenchVersion when that version is generatable; for a grader-only version
+	// (a grading policy that landed before its generation contract) the newest
+	// generatable corpus below it is regraded under the requested policy.
+	CorpusBenchVersion int              `json:"corpus_bench_version"`
+	RunSize            string           `json:"run_size"`
+	Seeds              int              `json:"seeds"`
+	SeedFirst          int64            `json:"seed_first"`
+	SeedLast           int64            `json:"seed_last"`
+	PassScore          float64          `json:"pass_score"`
+	TargetShare        float64          `json:"target_share"`
+	WithinTarget       bool             `json:"within_target"`
+	TotalCases         int              `json:"total_cases"`
+	Passable           int              `json:"passable"`
+	Share              float64          `json:"share"`
+	ScoreMass          float64          `json:"score_mass"`
+	MeanCredit         float64          `json:"mean_credit"`
+	Probes             []string         `json:"probes"`
+	Kinds              []cannedKindStat `json:"kinds"`
+	// ClaimKindGates publish the per-kind gate for every claim kind that appears
+	// in the corpus; ClaimKindsWithinTarget is their conjunction.
+	ClaimKindGates         []claimKindGate `json:"claim_kind_gates,omitempty"`
+	ClaimKindsWithinTarget bool            `json:"claim_kinds_within_target"`
 }
 
 type cannedAccumulator struct {
@@ -278,19 +400,22 @@ type robustnessKindStat struct {
 }
 
 type robustnessReport struct {
-	BankVersion      string               `json:"bank_version"`
-	BenchVersion     int                  `json:"bench_version"`
-	Cases            int                  `json:"cases"`
-	Probes           int                  `json:"probes"`
-	PromptOnly       int                  `json:"prompt_only_probes"`
-	Evaluations      int                  `json:"evaluations"`
-	PositiveChecks   int                  `json:"positive_checks"`
-	PositiveFailures int                  `json:"positive_failures"`
-	NegativeChecks   int                  `json:"negative_checks"`
-	NegativeFailures int                  `json:"negative_failures"`
-	CoverageOK       bool                 `json:"coverage_ok"`
-	WithinLimits     bool                 `json:"within_limits"`
-	Kinds            []robustnessKindStat `json:"kinds"`
+	BankVersion              string               `json:"bank_version"`
+	BenchVersion             int                  `json:"bench_version"`
+	Cases                    int                  `json:"cases"`
+	Probes                   int                  `json:"probes"`
+	PromptOnly               int                  `json:"prompt_only_probes"`
+	Evaluations              int                  `json:"evaluations"`
+	PositiveChecks           int                  `json:"positive_checks"`
+	PositiveFailures         int                  `json:"positive_failures"`
+	NegativeChecks           int                  `json:"negative_checks"`
+	NegativeFailures         int                  `json:"negative_failures"`
+	ReviewedPositives        int                  `json:"reviewed_positives"`
+	ReviewedPositiveFailures int                  `json:"reviewed_positive_failures"`
+	FailedChecks             []string             `json:"failed_checks,omitempty"`
+	CoverageOK               bool                 `json:"coverage_ok"`
+	WithinLimits             bool                 `json:"within_limits"`
+	Kinds                    []robustnessKindStat `json:"kinds"`
 }
 
 type generatedAndRobustnessReport struct {
@@ -380,10 +505,15 @@ func kindOrValue(k string) string {
 // question. No probe receives the expected answer, answer items, case id, seed,
 // or generated memory.
 func cannedAudit(benchVersion int, runSize string, seedCount int) (cannedReport, error) {
-	if !protocol.SupportedBenchVersion(benchVersion) {
+	bank, err := bankForVersion(benchVersion)
+	if err != nil {
+		return cannedReport{}, err
+	}
+	corpusVersion, ok := corpusVersionFor(benchVersion)
+	if !ok {
 		return cannedReport{}, fmt.Errorf("unsupported bench_version %d", benchVersion)
 	}
-	prof, ok := gen.ProfileForVersion(runSize, benchVersion)
+	prof, ok := gen.ProfileForVersion(runSize, corpusVersion)
 	if !ok {
 		return cannedReport{}, fmt.Errorf("unsupported run_size %q", runSize)
 	}
@@ -394,15 +524,20 @@ func cannedAudit(benchVersion int, runSize string, seedCount int) (cannedReport,
 	byKind := map[string]*cannedAccumulator{}
 	total := cannedAccumulator{}
 	for seed := int64(1); seed <= int64(seedCount); seed++ {
-		artifact, err := gen.GenerateDataset(seed, prof, benchVersion)
+		artifact, err := gen.GenerateDataset(seed, prof, corpusVersion)
 		if err != nil {
 			return cannedReport{}, fmt.Errorf("generate seed %d: %w", seed, err)
 		}
 		for _, ac := range artifact.MemoryCases {
-			if benchVersion >= protocol.BenchVersionV8 && ac.BenchVersion != benchVersion {
-				return cannedReport{}, fmt.Errorf("case %s stamps bench_version %d, want %d", ac.ID, ac.BenchVersion, benchVersion)
+			if corpusVersion >= protocol.BenchVersionV8 && ac.BenchVersion != corpusVersion {
+				return cannedReport{}, fmt.Errorf("case %s stamps bench_version %d, want %d", ac.ID, ac.BenchVersion, corpusVersion)
 			}
-			best, _ := bestCannedScore(ac.MemoryCase)
+			mc := ac.MemoryCase
+			if corpusVersion != benchVersion {
+				// Regrade the fallback corpus under the requested grading policy.
+				mc.BenchVersion = benchVersion
+			}
+			best, _ := bestCannedScore(mc, bank)
 			kind := kindOrValue(ac.AnswerKind)
 			acc := byKind[kind]
 			if acc == nil {
@@ -425,21 +560,24 @@ func cannedAudit(benchVersion int, runSize string, seedCount int) (cannedReport,
 		kinds = append(kinds, kind)
 	}
 	sort.Strings(kinds)
+	probes := generatedCannedProbes(bank)
 	report := cannedReport{
-		BenchVersion: benchVersion,
-		RunSize:      runSize,
-		Seeds:        seedCount,
-		SeedFirst:    1,
-		SeedLast:     int64(seedCount),
-		PassScore:    cannedPassScore,
-		TargetShare:  cannedTargetShare,
-		TotalCases:   total.Cases,
-		Passable:     total.Passable,
-		ScoreMass:    total.ScoreMass,
-		Probes:       make([]string, 0, len(generatedCannedProbes())),
-		Kinds:        make([]cannedKindStat, 0, len(kinds)),
+		BenchVersion:           benchVersion,
+		CorpusBenchVersion:     corpusVersion,
+		RunSize:                runSize,
+		Seeds:                  seedCount,
+		SeedFirst:              1,
+		SeedLast:               int64(seedCount),
+		PassScore:              cannedPassScore,
+		TargetShare:            cannedTargetShare,
+		TotalCases:             total.Cases,
+		Passable:               total.Passable,
+		ScoreMass:              total.ScoreMass,
+		Probes:                 make([]string, 0, len(probes)),
+		Kinds:                  make([]cannedKindStat, 0, len(kinds)),
+		ClaimKindsWithinTarget: true,
 	}
-	for _, probe := range generatedCannedProbes() {
+	for _, probe := range probes {
 		report.Probes = append(report.Probes, probe.Name)
 	}
 	for _, kind := range kinds {
@@ -450,6 +588,15 @@ func cannedAudit(benchVersion int, runSize string, seedCount int) (cannedReport,
 			stat.MeanCredit = acc.ScoreMass / float64(acc.Cases)
 		}
 		report.Kinds = append(report.Kinds, stat)
+		if bank.InteractionOnly(kind) {
+			continue
+		}
+		gate := claimKindGate{Kind: kind, Cases: acc.Cases, Passable: acc.Passable, Share: stat.Share, Target: grade.ClaimKindTargetShare}
+		gate.Within = gate.Share < gate.Target
+		if !gate.Within {
+			report.ClaimKindsWithinTarget = false
+		}
+		report.ClaimKindGates = append(report.ClaimKindGates, gate)
 	}
 	if total.Cases > 0 {
 		report.Share = float64(total.Passable) / float64(total.Cases)
@@ -459,12 +606,24 @@ func cannedAudit(benchVersion int, runSize string, seedCount int) (cannedReport,
 	return report, nil
 }
 
-func generatedCannedProbes() []robustnessProbe {
-	probes := make([]robustnessProbe, 0, len(cannedProbes)+len(robustnessProbesV1))
+// corpusVersionFor returns the version whose corpus audits a grading policy:
+// the version itself when generatable, else the newest generatable version
+// below it. ok is false when nothing below it is generatable either.
+func corpusVersionFor(benchVersion int) (int, bool) {
+	for v := benchVersion; v >= protocol.BenchVersionV2; v-- {
+		if protocol.SupportedBenchVersion(v) {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func generatedCannedProbes(bank grade.AuditBank) []robustnessProbe {
+	probes := make([]robustnessProbe, 0, len(cannedProbes)+len(bank.Probes))
 	for _, probe := range cannedProbes {
 		probes = append(probes, robustnessProbe{Name: probe.Name, Fixed: probe.Response})
 	}
-	for _, probe := range robustnessProbesV1 {
+	for _, probe := range bank.Probes {
 		if probe.PromptOnly() {
 			probes = append(probes, probe)
 		}
@@ -472,10 +631,10 @@ func generatedCannedProbes() []robustnessProbe {
 	return probes
 }
 
-func bestCannedScore(mc protocol.MemoryCase) (float64, string) {
+func bestCannedScore(mc protocol.MemoryCase, bank grade.AuditBank) (float64, string) {
 	best := 0.0
 	bestProbe := ""
-	for _, probe := range generatedCannedProbes() {
+	for _, probe := range generatedCannedProbes(bank) {
 		if score := grade.Memory(mc, probe.Response(mc.Question)).Score; score > best {
 			best = score
 			bestProbe = probe.Name
@@ -485,9 +644,14 @@ func bestCannedScore(mc protocol.MemoryCase) (float64, string) {
 }
 
 func syntheticRobustnessAudit(benchVersion int) (robustnessReport, error) {
-	if benchVersion != protocol.BenchVersionV9 {
-		return robustnessReport{}, fmt.Errorf("synthetic robustness bank %s requires bench_version %d", robustnessBankVersion, protocol.BenchVersionV9)
+	bank, err := bankForVersion(benchVersion)
+	if err != nil {
+		return robustnessReport{}, err
 	}
+	return runRobustnessBank(bank, benchVersion)
+}
+
+func runRobustnessBank(bank grade.AuditBank, benchVersion int) (robustnessReport, error) {
 	type acc struct {
 		Cases, Evaluations, Passes int
 		ScoreMass                  float64
@@ -497,23 +661,23 @@ func syntheticRobustnessAudit(benchVersion int) (robustnessReport, error) {
 	caseNames := map[string]bool{}
 	probeNames := map[string]bool{}
 	promptOnly := 0
-	for _, probe := range robustnessProbesV1 {
+	for _, probe := range bank.Probes {
 		if probe.Name == "" || probeNames[probe.Name] {
-			return robustnessReport{}, fmt.Errorf("robustness bank %s has empty or duplicate probe %q", robustnessBankVersion, probe.Name)
+			return robustnessReport{}, fmt.Errorf("robustness bank %s has empty or duplicate probe %q", bank.Version, probe.Name)
 		}
 		probeNames[probe.Name] = true
 		if probe.PromptOnly() {
 			promptOnly++
 		}
 	}
-	for _, rc := range robustnessCasesV1 {
+	for _, rc := range bank.Cases {
 		if rc.Name == "" || caseNames[rc.Name] {
-			return robustnessReport{}, fmt.Errorf("robustness bank %s has empty or duplicate case %q", robustnessBankVersion, rc.Name)
+			return robustnessReport{}, fmt.Errorf("robustness bank %s has empty or duplicate case %q", bank.Version, rc.Name)
 		}
 		caseNames[rc.Name] = true
 		kind := kindOrValue(rc.Case.AnswerKind)
-		if _, ok := robustnessLimitsV1[kind]; !ok {
-			return robustnessReport{}, fmt.Errorf("robustness bank %s case %q has unbounded kind %q", robustnessBankVersion, rc.Name, kind)
+		if _, ok := bank.Limits[kind]; !ok {
+			return robustnessReport{}, fmt.Errorf("robustness bank %s case %q has unbounded kind %q", bank.Version, rc.Name, kind)
 		}
 		a := byKind[kind]
 		if a == nil {
@@ -526,9 +690,9 @@ func syntheticRobustnessAudit(benchVersion int) (robustnessReport, error) {
 		mc.ID = "robustness-" + rc.Name
 		mc.Question = rc.Question
 		if score := grade.Memory(mc, rc.Positive).Score; score <= 0 {
-			return robustnessReport{}, fmt.Errorf("robustness bank %s positive control %q scored %.3f", robustnessBankVersion, rc.Name, score)
+			return robustnessReport{}, fmt.Errorf("robustness bank %s positive control %q scored %.3f", bank.Version, rc.Name, score)
 		}
-		for _, probe := range robustnessProbesV1 {
+		for _, probe := range bank.Probes {
 			resp := probe.Response(rc.Question)
 			responseText := resp.Answer + "\n" + resp.FinalText
 			if mc.ExpectedAnswer != "" && grade.Hit(mc.ExpectedAnswer, responseText) {
@@ -563,29 +727,31 @@ func syntheticRobustnessAudit(benchVersion int) (robustnessReport, error) {
 	}
 
 	report := robustnessReport{
-		BankVersion: robustnessBankVersion, BenchVersion: benchVersion,
-		Cases: len(robustnessCasesV1), Probes: len(robustnessProbesV1), PromptOnly: promptOnly,
-		PositiveChecks: len(robustnessCasesV1), NegativeChecks: len(robustnessNegativesV1), CoverageOK: true, WithinLimits: true,
+		BankVersion: bank.Version, BenchVersion: benchVersion,
+		Cases: len(bank.Cases), Probes: len(bank.Probes), PromptOnly: promptOnly,
+		PositiveChecks: len(bank.Cases), NegativeChecks: len(bank.Negatives), ReviewedPositives: len(bank.Positives),
+		CoverageOK: true, WithinLimits: true,
 	}
-	kinds := make([]string, 0, len(robustnessLimitsV1))
-	for kind := range robustnessLimitsV1 {
+	kinds := make([]string, 0, len(bank.Limits))
+	for kind := range bank.Limits {
 		kinds = append(kinds, kind)
 	}
 	sort.Strings(kinds)
 	for _, kind := range kinds {
 		a := byKind[kind]
-		limit := robustnessLimitsV1[kind]
-		stat := robustnessKindStat{Kind: kind, Probes: len(robustnessProbesV1), MaxPassShare: limit.MaxPassShare, MaxMeanCredit: limit.MaxMeanCredit}
+		limit := bank.Limits[kind]
+		stat := robustnessKindStat{Kind: kind, Probes: len(bank.Probes), MaxPassShare: limit.MaxPassShare, MaxMeanCredit: limit.MaxMeanCredit}
 		if a == nil || a.Cases == 0 || a.Evaluations == 0 {
 			report.CoverageOK = false
 			report.WithinLimits = false
+			report.FailedChecks = append(report.FailedChecks, "coverage:"+kind)
 			report.Kinds = append(report.Kinds, stat)
 			continue
 		}
 		stat.Cases, stat.Evaluations, stat.Passes = a.Cases, a.Evaluations, a.Passes
 		stat.AggregatePassShare = float64(a.Passes) / float64(a.Evaluations)
 		stat.AggregateMeanCredit = a.ScoreMass / float64(a.Evaluations)
-		for _, probe := range robustnessProbesV1 {
+		for _, probe := range bank.Probes {
 			pa := byKindProbe[kind][probe.Name]
 			if pa == nil || pa.Evaluations == 0 {
 				continue
@@ -604,16 +770,31 @@ func syntheticRobustnessAudit(benchVersion int) (robustnessReport, error) {
 		stat.WithinLimit = stat.PassShare <= stat.MaxPassShare && stat.MeanCredit <= stat.MaxMeanCredit
 		if !stat.WithinLimit {
 			report.WithinLimits = false
+			report.FailedChecks = append(report.FailedChecks, "limit:"+kind+":"+stat.WorstPassProbe)
 		}
 		report.Evaluations += stat.Evaluations
 		report.Kinds = append(report.Kinds, stat)
 	}
-	for _, negative := range robustnessNegativesV1 {
+	for _, negative := range bank.Negatives {
 		mc := negative.Case
 		mc.BenchVersion = benchVersion
 		if grade.Memory(mc, negative.Response).Score != 0 {
 			report.NegativeFailures++
 			report.WithinLimits = false
+			report.FailedChecks = append(report.FailedChecks, "negative:"+negative.Name)
+		}
+	}
+	for _, positive := range bank.Positives {
+		mc := positive.Case
+		mc.BenchVersion = benchVersion
+		want := positive.MinScore
+		if want <= 0 {
+			want = 1
+		}
+		if grade.Memory(mc, positive.Response).Score < want {
+			report.ReviewedPositiveFailures++
+			report.WithinLimits = false
+			report.FailedChecks = append(report.FailedChecks, "positive:"+positive.Name)
 		}
 	}
 	return report, nil
@@ -635,6 +816,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	seedCount := fs.Int("seeds", 0, "number of deterministic generated seeds to audit (1..N)")
 	runSize := fs.String("run-size", "full", "generated audit profile: small | medium | full")
 	asJSON := fs.Bool("json", false, "emit machine-readable JSON")
+	releaseGateMode := fs.Bool("release-gate", false, "verify every supported bench version and grading policy floor owns an audit bank (fails closed)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -645,6 +827,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 	transcriptMode := *artifactPath != "" || *transcriptPath != ""
 	cannedMode := *benchVersion != 0 || *seedCount != 0
 	switch {
+	case *releaseGateMode && (transcriptMode || cannedMode):
+		return fmt.Errorf("-release-gate takes no other mode flags")
+	case *releaseGateMode:
+		rows, gateErr := releaseGate()
+		if err := writeReleaseGate(stdout, rows, *asJSON); err != nil {
+			return err
+		}
+		return gateErr
 	case transcriptMode && cannedMode:
 		return fmt.Errorf("artifact/transcript mode and generated canned-response mode are mutually exclusive")
 	case transcriptMode:
@@ -667,7 +857,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		report := generatedAndRobustnessReport{
 			GeneratedCorpus: generated,
 			Synthetic:       synthetic,
-			WithinLimits:    generated.WithinTarget && synthetic.CoverageOK && synthetic.WithinLimits && synthetic.NegativeFailures == 0,
+			WithinLimits: generated.WithinTarget && generated.ClaimKindsWithinTarget && synthetic.CoverageOK &&
+				synthetic.WithinLimits && synthetic.NegativeFailures == 0 && synthetic.ReviewedPositiveFailures == 0,
 		}
 		if err := writeGeneratedAndRobustnessReport(stdout, report, *asJSON); err != nil {
 			return err
@@ -675,15 +866,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if !generated.WithinTarget {
 			return fmt.Errorf("generated-corpus canned-response share %.4f exceeds target %.4f", generated.Share, generated.TargetShare)
 		}
+		if !generated.ClaimKindsWithinTarget {
+			return fmt.Errorf("generated-corpus public-question-only passable share reached %.4f for a claim kind", grade.ClaimKindTargetShare)
+		}
 		if !synthetic.CoverageOK {
 			return fmt.Errorf("synthetic robustness bank %s lacks required answer-kind coverage", synthetic.BankVersion)
 		}
-		if !synthetic.WithinLimits || synthetic.NegativeFailures != 0 {
-			return fmt.Errorf("synthetic robustness bank %s exceeded a per-kind limit or passed %d negative checks", synthetic.BankVersion, synthetic.NegativeFailures)
+		if !synthetic.WithinLimits || synthetic.NegativeFailures != 0 || synthetic.ReviewedPositiveFailures != 0 {
+			return fmt.Errorf("synthetic robustness bank %s failed %d check(s): %s", synthetic.BankVersion, len(synthetic.FailedChecks), strings.Join(synthetic.FailedChecks, ", "))
 		}
 		return nil
 	default:
-		return fmt.Errorf("usage: graderaudit -artifact dataset.json -transcripts transcripts.jsonl [-json], or -bench-version 9 -seeds 40 [-run-size full] [-json]")
+		return fmt.Errorf("usage: graderaudit -artifact dataset.json -transcripts transcripts.jsonl [-json], or -bench-version 9 -seeds 40 [-run-size full] [-json], or -release-gate [-json]")
 	}
 }
 
@@ -702,11 +896,12 @@ func writeGeneratedAndRobustnessReport(w io.Writer, report generatedAndRobustnes
 	if err := writeCannedReport(w, report.GeneratedCorpus, false); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "gate\tsynthetic_robustness\nbank_version\tbench_version\tcases\tprobes\tprompt_only\tevaluations\tpositive_checks\tpositive_failures\tnegative_checks\tnegative_failures\tcoverage_ok\twithin_limits\n%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%t\t%t\n",
+	if _, err := fmt.Fprintf(w, "gate\tsynthetic_robustness\nbank_version\tbench_version\tcases\tprobes\tprompt_only\tevaluations\tpositive_checks\tpositive_failures\tnegative_checks\tnegative_failures\treviewed_positives\treviewed_positive_failures\tcoverage_ok\twithin_limits\n%s\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d\t%t\t%t\n",
 		report.Synthetic.BankVersion, report.Synthetic.BenchVersion, report.Synthetic.Cases,
 		report.Synthetic.Probes, report.Synthetic.PromptOnly, report.Synthetic.Evaluations,
 		report.Synthetic.PositiveChecks, report.Synthetic.PositiveFailures,
 		report.Synthetic.NegativeChecks, report.Synthetic.NegativeFailures,
+		report.Synthetic.ReviewedPositives, report.Synthetic.ReviewedPositiveFailures,
 		report.Synthetic.CoverageOK, report.Synthetic.WithinLimits); err != nil {
 		return fmt.Errorf("write synthetic robustness summary: %w", err)
 	}
@@ -804,9 +999,9 @@ func writeCannedReport(w io.Writer, report cannedReport, asJSON bool) error {
 		}
 		return nil
 	}
-	if _, err := fmt.Fprintf(w, "bench_version\trun_size\tseeds\tpass_score\ttarget_share\ttotal_cases\tpassable\tshare\tmean_credit\twithin_target\n%d\t%s\t%d\t%.2f\t%.6f\t%d\t%d\t%.6f\t%.6f\t%t\n",
-		report.BenchVersion, report.RunSize, report.Seeds, report.PassScore, report.TargetShare,
-		report.TotalCases, report.Passable, report.Share, report.MeanCredit, report.WithinTarget); err != nil {
+	if _, err := fmt.Fprintf(w, "bench_version\tcorpus_bench_version\trun_size\tseeds\tpass_score\ttarget_share\ttotal_cases\tpassable\tshare\tmean_credit\twithin_target\tclaim_kinds_within_target\n%d\t%d\t%s\t%d\t%.2f\t%.6f\t%d\t%d\t%.6f\t%.6f\t%t\t%t\n",
+		report.BenchVersion, report.CorpusBenchVersion, report.RunSize, report.Seeds, report.PassScore, report.TargetShare,
+		report.TotalCases, report.Passable, report.Share, report.MeanCredit, report.WithinTarget, report.ClaimKindsWithinTarget); err != nil {
 		return fmt.Errorf("write canned-response summary: %w", err)
 	}
 	if _, err := fmt.Fprintln(w, "answer_kind\tcases\tpassable\tshare\tmean_credit"); err != nil {
@@ -815,6 +1010,36 @@ func writeCannedReport(w io.Writer, report cannedReport, asJSON bool) error {
 	for _, stat := range report.Kinds {
 		if _, err := fmt.Fprintf(w, "%s\t%d\t%d\t%.6f\t%.6f\n", stat.Kind, stat.Cases, stat.Passable, stat.Share, stat.MeanCredit); err != nil {
 			return fmt.Errorf("write canned-response kind %s: %w", stat.Kind, err)
+		}
+	}
+	if len(report.ClaimKindGates) > 0 {
+		if _, err := fmt.Fprintln(w, "claim_kind\tcases\tpassable\tshare\ttarget_share\twithin_target"); err != nil {
+			return fmt.Errorf("write claim-kind gate header: %w", err)
+		}
+		for _, gate := range report.ClaimKindGates {
+			if _, err := fmt.Fprintf(w, "%s\t%d\t%d\t%.6f\t%.6f\t%t\n", gate.Kind, gate.Cases, gate.Passable, gate.Share, gate.Target, gate.Within); err != nil {
+				return fmt.Errorf("write claim-kind gate %s: %w", gate.Kind, err)
+			}
+		}
+	}
+	return nil
+}
+
+func writeReleaseGate(w io.Writer, rows []releaseGateRow, asJSON bool) error {
+	if asJSON {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(rows); err != nil {
+			return fmt.Errorf("encode release gate: %w", err)
+		}
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "gate\trelease\nbench_version\tpolicy_floor\tbank_version\tgeneratable\terror"); err != nil {
+		return fmt.Errorf("write release gate header: %w", err)
+	}
+	for _, row := range rows {
+		if _, err := fmt.Fprintf(w, "%d\t%d\t%s\t%t\t%s\n", row.BenchVersion, row.PolicyFloor, row.BankVersion, row.Generatable, row.Error); err != nil {
+			return fmt.Errorf("write release gate row: %w", err)
 		}
 	}
 	return nil

@@ -699,3 +699,54 @@ the exact rollback to fixed shares. `fleet_ready` exposes the ledger marker only
 after every recently live weight-setting validator advertises protocol 20;
 there is no force override because a mixed fold would split consensus. A merge
 or validator rollout alone therefore does not activate tie pooling.
+
+### Epoch-pinned ledger
+
+`GET /scoring/scores` used to be a time-based read. Validators poll it once per
+chain epoch at their own phase, so a ledger change at phase *p* split the
+fleet into "read before *p*" and "read after *p*" for exactly one Yuma fold,
+and whichever side lost the stake vote was clipped. Under the operator policy
+`ledger_pin_mode: epoch` (the shipped default) the Platform instead freezes
+the ledger once per chain epoch, keyed on Subtensor's `SubnetEpochIndex`:
+
+- the first read after the epoch advances (or the Platform's own background
+  loop, whichever comes first) materializes the ledger once and stores it
+  immutably; every validator that reads during that epoch receives the
+  identical entries and fold markers, and the response carries `epoch_index`,
+  `pinned_block`, `pinned_at` and `ledger_digest` (SHA-256 of exactly what was
+  served) so two validators can prove they folded the same input;
+- a Backroom policy change (burn share, tie weighting, band clamp) lands at
+  the next pin for the whole fleet, never mid-epoch for part of it;
+- if the current epoch's pin cannot be produced (the chain read failed) the
+  previous pin is served to everyone with `stale: true` -- the fleet is never
+  split between a live read and a pin. Only a Platform that has never taken a
+  pin falls through to the live read.
+
+The fold itself is unchanged by pinning, which is why this switch needs no
+fleet-protocol gate; `ledger_pin_mode: live` is the exact rollback. The pin
+history is public at `GET /api/v1/public/ledger-epochs` and on the dashboard.
+
+### Crown incumbency
+
+The historical fold re-derives the champion on every read: the earliest
+lineage anchor is the provisional champion and every later entry must clear
+the dethrone band over it. That has no memory, so when a senior lineage sits
+inside the band of the holder, the crown flips back and forth as continual
+retest waves move the official composites by a score quantum -- and every
+validator that read the ledger on the other side of a flip is clipped on the
+65% slot.
+
+Under the operator policy `crown_incumbent_mode: fleet_ready` each epoch pin
+carries `crown_mode: incumbent` and `crown_incumbent_agent_id`: the previous
+pin's champion, resolved into the current pool through its owner family (a
+resubmission by the same owner keeps the crown; a lineage that left the pool
+yields no incumbent and the classic walk runs). The fold then opens its
+champion walk from that incumbent and visits every other entry in the same
+`first_seen` order, dethroning only when the existing decision clears the
+band. Nothing about the band, the ceiling cap or tie pooling changes.
+
+Activation follows tie pooling exactly: the marker is served only after
+every recently-live weight-setting validator reports protocol 27, there is
+no force override, and `crown_incumbent_mode: disabled` is the exact
+rollback. A pin taken while the marker is off records no incumbent, so a
+flip lands at the next pin for the whole fleet.

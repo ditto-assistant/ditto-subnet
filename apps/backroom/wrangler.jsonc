@@ -10,6 +10,7 @@
   "vars": {
     "GOOGLE_REDIRECT_URI": "https://backroom.dittobench.ai/auth/callback",
     "DITTO_PLATFORM_API_BASE_URL": "https://platform-api.heyditto.ai",
+    "BACKROOM_BLOCKED_EMAILS": "brian@omniaura.ai",
   },
   // OAuth grants, registered MCP clients, and issued tokens for the /mcp
   // endpoint. Terraform owns the namespace in the cloudflare-dittobench stack

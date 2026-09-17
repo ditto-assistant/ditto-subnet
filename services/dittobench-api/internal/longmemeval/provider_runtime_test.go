@@ -282,7 +282,6 @@ func TestReaderRelayRejectsUntrustedRequestVariantsBeforeSpend(t *testing.T) {
 		"null completion bound":     {http.MethodPost, "/v1/chat/completions", `{"model":"openai/gpt-oss-20b","max_tokens":null}`, http.StatusBadRequest},
 		"zero completion bound":     {http.MethodPost, "/v1/chat/completions", `{"model":"openai/gpt-oss-20b","max_tokens":0}`, http.StatusBadRequest},
 		"fraction completion bound": {http.MethodPost, "/v1/chat/completions", `{"model":"openai/gpt-oss-20b","max_tokens":1.5}`, http.StatusBadRequest},
-		"over frozen bound":         {http.MethodPost, "/v1/chat/completions", `{"model":"openai/gpt-oss-20b","max_tokens":20001}`, http.StatusBadRequest},
 		"contradictory bounds":      {http.MethodPost, "/v1/chat/completions", `{"model":"openai/gpt-oss-20b","max_tokens":1,"max_completion_tokens":2}`, http.StatusBadRequest},
 		"multiple completions":      {http.MethodPost, "/v1/chat/completions", `{"model":"openai/gpt-oss-20b","max_tokens":1,"n":2}`, http.StatusBadRequest},
 		"trailing JSON":             {http.MethodPost, "/v1/chat/completions", `{"model":"openai/gpt-oss-20b"}{}`, http.StatusBadRequest},
@@ -329,7 +328,6 @@ func TestReaderRewriteInjectsFrozenBoundAndRequiresConsistentExplicitBound(t *te
 		"null":          `{"model":"openai/gpt-oss-20b","max_tokens":null}`,
 		"contradictory": `{"model":"openai/gpt-oss-20b","max_tokens":1,"max_completion_tokens":2}`,
 		"multiple":      `{"model":"openai/gpt-oss-20b","max_tokens":1,"n":2}`,
-		"over bound":    `{"model":"openai/gpt-oss-20b","max_tokens":20001}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, _, err := rewriteReaderRequest([]byte(raw), policy, "openai"); err == nil {
@@ -351,6 +349,69 @@ func TestReaderRewriteInjectsFrozenBoundAndRequiresConsistentExplicitBound(t *te
 	)
 	if err != nil || reservation.CompletionTokens != 7 || reservation.PromptTokens != uint64(len(encoded)) {
 		t.Fatalf("reservation=%#v len=%d err=%v", reservation, len(encoded), err)
+	}
+	// An explicit over-ask is clamped to the frozen per-request bound, whichever
+	// alias carried it, and the reservation is the clamped value: the budget
+	// rail is unchanged, the request is served instead of refused.
+	for name, raw := range map[string]string{
+		"max_tokens":            `{"model":"openai/gpt-oss-20b","max_tokens":20001}`,
+		"max_completion_tokens": `{"model":"openai/gpt-oss-20b","max_completion_tokens":4096000}`,
+		"both aliases":          `{"model":"openai/gpt-oss-20b","max_tokens":20001,"max_completion_tokens":20001}`,
+	} {
+		t.Run("clamp "+name, func(t *testing.T) {
+			clamped, clampedReservation, err := rewriteReaderRequest([]byte(raw), policy, "openai")
+			if err != nil || clampedReservation.CompletionTokens != 20_000 ||
+				!bytes.Contains(clamped, []byte(`"max_tokens":20000`)) ||
+				bytes.Contains(clamped, []byte(`max_completion_tokens`)) {
+				t.Fatalf("clamped=%s reservation=%#v err=%v", clamped, clampedReservation, err)
+			}
+		})
+	}
+}
+
+// TestReaderRelayClampsOverAskToFrozenBoundAndServes is the production
+// signature behind two zero-reader bundles (aceron_v16 06db691f, 2026-09-12/13):
+// a harness whose own ceiling is 4096 completion tokens against a frozen
+// per-request bound below it. Every reader call must be dispatched with the
+// bound substituted, receipted, and never refused before reservation.
+func TestReaderRelayClampsOverAskToFrozenBoundAndServes(t *testing.T) {
+	profile := runtimeProviderProfile(t)
+	policy := providerPolicy(&profile, ReaderLane)
+	// Frozen bound below the harness ceiling, exactly as v8 (2,304,000 / 1,152 = 2,000).
+	policy.MaxRequests = 1_152
+	policy.MaxCompletionTokens = 2_304_000
+	upstream := newRuntimeUpstream(t)
+	var upstreamMaxTokens []string
+	upstream.next = func(index int, body map[string]any) (int, string) {
+		upstreamMaxTokens = append(upstreamMaxTokens, fmt.Sprint(body["max_tokens"]))
+		if _, present := body["max_completion_tokens"]; present {
+			t.Errorf("upstream request %d carried max_completion_tokens: %#v", index, body)
+		}
+		model, _ := body["model"].(string)
+		return http.StatusOK, fmt.Sprintf(
+			`{"id":"receipt-%d","model":%q,"provider":"DeepInfra","choices":[{"message":{"content":"reader answer"}}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14,"cost":0.00000125}}`,
+			index, model,
+		)
+	}
+	session, _ := newRuntimeProviderSession(t, profile, upstream)
+	for _, body := range []string{
+		`{"model":"openai/gpt-oss-20b","max_tokens":4096,"temperature":0,"seed":42,"tool_choice":"none","messages":[]}`,
+		`{"model":"openai/gpt-oss-20b","max_completion_tokens":4096,"messages":[]}`,
+	} {
+		response := readerRequest(t, session, body)
+		if response.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		if IsPreReservationReaderRejection(session.ReaderHandler(), response.Result()) {
+			t.Fatal("served over-ask carried the pre-reservation rejection marker")
+		}
+	}
+	if len(upstreamMaxTokens) != 2 || upstreamMaxTokens[0] != "2000" || upstreamMaxTokens[1] != "2000" {
+		t.Fatalf("upstream max_tokens=%v, want two requests clamped to 2000", upstreamMaxTokens)
+	}
+	reader := evidenceByLane(t, session)[ReaderLane]
+	if reader.Requests != 2 || reader.ReceiptedRequests != 2 || reader.Successes != 2 {
+		t.Fatalf("reader evidence=%#v", reader)
 	}
 }
 
@@ -709,6 +770,20 @@ func TestProviderSessionEnforcesEveryFrozenCap(t *testing.T) {
 			profile.Providers = append([]ProviderPolicy(nil), base.Providers...)
 			mutate(providerPolicy(&profile, ReaderLane))
 			upstream := newRuntimeUpstream(t)
+			var upstreamMaxTokens string
+			if name == "completion" {
+				// The completion cap is enforced by clamping the request to the
+				// frozen per-request bound, so the upstream must be asked for
+				// exactly that bound and its receipt must fit inside it.
+				upstream.next = func(index int, body map[string]any) (int, string) {
+					upstreamMaxTokens = fmt.Sprint(body["max_tokens"])
+					model, _ := body["model"].(string)
+					return http.StatusOK, fmt.Sprintf(
+						`{"id":"receipt-%d","model":%q,"provider":"DeepInfra","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":11,"completion_tokens":2,"total_tokens":13,"cost":0.00000125}}`,
+						index, model,
+					)
+				}
+			}
 			session, _ := newRuntimeProviderSession(t, profile, upstream)
 			body := `{"model":"openai/gpt-oss-20b","max_tokens":64}`
 			if name == "completion" {
@@ -718,6 +793,16 @@ func TestProviderSessionEnforcesEveryFrozenCap(t *testing.T) {
 				body = `{"model":"openai/gpt-oss-20b","max_tokens":150}`
 			}
 			first := readerRequest(t, session, body)
+			if name == "completion" {
+				if first.Code != http.StatusOK || upstream.count.Load() != 1 || upstreamMaxTokens != "2" {
+					t.Fatalf("over-bound completion ask was not clamped and served: status=%d calls=%d max_tokens=%s", first.Code, upstream.count.Load(), upstreamMaxTokens)
+				}
+				reader := evidenceByLane(t, session)[ReaderLane]
+				if reader.CompletionTokens != 2 || reader.ReceiptedRequests != 1 {
+					t.Fatalf("clamped completion accounting=%#v", reader)
+				}
+				return
+			}
 			if name == "request" {
 				if first.Code != http.StatusOK {
 					t.Fatalf("first request status=%d", first.Code)
@@ -737,9 +822,6 @@ func TestProviderSessionEnforcesEveryFrozenCap(t *testing.T) {
 				}
 			} else {
 				expectedStatus := http.StatusBadGateway
-				if name == "completion" {
-					expectedStatus = http.StatusBadRequest
-				}
 				if first.Code != expectedStatus || upstream.count.Load() != 0 {
 					t.Fatalf("avoidable over-cap request spent provider budget: status=%d calls=%d", first.Code, upstream.count.Load())
 				}

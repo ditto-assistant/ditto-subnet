@@ -73,8 +73,9 @@ application packages.
 Private modules can rotate timing and relay tripwires, randomized controls,
 source/fingerprint triage, and behavioral challenge packs without changing the
 v9 protocol or signing bytes. No private signal proves causal model use.
-Modules can pass or route to `retryable_infra`, `quarantine`, `inconclusive`,
-or `pass_inconclusive`;
+Modules can pass or route to `retryable_infra`, `quarantine`, or `inconclusive`;
+historical v10-v12 attempts also retain `pass_inconclusive` compatibility, while
+the v13 wire contract rejects that fail-open outcome;
 only the objective stable core can return `deterministic_reject`.
 
 The worker also sends the optional signed, privacy-bounded fleet heartbeat

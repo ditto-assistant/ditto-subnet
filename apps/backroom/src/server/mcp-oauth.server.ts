@@ -188,7 +188,11 @@ export async function completeMcpAuthorization(
   // cannot mint a privileged grant from a session issued while it still had one.
   let accessLevel: 'read' | 'write'
   try {
-    accessLevel = accessLevelForEmail(session.email, env.BACKROOM_ADMIN_EMAILS)
+    accessLevel = accessLevelForEmail(
+      session.email,
+      env.BACKROOM_ADMIN_EMAILS,
+      env.BACKROOM_BLOCKED_EMAILS,
+    )
   } catch {
     return noStoreJson({ error: 'This account is not authorized to enter Backroom' }, 403)
   }

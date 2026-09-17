@@ -475,7 +475,10 @@ async def _load(
     )
     ticket_query = (
         select(ValidatorTicket)
-        .where(ValidatorTicket.agent_id == agent_id)
+        .where(
+            ValidatorTicket.agent_id == agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+        )
         .order_by(
             ValidatorTicket.deadline.asc(), ValidatorTicket.validator_hotkey.asc()
         )
@@ -1558,7 +1561,10 @@ async def _finalized_quorum_state(
     for ticket in (
         await session.scalars(
             select(ValidatorTicket)
-            .where(ValidatorTicket.agent_id.in_(finalized_ids))
+            .where(
+                ValidatorTicket.agent_id.in_(finalized_ids),
+                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+            )
             .order_by(
                 ValidatorTicket.deadline.asc(),
                 ValidatorTicket.validator_hotkey.asc(),
@@ -1766,6 +1772,7 @@ async def list_v9_contract_retests(
                 .where(
                     ValidatorTicket.agent_id.in_(agent_ids),
                     ValidatorTicket.bench_version == 9,
+                    ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
                 )
                 .order_by(
                     ValidatorTicket.deadline.asc(),

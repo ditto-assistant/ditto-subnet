@@ -11,6 +11,7 @@ sync/async tell must stay silent on Go, where a real model call blocks.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from ditto_screener.source_signals import find_benchmark_emulation_fingerprints
 
@@ -1070,6 +1071,277 @@ def test_scorer_slot_rescale_findings_never_leak_matched_source_text() -> None:
         "normalize_minor_unit_answer_value",
         "answer_contract",
         "effective_input",
+    ):
+        assert secret not in encoded
+    for finding in findings:
+        assert finding["category"] == "benchmark_emulation"
+        for location in finding["locations"]:
+            assert set(location) == {"path", "line", "role"}
+
+
+# Keep/declarative-preference compiler (policy v13 I5 rejections of aceron_v17,
+# aceron_v20, aceron_v21, TeaCUP v3, and TeaCUP v4). The classifier is shared
+# verbatim with a cleared fork, so the served no-change directive and the v21
+# capability re-key anchor the leads, not the classifier identifiers.
+
+_RUST_CUE_LIST_PREFERENCE_TURN = """\
+fn compile(lower: &str, notes: &mut String) {
+    let normal_preference_framing =
+        contains_any(lower, &["my normal", "my usual", "normal appearance"]);
+    let preference_keep = lower.contains("keep ") || fuzzy_word(lower, "keep");
+    let keep_as_preference = normal_preference_framing && preference_keep;
+    let declarative_preference = normal_preference_framing
+        && (preference_keep || contains_any(lower, &["prefer", "preference"]))
+        && !keep_as_preference;
+    if declarative_preference {
+        notes.push_str(
+            "DECLARATIVE PREFERENCE TURN: The user stated a durable preference; \\
+they did not request an immediate external settings change.",
+        );
+    }
+}
+"""
+
+_RUST_HABITUAL_LIST_NOTHING_REQUESTED = """\
+fn states_a_standing_default(lower: &str) -> bool {
+    const HABITUAL: &[&str] = &["default", "normal", "regular", "standard", "usual"];
+    let words: Vec<&str> = lower.split(' ').collect();
+    words.iter().enumerate().any(|(position, word)| {
+        matches!(*word, "my" | "our")
+            && words[position + 1..].iter().take(3).any(|w| HABITUAL.contains(w))
+    })
+}
+
+fn policy(requests_nothing: bool) -> String {
+    let mut policy = String::new();
+    policy.push_str(if requests_nothing {
+        "Nothing in this request asks for a change to be made. What the user \\
+tells you is information about them, not an instruction to change anything."
+    } else {
+        "If it also requests a positive action, use a compatible schema."
+    });
+    policy
+}
+"""
+
+_RUST_V21_PRESERVE_STATE_PROMPT = """\
+fn ownership(tool_candidate: bool, tool_not_needed: bool) -> String {
+    if tool_not_needed {
+        "Answer directly when no capability call is needed.".to_string()
+    } else if tool_candidate {
+        "The request asks to preserve a state, without asking for an immediate \\
+transition. Do not infer a mutation."
+            .to_string()
+    } else {
+        "You are the sole author of every action.".to_string()
+    }
+}
+"""
+
+_RUST_RENAMED_REQUIREMENT_GATED_PROMPT = """\
+fn guidance(spec: &Spec) -> &'static str {
+    if spec.lane == ToolRequirement::Candidate {
+        return "This message asks to preserve a state; nothing else is asked.";
+    }
+    "Inspect every supplied schema."
+}
+"""
+
+_RUST_V21_CONTINUITY_EFFORT_REKEY = """\
+fn route(lead: Option<&str>, picks: &[Pick], tools: &[Tool], wants: bool) -> Req {
+    let hold_on = lead.is_some_and(|word| crate::fuzzy::same_word(word, "keep"));
+    let durable_knob = picks.first().is_some_and(|pick| {
+        tools.iter().find(|tool| tool.name == pick.name).is_some_and(|tool| {
+            let text = tool.description.to_ascii_lowercase();
+            let has_field = tool
+                .parameters
+                .get("properties")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|properties| properties.contains_key("effort"));
+            (text.contains("persist") && text.contains("operational")) || has_field
+        })
+    });
+    if hold_on && durable_knob && wants {
+        ToolRequirement::Required
+    } else if hold_on && !durable_knob {
+        ToolRequirement::Candidate
+    } else {
+        ToolRequirement::NotNeeded
+    }
+}
+"""
+
+_RUST_CLASSIFIER_WITH_TEST_ONLY_ACKNOWLEDGEMENT = """\
+fn compile(lower: &str, requested_actions: &mut BTreeSet<String>) -> bool {
+    let normal_preference_framing = contains_any(lower, &["my normal", "my usual"]);
+    let preference_keep = lower.contains("keep ");
+    let keep_as_preference = normal_preference_framing && preference_keep;
+    let declarative_preference = normal_preference_framing && !keep_as_preference;
+    if declarative_preference {
+        requested_actions.clear();
+    }
+    declarative_preference
+}
+
+#[cfg(test)]
+async fn run_declarative_answer_review(declarative_preference: bool) -> String {
+    if declarative_preference {
+        return "Nothing in this request asks for a change to be made.".to_string();
+    }
+    String::new()
+}
+"""
+
+_RUST_ORDINARY_KEEP_COMMAND = """\
+fn route(lower: &str, requested_actions: &mut BTreeSet<String>) -> ToolRequirement {
+    if lower.starts_with("keep ") {
+        requested_actions.insert("save".to_string());
+        return ToolRequirement::Required;
+    }
+    if lower.contains("keep me posted") {
+        requested_actions.insert("notify".to_string());
+    }
+    ToolRequirement::Candidate
+}
+"""
+
+_RUST_GENERIC_PREFERENCE_STORAGE = """\
+fn remember(lower: &str, memory: &mut Memory, prompt: &mut String) {
+    if lower.contains("my usual") || lower.contains("i prefer") {
+        memory.store_preference(lower);
+        prompt.push_str(
+            "The user shared a preference. Save it with the memory tool if that \\
+helps, then answer.",
+        );
+    }
+}
+"""
+
+_RUST_DIRECTIVE_PROSE_IN_COMMENT = """\
+fn notes(declarative_preference: bool, notes: &mut String) {
+    // Older builds said "Nothing in this request asks for a change to be made"
+    // here; this build lets the model decide.
+    if declarative_preference {
+        notes.push_str("Inspect the full catalog and decide.");
+    }
+}
+"""
+
+_KEEP_PREFERENCE_KINDS = {
+    "declarative-preference-turn-directive",
+    "keep-continuity-capability-rekey",
+}
+
+
+def test_declarative_preference_turn_trips_on_cue_list_v20_shape() -> None:
+    findings = find_benchmark_emulation_fingerprints(
+        [("src/runtime/task_spec.rs", _RUST_CUE_LIST_PREFERENCE_TURN)]
+    )
+    directive = [
+        f for f in findings if f["kind"] == "declarative-preference-turn-directive"
+    ]
+    assert directive
+    assert directive[0]["severity"] == "high"
+    assert [loc["line"] for loc in directive[0]["locations"]] == [9, 11]
+
+
+def test_declarative_preference_turn_trips_on_habitual_list_teacup_shape() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/prompting/mod.rs", _RUST_HABITUAL_LIST_NOTHING_REQUESTED)]
+        )
+    )
+    assert "declarative-preference-turn-directive" in kinds
+
+
+def test_declarative_preference_turn_trips_on_v21_preserve_state_prompt() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/agent/inference_loop.rs", _RUST_V21_PRESERVE_STATE_PROMPT)]
+        )
+    )
+    assert "declarative-preference-turn-directive" in kinds
+
+
+def test_declarative_preference_turn_survives_renamed_gate_identifiers() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/agent/guidance.rs", _RUST_RENAMED_REQUIREMENT_GATED_PROMPT)]
+        )
+    )
+    assert "declarative-preference-turn-directive" in kinds
+
+
+def test_keep_continuity_capability_rekey_trips_on_renamed_v21_router() -> None:
+    findings = find_benchmark_emulation_fingerprints(
+        [("src/runtime/task_spec.rs", _RUST_V21_CONTINUITY_EFFORT_REKEY)]
+    )
+    rekey = [f for f in findings if f["kind"] == "keep-continuity-capability-rekey"]
+    assert rekey
+    assert rekey[0]["severity"] == "medium"
+
+
+def test_classifier_with_test_only_acknowledgement_is_not_a_lead() -> None:
+    # The cleared fork keeps the classifier and parks its acknowledgement prompt
+    # in a #[cfg(test)] helper that /run never serves.
+    findings = find_benchmark_emulation_fingerprints(
+        [("src/baseline.rs", _RUST_CLASSIFIER_WITH_TEST_ONLY_ACKNOWLEDGEMENT)]
+    )
+    assert not _kinds(findings) & _KEEP_PREFERENCE_KINDS
+
+    served = _RUST_CLASSIFIER_WITH_TEST_ONLY_ACKNOWLEDGEMENT.replace(
+        "#[cfg(test)]\n", "\n"
+    )
+    assert "declarative-preference-turn-directive" in _kinds(
+        find_benchmark_emulation_fingerprints([("src/baseline.rs", served)])
+    )
+
+
+def test_test_only_item_skip_ends_at_braceless_item() -> None:
+    source = "#[cfg(test)]\nmod tests;\n\n" + _RUST_V21_PRESERVE_STATE_PROMPT
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints([("src/agent/inference_loop.rs", source)])
+    )
+    assert "declarative-preference-turn-directive" in kinds
+
+
+def test_ordinary_keep_and_preference_storage_are_not_keep_preference_leads() -> None:
+    for path, source in (
+        ("src/router.rs", _RUST_ORDINARY_KEEP_COMMAND),
+        ("src/memory.rs", _RUST_GENERIC_PREFERENCE_STORAGE),
+        ("src/notes.rs", _RUST_DIRECTIVE_PROSE_IN_COMMENT),
+    ):
+        kinds = _kinds(find_benchmark_emulation_fingerprints([(path, source)]))
+        assert not kinds & _KEEP_PREFERENCE_KINDS, path
+
+
+def test_starter_kit_trips_no_keep_preference_lead() -> None:
+    kit = Path(__file__).resolve().parents[3] / "miners" / "dittobench-starter-kit"
+    files = [
+        (str(path.relative_to(kit)), path.read_text(encoding="utf-8"))
+        for path in sorted((kit / "src").rglob("*.rs"))
+    ]
+    assert files
+    kinds = _kinds(find_benchmark_emulation_fingerprints(files))
+    assert not kinds & _KEEP_PREFERENCE_KINDS
+
+
+def test_keep_preference_findings_never_leak_matched_source_text() -> None:
+    findings = find_benchmark_emulation_fingerprints(
+        [
+            ("src/prompting/mod.rs", _RUST_HABITUAL_LIST_NOTHING_REQUESTED),
+            ("src/runtime/task_spec.rs", _RUST_V21_CONTINUITY_EFFORT_REKEY),
+        ]
+    )
+    assert _kinds(findings) >= _KEEP_PREFERENCE_KINDS
+    encoded = json.dumps(findings)
+    for secret in (
+        "requests_nothing",
+        "Nothing in this request",
+        "information about them",
+        "contains_key",
+        "operational",
+        "same_word",
     ):
         assert secret not in encoded
     for finding in findings:
