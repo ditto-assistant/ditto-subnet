@@ -4,12 +4,57 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"reflect"
+	"regexp"
+	"strings"
 	"testing"
 )
 
 func privateArtifactDigest(raw []byte) string {
 	h := sha256.Sum256(raw)
 	return hex.EncodeToString(h[:])
+}
+
+func TestDecodePrivateArtifactRejectsUnboundContextsWithFreshDigest(t *testing.T) {
+	profile, _ := ProfileForVersion("full", 13)
+	base, err := GenerateDatasetWithSurface(1, profile, 13, SurfaceOptions{Salt: 91})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Context IDs are visible in the request, not inferred from grader metadata.
+	contextPattern := regexp.MustCompile(`planning context ([a-zA-Z0-9_-]+)`)
+	var target, other string
+	for _, c := range base.ToolCases {
+		if match := contextPattern.FindStringSubmatch(c.Prompt); len(match) == 2 {
+			if target == "" {
+				target = match[1]
+			} else if match[1] != target {
+				other = match[1]
+				break
+			}
+		}
+	}
+	if target == "" || other == "" {
+		t.Fatal("fixture must contain distinct visible planning contexts")
+	}
+	for _, replacement := range []string{"", other, target + " " + target} {
+		t.Run("context-"+replacement, func(t *testing.T) {
+			a, err := GenerateDatasetWithSurface(1, profile, 13, SurfaceOptions{Salt: 91})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := visitPrivateSurfaces(&a, func(_ string, text *string) error {
+				*text = strings.ReplaceAll(*text, target, replacement)
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			raw := mustMarshal(t, a)
+			got, err := DecodePrivateArtifact(raw, privateArtifactDigest(raw), 1, "full")
+			if err == nil || !reflect.DeepEqual(got, DatasetArtifact{}) {
+				t.Fatal("accepted missing, reassigned or duplicated context with fresh digest")
+			}
+		})
+	}
 }
 
 func TestDecodePrivateArtifactPinsBytesAndContract(t *testing.T) {

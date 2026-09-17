@@ -88,6 +88,26 @@ func DecodePrivateArtifact(raw []byte, expectedSHA string, seed int64, runSize s
 	if err != nil || !bytes.Equal(before, normalized) {
 		return fail("immutable contract mismatch")
 	}
+	// Text normalization above must not erase protected contract values. In
+	// particular, old prelaunch artifacts lack the request/record context
+	// bindings added to V13. A newly computed object digest cannot bless them.
+	protected := v13GlobalProtected(&base)
+	sources := map[string]string{}
+	if err := visitPrivateSurfaces(&base, func(location string, text *string) error {
+		sources[location] = *text
+		return nil
+	}); err != nil {
+		return fail("cannot inspect base surfaces")
+	}
+	if err := visitPrivateSurfaces(&artifact, func(location string, text *string) error {
+		source, ok := sources[location]
+		if !ok {
+			return errors.New("unknown surface")
+		}
+		return checkPrivateCandidate(source, *text, protected)
+	}); err != nil {
+		return fail("protected surface contract mismatch")
+	}
 	after, err := artifact.Marshal()
 	if err != nil || bytes.Equal(before, after) {
 		return fail("missing private transformation")
