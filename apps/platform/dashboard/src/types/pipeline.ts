@@ -144,6 +144,14 @@ export interface ScreeningReviewFinding {
   categories?: string[];
   locations?: ScreeningReviewLocation[];
   reviewer_revision?: string;
+  invariant_assessment?: {
+    decisions: {
+      invariant: string;
+      disposition: string;
+      summary: string;
+      evidence_indices: number[];
+    }[];
+  } | null;
 }
 
 export interface ScreeningReviewEvidence {
@@ -166,6 +174,15 @@ export interface ScreeningAttempt {
   quarantine_resolved_at?: string | null;
   review_finding?: ScreeningReviewFinding | null;
   review_evidence?: ScreeningReviewEvidence[] | null;
+  review_notes?:
+    | {
+        kind: "concern" | "cleared" | "observation";
+        stage: string;
+        summary: string;
+        path?: string | null;
+        line?: number | null;
+      }[]
+    | null;
 }
 
 export interface ValidationAttempt {

@@ -23,6 +23,22 @@ from ditto_screener.adjudicator import (
     build_adjudicator,
 )
 
+
+def test_miner_reason_preserves_complete_explanation_and_paragraphs() -> None:
+    reason = (
+        "The served path bypasses the deciding model.\n\n"
+        + "Relevant source detail. " * 80
+    )
+    verdict = adjudicator_module._verdict_from({"decision": "reject", "reason": reason})
+    assert verdict.reason == reason.strip()
+    assert len(verdict.reason) > 600
+
+
+def test_oversized_reason_is_refused_instead_of_silently_truncated() -> None:
+    with pytest.raises(ValueError, match="exceeds 8000"):
+        adjudicator_module._verdict_from({"decision": "reject", "reason": "x" * 8001})
+
+
 _SOURCE = "\n".join(
     [
         "// leading comment",
@@ -314,11 +330,11 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert "required_*tool" in policy_v10
     assert "ForcedChoiceModel" in policy_v10
     assert "forbidding every other tool" in policy_v10
-    assert adjudicator_prompt_revision(10) == "adjudicator-v3-policy-v10"
-    assert adjudicator_prompt_revision(11) == "adjudicator-v3-policy-v11"
-    assert adjudicator_prompt_revision(12) == "adjudicator-v3-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v4-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v4-policy-v13"
+    assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
+    assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
+    assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v5-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v5-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -434,7 +450,7 @@ async def test_v11_court_request_and_signed_verdict_bind_policy_version(
         in str(requests[0]["messages"]).lower()
     )
     assert result.policy_version == 11
-    assert result.prompt_revision == "adjudicator-v3-policy-v11"
+    assert result.prompt_revision == "adjudicator-v4-policy-v11"
 
 
 async def test_clear_names_a_published_clause_and_read_lines(tmp_path: Path) -> None:

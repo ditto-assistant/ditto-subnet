@@ -319,7 +319,7 @@ function ScreeningAttemptRow(props: { attempt: ScreeningAttempt; isOld: boolean 
         <Show when={a().quarantine_resolution_reason}>
           {(reason) => (
             <div class="attempt-resolution-reason">
-              <b>Operator reason:</b> {reason()}
+              <b>Review reason:</b> {reason()}
             </div>
           )}
         </Show>

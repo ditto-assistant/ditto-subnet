@@ -656,6 +656,63 @@ describe("terminal screening review cards (row 23)", () => {
     expect(SUBMISSIONS_CSS).toContain(".screening-review-location code");
     expect(SUBMISSIONS_CSS).toContain("grid-column: 1 / -1");
   });
+
+  it("restores historical v13 observations without presenting them as final findings", () => {
+    render(() => (
+      <ScreeningReview
+        attempt={{
+          status: "rejected",
+          policy_version: 13,
+          quarantine_resolution: "rescreen",
+          review_finding: null,
+          review_notes: [
+            {
+              kind: "concern",
+              stage: "l1",
+              path: "src/answer.rs",
+              line: 37,
+              summary: "The fallback replaces the model-authored answer.",
+            },
+            { kind: "cleared", stage: "l2", summary: "The retrieval path keeps complete records." },
+          ],
+        }}
+      />
+    ));
+    const card = document.querySelector(".screening-review");
+    expect(card?.textContent).toContain("Review observations");
+    expect(card?.textContent).toContain("not separate rejection findings");
+    expect(card?.textContent).toContain("L1 · concern");
+    expect(card?.textContent).toContain("L2 · cleared");
+    expect(card?.textContent).toContain("src/answer.rs:37");
+    expect(card?.textContent).not.toContain("Verified finding");
+  });
+
+  it("links each policy check to its own cited source locations", () => {
+    render(() => (
+      <ScreeningReview
+        attempt={{
+          ...attempt,
+          review_finding: {
+            ...attempt.review_finding,
+            invariant_assessment: {
+              decisions: [
+                {
+                  invariant: "I3_model_dissent",
+                  disposition: "breach",
+                  summary: "The response ignores model dissent.",
+                  evidence_indices: [0],
+                },
+              ],
+            },
+          },
+        }}
+      />
+    ));
+    const card = document.querySelector(".screening-review");
+    expect(card?.textContent).toContain("Policy checks");
+    expect(card?.textContent).toContain("The response ignores model dissent.");
+    expect(card?.textContent).toContain("agent/main.py:42");
+  });
 });
 
 describe("screening policy summary badges", () => {

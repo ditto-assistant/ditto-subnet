@@ -22673,6 +22673,8 @@ export interface components {
             /** Review Evidence */
             review_evidence?: components["schemas"]["PublicScreeningReviewEvidence"][];
             review_finding?: components["schemas"]["PublicScreeningReviewFinding"] | null;
+            /** Review Notes */
+            review_notes?: components["schemas"]["PublicScreeningReviewNote"][];
             /** Screener Hotkey */
             screener_hotkey: string;
             /**
@@ -22710,6 +22712,29 @@ export interface components {
              */
             submitted_at: string;
         };
+        /** PublicScreeningInvariantAssessment */
+        PublicScreeningInvariantAssessment: {
+            /** Decisions */
+            decisions: components["schemas"]["PublicScreeningInvariantDecision"][];
+            /** Schema Version */
+            schema_version: number;
+        };
+        /** PublicScreeningInvariantDecision */
+        PublicScreeningInvariantDecision: {
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "pass" | "breach" | "inconclusive";
+            /** Evidence Indices */
+            evidence_indices: number[];
+            /** Invariant */
+            invariant: string;
+            /** Pass Clause */
+            pass_clause?: string | null;
+            /** Summary */
+            summary: string;
+        };
         /**
          * PublicScreeningReviewEvidence
          * @description One public-safe policy observation from a terminal cheating decision.
@@ -22731,6 +22756,7 @@ export interface components {
             categories: string[];
             /** Confidence */
             confidence: number;
+            invariant_assessment?: components["schemas"]["PublicScreeningInvariantAssessment"] | null;
             /** Locations */
             locations?: components["schemas"]["PublicScreeningReviewLocation"][];
             /** Reviewer Revision */
@@ -22754,6 +22780,32 @@ export interface components {
             line: number;
             /** Path */
             path: string;
+        };
+        /**
+         * PublicScreeningReviewNote
+         * @description Allowlisted public fields; future private protocol fields stay private.
+         */
+        PublicScreeningReviewNote: {
+            /** Category */
+            category: string;
+            /** Confidence */
+            confidence?: number | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "concern" | "cleared" | "observation";
+            /** Line */
+            line?: number | null;
+            /** Path */
+            path?: string | null;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "l1" | "l2" | "l3";
+            /** Summary */
+            summary: string;
         };
         /**
          * PublicSubmissionFamily

@@ -4849,7 +4849,10 @@ class TestClaim:
         attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
         adjudication = SourceReviewAdjudication(
             decision="reject",
-            reason="served code fixes the graded answer family at src/main.rs:6",
+            reason=(
+                "Served code fixes the graded answer family at src/main.rs:6.\n\n"
+                + "The deciding model cannot override the host-selected answer. " * 30
+            ),
             reject_invariant="i5_production_engine",
             citations=[{"path": "src/main.rs", "line": 6}],
             notes_considered=1,
@@ -4887,7 +4890,9 @@ class TestClaim:
             )
             assert agent is not None and agent.status == AgentStatus.REJECTED
             assert agent.screening_reason == adjudication.reason
+            assert len(agent.screening_reason) > 600
             assert attempt is not None and attempt.status == "rejected"
+            assert attempt.public_reason == adjudication.reason
             assert retained is not None and retained.status == "resolved"
             assert retained.evidence is not None
             assert retained.evidence[-1]["code"] == ("adjudicated-source-review-reject")

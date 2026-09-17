@@ -75,8 +75,8 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v4-policy-v13"
-    return f"adjudicator-v3-policy-v{policy_version}"
+        return "adjudicator-v5-policy-v13"
+    return f"adjudicator-v4-policy-v{policy_version}"
 
 
 # Kept as the current-policy compatibility export for callers that only need
@@ -240,6 +240,8 @@ you read.
 The reason field is shown to the miner. Make it specific and factual: what
 the served path does, at which file and line, and why that does or does not
 take authority over the graded answer.
+Use complete sentences and short paragraphs, up to 8000 characters. Do not
+include source text, prompts, credentials, private challenge values, or transcripts.
 """.strip()
 
 _POLICY_V11_PROMPT_TAIL = """
@@ -417,7 +419,7 @@ _TOOLS: list[dict[str, object]] = [
                 "type": "object",
                 "properties": {
                     "decision": {"type": "string", "enum": ["clear", "reject"]},
-                    "reason": {"type": "string"},
+                    "reason": {"type": "string", "maxLength": 8000},
                     "reject_invariant": {
                         "type": "string",
                         "enum": [item.value for item in SourceReviewInvariant],
@@ -1138,6 +1140,8 @@ def _verdict_from(arguments: Mapping[str, object]) -> _Verdict:
     reason = arguments.get("reason")
     if not isinstance(reason, str) or not reason.strip():
         raise ValueError("adjudicator decision has no reason")
+    if len(reason) > 8000:
+        raise ValueError("adjudicator reason exceeds 8000 characters")
     citations: list[tuple[str, int]] = []
     for item in _bounded_sequence(arguments.get("citations"), _MAX_CITATIONS):
         if not isinstance(item, Mapping):
@@ -1156,7 +1160,7 @@ def _verdict_from(arguments: Mapping[str, object]) -> _Verdict:
     clause = arguments.get("clear_clause")
     return _Verdict(
         decision=decision,
-        reason=" ".join(reason.split())[:600],
+        reason=reason.strip(),
         reject_invariant=invariant if isinstance(invariant, str) else None,
         clear_clause=clause if isinstance(clause, str) else None,
         citations=tuple(citations),
