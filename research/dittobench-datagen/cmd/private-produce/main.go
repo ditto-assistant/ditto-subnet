@@ -109,7 +109,12 @@ func run() error {
 		}
 		return nil
 	}
-	dataset, receipt, err := client.Produce(ctx, base, *concurrency)
+	var diagnostics []privatesurface.Diagnostic
+	dataset, receipt, err := client.ProduceWithDiagnostics(ctx, base, *concurrency, func(d privatesurface.Diagnostic) { diagnostics = append(diagnostics, d) })
+	trace, _ := json.Marshal(diagnostics)
+	if writeErr := writePrivate(*out, "diagnostics.json", trace); writeErr != nil {
+		return writeErr
+	}
 	if err != nil {
 		return err
 	}

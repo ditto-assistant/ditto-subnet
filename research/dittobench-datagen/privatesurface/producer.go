@@ -219,6 +219,21 @@ func (r cachedResults) Validate(_ context.Context, req gen.PrivateSurfaceRequest
 // retries are deliberately caller-owned; transport failures cannot fall back to
 // the public artifact or a weaker validation model.
 func (c *Client) Produce(ctx context.Context, base gen.DatasetArtifact, concurrency int) ([]byte, []byte, error) {
+	return c.ProduceWithDiagnostics(ctx, base, concurrency, nil)
+}
+
+// Diagnostic contains PRIVATE text. It is never a lease or approval receipt.
+type Diagnostic struct {
+	Location string         `json:"location"`
+	Before   string         `json:"before"`
+	After    string         `json:"after"`
+	Error    string         `json:"error,omitempty"`
+	Receipt  SurfaceReceipt `json:"receipt"`
+}
+
+// ProduceWithDiagnostics invokes the optional sink serially for completed
+// calls, including rejections. The sink must use restricted storage, not logs.
+func (c *Client) ProduceWithDiagnostics(ctx context.Context, base gen.DatasetArtifact, concurrency int, sink func(Diagnostic)) ([]byte, []byte, error) {
 	if concurrency < 1 || concurrency > 16 {
 		return nil, nil, errors.New("private producer: concurrency outside 1..16")
 	}
@@ -243,8 +258,15 @@ func (c *Client) Produce(ctx context.Context, base gen.DatasetArtifact, concurre
 					continue
 				}
 				req := requests[index]
-				after, receipt, err := c.RewriteOne(ctx, req)
+				after, receipt, err := c.ProbeOne(ctx, req)
 				mutex.Lock()
+				if sink != nil {
+					diagnostic := Diagnostic{Location: req.Location, Before: req.Text, After: after, Receipt: receipt}
+					if err != nil {
+						diagnostic.Error = err.Error()
+					}
+					sink(diagnostic)
+				}
 				if err != nil {
 					if first == nil {
 						first = err
