@@ -25,7 +25,10 @@ never receives answer values absent from that source. This prevents spelling-
 correcting a benchmark feature. A semantic rejection permits at most five
 candidates, each subject to the same judge. The receipt retains rejected-call
 provenance; exhausted retries still fail. The last candidate explicitly requests
-verbatim source preservation. Exact byte equality is validated deterministically
+explicit source preservation using `{"text":null}` rather than retyping masked
+text. Null is accepted only in a valid writer response with provenance, never
+as an error fallback; missing fields and malformed responses still fail.
+Exact byte equality is validated deterministically
 and recorded as `exact-byte-identity-v1`, without claiming an LLM validation.
 Every actual change still requires the independent judge; all candidates still
 pass the mechanical and artifact checks. Before/after hashes expose unchanged surfaces; they must

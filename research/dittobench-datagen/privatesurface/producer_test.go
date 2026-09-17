@@ -153,6 +153,33 @@ func TestRejectAndProviderFailureNeverReturnCandidate(t *testing.T) {
 	}
 }
 
+func TestExplicitPreservationIsNotMalformedResponseFallback(t *testing.T) {
+	for _, content := range []string{`{"text":null}`, `{}`, `null`, `{"text":null,"extra":true}`, `{"text":null,"text":"changed"}`} {
+		t.Run(content, func(t *testing.T) {
+			calls := 0
+			c := fakeClient(t, func(_ int, request map[string]any) (int, any) {
+				calls++
+				if request["model"] != "rewrite-v1" {
+					t.Error("preservation must not invent an independent LLM judgment")
+				}
+				return 200, completion(content)
+			})
+			source := "Keep <EXACT> with intentional typoos."
+			after, receipt, err := c.RewriteOne(context.Background(), gen.PrivateSurfaceRequest{Text: source, Protected: []string{"<EXACT>", "typoos"}})
+			if content == `{"text":null}` {
+				if err != nil || after != source || receipt.ValidationMethod != "exact-byte-identity-v1" || receipt.Rewrite.ID == "" || receipt.Validation.ID != "" {
+					t.Fatalf("explicit preservation lost provenance: %v", err)
+				}
+			} else if err == nil || after != "" {
+				t.Fatal("malformed output became implicit preservation")
+			}
+			if calls != 1 {
+				t.Fatal("unexpected provider calls")
+			}
+		})
+	}
+}
+
 func TestProduceNeverApprovesUnchangedArtifact(t *testing.T) {
 	c := fakeClient(t, func(_ int, request map[string]any) (int, any) {
 		if request["model"] == "validator-v1" {
