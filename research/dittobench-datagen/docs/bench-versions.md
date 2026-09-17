@@ -931,6 +931,15 @@ measured honest starter-kit reference still need qualification. The private
 ceiling test first requires a public pass-off control of at least 0.90 in every
 surface slice; missing parser coverage cannot be reported as resistance.
 
+Use `parserprobe -bench-version 13 -seeds 40 -run-size full
+-require-public-control -json` to enforce this necessary public GIH control
+at the command boundary. Ordinary report generation can exit successfully
+with scores below the control floor. The explicit gate exits nonzero for
+insufficient/duplicate seeds, missing coverage, or any required slice below
+0.90. Passing it is not private qualification or permission to activate:
+the N14, honest-agent, runtime tool/control, and private-artifact comparisons
+are separate evidence.
+
 ### Known vector
 
 The same prelaunch correction authorization also covers intent-bank isolation:
