@@ -596,6 +596,29 @@ var v13NearMissPrompts = map[string][]string{
 // v13UnexpectedCase builds one coined-fixture result-usage case: the prompt
 // names an entry of the seed's coined list content and asks for the figure the
 // served result attaches to it.
+var v13UnexpectedPrompts = map[string][]string{
+	"schedules_result_usage": {
+		"Check the schedules on my workflows — how many runs has the one that goes %s logged so far? Exact number, please.",
+		"Look at what's on a timer for me: the workflow scheduled %s — what's its exact logged run count?",
+		"Pull up my workflow schedules and tell me precisely how many runs the %s one has logged.",
+	},
+	"tool_registry_result_usage": {
+		"Search your tool registry for something that can %s and tell me the exact registry snapshot number the search reports.",
+		"Before writing any code, look up which tool binding can %s — and give me the precise snapshot number the registry search returns.",
+		"Find the right tool binding to %s and report the exact registry snapshot the lookup came back with.",
+	},
+	"sandbox_result_usage": {
+		"Evaluate the %s routine in the code sandbox and report the exact value it prints — just the number.",
+		"Run the %s routine through Code Mode and tell me precisely what it outputs.",
+		"Execute %s in the in-process sandbox and give me the exact figure it returns.",
+	},
+	"agent_jobs_result_usage": {
+		"Look at my recent background jobs — exactly how many items did the %s job process?",
+		"Check the agent jobs I dispatched: what's the precise item count the finished %s job reports?",
+		"How many items did my %s job get through? Read it off the job list and give me the exact number.",
+	},
+}
+
 func v13UnexpectedCase(seed int64, prior protocol.ToolCase, co toolexec.Coined, family string, index int) protocol.ToolCase {
 	focus := co.Workflows[co.Focus]
 	var tool, prompt string
@@ -603,39 +626,23 @@ func v13UnexpectedCase(seed int64, prior protocol.ToolCase, co toolexec.Coined, 
 	switch family {
 	case "schedules_result_usage":
 		tool = "list_schedules"
-		prompts := []string{
-			"Check the schedules on my workflows — how many runs has the one that goes %s logged so far? Exact number, please.",
-			"Look at what's on a timer for me: the workflow scheduled %s — what's its exact logged run count?",
-			"Pull up my workflow schedules and tell me precisely how many runs the %s one has logged.",
-		}
+		prompts := v13UnexpectedPrompts[family]
 		prompt = fmt.Sprintf(prompts[v13ToolPick(seed, index, "unexpected-prompt", len(prompts))], focus.Cadence)
 		protect = strings.Fields(focus.Cadence)
 	case "tool_registry_result_usage":
 		tool = "search_tools"
 		caps := []string{"convert a file between formats", "fetch live exchange rates", "resize a batch of images", "pull rows from a spreadsheet", "look up a package's latest version"}
 		cap := caps[v13ToolPick(seed, index, "unexpected-cap", len(caps))]
-		prompts := []string{
-			"Search your tool registry for something that can %s and tell me the exact registry snapshot number the search reports.",
-			"Before writing any code, look up which tool binding can %s — and give me the precise snapshot number the registry search returns.",
-			"Find the right tool binding to %s and report the exact registry snapshot the lookup came back with.",
-		}
+		prompts := v13UnexpectedPrompts[family]
 		prompt = fmt.Sprintf(prompts[v13ToolPick(seed, index, "unexpected-prompt", len(prompts))], cap)
 	case "sandbox_result_usage":
 		tool = "run_code"
-		prompts := []string{
-			"Evaluate the %s routine in the code sandbox and report the exact value it prints — just the number.",
-			"Run the %s routine through Code Mode and tell me precisely what it outputs.",
-			"Execute %s in the in-process sandbox and give me the exact figure it returns.",
-		}
+		prompts := v13UnexpectedPrompts[family]
 		prompt = fmt.Sprintf(prompts[v13ToolPick(seed, index, "unexpected-prompt", len(prompts))], co.Routine)
 		protect = strings.Fields(co.Routine)
 	default: // agent_jobs_result_usage
 		tool = "list_agent_jobs"
-		prompts := []string{
-			"Look at my recent background jobs — exactly how many items did the %s job process?",
-			"Check the agent jobs I dispatched: what's the precise item count the finished %s job reports?",
-			"How many items did my %s job get through? Read it off the job list and give me the exact number.",
-		}
+		prompts := v13UnexpectedPrompts["agent_jobs_result_usage"]
 		prompt = fmt.Sprintf(prompts[v13ToolPick(seed, index, "unexpected-prompt", len(prompts))], co.Jobs[0])
 		protect = strings.Fields(co.Jobs[0])
 	}

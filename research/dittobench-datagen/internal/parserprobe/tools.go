@@ -27,10 +27,11 @@ type toolFrame struct {
 // every intent prompt, the v8 capability-resolution prompts, and the
 // coherent-world frames, plus the wrap lead-in/trailer pools to strip.
 type toolParser struct {
-	frames   []toolFrame
-	leadIns  []string
-	trailers []string
-	routing  []frame // v12 composed routing-cue asks
+	frames    []toolFrame
+	leadIns   []string
+	trailers  []string
+	routing   []frame // v12 composed routing-cue asks
+	discovery []discoveryFrameV13
 }
 
 // grammarExpansionCap bounds the enumeration of one grammar; the audited

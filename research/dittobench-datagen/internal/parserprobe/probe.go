@@ -8,6 +8,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
 
 // Options configures one probe run.
@@ -226,6 +227,9 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 	stores := buildStores(a)
 	waveStores := map[int]map[string]*store{}
 	tp := newToolParser(a.BenchVersion)
+	if a.BenchVersion >= protocol.BenchVersionV13 {
+		tp.addV13WireCatalog(a.Catalog)
+	}
 	needles := fixtureNeedles(a)
 	sr := SeedReport{Seed: a.Seed, BenchVersion: a.BenchVersion, MemoryCases: len(a.MemoryCases), ToolCases: len(a.ToolCases), GIH: newVariant()}
 	if rt != nil {
@@ -318,6 +322,14 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 		excluded := resultUsageArgs(tc.Category, needleValue(needles[tc.ID]))
 		want := toolSignature(tc.ExpectedTools, tc.FuzzyTrajectory, excluded)
 		pred := predictTool(tp, tc.Prompt, primary, &fetchOrdinal)
+		if a.BenchVersion >= protocol.BenchVersionV13 {
+			// Fixture ownership stays on the evaluator side. The inverse gets
+			// only the same response method available over the served tool API.
+			fixture := toolexec.BuildFixtureForVersion(a.Seed, tc, a.BenchVersion)
+			if discovered, matched := tp.discoveryPrediction(tc.Prompt, fixture.Result); matched {
+				pred = discovered
+			}
+		}
 		got := toolSignature(pred.tools, tc.FuzzyTrajectory, excluded)
 		score := 0.0
 		if pred.ok && got == want {

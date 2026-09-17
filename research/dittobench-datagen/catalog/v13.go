@@ -522,6 +522,17 @@ var decoyShapes = []DecoyShape{
 // DecoyShapeCount is the size of the frozen shape pool (>= 20 by contract).
 func DecoyShapeCount() int { return len(decoyShapes) }
 
+// DecoyShapes returns detached public grammar definitions, not a seed's
+// selected tools or fixture answers. An inverse must resolve names from the
+// catalog actually delivered to its harness, never regenerate a secret seed.
+func DecoyShapes() []DecoyShape {
+	out := append([]DecoyShape(nil), decoyShapes...)
+	for i := range out {
+		out[i].Prompts = append([]string(nil), out[i].Prompts...)
+	}
+	return out
+}
+
 // DecoyShapeKeys returns every shape key in pool order. Category names are
 // "decoy_<key>_result_usage"; the public glossary mirror is checked against it.
 func DecoyShapeKeys() []string {

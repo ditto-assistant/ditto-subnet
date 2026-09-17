@@ -197,3 +197,50 @@ func SettingValuePools() (themes, modelIDs, fonts []string) {
 }
 
 func themesPool() []string { return themes }
+
+// V13LinkReadGrammar exports the frozen generator grammar, without a subject
+// or seed. The caller must fill slots only from its wire-visible prompt.
+func V13LinkReadGrammar() persona.Grammar {
+	out := persona.Grammar{}
+	for key, values := range v13WorldLinkReadGrammar {
+		out[key] = append([]string(nil), values...)
+	}
+	return out
+}
+
+// V13UnexpectedSurfaces exposes the same frozen frames used by the generator.
+// The inverse identifies a call, not the answer returned by that call.
+func V13UnexpectedSurfaces() []ToolSurface {
+	var out []ToolSurface
+	for _, entry := range []struct{ family, tool string }{
+		{"schedules_result_usage", "list_schedules"},
+		{"tool_registry_result_usage", "search_tools"},
+		{"sandbox_result_usage", "run_code"},
+		{"agent_jobs_result_usage", "list_agent_jobs"},
+	} {
+		out = append(out, ToolSurface{Category: entry.family, Tools: []string{entry.tool}, Templates: append([]string(nil), v13UnexpectedPrompts[entry.family]...), ResultUsage: true})
+	}
+	return out
+}
+
+type DiscoverySurface struct {
+	Category, Tool, ArgKey string
+	NearMiss               bool
+	Templates              []string
+}
+
+// V13DiscoverySurfaces is a seed-free grammar projection. Available options
+// must still be discovered by calling the served tool, not inferred from seed.
+func V13DiscoverySurfaces() []DiscoverySurface {
+	var out []DiscoverySurface
+	for _, kind := range []string{"accent", "font"} {
+		tool, key := "set_accent_color", "color"
+		if kind == "font" {
+			tool, key = "set_chat_font", "font"
+		}
+		out = append(out,
+			DiscoverySurface{Category: "discovery_" + kind + "_set", Tool: tool, ArgKey: key, Templates: append([]string(nil), v13DiscoveryPrompts[kind]...)},
+			DiscoverySurface{Category: "discovery_" + kind + "_set", Tool: tool, ArgKey: key, NearMiss: true, Templates: append([]string(nil), v13NearMissPrompts[kind]...)})
+	}
+	return out
+}
