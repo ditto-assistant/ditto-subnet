@@ -39,6 +39,7 @@ from ditto.api_models.screener import (
 )
 from ditto.api_models.screener_review_settings import (
     FANOUT_SHADOW_SETTINGS_FIELDS,
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
     ScreenerReviewSettings,
 )
 from ditto.api_models.system_health import (
@@ -159,10 +160,26 @@ def test_inactive_fanout_checksum_keeps_the_pre_fanout_wire_shape() -> None:
     legacy = settings.model_dump(mode="json")
     for field in FANOUT_SHADOW_SETTINGS_FIELDS:
         legacy.pop(field)
+    legacy.pop("l2_always_escalate")
     expected = hashlib.sha256(
         json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     assert _review_settings_checksum(settings) == expected
+
+
+def test_always_escalate_is_bound_into_the_checksum_only_when_enabled() -> None:
+    """Workers predating the control verify every normal posture unchanged,
+    while a posture that requires escalation cannot be served without it."""
+    normal = ScreenerReviewSettings(mode="enforce")
+    escalating = normal.model_copy(update={"l2_always_escalate": True})
+    shape = escalating.model_dump(mode="json")
+    for field in FANOUT_SHADOW_SETTINGS_FIELDS:
+        shape.pop(field)
+    expected = hashlib.sha256(
+        json.dumps(shape, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert _review_settings_checksum(escalating) == expected
+    assert _review_settings_checksum(escalating) != _review_settings_checksum(normal)
 
 
 def test_enabled_fanout_checksum_binds_every_fanout_field() -> None:
@@ -4193,7 +4210,9 @@ class TestClaim:
             "ditto.api_server.endpoints.screener.resolve_queue_policy_settings",
             AsyncMock(
                 return_value=SimpleNamespace(
-                    deferred_source_review=SimpleNamespace(mode="enforce")
+                    deferred_source_review=SimpleNamespace(
+                        mode="enforce", integrity_double_check_mode="off"
+                    )
                 )
             ),
         )
@@ -4943,6 +4962,147 @@ class TestClaim:
             assert attempt is not None
             assert attempt.review_settings_revision == claimed_revision_id
             assert attempt.review_settings_checksum == claimed_checksum
+
+    async def test_integrity_double_check_runs_on_the_pinned_stronger_posture(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A top-five double-check leases on, and only accepts, its own posture."""
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.ATH_PENDING_REVIEW,
+            name="top-five-double-check",
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        normal = ScreenerReviewSettings(mode="enforce")
+        normal_checksum = _review_settings_checksum(normal)
+        stronger = ScreenerReviewSettings(
+            mode="enforce",
+            l2_model="openai/gpt-5.6-sol",
+            l2_fallback_models=("openai/gpt-5.6-terra",),
+            l2_always_escalate=True,
+            policy_manifest_profile="l1_l2",
+        )
+        stronger_checksum = _review_settings_checksum(stronger)
+        opened_at = datetime.now(UTC) - timedelta(minutes=1)
+        async with session_maker() as session, session.begin():
+            normal_row = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=normal.model_dump(mode="json"),
+                checksum=normal_checksum,
+                reason="fleet posture",
+                actor="test",
+            )
+            stronger_row = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope=INTEGRITY_DOUBLE_CHECK_SCOPE,
+                settings=stronger.model_dump(mode="json"),
+                checksum=stronger_checksum,
+                reason="stronger top-five posture",
+                actor="test",
+            )
+            session.add_all([normal_row, stronger_row])
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="passed",
+                    started_at=opened_at - timedelta(days=1),
+                    deadline=opened_at - timedelta(hours=23),
+                    finished_at=opened_at - timedelta(hours=23),
+                    build_only=False,
+                )
+            )
+            session.add(
+                AthReview(
+                    review_id=uuid4(),
+                    agent_id=agent_id,
+                    status="pending",
+                    opened_at=opened_at,
+                    original_reason=(
+                        "Top-five rank qualified this submission for an "
+                        "integrity double-check"
+                    ),
+                    original_policy_version=SCREENING_POLICY_VERSION,
+                    original_evidence={
+                        "previous_status": AgentStatus.SCORED.value,
+                        "score_count": 3,
+                    },
+                    algorithm_provenance={
+                        "review_kind": "deferred_source_review",
+                        "trigger": "integrity_double_check",
+                    },
+                )
+            )
+            await session.flush()
+            normal_id = normal_row.revision
+            stronger_id = stronger_row.revision
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        claimed = await client.post(
+            "/api/v1/screener/claim",
+            params={
+                "policy_version": SCREENING_POLICY_VERSION,
+                "review_settings_revision": normal_id,
+                "review_settings_instance_id": "ditto-screener-fleet-test",
+                "review_settings_scope": "*",
+                "review_settings_checksum": normal_checksum,
+            },
+        )
+        assert claimed.status_code == 200, claimed.text
+        [item] = claimed.json()["items"]
+        assert item["build_only"] is False
+        assert item["review_settings_override"] == {
+            "revision": stronger_id,
+            "scope": INTEGRITY_DOUBLE_CHECK_SCOPE,
+            "checksum": stronger_checksum,
+        }
+        attempt_id = UUID(item["attempt_id"])
+
+        def verdict(revision: int, scope: str, checksum: str) -> dict:
+            return _result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="quarantine",
+                manifest_digest="12" * 32,
+                reason_code="agentic-source-review-tripwire",
+                review_settings_revision=revision,
+                review_settings_instance_id="ditto-screener-fleet-test",
+                review_settings_scope=scope,
+                review_settings_checksum=checksum,
+            )
+
+        # The normal posture cannot answer for a double-check claim.
+        weaker = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=verdict(normal_id, "*", normal_checksum),
+        )
+        assert weaker.status_code >= 400
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=verdict(stronger_id, INTEGRITY_DOUBLE_CHECK_SCOPE, stronger_checksum),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.ATH_PENDING_REVIEW
+        async with session_maker() as session:
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            review = await session.scalar(
+                select(AthReview).where(AthReview.agent_id == agent_id)
+            )
+            assert attempt is not None and attempt.status == "quarantined"
+            assert attempt.review_settings_scope == INTEGRITY_DOUBLE_CHECK_SCOPE
+            assert review is not None and review.status == "pending"
+            assert review.original_evidence["deep_review_result"]["attempt_id"] == (
+                str(attempt_id)
+            )
 
     async def test_claim_rejects_stale_review_settings_before_leasing(
         self,

@@ -131,6 +131,7 @@ from ditto.api_models.screener_nodes import (
 )
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.api_models.screener_review_settings import (
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
     EffectiveScreenerReviewSettings,
     ScreenerReviewSettings,
     policy_manifest_digest,
@@ -4817,6 +4818,9 @@ async def claim(
                 limit=limit,
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
+                integrity_double_check_mode=(
+                    queue_settings.deferred_source_review.integrity_double_check_mode
+                ),
                 review_settings_binding=binding,
                 review_settings_enrolled_node_id=node_id,
                 canary_policy_version=canary_policy_version,
@@ -4875,6 +4879,9 @@ async def claim(
                 limit=limit,
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
+                integrity_double_check_mode=(
+                    queue_settings.deferred_source_review.integrity_double_check_mode
+                ),
                 review_settings_binding=binding,
                 review_settings_enrolled_node_id=node_id,
                 canary_policy_version=canary_policy_version,
@@ -6266,6 +6273,10 @@ async def submit_result(
                     )
                 settings = ScreenerReviewSettings.model_validate(revision.settings)
                 allowed_scopes = {"*", payload.review_settings_instance_id}
+                if attempt.review_settings_scope == INTEGRITY_DOUBLE_CHECK_SCOPE:
+                    # Platform pinned this claim to the double-check posture;
+                    # the exact claimed binding is still compared below.
+                    allowed_scopes.add(INTEGRITY_DOUBLE_CHECK_SCOPE)
                 enrolled_node_id = getattr(request.state, "screener_node_id", None)
                 if (
                     enrolled_node_id is not None

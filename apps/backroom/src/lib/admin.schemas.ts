@@ -326,6 +326,7 @@ export const screenerReviewSettingsSchema = z
     max_cost_usd: z.number().positive().max(10),
     critic_reasoning_effort: z.enum(['low', 'medium', 'high']),
     cache_ttl_seconds: z.number().int().min(60).max(2_592_000),
+    l2_always_escalate: z.boolean().default(false),
     audit_retention_days: z.number().int().min(1).max(365),
     policy_manifest_profile: policyManifestProfileSchema.default('l1'),
     policy_manifest_rotation_id: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).default('v8-luna-source-review-behavioral-oracle'),
@@ -1803,6 +1804,7 @@ export const SIMILARITY_BUDGET_DEFAULT = {
 // already have an additive client-first default path.
 export const DEFERRED_SOURCE_REVIEW_DEFAULT = {
   mode: 'off',
+  integrity_double_check_mode: 'off',
   min_cohort_size: 8,
   composite_mad_multiplier: 6,
   axis_mad_multiplier: 6,
@@ -1822,8 +1824,17 @@ export const deferredSourceReviewModeSchema = z.enum([
   'bypass',
 ])
 
+// Second, stronger deep review for every top-five entrant, including rows that
+// already passed the full pre-score screen. Enforce is refused by Platform until
+// screener review scope `integrity-double-check` holds a usable posture.
+export const integrityDoubleCheckModeSchema = z.enum(['off', 'observe', 'enforce'])
+export const INTEGRITY_DOUBLE_CHECK_SCOPE = 'integrity-double-check'
+
 const deferredSourceReviewSchema = z.object({
   mode: deferredSourceReviewModeSchema.default(DEFERRED_SOURCE_REVIEW_DEFAULT.mode),
+  integrity_double_check_mode: integrityDoubleCheckModeSchema.default(
+    DEFERRED_SOURCE_REVIEW_DEFAULT.integrity_double_check_mode,
+  ),
   min_cohort_size: z.number().int().min(5).max(100).default(
     DEFERRED_SOURCE_REVIEW_DEFAULT.min_cohort_size,
   ),
@@ -1843,6 +1854,7 @@ const deferredSourceReviewSchema = z.object({
 
 const deferredSourceReviewWriteSchema = deferredSourceReviewSchema.extend({
   mode: deferredSourceReviewModeSchema,
+  integrity_double_check_mode: integrityDoubleCheckModeSchema,
   min_cohort_size: z.number().int().min(5).max(100),
   composite_mad_multiplier: z.number().min(1).max(20),
   axis_mad_multiplier: z.number().min(1).max(20),

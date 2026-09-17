@@ -240,6 +240,67 @@ def test_explicit_budget_is_never_dropped_from_the_checksum(make_config) -> None
         EffectiveReviewSettings.model_validate(payload)
 
 
+def _platform_shaped_payload(config, **updates: object) -> dict:
+    """Checksum exactly as Platform's ``review_settings_checksum`` mints it."""
+    baseline = bootstrap_review_settings(config)
+    payload = baseline.model_dump(mode="json")
+    payload["settings"].update(updates)
+    hashed = dict(payload["settings"])
+    if hashed["fanout_shadow_mode"] == "off":
+        for name in _POST_CHECKSUM_FIELDS[
+            _POST_CHECKSUM_FIELDS.index(
+                "fanout_shadow_mode"
+            ) : _POST_CHECKSUM_FIELDS.index("fanout_shadow_reserved_targon_slots") + 1
+        ]:
+            hashed.pop(name)
+    if not hashed["l2_always_escalate"]:
+        hashed.pop("l2_always_escalate")
+    payload["checksum"] = hashlib.sha256(
+        json.dumps(hashed, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return payload
+
+
+@pytest.mark.parametrize("fanout_mode", ("off", "shadow"))
+@pytest.mark.parametrize("always_escalate", (False, True))
+def test_always_escalate_posture_checksum_verifies(
+    make_config, fanout_mode, always_escalate
+) -> None:
+    config = make_config(source_review_timeout_seconds=1_800)
+    payload = _platform_shaped_payload(
+        config,
+        fanout_shadow_mode=fanout_mode,
+        fanout_shadow_image_source_sha="1" * 40,
+        l2_always_escalate=always_escalate,
+    )
+    verified = EffectiveReviewSettings.model_validate(payload)
+    assert verified.settings.l2_always_escalate is always_escalate
+
+
+def test_always_escalate_cannot_be_stripped_from_a_signed_posture(make_config) -> None:
+    config = make_config(source_review_timeout_seconds=1_800)
+    payload = _platform_shaped_payload(config, l2_always_escalate=True)
+    payload["settings"]["l2_always_escalate"] = False
+    with pytest.raises(ValidationError, match="checksum"):
+        EffectiveReviewSettings.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("env_escalates", "posture_escalates", "expected"),
+    ((False, False, False), (False, True, True), (True, False, True)),
+)
+def test_posture_can_add_but_never_remove_escalation(
+    make_config, env_escalates, posture_escalates, expected
+) -> None:
+    config = make_config(
+        source_review_timeout_seconds=1_800, l2_always_escalate=env_escalates
+    )
+    effective = EffectiveReviewSettings.model_validate(
+        _platform_shaped_payload(config, l2_always_escalate=posture_escalates)
+    )
+    assert effective.apply_to(config).l2_always_escalate is expected
+
+
 @pytest.mark.asyncio
 async def test_expired_enforce_cache_refuses_new_claims(make_config, tmp_path) -> None:
     config = make_config(

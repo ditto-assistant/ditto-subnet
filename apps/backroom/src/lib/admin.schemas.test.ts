@@ -2426,6 +2426,7 @@ describe('queue policy settings schemas', () => {
     owner_concurrent_submission_limit: 2,
     deferred_source_review: {
       mode: 'off',
+      integrity_double_check_mode: 'off',
       min_cohort_size: 8,
       composite_mad_multiplier: 6,
       axis_mad_multiplier: 6,

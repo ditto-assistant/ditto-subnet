@@ -134,6 +134,7 @@ class ReviewSettings(BaseModel):
     critic_reasoning_effort: Literal["low", "medium"]
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)]
     audit_retention_days: Annotated[int, Field(ge=1, le=365)]
+    l2_always_escalate: bool = False
     policy_manifest_profile: Literal["core", "l1", "l1_l2"] = "l1"
     policy_manifest_rotation_id: Annotated[
         str, Field(pattern=r"^[a-zA-Z0-9._-]{1,80}$")
@@ -207,6 +208,7 @@ _POST_CHECKSUM_FIELDS: tuple[str, ...] = (
     "fanout_shadow_daily_cost_usd",
     "fanout_shadow_global_concurrency",
     "fanout_shadow_reserved_targon_slots",
+    "l2_always_escalate",
 )
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
@@ -237,14 +239,25 @@ class EffectiveReviewSettings(BaseModel):
         if self.settings.fanout_shadow_mode == "off":
             inactive = dict(current)
             for name in _POST_CHECKSUM_FIELDS[
-                _POST_CHECKSUM_FIELDS.index("fanout_shadow_mode") :
+                _POST_CHECKSUM_FIELDS.index(
+                    "fanout_shadow_mode"
+                ) : _POST_CHECKSUM_FIELDS.index("fanout_shadow_reserved_targon_slots")
+                + 1
             ]:
                 inactive.pop(name, None)
-            candidate = json.dumps(
-                inactive, sort_keys=True, separators=(",", ":")
-            ).encode()
-            if hashlib.sha256(candidate).hexdigest() == self.checksum:
-                return self
+            shapes = [inactive]
+            # Platform also omits a default ``l2_always_escalate`` so workers
+            # that predate the control keep verifying every normal posture.
+            if not self.settings.l2_always_escalate:
+                shapes.append(
+                    {k: v for k, v in inactive.items() if k != "l2_always_escalate"}
+                )
+            for shape in shapes:
+                candidate = json.dumps(
+                    shape, sort_keys=True, separators=(",", ":")
+                ).encode()
+                if hashlib.sha256(candidate).hexdigest() == self.checksum:
+                    return self
 
         # A revision minted before a control existed cannot carry that key in
         # the canonical JSON its immutable checksum was taken over, so replay
@@ -309,6 +322,9 @@ class EffectiveReviewSettings(BaseModel):
             l2_critic_reasoning_effort=value.critic_reasoning_effort,
             l2_cache_ttl_seconds=float(value.cache_ttl_seconds),
             l2_audit_retention_days=value.audit_retention_days,
+            # A posture can require escalation but never disable an env that
+            # already escalates every review on that worker.
+            l2_always_escalate=config.l2_always_escalate or value.l2_always_escalate,
         )
 
 

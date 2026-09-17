@@ -6,7 +6,7 @@ import type {
   ScreenerReviewControl,
   ScreenerReviewSettings,
 } from '../lib/admin.schemas'
-import { QUEUE_POLICY_CONFIRMATION } from '../lib/admin.schemas'
+import { INTEGRITY_DOUBLE_CHECK_SCOPE, QUEUE_POLICY_CONFIRMATION } from '../lib/admin.schemas'
 import {
   getScreenerReviewControl,
   getQueuePolicyControl,
@@ -53,6 +53,7 @@ const defaults: ScreenerReviewSettings = {
   max_cost_usd: 2,
   critic_reasoning_effort: 'medium',
   cache_ttl_seconds: 604_800,
+  l2_always_escalate: false,
   audit_retention_days: 30,
   policy_manifest_profile: 'l1',
   policy_manifest_rotation_id: 'v8-luna-source-review-behavioral-oracle',
@@ -109,6 +110,12 @@ const DEFERRED_MODE_DESCRIPTION = {
     'Cheap admission and prescoring run first; top-five entrants and configured score anomalies then receive deep source review.',
   bypass:
     'No source review at all: cheap admission only, no post-score qualification, no holds. Copy/plagiarism enforcement is a separate path and stays armed.',
+} as const
+
+const INTEGRITY_DOUBLE_CHECK_DESCRIPTION = {
+  off: 'No second review. Top-five rows keep the review they were admitted on.',
+  observe: 'Records which top-five rows would be double-checked, once per agent, without holding them.',
+  enforce: `Holds each new top-five row once for a deep review pinned to the ${INTEGRITY_DOUBLE_CHECK_SCOPE} reviewer posture. A clean pass restores it; anything else is an operator hold.`,
 } as const
 
 function DeferredSourceReviewPolicy({
@@ -252,6 +259,38 @@ function DeferredSourceReviewPolicy({
           </div>
         </div>
 
+        <div>
+          <p className="text-xs font-semibold">Top-five integrity double-check</p>
+          <p className="mt-1 max-w-[80ch] text-xs leading-5 text-[var(--muted)]">
+            A second, stronger review for top-five rows that already passed the full pre-score
+            screen, independent of the mode above. Platform refuses enforce until the
+            {' '}<code>{INTEGRITY_DOUBLE_CHECK_SCOPE}</code> screener review scope holds an enforce
+            posture with L3 and the l1_l2 manifest.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3" aria-label="Integrity double-check mode">
+            {(['off', 'observe', 'enforce'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                aria-label={`double-check ${mode}`}
+                disabled={readOnly || loading}
+                aria-pressed={deferred.integrity_double_check_mode === mode}
+                onClick={() => changeDeferred({ integrity_double_check_mode: mode })}
+                className={`min-h-11 rounded-lg border p-3 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
+                  deferred.integrity_double_check_mode === mode
+                    ? 'border-[var(--acid)] bg-[var(--acid-dim)] text-[var(--acid)]'
+                    : 'border-[var(--line)] text-[var(--muted-strong)] hover:bg-white/5'
+                }`}
+              >
+                <span className="block font-semibold capitalize">{mode}</span>
+                <span className="mt-1 block font-normal leading-4 text-[var(--muted)]">
+                  {INTEGRITY_DOUBLE_CHECK_DESCRIPTION[mode]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <fieldset className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" disabled={readOnly || loading}>
           <NumericField
             label="Minimum scored cohort"
@@ -355,6 +394,7 @@ function DeferredSourceReviewPolicy({
             <span className="text-[var(--muted)]">Effective revision <strong className="text-white">{state.effective.revision}</strong></span>
             <span className="text-[var(--muted)]">Source <strong className="capitalize text-white">{state.effective.source}</strong></span>
             <span className="text-[var(--muted)]">Mode <strong className="capitalize text-white">{state.effective.settings.deferred_source_review.mode}</strong></span>
+            <span className="text-[var(--muted)]">Double-check <strong className="capitalize text-white">{state.effective.settings.deferred_source_review.integrity_double_check_mode}</strong></span>
           </div>
           {state.history.length > 0 ? (
             <div className="mt-4 overflow-x-auto">
@@ -416,12 +456,14 @@ export function ScreenerReviewControlPanel({
   const [error, setError] = useState('')
   const expectedConfirmation = `APPLY SCREENER REVIEW ${scope} ${settings.mode.toUpperCase()}`
   const ready = reason.trim().length >= 8 && confirmation === expectedConfirmation
-  const scopes = ['*', ...new Set(state.known_instances)]
+  // The double-check posture has no worker heartbeating under it, so offer it
+  // before its first revision exists.
+  const scopes = ['*', ...new Set([INTEGRITY_DOUBLE_CHECK_SCOPE, ...state.known_instances])]
   const appliedWorkers = state.applied_instances.filter((item) => {
     const selectedWorker = scope === '*' ? item.expected_scope === '*' : item.instance_id === scope
     return selectedWorker && item.fresh && item.matches_effective
   })
-  const availableModes = scope === '*'
+  const availableModes = scope === '*' || scope === INTEGRITY_DOUBLE_CHECK_SCOPE
     ? (['off', 'shadow', 'enforce'] as const)
     : (['off', 'shadow', 'inherit', 'enforce'] as const)
 
@@ -510,7 +552,11 @@ export function ScreenerReviewControlPanel({
               >
                 {scopes.map((item) => (
                   <option key={item} value={item}>
-                    {item === '*' ? 'Global default' : item}
+                    {item === '*'
+                      ? 'Global default'
+                      : item === INTEGRITY_DOUBLE_CHECK_SCOPE
+                        ? 'Top-five double-check posture'
+                        : item}
                   </option>
                 ))}
               </select>
@@ -692,6 +738,35 @@ export function ScreenerReviewControlPanel({
                 }`}
               >
                 L3 {settings.l3_enabled ? 'enabled' : 'disabled'}
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-4 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold">Always escalate to L2/L3</p>
+                <p className="mt-1 max-w-[70ch] text-xs leading-5 text-[var(--muted)]">
+                  {settings.l2_always_escalate
+                    ? 'Every review runs the L2/L3 models, even when L1 certifies a low-risk clear. Workers whose environment already escalates are unaffected.'
+                    : 'L2/L3 run only when L1 raises risk or cannot certify a clear, unless the worker environment escalates every review.'}
+                  {scope === INTEGRITY_DOUBLE_CHECK_SCOPE
+                    ? ' Turn this on for the double-check posture so a top-five review always reaches the stronger models.'
+                    : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.l2_always_escalate}
+                aria-label="Always escalate to L2/L3"
+                disabled={readOnly || loading || settings.mode === 'inherit'}
+                onClick={() => setSettings((current) => ({ ...current, l2_always_escalate: !current.l2_always_escalate }))}
+                className={`inline-flex min-h-11 shrink-0 items-center rounded-lg border px-4 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
+                  settings.l2_always_escalate
+                    ? 'border-[var(--acid)] bg-[var(--acid-dim)] text-[var(--acid)]'
+                    : 'border-[var(--line)] text-[var(--muted-strong)] hover:bg-white/5'
+                }`}
+              >
+                {settings.l2_always_escalate ? 'Always' : 'On risk'}
               </button>
             </div>
 

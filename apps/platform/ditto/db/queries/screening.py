@@ -3,17 +3,32 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import ColumnElement, and_, case, exists, false, func, or_, select
+from sqlalchemy import (
+    ColumnElement,
+    and_,
+    case,
+    exists,
+    false,
+    func,
+    or_,
+    select,
+    true,
+)
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import ScalarSelect
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contracts
-from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.screener_review_settings import (
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
+    ScreenerReviewSettings,
+    integrity_double_check_posture_error,
+)
 from ditto.db.models import (
     Agent,
     AthReview,
@@ -70,6 +85,11 @@ MAX_SCREENING_EXPIRIES = 5
 # set: an owner still being screened is handled by deferring the claim
 # (earlier_pending), not by flagging, so the race resolves before either is
 # judged.
+logger = logging.getLogger(__name__)
+# Mirrors ``ditto.api_server.deferred_source_review.INTEGRITY_DOUBLE_CHECK_TRIGGER``
+# without importing the API layer into queries.
+_INTEGRITY_DOUBLE_CHECK_TRIGGER = "integrity_double_check"
+
 _USABLE_OWNER_STATUSES = (
     AgentStatus.EVALUATING,
     AgentStatus.SCORED,
@@ -733,6 +753,18 @@ async def _park_repeatedly_inconclusive(
     agent.screening_reason_code = _EXHAUSTED_REASON_CODE
 
 
+async def latest_integrity_double_check_posture(
+    session: AsyncSession,
+) -> ScreenerReviewSettingsRevision | None:
+    """Return the reviewer revision a double-check deep pass is pinned to."""
+    return await session.scalar(
+        select(ScreenerReviewSettingsRevision)
+        .where(ScreenerReviewSettingsRevision.scope == INTEGRITY_DOUBLE_CHECK_SCOPE)
+        .order_by(ScreenerReviewSettingsRevision.revision.desc())
+        .limit(1)
+    )
+
+
 async def claim_screening_attempts(
     session: AsyncSession,
     *,
@@ -742,6 +774,7 @@ async def claim_screening_attempts(
     limit: int,
     netuid: int = 118,
     deferred_review_mode: str = "off",
+    integrity_double_check_mode: str = "off",
     review_settings_binding: tuple[int, str, str, str] | None = None,
     review_settings_enrolled_node_id: str | None = None,
     canary_policy_version: int | None = None,
@@ -757,6 +790,14 @@ async def claim_screening_attempts(
     already holding a pending deferred review can be re-claimed for that
     review -- that stays eligible in every mode, or a mode change would strand
     the holds open when it was made.
+
+    ``integrity_double_check_mode`` is
+    ``queue_policy_settings.deferred_source_review.integrity_double_check_mode``.
+    A deep pass for a hold opened by the double-check is always pinned to the
+    ``integrity-double-check`` reviewer posture, in every mode, and is skipped
+    (left pending) while that posture is missing or unusable. In ``enforce`` a
+    mechanically admitted top-five row's deferred pass takes the same posture
+    when it is usable, and otherwise keeps the worker's normal posture.
 
     When at least one instance is heartbeating this shared hotkey, concurrent
     running leases cannot exceed that live instance count. That keeps
@@ -921,13 +962,65 @@ async def claim_screening_attempts(
         .correlate(Agent)
         .scalar_subquery()
     )
+    # Resolved before selection: a double-check hold without a usable posture
+    # (or claimed by a worker that cannot bind one) must not be selected at
+    # all, or it would sit at the head of every claim and starve the queue.
+    double_check_posture: tuple[int, str, str] | None = None
+    posture_row = await latest_integrity_double_check_posture(session)
+    if (
+        posture_row is not None
+        and integrity_double_check_posture_error(
+            ScreenerReviewSettings.model_validate(posture_row.settings)
+        )
+        is None
+    ):
+        double_check_posture = (
+            posture_row.revision,
+            posture_row.scope,
+            posture_row.checksum,
+        )
+    double_check_claimable = (
+        double_check_posture is not None and review_settings_binding is not None
+    )
+    # A double-check hold lands on an agent whose latest attempt is its full
+    # pre-score deep screen, not a build-only admission. What makes any
+    # deferred hold claimable is that no attempt has started since it opened;
+    # after one has, only an exact operator retry re-leases it.
+    no_attempt_since_hold = exists(
+        select(AthReview.review_id).where(
+            AthReview.agent_id == Agent.agent_id,
+            AthReview.status == "pending",
+            AthReview.algorithm_provenance["review_kind"].as_string()
+            == "deferred_source_review",
+            ~exists(
+                select(ScreeningAttempt.attempt_id).where(
+                    ScreeningAttempt.agent_id == Agent.agent_id,
+                    ScreeningAttempt.started_at
+                    >= func.coalesce(AthReview.reopened_at, AthReview.opened_at),
+                )
+            ),
+        )
+    )
     deferred_ath_eligible = (
         (Agent.status == AgentStatus.ATH_PENDING_REVIEW)
         & pending_deferred_review
         & (
             latest_attempt_id.is_(None)
             | latest_attempt_build_only.is_(True)
+            | no_attempt_since_hold
             | manual_failed_retry
+        )
+        & (
+            true()
+            if double_check_claimable
+            else ~exists(
+                select(AthReview.review_id).where(
+                    AthReview.agent_id == Agent.agent_id,
+                    AthReview.status == "pending",
+                    AthReview.algorithm_provenance["trigger"].as_string()
+                    == _INTEGRITY_DOUBLE_CHECK_TRIGGER,
+                )
+            )
         )
     )
     eligible = or_(
@@ -1266,6 +1359,37 @@ async def claim_screening_attempts(
                 canary_settings.scope,
                 canary_settings.checksum,
             )
+        if deferred_deep_review and canary_review_settings_revision is None:
+            pending_hold = await session.scalar(
+                select(AthReview).where(
+                    AthReview.agent_id == agent.agent_id,
+                    AthReview.status == "pending",
+                )
+            )
+            double_check_hold = bool(
+                pending_hold is not None
+                and pending_hold.algorithm_provenance.get("trigger")
+                == _INTEGRITY_DOUBLE_CHECK_TRIGGER
+            )
+            if double_check_hold or integrity_double_check_mode == "enforce":
+                if double_check_posture is not None and review_settings_binding:
+                    attempt_review_settings_binding = (
+                        double_check_posture[0],
+                        review_settings_binding[1],
+                        double_check_posture[1],
+                        double_check_posture[2],
+                    )
+                elif double_check_hold:
+                    # Unreachable while selection excludes these holds; kept so
+                    # a race with a posture write can never run the double-check
+                    # on the normal posture it already passed.
+                    logger.warning(
+                        "integrity double-check for agent_id=%s is waiting on a "
+                        "usable %s reviewer posture",
+                        agent.agent_id,
+                        INTEGRITY_DOUBLE_CHECK_SCOPE,
+                    )
+                    continue
         # ``enforce`` defers the deep review to the submissions that qualify;
         # ``bypass`` never runs it at all. Both admit on the same cheap
         # build-only pass, so the pre-score depth is one predicate over the two.

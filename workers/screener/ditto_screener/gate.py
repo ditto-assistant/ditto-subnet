@@ -854,6 +854,7 @@ class BuildGate:
             clear_min_notes=config.review_clear_min_notes,
             adjudicator=build_adjudicator(config),
             adjudicator_reserve_seconds=config.adjudicator_timeout_seconds,
+            always_escalate=config.l2_always_escalate,
         )
 
     def apply_review_settings(self, effective: EffectiveReviewSettings) -> bool:

@@ -767,6 +767,23 @@ async def test_certified_l1_low_escalates_when_always_escalate(
     assert l2.calls == 1
 
 
+async def test_certified_l1_low_escalates_when_posture_requires_it() -> None:
+    """The integrity double-check posture reaches L2/L3 without the env."""
+    l1 = _FakeL1(_l1("low", clearance_certified=True))
+    l2 = _FakeL2(_model_result(_safe()))
+    layered = LayeredSourceReviewAgent(
+        l1=l1,  # type: ignore[arg-type]
+        l2=l2,  # type: ignore[arg-type]
+        mode="enforce",
+        always_escalate=True,
+    )
+
+    await layered.review("unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT)
+
+    assert l1.calls == 1
+    assert l2.calls == 1
+
+
 async def test_uncertified_l1_low_escalates_to_l2() -> None:
     l1 = _FakeL1(_l1("low", clearance_certified=False))
     l2 = _FakeL2(_model_result(_safe()))

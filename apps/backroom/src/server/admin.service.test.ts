@@ -1873,6 +1873,7 @@ describe('queue policy administration', () => {
     },
     deferred_source_review: {
       mode: 'off',
+      integrity_double_check_mode: 'off',
       min_cohort_size: 8,
       composite_mad_multiplier: 6,
       axis_mad_multiplier: 6,

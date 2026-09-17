@@ -96,6 +96,12 @@ average a mixed-looking I4/I7 into a keep when I3 or I5 still fails.
 with L2 off / deferred_source_review bypass means Luna/L2 never reviewed the
 source. ATH still inspects this SHA.
 
+A `deferred_source_review` hold whose reason is the top-five integrity
+double-check (`algorithm_provenance.trigger=integrity_double_check`) already
+passed the full pre-score screen. The pinned `integrity-double-check` posture
+could not clear it, so read `original_evidence.deep_review_result` first. A
+passed pre-score screen is not a clear.
+
 Excluding an optional `measure` / `Program` solver (`cfg(measure)` off,
 `--no-default-features`) is a credit, not a keep. Trace the default shipped
 path for I4/I5/I7.

@@ -192,6 +192,12 @@ class ScreenerConfig:
     l2_audit_retention_days: int
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
+    l2_always_escalate: bool = False
+    """Send every L1 result through L2/L3, even a certified low-risk clear.
+
+    Seeded from ``SCREENER_L2_ALWAYS_ESCALATE``; a bound reviewer revision can
+    only turn it on for one posture (the integrity double-check), never off.
+    """
     remote_build_mode: str = "off"
     """How the gate uses a prebuilt image archive.
 
@@ -434,6 +440,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         review_settings_max_stale_seconds=_parse_int(
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS", "900"
         ),
+        l2_always_escalate=os.environ.get("SCREENER_L2_ALWAYS_ESCALATE", "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"},
         remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off"),
         remote_build_timeout_seconds=_parse_float(
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1500"

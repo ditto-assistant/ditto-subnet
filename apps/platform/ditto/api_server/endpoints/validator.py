@@ -150,8 +150,15 @@ from ditto.api_server.deferred_source_review import (
     DEFERRED_MECHANICAL_REASON,
     DEFERRED_REVIEW_KIND,
     DEFERRED_REVIEW_REASON,
+    INTEGRITY_DOUBLE_CHECK_ACTOR,
+    INTEGRITY_DOUBLE_CHECK_ALGORITHM,
+    INTEGRITY_DOUBLE_CHECK_AUDIT_KIND,
+    INTEGRITY_DOUBLE_CHECK_REASON,
+    INTEGRITY_DOUBLE_CHECK_TRIGGER,
+    TOP_FIVE_SIZE,
     DeferredReviewDecision,
     evaluate_deferred_review,
+    evaluate_integrity_double_check,
 )
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -218,6 +225,7 @@ from ditto.db.models import (
     ConfirmationScore,
     InferenceGrant,
     Score,
+    ScoreAuditEntry,
     ScreeningAttempt,
     ScreeningQuarantine,
     ValidatorHeartbeat,
@@ -614,10 +622,36 @@ async def _record_deferred_review_decision(
     screening_attempt: ScreeningAttempt | None,
     score_count: int,
     now: datetime,
+    bench_version: int | None = None,
+    double_check: bool = False,
 ) -> None:
-    """Persist an observe record or enforce an idempotent reward hold."""
+    """Persist an observe record or enforce an idempotent reward hold.
+
+    ``double_check`` records the hold as a top-five integrity double-check: the
+    same ``deferred_source_review`` lifecycle, with its own reason, actor and
+    ``trigger`` provenance so the screener claim pins the stronger posture, and
+    an ``enforced`` score-audit marker that survives later reopens of the
+    agent's single review row and suppresses a second double-check.
+    """
     if not decision.triggered:
         return
+    audit_kind = (
+        INTEGRITY_DOUBLE_CHECK_AUDIT_KIND if double_check else DEFERRED_REVIEW_KIND
+    )
+    reason = INTEGRITY_DOUBLE_CHECK_REASON if double_check else DEFERRED_REVIEW_REASON
+    actor = (
+        INTEGRITY_DOUBLE_CHECK_ACTOR
+        if double_check
+        else "platform:deferred-source-review"
+    )
+    trigger_provenance: dict[str, object] = (
+        {"trigger": INTEGRITY_DOUBLE_CHECK_TRIGGER} if double_check else {}
+    )
+    algorithm_version = (
+        INTEGRITY_DOUBLE_CHECK_ALGORITHM
+        if double_check
+        else "deferred-source-review-v1"
+    )
     retained_review: ScreeningQuarantine | None = None
     if screening_attempt is not None:
         retained_review = await session.scalar(
@@ -632,6 +666,7 @@ async def _record_deferred_review_decision(
         "deferred_review": {
             **decision.evidence,
             "mode": mode,
+            "bench_version": bench_version,
             "screening_attempt_id": (
                 str(screening_attempt.attempt_id)
                 if screening_attempt is not None
@@ -664,7 +699,7 @@ async def _record_deferred_review_decision(
             validator_hotkey=None,
             event=EVENT_AUDIT,
             payload={
-                "audit_kind": DEFERRED_REVIEW_KIND,
+                "audit_kind": audit_kind,
                 "enforced": False,
                 "qualified": True,
                 "trigger_kinds": list(decision.triggers),
@@ -675,6 +710,20 @@ async def _record_deferred_review_decision(
 
     if existing is not None and existing.status == "pending":
         return
+    if double_check:
+        await append_audit_entry(
+            session,
+            agent_id=agent.agent_id,
+            validator_hotkey=None,
+            event=EVENT_AUDIT,
+            payload={
+                "audit_kind": audit_kind,
+                "enforced": True,
+                "qualified": True,
+                "trigger_kinds": list(decision.triggers),
+            },
+            recorded_at=now,
+        )
 
     previous_status = agent.status.value
     if existing is None:
@@ -684,16 +733,21 @@ async def _record_deferred_review_decision(
                 agent_id=agent.agent_id,
                 status="pending",
                 opened_at=now,
-                original_reason=DEFERRED_REVIEW_REASON,
+                original_reason=reason,
                 original_policy_version=agent.screening_policy_version,
                 original_evidence=evidence,
                 algorithm_provenance={
                     "snapshot": "score-finalization",
                     "review_kind": DEFERRED_REVIEW_KIND,
-                    "algorithm_version": "deferred-source-review-v1",
+                    "algorithm_version": algorithm_version,
                     "opened_by": "platform",
                     "backfilled": False,
-                    "opened_at_source": "deferred-review-enforce",
+                    "opened_at_source": (
+                        "integrity-double-check-enforce"
+                        if double_check
+                        else "deferred-review-enforce"
+                    ),
+                    **trigger_provenance,
                 },
             )
         )
@@ -724,7 +778,7 @@ async def _record_deferred_review_decision(
         existing.resolved_by = None
         existing.resolution = None
         existing.resolution_reason = None
-        existing.original_reason = DEFERRED_REVIEW_REASON
+        existing.original_reason = reason
         # The reopened lifecycle is a deferred source review, which has no
         # matched agent. ``agent.duplicate_of`` is cleared below, and
         # ``resolve_copy_review`` refuses to resolve while the two disagree, so
@@ -742,19 +796,24 @@ async def _record_deferred_review_decision(
         existing.algorithm_provenance = {
             "snapshot": "score-finalization",
             "review_kind": DEFERRED_REVIEW_KIND,
-            "algorithm_version": "deferred-source-review-v1",
+            "algorithm_version": algorithm_version,
             "opened_by": "platform",
             "backfilled": False,
-            "opened_at_source": "deferred-review-reopen",
+            "opened_at_source": (
+                "integrity-double-check-reopen"
+                if double_check
+                else "deferred-review-reopen"
+            ),
             "prior_review_kind": prior_provenance.get("review_kind"),
+            **trigger_provenance,
         }
         session.add(
             AthReviewAction(
                 action_id=uuid4(),
                 review_id=existing.review_id,
                 action="reopen",
-                reason=DEFERRED_REVIEW_REASON,
-                actor="platform:deferred-source-review",
+                reason=reason,
+                actor=actor,
                 evidence={
                     "sha256": agent.sha256,
                     "score_count": score_count,
@@ -766,7 +825,7 @@ async def _record_deferred_review_decision(
     await preserve_desired_authority(session, now=now)
     agent.status = AgentStatus.ATH_PENDING_REVIEW
     agent.duplicate_of = None
-    agent.review_reason = DEFERRED_REVIEW_REASON
+    agent.review_reason = reason
 
 
 async def _evaluate_and_record_deferred_review(
@@ -824,6 +883,7 @@ async def _evaluate_and_record_deferred_review(
             screening_attempt=None,
             score_count=score_count,
             now=now,
+            bench_version=bench_version,
         )
         return
 
@@ -878,6 +938,147 @@ async def _evaluate_and_record_deferred_review(
             screening_attempt=admission_attempt,
             score_count=score_counts.get(row.agent_id, 0),
             now=now,
+            bench_version=bench_version,
+        )
+
+
+async def _held_post_score_review_composites(
+    session: AsyncSession, *, bench_version: int
+) -> list[float]:
+    """Composites of rows the canonical ledger dropped for a deep-review hold.
+
+    Read from each pending hold's own qualification snapshot, which is the
+    ledger composite it held at. A snapshot from before the benchmark version
+    was recorded is counted: it still occupies a slot on the only board it
+    could have come from, and over-counting only delays a hold.
+    """
+    composites: list[float] = []
+    for evidence in await session.scalars(
+        select(AthReview.original_evidence).where(
+            AthReview.status == "pending",
+            AthReview.algorithm_provenance["review_kind"].as_string()
+            == DEFERRED_REVIEW_KIND,
+        )
+    ):
+        snapshot = (
+            evidence.get("deferred_review") if isinstance(evidence, dict) else None
+        )
+        if not isinstance(snapshot, dict):
+            continue
+        held_version = snapshot.get("bench_version")
+        if held_version is not None and held_version != bench_version:
+            continue
+        candidate = snapshot.get("candidate")
+        composite = candidate.get("composite") if isinstance(candidate, dict) else None
+        if isinstance(composite, int | float) and not isinstance(composite, bool):
+            composites.append(float(composite))
+    return composites
+
+
+async def _evaluate_and_record_integrity_double_check(
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    settings: DeferredSourceReviewSettings,
+    now: datetime,
+) -> None:
+    """Hold each new top-five row once for a stronger integrity double-check.
+
+    Runs after ``_evaluate_and_record_deferred_review`` on every canonical
+    ledger mutation, independent of its ``mode``: that path only reaches
+    mechanically admitted rows, while this one also covers rows that already
+    passed the full pre-score screen. A row is skipped when its agent has any
+    deferred review lifecycle (pending, or resolved by an operator or a deep
+    pass -- never reopened) or an enforced double-check audit marker (which
+    survives a later copy reopen of the agent's single review row).
+    """
+    mode = settings.integrity_double_check_mode
+    if mode == "off":
+        return
+    await session.flush()
+    ledger = await list_eligible_ledger(
+        session,
+        bench_version=bench_version,
+        include_fingerprints=False,
+        include_details=False,
+    )
+    top_ids = [row.agent_id for row in ledger[:TOP_FIVE_SIZE] if row.eligible]
+    if not top_ids:
+        return
+    candidates = {
+        candidate.agent_id: candidate
+        for candidate in await session.scalars(
+            select(Agent).where(
+                Agent.agent_id.in_(top_ids),
+                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+            )
+        )
+    }
+    if not candidates:
+        return
+    reviewed_ids = set(
+        await session.scalars(
+            select(AthReview.agent_id).where(
+                AthReview.agent_id.in_(tuple(candidates)),
+                AthReview.algorithm_provenance["review_kind"].as_string()
+                == DEFERRED_REVIEW_KIND,
+            )
+        )
+    )
+    # An enforced marker suppresses in every mode. In observe, any earlier
+    # record does too: the ledger mutates on every finalization, and one
+    # would-be hold per agent is the evidence, not one per mutation.
+    audited = (
+        await session.execute(
+            select(ScoreAuditEntry.agent_id, ScoreAuditEntry.payload).where(
+                ScoreAuditEntry.agent_id.in_(tuple(candidates)),
+                ScoreAuditEntry.event == EVENT_AUDIT,
+                ScoreAuditEntry.payload["audit_kind"].as_string()
+                == INTEGRITY_DOUBLE_CHECK_AUDIT_KIND,
+            )
+        )
+    ).all()
+    checked_ids = {
+        audited_id
+        for audited_id, payload in audited
+        if mode == "observe"
+        or (isinstance(payload, dict) and payload.get("enforced") is True)
+    }
+    score_counts = {
+        candidate_id: int(count)
+        for candidate_id, count in (
+            await session.execute(
+                select(Score.agent_id, func.count())
+                .where(
+                    Score.agent_id.in_(tuple(candidates)),
+                    Score.bench_version == bench_version,
+                )
+                .group_by(Score.agent_id)
+            )
+        ).all()
+    }
+    # Snapshot once: the ledger above still ranks rows this loop holds, so
+    # adding them to ``held`` as well would count each one twice.
+    held = await _held_post_score_review_composites(
+        session, bench_version=bench_version
+    )
+    for agent_id in top_ids:
+        candidate = candidates.get(agent_id)
+        if candidate is None or agent_id in reviewed_ids or agent_id in checked_ids:
+            continue
+        decision = evaluate_integrity_double_check(
+            agent_id=agent_id, ledger=ledger, held_composites=held
+        )
+        await _record_deferred_review_decision(
+            session,
+            agent=candidate,
+            decision=decision,
+            mode=mode,
+            screening_attempt=None,
+            score_count=score_counts.get(agent_id, 0),
+            now=now,
+            bench_version=bench_version,
+            double_check=True,
         )
 
 
@@ -6570,6 +6771,12 @@ async def submit_score(
                 settings=queue_policy.deferred_source_review,
                 now=audit_now,
             )
+            await _evaluate_and_record_integrity_double_check(
+                session,
+                bench_version=ticket.bench_version,
+                settings=queue_policy.deferred_source_review,
+                now=audit_now,
+            )
             await append_audit_entry(
                 session,
                 agent_id=agent_id,
@@ -6973,6 +7180,12 @@ async def submit_score(
                     agent=agent,
                     bench_version=ticket.bench_version,
                     score_count=len(agent_scores),
+                    settings=deferred_settings,
+                    now=audit_now,
+                )
+                await _evaluate_and_record_integrity_double_check(
+                    session,
+                    bench_version=ticket.bench_version,
                     settings=deferred_settings,
                     now=audit_now,
                 )

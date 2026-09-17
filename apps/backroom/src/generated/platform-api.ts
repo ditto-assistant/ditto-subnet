@@ -16165,6 +16165,12 @@ export interface components {
              */
             composite_mad_multiplier: number;
             /**
+             * Integrity Double Check Mode
+             * @default off
+             * @enum {string}
+             */
+            integrity_double_check_mode: "off" | "observe" | "enforce";
+            /**
              * Min Axis Delta
              * @default 0.15
              */
@@ -23719,6 +23725,7 @@ export interface components {
              * @default {
              *       "axis_mad_multiplier": 6,
              *       "composite_mad_multiplier": 6,
+             *       "integrity_double_check_mode": "off",
              *       "min_axis_delta": 0.15,
              *       "min_cohort_size": 8,
              *       "min_composite_delta": 0.1,
@@ -25931,6 +25938,11 @@ export interface components {
              * @default 900
              */
             fanout_shadow_timeout_seconds: number;
+            /**
+             * L2 Always Escalate
+             * @default false
+             */
+            l2_always_escalate: boolean;
             /**
              * L2 Fallback Models
              * @default [

@@ -39,6 +39,11 @@ FANOUT_SHADOW_SETTINGS_FIELDS = (
     "fanout_shadow_reserved_targon_slots",
 )
 PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
+# The reviewer posture (stronger L2/L3 models and budgets) a top-five integrity
+# double-check deep pass is pinned to. No worker heartbeats under this scope, so
+# a revision here never changes the fleet's normal posture; Platform binds it to
+# one claimed attempt at a time.
+INTEGRITY_DOUBLE_CHECK_SCOPE = "integrity-double-check"
 
 _POLICY_MANIFEST_MODULES: dict[PolicyManifestProfile, list[dict[str, str]]] = {
     "core": [],
@@ -144,6 +149,11 @@ class ScreenerReviewSettings(BaseModel):
     fanout_shadow_global_concurrency: Literal[1] = 1
     fanout_shadow_reserved_targon_slots: Annotated[int, Field(ge=1, le=4)] = 1
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
+    # Send every L1 result through the L2/L3 models, even a certified low-risk
+    # clear. Workers OR this with their ``SCREENER_L2_ALWAYS_ESCALATE`` env, so
+    # it can only add escalation. The integrity double-check posture sets it so
+    # a top-five deep pass always reaches the stronger models.
+    l2_always_escalate: bool = False
     audit_retention_days: Annotated[int, Field(ge=1, le=365)] = 30
     policy_manifest_profile: PolicyManifestProfile = "l1"
     policy_manifest_rotation_id: Annotated[
@@ -191,11 +201,14 @@ class ScreenerReviewSettings(BaseModel):
 
 
 def review_settings_checksum(settings: ScreenerReviewSettings) -> str:
-    """Hash inactive fan-out settings in the legacy shape for rolling upgrades."""
+    """Hash inactive/default late controls in the legacy shape for rolling upgrades."""
     value = settings.model_dump(mode="json")
     if settings.fanout_shadow_mode == "off":
         for field in FANOUT_SHADOW_SETTINGS_FIELDS:
             value.pop(field)
+    if not settings.l2_always_escalate:
+        # Workers that predate the control cannot hash a key they drop.
+        value.pop("l2_always_escalate")
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 
@@ -300,3 +313,21 @@ class AdminScreenerReviewSettingsResponse(BaseModel):
     applied_instances: list[AppliedScreenerReviewSettings]
     shadow_observations: list[AdminShadowReviewObservation]
     policy_manifests: list[ScreenerPolicyManifestView]
+
+
+def integrity_double_check_posture_error(
+    settings: ScreenerReviewSettings,
+) -> str | None:
+    """Why a reviewer revision cannot serve as the double-check posture.
+
+    The double-check exists to run the stronger layered review, so a posture
+    that would skip L2 (``off``/``shadow``) or the L3 critic is refused rather
+    than silently degrading into a repeat of the normal screen.
+    """
+    if settings.mode != "enforce":
+        return f"posture mode must be enforce, not {settings.mode}"
+    if not settings.l3_enabled:
+        return "posture must enable the L3 critic"
+    if settings.policy_manifest_profile != "l1_l2":
+        return "posture must use the l1_l2 policy manifest profile"
+    return None
