@@ -208,7 +208,7 @@ async def pin_private_dataset(
             base_bytes=base_bytes,
             dataset_bytes=dataset_bytes,
         )
-        .on_conflict_do_nothing(index_elements=["identity_sha256"])
+        .on_conflict_do_nothing(index_elements=["identity_sha256"]),
     )
     winner = await find_private_dataset(session, identity=identity)
     if winner is None:
