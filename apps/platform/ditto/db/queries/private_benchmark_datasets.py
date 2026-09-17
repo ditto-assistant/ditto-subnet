@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.db.models import PrivateBenchmarkDataset
@@ -189,7 +190,8 @@ async def pin_private_dataset(
     not by replacing the existing dataset with another provider response.
     """
     _validate(identity, base_bytes, dataset_bytes, validation_receipt_bytes)
-    await session.execute(
+    await _insert_private(
+        session,
         insert(PrivateBenchmarkDataset)
         .values(
             dataset_id=uuid4(),
@@ -212,3 +214,12 @@ async def pin_private_dataset(
     if winner is None:
         raise PrivateDatasetError("private artifact pin unavailable")
     return winner
+
+
+async def _insert_private(session: AsyncSession, statement) -> None:
+    # Driver errors can contain a failing-row DETAIL even when SQLAlchemy bind
+    # logging is disabled. Do not propagate those bytes into HTTP error logs.
+    try:
+        await session.execute(statement)
+    except SQLAlchemyError:
+        raise PrivateDatasetError("private artifact storage unavailable") from None

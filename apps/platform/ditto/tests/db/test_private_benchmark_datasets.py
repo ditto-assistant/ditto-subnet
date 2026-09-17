@@ -3,12 +3,14 @@
 import asyncio
 import hashlib
 import json
+import traceback
 from dataclasses import replace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete, update
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from ditto.db.models import PrivateBenchmarkDataset
 from ditto.db.queries.private_benchmark_datasets import (
@@ -49,6 +51,18 @@ def candidate(key, text="private", salt=1):
         "dataset_bytes": dataset,
         "validation_receipt_bytes": receipt,
     }
+
+
+async def test_driver_failure_cannot_leak_private_input_in_traceback():
+    session = AsyncMock()
+    session.execute.side_effect = SQLAlchemyError("SECRET failing row and bind bytes")
+    key = identity()
+    try:
+        await pin_private_dataset(session, identity=key, **candidate(key))
+    except PrivateDatasetError:
+        assert "SECRET" not in traceback.format_exc()
+    else:
+        pytest.fail("storage failure was accepted")
 
 
 async def test_retry_and_restart_reuse_exact_bytes(session_maker):
