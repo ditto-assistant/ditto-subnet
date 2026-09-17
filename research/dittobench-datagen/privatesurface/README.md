@@ -19,7 +19,9 @@ intentional misspellings. An independent model judges each rewrite. A separate
 generator pass checks protected-value counts and immutable artifact fields.
 Typo provenance is observed without changing the base artifact; those exact
 tokens and graded values are masked during rewriting and restored before the
-independent semantic check. This prevents the rewrite model from spelling-
+independent semantic check. The writer also receives the same original source
+as reference-only context so opaque markers do not hide grammatical roles; it
+never receives answer values absent from that source. This prevents spelling-
 correcting a benchmark feature. A semantic rejection permits at most five
 candidates, each subject to the same judge. The receipt retains rejected-call
 provenance; exhausted retries still fail. The last candidate explicitly requests
@@ -59,6 +61,11 @@ semantic receipt may be up to 4 MiB for a full-profile run.
   the current 60-second production generate-service request window.
 - Unit tests use fake inference strictly for privacy-request, failure, receipt,
   cancellation and traversal contracts. Those fixtures are not qualification.
+- The 40-seed full public GIH control on 2026-09-17 scored 0.237 on tool prompts
+  and 0.77926078 on quantity, below the required 0.90 control floor. Aggregate
+  memory was 0.90005; it does not excuse failed slices. No private resistance
+  claim can be made from this incomplete-strength control. Raw local report
+  SHA-256: `3686b2b5d3b4421e4d088be54b541a60fd612e165242a4879e5749d0fbe27202`.
 
 Launch still requires real complete artifact production, semantic negative
 controls, measured honest and adversarial runs, durable preparation, closure and

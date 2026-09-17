@@ -104,6 +104,27 @@ func TestRewriteHasIndependentValidationAndDigestReceipt(t *testing.T) {
 	}
 }
 
+func TestRewriteReferenceContainsOnlyTheSameSource(t *testing.T) {
+	source := "Lois gos by Kit."
+	c := fakeClient(t, func(n int, request map[string]any) (int, any) {
+		if n == 2 {
+			return 200, completion(`{"accepted":true}`)
+		}
+		messages := request["messages"].([]any)
+		var input map[string]any
+		_ = json.Unmarshal([]byte(messages[1].(map[string]any)["content"].(string)), &input)
+		if input["reference_text"] != source || input["text"] == source {
+			t.Fatal("rewrite lost source context or protected-token masking")
+		}
+		out, _ := json.Marshal(map[string]any{"text": input["text"]})
+		return 200, completion(string(out))
+	})
+	after, _, err := c.RewriteOne(context.Background(), gen.PrivateSurfaceRequest{Location: "x", Text: source, Protected: []string{"Lois", "gos", "Kit"}})
+	if err != nil || after != source {
+		t.Fatalf("source-preserving candidate failed: %v", err)
+	}
+}
+
 func TestRejectAndProviderFailureNeverReturnCandidate(t *testing.T) {
 	for _, verdict := range []string{`{"accepted":false}`, `{"accepted":"true"}`, `{}`, `{"accepted":true,"explanation":"secret"}`, `{"accepted":false,"accepted":true}`, `{"accepted":true} {"accepted":true}`} {
 		t.Run(verdict, func(t *testing.T) {
