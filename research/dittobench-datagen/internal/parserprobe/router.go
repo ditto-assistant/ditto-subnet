@@ -62,7 +62,7 @@ func trainRouter(benchVersion int, runSize string, first int64, n int) (*router,
 			add("mem:"+routerLabel(mc.QuestionType), mc.Question)
 		}
 		for _, tc := range a.ToolCases {
-			add("tool:"+tc.Category, tc.Prompt)
+			add("tool:"+toolControlFamily(benchVersion, tc), tc.Prompt)
 		}
 	}
 	r := newRouter()

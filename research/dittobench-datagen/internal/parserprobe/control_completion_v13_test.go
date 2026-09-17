@@ -42,10 +42,18 @@ func TestV13NamedControlGeneratedCases(t *testing.T) {
 		parser.addV13WireCatalog(a.Catalog)
 		st := buildStores(a)[gen.PrimaryUser]
 		needles := fixtureNeedles(a)
-		for _, c := range a.ToolCases {
+		for _, c := range controlToolOrder(a) {
+			if c.EffectAnswer != "" {
+				p := parser.classifyTool(c.Prompt, st)
+				if scoreControlEffect(c, p) != 1 {
+					t.Errorf("seed %d effect %q: got %q, want %q", seed, c.Prompt, p.effectAnswer, c.EffectAnswer)
+				}
+				continue
+			}
 			switch c.Category {
 			case "world_memory_update", "world_memory_delete":
 			case "v13_state_dependent_calendar", "v13_state_dependent_email", "v13_restraint_abstention_web", "v13_restraint_declarative_preference":
+			case "v13_restraint_negation_web":
 			case "set_effort", "v10_state_dependent_routing", "world_contact_research_email_result_usage", "world_theme_discover_set", "world_business_workflow", "v13_restraint_effort", "v13_restraint_email", "v13_restraint_calendar":
 			default:
 				continue
@@ -55,7 +63,39 @@ func TestV13NamedControlGeneratedCases(t *testing.T) {
 			if !p.ok || toolSignature(p.tools, c.FuzzyTrajectory, excluded) != toolSignature(c.ExpectedTools, c.FuzzyTrajectory, excluded) {
 				t.Errorf("seed %d %s prompt=%q predicted=%q expected=%q", seed, c.Category, c.Prompt, toolSignature(p.tools, c.FuzzyTrajectory, excluded), toolSignature(c.ExpectedTools, c.FuzzyTrajectory, excluded))
 			}
+			parser.applyControlMutation(p)
 		}
+	}
+}
+
+func TestV13EffectControlRequiresPublicValuesAndPriorUpdates(t *testing.T) {
+	parser := newToolParser(13)
+	parser.addV13WireCatalog(nil)
+	st := newStore(13)
+	question := "What's my library card number?"
+	if p := parser.classifyTool(question, st); p.ok {
+		t.Fatal("invented missing card")
+	}
+	for _, value := range []string{"1234", "9876"} {
+		st.pairs = []protocol.MemoryPair{{Prompt: "Remember my library card number: " + value + "."}}
+		p := parser.classifyTool(question, st)
+		if !p.ok || p.effectAnswer != value {
+			t.Fatalf("ignored changed record: %+v", p)
+		}
+	}
+	st.pairs = append(st.pairs, protocol.MemoryPair{Prompt: "Remember my library card number: 5555."})
+	if p := parser.classifyTool(question, st); p.ok {
+		t.Fatal("accepted conflicting values")
+	}
+	project := st.upsertProject("example lane")
+	project.toolNotePairID = "note-1"
+	question = `Which day is the handoff for "example lane" at Example Ltd now?`
+	if p := parser.classifyTool(question, st); p.ok {
+		t.Fatal("invented a future update")
+	}
+	parser.applyControlMutation(toolPrediction{ok: true, tools: []protocol.ToolSpec{{Name: "update_memory", RequiredArgs: map[string]string{"pair_id": "note-1", "content": "handoff is Thursday"}}}})
+	if p := parser.classifyTool(question, st); !p.ok || p.effectAnswer != "Thursday" {
+		t.Fatalf("lost actual update: %+v", p)
 	}
 }
 

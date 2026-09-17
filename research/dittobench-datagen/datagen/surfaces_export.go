@@ -74,6 +74,9 @@ func V13NamedToolGrammars() []NamedToolGrammar {
 	for _, intent := range v13ArgIntentGrammars["set_effort"] {
 		out = append(out, NamedToolGrammar{"set_effort", intent.grammar, nil, intent.value})
 	}
+	for _, fact := range v13PlantedFacts {
+		out = append(out, NamedToolGrammar{"v13_memory_effect_read", persona.Grammar{"root": append([]string(nil), fact.questions...)}, nil, fmt.Sprintf(fact.record, "%s")})
+	}
 	for _, pair := range v13Unknowables {
 		for i, leads := range [][]string{v13UnknowableLeads, v13AnswerableLeads} {
 			var roots []string
@@ -89,6 +92,19 @@ func V13NamedToolGrammars() []NamedToolGrammar {
 				tool = "search_web"
 			}
 			out = append(out, NamedToolGrammar{V13RestraintCategoryPrefix + string(v13FamilyAbstention), persona.Grammar{"root": roots}, nil, tool})
+		}
+	}
+	for _, question := range v13GeneralKnowledge {
+		for i, leads := range [][]string{v13NegationLeads, v13AffirmLeads} {
+			var roots []string
+			for _, lead := range leads {
+				roots = append(roots, lead+question+"?")
+			}
+			tool := ""
+			if i == 1 {
+				tool = "search_web"
+			}
+			out = append(out, NamedToolGrammar{V13RestraintCategoryPrefix + string(v13FamilyNegation), persona.Grammar{"root": roots}, nil, tool})
 		}
 	}
 	for _, noun := range []string{"accent", "chat font", "color mode"} {
@@ -108,6 +124,8 @@ func V13NamedToolGrammars() []NamedToolGrammar {
 	}{
 		{"world_memory_update", v13UpdatePrompts, []string{"alias", "client", "day"}},
 		{"world_memory_delete", v13DeletePrompts, []string{"nickname", "context", "relation", "employer"}},
+		{"v13_effect_update_read", v13FollowUpUpdatePrompts, []string{"alias", "client"}},
+		{"v13_effect_delete_read", v13FollowUpDeletePrompts, []string{"nickname", "relation", "employer"}},
 	} {
 		var roots []string
 		args := make([]any, len(entry.roles))

@@ -33,6 +33,7 @@ type toolParser struct {
 	routing   []frame // v12 composed routing-cue asks
 	discovery []discoveryFrameV13
 	named     []namedToolFrameV13
+	noteEdits map[string]string
 }
 
 // grammarExpansionCap bounds the enumeration of one grammar; the audited
@@ -146,9 +147,11 @@ func appendAll(prefixes, suffixes []string) []string {
 
 // toolPrediction is the parser's outcome signature for one tool prompt.
 type toolPrediction struct {
-	category string
-	tools    []protocol.ToolSpec
-	ok       bool
+	category     string
+	tools        []protocol.ToolSpec
+	ok           bool
+	effectAnswer string
+	memoryEffect bool
 }
 
 // classifyTool strips wrap lead-ins/trailers, matches the frame banks, and

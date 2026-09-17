@@ -317,8 +317,10 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 		}
 	}
 	primary := stores[gen.PrimaryUser]
+	routerTP := *tp
+	routerTP.noteEdits = map[string]string{}
 	fetchOrdinal := 0
-	for _, tc := range a.ToolCases {
+	for _, tc := range controlToolOrder(a) {
 		excluded := resultUsageArgs(tc.Category, needleValue(needles[tc.ID]))
 		want := toolSignature(tc.ExpectedTools, tc.FuzzyTrajectory, excluded)
 		pred := predictTool(tp, tc.Prompt, primary, &fetchOrdinal)
@@ -335,16 +337,30 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 		if pred.ok && got == want {
 			score = 1
 		}
-		sr.GIH.record("tool", "tool-prompts", tc.Category, pred.ok && pred.category == tc.Category, pred.ok, score)
+		family := toolControlFamily(a.BenchVersion, tc)
+		if a.BenchVersion >= protocol.BenchVersionV13 && tc.EffectAnswer != "" {
+			// Effect reads deliberately permit any internal memory trajectory.
+			// The obsolete category/ExpectedTools are not observable requirements.
+			score = scoreControlEffect(tc, pred)
+		}
+		sr.GIH.record("tool", "tool-prompts", tc.Category, pred.ok && pred.category == family, pred.ok, score)
+		tp.applyControlMutation(pred)
 		if rt != nil {
 			fam := rt.predict("tool:", tc.Prompt)
 			rscore := 0.0
 			// The router only names the category; the outcome still needs the
 			// frame parse for slots, so it is credited when the frame parse agrees.
-			if pred.ok && pred.category == fam && got == want {
-				rscore = 1
+			if tc.EffectAnswer != "" && a.BenchVersion >= protocol.BenchVersionV13 {
+				if fam == family {
+					rscore = scoreControlEffect(tc, routerTP.classifyTool(tc.Prompt, primary))
+				}
+			} else if pred.ok && pred.category == fam && got == want {
+				rscore = score
 			}
-			sr.Router.record("tool", "tool-prompts", tc.Category, fam == tc.Category, pred.ok && pred.category == fam, rscore)
+			if pred.category == fam {
+				routerTP.applyControlMutation(pred)
+			}
+			sr.Router.record("tool", "tool-prompts", tc.Category, fam == family, pred.ok && pred.category == fam, rscore)
 		}
 	}
 	sr.GIH.finish()
@@ -353,6 +369,29 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 		sr.Router.finish()
 	}
 	return sr, unmatched, missing
+}
+
+func toolControlFamily(version int, c protocol.ToolCase) string {
+	if version >= protocol.BenchVersionV13 && c.EffectAnswer != "" {
+		return "v13_memory_effect_read"
+	}
+	return c.Category
+}
+
+func controlToolOrder(a gen.DatasetArtifact) []protocol.ToolCase {
+	if a.BenchVersion >= protocol.BenchVersionV13 {
+		// The harness receives the generator's dependency repair, not the raw
+		// artifact order (which can put a read before the update it depends on).
+		return gen.V13ArrangeToolOrder(a.ToolCases)
+	}
+	return a.ToolCases
+}
+
+func scoreControlEffect(c protocol.ToolCase, p toolPrediction) float64 {
+	if !p.ok || !p.memoryEffect || len(p.tools) != 0 {
+		return 0
+	}
+	return grade.MemoryEffectV13(c.EffectAnswer, c.EffectForbidden, protocol.RunResponse{Answer: p.effectAnswer, FinalText: p.effectAnswer}).Score
 }
 
 // resultUsageArgs names the argument values a parser cannot know without

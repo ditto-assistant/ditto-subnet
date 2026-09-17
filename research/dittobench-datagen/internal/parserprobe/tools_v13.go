@@ -115,7 +115,39 @@ func (tp *toolParser) namedPredictionV13(prompt string, st *store) (toolPredicti
 			if candidate.category == "set_effort" {
 				return toolPrediction{category: candidate.category, ok: true, tools: []protocol.ToolSpec{{Name: "set_reasoning_effort", RequiredArgs: map[string]string{"effort": candidate.value}}}}, true
 			}
-			if candidate.category == "v13_restraint_abstention_web" {
+			if candidate.category == "v13_memory_effect_read" || strings.HasPrefix(candidate.category, "v13_effect_") {
+				p := toolPrediction{category: "v13_memory_effect_read", memoryEffect: true}
+				if st == nil {
+					return p, true
+				}
+				switch candidate.category {
+				case "v13_memory_effect_read":
+					f := compileFrame(candidate.value)
+					f.literalBudget = 3
+					answers := map[string]bool{}
+					for _, pair := range st.pairs {
+						if slots, ok := f.match(pair.Prompt); ok {
+							answers[slots[0]] = true
+						}
+					}
+					if len(answers) == 1 {
+						for answer := range answers {
+							p.effectAnswer = answer
+						}
+					}
+				case "v13_effect_update_read":
+					if project := st.projectByAlias(values["alias"]); project != nil {
+						p.effectAnswer = strings.TrimPrefix(tp.noteEdits[project.toolNotePairID], "handoff is ")
+					}
+				case "v13_effect_delete_read":
+					if person := st.personByNick(values["nickname"], values["relation"]); person != nil {
+						p.effectAnswer = person.email
+					}
+				}
+				p.ok = p.effectAnswer != ""
+				return p, true
+			}
+			if candidate.category == "v13_restraint_abstention_web" || candidate.category == "v13_restraint_negation_web" {
 				p := toolPrediction{category: candidate.category, ok: true}
 				if candidate.value != "" {
 					p.tools = []protocol.ToolSpec{{Name: candidate.value}}
@@ -164,6 +196,25 @@ func (tp *toolParser) namedPredictionV13(prompt string, st *store) (toolPredicti
 		}
 	}
 	return toolPrediction{}, false
+}
+
+// Track only updates actually derived by this control from an earlier public
+// request. A follow-up never receives the hidden mutation's expected answer.
+func (tp *toolParser) applyControlMutation(p toolPrediction) {
+	if !p.ok {
+		return
+	}
+	if tp.noteEdits == nil {
+		tp.noteEdits = map[string]string{}
+	}
+	for _, tool := range p.tools {
+		if tool.Name == "update_memory" && tool.RequiredArgs["pair_id"] != "" {
+			tp.noteEdits[tool.RequiredArgs["pair_id"]] = tool.RequiredArgs["content"]
+		}
+		if tool.Name == "delete_memory" {
+			delete(tp.noteEdits, tool.RequiredArgs["pair_id"])
+		}
+	}
 }
 
 // Resolve a state-dependent route from the public alias and stored reply,
