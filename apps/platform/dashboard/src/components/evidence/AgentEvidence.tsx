@@ -278,7 +278,10 @@ function screeningMetaRest(a: ScreeningAttempt, isOld: boolean): string {
   if (a.quarantine_resolution === "release") {
     meta += " · Operator released this submission from quarantine.";
   } else if (a.quarantine_resolution === "rescreen") {
-    meta += " · Operator sent this submission through screening again.";
+    meta +=
+      a.status === "rejected"
+        ? " · Screening rejected this submission."
+        : " · Operator sent this submission through screening again.";
   } else if (a.quarantine_resolution === "reject") {
     meta += " · Operator rejected this submission after quarantine review.";
   } else if (isOld && a.status === "expired") {

@@ -915,6 +915,38 @@ describe("async agent evidence", () => {
     );
   }
 
+  it("does not describe a historical adjudicated rejection as a new rescreen", async () => {
+    stubPipelineFetch(() =>
+      Promise.resolve(
+        pipelineResponse({
+          screening_attempts: [
+            {
+              policy_version: 13,
+              status: "rejected",
+              quarantine_resolution: "rescreen",
+              reason: "The served fallback overrides the model answer.",
+              quarantine_resolution_reason: "The served fallback overrides the model answer.",
+              review_notes: [
+                {
+                  kind: "concern",
+                  stage: "l1",
+                  summary: "A host override is reachable.",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    render(() => <AgentEvidence entry={summary} />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("A host override is reachable."),
+    );
+    expect(document.body.textContent).toContain("Screening rejected this submission.");
+    expect(document.body.textContent).not.toContain("sent this submission through screening again");
+    expect(document.body.textContent).toContain("Review reason:");
+  });
+
   it("paints the summary while the evidence record loads automatically", async () => {
     let resolvePipeline: ((response: Response) => void) | undefined;
     stubPipelineFetch(
