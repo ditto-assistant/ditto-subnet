@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 func testProfile() Profile { return Profile{"rewrite-v1", "provider-a", "validator-v1", "provider-b"} }
@@ -176,5 +177,25 @@ func TestFullProfileProducesBoundedReceiptAndExactReplay(t *testing.T) {
 	var parsed Receipt
 	if json.Unmarshal(receipt, &parsed) != nil || !parsed.Accepted || parsed.DatasetSHA256 != digest(data) {
 		t.Fatal("invalid receipt")
+	}
+}
+
+func TestProduceSemanticRetriesAreBoundedAndRetained(t *testing.T) {
+	calls := 0
+	c := fakeClient(t, func(_ int, request map[string]any) (int, any) {
+		calls++
+		if request["model"] == "validator-v1" {
+			return 200, completion(`{"accepted":false}`)
+		}
+		return 200, completion(`{"text":"changed text"}`)
+	})
+	base := gen.DatasetArtifact{BenchVersion: 13, SurfaceSalt: 1, ToolCases: []protocol.ToolCase{{ID: "t", Prompt: "source text"}}}
+	var diagnostics []Diagnostic
+	data, receipt, err := c.ProduceWithDiagnostics(context.Background(), base, 1, func(d Diagnostic) { diagnostics = append(diagnostics, d) })
+	if err == nil || data != nil || receipt != nil || calls != 2*maxSurfaceAttempts {
+		t.Fatalf("retry boundary failed: calls=%d err=%v", calls, err)
+	}
+	if len(diagnostics) != 1 || len(diagnostics[0].Receipt.Rejected) != maxSurfaceAttempts {
+		t.Fatal("missing rejected-call provenance")
 	}
 }

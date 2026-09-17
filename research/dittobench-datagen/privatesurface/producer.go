@@ -26,6 +26,7 @@ const maxResponse = 1 << 20
 const maxSurfaceAttempts = 5
 
 var errSemantic = errors.New("private producer: semantic validation rejected")
+var errProtected = errors.New("private producer: protected rewrite rejected")
 
 const retryPrompt = ` An earlier candidate failed independent semantic validation. Stay closer to the source. Keep any phrase you cannot safely paraphrase verbatim and only rewrite safe surrounding phrasing. Return the source unchanged if no safe rewrite exists. Do not weaken any requirement above.`
 
@@ -51,7 +52,7 @@ func (p Profile) Digest() (string, error) {
 	if p.RewriteModel == p.ValidatorModel {
 		return "", errors.New("private producer: independent validator model required")
 	}
-	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", p, rewritePrompt, validatePrompt, retryPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
+	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "bounded-semantic-and-protected-retries", p, rewritePrompt, validatePrompt, retryPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
 	return digest(raw), nil
 }
 
@@ -204,7 +205,7 @@ func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, re
 	}
 	text, err := restore(*rewritten.Text)
 	if err != nil {
-		return "", SurfaceReceipt{}, err
+		return *rewritten.Text, SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(*rewritten.Text)), Rewrite: rewrite}, errProtected
 	}
 	rewritten.Text = &text
 	content, validation, err := c.complete(ctx, c.profile.ValidatorModel, c.profile.ValidatorProvider, validatePrompt, map[string]any{"before": req.Text, "after": *rewritten.Text, "protected": req.Protected}, "accepted", "boolean", 0)
@@ -287,7 +288,7 @@ func (c *Client) ProduceWithDiagnostics(ctx context.Context, base gen.DatasetArt
 				var rejected []SurfaceReceipt
 				for attempt := 0; attempt < maxSurfaceAttempts; attempt++ {
 					after, receipt, err = c.probeOne(ctx, req, attempt > 0)
-					if !errors.Is(err, errSemantic) {
+					if !errors.Is(err, errSemantic) && !errors.Is(err, errProtected) {
 						break
 					}
 					rejected = append(rejected, receipt)
