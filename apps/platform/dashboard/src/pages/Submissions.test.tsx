@@ -815,6 +815,31 @@ describe("screening dispute form", () => {
 describe("async agent evidence", () => {
   const summary = loadFixture<AgentSummaryPayload>("agent-top-summary");
 
+  it.each([
+    ["rejected", 2, "rejected this submission"],
+    ["rejected", 3, "rejected this submission"],
+    ["screening_failed", 3, "not a submission rejection"],
+    ["under_review", 3, "held for integrity review"],
+    ["screening", 3, "currently checking"],
+  ])("shows %s ahead of %i historical scores", async (status, score_count, expected) => {
+    render(() => (
+      <AgentEvidence
+        entry={{ ...summary, status, score_count }}
+        pipeline={() => undefined}
+        pipelineLoading={() => true}
+        pipelineFetching={() => true}
+        pipelineError={() => null}
+        retryPipeline={() => undefined}
+      />
+    ));
+    await waitFor(() => {
+      const text = document.querySelector(".pipeline-current-message")?.textContent;
+      expect(text).toContain(expected);
+      expect(text).not.toContain("Canonical validation complete");
+      expect(text).not.toContain("Waiting for");
+    });
+  });
+
   function body(): HTMLElement {
     return document.querySelector("[data-agent-history-body]") as HTMLElement;
   }
