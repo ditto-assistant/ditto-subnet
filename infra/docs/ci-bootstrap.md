@@ -83,8 +83,8 @@ trusted Worker from the current default branch.
 ## `coding-hippius-probe`
 
 The manual Hippius capability probe uses its own environment and GCP identity,
-never `infra-apply` or `GCP_TF_APPLY_SA`. `ai-mountain` and Peyton can approve
-their own runs here. The environment allows only the `main` branch (not tags).
+never `infra-apply` or `GCP_TF_APPLY_SA`. Peyton approves runs here. The
+environment allows only the `main` branch (not tags).
 Keep all Terraform and other protected infrastructure approvals unchanged.
 
 The `gcp-platform` root owns `hippius-probe.tf`: a separate federation pool,
@@ -93,13 +93,13 @@ secrets. Its only Secret Manager permissions are `versions.list` and
 `versions.access`. The identity has no project roles, Terraform state access,
 or service-account impersonation grants. Federation requires the exact repo
 and owner IDs, workflow path, main branch, manual event, environment subject,
-and Peyton or ai-mountain's immutable actor ID.
+and Peyton's immutable actor ID.
 
 Before enabling the environment, apply the independent review ruleset in
 `infra/github/hippius-probe-ruleset.json`. It requires one approval from the
 existing `admin` team for changes to the workflow, executable probe files,
 isolated dependency lock, and delegation configuration. Admins retain emergency
-bypass; ai-mountain has no ruleset bypass. GitHub owns this configuration; the
+bypass. GitHub owns this configuration; the
 JSON files record the exact reproducible API payloads. Do not change the
 repository-wide CODEOWNERS or review requirements for unrelated files.
 
@@ -126,7 +126,7 @@ project and its build hooks are not installed. Artifact upload requires the
 probe step to succeed, including checking all three output files for secret
 bytes. Failed probes or sanitization produce no uploaded artifact.
 
-To revoke delegated access, remove ai-mountain from the probe environment's
-reviewers and remove his actor ID from the reviewed provider condition. A
-provider disable revokes federation entirely. Neither action requires widening
-`infra-apply`.
+To revoke delegated access, remove the operator from the probe environment's
+reviewers and remove the matching actor ID from the reviewed provider condition.
+A provider disable revokes federation entirely. Neither action requires
+widening `infra-apply`.

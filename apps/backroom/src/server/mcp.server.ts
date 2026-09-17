@@ -272,6 +272,8 @@ export type BackroomEnv = {
   SESSION_SECRET: string
   /** Comma-separated `@omniaura.ai` administrators who may hold write grants. */
   BACKROOM_ADMIN_EMAILS?: string
+  /** Comma-separated identities denied on every console and MCP request. */
+  BACKROOM_BLOCKED_EMAILS?: string
 }
 
 export const WRITE_TOOL_NAMES = new Set([

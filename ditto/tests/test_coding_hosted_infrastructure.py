@@ -28,7 +28,7 @@ def test_production_intent_names_one_custodian_with_database_path() -> None:
     prod = (STACK / "prod.auto.tfvars").read_text()
     assert re.search(r"(?m)^enable_coding_hosted_host\s*=\s*true\s*$", prod)
     assert re.search(
-        r'(?m)^coding_hosted_operators\s*=\s*\["user:brian@omniaura\.ai"\]\s*$',
+        r'(?m)^coding_hosted_operators\s*=\s*\["user:peyton@omniaura\.ai"\]\s*$',
         prod,
     )
     assert re.search(r"(?m)^enable_coding_hosted_postgres\s*=\s*true\s*$", prod)

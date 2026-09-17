@@ -40,7 +40,7 @@ resource "google_iam_workload_identity_pool_provider" "hippius_probe" {
     "assertion.ref == 'refs/heads/main'",
     "assertion.event_name == 'workflow_dispatch'",
     "assertion.workflow_ref == 'ditto-assistant/ditto-subnet/.github/workflows/coding-hippius-probe.yml@refs/heads/main'",
-    "assertion.actor_id in ['6766068', '170978465']",
+    "assertion.actor_id == '6766068'",
   ])
   oidc {
     issuer_uri = "https://token.actions.githubusercontent.com"

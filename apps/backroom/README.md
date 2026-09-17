@@ -49,10 +49,12 @@ Runtime configuration is in `wrangler.jsonc`. Google OAuth must register
 `https://backroom.dittobench.ai/auth/callback`. The existing product Backroom
 callback remains registered separately. Any verified `@omniaura.ai` Google
 Workspace account receives read access; only `BACKROOM_ADMIN_EMAILS` receives
-write access. Sessions expire after 7 days and roles are recomputed from the
-current Worker binding on every request. Workspace-account revocation has an
-accepted maximum 7-day read-only window for an already-issued session; see
-`docs/oauth.md` for the immediate-revocation procedure.
+write access. `BACKROOM_BLOCKED_EMAILS` denies named identities on every console
+and MCP request, including requests carrying an already-issued token. Sessions
+expire after 7 days and roles are recomputed from the current Worker bindings on
+every request. Workspace-account revocation alone has an accepted maximum 7-day
+read-only window for an already-issued session; see `docs/oauth.md` for the
+immediate-revocation procedure.
 
 This deployment does not use Firebase, `api.heyditto.ai`, or the private Ditto
 company-membership endpoint. It only sends operator-attributed requests to the
