@@ -7861,7 +7861,11 @@ async def submit_transcript(
     # Private transcripts can expose answers while another CRN member still
     # needs the dataset. Retain privately; a later explicit closure/reveal
     # operation must establish that no future work can reuse this artifact.
-    if storage.public_bucket is not None and private_dataset is None:
+    if (
+        storage.public_bucket is not None
+        and private_dataset is None
+        and score.bench_version != 13
+    ):
         try:
             if not await storage.object_exists(key=key, bucket=storage.public_bucket):
                 await storage.put_object(

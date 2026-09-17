@@ -11372,6 +11372,29 @@ def _install_generator(app: FastAPI, generator: object) -> None:
 
 
 class TestPublicDatasetReveal:
+    async def test_v13_reveal_waits_for_work_set_closure(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_k3(
+            session_maker, miner=_MINER_A, composites=[0.4, 0.5, 0.6]
+        )
+        async with session_maker() as session, session.begin():
+            scores = await session.scalars(
+                select(Score).where(Score.agent_id == UUID(agent_id))
+            )
+            for score in scores:
+                score.bench_version = 13
+        _install_db(app, session_maker)
+        generator = _FakeRevealGenerator()
+        _install_generator(app, generator)
+        response = await client.get(f"/api/v1/public/agent/{agent_id}/dataset")
+        assert response.status_code == 409
+        assert response.headers["cache-control"] == "no-store"
+        assert generator.calls == 0
+
     async def test_reveals_full_labeled_dataset_for_finalized_agent(
         self,
         app: FastAPI,

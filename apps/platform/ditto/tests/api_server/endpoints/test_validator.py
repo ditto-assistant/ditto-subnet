@@ -9670,6 +9670,38 @@ class TestTranscriptPublication:
         assert response.status_code == 200
         assert storage.put_object.await_count == 2  # still exactly two writes
 
+    async def test_v13_transcript_is_private_even_without_dataset_metadata(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        storage.public_bucket = "ditto-public"
+        storage.put_object = AsyncMock()
+        storage.object_exists = AsyncMock(return_value=False)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await self._record_score_with_transcript(client, session_maker, agent_id)
+        async with session_maker() as session, session.begin():
+            score = await session.scalar(
+                select(Score).where(Score.agent_id == agent_id)
+            )
+            assert score is not None
+            score.bench_version = 13
+        response = await client.put(
+            f"/api/v1/validator/agent/{agent_id}/transcript/run_t_0",
+            content=self._TRANSCRIPT,
+            headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
+        )
+        assert response.status_code == 200, response.text
+        storage.put_object.assert_awaited_once_with(
+            key=f"transcripts/{self._digest}.json",
+            body=self._TRANSCRIPT,
+            content_type="application/json",
+        )
+
     async def test_submit_transcript_stores_without_public_mirror(
         self,
         app: FastAPI,
