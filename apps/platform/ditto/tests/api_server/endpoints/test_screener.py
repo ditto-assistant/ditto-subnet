@@ -4890,7 +4890,7 @@ class TestClaim:
             )
             assert agent is not None and agent.status == AgentStatus.REJECTED
             assert agent.screening_reason == adjudication.reason
-            assert len(agent.screening_reason) > 600
+            assert len(adjudication.reason) > 600
             assert attempt is not None and attempt.status == "rejected"
             assert attempt.public_reason == adjudication.reason
             assert retained is not None and retained.status == "resolved"
