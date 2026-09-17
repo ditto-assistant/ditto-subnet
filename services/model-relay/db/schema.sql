@@ -817,6 +817,19 @@ CREATE FUNCTION public.reject_benchmark_canary_score() RETURNS trigger
         $$;
 
 
+--
+-- Name: reject_private_benchmark_dataset_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_private_benchmark_dataset_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+          RAISE EXCEPTION 'private benchmark dataset is immutable';
+        END;
+        $$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -3268,6 +3281,34 @@ CREATE TABLE public.owner_attestations (
     CONSTRAINT ck_owner_attestations_owner_attestations_lo_key_kind_check CHECK ((lo_key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text]))),
     CONSTRAINT ck_owner_attestations_owner_attestations_lo_signature_check CHECK ((length(lo_signature) = 128)),
     CONSTRAINT ck_owner_attestations_owner_attestations_revocation_pair CHECK (((revoked_at IS NULL) = (revoked_by IS NULL)))
+);
+
+
+--
+-- Name: private_benchmark_datasets; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.private_benchmark_datasets (
+    dataset_id uuid NOT NULL,
+    identity_sha256 text NOT NULL,
+    scope text NOT NULL,
+    bench_version integer NOT NULL,
+    seed bigint NOT NULL,
+    run_size text NOT NULL,
+    transform_profile_sha256 text NOT NULL,
+    validation_receipt_sha256 text NOT NULL,
+    validation_receipt_bytes bytea NOT NULL,
+    base_sha256 text NOT NULL,
+    dataset_sha256 text NOT NULL,
+    base_bytes bytea NOT NULL,
+    dataset_bytes bytea NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_private_benchmark_datasets_content_hashes CHECK (((base_sha256 = encode(sha256(base_bytes), 'hex'::text)) AND (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text)) AND (validation_receipt_sha256 = encode(sha256(validation_receipt_bytes), 'hex'::text)) AND ((octet_length(validation_receipt_bytes) >= 1) AND (octet_length(validation_receipt_bytes) <= 1048576)))),
+    CONSTRAINT ck_private_benchmark_datasets_digest_format CHECK (((identity_sha256 ~ '^[0-9a-f]{64}$'::text) AND (transform_profile_sha256 ~ '^[0-9a-f]{64}$'::text) AND (validation_receipt_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_private_benchmark_datasets_run_size CHECK ((run_size = ANY (ARRAY['small'::text, 'medium'::text, 'full'::text]))),
+    CONSTRAINT ck_private_benchmark_datasets_scope CHECK (((length(scope) >= 1) AND (length(scope) <= 256))),
+    CONSTRAINT ck_private_benchmark_datasets_size CHECK ((((octet_length(base_bytes) >= 1) AND (octet_length(base_bytes) <= 33554432)) AND ((octet_length(dataset_bytes) >= 1) AND (octet_length(dataset_bytes) <= 33554432)))),
+    CONSTRAINT ck_private_benchmark_datasets_version_seed CHECK (((bench_version = 13) AND (seed >= 0)))
 );
 
 
@@ -6197,6 +6238,14 @@ ALTER TABLE ONLY public.miner_ditto_links
 
 
 --
+-- Name: private_benchmark_datasets pk_private_benchmark_datasets; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.private_benchmark_datasets
+    ADD CONSTRAINT pk_private_benchmark_datasets PRIMARY KEY (dataset_id);
+
+
+--
 -- Name: queue_policy_settings_revisions pk_queue_policy_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6826,6 +6875,14 @@ ALTER TABLE ONLY public.coding_hosted_private_tasks
 
 ALTER TABLE ONLY public.coding_hosted_terminal_reservations
     ADD CONSTRAINT uq_coding_hosted_terminal_reservations_identity_sha256 UNIQUE (identity_sha256);
+
+
+--
+-- Name: private_benchmark_datasets uq_private_benchmark_datasets_identity_sha256; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.private_benchmark_datasets
+    ADD CONSTRAINT uq_private_benchmark_datasets_identity_sha256 UNIQUE (identity_sha256);
 
 
 --
@@ -8160,6 +8217,13 @@ CREATE TRIGGER efficiency_bonuses_curve_guard BEFORE INSERT OR UPDATE OF agent_i
 --
 
 CREATE TRIGGER efficiency_cohort_snapshots_curve_guard BEFORE INSERT OR UPDATE ON public.efficiency_cohort_snapshots FOR EACH ROW EXECUTE FUNCTION public.guard_efficiency_snapshot_curve();
+
+
+--
+-- Name: private_benchmark_datasets private_benchmark_dataset_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER private_benchmark_dataset_immutable BEFORE DELETE OR UPDATE ON public.private_benchmark_datasets FOR EACH ROW EXECUTE FUNCTION public.reject_private_benchmark_dataset_mutation();
 
 
 --
