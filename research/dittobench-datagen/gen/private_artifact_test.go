@@ -25,6 +25,9 @@ func TestDecodePrivateArtifactPinsBytesAndContract(t *testing.T) {
 	if err != nil || string(mustMarshal(t, got)) != string(raw) {
 		t.Fatalf("valid pinned artifact rejected: %v", err)
 	}
+	if !reflect.DeepEqual(got, base) {
+		t.Fatal("decoded execution artifact lost non-serialized grading metadata")
+	}
 	for _, tc := range []struct {
 		name string
 		edit func(*DatasetArtifact)
@@ -61,5 +64,42 @@ func TestDecodePrivateArtifactPinsBytesAndContract(t *testing.T) {
 	}
 	if _, err := DecodePrivateArtifact(raw, privateArtifactDigest(raw), 4242, "invalid"); err == nil {
 		t.Fatal("accepted unknown profile")
+	}
+}
+
+func TestDecodePrivateArtifactRestoresFullPrivateGradingContract(t *testing.T) {
+	profile, _ := ProfileForVersion("full", 13)
+	base, err := GenerateDatasetWithSurface(1, profile, 13, SurfaceOptions{Salt: 91})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Plumbing-only text edit, not a qualification claim.
+	base.ToolCases[0].Prompt += "\n"
+	base.MemoryCases[0].Question += "\n"
+	raw := mustMarshal(t, base)
+	got, err := DecodePrivateArtifact(raw, privateArtifactDigest(raw), 1, "full")
+	if err != nil {
+		t.Fatal(err)
+	}
+	claims, restraints, dependencies := 0, 0, 0
+	for _, c := range base.MemoryCases {
+		claims += len(c.Claims)
+	}
+	for _, c := range base.ToolCases {
+		if c.Restraint != nil {
+			restraints++
+		}
+		if c.RunAfterCaseID != "" {
+			dependencies++
+		}
+	}
+	if claims == 0 || restraints == 0 || dependencies == 0 {
+		t.Fatal("fixture does not exercise grader-only metadata")
+	}
+	if !reflect.DeepEqual(got, base) {
+		t.Fatal("full private execution lost claims, twins, restraint or mutation metadata")
+	}
+	if string(mustMarshal(t, got)) != string(raw) {
+		t.Fatal("rehydration changed the stored private surfaces")
 	}
 }

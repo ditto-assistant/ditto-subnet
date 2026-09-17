@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 const MaxPrivateArtifactBytes = 32 << 20
@@ -90,5 +92,41 @@ func DecodePrivateArtifact(raw []byte, expectedSHA string, seed int64, runSize s
 	if err != nil || bytes.Equal(before, after) {
 		return fail("missing private transformation")
 	}
-	return artifact, nil
+	// JSON deliberately excludes grader-only claims, restraint/twin rules and
+	// mutation dependencies. Return the authoritative generated contract with
+	// ONLY its text replaced by verified stored surfaces; returning the decoded
+	// JSON object would silently discard those grading checks.
+	seenPairs := map[string][2]string{}
+	copyPair := func(user string, target *protocol.MemoryPair, source protocol.MemoryPair) error {
+		if user == "" {
+			user = PrimaryUser
+		}
+		key, _ := json.Marshal([]string{user, source.PairID})
+		texts := [2]string{source.Prompt, source.Response}
+		if old, ok := seenPairs[string(key)]; ok && old != texts {
+			return errors.New("conflicting repeated private surface")
+		}
+		seenPairs[string(key)] = texts
+		target.Prompt, target.Response = source.Prompt, source.Response
+		return nil
+	}
+	for i := range base.ToolCases {
+		base.ToolCases[i].Prompt = artifact.ToolCases[i].Prompt
+		for j := range base.ToolCases[i].PrerequisitePairs {
+			if err := copyPair(PrimaryUser, &base.ToolCases[i].PrerequisitePairs[j], artifact.ToolCases[i].PrerequisitePairs[j]); err != nil {
+				return fail(err.Error())
+			}
+		}
+	}
+	for i := range base.MemoryCases {
+		base.MemoryCases[i].Question = artifact.MemoryCases[i].Question
+	}
+	for i := range base.MemoryWaves {
+		for j := range base.MemoryWaves[i].Pairs {
+			if err := copyPair(base.MemoryWaves[i].UserID, &base.MemoryWaves[i].Pairs[j], artifact.MemoryWaves[i].Pairs[j]); err != nil {
+				return fail(err.Error())
+			}
+		}
+	}
+	return base, nil
 }
