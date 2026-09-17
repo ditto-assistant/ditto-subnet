@@ -114,6 +114,49 @@ func ApplyPrivateSurface(ctx context.Context, input DatasetArtifact, transformer
 		*target = after
 		return nil
 	}
+	if err := visitPrivateSurfaces(&output, transform); err != nil {
+		return fail(err.Error())
+	}
+	if !changed {
+		return fail("unchanged artifact is not a private transformation")
+	}
+	return output, nil
+}
+
+// PrivateSurfaceRequests plans unique provider inputs without running any
+// transformer or approving any output. Repeated graph-local records share one
+// request. The returned strings/slices do not alias mutable input state.
+func PrivateSurfaceRequests(input DatasetArtifact) ([]PrivateSurfaceRequest, error) {
+	if input.BenchVersion != protocol.BenchVersionV13 || input.SurfaceSalt == 0 {
+		return nil, errors.New("private surface: requires a salted v13 artifact")
+	}
+	protected := v13GlobalProtected(&input)
+	seen := map[string]string{}
+	var requests []PrivateSurfaceRequest
+	err := visitPrivateSurfaces(&input, func(location string, text *string) error {
+		if old, ok := seen[location]; ok {
+			if old != *text {
+				return errors.New("private surface: conflicting repeated surface")
+			}
+			return nil
+		}
+		seen[location] = *text
+		request := PrivateSurfaceRequest{Location: location, Text: *text}
+		for _, value := range protected {
+			if strings.Contains(*text, value) {
+				request.Protected = append(request.Protected, value)
+			}
+		}
+		requests = append(requests, request)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return requests, nil
+}
+
+func visitPrivateSurfaces(output *DatasetArtifact, transform func(string, *string) error) error {
 	pair := func(user string, p *protocol.MemoryPair) error {
 		if user == "" {
 			user = PrimaryUser
@@ -129,30 +172,27 @@ func ApplyPrivateSurface(ctx context.Context, input DatasetArtifact, transformer
 	for i := range output.ToolCases {
 		c := &output.ToolCases[i]
 		if err := transform("tool:"+c.ID, &c.Prompt); err != nil {
-			return fail(err.Error())
+			return err
 		}
 		for j := range c.PrerequisitePairs {
 			if err := pair(PrimaryUser, &c.PrerequisitePairs[j]); err != nil {
-				return fail(err.Error())
+				return err
 			}
 		}
 	}
 	for i := range output.MemoryCases {
 		c := &output.MemoryCases[i]
 		if err := transform("case:"+c.ID, &c.Question); err != nil {
-			return fail(err.Error())
+			return err
 		}
 	}
 	for i := range output.MemoryWaves {
 		w := &output.MemoryWaves[i]
 		for j := range w.Pairs {
 			if err := pair(w.UserID, &w.Pairs[j]); err != nil {
-				return fail(err.Error())
+				return err
 			}
 		}
 	}
-	if !changed {
-		return fail("unchanged artifact is not a private transformation")
-	}
-	return output, nil
+	return nil
 }
