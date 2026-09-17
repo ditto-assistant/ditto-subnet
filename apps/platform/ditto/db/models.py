@@ -120,6 +120,64 @@ class PrivateBenchmarkDataset(Base):
     )
 
 
+class PrivateBenchmarkPreparation(Base):
+    """Durable, fenced preparation intent; no lease or qualification authority."""
+
+    __tablename__ = "private_benchmark_preparations"
+    __table_args__ = (
+        UniqueConstraint("identity_sha256"),
+        ForeignKeyConstraint(["dataset_id"], ["private_benchmark_datasets.dataset_id"]),
+        CheckConstraint("bench_version = 13 AND seed >= 0", name="version_seed"),
+        CheckConstraint("run_size IN ('small', 'medium', 'full')", name="run_size"),
+        CheckConstraint("length(scope) BETWEEN 1 AND 256", name="scope"),
+        CheckConstraint(
+            "identity_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "transform_profile_sha256 ~ '^[0-9a-f]{64}$'",
+            name="digest_format",
+        ),
+        CheckConstraint(
+            "octet_length(surface_salt) = 8 AND "
+            "surface_salt <> decode('0000000000000000', 'hex')",
+            name="salt",
+        ),
+        CheckConstraint(
+            "state IN ('pending', 'running', 'ready', 'failed') AND "
+            "attempts BETWEEN 0 AND 3",
+            name="state_attempts",
+        ),
+        CheckConstraint(
+            "(state = 'running') = (claim_until IS NOT NULL) AND "
+            "(state <> 'running' OR claim_token IS NOT NULL) AND "
+            "(state = 'ready') = (dataset_id IS NOT NULL)",
+            name="state_binding",
+        ),
+        Index(
+            "ix_private_benchmark_preparation_claim",
+            "transform_profile_sha256",
+            "state",
+            "created_at",
+        ),
+    )
+
+    preparation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    identity_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    run_size: Mapped[str] = mapped_column(Text, nullable=False)
+    transform_profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    surface_salt: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    claim_token: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    claim_until: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    dataset_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    failure_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class Agent(Base):
     """One row of the ``agents`` table.
 

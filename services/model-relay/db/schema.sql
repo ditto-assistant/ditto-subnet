@@ -798,6 +798,30 @@ CREATE FUNCTION public.guard_validator_ticket_purpose() RETURNS trigger
 
 
 --
+-- Name: protect_private_benchmark_preparation_identity(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.protect_private_benchmark_preparation_identity() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'private preparation history is retained';
+          END IF;
+          IF ROW(OLD.preparation_id, OLD.identity_sha256, OLD.scope,
+                 OLD.bench_version, OLD.seed, OLD.run_size,
+                 OLD.transform_profile_sha256, OLD.surface_salt, OLD.created_at)
+             IS DISTINCT FROM
+             ROW(NEW.preparation_id, NEW.identity_sha256, NEW.scope,
+                 NEW.bench_version, NEW.seed, NEW.run_size,
+                 NEW.transform_profile_sha256, NEW.surface_salt, NEW.created_at)
+             OR OLD.state = 'ready' THEN
+            RAISE EXCEPTION 'private preparation identity or ready result is immutable';
+          END IF;
+          RETURN NEW;
+        END; $$;
+
+
+--
 -- Name: reject_benchmark_canary_score(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -3309,6 +3333,36 @@ CREATE TABLE public.private_benchmark_datasets (
     CONSTRAINT ck_private_benchmark_datasets_scope CHECK (((length(scope) >= 1) AND (length(scope) <= 256))),
     CONSTRAINT ck_private_benchmark_datasets_size CHECK ((((octet_length(base_bytes) >= 1) AND (octet_length(base_bytes) <= 33554432)) AND ((octet_length(dataset_bytes) >= 1) AND (octet_length(dataset_bytes) <= 33554432)))),
     CONSTRAINT ck_private_benchmark_datasets_version_seed CHECK (((bench_version = 13) AND (seed >= 0)))
+);
+
+
+--
+-- Name: private_benchmark_preparations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.private_benchmark_preparations (
+    preparation_id uuid NOT NULL,
+    identity_sha256 text NOT NULL,
+    scope text NOT NULL,
+    bench_version integer NOT NULL,
+    seed bigint NOT NULL,
+    run_size text NOT NULL,
+    transform_profile_sha256 text NOT NULL,
+    surface_salt bytea NOT NULL,
+    state text NOT NULL,
+    attempts integer NOT NULL,
+    claim_token uuid,
+    claim_until timestamp with time zone,
+    dataset_id uuid,
+    failure_code text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_private_benchmark_preparations_digest_format CHECK (((identity_sha256 ~ '^[0-9a-f]{64}$'::text) AND (transform_profile_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_private_benchmark_preparations_run_size CHECK ((run_size = ANY (ARRAY['small'::text, 'medium'::text, 'full'::text]))),
+    CONSTRAINT ck_private_benchmark_preparations_salt CHECK (((octet_length(surface_salt) = 8) AND (surface_salt <> decode('0000000000000000'::text, 'hex'::text)))),
+    CONSTRAINT ck_private_benchmark_preparations_scope CHECK (((length(scope) >= 1) AND (length(scope) <= 256))),
+    CONSTRAINT ck_private_benchmark_preparations_state_attempts CHECK (((state = ANY (ARRAY['pending'::text, 'running'::text, 'ready'::text, 'failed'::text])) AND ((attempts >= 0) AND (attempts <= 3)))),
+    CONSTRAINT ck_private_benchmark_preparations_state_binding CHECK ((((state = 'running'::text) = (claim_until IS NOT NULL)) AND ((state <> 'running'::text) OR (claim_token IS NOT NULL)) AND ((state = 'ready'::text) = (dataset_id IS NOT NULL)))),
+    CONSTRAINT ck_private_benchmark_preparations_version_seed CHECK (((bench_version = 13) AND (seed >= 0)))
 );
 
 
@@ -6246,6 +6300,14 @@ ALTER TABLE ONLY public.private_benchmark_datasets
 
 
 --
+-- Name: private_benchmark_preparations pk_private_benchmark_preparations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.private_benchmark_preparations
+    ADD CONSTRAINT pk_private_benchmark_preparations PRIMARY KEY (preparation_id);
+
+
+--
 -- Name: queue_policy_settings_revisions pk_queue_policy_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6886,6 +6948,14 @@ ALTER TABLE ONLY public.private_benchmark_datasets
 
 
 --
+-- Name: private_benchmark_preparations uq_private_benchmark_preparations_identity_sha256; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.private_benchmark_preparations
+    ADD CONSTRAINT uq_private_benchmark_preparations_identity_sha256 UNIQUE (identity_sha256);
+
+
+--
 -- Name: screener_node_bootstrap_grants uq_screener_node_bootstrap_grants_token_hash; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7475,6 +7545,13 @@ CREATE INDEX inference_requests_started_idx ON public.inference_requests USING b
 --
 
 CREATE INDEX inference_routing_audit_history_idx ON public.inference_routing_audit USING btree (recorded_at);
+
+
+--
+-- Name: ix_private_benchmark_preparation_claim; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX ix_private_benchmark_preparation_claim ON public.private_benchmark_preparations USING btree (transform_profile_sha256, state, created_at);
 
 
 --
@@ -8227,6 +8304,13 @@ CREATE TRIGGER private_benchmark_dataset_immutable BEFORE DELETE OR UPDATE ON pu
 
 
 --
+-- Name: private_benchmark_preparations private_benchmark_preparation_identity; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER private_benchmark_preparation_identity BEFORE DELETE OR UPDATE ON public.private_benchmark_preparations FOR EACH ROW EXECUTE FUNCTION public.protect_private_benchmark_preparation_identity();
+
+
+--
 -- Name: scores scores_reject_benchmark_canary; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -8893,6 +8977,14 @@ ALTER TABLE ONLY public.inference_grants
 
 ALTER TABLE ONLY public.inference_requests
     ADD CONSTRAINT fk_inference_requests_grant_id_inference_grants FOREIGN KEY (grant_id) REFERENCES public.inference_grants(grant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: private_benchmark_preparations fk_private_benchmark_preparations_dataset_id_private_be_c0a3; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.private_benchmark_preparations
+    ADD CONSTRAINT fk_private_benchmark_preparations_dataset_id_private_be_c0a3 FOREIGN KEY (dataset_id) REFERENCES public.private_benchmark_datasets(dataset_id);
 
 
 --
