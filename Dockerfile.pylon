@@ -31,7 +31,7 @@ ADD --checksum=sha256:443b1fd0f497331719f23d854362ad7573314aae9fc955f1371bdafc66
 ADD --checksum=sha256:3d1c96a56bfedd7ce534414761b6067a3ee41c317b7034f3ee24c753170bed10 \
   https://files.pythonhosted.org/packages/de/e6/cfd0a3d0a8d78f9355af6d28125406f42e7ccd25ffebcc3c71e6321be9d0/bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
   /tmp/bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-COPY services/pylon/ditto_pylon_epoch.py services/pylon/patch_epoch_schedule.py /tmp/pylon-epoch/
+COPY services/pylon/ditto_pylon_epoch.py services/pylon/patch_epoch_schedule.py services/pylon/patch_receipts.py services/pylon/ditto_pylon_receipts.py services/pylon/ditto_pylon_receipt_api.py services/pylon/receipt_migration.py /tmp/pylon-epoch/
 
 # TurboBT is supplied as an immutable named Git context by the release
 # workflow. Installing it into Pylon's existing virtualenv preserves the
@@ -51,6 +51,7 @@ RUN /app/pylon_service/.venv/bin/python /tmp/pylon-epoch/patch_epoch_schedule.py
       --no-deps \
       /tmp/bittensor_drand-2.0.0-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl \
     && /app/pylon_service/.venv/bin/python /tmp/pylon-epoch/patch_epoch_schedule.py \
+    && /app/pylon_service/.venv/bin/python /tmp/pylon-epoch/patch_receipts.py \
     && uv pip check --python /app/pylon_service/.venv/bin/python \
     && rm -rf \
       /tmp/bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl \
@@ -59,4 +60,5 @@ RUN /app/pylon_service/.venv/bin/python /tmp/pylon-epoch/patch_epoch_schedule.py
       /tmp/turbobt
 
 LABEL io.heyditto.validator.pylon-base-version="2.3.2" \
-      io.heyditto.validator.epoch-schedule="subtensor-stateful-epochs-v1"
+      io.heyditto.validator.epoch-schedule="subtensor-stateful-epochs-v1" \
+      io.heyditto.validator.weight-receipts="1"

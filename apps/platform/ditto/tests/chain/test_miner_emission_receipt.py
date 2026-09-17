@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from ditto.chain import ChainClient, ChainConfig, ChainConnectionError
+from ditto.chain.errors import ChainEmissionReceiptUnavailable
 
 
 @pytest.fixture
@@ -147,7 +148,11 @@ async def test_missing_payout_fails_closed(
         state["keys"].append((1, "different"))
     elif failure == "wrong_netuid":
         state["events"][0]["event"]["attributes"]["netuid"] = 119
-    with pytest.raises(ChainConnectionError):
+    with pytest.raises(
+        ChainEmissionReceiptUnavailable
+        if failure in {"changed_weights", "changed_updates"}
+        else ChainConnectionError
+    ):
         await client().get_miner_emission_receipt(118)
 
 
@@ -247,5 +252,76 @@ async def test_ownership_transition_cannot_turn_burn_into_earnings(
     # The event still reports positive gross miner incentive. A new owner
     # association before payout can recycle that incentive instead of paying it.
     receipt_chain["post_ownership"] = {storage: value}
-    with pytest.raises(ChainConnectionError, match="ownership changed"):
+    with pytest.raises(ChainEmissionReceiptUnavailable, match="ownership changed"):
         await client().get_miner_emission_receipt(118)
+
+
+@pytest.mark.usefixtures("receipt_chain")
+async def test_historical_payout_does_not_follow_latest_step(
+    install_substrate_module: AsyncMock,
+) -> None:
+    original = install_substrate_module.query.side_effect
+
+    async def historical(**kwargs: Any) -> Any:
+        if (
+            kwargs["storage_function"] == "LastMechansimStepBlock"
+            and kwargs["block_hash"] == "h1200"
+        ):
+            return 1100
+        return await original(**kwargs)
+
+    install_substrate_module.query.side_effect = historical
+    result = await client().get_miner_emission_receipt(118, payout_block=1000)
+    assert result.block == 1000
+    with pytest.raises(ChainConnectionError, match="finalized"):
+        await client().get_miner_emission_receipt(118, payout_block=1201)
+
+
+@pytest.mark.usefixtures("receipt_chain")
+@pytest.mark.parametrize(
+    "error", [ValueError("State already discarded"), OSError("RPC unavailable")]
+)
+async def test_historical_rpc_error_remains_retryable(
+    install_substrate_module: AsyncMock, error: Exception
+) -> None:
+    install_substrate_module.query.side_effect = error
+    with pytest.raises(ChainConnectionError):
+        await client().get_miner_emission_receipt(118, payout_block=1000)
+
+
+async def test_historical_commit_at_payout_is_terminal(
+    receipt_chain: dict[str, Any],
+) -> None:
+    receipt_chain["post_updates"] = [0, 0, 1000, 0]
+    with pytest.raises(ChainEmissionReceiptUnavailable):
+        await client().get_miner_emission_receipt(118, payout_block=1000)
+
+
+async def test_missing_post_update_array_remains_retryable(
+    receipt_chain: dict[str, Any],
+) -> None:
+    receipt_chain["post_updates"] = None
+    with pytest.raises(ChainConnectionError):
+        await client().get_miner_emission_receipt(118, payout_block=1000)
+
+
+@pytest.mark.usefixtures("receipt_chain")
+async def test_historical_receipt_reuses_archive_transport(
+    install_substrate_module: AsyncMock,
+) -> None:
+    result = await client().get_miner_emission_receipt(
+        118,
+        payout_block=1000,
+        substrate=install_substrate_module,
+    )
+    assert result.block == 1000
+    install_substrate_module.__aenter__.assert_not_awaited()
+    install_substrate_module.__aexit__.assert_not_awaited()
+
+
+async def test_missing_post_weight_matrix_remains_retryable(
+    receipt_chain: dict[str, Any],
+) -> None:
+    receipt_chain["post_weights"] = []
+    with pytest.raises(ChainConnectionError):
+        await client().get_miner_emission_receipt(118, payout_block=1000)

@@ -5800,7 +5800,8 @@ class AgentKingship(Base):
     """King-only source release, anchored to proven completed winner emissions.
 
     Legacy revealed weights are retained as diagnostics, never as payout proof.
-    The emission anchor and its evidence are written once for this exact agent.
+    The emission anchor and its evidence identify the earliest verified payout
+    for this exact agent, including proofs received out of order.
     """
 
     __tablename__ = "agent_kingship"
@@ -5856,6 +5857,107 @@ class ValidatorWeightsFoldHistory(Base):
         Index(
             "validator_weights_fold_history_lookup_idx", "validator_hotkey", "folded_at"
         ),
+    )
+
+
+class ValidatorWeightRequest(Base):
+    """Immutable Pylon request identity and its exact submitted artifact binding."""
+
+    __tablename__ = "validator_weight_requests"
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    request: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class ValidatorWeightReceipt(Base):
+    """Signed finalized-commit claim; chain verification is a separate step."""
+
+    __tablename__ = "validator_weight_receipts"
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    receipt_digest: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    ciphertext_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    receipt: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signed_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        Index(
+            "validator_weight_receipts_ciphertext_idx",
+            "netuid",
+            "validator_hotkey",
+            "ciphertext_hash",
+        ),
+    )
+
+
+class SourceEmissionCollectorCursor(Base):
+    """Finalized block cursor; advanced atomically with collected evidence."""
+
+    __tablename__ = "source_emission_collector_cursors"
+    netuid: Mapped[int] = mapped_column(Integer, primary_key=True)
+    block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    runtime_code_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SourceEmissionVectorBinding(Base):
+    """Latest observed vector write, including explicit unknown invalidations."""
+
+    __tablename__ = "source_emission_vector_bindings"
+    netuid: Mapped[int] = mapped_column(Integer, primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    receipt_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reveal_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    vector_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+
+
+class SourceEmissionPayout(Base):
+    """Immutable processed finalized payout and its attribution proof."""
+
+    __tablename__ = "source_emission_payouts"
+    netuid: Mapped[int] = mapped_column(Integer, primary_key=True)
+    block_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    proof: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    terminal: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+    blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class SourceEmissionPayoutResolution(Base):
+    """One immutable winning submission identity per finalized subnet payout."""
+
+    __tablename__ = "source_emission_payout_resolutions"
+    netuid: Mapped[int] = mapped_column(Integer, primary_key=True)
+    block_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    proof: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
     )
 
 

@@ -174,6 +174,8 @@ if TYPE_CHECKING:
     from ditto.validator.platform import PlatformClient
     from ditto.validator.stack_health import StackHealthCollector
 
+from ditto.validator.weight_receipts import WeightReceiptRelay
+
 logger = logging.getLogger(__name__)
 
 
@@ -685,6 +687,9 @@ class ValidatorWorker:
         # injected setter (used in tests to substitute a fake).
         # Both expose ``async def put_weights(dict[str, float])``.
         self._weight_setter: Any = weight_setter if weight_setter is not None else chain
+        self._weight_receipt_relay = WeightReceiptRelay(
+            self._weight_setter, self._platform, config.validator_hotkey, config.netuid
+        )
         # Public telemetry sink. A disabled instance is a cheap no-op, so the
         # sweep can call it unconditionally.
         self._telemetry: ValidatorTelemetry = telemetry or ValidatorTelemetry(
@@ -1350,6 +1355,7 @@ class ValidatorWorker:
         active_snapshot: tuple[UUID | None, BenchmarkProgress | None] | None = None,
     ) -> bool:
         """Coalesce callers and send at most once per wall-clock second."""
+        self._weight_receipt_relay.schedule_recovery()
         slot_id = _CURRENT_SLOT.get()
         sent_progress = active_snapshot[1] if active_snapshot is not None else None
         async with self._active_heartbeat_lock:
@@ -2109,7 +2115,10 @@ class ValidatorWorker:
                 king_fingerprint=king_fingerprint,
             )
         await self._log_commit_reveal_mode()
-        submitted = await self._put_weights_with_retry(weights)
+        await self._weight_receipt_relay.recover()
+        submitted = await self._weight_receipt_relay.submit(weights, ledger, champion)
+        if submitted is None:
+            submitted = await self._put_weights_with_retry(weights)
         # The proof of what was folded: the pin identity the ledger carried, the
         # digest of the exact vector handed to Pylon, and the crown derived.
         # Echoed on every heartbeat until the next accepted fold replaces it, so

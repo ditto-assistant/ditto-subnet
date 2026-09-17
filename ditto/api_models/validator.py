@@ -1998,6 +1998,10 @@ class LedgerResponse(BaseModel):
         ),
     )
 
+    ledger_snapshot_id: UUID | None = Field(
+        default=None,
+        description="Immutable ledger snapshot identity for commit provenance.",
+    )
     epoch_index: Annotated[
         int | None,
         Field(

@@ -5,6 +5,7 @@ on:
     paths:
       - Dockerfile.pylon
       - services/pylon/**
+      - packages/ditto-screening-protocol/ditto_screening_protocol/weight_receipt.py
       - scripts/test-pylon-epoch-schedule.sh
       - ditto/tests/test_pylon_epoch_schedule.py
       - .github/workflows/pylon-epoch-schedule.yml

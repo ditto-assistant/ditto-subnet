@@ -119,6 +119,11 @@ from ditto.api_models.validator_weights_fold import (
     WeightsFold,
     weights_fold_signing_token,
 )
+from ditto.api_models.weight_receipt import (
+    SubmitWeightReceiptRequest,
+    SubmitWeightReceiptResponse,
+    weight_receipt_signing_message,
+)
 from ditto.api_server.anti_copy_comparison import ANTI_COPY_ALGORITHM_VERSION
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import expected_netuid
@@ -343,6 +348,10 @@ from ditto.db.queries.tickets import (
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+)
+from ditto.db.queries.weight_receipts import (
+    WeightReceiptConflict,
+    record_weight_receipt,
 )
 from ditto.db.queries.weights_fold_history import record_verified_weights_fold
 from ditto.metrics import (
@@ -2954,6 +2963,53 @@ async def _validated_heartbeat_work(
         benchmark_capacity=stored_benchmark_capacity,
         confirmation_progress=stored_confirmation_progress,
         claimed_slots=claimed,
+    )
+
+
+@router.post(
+    "/weight-submission-receipt",
+    response_model=SubmitWeightReceiptResponse,
+    responses={
+        401: {"description": "Invalid validator identity, signature, or timestamp."},
+        409: {"description": "Receipt conflicts with its immutable job or ledger."},
+    },
+)
+async def submit_weight_receipt(
+    request: Request,
+    request_body: SubmitWeightReceiptRequest,
+    validator_hotkey: ValidatorDep,
+    session: SessionDep,
+) -> SubmitWeightReceiptResponse:
+    """Durably acknowledge a signed commit claim without granting source release."""
+    if len(await request.body()) > 3 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="weight receipt payload too large")
+    receipt = request_body.receipt
+    if receipt.validator_hotkey != validator_hotkey:
+        raise ValidatorAuthError("weight receipt hotkey does not match header")
+    if receipt.netuid != request.app.state.config.chain.netuid:
+        raise ValidatorAuthError("weight receipt belongs to another subnet")
+    now = datetime.now(UTC)
+    if abs(int(now.timestamp()) - request_body.timestamp) > _HEARTBEAT_MAX_SKEW_SECONDS:
+        raise ValidatorAuthError(
+            "weight receipt signature timestamp is outside the window"
+        )
+    if not _verify_signature(
+        validator_hotkey,
+        weight_receipt_signing_message(receipt, request_body.timestamp),
+        request_body.signature,
+    ):
+        raise ValidatorAuthError("weight receipt signature verification failed")
+    try:
+        async with session.begin():
+            digest = await record_weight_receipt(
+                session, submission=request_body, now=now
+            )
+    except WeightReceiptConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return SubmitWeightReceiptResponse(
+        request_id=receipt.request_id,
+        attempt_id=receipt.attempt.attempt_id,
+        receipt_digest=digest,
     )
 
 

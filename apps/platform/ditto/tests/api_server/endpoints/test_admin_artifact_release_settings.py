@@ -362,8 +362,12 @@ async def test_release_gate_reports_real_receipts_and_bounded_pending_rows(
     )
     assert response.status_code == 200
     gate = response.json()["release_gate"]
-    assert gate["version"] == "completed-winner-emission-v1"
-    assert gate["automatic_confirmation_enabled"] is False
+    assert gate["version"] == "completed-winner-emission-v2"
+    assert gate["automatic_confirmation_enabled"] is True
+    assert gate["collector_cursor_block"] is None
+    assert gate["collector_runtime_code_hash"] is None
+    assert gate["pending_receipt_count"] == 0
+    assert gate["unresolved_payout_count"] == 0
     assert gate["confirmed_kings"] == 1
     assert gate["pending_kings"] == 26
     assert gate["rows_limit"] == 25

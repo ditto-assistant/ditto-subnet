@@ -165,6 +165,7 @@ from ditto.api_server.runtime_profiles import RuntimeProfileStore
 from ditto.api_server.screener_policy_activation import (
     ScreenerPolicyActivationResolver,
 )
+from ditto.api_server.source_emission_collector import SourceEmissionCollector
 from ditto.api_server.storage import create_storage_client
 from ditto.api_server.validator_names import create_validator_names
 from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
@@ -425,6 +426,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await ledger_pin_loop.start()
             app.state.ledger_pin_loop = ledger_pin_loop
+            emission_collector = SourceEmissionCollector(
+                app_state=app.state,
+                session_maker=app.state.session_maker,
+                confirmation_enabled=app.state.config.source_emission_confirmation_enabled,
+            )
+            stack.push_async_callback(emission_collector.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await emission_collector.start()
+            app.state.source_emission_collector = emission_collector
 
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)

@@ -501,6 +501,9 @@ class ApiServerConfig:
     cloudrun: CloudRunScreeningConfig | None = None
     """Cloud Run Jobs/Service fallback. Disabled when project/SA env is absent."""
 
+    source_emission_confirmation_enabled: bool = True
+    """Allow verified payout attribution to arm the embargo; collection stays on."""
+
 
 def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig | None:
     api_key = os.environ.get("DITTO_TARGON_API_KEY", "").strip()
@@ -923,6 +926,10 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     cloudrun = _parse_cloudrun_screening_config_from_env()
 
     return ApiServerConfig(
+        source_emission_confirmation_enabled=(
+            os.environ.get("DITTO_SOURCE_EMISSION_CONFIRMATION_ENABLED", "true").lower()
+            in _TRUTHY
+        ),
         host=host,
         port=port,
         log_level=log_level,

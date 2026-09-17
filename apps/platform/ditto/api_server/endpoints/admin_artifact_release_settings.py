@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +21,15 @@ from ditto.api_models.artifact_release_settings import (
 from ditto.api_models.source_disclosure import SourceDisclosure, release_confirmation
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import Agent, AgentKingship, ArtifactReleaseSettingsRevision
+from ditto.db.models import (
+    Agent,
+    AgentKingship,
+    ArtifactReleaseSettingsRevision,
+    SourceEmissionCollectorCursor,
+    SourceEmissionPayout,
+    SourceEmissionPayoutResolution,
+    ValidatorWeightReceipt,
+)
 from ditto.db.queries.artifact_release_settings import (
     DEFAULT_ARTIFACT_RELEASE_DISCLOSURE,
     DEFAULT_ARTIFACT_RELEASE_EMBARGO_HOURS,
@@ -60,6 +68,7 @@ def _default_revision() -> RevisionModel:
 
 @router.get("", response_model=AdminArtifactReleaseSettingsResponse)
 async def get_settings(
+    request: Request,
     _admin: AdminDep,
     session: SessionDep,
 ) -> AdminArtifactReleaseSettingsResponse:
@@ -90,11 +99,78 @@ async def get_settings(
             .limit(25)
         )
     ).all()
+    netuid = request.app.state.config.chain.netuid
+    cursor = await session.get(SourceEmissionCollectorCursor, netuid)
+    last_payout = await session.scalar(
+        select(SourceEmissionPayout)
+        .where(
+            SourceEmissionPayout.netuid == netuid,
+        )
+        .order_by(SourceEmissionPayout.block.desc())
+        .limit(1)
+    )
+    resolution = (
+        await session.get(
+            SourceEmissionPayoutResolution, (netuid, last_payout.block_hash)
+        )
+        if last_payout is not None
+        else None
+    )
+    unresolved = await session.scalar(
+        select(func.count())
+        .select_from(SourceEmissionPayout)
+        .where(
+            SourceEmissionPayout.netuid == netuid,
+            SourceEmissionPayout.terminal.is_(False),
+            ~select(SourceEmissionPayoutResolution.netuid)
+            .where(
+                SourceEmissionPayoutResolution.netuid == SourceEmissionPayout.netuid,
+                SourceEmissionPayoutResolution.block_hash
+                == SourceEmissionPayout.block_hash,
+            )
+            .exists(),
+        )
+    )
+    # Claims not represented in any resolved payout remain pending evidence.
+    receipts = await session.scalar(
+        select(func.count())
+        .select_from(ValidatorWeightReceipt)
+        .where(
+            ValidatorWeightReceipt.netuid == netuid,
+            ~select(SourceEmissionPayoutResolution.netuid)
+            .where(
+                SourceEmissionPayoutResolution.netuid == netuid,
+                SourceEmissionPayoutResolution.proof.op("@>")(
+                    func.jsonb_build_object(
+                        "validators",
+                        func.jsonb_build_array(
+                            func.jsonb_build_object(
+                                "receipt_digest", ValidatorWeightReceipt.receipt_digest
+                            )
+                        ),
+                    )
+                ),
+            )
+            .exists(),
+        )
+    )
     return AdminArtifactReleaseSettingsResponse(
         current=_revision(rows[0]) if rows else _default_revision(),
         history=[_revision(row) for row in rows],
         release_gate=SourceReleaseGateStatus(
             version=SOURCE_RELEASE_GATE_VERSION,
+            automatic_confirmation_enabled=request.app.state.config.source_emission_confirmation_enabled,
+            collector_cursor_block=cursor.block if cursor else None,
+            collector_cursor_hash=cursor.block_hash if cursor else None,
+            collector_runtime_code_hash=cursor.runtime_code_hash if cursor else None,
+            collector_blocked_reason=cursor.last_blocked_reason if cursor else None,
+            last_payout_block=last_payout.block if last_payout else None,
+            last_payout_blocked_reason=last_payout.blocked_reason
+            if last_payout
+            else None,
+            last_payout_attributed=resolution is not None,
+            unresolved_payout_count=int(unresolved or 0),
+            pending_receipt_count=int(receipts or 0),
             pending_kings=total - confirmed,
             confirmed_kings=confirmed,
             rows=[

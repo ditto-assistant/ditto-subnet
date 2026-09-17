@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import nullcontext
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlsplit
 
 from ditto.chain.errors import (
     ChainAuthError,
     ChainConnectionError,
+    ChainEmissionReceiptUnavailable,
     ChainError,
     ChainTimeoutError,
     ExtrinsicNotFoundError,
@@ -517,7 +519,12 @@ class ChainClient:
         )
 
     async def get_miner_emission_receipt(
-        self, netuid: int, *, target_hotkeys: frozenset[str] | None = None
+        self,
+        netuid: int,
+        *,
+        target_hotkeys: frozenset[str] | None = None,
+        payout_block: int | None = None,
+        substrate: Any | None = None,
     ) -> ChainMinerEmissionReceipt:
         """Read one finalized successful miner distribution, or fail closed.
 
@@ -536,8 +543,15 @@ class ChainClient:
         """
         from async_substrate_interface import AsyncSubstrateInterface
 
+        # Reuse the collector's archive provider for every read of this proof.
+        # The caller owns an injected transport; do not close it here.
+        context = (
+            nullcontext(substrate)
+            if substrate is not None
+            else AsyncSubstrateInterface(url=self._substrate_url())
+        )
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with context as substrate:
                 finalized_hash = await substrate.get_chain_finalised_head()
                 finalized = _block_number_from_header(
                     await substrate.get_block_header(block_hash=finalized_hash)
@@ -553,8 +567,12 @@ class ChainClient:
                         )
                     )
 
-                block = _receipt_uint(
-                    await read(_LAST_STEP_STORAGE, finalized_hash, [netuid])
+                block = (
+                    _receipt_uint(payout_block)
+                    if payout_block is not None
+                    else _receipt_uint(
+                        await read(_LAST_STEP_STORAGE, finalized_hash, [netuid])
+                    )
                 )
                 if not 0 < block <= finalized:
                     raise ValueError("no finalized successful distribution")
@@ -601,13 +619,26 @@ class ChainClient:
                 # Ownership can change in initialization before distribution,
                 # while extrinsics can change it afterwards. Neither endpoint
                 # alone identifies the burned recipients on a transition block.
+                new_owner = await read("SubnetOwner", block_hash, [netuid])
+                new_owner_hotkey = await read(
+                    _SUBNET_OWNER_HOTKEY_STORAGE, block_hash, [netuid]
+                )
+                new_owned = await read("OwnedHotkeys", block_hash, [owner])
                 if (
-                    await read("SubnetOwner", block_hash, [netuid]) != owner
-                    or await read(_SUBNET_OWNER_HOTKEY_STORAGE, block_hash, [netuid])
-                    != owner_hotkey
-                    or await read("OwnedHotkeys", block_hash, [owner]) != owned
+                    not isinstance(new_owner, str)
+                    or not new_owner
+                    or not isinstance(new_owner_hotkey, str)
+                    or not new_owner_hotkey
+                    or not isinstance(new_owned, list)
+                    or any(not isinstance(h, str) for h in new_owned)
                 ):
-                    raise ValueError(
+                    raise ValueError("missing post-distribution ownership")
+                if (new_owner, new_owner_hotkey, new_owned) != (
+                    owner,
+                    owner_hotkey,
+                    owned,
+                ):
+                    raise ChainEmissionReceiptUnavailable(
                         "subnet ownership changed during distribution block"
                     )
                 excluded = {*owned, owner_hotkey}
@@ -632,13 +663,50 @@ class ChainClient:
                 if len(set(hotkeys.values())) != len(hotkeys):
                     raise ValueError("duplicate registered hotkey")
                 raw_weights = await mapping(_WEIGHTS_STORAGE, parent_hash)
-                if raw_weights != await mapping(_WEIGHTS_STORAGE, block_hash):
-                    raise ValueError("weights changed during distribution block")
+                new_weights = await mapping(_WEIGHTS_STORAGE, block_hash)
+                if raw_weights != new_weights:
+                    # A malformed/empty archive response is not evidence of an
+                    # immutable transition: retain the block for another provider.
+                    for rows in (raw_weights, new_weights):
+                        if not rows or len({uid for uid, _ in rows}) != len(rows):
+                            raise ValueError("incomplete distribution weight matrix")
+                        for uid, vector in rows:
+                            if _receipt_uint(uid) not in hotkeys or not isinstance(
+                                vector, list
+                            ):
+                                raise ValueError("invalid distribution weight matrix")
+                            for pair in vector:
+                                if (
+                                    not isinstance(pair, (list, tuple))
+                                    or len(pair) != 2
+                                ):
+                                    raise ValueError("invalid distribution weight pair")
+                                if (
+                                    _receipt_uint(pair[0]) not in hotkeys
+                                    or _receipt_uint(pair[1]) > 65535
+                                ):
+                                    raise ValueError(
+                                        "invalid distribution weight value"
+                                    )
+                    raise ChainEmissionReceiptUnavailable(
+                        "weights changed during distribution block"
+                    )
                 updates = await read("LastUpdate", parent_hash, [netuid])
-                if not isinstance(updates, list) or updates != await read(
-                    "LastUpdate", block_hash, [netuid]
+                new_updates = await read("LastUpdate", block_hash, [netuid])
+                if any(
+                    not isinstance(values, list)
+                    or len(values) != len(hotkeys)
+                    or any(
+                        isinstance(v, bool) or not isinstance(v, int) or v < 0
+                        for v in values
+                    )
+                    for values in (updates, new_updates)
                 ):
-                    raise ValueError("weight updates changed during distribution block")
+                    raise ValueError("invalid validator update arrays")
+                if updates != new_updates:
+                    raise ChainEmissionReceiptUnavailable(
+                        "weight updates changed during distribution block"
+                    )
                 events = _unwrap_substrate_value(
                     await substrate.query(
                         module=_SYSTEM_MODULE,
@@ -754,6 +822,8 @@ class ChainClient:
                     tuple(last_updates),
                     tuple(timestamps),
                 )
+        except ChainEmissionReceiptUnavailable:
+            raise
         except TimeoutError as e:
             raise ChainTimeoutError(
                 f"get_miner_emission_receipt({netuid}) timed out"

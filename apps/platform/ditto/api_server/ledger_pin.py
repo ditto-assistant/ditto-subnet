@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
@@ -76,6 +77,7 @@ class LedgerPin:
     ledger_digest: str
     champion_agent_id: Any | None = None
     incumbent_agent_id: Any | None = None
+    snapshot_id: UUID | None = None
 
     @classmethod
     def from_row(cls, row: LedgerEpochSnapshot) -> LedgerPin:
@@ -83,6 +85,7 @@ class LedgerPin:
         if pinned_at.tzinfo is None:
             pinned_at = pinned_at.replace(tzinfo=UTC)
         return cls(
+            snapshot_id=row.snapshot_id,
             netuid=row.netuid,
             epoch_index=row.epoch_index,
             last_epoch_block=row.last_epoch_block,
@@ -145,6 +148,7 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         age_seconds=age,
         burn_share=float(served.get("burn_share", 0.0)),
         continual_retest_cohort_size=int(served.get("continual_retest_cohort_size", 5)),
+        ledger_snapshot_id=pin.snapshot_id,
         epoch_index=pin.epoch_index,
         pinned_block=pin.pinned_block,
         pinned_at=pin.pinned_at,

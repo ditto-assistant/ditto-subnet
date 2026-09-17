@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -47,7 +47,16 @@ class SourceReleaseGateStatus(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     version: str
-    automatic_confirmation_enabled: Literal[False] = False
+    automatic_confirmation_enabled: bool = False
+    collector_cursor_block: int | None = None
+    collector_cursor_hash: str | None = None
+    collector_runtime_code_hash: str | None = None
+    collector_blocked_reason: str | None = None
+    last_payout_block: int | None = None
+    last_payout_blocked_reason: str | None = None
+    last_payout_attributed: bool = False
+    unresolved_payout_count: int = 0
+    pending_receipt_count: int = 0
     pending_kings: int
     confirmed_kings: int
     rows: Annotated[list[SourceReleaseEligibilityRow], Field(max_length=25)]

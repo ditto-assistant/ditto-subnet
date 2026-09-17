@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.db.models import Agent, AgentKingship
@@ -23,7 +23,7 @@ def _as_utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
-SOURCE_RELEASE_GATE_VERSION = "completed-winner-emission-v1"
+SOURCE_RELEASE_GATE_VERSION = "completed-winner-emission-v2"
 
 
 @dataclass(frozen=True)
@@ -55,7 +55,7 @@ class KingEmissionProof:
 async def record_emission_confirmed(
     session: AsyncSession, *, agent_id: UUID, proof: KingEmissionProof
 ) -> None:
-    """Atomically persist the first verified emission proof for an ever-king."""
+    """Keep the earliest verified earning block, including late-arriving proof."""
     if (
         proof.confirmed_at.tzinfo is None
         or proof.block < 1
@@ -68,7 +68,10 @@ async def record_emission_confirmed(
         update(AgentKingship)
         .where(
             AgentKingship.agent_id == agent_id,
-            AgentKingship.emission_confirmed_at.is_(None),
+            or_(
+                AgentKingship.emission_confirmed_at.is_(None),
+                AgentKingship.emission_confirmed_at > proof.confirmed_at,
+            ),
             AgentKingship.first_crowned_at <= proof.confirmed_at,
         )
         .values(

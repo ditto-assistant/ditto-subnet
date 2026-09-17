@@ -98,6 +98,13 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationSubmitRequest,
     V9ConfirmationSubmitResponse,
 )
+from ditto.api_models.weight_receipt import (
+    FinalizedWeightReceipt,
+    SubmitWeightReceiptRequest,
+    SubmitWeightReceiptResponse,
+    weight_receipt_digest,
+    weight_receipt_signing_message,
+)
 from ditto.validator.coding_publication import (
     PreparedCodingPublication,
     PublicationAuthority,
@@ -288,6 +295,38 @@ class PlatformClient:
             or config.platform_api_url
         ).rstrip("/")
         self._headers = {"X-Validator-Hotkey": config.validator_hotkey}
+
+    async def submit_weight_receipt(
+        self, receipt: FinalizedWeightReceipt
+    ) -> SubmitWeightReceiptResponse:
+        """Persist immutable commit provenance and require an exact signed-body ACK."""
+        timestamp = int(datetime.now(UTC).timestamp())
+        signature = self._keypair.sign(
+            weight_receipt_signing_message(receipt, timestamp)
+        )
+        request = SubmitWeightReceiptRequest(
+            receipt=receipt,
+            timestamp=timestamp,
+            signature="0x" + bytes(signature).hex(),
+        )
+        try:
+            response = await self._client.post(
+                f"{self._base}{_PREFIX}/weight-submission-receipt",
+                json=request.model_dump(mode="json"),
+                headers=self._headers,
+            )
+        except httpx.HTTPError as exc:
+            raise PlatformError("weight receipt persistence outcome unknown") from exc
+        if response.status_code != 200:
+            raise PlatformError(f"weight receipt rejected ({response.status_code})")
+        result = SubmitWeightReceiptResponse.model_validate(response.json())
+        if (
+            result.request_id != receipt.request_id
+            or result.attempt_id != receipt.attempt.attempt_id
+            or result.receipt_digest != weight_receipt_digest(receipt)
+        ):
+            raise PlatformError("weight receipt acknowledgement mismatch")
+        return result
 
     async def submit_heartbeat(
         self, request: ValidatorHeartbeatRequest
