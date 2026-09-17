@@ -14,7 +14,9 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-func testProfile() Profile { return Profile{"rewrite-v1", "provider-a", "validator-v1", "provider-b"} }
+func testProfile() Profile {
+	return Profile{RewriteModel: "rewrite-v1", RewriteProvider: "provider-a", ValidatorModel: "validator-v1", ValidatorProvider: "provider-b"}
+}
 
 func TestProfileBindsModelAndRoute(t *testing.T) {
 	p := testProfile()

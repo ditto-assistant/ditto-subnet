@@ -10,6 +10,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -36,11 +37,23 @@ func run() error {
 	rewriteProvider := flag.String("rewrite-provider", "", "exclusive OpenRouter provider slug")
 	validatorModel := flag.String("validator-model", "", "independent semantic validator model")
 	validatorProvider := flag.String("validator-provider", "", "exclusive semantic validator provider slug")
+	rewriteReasoning := flag.String("rewrite-reasoning", "", "explicit reasoning effort; replaces temperature when set")
+	validatorReasoning := flag.String("validator-reasoning", "", "explicit independent-validator reasoning effort")
+	saltFile := flag.String("salt-file", "", "private regular 8-byte big-endian reserved entropy file")
+	profileOnly := flag.Bool("profile-sha", false, "print profile digest without inference or artifacts")
 	flag.Parse()
+	profile := privatesurface.Profile{RewriteModel: *rewriteModel, RewriteProvider: *rewriteProvider, ValidatorModel: *validatorModel, ValidatorProvider: *validatorProvider, RewriteReasoning: *rewriteReasoning, ValidatorReasoning: *validatorReasoning}
+	if *profileOnly {
+		digest, err := profile.Digest()
+		if err != nil {
+			return err
+		}
+		fmt.Println(digest)
+		return nil
+	}
 	if *seed < 0 || *out == "" || *probe < 0 || *probe > 32 {
 		return errors.New("private producer: invalid arguments")
 	}
-	profile := privatesurface.Profile{RewriteModel: *rewriteModel, RewriteProvider: *rewriteProvider, ValidatorModel: *validatorModel, ValidatorProvider: *validatorProvider}
 	client, err := privatesurface.NewClient(profile, os.Getenv("OPENROUTER_API_KEY"))
 	if err != nil {
 		return err
@@ -50,10 +63,19 @@ func run() error {
 		return errors.New("private producer: invalid run size")
 	}
 	var salt uint64
-	for salt == 0 {
+	if *saltFile != "" {
+		salt, err = readReservedSalt(*saltFile)
+		if err != nil {
+			return err
+		}
+	}
+	for attempt := 0; salt == 0 && attempt < 2; attempt++ {
 		if err := binary.Read(rand.Reader, binary.LittleEndian, &salt); err != nil {
 			return errors.New("private producer: entropy unavailable")
 		}
+	}
+	if salt == 0 {
+		return errors.New("private producer: invalid entropy")
 	}
 	base, protectedNoise, err := gen.GeneratePrivateBase(*seed, *runSize, salt)
 	if err != nil {
@@ -126,6 +148,31 @@ func run() error {
 	}
 	fmt.Println("candidate produced privately; NOT qualified, pinned, leased or activated")
 	return nil
+}
+
+func readReservedSalt(path string) (uint64, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() != 8 {
+		return 0, errors.New("private producer: invalid entropy file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, errors.New("private producer: entropy file unavailable")
+	}
+	defer file.Close()
+	actual, err := file.Stat()
+	if err != nil || !os.SameFile(info, actual) {
+		return 0, errors.New("private producer: entropy file changed")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, 9))
+	if err != nil || len(raw) != 8 {
+		return 0, errors.New("private producer: invalid entropy length")
+	}
+	salt := binary.BigEndian.Uint64(raw)
+	if salt == 0 {
+		return 0, errors.New("private producer: invalid reserved entropy")
+	}
+	return salt, nil
 }
 
 func writePrivate(dir, name string, data []byte) error {

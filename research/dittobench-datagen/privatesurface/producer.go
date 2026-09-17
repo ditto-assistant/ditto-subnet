@@ -37,10 +37,12 @@ const validatePrompt = `Independently compare the before and after synthetic ben
 // Profile is explicitly selected; there is no default model or fallback route.
 // Versioned prompt bytes and privacy requirements participate in its digest.
 type Profile struct {
-	RewriteModel      string `json:"rewrite_model"`
-	RewriteProvider   string `json:"rewrite_provider"`
-	ValidatorModel    string `json:"validator_model"`
-	ValidatorProvider string `json:"validator_provider"`
+	RewriteModel       string `json:"rewrite_model"`
+	RewriteProvider    string `json:"rewrite_provider"`
+	ValidatorModel     string `json:"validator_model"`
+	ValidatorProvider  string `json:"validator_provider"`
+	RewriteReasoning   string `json:"rewrite_reasoning,omitempty"`
+	ValidatorReasoning string `json:"validator_reasoning,omitempty"`
 }
 
 func (p Profile) Digest() (string, error) {
@@ -51,6 +53,11 @@ func (p Profile) Digest() (string, error) {
 	}
 	if p.RewriteModel == p.ValidatorModel {
 		return "", errors.New("private producer: independent validator model required")
+	}
+	for _, effort := range []string{p.RewriteReasoning, p.ValidatorReasoning} {
+		if effort != "" && effort != "none" && effort != "low" && effort != "medium" && effort != "high" {
+			return "", errors.New("private producer: invalid reasoning profile")
+		}
 	}
 	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "bounded-semantic-and-protected-retries", p, rewritePrompt, validatePrompt, retryPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
 	return digest(raw), nil
@@ -126,6 +133,14 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 		"response_format": map[string]any{"type": "json_schema", "json_schema": map[string]any{
 			"name": "private_surface", "strict": true, "schema": map[string]any{"type": "object", "additionalProperties": false, "required": []string{field}, "properties": map[string]any{field: map[string]string{"type": kind}}},
 		}},
+	}
+	reasoning := c.profile.ValidatorReasoning
+	if model == c.profile.RewriteModel {
+		reasoning = c.profile.RewriteReasoning
+	}
+	if reasoning != "" {
+		delete(payload, "temperature")
+		payload["reasoning"] = map[string]any{"effort": reasoning, "exclude": true}
 	}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url, bytes.NewReader(body))
