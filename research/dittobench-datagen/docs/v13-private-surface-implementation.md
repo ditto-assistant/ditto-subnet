@@ -4,6 +4,36 @@ Status: implementation in progress; **not enabled or qualified**. Owner selected
 Platform-owned generation instead of validator commit/reveal. This does not
 depend on the separate coding competition or the offline curator signing key.
 
+## Launch-readiness checkpoint (2026-09-17)
+
+The stack now implements the immutable Platform store, authenticated ticket-bound
+delivery, exact-byte scorer execution, bounded private producer, durable fenced
+preparation queue/worker, and private lease preparation. These are implementation
+claims, not deployment or qualification. The original sequence below remains the
+design checklist; its foundation-only descriptions predate those later layers.
+
+Actual qualification remains blocked:
+
+- The 40-seed, full-profile public GIH control scored 0.237 on tool prompts and
+  0.7792607803 on quantity, below the required 0.90 per-slice floor. Registered
+  family names and successful report generation do not establish parser quality.
+  Report SHA-256: `3686b2b5d3b4421e4d088be54b541a60fd612e165242a4879e5749d0fbe27202`.
+- Bounded real small-profile producer runs have not yielded an accepted artifact.
+  Failures include altered protected text and semantic rejection. One run passed
+  all 205 individual semantic checks but failed the final global protected-value
+  check; that check now also runs before each semantic judgment. Failures remain
+  rejected and diagnostics remain private.
+- Exact byte-identical candidates now use a deterministic identity proof. Actual
+  rewrites still require independent semantic validation. Identity proofs and
+  unchanged surfaces must not be counted as private-surface resistance.
+- Honest-agent calibration, full runtime tool/control evidence, N14 comparisons,
+  qualification approval/readiness integration, safe closure/reveal and deployed
+  private end-to-end canary evidence remain outstanding.
+
+`parserprobe -require-public-control` now makes the necessary public-control
+threshold explicit at the CLI boundary. It does not fix the weak control or
+authorize launch. No activation is justified by this checkpoint.
+
 ## Implemented foundation
 
 `gen.ApplyPrivateSurface` is separate from the legacy `TranslationPass` and the
