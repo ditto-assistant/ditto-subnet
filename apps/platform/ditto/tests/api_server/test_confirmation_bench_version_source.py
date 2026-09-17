@@ -57,6 +57,18 @@ _EQUALITY_COMPARISON = re.compile(r"bench_version\s*(==|!=)\s*\d+")
 _PROJECTION_EXCEPTIONS = {
     (
         "api_server/endpoints/public.py",
+        "if dataset_bench_version == 13:",
+    ): "V13 private-artifact disclosure hold; not confirmation eligibility.",
+    (
+        "api_server/endpoints/validator.py",
+        "if bench_version == 13:",
+    ): "Withhold V13 full score mirrors until private work-set closure.",
+    (
+        "api_server/endpoints/validator.py",
+        "and score.bench_version != 13",
+    ): "Withhold V13 anonymous transcript mirrors, including missing metadata.",
+    (
+        "api_server/endpoints/public.py",
         "if bench_version == 9 or v9_base is not None",
     ): (
         "Selects which model-use factor family a row uses. Bench 9 always "

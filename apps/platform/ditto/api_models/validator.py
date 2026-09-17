@@ -293,7 +293,9 @@ class ConfirmationDatasetPin(BaseModel):
     """
 
     seed: Annotated[int, Field(ge=0)]
-    private_dataset_mode: Literal["platform-private-v1"] | None = None
+    private_dataset_mode: Literal["platform-private-v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     dataset_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     run_size: Annotated[str, Field(min_length=1)]
     anchor_agent_id: Annotated[
@@ -358,7 +360,9 @@ class JobResponse(BaseModel):
     """
 
     agent_id: Annotated[UUID, Field(description="Agent this ticket is for.")]
-    private_dataset_mode: Literal["platform-private-v1"] | None = None
+    private_dataset_mode: Literal["platform-private-v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     slot_id: Annotated[str, Field(pattern=r"^slot-[0-7]$")] = "slot-0"
     miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
     sha256: Annotated[
