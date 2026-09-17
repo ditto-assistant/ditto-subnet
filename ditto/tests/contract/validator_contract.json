@@ -5059,6 +5059,18 @@
         ],
         "default": null
       },
+      "ledger_snapshot_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "pinned_at": {
         "anyOf": [
           {
