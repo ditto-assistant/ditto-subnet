@@ -504,7 +504,7 @@ func TestRecoverableGenerationErrorRemainsMinerOwnedAtHTTP502(t *testing.T) {
 	if exhausted.terminalErrorCode != providerGenerationInvalidCode {
 		t.Fatalf("terminal code=%q want %s", exhausted.terminalErrorCode, providerGenerationInvalidCode)
 	}
-	if got := chatProviderFailure(exhausted).headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
+	if got := chatProviderFailure(exhausted, "openai/gpt-oss-20b", "openrouter").headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
 		t.Fatalf("failure class=%q want %q", got, minerRecoverableGeneration)
 	}
 }
@@ -728,7 +728,7 @@ func TestInvalidToolParametersFlowToRecoverableFailureClass(t *testing.T) {
 	if exhausted.terminalErrorCode != providerGenerationInvalidCode {
 		t.Fatalf("terminal code=%q want %s", exhausted.terminalErrorCode, providerGenerationInvalidCode)
 	}
-	failure := chatProviderFailure(exhausted)
+	failure := chatProviderFailure(exhausted, "openai/gpt-oss-20b", "openrouter")
 	if got := failure.headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
 		t.Fatalf("failure class=%q want %q", got, minerRecoverableGeneration)
 	}
@@ -757,8 +757,11 @@ func TestInvalidToolParametersProviderErrorKeepsOtherFailuresClosed(t *testing.T
 	}
 }
 
-func TestChatProviderFailureMarksOnlyRecoverableGenerationErrors(t *testing.T) {
-	recoverable := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: providerGenerationInvalidCode})
+func TestChatProviderFailureMarksOnlyTypedRecoveryClasses(t *testing.T) {
+	recoverable := chatProviderFailure(
+		&chatProviderExhausted{terminalErrorCode: providerGenerationInvalidCode},
+		"openai/gpt-oss-20b", "groq",
+	)
 	if recoverable.status != http.StatusBadGateway || recoverable.message != "inference provider unavailable" {
 		t.Fatalf("public failure changed: %+v", recoverable)
 	}
@@ -766,12 +769,29 @@ func TestChatProviderFailureMarksOnlyRecoverableGenerationErrors(t *testing.T) {
 		t.Fatalf("failure class=%q want %q", got, minerRecoverableGeneration)
 	}
 
-	ordinary := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: "provider_unavailable"})
+	ordinary := chatProviderFailure(
+		&chatProviderExhausted{terminalErrorCode: "provider_unavailable"},
+		"openai/gpt-oss-20b", "groq",
+	)
 	if len(ordinary.headers) != 0 {
 		t.Fatalf("ordinary provider failure was marked recoverable: %+v", ordinary.headers)
 	}
+	gateway := chatProviderFailure(&chatProviderExhausted{
+		terminalErrorCode: "provider_unavailable",
+		phases: []phaseTrace{{
+			status: http.StatusOK,
+			body:   []byte(`{"error":{"code":502,"message":"bad gateway"}}`),
+		}},
+	}, "openai/gpt-oss-20b", "groq")
+	if gateway.headers[minerRecoverableFailureHeader] != relayRecoverableGateway ||
+		gateway.headers["Retry-After"] != "5" {
+		t.Fatalf("receipt-free gateway classification=%#v", gateway.headers)
+	}
 	for _, terminalCode := range []string{"upstream_http_401", "upstream_http_429", "provider_transport", "provider_timeout"} {
-		failure := chatProviderFailure(&chatProviderExhausted{terminalErrorCode: terminalCode})
+		failure := chatProviderFailure(
+			&chatProviderExhausted{terminalErrorCode: terminalCode},
+			"openai/gpt-oss-20b", "groq",
+		)
 		if len(failure.headers) != 0 {
 			t.Fatalf("%s exposed private classification: %+v", terminalCode, failure.headers)
 		}

@@ -12,6 +12,16 @@ sequence is exhausted entirely by canonical, receipt-free HTTP 429 or 503
 responses. Timeouts, transport ambiguity, receipt-bearing responses, and
 ordinary provider errors do not open the circuit.
 
+An explicit receipt-free 502 uses a smaller in-lease circuit first. The relay
+returns the authenticated `relay_recoverable_gateway` class, and the scorer
+keeps the current logical request and completed case progress while it waits
+5s, 10s, and 20s for recovery. This does not open the fleet circuit or reissue
+leases. One validator-wide probe token serializes recovery across concurrent
+leases, so each validator sends one canary rather than a retry wave. If the
+bounded window exhausts, the score attempt fails closed under
+the ordinary operator-retry policy. A miner-recoverable generation 502 is a
+different class and is never consumed by this infrastructure recovery path.
+
 Targon source review calls OpenRouter directly. Its short-lived Platform job
 capability may therefore report an exhausted HTTP 429 through the relay's
 `/api/v1/inference/source-review/provider-event` route. The relay validates the

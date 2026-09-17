@@ -33,6 +33,7 @@ const (
 	providerGenerationInvalidCode = "provider_generation_invalid"
 	minerRecoverableFailureHeader = "X-Ditto-Inference-Failure-Class"
 	minerRecoverableGeneration    = "miner_recoverable_generation"
+	relayRecoverableGateway       = "relay_recoverable_gateway"
 )
 
 func isProviderRetryStatus(status int) bool {
