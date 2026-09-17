@@ -558,11 +558,11 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         config.l2_workspace_root
     ):
         raise ScreenerConfigError("SCREENER_L2_WORKSPACE_ROOT must be absolute")
-    if not 1 <= config.l2_max_steps <= 20:
-        raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 20")
-    if not 30 <= config.l2_timeout_seconds <= 900:
+    if not 1 <= config.l2_max_steps <= 48:
+        raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 48")
+    if not 30 <= config.l2_timeout_seconds <= 1_800:
         raise ScreenerConfigError(
-            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 900"
+            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 1800"
         )
     if not 1 <= config.l2_max_output_tokens <= 128_000:
         raise ScreenerConfigError(
@@ -582,9 +582,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_ANALYST_REASONING_EFFORT must be model_default"
         )
-    if config.l2_critic_reasoning_effort not in {"low", "medium"}:
+    if config.l2_critic_reasoning_effort not in {"low", "medium", "high"}:
         raise ScreenerConfigError(
-            "SCREENER_L2_CRITIC_REASONING_EFFORT must be low or medium"
+            "SCREENER_L2_CRITIC_REASONING_EFFORT must be low, medium, or high"
         )
     if not 60 <= config.l2_cache_ttl_seconds <= 30 * 86_400:
         raise ScreenerConfigError(

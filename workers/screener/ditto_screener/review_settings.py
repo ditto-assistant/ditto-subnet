@@ -89,8 +89,8 @@ class ReviewSettings(BaseModel):
     l2_fallback_models: tuple[ReviewModel, ...]
     l3_enabled: bool = True
     l3_model: Literal["openai/gpt-5.6-sol"]
-    timeout_seconds: Annotated[int, Field(ge=30, le=900)]
-    max_steps: Annotated[int, Field(ge=1, le=20)]
+    timeout_seconds: Annotated[int, Field(ge=30, le=1_800)]
+    max_steps: Annotated[int, Field(ge=1, le=48)]
     source_review_max_steps: Annotated[int, Field(ge=1, le=240)] = 200
     source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=16_000_000)] = (
         8_000_000
@@ -131,7 +131,7 @@ class ReviewSettings(BaseModel):
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)]
     max_cost_usd: Annotated[float, Field(gt=0, le=10)]
-    critic_reasoning_effort: Literal["low", "medium"]
+    critic_reasoning_effort: Literal["low", "medium", "high"]
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)]
     audit_retention_days: Annotated[int, Field(ge=1, le=365)]
     l2_always_escalate: bool = False

@@ -2014,6 +2014,23 @@ describe('screener review settings schemas', () => {
     expect(parsed.adjudicator_max_steps).toBe(128)
   })
 
+  it('accepts Platform L2 budgets and preserves the upper bounds', () => {
+    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 48]]) {
+      const parsed = screenerReviewSettingsSchema.parse({
+        ...settings, timeout_seconds, max_steps, critic_reasoning_effort: 'high',
+      })
+      expect(parsed.timeout_seconds).toBe(timeout_seconds)
+      expect(parsed.max_steps).toBe(max_steps)
+      expect(parsed.critic_reasoning_effort).toBe('high')
+    }
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, timeout_seconds: 1801,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_steps: 49,
+    })).toThrow()
+  })
+
   it('accepts the time-bound adjudicator step budget and rejects larger values', () => {
     expect(screenerReviewSettingsSchema.parse({
       ...settings,

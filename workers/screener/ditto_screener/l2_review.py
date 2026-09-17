@@ -2168,8 +2168,8 @@ class TerraSolSourceReviewAgent:
         self._cache_ttl_seconds = cache_ttl_seconds
         if analyst_reasoning_effort != "model_default":
             raise ValueError("L2 analyst reasoning effort must be model_default")
-        if critic_reasoning_effort not in {"low", "medium"}:
-            raise ValueError("L2 critic reasoning effort must be low or medium")
+        if critic_reasoning_effort not in {"low", "medium", "high"}:
+            raise ValueError("L2 critic reasoning effort must be low, medium, or high")
         self._analyst_reasoning_effort = analyst_reasoning_effort
         self._critic_reasoning_effort = critic_reasoning_effort
         self._model = model
@@ -5638,7 +5638,7 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 call graph has invalid collections": "call-graph-invalid",
     "L2 call graph is not an object": "call-graph-invalid",
     "L2 analyst reasoning effort must be model_default": "config-invalid",
-    "L2 critic reasoning effort must be low or medium": "config-invalid",
+    "L2 critic reasoning effort must be low, medium, or high": "config-invalid",
     "at least one starter provenance manifest is required": "config-invalid",
     "invalid L2 mode": "config-invalid",
     "L2 review exceeded lease budget": "lease-budget-exhausted",
