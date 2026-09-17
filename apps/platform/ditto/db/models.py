@@ -23,6 +23,7 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     Numeric,
     PrimaryKeyConstraint,
@@ -65,6 +66,58 @@ class Base(DeclarativeBase):
     """Declarative base for every Ditto ORM model."""
 
     metadata = MetaData(naming_convention=_NAMING_CONVENTION)
+
+
+class PrivateBenchmarkDataset(Base):
+    """Immutable private bytes, never a public dataset projection.
+
+    The migration also rejects UPDATE/DELETE so a pinned identity cannot be
+    silently regenerated. No activation or qualification is implied by a row.
+    """
+
+    __tablename__ = "private_benchmark_datasets"
+    __table_args__ = (
+        UniqueConstraint("identity_sha256"),
+        CheckConstraint("bench_version = 13 AND seed >= 0", name="version_seed"),
+        CheckConstraint("run_size IN ('small', 'medium', 'full')", name="run_size"),
+        CheckConstraint("length(scope) BETWEEN 1 AND 256", name="scope"),
+        CheckConstraint(
+            "octet_length(base_bytes) BETWEEN 1 AND 33554432 AND "
+            "octet_length(dataset_bytes) BETWEEN 1 AND 33554432",
+            name="size",
+        ),
+        CheckConstraint(
+            "base_sha256 = encode(sha256(base_bytes), 'hex') AND "
+            "dataset_sha256 = encode(sha256(dataset_bytes), 'hex') AND "
+            "validation_receipt_sha256 = "
+            "encode(sha256(validation_receipt_bytes), 'hex') AND "
+            "octet_length(validation_receipt_bytes) BETWEEN 1 AND 1048576",
+            name="content_hashes",
+        ),
+        CheckConstraint(
+            "identity_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "transform_profile_sha256 ~ '^[0-9a-f]{64}$' AND "
+            "validation_receipt_sha256 ~ '^[0-9a-f]{64}$'",
+            name="digest_format",
+        ),
+    )
+
+    dataset_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    identity_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    run_size: Mapped[str] = mapped_column(Text, nullable=False)
+    transform_profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    validation_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    validation_receipt_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    base_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    dataset_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    base_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    dataset_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class Agent(Base):
