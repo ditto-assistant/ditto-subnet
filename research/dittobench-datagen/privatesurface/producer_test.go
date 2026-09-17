@@ -145,3 +145,36 @@ func TestProduceNeverApprovesUnchangedArtifact(t *testing.T) {
 		t.Fatal("unchanged dataset approved")
 	}
 }
+
+func TestFullProfileProducesBoundedReceiptAndExactReplay(t *testing.T) {
+	// Whitespace and an accepting fake judge exercise plumbing ONLY.
+	c := fakeClient(t, func(_ int, request map[string]any) (int, any) {
+		if request["model"] == "validator-v1" {
+			return 200, completion(`{"accepted":true}`)
+		}
+		messages := request["messages"].([]any)
+		var source map[string]any
+		_ = json.Unmarshal([]byte(messages[1].(map[string]any)["content"].(string)), &source)
+		out, _ := json.Marshal(map[string]any{"text": source["text"].(string) + "\n"})
+		return 200, completion(string(out))
+	})
+	profile, _ := gen.ProfileForVersion("full", 13)
+	base, err := gen.GenerateDatasetWithSurface(4242, profile, 13, gen.SurfaceOptions{Salt: 91})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, receipt, err := c.Produce(context.Background(), base, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(receipt) <= 1<<20 || len(receipt) > 4<<20 {
+		t.Fatalf("unexpected full receipt size %d", len(receipt))
+	}
+	if _, err := gen.DecodePrivateArtifact(data, digest(data), 4242, "full"); err != nil {
+		t.Fatal(err)
+	}
+	var parsed Receipt
+	if json.Unmarshal(receipt, &parsed) != nil || !parsed.Accepted || parsed.DatasetSHA256 != digest(data) {
+		t.Fatal("invalid receipt")
+	}
+}

@@ -41,7 +41,7 @@ type PrivateSurfaceValidator interface {
 // the public rehearsal path. Input must already have received the salted v13
 // assembly pass. Only tool prompts, memory questions, and pair text may change;
 // catalogs, grading rules, graph identities and fixture content remain frozen.
-func ApplyPrivateSurface(ctx context.Context, input DatasetArtifact, transformer PrivateSurfaceTransformer, validator PrivateSurfaceValidator) (DatasetArtifact, error) {
+func ApplyPrivateSurface(ctx context.Context, input DatasetArtifact, transformer PrivateSurfaceTransformer, validator PrivateSurfaceValidator, additionalProtected ...[]string) (DatasetArtifact, error) {
 	fail := func(reason string) (DatasetArtifact, error) {
 		return DatasetArtifact{}, fmt.Errorf("private surface: %s", reason)
 	}
@@ -62,6 +62,9 @@ func ApplyPrivateSurface(ctx context.Context, input DatasetArtifact, transformer
 		return fail("cannot decode base artifact")
 	}
 	protected := v13GlobalProtected(&input)
+	for _, extra := range additionalProtected {
+		protected = append(protected, extra...)
+	}
 	type cached struct{ before, after string }
 	cache := map[string]cached{}
 	changed := false
@@ -126,11 +129,14 @@ func ApplyPrivateSurface(ctx context.Context, input DatasetArtifact, transformer
 // PrivateSurfaceRequests plans unique provider inputs without running any
 // transformer or approving any output. Repeated graph-local records share one
 // request. The returned strings/slices do not alias mutable input state.
-func PrivateSurfaceRequests(input DatasetArtifact) ([]PrivateSurfaceRequest, error) {
+func PrivateSurfaceRequests(input DatasetArtifact, additionalProtected ...[]string) ([]PrivateSurfaceRequest, error) {
 	if input.BenchVersion != protocol.BenchVersionV13 || input.SurfaceSalt == 0 {
 		return nil, errors.New("private surface: requires a salted v13 artifact")
 	}
 	protected := v13GlobalProtected(&input)
+	for _, extra := range additionalProtected {
+		protected = append(protected, extra...)
+	}
 	seen := map[string]string{}
 	var requests []PrivateSurfaceRequest
 	err := visitPrivateSurfaces(&input, func(location string, text *string) error {

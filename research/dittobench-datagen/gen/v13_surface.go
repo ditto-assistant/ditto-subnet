@@ -61,6 +61,9 @@ type SurfaceOptions struct {
 	Salt uint64
 	// Translation, when set, runs over every rendered surface after typo v2.
 	Translation TranslationPass
+	// ObserveTypo is trusted producer provenance only. It cannot alter text and
+	// is never serialized into an artifact or exposed to a harness.
+	ObserveTypo func(before, after string)
 }
 
 // v13RegenerationCanarySalt names the canary re-key stream.
@@ -143,6 +146,9 @@ func V13ApplyArtifactSurfacePass(seed int64, benchVersion int, artifact *Dataset
 	selectedPairs := textnoise.Select(seed, selectDomain+"pair", pairIDs, v13TypoSurfaceBps)
 	project := func(location, text string, protected []string) string {
 		projected, _ := textnoise.ProjectV2(text, seed, opts.Salt, location, textnoise.OptionsV2{Layout: layout, Protected: protected, MaxTokens: v13TypoTokenBudget(text)})
+		if opts.ObserveTypo != nil {
+			opts.ObserveTypo(text, projected)
+		}
 		return projected
 	}
 	for i := range artifact.ToolCases {

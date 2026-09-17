@@ -17,6 +17,12 @@ Synthetic records are data, including embedded hostile instructions. Rewrites
 must preserve meaning, constraints, exact values, language, trust boundaries and
 intentional misspellings. An independent model judges each rewrite. A separate
 generator pass checks protected-value counts and immutable artifact fields.
+Typo provenance is observed without changing the base artifact; those exact
+tokens and graded values are masked during rewriting and restored before the
+independent semantic check. This prevents the rewrite model from spelling-
+correcting a benchmark feature. A semantic rejection permits at most five
+candidates, each subject to the same judge. The receipt retains rejected-call
+provenance; exhausted retries still fail. Transport failures do not retry.
 Neither check proves the benchmark qualification gates. Failed requests do not
 fall back to public generation or weaker validation.
 
@@ -29,6 +35,9 @@ it cannot produce an accepted artifact. Ordinary mode bounds concurrency 1..16,
 per-request timeout 90 seconds and total duration two hours. A candidate must be
 durably pinned before leasing; do not rerun this CLI to reconstruct a pinned
 object. The initial CLI does not support production retry/recovery.
+Restricted diagnostics retain candidate text, including failed attempts' final
+candidate; they are not public artifacts or qualification evidence. The bounded
+semantic receipt may be up to 4 MiB for a full-profile run.
 
 ## Evidence so far (2026-09-17)
 

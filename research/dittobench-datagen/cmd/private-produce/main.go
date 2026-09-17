@@ -45,7 +45,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	p, ok := gen.ProfileForVersion(*runSize, 13)
+	_, ok := gen.ProfileForVersion(*runSize, 13)
 	if !ok {
 		return errors.New("private producer: invalid run size")
 	}
@@ -55,7 +55,7 @@ func run() error {
 			return errors.New("private producer: entropy unavailable")
 		}
 	}
-	base, err := gen.GenerateDatasetWithSurface(*seed, p, 13, gen.SurfaceOptions{Salt: salt})
+	base, protectedNoise, err := gen.GeneratePrivateBase(*seed, *runSize, salt)
 	if err != nil {
 		return errors.New("private producer: base generation failed")
 	}
@@ -74,7 +74,7 @@ func run() error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer cancel()
 	if *probe > 0 {
-		requests, err := gen.PrivateSurfaceRequests(base)
+		requests, err := gen.PrivateSurfaceRequests(base, protectedNoise)
 		if err != nil {
 			return err
 		}
@@ -110,7 +110,7 @@ func run() error {
 		return nil
 	}
 	var diagnostics []privatesurface.Diagnostic
-	dataset, receipt, err := client.ProduceWithDiagnostics(ctx, base, *concurrency, func(d privatesurface.Diagnostic) { diagnostics = append(diagnostics, d) })
+	dataset, receipt, err := client.ProduceWithDiagnostics(ctx, base, *concurrency, func(d privatesurface.Diagnostic) { diagnostics = append(diagnostics, d) }, protectedNoise)
 	trace, _ := json.Marshal(diagnostics)
 	if writeErr := writePrivate(*out, "diagnostics.json", trace); writeErr != nil {
 		return writeErr
