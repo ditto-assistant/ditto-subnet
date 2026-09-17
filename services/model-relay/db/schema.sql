@@ -828,7 +828,13 @@ SET default_table_access_method = heap;
 CREATE TABLE public.agent_kingship (
     agent_id uuid NOT NULL,
     first_crowned_at timestamp with time zone DEFAULT now() NOT NULL,
-    weight_confirmed_at timestamp with time zone
+    weight_confirmed_at timestamp with time zone,
+    emission_confirmed_at timestamp with time zone,
+    emission_block bigint,
+    emission_block_hash text,
+    emission_epoch_index bigint,
+    emission_ledger_digest text,
+    emission_evidence jsonb
 );
 
 
@@ -4484,6 +4490,25 @@ CREATE TABLE public.validator_tickets (
 
 
 --
+-- Name: validator_weights_fold_history; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.validator_weights_fold_history (
+    validator_hotkey text NOT NULL,
+    fold_digest text NOT NULL,
+    folded_at bigint NOT NULL,
+    vector_digest text NOT NULL,
+    epoch_index bigint,
+    ledger_digest text,
+    champion_agent_id uuid,
+    weights_fold jsonb NOT NULL,
+    first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    signature text NOT NULL,
+    signed_heartbeat jsonb
+);
+
+
+--
 -- Name: artifact_fetch_audit seq; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -6249,6 +6274,14 @@ ALTER TABLE ONLY public.validator_slot_settings_revisions
 
 
 --
+-- Name: validator_weights_fold_history pk_validator_weights_fold_history; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.validator_weights_fold_history
+    ADD CONSTRAINT pk_validator_weights_fold_history PRIMARY KEY (validator_hotkey, fold_digest);
+
+
+--
 -- Name: provider_outage_circuits provider_outage_circuits_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7659,6 +7692,13 @@ CREATE INDEX validator_tickets_open_idx ON public.validator_tickets USING btree 
 --
 
 CREATE INDEX validator_tickets_provider_outage_idx ON public.validator_tickets USING btree (provider_outage_epoch) WHERE (provider_outage_epoch IS NOT NULL);
+
+
+--
+-- Name: validator_weights_fold_history_lookup_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX validator_weights_fold_history_lookup_idx ON public.validator_weights_fold_history USING btree (validator_hotkey, folded_at);
 
 
 --

@@ -598,6 +598,18 @@ class ChainClient:
                     not isinstance(h, str) for h in owned
                 ):
                     raise ValueError("invalid owner-associated hotkeys")
+                # Ownership can change in initialization before distribution,
+                # while extrinsics can change it afterwards. Neither endpoint
+                # alone identifies the burned recipients on a transition block.
+                if (
+                    await read("SubnetOwner", block_hash, [netuid]) != owner
+                    or await read(_SUBNET_OWNER_HOTKEY_STORAGE, block_hash, [netuid])
+                    != owner_hotkey
+                    or await read("OwnedHotkeys", block_hash, [owner]) != owned
+                ):
+                    raise ValueError(
+                        "subnet ownership changed during distribution block"
+                    )
                 excluded = {*owned, owner_hotkey}
 
                 async def mapping(name: str, at: str) -> list[tuple[Any, Any]]:

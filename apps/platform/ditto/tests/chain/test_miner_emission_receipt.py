@@ -48,6 +48,8 @@ def receipt_chain(install_substrate_module: AsyncMock) -> dict[str, Any]:
             else state["updates"],
             "Now": state["timestamp"] if at == "h1000" else 950000,
         }
+        if at == "h1000" and name in state.get("post_ownership", {}):
+            return state["post_ownership"][name]
         return values[name]
 
     async def query_map(**kwargs: Any) -> Any:
@@ -229,3 +231,21 @@ def test_installed_scale_decoder_preserves_named_event_attributes() -> None:
     assert decoded["attributes"] == {"netuid": 118, "emissions": [0, 200]}
     assert decoded["module_id"] == "SubtensorModule"
     assert decoded["event_id"] == "IncentiveAlphaEmittedToMiners"
+
+
+@pytest.mark.parametrize(
+    "storage,value",
+    [
+        ("SubnetOwner", "new-owner"),
+        ("SubnetOwnerHotkey", "miner"),
+        ("OwnedHotkeys", ["owner-associated", "miner"]),
+    ],
+)
+async def test_ownership_transition_cannot_turn_burn_into_earnings(
+    receipt_chain: dict[str, Any], storage: str, value: Any
+) -> None:
+    # The event still reports positive gross miner incentive. A new owner
+    # association before payout can recycle that incentive instead of paying it.
+    receipt_chain["post_ownership"] = {storage: value}
+    with pytest.raises(ChainConnectionError, match="ownership changed"):
+        await client().get_miner_emission_receipt(118)
