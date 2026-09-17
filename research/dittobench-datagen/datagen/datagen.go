@@ -2229,7 +2229,10 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		}
 		switch {
 		case intent13 != nil:
-			prompt = persona.Expand(r, bankFor("intent:"+cat.name, intent13.grammar), "root")
+			// Different intent values have different semantic grammars. Sharing
+			// one category cache can render an earlier value's request while
+			// grading the newly drawn value (for example deep vs medium effort).
+			prompt = persona.Expand(r, bankFor("intent:"+cat.name+":"+intent13.value, intent13.grammar), "root")
 			argValue = intent13.value
 			if strings.Contains(prompt, argValue) {
 				usedFiller = argValue

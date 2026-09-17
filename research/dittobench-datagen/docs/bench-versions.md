@@ -933,6 +933,14 @@ surface slice; missing parser coverage cannot be reported as resistance.
 
 ### Known vector
 
+The same prelaunch correction authorization also covers intent-bank isolation:
+V13 caches each closed-value intent grammar separately. The former category-only
+cache could reuse a deep-reasoning prompt while grading a later medium-effort
+draw (or vice versa). The fix keeps each prompt coupled to its selected value;
+it changes neither grading thresholds nor earlier benchmark contracts. Re-run
+qualification at the corrected source revision even when a sampled dataset hash
+is unchanged: the seed below does not exercise this collision.
+
 Prelaunch correction authorized by the owner on 2026-09-17: V13 had only
 diagnostic canaries, not public rollout. Record-grounded restraint members now
 carry distinct visible planning-context references in both request and note.
