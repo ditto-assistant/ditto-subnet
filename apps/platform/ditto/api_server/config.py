@@ -42,6 +42,11 @@ from ditto.api_server.embedding import (
 )
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.pricing import PricingConfig, parse_pricing_config_from_env
+from ditto.api_server.private_benchmark_preparation import (
+    PrivatePreparationConfig,
+    check_private_preparation_config,
+    parse_private_preparation_config,
+)
 from ditto.api_server.storage import StorageConfig, parse_storage_config_from_env
 from ditto.api_server.validator_names import (
     ValidatorNamesConfig,
@@ -349,6 +354,10 @@ class ApiServerConfig:
 
     validator_compatibility: ValidatorCompatibilityConfig
     """Validator release and heartbeat requirements for scoring tickets."""
+
+    private_preparation: PrivatePreparationConfig = field(
+        default_factory=PrivatePreparationConfig
+    )
 
     inference_proxy: InferenceProxyConfig = field(
         default_factory=lambda: InferenceProxyConfig(
@@ -941,6 +950,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         storage=parse_storage_config_from_env(),
         embedding=parse_embedding_config_from_env(),
         data_pipeline=parse_data_pipeline_config_from_env(),
+        private_preparation=parse_private_preparation_config(),
         targon=targon,
         cloudrun=cloudrun,
         screener_auth=ScreenerAuthConfig(
@@ -1045,6 +1055,7 @@ def check_config(config: ApiServerConfig) -> None:
             ``log_level`` is not a stdlib level name.
     """
     check_hosted_signer_config(config.coding_hosted_signer)
+    check_private_preparation_config(config.private_preparation)
     check_ditto_link_config(config.ditto_link)
     if not 1 <= config.port <= 65535:
         raise ApiServerConfigError(f"port out of range: {config.port}")

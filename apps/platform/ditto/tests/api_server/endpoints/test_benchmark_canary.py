@@ -1,6 +1,7 @@
 """Real-Postgres canary authority, transport and score-isolation regressions."""
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
@@ -13,15 +14,22 @@ from sqlalchemy.exc import DBAPIError
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import ScoreReport
 from ditto.api_server.endpoints import admin_benchmark_canary, validator
+from ditto.api_server.onchain_seed import derive_validator_seed
+from ditto.api_server.private_benchmark_preparation import (
+    PrivatePreparationConfig,
+    private_identity,
+)
 from ditto.db.models import (
     Agent,
     BenchmarkCanary,
     BenchmarkRollout,
+    PrivateBenchmarkPreparation,
     Score,
     ValidatorHeartbeat,
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version
+from ditto.db.queries.private_benchmark_datasets import pin_private_dataset
 from ditto.db.queries.retry_state import resolve_bench_version
 from ditto.db.queries.tickets import expire_overdue_tickets, ticket_retry_budget_spent
 from ditto.tests.api_server.endpoints.test_admin_benchmark_rollout import (
@@ -32,6 +40,7 @@ from ditto.tests.api_server.endpoints.test_admin_benchmark_rollout import (
     _install,
     _StubGenerator,
 )
+from ditto.tests.db.test_private_benchmark_datasets import candidate
 
 pytestmark = pytest.mark.asyncio
 KEY = bittensor.Keypair.create_from_uri("//Alice")
@@ -41,8 +50,14 @@ HOTKEY = KEY.ss58_address
 @pytest.fixture
 async def ready(app, session_maker, monkeypatch):
     _install(app, session_maker)
+    app.state.session_maker = session_maker
+    app.state.private_preparation_sessions = session_maker
     app.state.chain = MagicMock()
     app.state.dataset_generator = _StubGenerator()
+    app.state.config = replace(
+        app.state.config,
+        private_preparation=PrivatePreparationConfig(profile_sha256="a" * 64),
+    )
     monkeypatch.setattr(
         admin_benchmark_canary, "_assert_validator_permitted", AsyncMock()
     )
@@ -50,6 +65,7 @@ async def ready(app, session_maker, monkeypatch):
     now = datetime.now(UTC)
     capabilities, stack = _capabilities(now)
     capabilities["scorer_benchmarks"]["supported_bench_versions"] = [7, 8, 12, 13]
+    capabilities["scorer_benchmarks"]["private_datasets"] = True
     async with session_maker() as session, session.begin():
         member = _add_cohort_agent(
             session, position=1, composite=0.5, now=now, bench_version=7
@@ -58,6 +74,12 @@ async def ready(app, session_maker, monkeypatch):
         agent = await session.get(Agent, member.agent_id)
         agent.dataset_seed_block = 100
         agent.dataset_seed_block_hash = "ab" * 32
+        private_key = private_identity(
+            derive_validator_seed("ab" * 32, agent.agent_id, HOTKEY), "full", "a" * 64
+        )
+        await pin_private_dataset(
+            session, identity=private_key, **candidate(private_key)
+        )
         _add_ready_route(session, now)
         session.add(
             ValidatorHeartbeat(
@@ -247,7 +269,9 @@ async def test_heartbeat_admission_guards(client, ready, session_maker, mode):
 
 
 async def test_generator_failure_rolls_back_lease(client, ready, app, session_maker):
-    app.state.dataset_generator.generate = AsyncMock(return_value=None)
+    app.state.config = replace(
+        app.state.config, private_preparation=PrivatePreparationConfig()
+    )
     response = await client.post(
         "/api/v1/admin/benchmark-canaries", headers=_HEADERS, json=ready
     )
@@ -258,6 +282,58 @@ async def test_generator_failure_rolls_back_lease(client, ready, app, session_ma
             is None
         )
         assert await counts(session) == (3, 0)
+
+
+async def test_pending_private_canary_commits_preparation_not_lease(
+    client, ready, app, session_maker
+):
+    app.state.config = replace(
+        app.state.config,
+        private_preparation=PrivatePreparationConfig("b" * 64),
+    )
+    public = AsyncMock(side_effect=AssertionError("public fallback forbidden"))
+    app.state.dataset_generator.generate = public
+    for _ in range(2):
+        response = await client.post(
+            "/api/v1/admin/benchmark-canaries", headers=_HEADERS, json=ready
+        )
+        assert response.status_code == 503, response.text
+        assert response.headers["retry-after"] == "60"
+    public.assert_not_awaited()
+    async with session_maker() as session:
+        assert (
+            await session.get(ValidatorTicket, (UUID(ready["agent_id"]), 13, HOTKEY))
+            is None
+        )
+        assert (
+            await session.scalar(select(func.count()).select_from(BenchmarkCanary)) == 0
+        )
+        rows = list(await session.scalars(select(PrivateBenchmarkPreparation)))
+        assert len(rows) == 1 and rows[0].state == "pending"
+
+
+async def test_private_incompatible_validator_cannot_enqueue(
+    client, ready, session_maker
+):
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.get(ValidatorHeartbeat, HOTKEY)
+        capabilities = dict(heartbeat.capabilities)
+        capabilities["scorer_benchmarks"] = {
+            **capabilities["scorer_benchmarks"],
+            "private_datasets": False,
+        }
+        heartbeat.capabilities = capabilities
+    response = await client.post(
+        "/api/v1/admin/benchmark-canaries", headers=_HEADERS, json=ready
+    )
+    assert response.status_code == 409, response.text
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(PrivateBenchmarkPreparation)
+            )
+            == 0
+        )
 
 
 async def test_later_ordinary_lease_starts_fresh(client, ready, session_maker):

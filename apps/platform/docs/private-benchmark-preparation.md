@@ -30,6 +30,27 @@ qualification and safe closure/reveal are separate work. Nothing here turns on
 private V13 generation, issues a canary, or activates a benchmark.
 # Trusted producer worker
 
+## Lease preparation
+
+New V13 normal, confirmation and canary pins resolve through the private store,
+not public generation. Set `DITTO_PRIVATE_DATASET_PROFILE_SHA256` only to the
+reviewed producer profile. Unset configuration fails closed for new V13 work;
+older versions retain their existing generator. Existing tickets are not
+re-pinned. Agent-level screening base pins remain distinct from the actual
+validator-specific private execution pin.
+
+Missing private artifacts reserve preparation in an independent short transaction
+and return 503 with a retry interval. The attempted lease rolls back. A separate
+two-connection pool avoids waiting for a connection held by the calling lease.
+`DITTO_PRIVATE_DATASET_MAX_PENDING` and `DITTO_PRIVATE_DATASET_MAX_DAILY` both
+default to eight; admission is serialized across profiles and counts failures
+against the rolling-day limit. Limits are dataset counts, not dollar guarantees.
+Equal seed/run/profile inputs share the `bench-v13` scope across CRN participants.
+Terminal failed preparations require operator review, not a new salt on retry.
+
+This configuration is not evidence of qualification and must not be enabled for
+rollout before the separate qualification and disclosure-closure gates land.
+
 `python -m ditto.private_benchmark_worker` prepares at most one queued artifact,
 then exits. It is not started by API boot. It checks the approved native binary
 SHA-256 and its `-profile-sha` output before claiming, then commits the claim

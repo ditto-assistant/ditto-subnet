@@ -202,6 +202,7 @@ from ditto.api_server.outlier_escalation import (
     OutlierEscalationSettings,
     evaluate_score_outlier,
 )
+from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.queue_policy_settings import (
     DEFAULT_SETTINGS as QUEUE_POLICY_DEFAULTS,
 )
@@ -390,6 +391,11 @@ async def _private_dataset_mode(
     )
     if dataset_id is None:
         return None
+    _assert_private_dataset_capability(heartbeat)
+    return "platform-private-v1"
+
+
+def _assert_private_dataset_capability(heartbeat: ValidatorHeartbeat | None) -> None:
     capabilities = heartbeat.capabilities if heartbeat is not None else None
     scorer = (
         capabilities.get("scorer_benchmarks")
@@ -402,7 +408,6 @@ async def _private_dataset_mode(
         or scorer.get("status") != "fresh_verified"
     ):
         raise HTTPException(503, "validator cannot execute private datasets")
-    return "platform-private-v1"
 
 
 def _inference_grant_offer(
@@ -4097,14 +4102,21 @@ async def request_job(
             # The post-commit block hash keeps the seed unpredictable; binding
             # the validator hotkey makes it distinct and publicly reproducible.
             # Persist the pin on the ticket so retries cannot rotate datasets.
+            if ticket.bench_version == 13 and ticket.seed is None:
+                _assert_private_dataset_capability(heartbeat)
+                if seed_block_hash is None or generator.run_size is None:
+                    raise HTTPException(503, "private V13 seed binding is unavailable")
             if seed_block_hash is not None and generator.run_size is not None:
                 expected_seed = derive_validator_seed(
                     seed_block_hash, agent.agent_id, payload.validator_hotkey
                 )
                 if ticket.seed is None:
                     ticket.seed = expected_seed
-                    ticket.dataset_sha256 = await generator.generate(
-                        expected_seed, bench_version=ticket.bench_version
+                    ticket.dataset_sha256 = await lease_dataset_sha(
+                        request,
+                        generator,
+                        seed=expected_seed,
+                        bench_version=ticket.bench_version,
                     )
                     ticket.seed_block = seed_block
                     ticket.seed_block_hash = seed_block_hash
@@ -5635,6 +5647,8 @@ async def request_top5_confirmation_job(
             bench_version=canonical_version,
         )
         if canonical_version >= 3:
+            if canonical_version == 13:
+                _assert_private_dataset_capability(heartbeat)
             if generator.run_size is None:
                 raise HTTPException(
                     status_code=503,
@@ -5643,8 +5657,11 @@ async def request_top5_confirmation_job(
             confirmation_datasets = [
                 ConfirmationDatasetPin(
                     seed=selected_wave_seed,
-                    dataset_sha256=await generator.generate(
-                        selected_wave_seed, bench_version=canonical_version
+                    dataset_sha256=await lease_dataset_sha(
+                        request,
+                        generator,
+                        seed=selected_wave_seed,
+                        bench_version=canonical_version,
                     ),
                     run_size=generator.run_size,
                     anchor_agent_id=(

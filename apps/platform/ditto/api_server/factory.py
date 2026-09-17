@@ -13,6 +13,7 @@ import os
 import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -273,6 +274,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             stack.push_async_callback(engine.dispose)
             app.state.engine = engine
             app.state.session_maker = create_session_maker(engine)
+            # Lease transactions hold ordinary pool connections. Preparation
+            # commits independently and must not wait for that same pool when
+            # every request already owns one of its connections.
+            app.state.private_preparation_sessions = None
+            if config.private_preparation.profile_sha256 is not None:
+                preparation_engine = create_db_engine(
+                    replace(config.postgres, pool_min_size=1, pool_max_size=2)
+                )
+                stack.push_async_callback(preparation_engine.dispose)
+                app.state.private_preparation_sessions = create_session_maker(
+                    preparation_engine
+                )
             app.state.coding_hippius_evidence_runtime = (
                 create_hippius_evidence_runtime_from_env(
                     session_maker=app.state.session_maker

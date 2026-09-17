@@ -33,6 +33,7 @@ from ditto.api_server.endpoints.validator import (
 )
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.onchain_seed import derive_validator_seed
+from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.validator_slot_settings import (
     allowed_slot_count,
     validator_issuance_paused,
@@ -272,6 +273,11 @@ async def issue_benchmark_canary(
             ) from exc
         if not capabilities.ticket_inference or heartbeat.protocol_version < 11:
             raise HTTPException(409, "validator lacks ticket inference capability")
+        if payload.bench_version == 13 and (
+            capabilities.scorer_benchmarks is None
+            or not capabilities.scorer_benchmarks.private_datasets
+        ):
+            raise HTTPException(409, "validator lacks private dataset capability")
         held = await _held_lease_slots(
             session, validator_hotkey=payload.validator_hotkey, now=now
         )
@@ -348,7 +354,9 @@ async def issue_benchmark_canary(
         seed = derive_validator_seed(
             agent.dataset_seed_block_hash, agent.agent_id, payload.validator_hotkey
         )
-        digest = await generator.generate(seed, bench_version=payload.bench_version)
+        digest = await lease_dataset_sha(
+            request, generator, seed=seed, bench_version=payload.bench_version
+        )
         if digest is None:
             raise HTTPException(503, "generator did not return a dataset digest")
         if await active_bench_version(session) != payload.expected_active_version:

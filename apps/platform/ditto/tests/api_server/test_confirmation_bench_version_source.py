@@ -56,6 +56,10 @@ _EQUALITY_COMPARISON = re.compile(r"bench_version\s*(==|!=)\s*\d+")
 # is (module, exact source line). Adding one is a decision, not a formality.
 _PROJECTION_EXCEPTIONS = {
     (
+        "api_server/endpoints/validator.py",
+        "if ticket.bench_version == 13 and ticket.seed is None:",
+    ): "Require private dataset capability and seed binding before new V13 preparation.",
+    (
         "api_server/endpoints/public.py",
         "if dataset_bench_version == 13:",
     ): "V13 private-artifact disclosure hold; not confirmation eligibility.",
