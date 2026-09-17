@@ -1316,6 +1316,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/miner-fees/export.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export Miner Fees
+         * @description Export the complete accepted ledger across all dates and destinations.
+         */
+        get: operations["export_miner_fees_api_v1_admin_miner_fees_export_csv_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/miner-owners/{identifier}": {
         parameters: {
             query?: never;
@@ -8543,6 +8563,8 @@ export interface components {
          * @description Ledger-derived gross revenue; wallet holdings are intentionally separate.
          */
         AdminMinerFeeSummary: {
+            /** Address History */
+            address_history?: components["schemas"]["MinerFeeAddress"][];
             /** First Payment At */
             first_payment_at: string | null;
             /**
@@ -18484,6 +18506,28 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /**
+         * MinerFeeAddress
+         * @description Known collection destination with all-time accepted ledger totals.
+         */
+        MinerFeeAddress: {
+            /** First Payment At */
+            first_payment_at: string | null;
+            /** Gross Amount Rao */
+            gross_amount_rao: number;
+            /** Gross Value Usd */
+            gross_value_usd: string;
+            /** Is Current */
+            is_current: boolean;
+            /** Last Payment At */
+            last_payment_at: string | null;
+            /** Paid Submissions */
+            paid_submissions: number;
+            /** Payment Address */
+            payment_address: string;
+            /** Priced Submissions */
+            priced_submissions: number;
         };
         /** MinerFeeDay */
         MinerFeeDay: {
@@ -31493,6 +31537,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AdminMinerFeeSummary"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_miner_fees_api_v1_admin_miner_fees_export_csv_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

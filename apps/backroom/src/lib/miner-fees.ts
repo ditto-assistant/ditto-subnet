@@ -11,6 +11,16 @@ export const minerFeeSummarySchema = z.object({
   unique_paying_coldkeys: z.number().int().nonnegative(),
   first_payment_at: z.string().datetime({ offset: true }).nullable(),
   last_payment_at: z.string().datetime({ offset: true }).nullable(),
+  address_history: z.array(z.object({
+    payment_address: z.string().min(1),
+    is_current: z.boolean(),
+    paid_submissions: z.number().int().nonnegative(),
+    gross_amount_rao: z.number().int().nonnegative(),
+    priced_submissions: z.number().int().nonnegative(),
+    gross_value_usd: z.coerce.number().nonnegative(),
+    first_payment_at: z.string().datetime({ offset: true }).nullable(),
+    last_payment_at: z.string().datetime({ offset: true }).nullable(),
+  })).optional(),
   recent_days: z.array(
     z.object({
       date: z.string(),

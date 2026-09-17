@@ -18,6 +18,21 @@ class MinerFeeDay(BaseModel):
     gross_value_usd: Decimal = Field(ge=0)
 
 
+class MinerFeeAddress(BaseModel):
+    """Known collection destination with all-time accepted ledger totals."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    payment_address: str
+    is_current: bool
+    paid_submissions: int = Field(ge=0)
+    gross_amount_rao: int = Field(ge=0)
+    priced_submissions: int = Field(ge=0)
+    gross_value_usd: Decimal = Field(ge=0)
+    first_payment_at: datetime | None
+    last_payment_at: datetime | None
+
+
 class AdminMinerFeeSummary(BaseModel):
     """Ledger-derived gross revenue; wallet holdings are intentionally separate."""
 
@@ -34,3 +49,5 @@ class AdminMinerFeeSummary(BaseModel):
     first_payment_at: datetime | None
     last_payment_at: datetime | None
     recent_days: list[MinerFeeDay]
+
+    address_history: list[MinerFeeAddress] = Field(default_factory=list)

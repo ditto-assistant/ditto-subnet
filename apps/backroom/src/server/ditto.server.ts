@@ -132,6 +132,7 @@ export async function platformAdminRequest(
      * phrases exist to make deliberate.
      */
     retries?: number
+    responseFormat?: 'text'
   } = {},
 ) {
   const baseUrl = (
@@ -158,7 +159,7 @@ export async function platformAdminRequest(
       response = await fetch(`${baseUrl}${path}`, {
         method,
         headers: {
-          Accept: 'application/json',
+          Accept: options.responseFormat === 'text' ? 'text/csv' : 'application/json',
           Authorization: `Bearer ${token}`,
           ...(options.actor ? { 'X-Admin-Actor': options.actor } : {}),
           ...(options.body === undefined
@@ -186,7 +187,9 @@ export async function platformAdminRequest(
       // Shared server helpers can run outside a TanStack response context.
     }
 
-    const payload = decodeResponseBody(await response.text())
+    const body = await response.text()
+    if (response.ok && options.responseFormat === 'text') return body
+    const payload = decodeResponseBody(body)
     if (response.ok) return payload
     if (response.status >= 500 && attempt++ < retries) continue
     const message = errorMessage(payload, response.status)
