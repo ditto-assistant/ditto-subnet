@@ -227,3 +227,30 @@ func TestProduceSemanticRetriesAreBoundedAndRetained(t *testing.T) {
 		t.Fatal("missing rejected-call provenance")
 	}
 }
+
+func TestGlobalAnswerIntroductionRetriesWithoutDisclosingHiddenValues(t *testing.T) {
+	calls := 0
+	c := fakeClient(t, func(n int, request map[string]any) (int, any) {
+		calls++
+		body, _ := json.Marshal(request)
+		if strings.Contains(string(body), "ZEBRA") {
+			t.Fatal("hidden answer was disclosed to provider")
+		}
+		if request["model"] == "validator-v1" {
+			return 200, completion(`{"accepted":true}`)
+		}
+		if n == 1 {
+			return 200, completion(`{"text":"ZEBRA is the code."}`)
+		}
+		return 200, completion(`{"text":"Please find my code."}`)
+	})
+	base := gen.DatasetArtifact{BenchVersion: 13, SurfaceSalt: 1, MemoryCases: []gen.ArtifactCase{{MemoryCase: protocol.MemoryCase{ID: "q", Question: "Find my code.", ExpectedAnswer: "ZEBRA"}}}}
+	data, receipt, err := c.Produce(context.Background(), base, 1)
+	if err != nil || len(data) == 0 || calls != 3 {
+		t.Fatalf("global candidate protection failed: calls=%d err=%v", calls, err)
+	}
+	var parsed Receipt
+	if json.Unmarshal(receipt, &parsed) != nil || len(parsed.Surfaces) != 1 || len(parsed.Surfaces[0].Rejected) != 1 {
+		t.Fatal("missing protected rejection provenance")
+	}
+}

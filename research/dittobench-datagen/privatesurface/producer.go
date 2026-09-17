@@ -63,7 +63,7 @@ func (p Profile) Digest() (string, error) {
 			return "", errors.New("private producer: invalid reasoning profile")
 		}
 	}
-	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "bounded-semantic-and-protected-retries", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
+	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "bounded-semantic-and-protected-retries", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
 	return digest(raw), nil
 }
 
@@ -200,10 +200,10 @@ func (c *Client) RewriteOne(ctx context.Context, req gen.PrivateSurfaceRequest) 
 // ProbeOne retains rejected candidate text for PRIVATE operator diagnostics.
 // Non-nil error always means rejected; callers must never issue these bytes.
 func (c *Client) ProbeOne(ctx context.Context, req gen.PrivateSurfaceRequest) (string, SurfaceReceipt, error) {
-	return c.probeOne(ctx, req, 0)
+	return c.probeOne(ctx, req, 0, nil)
 }
 
-func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, attempt int) (string, SurfaceReceipt, error) {
+func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, attempt int, check func(string, string) error) (string, SurfaceReceipt, error) {
 	masked, markers, restore, err := maskProtected(req.Text, req.Protected)
 	if err != nil {
 		return "", SurfaceReceipt{}, err
@@ -230,6 +230,9 @@ func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, at
 		return *rewritten.Text, SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(*rewritten.Text)), Rewrite: rewrite}, errProtected
 	}
 	rewritten.Text = &text
+	if check != nil && check(req.Text, text) != nil {
+		return text, SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(text)), Rewrite: rewrite}, errProtected
+	}
 	content, validation, err := c.complete(ctx, c.profile.ValidatorModel, c.profile.ValidatorProvider, validatePrompt, map[string]any{"before": req.Text, "after": *rewritten.Text, "protected": req.Protected}, "accepted", "boolean", 0)
 	receipt := SurfaceReceipt{LocationSHA256: digest([]byte(req.Location)), BeforeSHA256: digest([]byte(req.Text)), AfterSHA256: digest([]byte(*rewritten.Text)), Rewrite: rewrite, Validation: validation}
 	if err != nil {
@@ -287,6 +290,10 @@ func (c *Client) ProduceWithDiagnostics(ctx context.Context, base gen.DatasetArt
 	if err != nil {
 		return nil, nil, err
 	}
+	check, err := gen.PrivateCandidateCheck(base, protected...)
+	if err != nil {
+		return nil, nil, err
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	results := cachedResults{}
@@ -309,7 +316,7 @@ func (c *Client) ProduceWithDiagnostics(ctx context.Context, base gen.DatasetArt
 				var err error
 				var rejected []SurfaceReceipt
 				for attempt := 0; attempt < maxSurfaceAttempts; attempt++ {
-					after, receipt, err = c.probeOne(ctx, req, attempt)
+					after, receipt, err = c.probeOne(ctx, req, attempt, check)
 					if !errors.Is(err, errSemantic) && !errors.Is(err, errProtected) {
 						break
 					}

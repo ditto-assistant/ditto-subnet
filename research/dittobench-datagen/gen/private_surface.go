@@ -36,6 +36,35 @@ type PrivateSurfaceValidator interface {
 	Validate(context.Context, PrivateSurfaceRequest, string) error
 }
 
+// PrivateCandidateCheck retains the full protected-value set locally. The
+// returned checker reports no values, so rejected candidates can be retried
+// without disclosing answers absent from their source text to the provider.
+// It is mechanical validation only; independent semantic validation is required.
+func PrivateCandidateCheck(input DatasetArtifact, additionalProtected ...[]string) (func(string, string) error, error) {
+	if input.BenchVersion != protocol.BenchVersionV13 || input.SurfaceSalt == 0 {
+		return nil, errors.New("private surface: requires a salted v13 artifact")
+	}
+	protected := v13GlobalProtected(&input)
+	for _, extra := range additionalProtected {
+		protected = append(protected, extra...)
+	}
+	return func(before, after string) error {
+		return checkPrivateCandidate(before, after, protected)
+	}, nil
+}
+
+func checkPrivateCandidate(before, after string, protected []string) error {
+	if !utf8.ValidString(after) || strings.TrimSpace(after) == "" || len(after) > 4*len(before)+1024 {
+		return errors.New("invalid transformed text")
+	}
+	for _, value := range protected {
+		if strings.Count(before, value) != strings.Count(after, value) {
+			return errors.New("protected value changed or introduced")
+		}
+	}
+	return nil
+}
+
 // ApplyPrivateSurface produces a detached artifact or no artifact at all. It
 // does not activate a benchmark, attest qualification, persist bytes, or change
 // the public rehearsal path. Input must already have received the salted v13
@@ -95,16 +124,9 @@ func ApplyPrivateSurface(ctx context.Context, input DatasetArtifact, transformer
 			// Provider errors can contain prompts, answers, or credentials.
 			return errors.New("transform failed")
 		}
-		if !utf8.ValidString(after) || strings.TrimSpace(after) == "" || len(after) > 4*len(before)+1024 {
-			return errors.New("invalid transformed text")
-		}
-		for _, value := range protected {
-			// Includes absent values: adding a previously hidden answer to a
-			// question is also forbidden. Conservative substring counts may
-			// reject valid paraphrases; they must never silently approve one.
-			if strings.Count(before, value) != strings.Count(after, value) {
-				return errors.New("protected value changed or introduced")
-			}
+		// Includes absent values: introducing a hidden answer is forbidden.
+		if err := checkPrivateCandidate(before, after, protected); err != nil {
+			return err
 		}
 		if err := validator.Validate(ctx, request, after); err != nil {
 			return errors.New("semantic validation failed")
