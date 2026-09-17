@@ -28,7 +28,12 @@ provenance; exhausted retries still fail. The last candidate explicitly requests
 verbatim source preservation, but still goes through the independent judge and
 all artifact checks. Before/after hashes expose unchanged surfaces; they must
 not be counted as demonstrated private coverage. A completely unchanged artifact
-still fails. Transport failures do not retry.
+still fails. Transient network errors and provider 429/502/503/504 responses
+share the same five-total-candidate budget, with bounded cancellation-aware
+backoff and recorded sanitized failure reasons. Authentication, missing routes,
+malformed JSON, filtering and token-limit failures do not retry. No extra retry
+budget is hidden inside an individual provider call. Reported call costs exclude
+any failed request for which the provider did not return usage.
 Neither check proves the benchmark qualification gates. Failed requests do not
 fall back to public generation or weaker validation.
 

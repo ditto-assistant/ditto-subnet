@@ -3,6 +3,7 @@ package privatesurface
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -69,6 +70,7 @@ func fakeClient(t *testing.T, responder func(int, map[string]any) (int, any)) *C
 		t.Fatal(err)
 	}
 	c.url = server.URL
+	c.retryDelay = 0
 	return c
 }
 
@@ -252,5 +254,49 @@ func TestGlobalAnswerIntroductionRetriesWithoutDisclosingHiddenValues(t *testing
 	var parsed Receipt
 	if json.Unmarshal(receipt, &parsed) != nil || len(parsed.Surfaces) != 1 || len(parsed.Surfaces[0].Rejected) != 1 {
 		t.Fatal("missing protected rejection provenance")
+	}
+}
+
+func TestTransientProviderRetriesShareTheCandidateBudget(t *testing.T) {
+	for _, status := range []int{429, 502, 503, 504, 401, 404} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			calls := 0
+			c := fakeClient(t, func(_ int, _ map[string]any) (int, any) {
+				calls++
+				return status, map[string]string{"error": "PRIVATE provider detail"}
+			})
+			base := gen.DatasetArtifact{BenchVersion: 13, SurfaceSalt: 1, ToolCases: []protocol.ToolCase{{ID: "t", Prompt: "source text"}}}
+			data, receipt, err := c.Produce(context.Background(), base, 1)
+			want := maxSurfaceAttempts
+			if status == 401 || status == 404 {
+				want = 1
+			}
+			if err == nil || data != nil || receipt != nil || calls != want || strings.Contains(err.Error(), "PRIVATE") {
+				t.Fatalf("retry boundary: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
+
+func TestTransientRecoveryStillRequiresSemanticValidation(t *testing.T) {
+	calls := 0
+	c := fakeClient(t, func(n int, request map[string]any) (int, any) {
+		calls++
+		if n == 1 {
+			return 503, nil
+		}
+		if request["model"] == "validator-v1" {
+			return 200, completion(`{"accepted":true}`)
+		}
+		return 200, completion(`{"text":"Please consider the source text."}`)
+	})
+	base := gen.DatasetArtifact{BenchVersion: 13, SurfaceSalt: 1, ToolCases: []protocol.ToolCase{{ID: "t", Prompt: "source text"}}}
+	data, raw, err := c.Produce(context.Background(), base, 1)
+	if err != nil || len(data) == 0 || calls != 3 {
+		t.Fatalf("recovery failed: calls=%d err=%v", calls, err)
+	}
+	var receipt Receipt
+	if json.Unmarshal(raw, &receipt) != nil || len(receipt.Surfaces[0].RejectedReasons) != 1 {
+		t.Fatal("transient failure not recorded")
 	}
 }

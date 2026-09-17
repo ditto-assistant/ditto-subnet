@@ -27,6 +27,7 @@ const maxSurfaceAttempts = 5
 
 var errSemantic = errors.New("private producer: semantic validation rejected")
 var errProtected = errors.New("private producer: protected rewrite rejected")
+var errTransient = errors.New("private producer: transient provider failure")
 
 const retryPrompt = ` An earlier candidate failed independent semantic validation. Stay closer to the source. Keep any phrase you cannot safely paraphrase verbatim and only rewrite safe surrounding phrasing. Return the source unchanged if no safe rewrite exists. Do not weaken any requirement above.`
 
@@ -63,7 +64,7 @@ func (p Profile) Digest() (string, error) {
 			return "", errors.New("private producer: invalid reasoning profile")
 		}
 	}
-	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "bounded-semantic-and-protected-retries", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
+	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "five-total-candidates-including-transient-retries-backoff-1s", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
 	return digest(raw), nil
 }
 
@@ -79,12 +80,13 @@ type CompletionReceipt struct {
 }
 
 type SurfaceReceipt struct {
-	LocationSHA256 string            `json:"location_sha256"`
-	BeforeSHA256   string            `json:"before_sha256"`
-	AfterSHA256    string            `json:"after_sha256"`
-	Rewrite        CompletionReceipt `json:"rewrite"`
-	Validation     CompletionReceipt `json:"validation"`
-	Rejected       []SurfaceReceipt  `json:"rejected,omitempty"`
+	LocationSHA256  string            `json:"location_sha256"`
+	BeforeSHA256    string            `json:"before_sha256"`
+	AfterSHA256     string            `json:"after_sha256"`
+	Rewrite         CompletionReceipt `json:"rewrite"`
+	Validation      CompletionReceipt `json:"validation"`
+	Rejected        []SurfaceReceipt  `json:"rejected,omitempty"`
+	RejectedReasons []string          `json:"rejected_reasons,omitempty"`
 }
 
 type Receipt struct {
@@ -101,10 +103,11 @@ type Receipt struct {
 // Client holds the credential only in the trusted producer. Never give this
 // client, the key, provider input, or private artifacts to a miner process.
 type Client struct {
-	profile Profile
-	key     string
-	http    *http.Client
-	url     string
+	profile    Profile
+	key        string
+	http       *http.Client
+	url        string
+	retryDelay time.Duration
 }
 
 func NewClient(profile Profile, apiKey string) (*Client, error) {
@@ -114,7 +117,7 @@ func NewClient(profile Profile, apiKey string) (*Client, error) {
 	if strings.TrimSpace(apiKey) == "" || strings.ContainsAny(apiKey, "\r\n") {
 		return nil, errors.New("private producer: credential required")
 	}
-	return &Client{profile: profile, key: apiKey, url: endpoint, http: &http.Client{
+	return &Client{profile: profile, key: apiKey, url: endpoint, retryDelay: time.Second, http: &http.Client{
 		Timeout: 90 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return errors.New("redirect forbidden")
@@ -155,14 +158,26 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fail("provider transport failed")
+		if ctx.Err() != nil {
+			return fail("cancelled")
+		}
+		return nil, CompletionReceipt{}, errTransient
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504 {
+			return nil, CompletionReceipt{}, fmt.Errorf("%w (status %d)", errTransient, resp.StatusCode)
+		}
 		return fail(fmt.Sprintf("provider status %d", resp.StatusCode))
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
-	if err != nil || len(raw) > maxResponse {
+	if err != nil {
+		if ctx.Err() != nil {
+			return fail("cancelled")
+		}
+		return nil, CompletionReceipt{}, errTransient
+	}
+	if len(raw) > maxResponse {
 		return fail("invalid response size")
 	}
 	var result struct {
@@ -177,8 +192,23 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 			Cost   float64 `json:"cost"`
 		} `json:"usage"`
 	}
-	if json.Unmarshal(raw, &result) != nil || len(result.Choices) != 1 || result.Choices[0].FinishReason != "stop" || result.ID == "" || result.Model == "" || result.Provider == "" || len(result.ID) > 256 || len(result.Model) > 256 || len(result.Provider) > 256 {
-		return fail("incomplete provider response")
+	if json.Unmarshal(raw, &result) != nil || len(result.Choices) != 1 {
+		return fail("malformed provider envelope")
+	}
+	if result.Choices[0].FinishReason != "stop" {
+		switch result.Choices[0].FinishReason {
+		case "length":
+			return fail("provider output token limit")
+		case "error":
+			return nil, CompletionReceipt{}, errTransient
+		case "content_filter":
+			return fail("provider content filter")
+		default:
+			return fail("unsupported provider finish reason")
+		}
+	}
+	if result.ID == "" || result.Model == "" || result.Provider == "" || len(result.ID) > 256 || len(result.Model) > 256 || len(result.Provider) > 256 {
+		return fail("missing provider identity")
 	}
 	content := json.RawMessage(result.Choices[0].Message.Content)
 	if !json.Valid(content) {
@@ -266,7 +296,8 @@ func (r cachedResults) Validate(_ context.Context, req gen.PrivateSurfaceRequest
 
 // Produce bounds concurrency and emits no partial accepted artifact. Semantic
 // rejections allow at most five independently judged candidates per surface.
-// Transport failures never fall back or automatically retry.
+// Transient transport failures share that same five-attempt budget. Routing,
+// authentication and malformed output failures never fall back or retry.
 func (c *Client) Produce(ctx context.Context, base gen.DatasetArtifact, concurrency int, protected ...[]string) ([]byte, []byte, error) {
 	return c.ProduceWithDiagnostics(ctx, base, concurrency, nil, protected...)
 }
@@ -315,14 +346,28 @@ func (c *Client) ProduceWithDiagnostics(ctx context.Context, base gen.DatasetArt
 				var receipt SurfaceReceipt
 				var err error
 				var rejected []SurfaceReceipt
+				var reasons []string
 				for attempt := 0; attempt < maxSurfaceAttempts; attempt++ {
 					after, receipt, err = c.probeOne(ctx, req, attempt, check)
-					if !errors.Is(err, errSemantic) && !errors.Is(err, errProtected) {
+					if !errors.Is(err, errSemantic) && !errors.Is(err, errProtected) && !errors.Is(err, errTransient) {
 						break
 					}
 					rejected = append(rejected, receipt)
+					reasons = append(reasons, err.Error())
+					if errors.Is(err, errTransient) && attempt+1 < maxSurfaceAttempts {
+						timer := time.NewTimer(time.Duration(attempt+1) * c.retryDelay)
+						select {
+						case <-ctx.Done():
+							timer.Stop()
+						case <-timer.C:
+						}
+					}
+					if ctx.Err() != nil {
+						break
+					}
 				}
 				receipt.Rejected = rejected
+				receipt.RejectedReasons = reasons
 				mutex.Lock()
 				if sink != nil {
 					diagnostic := Diagnostic{Location: req.Location, Before: req.Text, After: after, Receipt: receipt}
