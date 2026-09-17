@@ -9,7 +9,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_server.dependencies import get_session
@@ -43,6 +43,34 @@ async def test_only_targon_platform_callback_is_terminal() -> None:
     assert _platform_finalizes_remote_lane("targon")
     assert not _platform_finalizes_remote_lane("hetzner")
     assert not _platform_finalizes_remote_lane("gcp")
+
+
+def _node_row_locks(statements: list[str]) -> list[str]:
+    """Statements that take the shared ``screener_nodes`` row lock."""
+    return [
+        stmt
+        for stmt in statements
+        if "screener_nodes" in stmt and "FOR UPDATE" in stmt.upper()
+    ]
+
+
+class _CaptureSql:
+    """Record every SQL statement the app emits while the block runs."""
+
+    def __init__(self, session_maker: async_sessionmaker[AsyncSession]) -> None:
+        self._engine = session_maker.kw["bind"].sync_engine
+        self.statements: list[str] = []
+
+    def _record(self, *args: object, **_kwargs: object) -> None:
+        # before_cursor_execute(conn, cursor, statement, params, context, many)
+        self.statements.append(str(args[2]))
+
+    def __enter__(self) -> "_CaptureSql":
+        event.listen(self._engine, "before_cursor_execute", self._record)
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        event.remove(self._engine, "before_cursor_execute", self._record)
 
 
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
@@ -572,31 +600,38 @@ async def test_hetzner_node_claim_is_identity_bound_and_platform_limited(
     )
     assert enabled.status_code == 200, enabled.text
 
-    leased = await client.post(
-        "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
-        headers=node_headers,
-        json={"environment": "prod"},
-    )
+    with _CaptureSql(session_maker) as claim_sql:
+        leased = await client.post(
+            "/api/v1/screener/nodes/jobs/submission-image-builds/claim",
+            headers=node_headers,
+            json={"environment": "prod"},
+        )
     assert leased.status_code == 200, leased.text
     assert leased.json()["build"]["build_id"] == build_id
+    # Capacity accounting for one node is serialized on its row lock ...
+    assert _node_row_locks(claim_sql.statements)
     async with session_maker() as session:
         row = await session.get(SubmissionImageBuild, build_id)
         assert row is not None
         assert row.node_id == "subnet-screener-1"
         assert row.provider == "hetzner"
 
-    failed = await client.put(
-        f"/api/v1/screener/nodes/jobs/submission-image-builds/{build_id}",
-        headers=node_headers,
-        json={
-            "status": "fallback_required",
-            "provider_resource_id": "ditto-build-test",
-            "error_code": (
-                "FLEET_SUBMISSION_BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING_FAILED"
-            ),
-        },
-    )
+    with _CaptureSql(session_maker) as update_sql:
+        failed = await client.put(
+            f"/api/v1/screener/nodes/jobs/submission-image-builds/{build_id}",
+            headers=node_headers,
+            json={
+                "status": "fallback_required",
+                "provider_resource_id": "ditto-build-test",
+                "error_code": (
+                    "FLEET_SUBMISSION_BUILDKIT_LOCAL_CARGO_DEPENDENCY_MISSING_FAILED"
+                ),
+            },
+        )
     assert failed.status_code == 204, failed.text
+    # ... but a job status update locks only its own job row, never the node:
+    # the node row was production's hottest lock (12 s waits) when it did.
+    assert _node_row_locks(update_sql.statements) == []
     async with session_maker() as session:
         attempt = await session.get(ScreeningAttempt, attempt_id)
         row = await session.get(SubmissionImageBuild, build_id)

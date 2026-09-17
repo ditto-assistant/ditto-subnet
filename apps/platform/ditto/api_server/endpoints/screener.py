@@ -2738,19 +2738,34 @@ async def get_controller_submission_source_review(
     )
 
 
-async def _locked_active_node(
+async def _authorized_node(
     request: Request,
     session: AsyncSession,
     *,
     environment: str,
     require_active: bool = True,
+    lock: bool,
 ) -> ScreenerNode:
+    """Load the caller's enrolled node, optionally taking its row lock.
+
+    The row lock serializes capacity accounting for one node, so only the
+    claim endpoints take it, and only around the count-then-claim section.
+    Job status updates lock their own job row instead: on 2026-09-07 the
+    shared node row was the single hottest lock in production (23,501 waits
+    over 500 ms, up to 12 s) because every update and every claim on
+    subnet-screener-1 queued behind whichever transaction held it.
+    """
     node_id = getattr(request.state, "screener_node_id", None)
     if node_id is None:
         raise ScreenerAuthError("node-scoped job claims require enrolled-node auth")
-    node = await session.scalar(
-        select(ScreenerNode).where(ScreenerNode.node_id == node_id).with_for_update()
-    )
+    if lock:
+        node = await session.scalar(
+            select(ScreenerNode)
+            .where(ScreenerNode.node_id == node_id)
+            .with_for_update()
+        )
+    else:
+        node = await session.get(ScreenerNode, node_id)
     if node is None or node.environment != environment:
         raise ScreenerAuthError("screener node is not authorized for this environment")
     if require_active and node.status != "active":
@@ -2758,6 +2773,40 @@ async def _locked_active_node(
     if not require_active and node.status not in {"active", "draining"}:
         raise HTTPException(status_code=409, detail="screener node cannot update jobs")
     return node
+
+
+async def _locked_active_node(
+    request: Request,
+    session: AsyncSession,
+    *,
+    environment: str,
+    require_active: bool = True,
+) -> ScreenerNode:
+    """Row-locked variant for the claim critical section."""
+    return await _authorized_node(
+        request,
+        session,
+        environment=environment,
+        require_active=require_active,
+        lock=True,
+    )
+
+
+async def _active_node(
+    request: Request,
+    session: AsyncSession,
+    *,
+    environment: str,
+    require_active: bool = True,
+) -> ScreenerNode:
+    """Unlocked variant for reads and for job-row updates."""
+    return await _authorized_node(
+        request,
+        session,
+        environment=environment,
+        require_active=require_active,
+        lock=False,
+    )
 
 
 async def _node_sandbox_usage(session: AsyncSession, *, node_id: str) -> int:
@@ -2819,9 +2868,7 @@ async def claim_node_submission_image_build(
     """Atomically enforce node and shared-VM limits before minting a job token."""
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
-            request, session, environment=payload.environment
-        )
+        node = await _active_node(request, session, environment=payload.environment)
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
@@ -2831,6 +2878,11 @@ async def claim_node_submission_image_build(
             return SubmissionImageBuildClaimResponse(build=None)
         _, limits = await resolve_screener_node_channel_settings(
             session, node_id=node.node_id
+        )
+        # Re-read under the row lock: capacity accounting for this node must be
+        # serialized, but the settings reads above need no lock.
+        node = await _locked_active_node(
+            request, session, environment=payload.environment
         )
         active_builds = await session.scalar(
             select(func.count())
@@ -2921,7 +2973,7 @@ async def update_node_submission_image_build(
 ) -> None:
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
+        node = await _active_node(
             request, session, environment="prod", require_active=False
         )
         row = await session.scalar(
@@ -3000,9 +3052,7 @@ async def claim_node_submission_runtime_smoke(
 ) -> SubmissionRuntimeArtifactClaimResponse:
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
-            request, session, environment=payload.environment
-        )
+        node = await _active_node(request, session, environment=payload.environment)
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
@@ -3012,6 +3062,11 @@ async def claim_node_submission_runtime_smoke(
             return SubmissionRuntimeArtifactClaimResponse(artifact=None)
         _, limits = await resolve_screener_node_channel_settings(
             session, node_id=node.node_id
+        )
+        # Re-read under the row lock: capacity accounting for this node must be
+        # serialized, but the settings reads above need no lock.
+        node = await _locked_active_node(
+            request, session, environment=payload.environment
         )
         active_runtime = await session.scalar(
             select(func.count())
@@ -3080,7 +3135,7 @@ async def complete_node_submission_runtime_smoke(
     chain: ChainDep,
 ) -> None:
     async with session.begin():
-        node = await _locked_active_node(
+        node = await _active_node(
             request, session, environment="prod", require_active=False
         )
         row = await session.scalar(
@@ -3134,9 +3189,7 @@ async def claim_node_submission_source_review(
 ) -> SubmissionSourceReviewClaimResponse:
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
-            request, session, environment=payload.environment
-        )
+        node = await _active_node(request, session, environment=payload.environment)
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
@@ -3146,6 +3199,11 @@ async def claim_node_submission_source_review(
             return SubmissionSourceReviewClaimResponse(review=None)
         _, limits = await resolve_screener_node_channel_settings(
             session, node_id=node.node_id
+        )
+        # Re-read under the row lock: capacity accounting for this node must be
+        # serialized, but the settings reads above need no lock.
+        node = await _locked_active_node(
+            request, session, environment=payload.environment
         )
         active_reviews = await session.scalar(
             select(func.count())
@@ -3259,7 +3317,7 @@ async def update_node_submission_source_review(
 ) -> None:
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
+        node = await _active_node(
             request, session, environment="prod", require_active=False
         )
         row = await session.scalar(
