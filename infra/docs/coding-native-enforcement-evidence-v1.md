@@ -119,7 +119,7 @@ Resource and pre-exec records carry the set's digest as
 The signed approval pins the set in `profile_pins.enforcement_images_sha256`.
 The pre-exec fixtures recorded against these images are pinned alongside it in
 `profile_pins.preexec_fixtures_sha256`; see
-[pre-exec confinement](#pre-exec-confinement-fixtures-landed-host-wiring-remains).
+[pre-exec confinement](#pre-exec-confinement-collected).
 
 The probe runner takes image digests and commands only from this set
 (`--enforcement-images`; `--image` is gone). It builds each language's hosted
@@ -421,7 +421,7 @@ collects now (nothing has been collected on a host yet):
 |---|---|
 | `network_enforcement` (all) | Collected by the [PR4 network collector](#network-collector-b5-pr4) |
 | `resource_enforcement` (all 35 probes × 4 language images) | Collected by the [PR5 resource collector](#resource-collector-b5-pr5) from started containers, measured from outside |
-| `preexec_confinement` (all) | Public fixtures are authored, recorded and pinned, and a preexec record built from them verifies offline; the host driver-run collector wiring remains. See [pre-exec and cleanup](#pre-exec-and-cleanup-b5-pr5) |
+| `preexec_confinement` (all) | Collected. Public fixtures are authored, recorded and pinned, and the driver-run collector produces a record the offline verifier accepts; validation against the released driver images on the real host remains. See [pre-exec and cleanup](#pre-exec-and-cleanup-b5-pr5) |
 | `cleanup_recovery` (all 10 probes) | Collected by the [PR5 cleanup collector](#cleanup-recovery-collected), including SIGKILL reconciliation from the hosted runtime's launch journal and the consumed-attempt rerun |
 
 The PR4 network collector measures preconditions and residue for network
@@ -829,17 +829,19 @@ probe, sequentially.
 
 ## Pre-exec and cleanup (B5 PR5)
 
-`preexec` exits 2 before reading a config or touching the host, and prints every
-catalog probe it does not collect with its reason (`NOT_COLLECTED` in the
-collector). A record missing a catalog probe never verifies, and no collector
-claims a probe it did not measure. A test checks that this list, the catalog
-and the tables below agree. `cleanup` collects every `cleanup_recovery` probe.
+`preexec` and `cleanup` both collect every probe of their kind. `NOT_COLLECTED`
+in the collector is now empty for both: a kind with any uncollected catalog
+probe refuses before any host effect, because a record missing a catalog probe
+never verifies and no collector claims a probe it did not measure. A test checks
+that this list, the catalog and the tables below agree.
 
-### Pre-exec confinement (fixtures landed; host wiring remains)
+### Pre-exec confinement (collected)
 
-The public synthetic fixtures now exist, are recorded, and a preexec record
-built from them is accepted by the offline verifier. What is not yet run on a
-host is the driver-run collector wiring that produces such a record.
+`collect-coding-native-enforcement.py preexec --config FILE --confirm "COLLECT
+NATIVE PREEXEC CONFINEMENT EVIDENCE"` is default-off and root-only on
+`ditto-coding-hosted-v2`. It takes the resource collector's config plus
+`preexec_fixtures`, and shares its host, release, preflight and daemon
+bindings. Nothing has run on a host.
 
 **Fixtures (B5 PR6).** `internal/codingenforcement/fixtures/preexec/` holds tiny,
 deterministic, public fixtures for every released language, recorded in
@@ -891,17 +893,35 @@ where `enforcement_images_sha256` is. The verifier binds a preexec record to it:
   its pinned fixture authority can never be private grading material, and that
   authority equals the enforcement image set's recorded Rust command authority.
 
-| Probes | Remaining host wiring |
-|---|---|
-| `control.pass`, `control.wrong`, `control.hang` | Stage each language's controls suite and candidate and run the recorded test command on the real hosted grading launch; map the receipt to `all_pass`/`some_fail`/`timeout` |
-| `identity.candidate`, `identity.host_ids`, `identity.capabilities`, `identity.no_new_privs`, `identity.seccomp` | Read the live hang-fixture candidate's `/proc/<pid>/status` from outside; only the hang fixture provides one |
-| `hostile.fork_exec`, `hostile.process_group_escape`, `hostile.setuid`, `hostile.signal_supervisor`, `hostile.capability_use`, `hostile.grader_mount_read`, `hostile.control_file_forge`, `hostile.network`, `hostile.scratch_exec`, `hostile.unshare`, `hostile.mount`, `hostile.ptrace`, `hostile.load_time_escape`, `hostile.credential_env` | Run the per-language hostile fixture and map its receipt (`denied`/`absent`, else unmatched) |
+**Collection (B5 PR6).** The `preexec-agent` runs one fixture per request on the
+production hosted grading launch: `PhaseFactory.HostedGrading` with the approved
+grading profile's manifest for that language's pinned image, then `Build` and
+`Test`. The fixture suite is not the benchmark's suite, so the run executes the
+fixture's own recorded command for the approved group, with the fixture's
+expected total; every other group keeps the image's recorded command. The
+binding between the two documents is Rust's pinned authority, as the verifier
+requires it.
 
-This host path needs the released driver images and the rootless native host to
-validate its per-language staging, so it lands with the driver-run collector.
-Until then, `preexec` refuses before any host effect, listing every catalog
-probe it does not yet collect with this reason, and no record can claim a probe
-it did not measure.
+Each run stages exactly two directories from the reviewed checkout, re-verifying
+every file against the pinned digest: a workspace holding only that subject and
+its module file, and a protected grader directory holding only the hidden suite.
+The suite therefore stays material the candidate cannot read, which is what
+makes `hostile.grader_mount_read` meaningful.
+
+| Phase | Probes | How they are observed |
+|---|---|---|
+| `controls` | `control.pass`, `control.wrong`, `control.hang` | The driver's own trusted test report (`passed`, `total`) and the harness receipt (`timed_out`), with the staged controls-suite digest |
+| `identity` | `identity.candidate`, `identity.host_ids`, `identity.capabilities`, `identity.no_new_privs`, `identity.seccomp` | Read from outside, from the one process in the container that maps to the approved unprivileged identity, while the hang control holds it live. The executor's own supervisor is root, so the identity is the discriminator; a container where no process holds it refuses rather than guessing |
+| `hostile` | every `hostile.*` | The suite's own pass/fail: passing is the recorded outcome (`denied`, or `absent` for `credential_env`), failing is its complement (`permitted`/`present`), which the catalog expectation does not match. A run that timed out is `probe_error`, and a build that never reached the suite refuses |
+
+A hostile subject observes its own confinement, so the collector never decides
+what a fixture proves: it reports the outcome either way and the shared verifier
+evaluates the catalog expectation.
+
+This path still needs the released driver images and the rootless native host to
+validate its per-language staging. Until that runs, the evidence here is what a
+simulated host produces: a record the offline verifier accepts end to end, with
+each refusal exercised.
 
 ### Cleanup recovery (collected)
 

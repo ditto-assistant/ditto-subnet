@@ -123,6 +123,32 @@ func (p GradingProfile) EnforcementProbeManifest(image EnforcementProbeImage, de
 	return manifest, nil
 }
 
+// PreexecProbeManifest is EnforcementProbeManifest for one pre-exec fixture
+// run. It differs in exactly one field: the named test group's expected total
+// becomes the fixture suite's own, because the public fixture suite is not the
+// benchmark's suite and the trusted supervisor refuses a report whose total is
+// not the requested one. Both the group and the total come from the
+// approval-pinned fixture manifest, never from an operator or a request.
+func (p GradingProfile) PreexecProbeManifest(
+	image EnforcementProbeImage,
+	deadline time.Time,
+	group string,
+	expectedTotal uint32,
+) (codinggrader.HostedManifest, error) {
+	if expectedTotal < 2 {
+		return codinggrader.HostedManifest{}, ErrAttempt
+	}
+	index := slices.IndexFunc(p.TestGroups, func(spec codinggrader.TestGroupSpec) bool { return spec.Group == group })
+	if index < 0 {
+		return codinggrader.HostedManifest{}, ErrAttempt
+	}
+	// The receiver is a copy; clone before editing so the caller's profile and
+	// every other group keep the approved totals.
+	p.TestGroups = slices.Clone(p.TestGroups)
+	p.TestGroups[index].ExpectedTotal = expectedTotal
+	return p.EnforcementProbeManifest(image, deadline)
+}
+
 func probeIdentity(label string) string {
 	sum := sha256.Sum256([]byte("dittobench-coding-native-enforcement-probe-v1\x00" + label))
 	return fmt.Sprintf("%x", sum)

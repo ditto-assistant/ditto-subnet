@@ -1475,12 +1475,10 @@ def test_cleanup_records_leftovers_and_refuses_an_agent_that_ignores_sigterm(rw)
         collector.scenario_runner_sigterm()
 
 
-def test_uncollectable_kinds_refuse_before_any_host_effect(capsys):
-    assert COLLECTOR.main(["preexec"], host_factory=pytest.fail) == 2
-    err = capsys.readouterr().err
-    for probe in COLLECTOR.NOT_COLLECTED["preexec_confinement"]:
-        assert probe in err
-    assert COLLECTOR.NOT_COLLECTED["cleanup_recovery"] == {}
+def test_every_kind_now_collects_every_catalog_probe():
+    # The refusal path stays: a kind with any uncollected catalog probe exits 2
+    # before reading a config or touching the host. Nothing is uncollected now.
+    assert COLLECTOR.NOT_COLLECTED == {kind: {} for kind in COLLECTOR.NOT_COLLECTED}
 
 
 def test_not_collected_probes_are_catalog_probes_and_documented():
@@ -1491,10 +1489,6 @@ def test_not_collected_probes_are_catalog_probes_and_documented():
         assert set(missing) <= ids
         for probe_id in missing:
             assert f"`{probe_id}`" in text, probe_id
-    assert COLLECTOR.NOT_COLLECTED["resource_enforcement"] == {}
-    assert set(COLLECTOR.NOT_COLLECTED["preexec_confinement"]) == {
-        probe["id"] for probe in catalog["kinds"]["preexec_confinement"]["probes"]
-    }
 
 
 def test_samplers_parse_cgroup_and_proc_formats():

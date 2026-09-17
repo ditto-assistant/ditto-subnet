@@ -2312,6 +2312,16 @@ WORK_FILES = {
 }
 EXECUTOR_LABEL = "io.heyditto.dittobench.coding-executor"
 CLEANUP_CONFIRMATION = "COLLECT NATIVE CLEANUP RECOVERY EVIDENCE"
+PREEXEC_CONFIRMATION = "COLLECT NATIVE PREEXEC CONFINEMENT EVIDENCE"
+PREEXEC_CONFIG_SCHEMA = "dittobench-coding-native-preexec-collection-config-v1"
+PREEXEC_AGENT_SCHEMA = "dittobench-coding-native-preexec-agent-v1"
+PREEXEC_FIXTURES_FILE = "preexec-fixtures.json"
+PREEXEC_RUN_ID = re.compile(r"p[0-9]{1,3}")
+# A hostile subject observes its own confinement: the suite passes when the
+# kernel refused the action, and the subject panics when it did not. The
+# recorded outcome is what a confined host produces; its complement is what an
+# unconfined one produces, and the catalog expectation then does not match.
+PREEXEC_UNCONFINED = {"denied": "permitted", "absent": "present"}
 # The hosted runtime's launch journal (codinglaunchjournal) and single-use
 # marker (codinghostedruntime.ConsumeAttempt), as the collector reads them.
 JOURNAL_DIR = WORK_DIR / "launch-journal"
@@ -2415,53 +2425,7 @@ HANG_GRACE_SECONDS = 120
 NOT_COLLECTED: dict[str, dict[str, str]] = {
     "network_enforcement": {},
     "resource_enforcement": {},
-    "preexec_confinement": {
-        # The public fixtures now exist, are recorded in
-        # internal/codingenforcement/fixtures/preexec/fixtures.json
-        # (dittobench-coding-native-preexec-fixtures-v1), pinned in the signed
-        # approval as preexec_fixtures_sha256, and a preexec record built from
-        # them is accepted by the offline verifier (coding-native-evidence.py).
-        # The remaining step is the host driver-run wiring: for each language,
-        # stage the pass/wrong/hang and hostile fixtures through that language's
-        # own recorded test command on the real hosted grading launch, read the
-        # hang candidate's /proc/<pid>/status from outside for the identity
-        # probes, and map each receipt to the catalog outcome. That path needs
-        # the released driver images and the rootless native host to validate,
-        # so it lands with the driver-run collector (a follow-up on this branch).
-        **dict.fromkeys(
-            (
-                "control.pass",
-                "control.wrong",
-                "control.hang",
-                "identity.candidate",
-                "identity.host_ids",
-                "identity.capabilities",
-                "identity.no_new_privs",
-                "identity.seccomp",
-                *(
-                    f"hostile.{name}"
-                    for name in (
-                        "fork_exec",
-                        "process_group_escape",
-                        "setuid",
-                        "signal_supervisor",
-                        "capability_use",
-                        "grader_mount_read",
-                        "control_file_forge",
-                        "network",
-                        "scratch_exec",
-                        "unshare",
-                        "mount",
-                        "ptrace",
-                        "load_time_escape",
-                        "credential_env",
-                    )
-                ),
-            ),
-            "public fixture recorded and pinned; host driver-run wiring remains "
-            "(needs the released driver images to validate)",
-        ),
-    },
+    "preexec_confinement": {},
     "cleanup_recovery": {},
 }
 
@@ -2536,6 +2500,66 @@ def parse_resource_config(raw: bytes) -> dict[str, Any]:
             f"collector {name} is malformed",
         )
     return value
+
+
+def parse_preexec_config(raw: bytes) -> dict[str, Any]:
+    """The resource collector's config plus the approval-pinned fixtures."""
+
+    value = parse_unique(raw, "collector config")
+    require(
+        type(value) is dict and value.get("schema") == PREEXEC_CONFIG_SCHEMA,
+        "collector config schema differs",
+    )
+    fixtures = value.pop("preexec_fixtures", None)
+    require(
+        type(fixtures) is str
+        and fixtures.startswith("/")
+        and os.path.normpath(fixtures) == fixtures
+        and ".." not in fixtures.split("/"),
+        "collector preexec_fixtures is not a clean absolute path",
+    )
+    # Reuse the resource config's own rules for every shared field.
+    parsed = parse_resource_config(
+        json.dumps({**value, "schema": RESOURCE_CONFIG_SCHEMA}).encode()
+    )
+    return {**parsed, "schema": PREEXEC_CONFIG_SCHEMA, "preexec_fixtures": fixtures}
+
+
+def parse_status_confinement(raw: bytes) -> dict[str, Any]:
+    """The candidate's own confinement, read from outside its container.
+
+    ``/proc/<pid>/status`` is the kernel's account of the process: its
+    capability sets, whether new privileges are refused, and whether seccomp
+    filters it. The candidate cannot write any of these fields.
+    """
+
+    fields: dict[str, str] = {}
+    for line in raw.splitlines():
+        name, _, rest = line.decode().partition(":")
+        fields[name.strip()] = rest.strip()
+    capabilities = {}
+    for key, name in (
+        ("CapAmb", "ambient"),
+        ("CapBnd", "bounding"),
+        ("CapEff", "effective"),
+        ("CapInh", "inheritable"),
+        ("CapPrm", "permitted"),
+    ):
+        value = fields.get(key, "")
+        require(
+            re.fullmatch(r"[0-9a-f]{1,16}", value) is not None,
+            f"candidate status lacks {key}",
+        )
+        capabilities[name] = int(value, 16)
+    result: dict[str, Any] = {"capabilities": capabilities}
+    for key, name in (("NoNewPrivs", "no_new_privs"), ("Seccomp", "seccomp_mode")):
+        value = fields.get(key, "")
+        require(
+            re.fullmatch(r"[0-9]{1,3}", value) is not None,
+            f"candidate status lacks {key}",
+        )
+        result[name] = int(value)
+    return result
 
 
 def parse_cgroup_limit(raw: bytes | None, label: str) -> int:
@@ -3910,6 +3934,270 @@ class CleanupCollector(ResourceCollector):
         self.end_phase("rerun")
 
 
+class PreexecCollector(ResourceCollector):
+    """``preexec_confinement``: the public fixtures, on the production launch.
+
+    Every fixture is a subject compiled against the same hidden suite. A
+    hostile subject panics when its action is not confined and observes the
+    kernel's refusal when it is, so the suite's own pass/fail is the
+    observation. The five identity probes are read from outside, from the
+    candidate's ``/proc/<pid>/status`` while the hang control holds it live.
+
+    The collector never decides what a fixture proves: the recorded outcome
+    describes a confined host, its complement an unconfined one, and the
+    catalog expectation is evaluated by the shared verifier either way.
+    """
+
+    kind = "preexec_confinement"
+
+    def __init__(
+        self, host: ResourceHost, config: dict[str, Any], checkout: Path = ROOT
+    ) -> None:
+        super().__init__(host, config, checkout)
+        self.daemon_unit = f"ditto-native-preexec-agent-{self.nonce}.service"
+        self.identity: dict[str, dict[str, Any]] = {}
+
+    def ask(
+        self, session: Session, value: dict[str, Any], extra: float = 30
+    ) -> dict[str, Any]:
+        timeout_ms = value.get("timeout_ms", 0)
+        answer = session.request(value, timeout_ms / 1000 + extra)
+        require(
+            answer.get("schema") == PREEXEC_AGENT_SCHEMA
+            and answer.get("op") == value["op"],
+            "preexec agent answer does not match its request",
+        )
+        require(not answer.get("error"), f"preexec agent refused {value['op']}")
+        return answer
+
+    def _bind_inputs(self) -> None:
+        super()._bind_inputs()
+        raw = self.host.read(Path(self.config["preexec_fixtures"]))
+        self.input_raw = {**self.input_raw, "preexec_fixtures": raw}
+        self.fixtures = self.evidence.parse_preexec_fixtures(raw)
+        self.profiles["preexec_fixtures_sha256"] = self.fixtures
+        self.inputs = {name: doc["sha256"] for name, doc in self.profiles.items()}
+        # The fixture suite is not the benchmark's suite, so the fixture runs
+        # its own recorded command. What must agree between the two documents
+        # is Rust's pinned authority, exactly as the offline verifier binds it.
+        images = self.profiles["enforcement_images_sha256"]["images"]
+        entry = self.fixtures["languages"]["rust"]
+        recorded = images["rust"]["test_argv"][entry["test_group"]]
+        fields = {recorded[i]: recorded[i + 1] for i in range(1, len(recorded) - 1, 2)}
+        require(
+            fields.get("--authority-sha256") == entry["authority_sha256"],
+            "the rust fixture authority is not the recorded rust authority",
+        )
+
+    def start_agent(self) -> None:
+        files = {
+            WORK_FILES[name]: raw
+            for name, raw in self.input_raw.items()
+            if name in WORK_FILES
+        }
+        files[PREEXEC_FIXTURES_FILE] = self.input_raw["preexec_fixtures"]
+        self.host.prepare_work_dir(self.uid, self.gid, files)
+        arguments = [str(self.runner), "preexec-agent"]
+        for name, file in WORK_FILES.items():
+            arguments += ["--" + name.replace("_", "-"), str(WORK_DIR / file)]
+        arguments += [
+            "--preexec-fixtures",
+            str(WORK_DIR / PREEXEC_FIXTURES_FILE),
+            "--checkout",
+            str(self.checkout.root),
+            "--runner",
+            str(self.runner),
+            "--work-dir",
+            str(WORK_DIR),
+        ]
+        for name in ("seccomp_profile", "apparmor_profile"):
+            if self.config[name]:
+                arguments += ["--" + name.replace("_", "-"), self.config[name]]
+        session = self.host.resource_session(self.daemon_unit, arguments)
+        self.sessions.append(session)
+        pid = 0
+        for _ in range(int(UNIT_WAIT_SECONDS / POLL_SECONDS)):
+            code, output = self.host.systemctl(
+                "--user",
+                f"--machine={USER}@.host",
+                "show",
+                self.daemon_unit,
+                "--property=MainPID",
+            )
+            pid = int(parse_show(output).get("MainPID", "0") or 0) if code == 0 else 0
+            if pid > 1:
+                break
+            self.host.sleep(POLL_SECONDS)
+        require(pid > 1, "preexec agent process is unknown")
+        daemon = f"user.slice/user-{self.uid}.slice/user@{self.uid}.service/"
+        require(
+            parse_cgroup(self.host.proc(pid, "cgroup")).startswith(daemon),
+            "preexec agent is not in the daemon user's cgroup",
+        )
+        answer = self.hello(session, pid, "preexec agent", in_host_pid_ns=True)
+        require(
+            answer.get("uid") == self.uid and answer.get("gid") == self.gid,
+            "preexec agent runs as another user",
+        )
+        require(
+            answer.get("inputs") == self.inputs,
+            "preexec agent read other profile documents",
+        )
+        self.agent, self.agent_pid = session, pid
+
+    # -- one fixture ---------------------------------------------------------
+
+    def launch_fixture(self, language: str, fixture: str) -> dict[str, Any]:
+        assert self.agent is not None
+        answer = self.ask(
+            self.agent,
+            {
+                "op": "start",
+                "language": language,
+                "repository": self.repositories[language],
+                "fixture": fixture,
+            },
+            extra=150,
+        )
+        require(
+            type(answer.get("run")) is str and PREEXEC_RUN_ID.fullmatch(answer["run"]),
+            "preexec agent run id is malformed",
+        )
+        require(
+            type(answer.get("executor_instance")) is str
+            and EXECUTOR_INSTANCE.fullmatch(answer["executor_instance"]),
+            "preexec fixture instance is malformed",
+        )
+        entry = self.fixtures["languages"][language]
+        expected = self.fixture_subject(language, fixture)
+        require(
+            answer.get("subject_sha256") == expected
+            and answer.get("suite_sha256") == entry["controls_suite_sha256"],
+            f"{language} {fixture} staged other bytes than the pinned fixture",
+        )
+        return answer
+
+    def fixture_subject(self, language: str, fixture: str) -> str:
+        entry = self.fixtures["languages"][language]
+        phase, _, name = fixture.partition(".")
+        if phase == "control":
+            return str(entry["controls"][name]["sha256"])
+        return str(entry["hostile"][name]["subject"]["sha256"])
+
+    def candidate(self, found: dict[str, Any]) -> int:
+        """The candidate process, found from outside by its mapped identity.
+
+        The executor's own supervisor is root in the container; only the
+        candidate runs as the approved unprivileged identity, so a process that
+        maps to it is the subject the fixture compiled.
+        """
+
+        uid = CANDIDATE_UIDS["executor_grading"]
+        for _ in range(int(UNIT_WAIT_SECONDS / SAMPLE_SECONDS / 10)):
+            descendants: list[int] = []
+            with contextlib.suppress(OSError, ValueError):
+                for child in self.host.children(found["init"]):
+                    descendants += [child, *self.host.children(child)]
+            for pid in descendants:
+                # The supervisor is root in the container and every id outside
+                # the mapping refuses; neither ends the scan for the candidate.
+                with contextlib.suppress(OSError, ValueError):
+                    host_ids = parse_status_ids(self.host.proc(pid, "status"))
+                    if container_ids(host_ids, self.subordinate) == {
+                        "uid": uid,
+                        "gid": uid,
+                    }:
+                        return pid
+            self.host.sleep(SAMPLE_SECONDS * 10)
+        raise Refusal("preexec candidate process did not start")
+
+    def sample_identity(self, language: str, found: dict[str, Any]) -> None:
+        """The five identity observations, all from one live candidate."""
+
+        pid = self.candidate(found)
+        self.measure(pid, f"{language} candidate")
+        host_uid, host_gid = parse_status_ids(self.host.proc(pid, "status"))
+        confinement = parse_status_confinement(self.host.proc(pid, "status"))
+        self.identity[language] = {
+            "identity.candidate": container_ids((host_uid, host_gid), self.subordinate),
+            "identity.host_ids": {"host_uid": host_uid, "host_gid": host_gid},
+            "identity.capabilities": confinement["capabilities"],
+            "identity.no_new_privs": {"no_new_privs": confinement["no_new_privs"]},
+            "identity.seccomp": {"seccomp_mode": confinement["seccomp_mode"]},
+        }
+
+    def run_fixture(
+        self, language: str, fixture: str, *, identity: bool = False
+    ) -> dict[str, Any]:
+        started = self.launch_fixture(language, fixture)
+        if identity:
+            found = self.container(started, "executor_grading", language)
+            self.sample_identity(language, found)
+        answer = self.finish(started, "executor_grading")
+        require(
+            answer.get("run_failed") is not True
+            and type(answer.get("return_code")) is int
+            and type(answer.get("passed")) is int
+            and type(answer.get("total")) is int,
+            f"{language} {fixture} has no production receipt",
+        )
+        require(
+            answer.get("build_failed") is not True,
+            f"{language} {fixture} never reached its suite",
+        )
+        return answer
+
+    # -- phases --------------------------------------------------------------
+
+    def controls_phase(self) -> None:
+        self.phase("controls")
+        for language in self.evidence.LANGUAGES:
+            entry = self.fixtures["languages"][language]
+            for name in self.evidence.PREEXEC_CONTROLS:
+                answer = self.run_fixture(
+                    language, f"control.{name}", identity=name == "hang"
+                )
+                self.observed[(f"control.{name}", language)] = {
+                    "passed": answer["passed"],
+                    "total": answer["total"],
+                    "suite_sha256": entry["controls_suite_sha256"],
+                    "timed_out": bool(answer.get("timed_out")),
+                }
+        self.end_phase("controls")
+
+    def identity_phase(self) -> None:
+        self.phase("identity")
+        for language in self.evidence.LANGUAGES:
+            require(
+                language in self.identity,
+                f"{language} candidate identity was not sampled",
+            )
+            for probe, observed in self.identity[language].items():
+                self.observed[(probe, language)] = observed
+        self.end_phase("identity")
+
+    def hostile_phase(self) -> None:
+        self.phase("hostile")
+        for language in self.evidence.LANGUAGES:
+            entry = self.fixtures["languages"][language]
+            for name in sorted(entry["hostile"]):
+                recorded = entry["hostile"][name]["outcome"]
+                answer = self.run_fixture(language, f"hostile.{name}")
+                if answer.get("timed_out"):
+                    outcome = "probe_error"
+                elif answer["passed"] == answer["total"] and answer["total"] >= 2:
+                    outcome = recorded
+                else:
+                    outcome = PREEXEC_UNCONFINED[recorded]
+                self.observed[(f"hostile.{name}", language)] = {"outcome": outcome}
+        self.end_phase("hostile")
+
+    def phases(self) -> None:
+        self.controls_phase()
+        self.identity_phase()
+        self.hostile_phase()
+
+
 def retain(evidence: Any, store_path: Path, record: dict[str, Any]) -> str:
     raw = evidence.canonical_bytes(record)
     evidence.parse_record_envelope(raw)
@@ -3964,12 +4252,10 @@ KIND_OF = {short: kind for kind, short in SUBCOMMANDS.items()}
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = result.add_subparsers(dest="kind", required=True)
-    for name in ("network", "resource", "cleanup"):
+    for name in ("network", "resource", "preexec", "cleanup"):
         command = commands.add_parser(name, help=f"collect {KIND_OF[name]}")
         command.add_argument("--config", required=True, type=Path)
         command.add_argument("--confirm", required=True)
-    for name in ("preexec",):
-        commands.add_parser(name, help=f"refused: {KIND_OF[name]} is not collectable")
     return result
 
 
@@ -3998,6 +4284,7 @@ def main(
     confirmation = {
         "network": CONFIRMATION,
         "resource": RESOURCE_CONFIRMATION,
+        "preexec": PREEXEC_CONFIRMATION,
         "cleanup": CLEANUP_CONFIRMATION,
     }[args.kind]
     require(args.confirm == confirmation, "collection needs the exact confirmation")
@@ -4012,6 +4299,9 @@ def main(
     elif args.kind == "resource":
         config = parse_resource_config(raw)
         collector = ResourceCollector(host, config, checkout)
+    elif args.kind == "preexec":
+        config = parse_preexec_config(raw)
+        collector = PreexecCollector(host, config, checkout)
     else:
         config = parse_resource_config(raw)
         collector = CleanupCollector(host, config, checkout)

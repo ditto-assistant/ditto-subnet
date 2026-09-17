@@ -743,9 +743,8 @@ def test_main_retains_the_record_and_prints_no_approval(cw, capsys):
     )
 
 
-def test_uncollectable_kinds_and_missing_confirmation_are_refused():
-    assert COLLECTOR.main(["preexec"], host_factory=pytest.fail) == 2
-    for kind in ("network", "resource", "cleanup"):
+def test_missing_confirmation_is_refused():
+    for kind in ("network", "resource", "preexec", "cleanup"):
         with pytest.raises(COLLECTOR.Refusal, match="exact confirmation"):
             COLLECTOR.main(
                 [kind, "--config", str(CONFIG_PATH), "--confirm", "yes"],
@@ -754,7 +753,8 @@ def test_uncollectable_kinds_and_missing_confirmation_are_refused():
     # Each kind has its own confirmation.
     for kind, other in (
         ("resource", COLLECTOR.CONFIRMATION),
-        ("cleanup", COLLECTOR.RESOURCE_CONFIRMATION),
+        ("preexec", COLLECTOR.RESOURCE_CONFIRMATION),
+        ("cleanup", COLLECTOR.PREEXEC_CONFIRMATION),
     ):
         with pytest.raises(COLLECTOR.Refusal, match="exact confirmation"):
             COLLECTOR.main(

@@ -125,3 +125,84 @@ func TestEnforcementProbeManifestUsesTheHostedConversion(t *testing.T) {
 		t.Fatal("a profile with another grader contract must be refused")
 	}
 }
+
+// The pre-exec variant retimes exactly one group's expected total: the public
+// fixture suite's, never the benchmark's, and never another group's.
+func TestPreexecProbeManifestRetimesOnlyTheNamedGroup(t *testing.T) {
+	profile := preexecProbeProfile()
+	image := preexecProbeImage()
+	original := slices.Clone(profile.TestGroups)
+	manifest, err := profile.PreexecProbeManifest(image, time.Now().Add(30*time.Minute), "hidden", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Validate(time.Now()) != nil {
+		t.Fatalf("manifest is invalid: %v", manifest.Validate(time.Now()))
+	}
+	hidden := slices.IndexFunc(manifest.TestGroups, func(spec codinggrader.TestGroupSpec) bool { return spec.Group == "hidden" })
+	visible := slices.IndexFunc(manifest.TestGroups, func(spec codinggrader.TestGroupSpec) bool { return spec.Group == "visible" })
+	if manifest.TestGroups[hidden].ExpectedTotal != 2 {
+		t.Fatalf("hidden expected total = %d", manifest.TestGroups[hidden].ExpectedTotal)
+	}
+	if manifest.TestGroups[visible].ExpectedTotal != original[1].ExpectedTotal {
+		t.Fatalf("visible expected total = %d", manifest.TestGroups[visible].ExpectedTotal)
+	}
+	if !slices.Equal(manifest.TestGroups[hidden].Command.Argv, image.TestArgv["hidden"]) {
+		t.Fatalf("hidden argv = %v", manifest.TestGroups[hidden].Command.Argv)
+	}
+	if original[0].ExpectedTotal != profile.TestGroups[0].ExpectedTotal {
+		t.Fatal("the caller's profile was edited")
+	}
+}
+
+// A suite of fewer than two tests, or a group the profile does not define,
+// cannot produce a usable control observation, so neither builds a manifest.
+func TestPreexecProbeManifestRefusesUnusableRequests(t *testing.T) {
+	profile := preexecProbeProfile()
+	image := preexecProbeImage()
+	deadline := time.Now().Add(30 * time.Minute)
+	for _, testCase := range []struct {
+		name  string
+		group string
+		total uint32
+	}{
+		{"one test", "hidden", 1},
+		{"no test", "hidden", 0},
+		{"unknown group", "secret", 2},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := profile.PreexecProbeManifest(image, deadline, testCase.group, testCase.total); err == nil {
+				t.Fatal("the request built a manifest")
+			}
+		})
+	}
+}
+
+func preexecProbeProfile() GradingProfile {
+	return GradingProfile{
+		Schema: "dittobench-coding-hosted-grading-profile-v2", ImageDigest: "sha256:" + strings.Repeat("a", 64),
+		GraderContractSHA256: codinggrader.HostedGraderContractSHA256(), GraderBundleSHA256: strings.Repeat("b", 64),
+		TestManifestSHA256: strings.Repeat("c", 64),
+		ResourcePolicy: codinggrader.ResourcePolicy{
+			CandidateLimits: codingrunner.DefaultLimits(), ProtectedLimits: codingrunner.DefaultLimits(),
+			MaxCombinedDiskBytes: 4 << 30, MemoryLimitBytes: 1 << 30, ScratchLimitBytes: 1 << 30, PidsLimit: 256, CPUQuotaMillis: 1000,
+		},
+		Build: codinggrader.BuildSpec{Required: true, Command: codingrunner.CommandSpec{ID: "build", Argv: []string{"dittobench-build"}, Timeout: time.Minute}},
+		TestGroups: []codinggrader.TestGroupSpec{
+			{Group: "hidden", Command: codingrunner.CommandSpec{ID: "hidden", Argv: []string{"dittobench-test-driver", "hidden"}, Timeout: time.Minute}, ExpectedTotal: 37},
+			{Group: "visible", Command: codingrunner.CommandSpec{ID: "visible", Argv: []string{"dittobench-test-driver", "visible"}, Timeout: time.Minute}, ExpectedTotal: 11},
+		},
+		ExecutionTimeout: 10 * time.Minute,
+	}
+}
+
+func preexecProbeImage() EnforcementProbeImage {
+	return EnforcementProbeImage{
+		ImageDigest: "sha256:" + strings.Repeat("d", 64),
+		BuildArgv:   []string{"go", "build", "./..."},
+		TestArgv: map[string][]string{
+			"hidden":  {"dittobench-test-driver", "--group", "hidden", "--suite", "hidden_test.go"},
+			"visible": {"dittobench-test-driver", "--group", "visible", "--suite", "visible_test.go"},
+		},
+	}
+}

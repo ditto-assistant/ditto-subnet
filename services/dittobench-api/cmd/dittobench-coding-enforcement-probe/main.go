@@ -19,6 +19,10 @@
 //	workload MODE --nonce HEX ...    in-container helper (B5 PR5): drives one
 //	                                 resource to its limit and holds, so the
 //	                                 collector can measure it from outside
+//	preexec-agent ...                host-side launcher (B5 PR6): runs one
+//	                                 pinned public fixture per request through
+//	                                 the production hosted grading launch and
+//	                                 reports only its receipt.
 //	resource-agent ...               host-side launcher (B5 PR5): starts
 //	                                 workloads through the production executor
 //	                                 and hosted harness launch paths
@@ -57,7 +61,7 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("a subcommand is required: resolve-images | observe-requested-config | net-agent | net-once | workload | resource-agent | reconcile-launch-journal")
+		return errors.New("a subcommand is required: resolve-images | observe-requested-config | net-agent | net-once | workload | resource-agent | preexec-agent | reconcile-launch-journal")
 	}
 	switch args[0] {
 	case "resolve-images":
@@ -68,6 +72,8 @@ func run(ctx context.Context, args []string, stdout io.Writer) error {
 		return netAgent(ctx, args[1:], os.Stdin, stdout)
 	case "net-once":
 		return netOnce(ctx, args[1:])
+	case "preexec-agent":
+		return preexecAgent(ctx, args[1:], os.Stdin, stdout)
 	case "resource-agent":
 		return resourceAgent(ctx, args[1:], os.Stdin, stdout)
 	case "reconcile-launch-journal":
