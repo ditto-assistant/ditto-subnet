@@ -137,6 +137,30 @@ which simply sees a few more tools and richer schemas.
 
 ## Dataset
 
+### Private V13 control-plane transport (default off)
+
+`DITTOBENCH_ALLOW_PRIVATE_DATASETS=1` enables the `platform-private-v1`
+capability on the trusted scorer. `/v2/score` accepts
+`private_dataset_mode: "platform-private-v1"` and `private_dataset_bytes`
+(base64 of the **exact** Platform-stored JSON bytes), together with the existing
+seed, profile, dataset SHA and ticket-inference identity. Mode without bytes,
+bytes without mode, unsupported versions, disabled configuration, and integrity
+failures are rejected; there is no public-generation fallback. The private
+artifact limit is 32 MiB decoded. Public practice rejects these fields.
+
+Before execution, the scorer verifies the raw-byte SHA against the lease pin
+and the immutable contract against salted datagen. It runs the received tool
+prompts, staged memory cases and waves through hostile-harness projection,
+preserving graph/evidence provenance and using the pinned catalog. It does not
+persist this artifact through `DITTOBENCH_ARTIFACT_DIR`; Platform owns retention.
+The existing report/transcript dataset digest remains the stored-byte hash,
+not a hash of reserialized JSON. The salt, grading artifact and private-mode
+metadata are never added to the harness wire or environment.
+
+This transport is not qualification or rollout approval. Fleet capability
+binding, authenticated Platform delivery, private producer admission and reveal
+closure must be deployed together before private work can be issued.
+
 The validator generates a `Dataset` of tool-calling cases. The harness never
 receives expected answers, only the prompt and the tool catalog.
 

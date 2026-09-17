@@ -175,6 +175,7 @@ type server struct {
 	// Validator-owned loopback sandboxes use a separate trusted client.
 	allowPrivate           bool
 	allowScreenedImages    bool
+	allowPrivateDatasets   bool
 	requireTicketInference bool
 	softwareVersion        string
 	sourceRevision         string
@@ -278,6 +279,7 @@ func main() {
 		sandbox:                sandboxRuntime,
 		allowPrivate:           allowPrivate,
 		allowScreenedImages:    allowScreenedImages,
+		allowPrivateDatasets:   envBool("DITTOBENCH_ALLOW_PRIVATE_DATASETS"),
 		requireTicketInference: requireTicketInference,
 		softwareVersion:        identity.SoftwareVersion,
 		sourceRevision:         identity.SourceRevision,
@@ -526,7 +528,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		SoftwareVersion:        s.softwareVersion,
 		SourceRevision:         s.sourceRevision,
 		SupportedBenchVersions: s.runtimeSupportedBenchVersions(r.Context()),
-		Features:               []string{"git_subdir"},
+		Features:               s.datasetFeatures(),
 		FullRunCapacity:        maxConcurrentRuns,
 		MemoryPhaseCapacity:    maxConcurrentMemoryPhases,
 		V8Readiness:            efficiency.V8Readiness(),
@@ -724,6 +726,11 @@ type submitRequest struct {
 	// platform issues (seed, dataset_sha256) with the ticket, and this guarantees
 	// the validator scored precisely that dataset. Empty on the practice path.
 	ExpectedDatasetSHA256 string `json:"dataset_sha256,omitempty"`
+	// PrivateDatasetMode is explicit so omitted bytes cannot silently select
+	// public regeneration. Bytes are base64 on this trusted control-plane wire;
+	// they are never copied into harness requests, public artifacts, or logs.
+	PrivateDatasetMode  string `json:"private_dataset_mode,omitempty"`
+	PrivateDatasetBytes []byte `json:"private_dataset_bytes,omitempty"`
 	// InferenceSessionID selects a trusted, memory-only platform capability
 	// prepared by the validator. It is an opaque broker routing id, not a bearer.
 	InferenceSessionID string `json:"inference_session_id,omitempty"`
@@ -995,6 +1002,10 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	version, msg := requestedPracticeBenchVersion(req.BenchVersion)
+	if req.PrivateDatasetMode != "" || len(req.PrivateDatasetBytes) != 0 {
+		writeError(w, http.StatusBadRequest, "private datasets are not accepted on practice")
+		return
+	}
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -1090,7 +1101,11 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req submitRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBody)
+	bodyLimit := int64(maxSubmitBody)
+	if s.allowPrivateDatasets {
+		bodyLimit += (gen.MaxPrivateArtifactBytes + 2) / 3 * 4
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or oversized JSON body")
 		return
@@ -1101,6 +1116,10 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.BenchVersion = version
+	if err := validatePrivateDatasetRequest(req, s.allowPrivateDatasets); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if (s.requireTicketInference || req.BenchVersion >= protocol.BenchVersionV7) && req.InferenceSessionID == "" {
 		writeError(
 			w,
@@ -1414,6 +1433,15 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// runStart stamps the router shadow entry's FirstSeen at the point this scored
 	// run began (used only by the shadow ledger; no effect on memory scoring).
 	runStart := time.Now().UTC()
+	var privateArtifact *gen.DatasetArtifact
+	if req.PrivateDatasetMode != "" {
+		loaded, err := gen.DecodePrivateArtifact(req.PrivateDatasetBytes, req.ExpectedDatasetSHA256, seed, req.RunSize)
+		if err != nil {
+			s.store.Fail(runID, "private dataset integrity verification failed")
+			return
+		}
+		privateArtifact = &loaded
+	}
 
 	// 1. building — build the crate in the Docker sandbox. Skipped on the local
 	//    harness_url path (the miner is already running their harness).
@@ -1507,6 +1535,15 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		return
 	}
 	datasetHash, artifactBytes, hashErr := artifact.SHA256Hex()
+	if privateArtifact != nil {
+		artifact = *privateArtifact
+		datasetHash, artifactBytes, hashErr = req.ExpectedDatasetSHA256, req.PrivateDatasetBytes, nil
+		toolCases, memSuite.Cases, memWaves = privateExecutionSurfaces(artifact)
+		if err := validateV8EvidenceAvailability(toolCases, memSuite.Cases, memWaves); err != nil {
+			s.store.Fail(runID, "private dataset evidence availability invalid")
+			return
+		}
+	}
 	if hashErr != nil {
 		log.Printf("run %s: dataset hashing failed: %v", runID, hashErr)
 	}
@@ -1521,7 +1558,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			return
 		}
 	}
-	if dir := strings.TrimSpace(os.Getenv("DITTOBENCH_ARTIFACT_DIR")); dir != "" && artifactBytes != nil {
+	if dir := strings.TrimSpace(os.Getenv("DITTOBENCH_ARTIFACT_DIR")); dir != "" && artifactBytes != nil && privateArtifact == nil {
 		if err := os.WriteFile(filepath.Join(dir, runID+".json"), artifactBytes, 0o644); err != nil {
 			log.Printf("run %s: artifact persist failed: %v", runID, err)
 		}
@@ -1660,6 +1697,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// schemas, coined decoys); the same seed drives the fixtures above, so the
 	// decoys a harness sees are exactly the ones the mock endpoint knows.
 	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
+	if privateArtifact != nil {
+		tools = artifact.Catalog
+	}
 
 	// V8 harnesses may embed before any model turn, including the route probe
 	// below. Admit the ticket-bound embedding lane before probing so a working
