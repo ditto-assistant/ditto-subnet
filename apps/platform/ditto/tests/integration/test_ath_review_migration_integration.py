@@ -34,6 +34,8 @@ def _alembic(*args: str) -> None:
     )
 
 
+# Reset rows left by earlier tests before exercising guarded downgrades.
+@pytest.mark.usefixtures("engine")
 async def test_upgrade_backfills_timestamp_provenance_and_is_idempotent() -> None:
     _alembic("downgrade", "base")
     _alembic("upgrade", "c53fa6d2b194")
