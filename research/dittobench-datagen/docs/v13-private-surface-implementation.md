@@ -14,24 +14,30 @@ design checklist; its foundation-only descriptions predate those later layers.
 
 Actual qualification remains blocked:
 
-- The repaired 40-seed, full-profile public GIH control scored 0.4105 on tool
-  prompts (previously 0.237) and 0.7792607803 on quantity, still below the required
-  0.90 per-slice floor. This report includes catalog-bound decoys, link reads and
-  unexpected-shape families; later discovery-response controls have focused
-  41-seed coverage, not a new complete control report. The parser diagnostic is
-  not the full runtime grader or honest-agent calibration.
+- The corrected public GIH control now passes all required 0.90 slice floors
+  across seeds 1–40, full profile: tool prompts 0.97825, quantity 0.9024640657,
+  story 0.9705128205, personal 0.9574215033 and programs 0.9982142857.
+  Composite is 0.95115, with no unclassified families. This supersedes the
+  earlier incomplete controls. The parser diagnostic is not the full runtime
+  tool-argument/provenance grader or honest-agent calibration.
 - A real small-profile candidate now passed generation and exact-byte decoder
   replay using the same reserved seed/salt as a prior rejected run: 205 surfaces,
   171 changed and 34 unchanged, approximately $0.88 reported completion usage.
   This is not full-profile qualification. Failed candidates remain rejected and
   diagnostics remain private. A final schema-bound explicit preservation choice
   avoids corrupting protected values; provider failures never imply preservation.
-- Contract audit found ambiguous restraint triplets: semantically equivalent
-  requests for the same entity have contradictory per-member prerequisites, but
-  the scorer seeds all prerequisites into one shared graph before tool execution.
-  The request carries no visible case-to-record binding. A fair correction needs
-  an explicit versioning decision; do not use hidden expected answers or pair
-  mappings to make the control pass. Existing benchmark contracts are immutable.
+- The owner approved correcting unlaunched V13 in place. Restraint requests now
+  carry opaque visible context bindings to their prerequisite records; the
+  control joins those records rather than reading hidden expected outcomes.
+  A separate intent-grammar cache bug was fixed in merged PR #1967: effort
+  grammar variants are cached by value as well as category. Private decoding
+  now rejects altered protected facts/context bindings even under a fresh hash.
+- A fresh full-profile candidate (1,706 unique surfaces) is being generated and
+  independently semantically validated under a $40 per-invocation cap, within
+  the owner's $100 campaign cap. Its spending ledger reserves before requests,
+  reconciles known billing and retains uncertain charges. No result or profile
+  approval is claimed while that run is incomplete. The earlier small run is
+  historical evidence only, not qualification of the corrected full contract.
 - Exact byte-identical candidates now use a deterministic identity proof. Actual
   rewrites still require independent semantic validation. Identity proofs and
   unchanged surfaces must not be counted as private-surface resistance.
@@ -40,8 +46,11 @@ Actual qualification remains blocked:
   private end-to-end canary evidence remain outstanding.
 
 `parserprobe -require-public-control` now makes the necessary public-control
-threshold explicit at the CLI boundary. It does not fix the weak control or
-authorize launch. No activation is justified by this checkpoint.
+threshold explicit at the CLI boundary. Passing it establishes the diagnostic
+control, not private resistance or authority to launch. No activation is
+justified by this checkpoint. The environment-armed legacy ceiling test still
+contains a placeholder honest reference and six-seed CI router; it must not be
+used as the documented measured starter-kit/10,000-seed qualification.
 
 ## Implemented foundation
 
