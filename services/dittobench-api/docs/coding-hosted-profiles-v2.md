@@ -4,7 +4,8 @@
 assignment commits to: the authoring (execution) profile and the grading
 profile of one private catalog index. It proves both against the worker's own
 launch-time checks before anyone reviews their digests. The inference policy and
-budget profile are separate, time-bound documents and are not produced here.
+budget profile are separate, time-bound documents, issued by
+[`ditto.coding_hosted_policy_issue`](../../../apps/platform/docs/coding-hosted-policy-issue-v2.md).
 
 Run it only on an owner-controlled machine that already holds the verified
 private payload. Outputs are private review inputs. They are not an approval,
