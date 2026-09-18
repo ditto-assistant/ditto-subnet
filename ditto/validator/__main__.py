@@ -24,7 +24,7 @@ from ditto.api_models.coding_certification_leases import (
 )
 from ditto.chain import ChainConfig, create_chain_client
 from ditto.system_health import SystemMetricsCollector
-from ditto.validator.coding_canary import CodingCanaryWorker
+from ditto.validator.coding_canary import CodingCanaryTargets, CodingCanaryWorker
 from ditto.validator.coding_canary_runtime import CodingCanaryRuntime
 from ditto.validator.coding_executor_canary import CodingExecutorConnectivityCanary
 from ditto.validator.coding_publication import CodingPublicationClient
@@ -146,31 +146,18 @@ async def _amain() -> int:
                 subtensor_network=config.subtensor_network,
             )
             logger.info("weight mode: Pylon identity (put_weights)")
-            async with create_chain_client(chain_config) as chain:
-                coding_canary: CodingCanaryWorker | None = None
-                if config.coding_canary_enabled:
-
-                    def _sign_canary_receipt(
-                        lease: CodingCertificationLeaseResponse,
-                        receipt: CodingCapabilityCertificationReceipt,
-                    ) -> str:
-                        return sign_coding_certification(
-                            keypair,
-                            validator_hotkey=config.validator_hotkey,
-                            agent_id=lease.authority.agent_id,
-                            bench_version=lease.authority.bench_version,
-                            lease_id=lease.authority.lease_id,
-                            screened_image_sha256=lease.authority.screened_image_sha256,
-                            receipt=receipt,
-                        )
-
-                    coding_canary = CodingCanaryWorker(
-                        platform=platform,
-                        runtime=CodingCanaryRuntime(config, http),
-                        sign_receipt=_sign_canary_receipt,
-                        poll_seconds=config.coding_canary_poll_seconds,
-                    )
-                    logger.info("coding canary worker enabled")
+            async with (
+                create_chain_client(chain_config) as chain,
+                AsyncExitStack() as coding_resources,
+            ):
+                # One private scorer client for every local coding worker.
+                scorer_http = _ScorerControlClient(config, coding_resources)
+                coding_canary = await _create_coding_canary_worker(
+                    config=config,
+                    platform=platform,
+                    keypair=keypair,
+                    scorer_http=scorer_http,
+                )
                 # Router-track compute-destination seam. Default-off: unless
                 # VALIDATOR_ROUTER_LEDGER_READ_ENABLED is set the worker keeps its
                 # EmptyRouterLedgerSource, so the fold is byte-identical to v1.
@@ -197,56 +184,131 @@ async def _amain() -> int:
                     ),
                     router_ledger_source=router_ledger_source,
                 )
-                async with AsyncExitStack() as coding_resources:
-                    coding_worker = await _create_coding_shadow_worker(
-                        config=config,
-                        platform=platform,
-                        keypair=keypair,
-                        resources=coding_resources,
+                coding_worker = await _create_coding_shadow_worker(
+                    config=config,
+                    platform=platform,
+                    keypair=keypair,
+                    resources=coding_resources,
+                    scorer_http=scorer_http,
+                )
+                _apply_ditto_logging()  # re-assert: bittensor has initialised
+
+                async def run_ordinary_worker() -> None:
+                    await worker.run_forever(
+                        stop,
+                        drain_requested=drain_requested,
+                        bootstrap_resume=(
+                            mark_bootstrap_resumed if bootstrap_drain_pending else None
+                        ),
+                        extra_busy=_extra_busy(coding_worker, coding_canary),
                     )
-                    _apply_ditto_logging()  # re-assert: bittensor has initialised
 
-                    async def run_ordinary_worker() -> None:
-                        await worker.run_forever(
-                            stop,
-                            drain_requested=drain_requested,
-                            bootstrap_resume=(
-                                mark_bootstrap_resumed
-                                if bootstrap_drain_pending
-                                else None
-                            ),
-                            extra_busy=_extra_busy(coding_worker, coding_canary),
-                        )
-
-                    extras: list[tuple[str, _ExtraWorker]] = []
-                    if coding_worker is not None:
-                        extras.append(("validator-coding-shadow-worker", coding_worker))
-                    if coding_canary is not None:
-                        extras.append(("validator-coding-canary-worker", coding_canary))
-                    try:
-                        if not extras:
-                            await run_ordinary_worker()
-                        else:
-                            async with asyncio.TaskGroup() as group:
+                extras: list[tuple[str, _ExtraWorker]] = []
+                if coding_worker is not None:
+                    extras.append(("validator-coding-shadow-worker", coding_worker))
+                if coding_canary is not None:
+                    extras.append(("validator-coding-canary-worker", coding_canary))
+                try:
+                    if not extras:
+                        await run_ordinary_worker()
+                    else:
+                        async with asyncio.TaskGroup() as group:
+                            group.create_task(
+                                run_ordinary_worker(),
+                                name="validator-ordinary-worker",
+                            )
+                            for name, extra_worker in extras:
                                 group.create_task(
-                                    run_ordinary_worker(),
-                                    name="validator-ordinary-worker",
+                                    extra_worker.run_forever(
+                                        stop,
+                                        drain_requested=drain_requested,
+                                    ),
+                                    name=name,
                                 )
-                                for name, extra_worker in extras:
-                                    group.create_task(
-                                        extra_worker.run_forever(
-                                            stop,
-                                            drain_requested=drain_requested,
-                                        ),
-                                        name=name,
-                                    )
-                    finally:
-                        stop.set()
+                finally:
+                    stop.set()
     finally:
         write_update_state("stopping")
         telemetry.close()
     logger.info("validator worker stopped")
     return 0
+
+
+class _ScorerControlClient:
+    """One private, no-proxy client to the local scorer control plane.
+
+    The scorer control bearer and the certification canary's per-lease broker
+    private key cross this client, so it stays separate from Platform and Pylon
+    traffic and never inherits a proxy setting. The canary worker and the
+    local-mode shadow worker share it. It is created on first use and closed
+    with the coding exit stack.
+    """
+
+    def __init__(self, config: ValidatorConfig, resources: AsyncExitStack) -> None:
+        self._config = config
+        self._resources = resources
+        self._client: httpx.AsyncClient | None = None
+
+    async def get(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = await self._resources.enter_async_context(
+                httpx.AsyncClient(
+                    timeout=self._config.http_timeout_seconds,
+                    trust_env=False,
+                )
+            )
+        return self._client
+
+
+async def _create_coding_canary_worker(
+    *,
+    config: ValidatorConfig,
+    platform: PlatformClient,
+    keypair: Any,
+    scorer_http: _ScorerControlClient,
+) -> CodingCanaryWorker | None:
+    if not config.coding_canary_enabled:
+        return None
+
+    canary_http = await scorer_http.get()
+
+    def _sign_canary_receipt(
+        lease: CodingCertificationLeaseResponse,
+        receipt: CodingCapabilityCertificationReceipt,
+    ) -> str:
+        return sign_coding_certification(
+            keypair,
+            validator_hotkey=config.validator_hotkey,
+            agent_id=lease.authority.agent_id,
+            bench_version=lease.authority.bench_version,
+            lease_id=lease.authority.lease_id,
+            screened_image_sha256=lease.authority.screened_image_sha256,
+            receipt=receipt,
+        )
+
+    targets = CodingCanaryTargets.of(
+        config.coding_canary_targets, config.coding_canary_validator_hotkey
+    )
+    worker = CodingCanaryWorker(
+        platform=platform,
+        runtime=CodingCanaryRuntime(config, canary_http),
+        sign_receipt=_sign_canary_receipt,
+        validator_hotkey=config.validator_hotkey,
+        targets=targets,
+        poll_seconds=config.coding_canary_poll_seconds,
+    )
+    if targets.refuses_all(config.validator_hotkey):
+        logger.warning(
+            "coding canary worker enabled but refuses every lease: it needs at "
+            "least one allowlisted target identity and an allowlisted validator "
+            "hotkey equal to this validator's hotkey"
+        )
+    else:
+        logger.info(
+            "coding canary worker enabled targets=%d",
+            len(targets.entries),
+        )
+    return worker
 
 
 async def _create_coding_shadow_worker(
@@ -255,6 +317,7 @@ async def _create_coding_shadow_worker(
     platform: PlatformClient,
     keypair: Any,
     resources: AsyncExitStack,
+    scorer_http: _ScorerControlClient,
 ) -> CodingShadowWorker | None:
     if not config.coding_shadow_enabled:
         return None
@@ -274,12 +337,7 @@ async def _create_coding_shadow_worker(
         client_keypair = keypair
         validator_hotkey = config.validator_hotkey
     else:
-        coding_http = await resources.enter_async_context(
-            httpx.AsyncClient(
-                timeout=config.http_timeout_seconds,
-                trust_env=False,
-            )
-        )
+        coding_http = await scorer_http.get()
 
     publication = CodingPublicationClient(
         base_url=config.dittobench_api_url,

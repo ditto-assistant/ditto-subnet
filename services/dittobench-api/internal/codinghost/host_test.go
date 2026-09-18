@@ -115,6 +115,104 @@ func TestHostAttachesCanaryWhenThePublicPackIsPresent(t *testing.T) {
 	}
 }
 
+// The readiness probe runs the live daemon checks certify would run after a
+// claim. A daemon that cannot prove rootless isolation is never ready.
+func TestHostCanaryReadinessRefusesAnUnprovenDaemon(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(directory, "docker"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory)
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	docker := sandbox.NewLocalDocker()
+	docker.RequireRootless = true
+	docker.RequireIsolatedDaemon = true
+	docker.EgressNetwork = "coding-sandbox"
+	docker.EgressProxy = "http://proxy.invalid:3128"
+	docker.DockerHost = "unix:///run/ditto-coding-executor/docker.sock"
+	repo, err := filepath.Abs(filepath.Join("..", "..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := newHost(Config{
+		ControlToken: testControlToken, PrivateRoot: root, SourceListener: listener,
+		SourcePublicBaseURL: "http://host.docker.internal:" + strconv.Itoa(port),
+		Policy:              loadPolicy(t), RuntimeImageRepository: "registry.invalid/coding-runtime",
+		RuntimeImageDigest: "sha256:" + strings.Repeat("2", 64), CanaryEnabled: true, CertificationRoot: repo,
+		Docker: docker, CandidateUID: 65532, CandidateGID: 65532,
+		MaxTotalBytes: 512 << 20, MaxAttempts: 4,
+	}, func(context.Context) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = host.Close(context.Background()) })
+	for authorized, want := range map[bool]int{false: http.StatusUnauthorized, true: http.StatusOK} {
+		request := httptest.NewRequest(http.MethodGet, "/v1/coding/certifier/canary/readiness", nil)
+		if authorized {
+			request.Header.Set("Authorization", "Bearer "+testControlToken)
+		}
+		response := httptest.NewRecorder()
+		host.CanaryReadinessHandler().ServeHTTP(response, request)
+		if response.Code != want {
+			t.Fatalf("authorized=%v status=%d", authorized, response.Code)
+		}
+		if !authorized {
+			continue
+		}
+		var readiness map[string]any
+		if err := json.Unmarshal(response.Body.Bytes(), &readiness); err != nil {
+			t.Fatal(err)
+		}
+		if readiness["ready"] != false || readiness["pack_loaded"] != true ||
+			readiness["executor_daemon_ready"] != false || readiness["failure"] != "executor_daemon" {
+			t.Fatalf("readiness=%v", readiness)
+		}
+	}
+}
+
+func TestHostWithoutCanaryHasNoReadinessRoute(t *testing.T) {
+	var host *Host
+	response := httptest.NewRecorder()
+	host.CanaryReadinessHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/v1/coding/certifier/canary/readiness", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status=%d", response.Code)
+	}
+}
+
+func TestHostRefusesTheRootfulSandboxDaemonAsItsCodingEndpoint(t *testing.T) {
+	listener, err := net.Listen("tcp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	docker := sandbox.NewLocalDocker()
+	docker.RequireRootless = true
+	docker.RequireIsolatedDaemon = true
+	docker.EgressNetwork = "coding-sandbox"
+	docker.EgressProxy = "http://proxy.invalid:3128"
+	docker.DockerHost = "tcp://127.0.0.1:2375"
+	_, err = newHost(Config{
+		ControlToken: testControlToken, PrivateRoot: root, SourceListener: listener,
+		SourcePublicBaseURL: "http://host.docker.internal:1", Policy: loadPolicy(t),
+		RuntimeImageRepository: "registry.invalid/coding-runtime", Docker: docker,
+		CandidateUID: 65532, CandidateGID: 65532, MaxTotalBytes: 512 << 20, MaxAttempts: 4,
+	}, func(context.Context) error { return nil })
+	if err == nil {
+		t.Fatal("coding host accepted the rootful sandbox daemon endpoint")
+	}
+}
+
 func TestHostFailsClosedWhenCanaryIsEnabledWithoutThePublicPack(t *testing.T) {
 	listener, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {

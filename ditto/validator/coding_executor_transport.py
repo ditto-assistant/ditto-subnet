@@ -8,10 +8,17 @@ import ipaddress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 from ditto.api_models.coding_executor_control import CodingExecutorOperation
 from ditto.validator.signing import sign_coding_executor_control
+
+# The validator Compose service reaches the scorer through sandbox-docker's
+# network namespace on the stack's private bridge. That fixed service origin is
+# the only plaintext, non-loopback scorer control origin; miner containers run
+# inside the nested daemon and cannot reach port 8000.
+COMPOSE_SCORER_ORIGIN = "http://sandbox-docker:8000"
 
 _PRIVATE_EXECUTOR_NETWORKS = tuple(
     ipaddress.ip_network(value)
@@ -104,6 +111,34 @@ def tls_or_loopback(scheme: str, hostname: str | None) -> bool:
         return False
 
 
+def scorer_control_origin(url: str) -> bool:
+    """Whether ``url`` is an accepted local scorer control-plane origin.
+
+    One rule for every validator runtime that sends the scorer control bearer:
+    any HTTPS origin, a loopback HTTP origin, or exactly the Compose service
+    origin. Paths, userinfo, queries, fragments, and malformed ports are
+    refused.
+    """
+
+    parsed = urlsplit(url)
+    try:
+        _ = parsed.port
+    except ValueError:
+        return False
+    if (
+        not parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in {"", "/"}
+        or parsed.query
+        or parsed.fragment
+    ):
+        return False
+    if f"{parsed.scheme}://{parsed.netloc}" == COMPOSE_SCORER_ORIGIN:
+        return True
+    return tls_or_loopback(parsed.scheme, parsed.hostname)
+
+
 def private_executor_endpoint(parsed: Any) -> bool:
     if parsed.scheme != "https" or parsed.port != 9443 or not parsed.hostname:
         return False
@@ -115,8 +150,10 @@ def private_executor_endpoint(parsed: Any) -> bool:
 
 
 __all__ = [
+    "COMPOSE_SCORER_ORIGIN",
     "CodingExecutorRequestAuthority",
     "private_executor_endpoint",
+    "scorer_control_origin",
     "sign_coding_executor_request",
     "tls_or_loopback",
 ]

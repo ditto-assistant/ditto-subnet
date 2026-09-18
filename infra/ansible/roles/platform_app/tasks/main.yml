@@ -430,6 +430,14 @@
       - >-
         platform_coding_shadow_inference_exchange_url is match(
         '^https://[^/@?#:]+(?::443)?/api/v1/validator/coding-shadow/inference-exchange$')
+      # Validators compare the exchange URL byte-for-byte with their
+      # VALIDATOR_PLATFORM_API_URL, the primary vhost. Pin both to that origin
+      # so a split inference origin can never be rendered as the exchange.
+      - platform_coding_validator_api_base_url == 'https://' + platform_domain
+      - >-
+        platform_coding_shadow_inference_exchange_url ==
+        'https://' + platform_domain +
+        '/api/v1/validator/coding-shadow/inference-exchange'
       - >-
         platform_coding_shadow_inference_proxy_url is match(
         '^https://[^/@?#:]+(?::443)?/api/v1/inference/coding/chat/completions$')
@@ -439,9 +447,10 @@
       - platform_secrets.openrouter_api_key | default('') | length >= 32
     fail_msg: >-
       Shadow coding transport requires a deployed relay pool, the exact locked
-      policy bytes from this checkout, the three reviewed HTTPS URLs, and the
-      server-only OpenRouter credential. Leave platform_coding_shadow_enabled
-      false until the whole profile has been reviewed.
+      policy bytes from this checkout, the three reviewed HTTPS URLs with the
+      exchange on the validator-facing API origin, and the server-only
+      OpenRouter credential. Leave platform_coding_shadow_enabled false until
+      the whole profile has been reviewed.
   when: platform_coding_shadow_enabled | bool
   no_log: true
 

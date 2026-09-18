@@ -335,15 +335,11 @@ func main() {
 	if brokerPort < 1024 || brokerPort > 65535 || brokerPort == *port {
 		log.Fatalf("invalid DITTOBENCH_BROKER_PORT: must be an unprivileged port distinct from the API port")
 	}
-	codingHost, err := codingShadowHostFromEnvironment(sandboxRuntime, *port, brokerPort)
-	if err != nil {
-		log.Fatalf("shadow coding runtime configuration failed: %v", err)
-	}
+	codingHost := installCodingHost(func() (*codinghost.Host, error) {
+		return codingShadowHostFromEnvironment(*port, brokerPort)
+	}, log.Printf)
 	s.codingHost = codingHost
 	defer closeCodingShadowHost(codingHost)
-	if codingHost != nil {
-		log.Printf("shadow coding runtime enabled on private control and source-bound routes")
-	}
 	go func() {
 		brokerAddr := "0.0.0.0:" + strconv.Itoa(brokerPort)
 		log.Printf("trusted inference broker listening on %s", brokerAddr)

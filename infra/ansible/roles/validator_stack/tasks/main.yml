@@ -35,6 +35,9 @@
       VALIDATOR_PROD_HOTKEY plus VALIDATOR_PROD_HOTKEY_SECRET_VERSION to the
       generated public SS58 address and its recorded numeric secret version.
 
+- name: Validate the certification canary profile
+  ansible.builtin.include_tasks: validate_coding_canary.yml
+
 - name: Validate the fixed coding executor client identity profile
   ansible.builtin.assert:
     that:

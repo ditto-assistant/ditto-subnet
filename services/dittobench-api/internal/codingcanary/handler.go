@@ -30,17 +30,24 @@ type Config struct {
 	Backend          Backend
 	OperationTimeout time.Duration
 	Now              func() time.Time
+	// Pack is the loaded public pack. Readiness re-verifies it on every probe.
+	Pack PublicPack
+	// Readiness probes executor eligibility. Nil always reports not ready.
+	Readiness func(context.Context) ReadinessCheck
 }
 
 type Service struct {
-	mu      sync.Mutex
-	backend Backend
-	now     func() time.Time
-	timeout time.Duration
-	token   [sha256.Size]byte
-	active  map[string]struct{}
-	lastNow time.Time
-	closed  bool
+	mu        sync.Mutex
+	backend   Backend
+	now       func() time.Time
+	timeout   time.Duration
+	token     [sha256.Size]byte
+	active    map[string]struct{}
+	lastNow   time.Time
+	closed    bool
+	pack      PublicPack
+	readiness func(context.Context) ReadinessCheck
+	probe     chan struct{}
 }
 
 func New(config Config) (*Service, error) {
@@ -61,8 +68,92 @@ func New(config Config) (*Service, error) {
 	return &Service{
 		backend: config.Backend, now: config.Now, timeout: config.OperationTimeout,
 		token: sha256.Sum256([]byte(config.ControlToken)), lastNow: now,
-		active: make(map[string]struct{}),
+		active: make(map[string]struct{}), pack: config.Pack, readiness: config.Readiness,
+		probe: make(chan struct{}, 1),
 	}, nil
+}
+
+// ReadinessHandler serves GET ReadinessPath with the canary's bearer. It never
+// creates a harness, container, grant, or lease; it re-verifies the loaded
+// pack and asks the host whether the dedicated executor daemon and runtime
+// image would pass certification preflight now. Anything short of all three
+// reports ready=false, so a validator refuses before its irreversible claim.
+func (service *Service) ReadinessHandler() http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		setPrivateHeaders(response)
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		if request.URL.Path != ReadinessPath || request.URL.RawQuery != "" {
+			writeError(response, http.StatusNotFound, "not_found")
+			return
+		}
+		if request.Method != http.MethodGet {
+			response.Header().Set("Allow", http.MethodGet)
+			writeError(response, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		if !service.authorized(request) {
+			writeError(response, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		select {
+		case service.probe <- struct{}{}:
+			defer func() { <-service.probe }()
+		default:
+			writeError(response, http.StatusServiceUnavailable, "busy")
+			return
+		}
+		service.mu.Lock()
+		closed := service.closed
+		service.mu.Unlock()
+		if closed {
+			writeError(response, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		ctx, cancel := context.WithTimeout(request.Context(), readinessTimeout)
+		defer cancel()
+		encoded, err := json.Marshal(service.readinessResult(ctx))
+		if err != nil {
+			writeError(response, http.StatusInternalServerError, "internal")
+			return
+		}
+		encoded = append(encoded, '\n')
+		response.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(encoded)
+	})
+}
+
+func (service *Service) readinessResult(ctx context.Context) ReadinessResponse {
+	result := ReadinessResponse{
+		Schema: ReadinessSchema, CodingContractVersion: 1, WeightEligible: false,
+		CanaryManifestSHA256: service.pack.CanaryManifestSHA256, RunnerPlanSHA256: service.pack.RunnerPlanSHA256,
+		GraderPlanSHA256: service.pack.GraderPlanSHA256, ResourceProfileSHA256: service.pack.ResourceProfileSHA256,
+		InferencePolicySHA256: service.pack.InferencePolicySHA256,
+	}
+	result.PackLoaded = validSHA256(service.pack.CanaryManifestSHA256) && service.pack.Verify() == nil
+	if !result.PackLoaded {
+		result.Failure = "pack"
+		return result
+	}
+	if service.readiness == nil {
+		result.Failure = "executor_daemon"
+		return result
+	}
+	check := service.readiness(ctx)
+	result.ExecutorDaemonReady = check.ExecutorDaemon && ctx.Err() == nil
+	result.RuntimeImageReady = result.ExecutorDaemonReady && check.RuntimeImage
+	switch {
+	case !result.ExecutorDaemonReady:
+		result.Failure = "executor_daemon"
+	case !result.RuntimeImageReady:
+		result.Failure = "runtime_image"
+	default:
+		result.Ready = true
+	}
+	return result
 }
 
 func (service *Service) Handler() http.Handler {
@@ -72,7 +163,7 @@ func (service *Service) Handler() http.Handler {
 			writeError(response, http.StatusServiceUnavailable, "unavailable")
 			return
 		}
-		if request.URL.Path != "/v1/coding/certifier/canary" || request.URL.RawQuery != "" {
+		if request.URL.Path != CanaryPath || request.URL.RawQuery != "" {
 			writeError(response, http.StatusNotFound, "not_found")
 			return
 		}

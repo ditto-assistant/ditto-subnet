@@ -1,0 +1,281 @@
+---
+# Exercise the validator-stack certification canary gates and environment
+# rendering on localhost. This never converges the role or touches a host.
+- name: Verify the validator certification canary is default-off and fail-closed
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars_files:
+    - ../roles/validator_stack/defaults/main.yml
+  vars:
+    validator_stack_pylon_token: pylon-token-placeholder
+    validator_stack_broker_token: broker-token-placeholder
+    validator_stack_wandb_api_key: wandb-placeholder
+    canary_template: ../roles/validator_stack/templates/validator.env.j2
+    valid_digest: "sha256:{{ '1' * 64 }}"
+    valid_repository: registry.invalid/ditto/coding-runtime
+    valid_docker_host: unix:///run/ditto-coding-executor/docker.sock
+    valid_egress_network: ditto-coding-egress
+    valid_egress_proxy: http://10.203.0.1:3128
+    valid_host_gateway_ip: 10.203.0.1
+    valid_artifact: "{{ 'a1' * 32 }}"
+    valid_screened_image: "{{ 'b1' * 32 }}"
+    valid_targets:
+      - agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+        artifact_sha256: "{{ valid_artifact }}"
+        screened_image_sha256: "{{ valid_screened_image }}"
+    # Synthetic SS58 test hotkey; production takes it from validated config.
+    valid_hotkey: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+  tasks:
+    - name: Accept the shipped defaults
+      ansible.builtin.include_tasks: ../roles/validator_stack/tasks/validate_coding_canary.yml
+
+    - name: Render the shipped defaults as disabled and empty
+      vars:
+        rendered: "{{ lookup('template', canary_template).splitlines() }}"
+      ansible.builtin.assert:
+        that:
+          - not validator_stack_coding_canary_enabled
+          - not validator_stack_dittobench_coding_canary_enabled
+          - validator_stack_coding_runtime_image_repository == ''
+          - validator_stack_coding_runtime_image_digest == ''
+          - validator_stack_coding_docker_host == ''
+          - validator_stack_coding_canary_targets == []
+          - validator_stack_coding_canary_validator_hotkey == ''
+          - "'VALIDATOR_CODING_CANARY_ENABLED=false' in rendered"
+          - "'VALIDATOR_CODING_CANARY_POLL_SECONDS=10' in rendered"
+          - "'VALIDATOR_CODING_CANARY_TARGETS=' in rendered"
+          - "'VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY=' in rendered"
+          - "'DITTOBENCH_CODING_CANARY_ENABLED=false' in rendered"
+          - "'DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY=' in rendered"
+          - "'DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST=' in rendered"
+          - "'DITTOBENCH_CODING_DOCKER_HOST=' in rendered"
+          - "'DITTOBENCH_CODING_EGRESS_NETWORK=' in rendered"
+          - "'DITTOBENCH_CODING_EGRESS_PROXY=' in rendered"
+          - "'DITTOBENCH_CODING_HOST_GATEWAY_IP=' in rendered"
+          - rendered | select('match', 'DITTOBENCH_CODING_CERTIFICATION_ROOT') | list == []
+          # The coding runtime has no CA bundle setting and never renders the
+          # ordinary scorer's sandbox proxy, network or gateway settings.
+          - rendered | select('match', 'DITTOBENCH_CODING_[A-Z_]*(CA_BUNDLE|CA_PATH|_CA=|CERT)') | list == []
+          - rendered | select('match', 'DITTOBENCH_SANDBOX_EGRESS_PROXY|DITTOBENCH_SANDBOX_HOST_GATEWAY_IP') | list == []
+
+    - name: Keep runtime identity, daemon endpoint, and targets out of disabled gates
+      vars:
+        validator_stack_coding_runtime_image_repository: "{{ valid_repository }}"
+        validator_stack_coding_runtime_image_digest: "{{ valid_digest }}"
+        validator_stack_coding_docker_host: "{{ valid_docker_host }}"
+        validator_stack_coding_egress_network: "{{ valid_egress_network }}"
+        validator_stack_coding_egress_proxy: "{{ valid_egress_proxy }}"
+        validator_stack_coding_host_gateway_ip: "{{ valid_host_gateway_ip }}"
+        validator_stack_coding_canary_targets: "{{ valid_targets }}"
+        validator_stack_coding_canary_validator_hotkey: "{{ valid_hotkey }}"
+        rendered: "{{ lookup('template', canary_template).splitlines() }}"
+      ansible.builtin.assert:
+        that:
+          - "'DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY=' in rendered"
+          - "'DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST=' in rendered"
+          - "'DITTOBENCH_CODING_DOCKER_HOST=' in rendered"
+          - "'DITTOBENCH_CODING_EGRESS_NETWORK=' in rendered"
+          - "'DITTOBENCH_CODING_EGRESS_PROXY=' in rendered"
+          - "'DITTOBENCH_CODING_HOST_GATEWAY_IP=' in rendered"
+          - "'VALIDATOR_CODING_CANARY_TARGETS=' in rendered"
+          - "'VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY=' in rendered"
+
+    - name: Accept and render a staged scorer-only profile
+      vars:
+        validator_stack_dittobench_coding_canary_enabled: true
+        validator_stack_coding_runtime_image_repository: "{{ valid_repository }}"
+        validator_stack_coding_runtime_image_digest: "{{ valid_digest }}"
+        validator_stack_coding_docker_host: "{{ valid_docker_host }}"
+        validator_stack_coding_egress_network: "{{ valid_egress_network }}"
+        validator_stack_coding_egress_proxy: "{{ valid_egress_proxy }}"
+        validator_stack_coding_host_gateway_ip: "{{ valid_host_gateway_ip }}"
+      block:
+        - name: Validate the staged scorer-only profile
+          ansible.builtin.include_tasks: ../roles/validator_stack/tasks/validate_coding_canary.yml
+
+        - name: Render the staged scorer-only profile
+          vars:
+            rendered: "{{ lookup('template', canary_template).splitlines() }}"
+          ansible.builtin.assert:
+            that:
+              - "'VALIDATOR_CODING_CANARY_ENABLED=false' in rendered"
+              - "'VALIDATOR_CODING_CANARY_TARGETS=' in rendered"
+              - "'DITTOBENCH_CODING_CANARY_ENABLED=true' in rendered"
+              - "'DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY=' + valid_repository in rendered"
+              - "'DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST=' + valid_digest in rendered"
+              - "'DITTOBENCH_CODING_DOCKER_HOST=' + valid_docker_host in rendered"
+              - "'DITTOBENCH_CODING_EGRESS_NETWORK=' + valid_egress_network in rendered"
+              - "'DITTOBENCH_CODING_EGRESS_PROXY=' + valid_egress_proxy in rendered"
+              - "'DITTOBENCH_CODING_HOST_GATEWAY_IP=' + valid_host_gateway_ip in rendered"
+
+    - name: Accept and render the complete canary profile
+      vars:
+        validator_stack_coding_canary_enabled: true
+        validator_stack_dittobench_coding_canary_enabled: true
+        validator_stack_coding_canary_poll_seconds: 30
+        validator_stack_coding_runtime_image_repository: "{{ valid_repository }}"
+        validator_stack_coding_runtime_image_digest: "{{ valid_digest }}"
+        validator_stack_coding_docker_host: "{{ valid_docker_host }}"
+        validator_stack_coding_egress_network: "{{ valid_egress_network }}"
+        validator_stack_coding_egress_proxy: "{{ valid_egress_proxy }}"
+        validator_stack_coding_host_gateway_ip: "{{ valid_host_gateway_ip }}"
+        validator_stack_coding_canary_targets:
+          - agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa
+            artifact_sha256: "{{ valid_artifact }}"
+            screened_image_sha256: "{{ valid_screened_image }}"
+          - agent_id: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb
+            artifact_sha256: "{{ 'a2' * 32 }}"
+            screened_image_sha256: "{{ 'b2' * 32 }}"
+        validator_stack_coding_canary_validator_hotkey: "{{ valid_hotkey }}"
+        validator_stack_hotkey: "{{ valid_hotkey }}"
+      block:
+        - name: Validate the complete canary profile
+          ansible.builtin.include_tasks: ../roles/validator_stack/tasks/validate_coding_canary.yml
+
+        - name: Render the complete canary profile
+          vars:
+            rendered: "{{ lookup('template', canary_template).splitlines() }}"
+          ansible.builtin.assert:
+            that:
+              - "'VALIDATOR_CODING_CANARY_ENABLED=true' in rendered"
+              - "'VALIDATOR_CODING_CANARY_POLL_SECONDS=30' in rendered"
+              - "'VALIDATOR_CODING_CANARY_TARGETS=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:' + valid_artifact + ':' + valid_screened_image + ',bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:' + 'a2' * 32 + ':' + 'b2' * 32 in rendered"
+              - "'VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY=' + valid_hotkey in rendered"
+              - "'DITTOBENCH_CODING_CANARY_ENABLED=true' in rendered"
+              - "'DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY=' + valid_repository in rendered"
+              - "'DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST=' + valid_digest in rendered"
+              - "'DITTOBENCH_CODING_DOCKER_HOST=' + valid_docker_host in rendered"
+              - "'DITTOBENCH_CODING_EGRESS_NETWORK=' + valid_egress_network in rendered"
+              - "'DITTOBENCH_CODING_EGRESS_PROXY=' + valid_egress_proxy in rendered"
+              - "'DITTOBENCH_CODING_HOST_GATEWAY_IP=' + valid_host_gateway_ip in rendered"
+
+    - name: Accept other Docker-grammar runtime repositories
+      vars:
+        validator_stack_dittobench_coding_canary_enabled: true
+        validator_stack_coding_runtime_image_digest: "{{ valid_digest }}"
+        validator_stack_coding_docker_host: "{{ valid_docker_host }}"
+        validator_stack_coding_egress_network: "{{ valid_egress_network }}"
+        validator_stack_coding_egress_proxy: "{{ valid_egress_proxy }}"
+        validator_stack_coding_host_gateway_ip: "{{ valid_host_gateway_ip }}"
+        validator_stack_coding_runtime_image_repository: "{{ repository }}"
+      ansible.builtin.include_tasks: ../roles/validator_stack/tasks/validate_coding_canary.yml
+      loop_control:
+        loop_var: repository
+      loop:
+        - registry.invalid:5000/ditto/coding-runtime
+        - ghcr.io/ditto-assistant/dittobench-coding-runtime
+        - runtime
+        - ditto/coding__runtime
+        - ditto/coding--runtime
+
+    - name: Reject every incomplete or unsafe profile
+      ansible.builtin.include_tasks: validator-stack-coding-canary-reject.yml
+      loop_control:
+        loop_var: case
+        label: "{{ case.name }}"
+      loop:
+        - {name: validator worker without the scorer route, validator: true, scorer: false}
+        - {name: validator worker beside the connectivity canary, validator: true, connectivity: true}
+        - {name: validator worker beside the connectivity run, validator: true, connectivity_run: true}
+        - {name: poll below one second, validator: true, poll: 0}
+        - {name: poll above five minutes, validator: true, poll: 301}
+        - {name: empty runtime digest, digest: ""}
+        - {name: tag instead of digest, digest: latest}
+        - {name: uppercase runtime digest, digest: "sha256:{{ 'A' * 64 }}"}
+        - {name: short runtime digest, digest: "sha256:{{ '1' * 63 }}"}
+        - {name: empty runtime repository, repository: ""}
+        - {name: repository with a digest, repository: "registry.invalid/runtime@sha256:{{ '1' * 64 }}"}
+        - {name: repository with a trailing slash, repository: registry.invalid/runtime/}
+        - {name: repository with a parent segment, repository: registry.invalid/../runtime}
+        - {name: repository with uppercase, repository: Registry.invalid/runtime}
+        - {name: repository with whitespace, repository: "registry.invalid/run time"}
+        - {name: repository with an empty path component, repository: "registry.invalid//runtime"}
+        - {name: repository with a colon inside the path, repository: "registry.invalid/a:b/c"}
+        - {name: repository with a tag, repository: "registry.invalid/runtime:latest"}
+        - {name: repository with a leading separator, repository: "registry.invalid/-runtime"}
+        - {name: repository with a triple underscore, repository: "registry.invalid/run___time"}
+        - {name: repository with a trailing newline, repository: "registry.invalid/runtime\n"}
+        - {name: repository longer than 255 bytes, repository: "a/{{ 'b' * 254 }}"}
+        - {name: scorer without a coding daemon, docker_host: ""}
+        - {name: validator worker without a coding daemon, validator: true, docker_host: ""}
+        - {name: scorer on the rootful sandbox daemon, docker_host: "tcp://127.0.0.1:2375"}
+        - {name: validator worker on the rootful sandbox daemon, validator: true, docker_host: "tcp://127.0.0.1:2375"}
+        - {name: coding daemon on the sandbox service port, docker_host: "tcp://sandbox-docker:2375"}
+        - {name: coding daemon on the host rootful socket, docker_host: "unix:///var/run/docker.sock"}
+        - {name: coding daemon on the run rootful socket, docker_host: "unix:///run/docker.sock"}
+        - {name: coding daemon on a relative socket, docker_host: "unix://run/coding/docker.sock"}
+        - {name: coding daemon with a parent segment, docker_host: "unix:///run/coding/../docker.sock"}
+        - {name: coding daemon with an empty segment, docker_host: "unix:///run//coding/docker.sock"}
+        - {name: coding daemon that is not a socket, docker_host: "unix:///run/coding/docker"}
+        - {name: coding daemon over ssh, docker_host: "ssh://coding@host.invalid"}
+        - {name: scorer without a coding egress network, egress_network: ""}
+        - {name: validator worker without a coding egress network, validator: true, egress_network: ""}
+        - {name: coding egress network starting with a dash, egress_network: "-host"}
+        - {name: coding egress network with uppercase, egress_network: Ditto-Coding}
+        - {name: scorer without a coding egress proxy, egress_proxy: ""}
+        - {name: validator worker without a coding egress proxy, validator: true, egress_proxy: ""}
+        - {name: coding egress proxy over https, egress_proxy: "https://10.203.0.1:3128"}
+        - {name: coding egress proxy by hostname, egress_proxy: "http://egress-proxy:3128"}
+        - {name: coding egress proxy on a public address, egress_proxy: "http://8.8.8.8:3128"}
+        - {name: coding egress proxy on loopback, egress_proxy: "http://127.0.0.1:3128"}
+        - {name: coding egress proxy without a port, egress_proxy: "http://10.203.0.1"}
+        - {name: coding egress proxy with a path, egress_proxy: "http://10.203.0.1:3128/"}
+        - {name: coding egress proxy with userinfo, egress_proxy: "http://user:pw@10.203.0.1:3128"}
+        - {name: coding egress proxy with a port above 65535, egress_proxy: "http://10.203.0.1:65536"}
+        - {name: coding egress proxy with a leading-zero port, egress_proxy: "http://10.203.0.1:03128"}
+        - {name: scorer without a coding host gateway, host_gateway_ip: ""}
+        - {name: validator worker without a coding host gateway, validator: true, host_gateway_ip: ""}
+        - {name: coding host gateway on loopback, host_gateway_ip: 127.0.0.1}
+        - {name: coding host gateway on a public address, host_gateway_ip: 8.8.8.8}
+        - {name: coding host gateway as the rootful magic name, host_gateway_ip: host-gateway}
+        - {name: coding host gateway with a leading zero, host_gateway_ip: 10.203.0.01}
+        - {name: validator worker without targets, validator: true, targets: []}
+        - {name: validator worker with a target string, validator: true, targets: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"}
+        - name: validator worker with a target mapping instead of a list
+          validator: true
+          targets: {agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}
+        - {name: validator worker with an agent-only target, validator: true, targets: [aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa]}
+        - name: validator worker with a target missing its artifact digest
+          validator: true
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a target missing its screened-image digest
+          validator: true
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}"}]
+        - name: validator worker with an extra target field
+          validator: true
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}", validator_hotkey: "{{ valid_hotkey }}"}]
+        - name: validator worker with an uppercase target
+          validator: true
+          targets: [{agent_id: AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a malformed target
+          validator: true
+          targets: [{agent_id: not-a-uuid, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a nil target
+          validator: true
+          targets: [{agent_id: "00000000-0000-0000-0000-000000000000", artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with an uppercase artifact digest
+          validator: true
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ 'A1' * 32 }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a prefixed artifact digest
+          validator: true
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "sha256:{{ valid_artifact }}", screened_image_sha256: "{{ valid_screened_image }}"}]
+        - name: validator worker with a short screened-image digest
+          validator: true
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: "{{ 'b' * 63 }}"}]
+        - name: validator worker with an empty screened-image digest
+          validator: true
+          targets: [{agent_id: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, artifact_sha256: "{{ valid_artifact }}", screened_image_sha256: ""}]
+        - name: validator worker with duplicate targets
+          validator: true
+          targets: "{{ valid_targets + valid_targets }}"
+        - name: validator worker with seventeen targets
+          validator: true
+          targets: >-
+            {{ query('ansible.builtin.sequence', 'start=1 end=17 format=aaaaaaaa-aaaa-4aaa-8aaa-%012x')
+            | map('regex_replace', '^(.*)$', '{"agent_id": "\1", "artifact_sha256": "' ~ valid_artifact ~ '", "screened_image_sha256": "' ~ valid_screened_image ~ '"}')
+            | map('from_json') | list }}
+        - {name: validator worker without a target hotkey, validator: true, canary_hotkey: ""}
+        - {name: validator worker bound to another validator hotkey, validator: true, canary_hotkey: 5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty}
+        - {name: validator worker with a malformed target hotkey, validator: true, canary_hotkey: not-a-hotkey, hotkey: not-a-hotkey}

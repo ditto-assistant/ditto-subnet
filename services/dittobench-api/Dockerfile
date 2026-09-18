@@ -70,6 +70,26 @@ RUN wget -q -O /longmemeval_s_cleaned.json \
       | sha256sum -c - && \
     chmod 0444 /longmemeval_s_cleaned.json
 
+# ---- public coding certification pack ----
+# The default-off certification canary (DITTOBENCH_CODING_CANARY_ENABLED) loads
+# a repo-shaped root. Copy the committed certification/v1 capsule and the locked
+# inference policy its manifest names, and make the tree read-only. Integrity is
+# checked where the pack is used, not by pins here: codingcanary.LoadPublicPack
+# verifies the grader files against the manifest Platform binds into every
+# lease, the visible workspace against its pinned listing digest, and the policy
+# against its pinned digest, and rejects any other file or link. A bad pack
+# therefore disables only the canary route, never this build or ordinary
+# scoring. The root .dockerignore drops the cache names the loader ignores.
+FROM alpine:3.22 AS coding-certification-pack
+COPY research/dittobench-coding-datagen/certification/v1/ \
+    /pack/certification-root/research/dittobench-coding-datagen/certification/v1/
+COPY packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json \
+    /pack/certification-root/packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json
+WORKDIR /pack/certification-root
+RUN find . -type d -exec chmod 0555 {} + && \
+    find . -type f -exec chmod 0444 {} +
+
+
 # ---- validator sandbox runtime ----
 # This opt-in target runs the API beside a host Docker daemon. The binary shells
 # out to both git and docker when it materializes and runs miner submissions.
@@ -93,6 +113,12 @@ COPY --from=confirmation-assets --chown=65532:65532 --chmod=0444 \
 COPY --chown=65532:65532 --chmod=0444 \
     packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json \
     /opt/ditto/coding/coding_inference_policy_locked_v1.json
+# BuildKit applies --chmod=0444 to the implicitly created /opt/ditto/coding, which
+# leaves the non-root scorer unable to traverse to the locked policy. Keep the
+# directory traversable but read-only. The certification pack is root-owned,
+# 0555/0444, and loaded (and verified) only when the canary gate is enabled.
+COPY --from=coding-certification-pack /pack/ /opt/ditto/coding/
+RUN chmod 0555 /opt/ditto/coding
 ENV HOME=/tmp
 # Legacy fallback only; the binary above already carries these values.
 ENV DITTOBENCH_SOFTWARE_VERSION=${DITTOBENCH_SOFTWARE_VERSION}

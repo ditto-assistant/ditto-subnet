@@ -182,7 +182,7 @@ func newHost(config Config, availability func(context.Context) error) (*Host, er
 		CandidateUID:    config.CandidateUID, CandidateGID: config.CandidateGID,
 		RequireRootless: true, RequireIsolatedDaemon: true,
 		SeccompProfile: config.Docker.SeccompProfile, AppArmorProfile: config.Docker.AppArmorProfile,
-		Now: now,
+		DockerHost: config.Docker.DockerHost, Now: now,
 	})
 	if err != nil {
 		return nil, errors.Join(ErrInvalidConfig, err)
@@ -255,8 +255,18 @@ func newHost(config Config, availability func(context.Context) error) (*Host, er
 			_ = publication.Close()
 			return nil, errors.Join(ErrInvalidConfig, backendErr)
 		}
+		imageDigest := config.RuntimeImageDigest
 		canary, err = codingcanary.New(codingcanary.Config{
-			ControlToken: config.ControlToken, Backend: canaryBackend, Now: now,
+			ControlToken: config.ControlToken, Backend: canaryBackend, Now: now, Pack: pack,
+			Readiness: func(ctx context.Context) codingcanary.ReadinessCheck {
+				// The harness runtime and the executor share the dedicated daemon;
+				// both must pass the checks certify would run after a claim.
+				if harnessRuntime.Available(ctx) != nil {
+					return codingcanary.ReadinessCheck{}
+				}
+				daemon, image := executors.CertificationReadiness(ctx, imageDigest)
+				return codingcanary.ReadinessCheck{ExecutorDaemon: daemon, RuntimeImage: image}
+			},
 		})
 		if err != nil {
 			_ = supervisor.Close()
@@ -296,6 +306,15 @@ func (host *Host) CanaryHandler() http.Handler {
 		return http.NotFoundHandler()
 	}
 	return host.canary.Handler()
+}
+
+// CanaryReadinessHandler serves the read-only certification readiness probe.
+// It is not found whenever the canary itself is not attached.
+func (host *Host) CanaryReadinessHandler() http.Handler {
+	if host == nil || host.canary == nil {
+		return http.NotFoundHandler()
+	}
+	return host.canary.ReadinessHandler()
 }
 
 func (host *Host) Close(ctx context.Context) error {

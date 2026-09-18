@@ -44,7 +44,7 @@ func New(config Config) (*Executor, error) {
 	if config.hosted {
 		return nil, errors.New("hosted grading requires its explicit constructor")
 	}
-	return newWithDocker(config, execDocker{})
+	return newWithDocker(config, execDocker{host: config.DockerHost})
 }
 
 func newWithDocker(config Config, docker dockerCLI) (*Executor, error) {

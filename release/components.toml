@@ -153,6 +153,8 @@ paths = [
   "scripts/test-coding-node-driver.sh",
   "scripts/test-coding-node-confinement.sh",
   "packages/dittobench-coding-contract/**",
+  # Baked into the sandbox scorer image for the default-off certification canary.
+  "research/dittobench-coding-datagen/certification/v1/**",
 ]
 
 [components.dittobench_datagen]

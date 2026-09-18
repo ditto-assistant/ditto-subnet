@@ -52,6 +52,52 @@ validator_stack_coding_executor_ca_path: /var/lib/ditto-validator/coding-executo
 validator_stack_coding_executor_client_cert_path: /var/lib/ditto-validator/coding-executor-mtls/validator-client.pem
 validator_stack_coding_executor_client_key_path: /var/lib/ditto-validator/coding-executor-mtls/validator-client-key.pem
 
+# Contract-v1 public certification canary, independently double-gated and off.
+#
+# The scorer switch builds the whole scorer coding host, not just a route: the
+# private root and relay journal, the 0.0.0.0:11438 source listener, a live
+# probe of the dedicated coding daemon, the supervisor and publication routes,
+# the certification pack, and the canary and readiness routes. If any of that
+# fails, the scorer logs a refusal, every coding route answers 404, and ordinary
+# benchmark scoring continues. The runtime image identity and the coding daemon
+# endpoint are rendered only while the scorer switch is on.
+#
+# The validator switch issues and claims certification leases. It requires the
+# scorer switch and exact targets, and the worker still refuses before issue
+# unless the scorer's readiness probe reports the pack, the rootless isolated
+# daemon, and the runtime image as ready.
+validator_stack_dittobench_coding_canary_enabled: false
+validator_stack_coding_canary_enabled: false
+validator_stack_coding_canary_poll_seconds: 10
+validator_stack_coding_runtime_image_repository: ""
+validator_stack_coding_runtime_image_digest: ""
+# DITTOBENCH_CODING_DOCKER_HOST: the dedicated rootless coding daemon's local
+# socket, for example unix:///run/ditto-coding-executor/docker.sock. It is never
+# the stack's privileged rootful sandbox-docker daemon (tcp://127.0.0.1:2375).
+# This role does not install that daemon, its socket mount, its isolated-daemon
+# label, or its runtime image; they are a separately reviewed change. Until they
+# exist, leave both canary switches false.
+validator_stack_coding_docker_host: ""
+# The coding runtime's own container settings on that dedicated daemon:
+# DITTOBENCH_CODING_EGRESS_NETWORK (its egress-restricted network name),
+# DITTOBENCH_CODING_EGRESS_PROXY (exactly http://<private IPv4>:<port>) and
+# DITTOBENCH_CODING_HOST_GATEWAY_IP (the private IPv4 that host.docker.internal
+# names inside that daemon's network namespace). The scorer never falls back to
+# the ordinary DITTOBENCH_SANDBOX_* values or the OpenRouter shim CA bundle.
+validator_stack_coding_egress_network: ""
+validator_stack_coding_egress_proxy: ""
+validator_stack_coding_host_gateway_ip: ""
+# Exact certification canary targets. The empty defaults refuse every lease.
+# Each target is one mapping with exactly agent_id (canonical UUID),
+# artifact_sha256 and screened_image_sha256 (lowercase 64-hex), the same fields
+# as one Platform certification allowlist tuple; the fourth field is the
+# validator hotkey below. A lease whose artifact or screened-image digest
+# differs from a listed target is refused before any execution. The hotkey
+# must equal validator_stack_hotkey, so the targets cannot be reused on another
+# validator.
+validator_stack_coding_canary_targets: []
+validator_stack_coding_canary_validator_hotkey: ""
+
 validator_stack_cosign_version: v3.0.6
 validator_stack_cosign_linux_amd64_sha256: c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
 validator_stack_uv_bin: /usr/local/bin/uv

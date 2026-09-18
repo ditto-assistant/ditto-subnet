@@ -174,8 +174,15 @@ platform_coding_shadow_ticket_lease_seconds: 3600
 platform_coding_shadow_inference_policy_file: >-
   {{ platform_checkout_root }}/packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json
 platform_coding_shadow_inference_policy_sha256: "6dd79225817b56ebf155f8344cd5faf752c8dd57802b21d6d2cbbae9cc2ff0b4"
+# Validators accept a coding grant exchange URL only when it is exactly
+# {VALIDATOR_PLATFORM_API_URL}/api/v1/validator/... (shadow tickets and, via
+# the same prefix, certification leases). Validators use the primary vhost
+# https://{{ platform_domain }}, so the exchange lives there, never on the
+# inference origin (production's is https://dittobench.ai). Activation asserts
+# exactly this origin.
+platform_coding_validator_api_base_url: "https://{{ platform_domain }}"
 platform_coding_shadow_inference_exchange_url: >-
-  {{ platform_inference_public_base_url }}/api/v1/validator/coding-shadow/inference-exchange
+  {{ platform_coding_validator_api_base_url }}/api/v1/validator/coding-shadow/inference-exchange
 platform_coding_shadow_inference_proxy_url: >-
   {{ platform_inference_public_base_url }}/api/v1/inference/coding/chat/completions
 platform_coding_shadow_inference_revoke_url: >-
