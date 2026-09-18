@@ -23,10 +23,12 @@ from ditto.chain.errors import ChainConnectionError
 from ditto.chain.models import ChainMinerEmissionReceipt
 
 # https://github.com/RaoFoundation/subtensor/releases/download/v464/subtensor-digest.json
-# Compressed/compact WASM for v464 and v459. Reveal, epoch math and block_step
-# are identical; v464 changes unrelated fees, owner leases and root dividends.
+# Compressed/compact WASM for v464 and v459, and verified compressed v466.
+# Reveal, weights, epoch math and block_step are unchanged in v466.
+# Artifact verification and scoped runtime audit: docs/source-runtime-v466.md.
 AUDITED_RUNTIME_CODE_HASHES = frozenset(
     {
+        "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e",
         "0x637844a3ad94d3bdbea45664b67bbfa07a31f21c087834a56a772ba27f612b9f",
         "0xd32f5c4347c58f0c5e68dc3e5dd53a26d4e5a24b770fb01279d1b05ec0612218",
         "0x558275958401c026fa4a4159466d49eabd08c761f0c801390593fcba91dee69b",

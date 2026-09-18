@@ -261,6 +261,28 @@ async def test_unknown_runtime_cannot_be_configured_around(chain: tuple) -> None
         )
 
 
+@pytest.mark.parametrize("upgrade", [False, True])
+async def test_v466_artifact_preserves_reveal_and_resets_upgrade_boundary(
+    chain: tuple, upgrade: bool
+) -> None:
+    substrate, state = chain
+    runtime = "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e"
+    state["runtime"] = (
+        "0x637844a3ad94d3bdbea45664b67bbfa07a31f21c087834a56a772ba27f612b9f"
+        if upgrade
+        else runtime
+    )
+    state["post_runtime"] = runtime
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.runtime_code_hash == runtime
+    if upgrade:
+        assert block.reset_reason == "runtime_changed"
+        assert not block.updates and not block.is_payout
+    else:
+        assert block.reset_reason is None
+        assert block.updates[0].commit_ciphertext_hash is not None
+
+
 async def test_known_runtime_transition_resets_provenance(chain: tuple) -> None:
     substrate, state = chain
     state["post_runtime"] = sorted(AUDITED_RUNTIME_CODE_HASHES)[1]
