@@ -11,7 +11,18 @@ operator may reject a submission. Historical v9 findings retain their original
 wire identity and are not silently reinterpreted; v10 applies to new or
 explicitly rescreened attempts.
 
-## Policy v13 (published, activation pending)
+## Policy v14 (draft, not active)
+
+[Policy v14](policy-v14.md) proposes an auditable completeness standard for
+source review, with a [review-evidence specification](policy-v14-review-evidence.md)
+covering every effective engine, deciding call, retry predicate, finalized
+field and execution guard. It preserves the pinned v13 substantive rules and
+safe harbors. It adds no byte-for-byte system-prompt rule or runtime wire gate.
+The draft does not bump the built-in policy version, raise an activation
+ceiling, change signing or trigger a rescreen. Its implementation and activation
+prerequisites must be met separately before it can govern a submission.
+
+## Policy v13 (published; activation is controlled by Backroom)
 
 Policy v13 replaces identifier-oriented review guidance with the mechanism-based
 white and black checklist in [policy-v13.md](policy-v13.md). It adds I8
