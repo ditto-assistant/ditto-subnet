@@ -1,0 +1,34 @@
+---
+# Shared by the pre-write refusal (coding_hosted_prerequisites_require_installed
+# false: a missing journal directory passes) and the post-create check (true: it
+# must exist). The worker home comes from daemon provisioning and must already be
+# exact; an existing journal directory must always be exact and is never changed.
+- name: Inspect the worker home and launch journal directory without following links
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ coding_hosted_prerequisites_launch_journal_dir | dirname }}"
+    - "{{ coding_hosted_prerequisites_launch_journal_dir }}"
+  register: coding_hosted_prerequisites_journal_state
+
+- name: Require a private worker home and an absent or exact launch journal directory
+  ansible.builtin.assert:
+    that:
+      - coding_hosted_prerequisites_journal_state.results[0].stat.isdir | default(false)
+      - not coding_hosted_prerequisites_journal_state.results[0].stat.islnk
+      - coding_hosted_prerequisites_journal_state.results[0].stat.uid == coding_hosted_prerequisites_worker_uid
+      - coding_hosted_prerequisites_journal_state.results[0].stat.mode == '0700'
+      - >-
+        (not coding_hosted_prerequisites_journal_state.results[1].stat.exists and
+         not coding_hosted_prerequisites_require_installed) or
+        (coding_hosted_prerequisites_journal_state.results[1].stat.isdir | default(false) and
+         not coding_hosted_prerequisites_journal_state.results[1].stat.islnk and
+         coding_hosted_prerequisites_journal_state.results[1].stat.uid == coding_hosted_prerequisites_worker_uid and
+         coding_hosted_prerequisites_journal_state.results[1].stat.gid == coding_hosted_prerequisites_worker_gid and
+         coding_hosted_prerequisites_journal_state.results[1].stat.mode == '0700')
+    fail_msg: >-
+      {{ 'The launch journal directory is not a worker-owned 0700 directory.'
+      if coding_hosted_prerequisites_require_installed else
+      'The worker home is not a private worker-owned directory, or the launch journal path is not a worker-owned 0700 directory; reconcile it explicitly first.' }}
+    quiet: true

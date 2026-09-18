@@ -110,6 +110,13 @@ jobs:
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i localhost, tests/coding-hosted-connectivity.yml
 
+      # Kept as its own step, away from the shared playbook loop, so parallel
+      # native-host changes append to that loop without conflicting here.
+      - name: Prove native host prerequisites stay disabled and their guard refuses bad inputs
+        run: |
+          uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml playbooks/gcp-coding-hosted-prerequisites.yml
+          uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/coding-hosted-prerequisites.yml
+
       - name: Prove native RSA custody bootstrap stays disabled by default
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check
