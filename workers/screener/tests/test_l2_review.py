@@ -2254,7 +2254,6 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
         "allow_fallbacks": True,
         "sort": "throughput",
         "require_parameters": False,
-        "zdr": True,
         "data_collection": "deny",
     }
     assert "reasoning" not in requests[0]

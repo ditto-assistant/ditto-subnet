@@ -3760,7 +3760,6 @@ class TerraSolSourceReviewAgent:
                 "allow_fallbacks": True,
                 "sort": "throughput",
                 "require_parameters": provider is not None,
-                "zdr": True,
                 "data_collection": "deny",
             }
             if fallback_models:

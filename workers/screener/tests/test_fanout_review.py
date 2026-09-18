@@ -661,7 +661,7 @@ async def test_real_reviewer_uses_inert_tools_policy_and_metering(tmp_path):
     assert all(
         FOCI["answer_authority"] in row["messages"][0]["content"] for row in seen
     )
-    assert seen[0]["provider"]["zdr"] is True
+    assert "zdr" not in seen[0]["provider"]
     assert seen[0]["provider"]["data_collection"] == "deny"
     assert "call_model" in json.dumps(seen[1]["messages"])
     assert reviewer.opened_paths == {"src/main.rs"}
