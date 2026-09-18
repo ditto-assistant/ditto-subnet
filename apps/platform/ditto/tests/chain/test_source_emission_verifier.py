@@ -120,7 +120,9 @@ def test_inactive_nonpermitted_stake_does_not_vote() -> None:
 
 
 def event(
-    name: str, values: list[Any] | tuple[Any, ...], phase: str = "Initialization"
+    name: str,
+    values: list[Any] | tuple[Any, ...] | dict[str, Any],
+    phase: str = "Initialization",
 ) -> dict:
     return {
         "module_id": "SubtensorModule",
@@ -453,3 +455,35 @@ async def test_unavailable_historical_commit_proof_retries_archive(
         substrate.get_block_header.return_value = {"header": {"number": 99}}
     with pytest.raises(ChainConnectionError):
         await verify_finalized_weight_commit(substrate, claim)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        "late_reveal",
+        "late_write",
+        "extrinsic",
+        "duplicate_payout",
+        "ambiguous_commit",
+    ],
+)
+async def test_payout_accepts_only_proven_initialization_order(
+    chain: tuple, failure: str | None
+) -> None:
+    substrate, state = chain
+    state["step"] = 100
+    payout = event("IncentiveAlphaEmittedToMiners", {"netuid": 118, "emissions": []})
+    state["events"].append(payout)
+    if failure == "late_reveal":
+        state["events"][-2:] = state["events"][-2:][::-1]
+    elif failure == "late_write":
+        state["events"] = [payout] + state["events"][:-1]
+    elif failure == "extrinsic":
+        state["events"][0]["phase"] = "ApplyExtrinsic"
+    elif failure == "duplicate_payout":
+        state["events"].append(payout)
+    elif failure == "ambiguous_commit":
+        state["pending"][0][1].append(("v1", 81, "0x040506", 101))
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.payout_initialization_reveals is (failure is None)

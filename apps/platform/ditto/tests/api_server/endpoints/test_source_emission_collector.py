@@ -525,3 +525,41 @@ async def test_missing_commit_archive_data_retries_provider_and_resolves_payout(
             )
             == 1
         )
+
+
+async def test_same_block_reveal_pays_exact_submission_before_new_same_hotkey_claim(
+    app, client, session_maker, monkeypatch
+):
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        "ditto.chain.source_emission_verifier.verify_finalized_weight_commit",
+        AsyncMock(),
+    )
+    a, b = await _prepare(app, session_maker)
+    for raw in (a, b):
+        assert (await _post(client, _signed(raw))).status_code == 200
+    collector = _collector(app, session_maker)
+    aid, bid = (UUID(item["provenance"]["champion_agent_id"]) for item in (a, b))
+    for raw, block in ((a, 200), (b, 201)):
+        observed = replace(
+            _observed(raw, block, reveal=True, payout=True),
+            payout_initialization_reveals=True,
+        )
+        await collector.process_block(observed, _payout(raw, block))
+        assert await collector.resolve_pending_payouts(SimpleNamespace()) == 1
+        async with session_maker() as session:
+            reveals = await get_king_reveal(session, agent_ids=[aid, bid])
+            assert reveals[aid].emission_confirmed_at == datetime.fromtimestamp(
+                _payout(a, 200).block_timestamp, UTC
+            )
+            if block == 200:
+                assert reveals[bid].emission_confirmed_at is None
+            else:
+                assert reveals[bid].emission_confirmed_at == datetime.fromtimestamp(
+                    _payout(b, 201).block_timestamp, UTC
+                )
+    assert (
+        await _collector(app, session_maker).resolve_pending_payouts(SimpleNamespace())
+        == 0
+    )

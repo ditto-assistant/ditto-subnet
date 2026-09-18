@@ -67,6 +67,7 @@ class SourceEmissionBlock:
     runtime_code_hash: str
     reset_reason: str | None = None
     invalidated_hotkeys: tuple[str, ...] = ()
+    payout_initialization_reveals: bool = False
 
 
 @dataclass(frozen=True)
@@ -214,10 +215,10 @@ async def read_source_emission_block(
 ) -> SourceEmissionBlock:
     """Read a finalized block; unsupported runtime/shape raises, never advances.
 
-    A payout whose WeightsSet occurs in the same block must not be attributed
-    using the returned post-block updates. Process payout first against the
-    prior durable bindings and reject if any target-subnet WeightsSet exists;
-    only then apply updates for future payouts.
+    Audited block_step reveals matured commits before running coinbase. A
+    same-block payout may consume post-block vectors only when every write has
+    one attributable initialization reveal before the unique emission event.
+    All other same-block writes remain ambiguous and fail closed.
     """
     if block < 1:
         raise ValueError("positive block required")
@@ -370,7 +371,10 @@ async def read_source_emission_block(
         raise ValueError("invalid block events")
     writes: dict[int, list[str]] = {}
     reveals: dict[str, list[str]] = {}
-    for event in events:
+    write_positions: dict[int, list[int]] = {}
+    reveal_positions: dict[str, list[int]] = {}
+    emission_positions: list[int] = []
+    for position, event in enumerate(events):
         if not isinstance(event, dict):
             raise ValueError("invalid event")
         if event.get("module_id") != "SubtensorModule":
@@ -383,12 +387,20 @@ async def read_source_emission_block(
                 if uid not in keys:
                     raise ValueError("unknown updated validator")
                 writes.setdefault(uid, []).append(str(event.get("phase")))
+                write_positions.setdefault(uid, []).append(position)
         elif name == "TimelockedWeightsRevealed":
             subnet, who = _attrs(event, ("netuid", "who"))
             if _uint(subnet) == netuid:
                 if who not in keys.values():
                     raise ValueError("unknown revealed validator")
                 reveals.setdefault(who, []).append(str(event.get("phase")))
+                reveal_positions.setdefault(who, []).append(position)
+        elif name == "IncentiveAlphaEmittedToMiners":
+            subnet, _ = _attrs(event, ("netuid", "emissions"))
+            if _uint(subnet) == netuid:
+                emission_positions.append(
+                    position if event.get("phase") == "Initialization" else -1
+                )
     if any(who not in {keys[uid] for uid in writes} for who in reveals):
         raise ValueError("successful reveal without weight write")
     pending: dict[str, list[tuple[str, int, int]]] = {}
@@ -453,6 +465,19 @@ async def read_source_emission_block(
         )
         updates.append(RevealedVectorUpdate(who, vector_digest(pairs), *proof))
 
+    payout_initialization_reveals = bool(
+        is_payout
+        and updates
+        and len(emission_positions) == 1
+        and all(change.commit_ciphertext_hash is not None for change in updates)
+        and all(
+            write_positions[uid][0]
+            < reveal_positions[keys[uid]][0]
+            < emission_positions[0]
+            for uid in writes
+        )
+    )
+
     voting = []
     if is_payout:
         scores = await read("StakeWeight", block_hash, [netuid])
@@ -484,6 +509,7 @@ async def read_source_emission_block(
         tuple(voting),
         tuple(digests),
         runtime_hashes[1],
+        payout_initialization_reveals=payout_initialization_reveals,
     )
 
 

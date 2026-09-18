@@ -195,7 +195,7 @@ class SourceEmissionCollector:
             payout_blocked_reason = None
             if (
                 observed.is_payout
-                and not observed.updates
+                and (not observed.updates or observed.payout_initialization_reveals)
                 and not observed.reset_reason
             ):
                 from ditto.chain.errors import ChainEmissionReceiptUnavailable
@@ -205,6 +205,7 @@ class SourceEmissionCollector:
                         self.netuid,
                         payout_block=block,
                         target_hotkeys=frozenset(),
+                        allow_initialization_reveals=observed.payout_initialization_reveals,
                         substrate=substrate,
                     )
                 except ChainEmissionReceiptUnavailable as error:
@@ -240,6 +241,36 @@ class SourceEmissionCollector:
                 or cursor.block_hash != observed.parent_hash
             ):
                 raise ValueError("finalized block does not continue the durable cursor")
+
+            async def apply_updates() -> None:
+                for change in observed.updates:
+                    await upsert_source_emission_vector_binding(
+                        session,
+                        netuid=self.netuid,
+                        validator_hotkey=change.validator_hotkey,
+                        receipt_digest=None,
+                        block=observed.block,
+                        reveal_block_hash=observed.block_hash,
+                        vector_digest=change.vector_digest,
+                        evidence={
+                            "commit_ciphertext_hash": change.commit_ciphertext_hash,
+                            "commit_block": change.commit_block,
+                            "reveal_round": change.reveal_round,
+                            "payout_initialization_reveal": (
+                                observed.payout_initialization_reveals
+                            ),
+                        },
+                    )
+
+            before_payout = (
+                observed.is_payout
+                and observed.payout_initialization_reveals
+                and not observed.reset_reason
+            )
+            if before_payout:
+                await apply_updates()
+            # Read only after the upserts so SQLAlchemy cannot reuse the old
+            # identity-map values for an equal-vector new submission.
             bindings = await list_source_emission_vector_bindings(
                 session, netuid=self.netuid
             )
@@ -247,7 +278,11 @@ class SourceEmissionCollector:
                 terminal_reason = (
                     payout_blocked_reason
                     or observed.reset_reason
-                    or ("payout_has_vector_writes" if observed.updates else None)
+                    or (
+                        "payout_has_vector_writes"
+                        if observed.updates and not before_payout
+                        else None
+                    )
                 )
                 if payout is None and terminal_reason is None:
                     raise ValueError("payout receipt unavailable")
@@ -309,22 +344,8 @@ class SourceEmissionCollector:
                     row.block = observed.block
                     row.reveal_block_hash = observed.block_hash
                     row.evidence = {"blocked_reason": observed.reset_reason}
-            else:
-                for change in observed.updates:
-                    await upsert_source_emission_vector_binding(
-                        session,
-                        netuid=self.netuid,
-                        validator_hotkey=change.validator_hotkey,
-                        receipt_digest=None,
-                        block=observed.block,
-                        reveal_block_hash=observed.block_hash,
-                        vector_digest=change.vector_digest,
-                        evidence={
-                            "commit_ciphertext_hash": change.commit_ciphertext_hash,
-                            "commit_block": change.commit_block,
-                            "reveal_round": change.reveal_round,
-                        },
-                    )
+            elif not before_payout:
+                await apply_updates()
             cursor.block = observed.block
             cursor.block_hash = observed.block_hash
             cursor.updated_at = now
@@ -364,7 +385,14 @@ class SourceEmissionCollector:
             or attempt.reveal_round != evidence.get("reveal_round")
             or vector_digest(attempt.normalized_weights) != binding["vector_digest"]
             or attempt.commit_block >= binding["block"]
-            or binding["block"] >= payout.block
+            or binding["block"] > payout.block
+            or (
+                binding["block"] == payout.block
+                and not (
+                    evidence.get("payout_initialization_reveal") is True
+                    and binding["reveal_block_hash"] == payout.block_hash
+                )
+            )
             or pin.champion_agent_id != receipt.provenance.champion_agent_id
         ):
             return None

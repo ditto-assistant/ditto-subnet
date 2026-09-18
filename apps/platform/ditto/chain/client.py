@@ -524,6 +524,7 @@ class ChainClient:
         *,
         target_hotkeys: frozenset[str] | None = None,
         payout_block: int | None = None,
+        allow_initialization_reveals: bool = False,
         substrate: Any | None = None,
     ) -> ChainMinerEmissionReceipt:
         """Read one finalized successful miner distribution, or fail closed.
@@ -535,9 +536,11 @@ class ChainClient:
         credited to stake or collateral (including an auto-stake destination).
 
         The event is emitted during initialization. Read identities and weights
-        at its parent block and reject matrix changes during the payout block:
-        reveals during initialization and later extrinsics otherwise make the
-        consumed matrix ambiguous. No unsupported event/schema is guessed.
+        at its parent block and reject matrix changes by default. The collector
+        can opt into independently verified initialization reveals: the audited
+        reader must prove every write precedes the payout and is attributable.
+        Only those rows may differ, and their post-block vectors are consumed.
+        Later or unexplained writes remain ambiguous and are never accepted.
         ``target_hotkeys`` bounds historical timestamp reads to validators whose
         vectors affect pending submissions; all vectors/update blocks remain.
         """
@@ -662,6 +665,34 @@ class ChainClient:
                     hotkeys[uid] = hotkey
                 if len(set(hotkeys.values())) != len(hotkeys):
                     raise ValueError("duplicate registered hotkey")
+                reveal_uids: set[int] = set()
+                if allow_initialization_reveals:
+                    from ditto.chain.source_emission_verifier import (
+                        read_source_emission_block,
+                    )
+
+                    source_block = await read_source_emission_block(
+                        substrate, netuid=netuid, block=block
+                    )
+                    if (
+                        source_block.block_hash != block_hash
+                        or source_block.reset_reason
+                        or not source_block.payout_initialization_reveals
+                    ):
+                        raise ChainEmissionReceiptUnavailable(
+                            "initialization reveals are not proven before payout"
+                        )
+                    revealed_hotkeys = {
+                        item.validator_hotkey for item in source_block.updates
+                    }
+                    reveal_uids = {
+                        uid
+                        for uid, hotkey in hotkeys.items()
+                        if hotkey in revealed_hotkeys
+                    }
+                    if len(reveal_uids) != len(source_block.updates):
+                        raise ValueError("incomplete revealed validator mapping")
+
                 raw_weights = await mapping(_WEIGHTS_STORAGE, parent_hash)
                 new_weights = await mapping(_WEIGHTS_STORAGE, block_hash)
                 if raw_weights != new_weights:
@@ -688,9 +719,17 @@ class ChainClient:
                                     raise ValueError(
                                         "invalid distribution weight value"
                                     )
-                    raise ChainEmissionReceiptUnavailable(
-                        "weights changed during distribution block"
-                    )
+                    old_rows, new_rows = dict(raw_weights), dict(new_weights)
+                    if any(
+                        old_rows.get(uid) != new_rows.get(uid)
+                        and uid not in reveal_uids
+                        for uid in old_rows.keys() | new_rows.keys()
+                    ):
+                        raise ChainEmissionReceiptUnavailable(
+                            "weights changed during distribution block"
+                        )
+                if reveal_uids:
+                    raw_weights = new_weights
                 updates = await read("LastUpdate", parent_hash, [netuid])
                 new_updates = await read("LastUpdate", block_hash, [netuid])
                 if any(
@@ -703,10 +742,17 @@ class ChainClient:
                     for values in (updates, new_updates)
                 ):
                     raise ValueError("invalid validator update arrays")
-                if updates != new_updates:
+                if any(
+                    old != new and uid not in reveal_uids
+                    for uid, (old, new) in enumerate(
+                        zip(updates, new_updates, strict=True)
+                    )
+                ):
                     raise ChainEmissionReceiptUnavailable(
                         "weight updates changed during distribution block"
                     )
+                if reveal_uids:
+                    updates = new_updates
                 events = _unwrap_substrate_value(
                     await substrate.query(
                         module=_SYSTEM_MODULE,
@@ -780,7 +826,9 @@ class ChainClient:
                     if not weights:
                         continue
                     update = _receipt_uint(updates[uid])
-                    if not 0 < update < block:
+                    if not (
+                        0 < update < block or update == block and uid in reveal_uids
+                    ):
                         raise ValueError("invalid validator update block")
                     vectors.append(ChainWeightVector(uid, hotkeys[uid], tuple(weights)))
                     last_updates.append((uid, update))

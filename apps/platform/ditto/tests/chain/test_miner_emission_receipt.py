@@ -325,3 +325,84 @@ async def test_missing_post_weight_matrix_remains_retryable(
     receipt_chain["post_weights"] = []
     with pytest.raises(ChainConnectionError):
         await client().get_miner_emission_receipt(118, payout_block=1000)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        "late_write",
+        "unexplained_weights",
+        "unexplained_update",
+        "unknown_runtime",
+    ],
+)
+async def test_initialization_reveal_receipt_uses_proven_consumed_vector(
+    receipt_chain, install_substrate_module, failure
+):
+    from ditto.chain.source_emission_verifier import AUDITED_RUNTIME_CODE_HASHES
+
+    state, substrate = receipt_chain, install_substrate_module
+    query, mapping = substrate.query.side_effect, substrate.query_map.side_effect
+    state["post_weights"] = [(2, [(1, 65535)])]
+    state["post_updates"] = [0, 0, 1000, 0]
+    state["events"][:0] = [
+        {
+            "module_id": "SubtensorModule",
+            "event_id": name,
+            "phase": "Initialization",
+            "event": {"attributes": attrs},
+        }
+        for name, attrs in [
+            ("WeightsSet", (118, 2)),
+            ("TimelockedWeightsRevealed", (118, "validator")),
+        ]
+    ]
+
+    async def enriched_query(**kw):
+        extras = {
+            "CommitRevealWeightsEnabled": True,
+            "StakeWeight": [0, 0, 65535, 0],
+            "Active": [False, False, True, False],
+            "ValidatorPermit": [False, False, True, False],
+        }
+        if kw["storage_function"] in extras:
+            return extras[kw["storage_function"]]
+        return await query(**kw)
+
+    async def enriched_mapping(**kw):
+        if kw["storage_function"] == "TimelockedWeightCommits":
+
+            async def rows():
+                yield 1, [("validator", 900, "0x010203", 123)]
+
+            return rows()
+        return await mapping(**kw)
+
+    substrate.query.side_effect = enriched_query
+    substrate.query_map.side_effect = enriched_mapping
+    substrate.rpc_request.return_value = {
+        "result": sorted(AUDITED_RUNTIME_CODE_HASHES)[0]
+    }
+    if failure == "late_write":
+        state["events"].append(state["events"].pop(0))
+    elif failure == "unexplained_weights":
+        state["post_weights"].append((1, [(2, 1)]))
+    elif failure == "unexplained_update":
+        state["post_updates"][1] = 1000
+    elif failure == "unknown_runtime":
+        substrate.rpc_request.return_value = {"result": "0xunknown"}
+    if failure:
+        with pytest.raises((ChainEmissionReceiptUnavailable, ChainConnectionError)):
+            await client().get_miner_emission_receipt(
+                118, allow_initialization_reveals=True
+            )
+    else:
+        result = await client().get_miner_emission_receipt(
+            118, allow_initialization_reveals=True
+        )
+        assert result.validator_last_updates == ((2, 1000),)
+        assert result.validator_last_update_timestamps == ((2, 1000),)
+        assert [(w.hotkey, w.value) for w in result.vectors[0].weights] == [
+            ("miner", 65535)
+        ]
