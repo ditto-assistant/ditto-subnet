@@ -335,3 +335,69 @@ async def test_diagnostics_distinguish_failure_stages_without_secret_material():
     restarted = WeightReceiptRelay(setter, platform, "validator", 118)
     assert restarted.diagnostics.submission_status == "not_attempted"
     assert restarted.diagnostics.recovery_observed_at is None
+
+
+async def test_diagnostic_reporting_failure_does_not_block_receipt_acknowledgement():
+    claim = finalized()
+    setter = SimpleNamespace(
+        list_weight_receipts=AsyncMock(
+            return_value={"receipts": [envelope(claim)], "next_after_task_id": None}
+        ),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(
+        submit_weight_receipt=AsyncMock(
+            return_value=SubmitWeightReceiptResponse(
+                request_id=claim.request_id,
+                attempt_id=claim.attempt.attempt_id,
+                receipt_digest=weight_receipt_digest(claim),
+            )
+        ),
+        submit_receipt_diagnostics=AsyncMock(side_effect=RuntimeError("unavailable")),
+    )
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    await relay.recover()
+    setter.acknowledge_weight_receipt.assert_awaited_once()
+    platform.submit_receipt_diagnostics.assert_awaited_once()
+    sent = platform.submit_receipt_diagnostics.call_args.args[0]
+    assert sent.page_forwarded == 1
+    assert sent.recovery_status == "page_complete"
+
+
+@pytest.mark.parametrize("status", [200, 404])
+async def test_diagnostic_transport_is_signed_and_allows_old_platform(status):
+    from ditto.api_models.receipt_diagnostics import (
+        ReceiptDiagnosticObservation,
+        ReceiptDiagnosticReport,
+        diagnostic_signing_message,
+    )
+
+    signed = []
+    signer = SimpleNamespace(sign=lambda message: signed.append(message) or bytes(64))
+
+    def handler(request):
+        body = json.loads(request.content)
+        report = ReceiptDiagnosticReport.model_validate(body["report"])
+        assert signed == [diagnostic_signing_message(report)]
+        assert report.validator_hotkey == "validator"
+        assert report.netuid == 118
+        assert body["signature"] == "0x" + "00" * 64
+        assert request.url.path == "/api/v1/validator/receipt-diagnostics"
+        return httpx.Response(status, json={"accepted": True})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(
+            SimpleNamespace(
+                platform_api_url="https://platform.invalid",
+                validator_hotkey="validator",
+                netuid=118,
+            ),
+            http,
+            signer,
+        )
+        await platform.submit_receipt_diagnostics(
+            ReceiptDiagnosticObservation(
+                submission_status="uncertain",
+                recovery_status="reading_pylon_failed",
+            )
+        )

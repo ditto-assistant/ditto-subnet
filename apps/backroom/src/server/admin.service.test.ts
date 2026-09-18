@@ -1154,7 +1154,12 @@ describe('artifact release administration', () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const release_gate = {
       version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
-      receipt_diagnostics: [{ report: { validator_hotkey: 'validator', observation: { recovery_status: 'forwarding_platform_failed' } }, stale: false }],
+      receipt_diagnostics: [{ report: {
+        schema_version: 1, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
+        observation: { submission_status: 'accepted', submission_observed_at: 90,
+          recovery_status: 'forwarding_platform_failed', recovery_observed_at: 100,
+          page_receipts: 1, page_finalized: 1, page_forwarded: 0, page_deferred: 1 },
+      }, received_at: '2026-09-18T00:00:00Z', stale: false }],
       receipt_diagnostics_has_more: false,
       pending_kings: 2,
       confirmed_kings: 1,

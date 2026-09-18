@@ -109,9 +109,6 @@ class WeightReceiptRelay:
         read = getattr(self.setter, "list_weight_receipts", None)
         report = getattr(self.platform, "submit_weight_receipt", None)
         acknowledge = getattr(self.setter, "acknowledge_weight_receipt", None)
-        if not callable(read) or not callable(report) or not callable(acknowledge):
-            self._recovery_observed("unsupported")
-            return
         self._recovery_observed(
             "reading_pylon",
             page_receipts=0,
@@ -119,6 +116,9 @@ class WeightReceiptRelay:
             page_forwarded=0,
             page_deferred=0,
         )
+        if not callable(read) or not callable(report) or not callable(acknowledge):
+            self._recovery_observed("unsupported")
+            return
         stage = "reading_pylon"
         deferred_stage: str | None = None
         try:
