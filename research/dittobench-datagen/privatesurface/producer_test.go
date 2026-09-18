@@ -295,6 +295,26 @@ func TestGlobalAnswerIntroductionRetriesWithoutDisclosingHiddenValues(t *testing
 	}
 }
 
+func TestCheckedProbeRejectsHiddenAnswerBeforeJudge(t *testing.T) {
+	calls := 0
+	c := fakeClient(t, func(n int, request map[string]any) (int, any) {
+		calls++
+		return 200, completion(`{"text":"ZEBRA is the code."}`)
+	})
+	base := gen.DatasetArtifact{BenchVersion: 13, SurfaceSalt: 1, MemoryCases: []gen.ArtifactCase{{MemoryCase: protocol.MemoryCase{ID: "q", Question: "Find my code.", ExpectedAnswer: "ZEBRA"}}}}
+	check, err := gen.PrivateCandidateCheck(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := gen.PrivateSurfaceRequest{Location: "q", Text: "Find my code."}
+	if _, _, err := c.ProbeChecked(context.Background(), req, nil); err == nil || calls != 0 {
+		t.Fatal("unchecked probe called provider")
+	}
+	if _, _, err := c.ProbeChecked(context.Background(), req, check); err != errProtected || calls != 1 {
+		t.Fatal("probe omitted global check or called judge on rejected text")
+	}
+}
+
 func TestTransientProviderRetriesShareTheCandidateBudget(t *testing.T) {
 	for _, status := range []int{429, 502, 503, 504, 401, 404} {
 		t.Run(fmt.Sprint(status), func(t *testing.T) {

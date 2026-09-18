@@ -107,6 +107,10 @@ func run() error {
 			return err
 		}
 		count := min(*probe, len(requests))
+		check, err := gen.PrivateCandidateCheck(base, protectedNoise)
+		if err != nil {
+			return err
+		}
 		type sample struct {
 			Index   int                            `json:"index"`
 			Before  string                         `json:"before"`
@@ -118,7 +122,7 @@ func run() error {
 		accepted := 0
 		for i := 0; i < count; i++ {
 			index := i * len(requests) / count
-			after, receipt, err := client.ProbeOne(ctx, requests[index])
+			after, receipt, err := client.ProbeChecked(ctx, requests[index], check)
 			row := sample{Index: index, Before: requests[index].Text, After: after, Receipt: &receipt}
 			if err != nil {
 				row.Error = err.Error()

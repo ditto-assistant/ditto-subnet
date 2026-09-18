@@ -69,7 +69,7 @@ func (p Profile) Digest() (string, error) {
 			return "", errors.New("private producer: invalid reasoning profile")
 		}
 	}
-	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "five-total-candidates-including-transient-and-truncation-retries-backoff-1s", "exact-byte-identity-validation-v1", "schema-bound-final-preservation-v1", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
+	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v2-word-boundaries", "per-candidate-global-protection-v2-word-boundaries", "five-total-candidates-including-transient-and-truncation-retries-backoff-1s", "exact-byte-identity-validation-v1", "schema-bound-final-preservation-v1", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
 	return digest(raw), nil
 }
 
@@ -260,6 +260,16 @@ func (c *Client) RewriteOne(ctx context.Context, req gen.PrivateSurfaceRequest) 
 // Non-nil error always means rejected; callers must never issue these bytes.
 func (c *Client) ProbeOne(ctx context.Context, req gen.PrivateSurfaceRequest) (string, SurfaceReceipt, error) {
 	return c.probeOne(ctx, req, 0, nil)
+}
+
+// ProbeChecked runs the same first-candidate checks as production, including
+// the full artifact's locally retained protected values. It does not retry or
+// approve an artifact. A sample without this checker is not a production probe.
+func (c *Client) ProbeChecked(ctx context.Context, req gen.PrivateSurfaceRequest, check func(string, string) error) (string, SurfaceReceipt, error) {
+	if check == nil {
+		return "", SurfaceReceipt{}, errors.New("private producer: candidate checker required")
+	}
+	return c.probeOne(ctx, req, 0, check)
 }
 
 func (c *Client) probeOne(ctx context.Context, req gen.PrivateSurfaceRequest, attempt int, check func(string, string) error) (string, SurfaceReceipt, error) {

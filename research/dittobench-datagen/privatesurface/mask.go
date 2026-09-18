@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/ditto-assistant/dittobench-datagen/internal/protectedtext"
 )
 
 // Masking protects exact values and intentionally corrupted tokens from a
@@ -18,7 +20,7 @@ func maskProtected(source string, protected []string) (string, []string, func(st
 	seen := map[string]bool{}
 	var values []string
 	for _, value := range protected {
-		if value != "" && !seen[value] && strings.Contains(source, value) {
+		if value != "" && !seen[value] && protectedtext.Count(source, value) > 0 {
 			values = append(values, value)
 			seen[value] = true
 		}
@@ -29,14 +31,13 @@ func maskProtected(source string, protected []string) (string, []string, func(st
 		}
 		return values[i] < values[j]
 	})
-	var pairs, reverse, markers []string
+	var reverse, markers []string
 	for i, value := range values {
 		marker := fmt.Sprintf("%s%d⟧", prefix, i)
-		pairs = append(pairs, value, marker)
 		reverse = append(reverse, marker, value)
 		markers = append(markers, marker)
 	}
-	masked := strings.NewReplacer(pairs...).Replace(source)
+	masked := protectedtext.Replace(source, values, markers)
 	used := make([]string, 0, len(markers))
 	for _, marker := range markers {
 		if strings.Contains(masked, marker) {
@@ -54,7 +55,7 @@ func maskProtected(source string, protected []string) (string, []string, func(st
 			return "", errors.New("private producer: unknown marker introduced")
 		}
 		for _, value := range values {
-			if strings.Count(after, value) != strings.Count(source, value) {
+			if protectedtext.Count(after, value) != protectedtext.Count(source, value) {
 				return "", errors.New("private producer: protected value changed")
 			}
 		}

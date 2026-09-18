@@ -24,3 +24,18 @@ func TestMaskRestoresExactOverlappingValuesAndTypos(t *testing.T) {
 		}
 	}
 }
+
+func TestMaskDoesNotSplitWordsAndRejectsAttachedMarker(t *testing.T) {
+	masked, markers, restore, err := maskProtected("Richard recorded 30 apples.", []string{"Richard", "or", "30"})
+	if err != nil || len(markers) != 2 || !strings.Contains(masked, "recorded") {
+		t.Fatal("masked unrelated word fragment")
+	}
+	if _, err := restore(strings.Replace(masked, "recorded", "reported", 1)); err != nil {
+		t.Fatal("safe surrounding rewrite rejected")
+	}
+	for _, marker := range markers {
+		if _, err := restore(strings.Replace(masked, marker, marker+"suffix", 1)); err == nil {
+			t.Fatal("attached marker evaded exact literal preservation")
+		}
+	}
+}

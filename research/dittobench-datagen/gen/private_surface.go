@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/ditto-assistant/dittobench-datagen/internal/protectedtext"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -58,7 +59,7 @@ func checkPrivateCandidate(before, after string, protected []string) error {
 		return errors.New("invalid transformed text")
 	}
 	for _, value := range protected {
-		if strings.Count(before, value) != strings.Count(after, value) {
+		if protectedtext.Count(before, value) != protectedtext.Count(after, value) {
 			return errors.New("protected value changed or introduced")
 		}
 	}
@@ -111,7 +112,7 @@ func ApplyPrivateSurface(ctx context.Context, input DatasetArtifact, transformer
 		}
 		request := PrivateSurfaceRequest{Location: location, Text: before}
 		for _, value := range protected {
-			if strings.Contains(before, value) {
+			if protectedtext.Count(before, value) > 0 {
 				request.Protected = append(request.Protected, value)
 			}
 		}
@@ -171,7 +172,7 @@ func PrivateSurfaceRequests(input DatasetArtifact, additionalProtected ...[]stri
 		seen[location] = *text
 		request := PrivateSurfaceRequest{Location: location, Text: *text}
 		for _, value := range protected {
-			if strings.Contains(*text, value) {
+			if protectedtext.Count(*text, value) > 0 {
 				request.Protected = append(request.Protected, value)
 			}
 		}
