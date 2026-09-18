@@ -89,7 +89,10 @@ async def consume(config: ScreenerConfig, platform: PlatformClient) -> bool:
         limits = Limits(total_seconds=min(3600, remaining))
         async with (
             httpx.AsyncClient(
-                timeout=120, trust_env=False, follow_redirects=False
+                timeout=120,
+                trust_env=False,
+                follow_redirects=False,
+                transport=runtime.transport(),
             ) as harness_client,
             httpx.AsyncClient(
                 timeout=120,

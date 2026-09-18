@@ -53,6 +53,9 @@ async def test_failed_delivery_keeps_private_evidence_and_cannot_rebill_same_cla
         async def start(self):
             return "http://127.0.0.1:8080"
 
+        def transport(self):
+            return None
+
         async def stop(self):
             return HarnessUsage(
                 profile="conversation-openrouter-oss20b-pplx768-v1",

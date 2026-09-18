@@ -4,7 +4,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from ditto_screener.conversation_relay import BUDGET, EMBED_MODEL, MODEL, Relay
+from ditto_screener.conversation_relay import (
+    BUDGET,
+    EMBED_MODEL,
+    MODEL,
+    Relay,
+    harness_request,
+)
 
 
 def chat(**kwargs):
@@ -118,3 +124,37 @@ def test_byok_zero_router_fee_retains_provider_price_bound(tmp_path, monkeypatch
     relay.post("/v1/chat/completions", chat())
     assert relay.spent == 60 and relay.cost_is_upper_bound
     assert not relay.unmetered and not relay.failed
+
+
+def test_harness_ingress_is_fixed_target_and_response_bounded(monkeypatch):
+    requests = []
+
+    class Opener:
+        def open(self, request, *, timeout):
+            requests.append(request)
+            assert timeout == 110
+            response = io.BytesIO(b'{"pairs":1}')
+            response.status = 200
+            return response
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: Opener())
+    assert harness_request("/seed", b'{"pairs":[]}') == (200, b'{"pairs":1}')
+    assert requests[0].full_url == "http://agent:8080/seed"
+    assert set(requests[0].headers) == {"Content-type"}
+    for path, body in [
+        ("/v1/chat/completions", b"{}"),
+        ("http://evil", None),
+        ("/health?url=evil", None),
+        ("/run", b"x" * 131073),
+    ]:
+        with pytest.raises(ValueError):
+            harness_request(path, body)
+    assert len(requests) == 1
+
+    class LargeOpener:
+        def open(self, *_args, **_kwargs):
+            return io.BytesIO(b"x" * 64001)
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: LargeOpener())
+    with pytest.raises(ValueError, match="oversized"):
+        harness_request("/health", None)

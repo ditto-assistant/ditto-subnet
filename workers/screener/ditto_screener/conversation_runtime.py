@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import json
@@ -41,7 +42,11 @@ class ConversationRuntime:
         self.state: Path | None = None
 
     async def docker(
-        self, *args: str, timeout: float = 60, provider: bool = False
+        self,
+        *args: str,
+        timeout: float = 60,
+        provider: bool = False,
+        input_data: bytes | None = None,
     ) -> str:
         env = dict(os.environ)
         if self.config.docker_host:
@@ -53,12 +58,13 @@ class ConversationRuntime:
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
+            stdin=asyncio.subprocess.PIPE if input_data is not None else None,
             env=env,
         )
         try:
             async with asyncio.timeout(timeout):
                 # CLI output is never miner stdout (logs are deliberately unused).
-                out, _ = await process.communicate()
+                out, _ = await process.communicate(input_data)
         except BaseException:
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
@@ -67,6 +73,9 @@ class ConversationRuntime:
         if process.returncode:
             raise AssessmentFailure("sandbox_operation_failed")
         return out.decode().strip()
+
+    def transport(self, *, timeout: int = 110) -> httpx.AsyncBaseTransport:
+        return HarnessTransport(self, timeout=timeout)
 
     async def preflight(self) -> None:
         security = json.loads(
@@ -225,6 +234,8 @@ class ConversationRuntime:
             self.container,
             "--network",
             self.network,
+            "--network-alias",
+            "agent",
             *common,
             "--user",
             "65532:65532",
@@ -238,8 +249,6 @@ class ConversationRuntime:
             "256",
             "--tmpfs",
             "/tmp:rw,nosuid,nodev,size=1g",
-            "--publish",
-            "127.0.0.1::8080",
             "--add-host",
             f"openrouter.ai:{relay_ip}",
             "--mount",
@@ -248,19 +257,18 @@ class ConversationRuntime:
         for key, value in environment.items():
             args.extend(("--env", f"{key}={value}"))
         await self.docker(*args, self.image)
-        binding = await self.docker("port", self.container, "8080/tcp")
-        if (
-            not binding.startswith("127.0.0.1:")
-            or not binding.removeprefix("127.0.0.1:").isdigit()
-        ):
-            raise AssessmentFailure("sandbox_port_invalid")
-        url = "http://" + binding
-        async with httpx.AsyncClient(trust_env=False, timeout=2) as client:
+        # A logical loopback origin preserves the harness adapter's contract.
+        # Requests actually use the trusted sidecar's fixed-target stdio bridge;
+        # internal-only rootless networks cannot expose a usable host port.
+        url = "http://127.0.0.1"
+        async with httpx.AsyncClient(
+            trust_env=False, timeout=2, transport=self.transport(timeout=2)
+        ) as client:
             for _ in range(60):
                 try:
                     if (await client.get(url + "/health")).is_success:
                         return url
-                except httpx.HTTPError:
+                except (httpx.HTTPError, AssessmentFailure):
                     pass
                 await asyncio.sleep(1)
         raise AssessmentFailure("sandbox_health_timeout")
@@ -287,3 +295,43 @@ class ConversationRuntime:
         if self.state:
             shutil.rmtree(self.state, ignore_errors=True)
         return usage
+
+
+class HarnessTransport(httpx.AsyncBaseTransport):
+    def __init__(self, runtime: ConversationRuntime, *, timeout: int = 110):
+        self.runtime = runtime
+        self.timeout = timeout
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host != "127.0.0.1" or request.method not in {"GET", "POST"}:
+            raise AssessmentFailure("invalid_harness_transport_request")
+        body = await request.aread()
+        if len(body) > 131_072:
+            raise AssessmentFailure("harness_request_too_large")
+        envelope = json.dumps(
+            {
+                "path": request.url.raw_path.decode("ascii"),
+                "timeout": self.timeout,
+                "body": base64.b64encode(body).decode()
+                if request.method == "POST"
+                else None,
+            }
+        ).encode()
+        raw = await self.runtime.docker(
+            "exec",
+            "--interactive",
+            self.runtime.relay,
+            "python",
+            "/relay.py",
+            "harness",
+            input_data=envelope,
+            timeout=self.timeout + 5,
+        )
+        if len(raw) > 100_000:
+            raise AssessmentFailure("harness_transport_response_too_large")
+        result = json.loads(raw)
+        status = result["status"]
+        data = base64.b64decode(result["body"], validate=True)
+        if type(status) is not int or not 100 <= status <= 599 or len(data) > 64_000:
+            raise AssessmentFailure("invalid_harness_transport_response")
+        return httpx.Response(status, content=data, request=request)

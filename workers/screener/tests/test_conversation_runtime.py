@@ -71,6 +71,8 @@ async def test_verified_image_is_fresh_isolated_and_never_receives_provider_key(
             return json.dumps({runtime.network: {"IPAddress": "172.20.0.2"}})
         if args[0] == "port":
             return "127.0.0.1:18080"
+        if args[0] == "exec":
+            return json.dumps({"status": 200, "body": "e30="})
         return ""
 
     runtime.docker = docker
@@ -89,7 +91,9 @@ async def test_verified_image_is_fresh_isolated_and_never_receives_provider_key(
 
     monkeypatch.setattr(
         "ditto_screener.conversation_runtime.httpx.AsyncClient",
-        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+        lambda **kwargs: real_client(
+            **{"transport": httpx.MockTransport(handler), **kwargs}
+        ),
     )
     if tamper:
         with pytest.raises(AssessmentFailure, match="mismatch"):
@@ -99,11 +103,18 @@ async def test_verified_image_is_fresh_isolated_and_never_receives_provider_key(
         )
         await runtime.stop()
         return
-    assert await runtime.start() == "http://127.0.0.1:18080"
+    assert await runtime.start() == "http://127.0.0.1"
     miner = next(args for args, _ in calls if args[:2] == ("run", "--detach"))
     assert "--read-only" in miner and "--cap-drop" in miner
     assert miner[miner.index("--network") + 1] == runtime.network
     assert "--privileged" not in miner and "--network=host" not in miner
+    assert "--publish" not in miner
+    assert miner[miner.index("--network-alias") + 1] == "agent"
+    relay = next(args for args, _ in calls if args[0] == "create")
+    assert "--publish" not in relay
+    assert any(
+        args[:3] == ("exec", "--interactive", runtime.relay) for args, _ in calls
+    )
     assert "provider-only-secret" not in str(calls)
     assert not any(
         "leaf.key" in arg or "relay.py" in arg or "usage.json" in arg for arg in miner

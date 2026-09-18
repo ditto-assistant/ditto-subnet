@@ -7,15 +7,19 @@ model, provider credential, budget, or administrative route.
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
+import signal
 import ssl
+import sys
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 
 MODEL = "openai/gpt-oss-20b"
 EMBED_MODEL = "perplexity/pplx-embed-v1-0.6b"
@@ -323,6 +327,48 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def harness_request(
+    path: str, body: bytes | None, *, timeout: int = 110
+) -> tuple[int, bytes]:
+    """Fixed-target host ingress; never forwards a caller's headers or origin."""
+    if (body is None and path != "/health") or (
+        body is not None and (path not in {"/run", "/seed"} or len(body) > MAX_BODY)
+    ):
+        raise ValueError("unsupported harness route")
+    if type(timeout) is not int or not 1 <= timeout <= 110:
+        raise ValueError("invalid harness timeout")
+    request = urllib.request.Request(
+        "http://agent:8080" + path,
+        data=body,
+        headers={"Content-Type": "application/json"},
+        method="GET" if body is None else "POST",
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    try:
+        response = opener.open(request, timeout=timeout)
+    except HTTPError as exc:
+        response = exc
+    with response:
+        data = response.read(64_001)
+        if len(data) > 64_000:
+            raise ValueError("oversized harness response")
+        return response.status, data
+
+
+def harness_stdio() -> None:
+    """Trusted Docker-exec transport; no published host port or caller headers."""
+    raw = sys.stdin.buffer.read(200_001)
+    if len(raw) > 200_000:
+        raise ValueError("oversized harness envelope")
+    envelope = json.loads(raw)
+    body = envelope["body"]
+    decoded = base64.b64decode(body, validate=True) if body is not None else None
+    status, data = harness_request(
+        envelope["path"], decoded, timeout=envelope["timeout"]
+    )
+    print(json.dumps({"status": status, "body": base64.b64encode(data).decode()}))
+
+
 def serve(relay: Relay) -> None:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:
@@ -373,16 +419,31 @@ def serve(relay: Relay) -> None:
 
     # Serial dispatch plus a bounded socket backlog contains malicious fan-out.
     server = ThreadingHTTPServer(("0.0.0.0", 11434), Handler)
-    server.daemon_threads = True
     tls = ThreadingHTTPServer(("0.0.0.0", 443), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain("/private/leaf.crt", "/private/leaf.key")
     tls.socket = context.wrap_socket(tls.socket, server_side=True)
-    threading.Thread(target=tls.serve_forever, daemon=True).start()
     chat = ThreadingHTTPServer(("0.0.0.0", 11435), Handler)
-    threading.Thread(target=chat.serve_forever, daemon=True).start()
-    server.serve_forever()
+    servers = [server, tls, chat]
+    stopped = threading.Event()
+    signal.signal(signal.SIGTERM, lambda *_: stopped.set())
+    for listener in servers:
+        threading.Thread(target=listener.serve_forever, daemon=True).start()
+    try:
+        stopped.wait()
+    finally:
+        for listener in servers:
+            listener.shutdown()
+        # Join in-flight handlers before the host reads settled usage. Docker's
+        # outer stop deadline still bounds hostile or stalled connections.
+        for listener in servers:
+            listener.server_close()
 
 
 if __name__ == "__main__":
-    serve(Relay(os.environ["OPENROUTER_API_KEY"], Path("/state/usage.json")))
+    if sys.argv[1:] == ["harness"]:
+        harness_stdio()
+    elif not sys.argv[1:]:
+        serve(Relay(os.environ["OPENROUTER_API_KEY"], Path("/state/usage.json")))
+    else:
+        raise SystemExit("unsupported relay mode")

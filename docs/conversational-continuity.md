@@ -141,6 +141,9 @@ The fresh miner has a read-only root, bounded tmpfs, CPU/memory/PID caps and one
 internal network. Only its trusted inference sidecar also joins an egress
 network. The miner receives placeholder keys and a public TLS CA, never the
 provider key, Docker socket, private certificate key or report state.
+Host requests reach only `/health`, `/run`, and `/seed` through a bounded Docker
+exec helper in the trusted sidecar. No container port is published. This works
+with internal-only rootless networks and does not depend on host port forwarding.
 
 Production Astra calls use OpenRouter's stateless Responses API with
 `openai/gpt-6-astra`, OpenAI-only routing, no provider fallback and the same
@@ -164,6 +167,18 @@ Its systemd override sets `SCREENER_CONVERSATION_OPENROUTER_KEY_FILE` and a priv
 per-worker `SCREENER_CONVERSATION_SPOOL_DIR`; absent settings leave the consumer
 inert. Drain/restart workers after convergence. Enable claims through Backroom
 only after runtime isolation and provider preflight checks pass.
+
+Run the no-inference launcher smoke against the same rootless daemon before
+enabling claims. It builds a disposable fixture, exercises 30 exchanges and TLS,
+and verifies cleanup. The image download transport uses the local fixture archive;
+it does not test object storage or grade a real submission.
+
+```sh
+cd workers/screener
+DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock \
+SCREENER_GATEWAY_STATE_ROOT=/var/lib/ditto-screener-gateway-state \
+uv run python scripts/smoke_conversation_runtime.py
+```
 
 The standalone CLI remains useful for an explicitly provisioned local sandbox:
 
