@@ -121,8 +121,9 @@ class Relay:
                     ):
                         raise RelayError("text_only_response_input_required")
             output = body.get("max_output_tokens", 4096)
-            if type(output) is not int or not 1 <= output <= 8192 or body.get("stream"):
+            if type(output) is not int or output < 1 or body.get("stream"):
                 raise RelayError("invalid_response_output_limit")
+            output = min(output, 8192)
             response_payload: dict[str, Any] = {
                 k: body[k]
                 for k in (
@@ -216,8 +217,11 @@ class Relay:
             elif content is not None and not isinstance(content, str):
                 raise RelayError("unsupported_message_content")
         output = body.get("max_completion_tokens", body.get("max_tokens", 4096))
-        if type(output) is not int or not 1 <= output <= 8192:
+        if type(output) is not int or output < 1:
             raise RelayError("invalid_output_limit")
+        # Clients may advertise a larger allowance (e.g. 16k). The instrument
+        # owns the actual ceiling and reserves only this bounded dispatch.
+        output = min(output, 8192)
         effort = body.get("reasoning_effort", "medium")
         if effort not in {"low", "medium", "high"}:
             raise RelayError("invalid_reasoning_effort")

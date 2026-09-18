@@ -39,8 +39,8 @@ def test_route_and_model_override_cannot_escape_budget_profile():
     assert "plugins" not in payload and "route" not in payload
     with pytest.raises(ValueError):
         Relay.payload("/proxy/https://evil.example", chat())
-    with pytest.raises(ValueError):
-        Relay.payload("/v1/chat/completions", chat(max_tokens=10**9))
+    _, bounded, _ = Relay.payload("/v1/chat/completions", chat(max_tokens=10**9))
+    assert bounded["max_tokens"] == 8192
 
 
 def provider(monkeypatch, body):
@@ -54,6 +54,39 @@ def provider(monkeypatch, body):
 
     monkeypatch.setattr("urllib.request.build_opener", lambda *_args: Opener())
     return calls
+
+
+@pytest.mark.parametrize(
+    "route,body,field",
+    [
+        ("/v1/chat/completions", chat(max_tokens=16000), "max_tokens"),
+        ("/v1/chat/completions", chat(max_completion_tokens=16000), "max_tokens"),
+        (
+            "/v1/responses",
+            {"input": "Hello", "max_output_tokens": 16000},
+            "max_output_tokens",
+        ),
+    ],
+)
+def test_larger_client_allowance_uses_unchanged_ceiling(
+    tmp_path, monkeypatch, route, body, field
+):
+    calls = provider(
+        monkeypatch,
+        {"usage": {"prompt_tokens": 20, "completion_tokens": 8192, "cost": 0.016424}},
+    )
+    relay = Relay("secret", tmp_path / "usage.json")
+    relay.post(route, body)
+    assert json.loads(calls[0].data)[field] == 8192
+    assert relay.tokens == 8212 and relay.spent == 16424 and not relay.failed
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1.5, "8192", None])
+def test_invalid_output_limit_remains_rejected(value):
+    with pytest.raises(ValueError):
+        Relay.payload("/v1/chat/completions", chat(max_tokens=value))
+    with pytest.raises(ValueError):
+        Relay.payload("/v1/responses", {"input": "Hello", "max_output_tokens": value})
 
 
 def test_ambiguous_provider_usage_is_reserved_and_never_replayed(tmp_path, monkeypatch):

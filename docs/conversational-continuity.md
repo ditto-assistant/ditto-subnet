@@ -155,6 +155,8 @@ Provider failure poisons the relay. Missing dollar receipts for metered embeddin
 usage produce a labelled price-ceiling bound, not invented actual spend.
 Chat accepts both plain text and arrays of text parts, including the system
 message shape emitted by Rig's OpenAI client. Multimodal parts remain refused.
+Larger positive client output allowances are capped at the existing 8,192-token
+dispatch ceiling before reservation; they do not enlarge the instrument budget.
 Private reports retain the first relay failure's fixed code, request/provider
 stage and optional HTTP status. They never include exception text, request URLs,
 headers or provider bodies. Subsequent client retries cannot overwrite that
@@ -246,7 +248,8 @@ All five initially admitted top-five assessments ended `incomplete` with
 revision 2 paused new admissions at 18:28:05Z; no attempt was running. The live
 fee remained 0.1 TAO and the rolling reservation remained $150. The old reports
 did not retain the underlying relay exception. Source inspection and an offline
-request reproduction identify a rejected Rig system-text array; they do not
+request reproduction identify a rejected Rig system-text array and a 16,000-token
+client allowance rejected by the 8,192-token relay ceiling; they do not
 establish that this explains every failed submission.
 
 Terminal identities remain terminal after a relay release or mode change.
