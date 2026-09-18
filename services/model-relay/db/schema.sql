@@ -2486,9 +2486,12 @@ CREATE TABLE public.conversation_assessments (
     reserved_microusd bigint NOT NULL,
     report jsonb,
     worker_hotkey text,
+    retry_of uuid,
+    retry_authorization jsonb,
     CONSTRAINT ck_conversation_assessments_conversation_base_quality CHECK (((base_quality_micros >= 0) AND (base_quality_micros <= 1000000))),
     CONSTRAINT ck_conversation_assessments_conversation_bench_version CHECK ((bench_version >= 9)),
-    CONSTRAINT ck_conversation_assessments_conversation_reserved_cost CHECK ((reserved_microusd = 30000000))
+    CONSTRAINT ck_conversation_assessments_conversation_reserved_cost CHECK ((reserved_microusd = 30000000)),
+    CONSTRAINT ck_conversation_assessments_conversation_retry_lineage CHECK (((retry_of IS NULL) OR ((retry_of <> assessment_id) AND (retry_authorization IS NULL))))
 );
 
 
@@ -5677,11 +5680,11 @@ ALTER TABLE ONLY public.continual_retest_settings_revisions
 
 
 --
--- Name: conversation_assessments conversation_assessment_identity; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: conversation_assessments conversation_one_manual_retry; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.conversation_assessments
-    ADD CONSTRAINT conversation_assessment_identity UNIQUE (agent_id, artifact_sha256, bench_version, instrument);
+    ADD CONSTRAINT conversation_one_manual_retry UNIQUE (retry_of);
 
 
 --
@@ -7518,6 +7521,13 @@ CREATE UNIQUE INDEX continual_retest_settings_scope_revision_idx ON public.conti
 
 
 --
+-- Name: conversation_assessment_identity; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX conversation_assessment_identity ON public.conversation_assessments USING btree (agent_id, artifact_sha256, bench_version, instrument) WHERE (retry_of IS NULL);
+
+
+--
 -- Name: conversation_created_at; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8801,6 +8811,14 @@ ALTER TABLE ONLY public.confirmation_bundle_subjects
 
 ALTER TABLE ONLY public.confirmation_bundle_tickets
     ADD CONSTRAINT confirmation_tickets_bundle_fkey FOREIGN KEY (bundle_id) REFERENCES public.confirmation_bundles(bundle_id);
+
+
+--
+-- Name: conversation_assessments conversation_retry_parent; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversation_assessments
+    ADD CONSTRAINT conversation_retry_parent FOREIGN KEY (retry_of) REFERENCES public.conversation_assessments(assessment_id);
 
 
 --
