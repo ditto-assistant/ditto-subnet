@@ -86,6 +86,8 @@ class JudgeMeter:
             input_bound * self.limits.input_microusd_per_token
             + output_bound * self.limits.output_microusd_per_token
         )
+        # Reserve room for OpenRouter's possible 5% BYOK service fee too.
+        reserve = (reserve * 105 + 99) // 100
         if self.spent + reserve > self.limits.judge_microusd:
             raise AssessmentFailure("judge_cost_limit")
         self.spent += reserve  # Timeout or missing usage retains the full charge.
@@ -126,7 +128,17 @@ class JudgeMeter:
                 or not 0 <= billed * 1_000_000 <= reservation[0]
             ):
                 raise AssessmentFailure("judge_cost_unverifiable")
-            actual = math.ceil(billed * 1_000_000)
+            if usage.get("is_byok") is True:
+                # Router credits omit the separate provider invoice. Use the
+                # pinned provider tariff plus the Router fee as a labelled bound.
+                actual += math.ceil(billed * 1_000_000)
+                self.cost_is_upper_bound = True
+            else:
+                actual = math.ceil(billed * 1_000_000)
+        elif usage.get("is_byok") is True:
+            actual = (actual * 105 + 99) // 100
+        if actual > reservation[0]:
+            raise AssessmentFailure("judge_cost_unverifiable")
         self.spent += actual - reservation[0]
         self.unmetered = False
         self.input_tokens += input_tokens

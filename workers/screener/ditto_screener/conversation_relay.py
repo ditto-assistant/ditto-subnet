@@ -221,6 +221,7 @@ class Relay:
         # OpenRouter max_price is dollars per million tokens; 2 microUSD/token
         # is the corresponding route ceiling, applied before every dispatch.
         reservation = 2 * (input_bound + output_bound)
+        reservation = (reservation * 105 + 99) // 100
         with self.lock:
             if (
                 self.failed
@@ -261,6 +262,23 @@ class Relay:
                     else usage.get("completion_tokens", usage.get("output_tokens"))
                 )
                 cost = usage.get("cost")
+                if (
+                    usage.get("is_byok") is True
+                    and type(prompt) is int
+                    and type(completion) is int
+                ):
+                    # BYOK credits cover the Router fee, not the provider bill.
+                    # Keep the provider price ceiling as a labelled upper bound.
+                    tariff = 2 * (prompt + completion) / 1_000_000
+                    if cost is None:
+                        cost = tariff * 1.05
+                    elif (
+                        type(cost) in {int, float} and math.isfinite(cost) and cost >= 0
+                    ):
+                        cost += tariff
+                    else:
+                        raise ValueError("unverifiable BYOK fee")
+                    self.cost_is_upper_bound = True
                 if embed and cost is None and type(prompt) is int:
                     # Embeddings can omit dollars. Preserve a clearly labelled
                     # upper bound at the enforced provider price ceiling.

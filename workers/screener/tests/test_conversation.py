@@ -195,6 +195,26 @@ def test_unknown_usage_keeps_reservation_and_fails_closed():
     assert meter.unmetered
 
 
+def test_byok_zero_router_fee_does_not_erase_provider_cost():
+    meter = JudgeMeter(Limits())
+    reservation = meter.reserve({"max_output_tokens": 100})
+    meter.reconcile(
+        {
+            "model": JUDGE_MODEL,
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cost": 0,
+                "is_byok": True,
+            },
+        },
+        reservation,
+        100,
+    )
+    assert meter.spent == 3500 and meter.cost_is_upper_bound
+    assert not meter.unmetered
+
+
 def test_nonfinite_prices_cannot_disable_cost_enforcement():
     with pytest.raises(ValueError, match="finite integers"):
         Limits(input_microusd_per_token=float("nan"))

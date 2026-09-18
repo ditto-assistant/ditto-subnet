@@ -99,3 +99,22 @@ def test_concurrent_requests_reserve_before_dispatch(tmp_path, monkeypatch):
         results = list(pool.map(attempt, range(8)))
     assert sum(results) == 1 and len(calls) == 1 and relay.requests == 300
     assert relay.spent == 40
+
+
+def test_byok_zero_router_fee_retains_provider_price_bound(tmp_path, monkeypatch):
+    provider(
+        monkeypatch,
+        {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 10,
+                "cost": 0,
+                "is_byok": True,
+            },
+        },
+    )
+    relay = Relay("secret", tmp_path / "usage.json")
+    relay.post("/v1/chat/completions", chat())
+    assert relay.spent == 60 and relay.cost_is_upper_bound
+    assert not relay.unmetered and not relay.failed

@@ -151,6 +151,10 @@ exact serving-provider profile. Route overrides and paid hosted tools are
 removed or refused; every dispatch reserves against the $5 cap before sending.
 Provider failure poisons the relay. Missing dollar receipts for metered embedding
 usage produce a labelled price-ceiling bound, not invented actual spend.
+BYOK Router fees exclude the separate provider invoice. For those responses the
+meter retains the provider tariff plus Router fee as a labelled upper bound;
+pre-dispatch reservations include the possible 5% BYOK fee. A zero Router charge
+therefore never makes BYOK inference appear free.
 
 Deploy the released code first. The focused
 `infra/ansible/playbooks/conversation-shadow.yml` playbook installs the worker
