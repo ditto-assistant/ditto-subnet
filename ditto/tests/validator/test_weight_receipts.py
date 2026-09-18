@@ -286,3 +286,52 @@ async def test_high_frequency_heartbeats_schedule_at_most_one_recovery_per_30s(
     relay.schedule_recovery()
     await asyncio.sleep(0)
     assert relay.recover.await_count == 2
+
+
+async def test_diagnostics_distinguish_failure_stages_without_secret_material():
+    from dataclasses import asdict
+
+    ledger, champion = context()
+    setter = SimpleNamespace(
+        put_weights_with_receipt=AsyncMock(side_effect=TimeoutError("secret-token")),
+        list_weight_receipts=AsyncMock(return_value=None),
+        acknowledge_weight_receipt=AsyncMock(),
+    )
+    platform = SimpleNamespace(submit_weight_receipt=AsyncMock())
+    relay = WeightReceiptRelay(setter, platform, "validator", 118)
+    assert relay.diagnostics.submission_status == "not_attempted"
+    await relay.submit({"miner": 1.0}, ledger, champion)
+    assert relay.diagnostics.submission_status == "uncertain"
+    assert relay.diagnostics.submission_observed_at is not None
+    await relay.recover()
+    assert relay.diagnostics.recovery_status == "unsupported"
+
+    claim = finalized()
+    setter.list_weight_receipts.return_value = {
+        "receipts": [envelope(claim)],
+        "next_after_task_id": None,
+    }
+    platform.submit_weight_receipt.side_effect = TimeoutError("secret-token")
+    await relay.recover()
+    assert relay.diagnostics.recovery_status == "forwarding_platform_failed"
+    assert relay.diagnostics.page_finalized == 1
+    assert relay.diagnostics.page_deferred == 1
+    assert relay.diagnostics.page_forwarded == 0
+    setter.acknowledge_weight_receipt.assert_not_awaited()
+    assert "secret-token" not in json.dumps(asdict(relay.diagnostics))
+
+    platform.submit_weight_receipt.side_effect = None
+    platform.submit_weight_receipt.return_value = SubmitWeightReceiptResponse(
+        request_id=claim.request_id,
+        attempt_id=claim.attempt.attempt_id,
+        receipt_digest=weight_receipt_digest(claim),
+    )
+    await relay.recover()
+    assert relay.diagnostics.recovery_status == "page_complete"
+    assert relay.diagnostics.page_forwarded == 1
+    assert relay.diagnostics.page_deferred == 0
+    setter.acknowledge_weight_receipt.assert_awaited_once()
+
+    restarted = WeightReceiptRelay(setter, platform, "validator", 118)
+    assert restarted.diagnostics.submission_status == "not_attempted"
+    assert restarted.diagnostics.recovery_observed_at is None
