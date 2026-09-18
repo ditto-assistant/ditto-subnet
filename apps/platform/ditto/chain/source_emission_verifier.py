@@ -178,8 +178,10 @@ def _unwrap(value: Any) -> Any:
 def _attrs(event: dict[str, Any], names: tuple[str, ...]) -> list[Any]:
     nested = event.get("event")
     attrs = nested.get("attributes") if isinstance(nested, dict) else None
-    if isinstance(attrs, list) and len(attrs) == len(names):
-        return attrs
+    # SCALE tuple events decode to tuples; JSON fixtures/transports use lists.
+    # Keep exact arity and named-field validation for either representation.
+    if isinstance(attrs, (list, tuple)) and len(attrs) == len(names):
+        return list(attrs)
     if isinstance(attrs, dict) and set(attrs) == set(names):
         return [attrs[n] for n in names]
     raise ValueError("unsupported event schema")

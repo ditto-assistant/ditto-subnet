@@ -119,7 +119,9 @@ def test_inactive_nonpermitted_stake_does_not_vote() -> None:
     )
 
 
-def event(name: str, values: list[Any], phase: str = "Initialization") -> dict:
+def event(
+    name: str, values: list[Any] | tuple[Any, ...], phase: str = "Initialization"
+) -> dict:
     return {
         "module_id": "SubtensorModule",
         "event_id": name,
@@ -128,14 +130,14 @@ def event(name: str, values: list[Any], phase: str = "Initialization") -> dict:
     }
 
 
-@pytest.fixture
-def chain() -> tuple[AsyncMock, dict]:
+@pytest.fixture(params=[list, tuple], ids=["json-list", "scale-tuple"])
+def chain(request: pytest.FixtureRequest) -> tuple[AsyncMock, dict]:
     substrate = AsyncMock()
     state: dict[str, Any] = {
         "runtime": sorted(AUDITED_RUNTIME_CODE_HASHES)[0],
         "events": [
-            event("WeightsSet", [118, 0]),
-            event("TimelockedWeightsRevealed", [118, "v1"]),
+            event("WeightsSet", request.param([118, 0])),
+            event("TimelockedWeightsRevealed", request.param([118, "v1"])),
         ],
         "pending": [(9, [("v1", 80, "0x010203", 100)])],
         "keys": [(0, "v1"), (1, "miner"), (2, "tail")],
@@ -272,6 +274,7 @@ def commit_chain(chain: tuple) -> tuple:
     from types import SimpleNamespace
 
     substrate, state = chain
+    attribute_type = type(state["events"][0]["event"]["attributes"])
     raw = "0x123456"
     ciphertext = "0x010203"
     digest = hashlib.blake2b(bytes.fromhex(ciphertext[2:]), digest_size=32).hexdigest()
@@ -291,7 +294,7 @@ def commit_chain(chain: tuple) -> tuple:
         event("ExtrinsicSuccess", [], "ApplyExtrinsic"),
         event(
             "TimelockedWeightsCommitted",
-            ["v1", 118, "0x" + digest, 100],
+            attribute_type(["v1", 118, "0x" + digest, 100]),
             "ApplyExtrinsic",
         ),
     ]
@@ -335,6 +338,16 @@ async def test_exact_finalized_commit_inclusion(commit_chain: tuple) -> None:
 
     substrate, _, claim = commit_chain
     await verify_finalized_weight_commit(substrate, claim)
+
+
+@pytest.mark.parametrize("values", [(118,), (118, 0, 1), {"netuid": 118}, "118,0"])
+async def test_malformed_event_attributes_still_fail_closed(
+    chain: tuple, values: Any
+) -> None:
+    substrate, state = chain
+    state["events"][0]["event"]["attributes"] = values
+    with pytest.raises(ValueError, match="unsupported event schema"):
+        await read_source_emission_block(substrate, netuid=118, block=100)
 
 
 @pytest.mark.parametrize(
