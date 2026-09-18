@@ -275,6 +275,7 @@ describe('Backroom MCP tools', () => {
         'set_source_release_policy',
         'set_submission_cooldown',
         'set_conversation_settings',
+        'authorize_conversation_retry',
         'unban_hotkey',
         'register_coding_catalog_release',
         'register_coding_private_v2_release',
@@ -337,7 +338,8 @@ describe('Backroom MCP tools', () => {
     // Four canary operations add explicit lease identity/digest/CAS inputs;
     // measured catalog is 133,733 bytes. Descriptions remain short summaries.
     // One bounded conversation observation tool adds ~900 bytes.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(135_500)
+    // The audited retry adds exact report/artifact digests; measured 136,355 bytes.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(136_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -356,7 +358,7 @@ describe('Backroom MCP tools', () => {
     // the one-line bench v13 gate-evidence and dispute-kind notes on the score
     // and dispute tools land at 25_237, so it moves to 25_400.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      25_400,
+      25_500, // One concise audited-retry summary adds 77 characters.
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2203,6 +2205,43 @@ describe('Backroom MCP tools', () => {
     const options = fetchMock.mock.calls[0]?.[1] as RequestInit
     expect(JSON.parse(String(options.body))).toMatchObject({ actor: session.email, mode: 'shadow', expected_revision: 0 })
     expect(readJsonResult(response)).toMatchObject({ settings_revision: 1, mode: 'shadow' })
+    await client.close()
+    await server.close()
+  })
+
+  it('queues one conversation retry with the authenticated actor and preserves its audit', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const assessmentId = '11111111-1111-4111-8111-111111111111'
+    const authorization = { actor: session.email, reason: 'One approved relay fix retry', report_sha256: 'b'.repeat(64),
+      authorized_at: '2026-09-18T22:00:00Z', expires_at: '2026-09-20T22:00:00Z' }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      mode: 'shadow', instrument: 'conversational-continuity-v1', judge_model: 'gpt-6-astra',
+      settings_revision: 3, daily_budget_microusd: 150000000, reserved_last_day_microusd: 150000000,
+      next_budget_slot_at: '2026-09-19T18:24:00Z', proposed_submission_fee_rao: 200000000,
+      current_submission_fee_rao: 100000000,
+      items: [{ assessment_id: assessmentId, agent_id: assessmentId, artifact_sha256: 'a'.repeat(64),
+        bench_version: 12, status: 'incomplete', created_at: '2026-09-18T18:24:00Z', expires_at: '2026-09-18T19:29:00Z',
+        base_quality_micros: 900000, conversation_micros: null, proposed_quality_micros: null,
+        reserved_microusd: 30000000, spent_microusd: null, error_code: 'harness_inference_incomplete',
+        report_sha256: 'b'.repeat(64), retry_of: null, retry_assessment_id: null, retry_authorization: authorization }],
+      fee_change_request: { expected_revision: 0, cooldown_seconds: 3600, fee_amount_rao: 200000000,
+        reason: 'Fund conversation assessment', actor: 'conversation-rollout', confirmation: 'example' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const args = { expected_revision: 3, assessment_id: assessmentId, expected_artifact_sha256: 'a'.repeat(64),
+      expected_report_sha256: 'b'.repeat(64), reason: authorization.reason, confirmation: 'AUTHORIZE ONE CONVERSATION RETRY', actor: 'spoofed@example.com' }
+    const readonly = await connect([BACKROOM_READ_SCOPE])
+    expect((await readonly.client.callTool({ name: 'authorize_conversation_retry', arguments: args })).isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await readonly.client.close()
+    await readonly.server.close()
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const response = await client.callTool({ name: 'authorize_conversation_retry', arguments: args })
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/conversation-assessments/authorize-retry')
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ ...args, actor: session.email })
+    expect(readJsonResult(response)).toMatchObject({ next_budget_slot_at: '2026-09-19T18:24:00Z',
+      current_submission_fee_rao: 100000000, items: [{ retry_authorization: authorization, retry_assessment_id: null }] })
     await client.close()
     await server.close()
   })

@@ -1,5 +1,5 @@
-import { conversationAssessmentInputSchema, conversationSettingsInputSchema } from '../lib/conversation.schemas'
-import { fetchConversationAssessments, setConversationSettings } from './admin.service'
+import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
+import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import '@tanstack/react-start/server-only'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
@@ -332,6 +332,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'start_runtime_profile',
   'set_submission_cooldown',
   'set_conversation_settings',
+  'authorize_conversation_retry',
   'unban_hotkey',
   'set_source_release_policy',
   'set_burn_settings',
@@ -589,6 +590,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read conversation evidence and spend.',
   set_conversation_settings:
     'Set shadow mode by revision.',
+  authorize_conversation_retry:
+    'Authorize one audited retry; preserves identity, history and budget caps.',
   get_screener_fanout_shadow:
     'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
   get_copy_court_settings:
@@ -1987,6 +1990,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchScreenerFanoutShadow(input)),
+  )
+
+  registerTool(
+    'authorize_conversation_retry',
+    {
+      title: 'Authorize one conversation retry',
+      description: 'Authorize exactly one audited retry of an original terminal harness_inference_incomplete report, binding its artifact and report digest. Authorization expires after 48 hours. The worker rechecks top-five eligibility, shadow mode, global concurrency and unchanged $30 per-attempt / $150 rolling daily reservations before claiming. Preserves the original report, seed, and reservation. Never changes fees or rewards. Requires backroom:write.',
+      inputSchema: conversationRetryInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => authorizeConversationRetry(props.session.email, input)),
   )
 
   registerTool(

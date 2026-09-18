@@ -134,6 +134,19 @@ for the harness, with a $150 rolling daily cap. Failed/expired identities are
 never automatically reissued. Image download capabilities and story seeds stay
 private. Reports bind artifact, screened archive, instrument and claim owner.
 
+An operator may explicitly authorize one retry of an original terminal
+`harness_inference_incomplete` report using `authorize_conversation_retry`.
+Supply the current settings revision, assessment ID, artifact and report digests,
+a reason and `AUTHORIZE ONE CONVERSATION RETRY`. The authenticated operator,
+reason and 48-hour authorization window are immutable. The child attempt retains
+the same artifact, screened image, benchmark version, story seed and base quality;
+the original report and $30 reservation remain intact. A child cannot be retried.
+Workers recheck shadow mode, current top-five eligibility, global concurrency and
+the rolling cap before consuming the authorization. A full cap leaves it pending;
+`next_budget_slot_at` shows when budget headroom returns. Reads expose the
+parent/child IDs and authorization audit. This does not change fees, output-token
+limits, ranking or rewards.
+
 The launcher uses a rootless Docker daemon, verifies archive size and digest,
 reuses the screener's config/layer normalization and checks the loaded image ID.
 The fresh miner has a read-only root, bounded tmpfs, CPU/memory/PID caps and one

@@ -816,6 +816,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/conversation-assessments/authorize-retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Authorize Retry */
+        post: operations["authorize_retry_api_v1_admin_conversation_assessments_authorize_retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/conversation-assessments/claim": {
         parameters: {
             query?: never;
@@ -16200,8 +16217,15 @@ export interface components {
             expires_at: string;
             /** Proposed Quality Micros */
             proposed_quality_micros: number | null;
+            /** Report Sha256 */
+            report_sha256?: string | null;
             /** Reserved Microusd */
             reserved_microusd: number;
+            /** Retry Assessment Id */
+            retry_assessment_id?: string | null;
+            retry_authorization?: components["schemas"]["ConversationRetryAuthorization"] | null;
+            /** Retry Of */
+            retry_of?: string | null;
             /** Spent Microusd */
             spent_microusd: number | null;
             /**
@@ -16228,6 +16252,8 @@ export interface components {
              * @enum {string}
              */
             mode: "off" | "shadow";
+            /** Next Budget Slot At */
+            next_budget_slot_at?: string | null;
             /**
              * Proposed Submission Fee Rao
              * @default 200000000
@@ -16327,6 +16353,48 @@ export interface components {
              */
             lease_token: string;
             report: components["schemas"]["ConversationReport"];
+        };
+        /** ConversationRetryAuthorization */
+        ConversationRetryAuthorization: {
+            /** Actor */
+            actor: string;
+            /**
+             * Authorized At
+             * Format: date-time
+             */
+            authorized_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Reason */
+            reason: string;
+            /** Report Sha256 */
+            report_sha256: string;
+        };
+        /** ConversationRetryRequest */
+        ConversationRetryRequest: {
+            /** Actor */
+            actor: string;
+            /**
+             * Assessment Id
+             * Format: uuid
+             */
+            assessment_id: string;
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "AUTHORIZE ONE CONVERSATION RETRY";
+            /** Expected Artifact Sha256 */
+            expected_artifact_sha256: string;
+            /** Expected Report Sha256 */
+            expected_report_sha256: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
         };
         /** ConversationSettingsRequest */
         ConversationSettingsRequest: {
@@ -31431,6 +31499,41 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationObservations"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    authorize_retry_api_v1_admin_conversation_assessments_authorize_retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationRetryRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

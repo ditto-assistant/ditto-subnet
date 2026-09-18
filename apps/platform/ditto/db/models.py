@@ -9940,16 +9940,34 @@ class ConversationAssessment(Base):
     reserved_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
     report: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
     worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    retry_of: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    retry_authorization: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
 
     __table_args__ = (
         ForeignKeyConstraint(["agent_id"], ["agents.agent_id"]),
+        ForeignKeyConstraint(
+            ["retry_of"],
+            ["conversation_assessments.assessment_id"],
+            name="conversation_retry_parent",
+        ),
+        UniqueConstraint("retry_of", name="conversation_one_manual_retry"),
         Index("conversation_created_at", "created_at"),
-        UniqueConstraint(
+        Index(
+            "conversation_assessment_identity",
             "agent_id",
             "artifact_sha256",
             "bench_version",
             "instrument",
-            name="conversation_assessment_identity",
+            unique=True,
+            postgresql_where=text("retry_of IS NULL"),
+            sqlite_where=text("retry_of IS NULL"),
+        ),
+        CheckConstraint(
+            "retry_of IS NULL OR "
+            "(retry_of <> assessment_id AND retry_authorization IS NULL)",
+            name="conversation_retry_lineage",
         ),
         CheckConstraint(
             "base_quality_micros BETWEEN 0 AND 1000000",

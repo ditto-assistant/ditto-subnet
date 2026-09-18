@@ -17,6 +17,8 @@ from ditto.api_models.conversation import (
     ConversationObservations,
     ConversationReport,
     ConversationResultRequest,
+    ConversationRetryAuthorization,
+    ConversationRetryRequest,
     ConversationSettingsRequest,
 )
 from ditto.api_models.submission_settings import AdminSubmissionSettingsRequest
@@ -32,6 +34,7 @@ from ditto.db.queries.submission_settings import effective_submission_settings
 from ditto_screening_protocol.conversation import (
     INSTRUMENT,
     JUDGE_MODEL,
+    digest,
     proposed_quality_micros,
 )
 from ditto_screening_protocol.conversation_story import story, story_digest
@@ -96,7 +99,9 @@ async def _reserved(session: AsyncSession, now: datetime) -> int:
     )
 
 
-def _observation(row: ConversationAssessment, now: datetime) -> ConversationObservation:
+def _observation(
+    row: ConversationAssessment, now: datetime, retry_id: UUID | None = None
+) -> ConversationObservation:
     report = ConversationReport.model_validate(row.report) if row.report else None
     score = report.conversation_micros() if report else None
     return ConversationObservation(
@@ -124,6 +129,10 @@ def _observation(row: ConversationAssessment, now: datetime) -> ConversationObse
         and not report.judge_cost_is_upper_bound
         else None,
         error_code=report.error_code if report else None,
+        report_sha256=digest(row.report) if row.report is not None else None,
+        retry_of=row.retry_of,
+        retry_authorization=row.retry_authorization,
+        retry_assessment_id=retry_id,
     )
 
 
@@ -149,12 +158,43 @@ async def observations(
             .limit(limit)
         )
     )
+    retry_rows = (
+        await session.execute(
+            select(
+                ConversationAssessment.retry_of,
+                ConversationAssessment.assessment_id,
+            ).where(
+                ConversationAssessment.retry_of.in_([r.assessment_id for r in rows])
+            )
+        )
+    ).all()
+    retries = {parent: child for parent, child in retry_rows if parent is not None}
+    reserved = await _reserved(session, now)
+    next_slot = None
+    if reserved + RUN_RESERVATION_MICROUSD > DAILY_BUDGET_MICROUSD:
+        rolling = (
+            await session.execute(
+                select(
+                    ConversationAssessment.created_at,
+                    ConversationAssessment.reserved_microusd,
+                )
+                .where(ConversationAssessment.created_at >= now - timedelta(days=1))
+                .order_by(ConversationAssessment.created_at)
+            )
+        ).all()
+        remaining = reserved
+        for created_at, amount in rolling:
+            remaining -= amount
+            if remaining + RUN_RESERVATION_MICROUSD <= DAILY_BUDGET_MICROUSD:
+                next_slot = created_at + timedelta(days=1, microseconds=1)
+                break
     return ConversationObservations(
         mode="shadow" if await _enabled(request, session) else "off",
         instrument=INSTRUMENT,
         judge_model=JUDGE_MODEL,
         daily_budget_microusd=DAILY_BUDGET_MICROUSD,
-        reserved_last_day_microusd=await _reserved(session, now),
+        reserved_last_day_microusd=reserved,
+        next_budget_slot_at=next_slot,
         current_submission_fee_rao=fee.fee_amount_rao,
         fee_change_request=AdminSubmissionSettingsRequest(
             expected_revision=fee.revision,
@@ -167,12 +207,59 @@ async def observations(
                 "FEE 200000000 RAO"
             ),
         ),
-        items=[_observation(row, now) for row in rows],
+        items=[_observation(row, now, retries.get(row.assessment_id)) for row in rows],
         settings_revision=settings.revision if settings else 0,
         settings_actor=settings.actor if settings else None,
         settings_reason=settings.reason if settings else None,
         settings_updated_at=settings.created_at if settings else None,
     )
+
+
+@router.post("/authorize-retry", response_model=ConversationObservations)
+async def authorize_retry(
+    request: Request,
+    payload: ConversationRetryRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> ConversationObservations:
+    # The same lock fences authorization, mode changes and every paid claim.
+    await session.execute(text("SELECT pg_advisory_xact_lock(761882019)"))
+    settings = await _settings(session)
+    if payload.expected_revision != (settings.revision if settings else 0):
+        raise HTTPException(409, "conversation settings revision changed")
+    source = await session.get(ConversationAssessment, payload.assessment_id)
+    if source is None:
+        raise HTTPException(404, "unknown conversation assessment")
+    if (
+        source.retry_of is not None
+        or source.artifact_sha256 != payload.expected_artifact_sha256
+        or source.report is None
+        or digest(source.report) != payload.expected_report_sha256
+        or source.report.get("status") != "incomplete"
+        or source.report.get("error_code") != "harness_inference_incomplete"
+    ):
+        raise HTTPException(409, "retry requires the exact terminal inference failure")
+    if source.retry_authorization is not None:
+        previous = ConversationRetryAuthorization.model_validate(
+            source.retry_authorization
+        )
+        if (previous.actor, previous.reason, previous.report_sha256) != (
+            payload.actor,
+            payload.reason,
+            payload.expected_report_sha256,
+        ):
+            raise HTTPException(409, "conversation retry authorization is immutable")
+        return await observations(request, None, session)
+    now = datetime.now(UTC)
+    source.retry_authorization = ConversationRetryAuthorization(
+        actor=payload.actor,
+        reason=payload.reason,
+        report_sha256=payload.expected_report_sha256,
+        authorized_at=now,
+        expires_at=now + timedelta(hours=48),
+    ).model_dump(mode="json")
+    await session.commit()
+    return await observations(request, None, session)
 
 
 @router.post("/claim", response_model=ConversationClaim | None)
@@ -236,15 +323,35 @@ async def claim_assessment(
         ):
             continue
         existing = await session.scalar(
-            select(ConversationAssessment.assessment_id).where(
+            select(ConversationAssessment).where(
                 ConversationAssessment.agent_id == agent.agent_id,
                 ConversationAssessment.artifact_sha256 == agent.sha256,
                 ConversationAssessment.bench_version == entry.bench_version,
                 ConversationAssessment.instrument == INSTRUMENT,
+                ConversationAssessment.retry_of.is_(None),
             )
         )
         if existing is not None:
-            continue  # Expired/failed attempts are not automatic billed retries.
+            if existing.retry_authorization is None:
+                continue  # Never automatically retry a paid attempt.
+            authorization = ConversationRetryAuthorization.model_validate(
+                existing.retry_authorization
+            )
+            already_retried = await session.scalar(
+                select(ConversationAssessment.assessment_id).where(
+                    ConversationAssessment.retry_of == existing.assessment_id
+                )
+            )
+            if (
+                already_retried is not None
+                or authorization.expires_at <= now
+                or existing.screened_image_sha256 != agent.screened_image_sha256
+                or existing.report is None
+                or digest(existing.report) != authorization.report_sha256
+                or existing.report.get("status") != "incomplete"
+                or existing.report.get("error_code") != "harness_inference_incomplete"
+            ):
+                continue
         if not 0 <= entry.official_composite <= 1:
             continue  # Legacy efficiency-adjusted values cannot be base quality.
         row = ConversationAssessment(
@@ -254,13 +361,16 @@ async def claim_assessment(
             screened_image_sha256=agent.screened_image_sha256,
             bench_version=entry.bench_version,
             instrument=INSTRUMENT,
-            seed=secrets.token_hex(32),
+            seed=existing.seed if existing is not None else secrets.token_hex(32),
             lease_token=uuid4(),
             created_at=now,
             expires_at=now + timedelta(minutes=65),
-            base_quality_micros=round(entry.official_composite * 1_000_000),
+            base_quality_micros=existing.base_quality_micros
+            if existing is not None
+            else round(entry.official_composite * 1_000_000),
             reserved_microusd=RUN_RESERVATION_MICROUSD,
             worker_hotkey=worker_hotkey,
+            retry_of=existing.assessment_id if existing is not None else None,
         )
         session.add(row)
         await session.commit()

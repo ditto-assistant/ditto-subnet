@@ -14,6 +14,7 @@ export const conversationObservationsSchema = z.object({
   instrument: z.string(),
   judge_model: z.string(),
   daily_budget_microusd: z.number().int().nonnegative(),
+  next_budget_slot_at: z.string().nullable().optional(),
   reserved_last_day_microusd: z.number().int().nonnegative(),
   proposed_submission_fee_rao: z.literal(200000000),
   current_submission_fee_rao: z.number().int(),
@@ -39,6 +40,13 @@ export const conversationObservationsSchema = z.object({
     reserved_microusd: z.number().int(),
     spent_microusd: z.number().int().nullable(),
     error_code: z.string().nullable(),
+    report_sha256: z.string().nullable().optional(),
+    retry_of: z.string().uuid().nullable().optional(),
+    retry_assessment_id: z.string().uuid().nullable().optional(),
+    retry_authorization: z.object({
+      actor: z.string(), reason: z.string(), report_sha256: z.string(),
+      authorized_at: z.string(), expires_at: z.string(),
+    }).nullable().optional(),
   })).max(100),
 })
 
@@ -56,4 +64,13 @@ export const conversationSettingsInputSchema = z.object({
   mode: z.enum(['off', 'shadow']),
   reason: z.string().min(10),
   confirmation: z.literal('APPLY CONVERSATION SHADOW SETTINGS'),
+})
+
+export const conversationRetryInputSchema = z.object({
+  expected_revision: z.number().int().nonnegative(),
+  assessment_id: z.string().uuid(),
+  expected_artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expected_report_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string().min(10),
+  confirmation: z.literal('AUTHORIZE ONE CONVERSATION RETRY'),
 })

@@ -21,6 +21,24 @@ class ConversationResultRequest(WireModel):
     report: ConversationReport
 
 
+class ConversationRetryAuthorization(WireModel):
+    actor: Annotated[str, Field(min_length=3, max_length=200)]
+    reason: Annotated[str, Field(min_length=10)]
+    report_sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+    authorized_at: datetime
+    expires_at: datetime
+
+
+class ConversationRetryRequest(WireModel):
+    expected_revision: Annotated[int, Field(strict=True, ge=0)]
+    assessment_id: UUID
+    expected_artifact_sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+    expected_report_sha256: Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
+    actor: Annotated[str, Field(min_length=3, max_length=200)]
+    reason: Annotated[str, Field(min_length=10)]
+    confirmation: Literal["AUTHORIZE ONE CONVERSATION RETRY"]
+
+
 class ConversationObservation(WireModel):
     assessment_id: UUID
     agent_id: UUID
@@ -35,6 +53,10 @@ class ConversationObservation(WireModel):
     reserved_microusd: int
     spent_microusd: int | None
     error_code: str | None
+    report_sha256: str | None = None
+    retry_of: UUID | None = None
+    retry_authorization: ConversationRetryAuthorization | None = None
+    retry_assessment_id: UUID | None = None
 
 
 class ConversationObservations(WireModel):
@@ -51,6 +73,7 @@ class ConversationObservations(WireModel):
     settings_actor: str | None = None
     settings_reason: str | None = None
     settings_updated_at: datetime | None = None
+    next_budget_slot_at: datetime | None = None
 
 
 class ConversationSettingsRequest(WireModel):

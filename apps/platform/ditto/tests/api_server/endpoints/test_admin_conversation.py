@@ -6,7 +6,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi import Request
@@ -282,3 +282,192 @@ async def test_fee_proposal_uses_existing_audited_revision_and_preserves_cooldow
             "/api/v1/admin/submission-settings", headers=HEADERS, json=proposal
         )
     ).status_code == 409
+
+
+async def failed_attempt(client):
+    claim = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    report = report_for(claim)
+    report.update(
+        status="incomplete",
+        error_code="harness_inference_incomplete",
+        grades=None,
+        exchanges=[],
+    )
+    response = await client.post(
+        BASE + f"/{claim['assessment_id']}/result",
+        headers=HEADERS,
+        json={"lease_token": claim["lease_token"], "report": report},
+    )
+    assert response.status_code == 200, response.text
+    return (
+        claim,
+        report,
+        {
+            "expected_revision": 0,
+            "assessment_id": claim["assessment_id"],
+            "expected_artifact_sha256": claim["artifact_sha256"],
+            "expected_report_sha256": response.json()["report_sha256"],
+            "actor": "operator@example.com",
+            "reason": "Explicit approval for one retry after the relay fix",
+            "confirmation": "AUTHORIZE ONE CONVERSATION RETRY",
+        },
+    )
+
+
+async def test_manual_retry_preserves_history_and_never_retries_twice(
+    app, client, session_maker, monkeypatch
+):
+    await install(app, session_maker, monkeypatch, count=1)
+    original, report, approval = await failed_attempt(client)
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    assert (
+        await client.post(BASE + "/authorize-retry", json=approval)
+    ).status_code == 401
+    for field, value in [
+        ("expected_revision", 7),
+        ("expected_artifact_sha256", "f" * 64),
+        ("expected_report_sha256", "f" * 64),
+    ]:
+        assert (
+            await client.post(
+                BASE + "/authorize-retry",
+                headers=HEADERS,
+                json={**approval, field: value},
+            )
+        ).status_code == 409
+    first = await client.post(BASE + "/authorize-retry", headers=HEADERS, json=approval)
+    assert first.status_code == 200, first.text
+    authorization = first.json()["items"][0]["retry_authorization"]
+    replay = await client.post(
+        BASE + "/authorize-retry", headers=HEADERS, json=approval
+    )
+    assert replay.json()["items"][0]["retry_authorization"] == authorization
+    assert (
+        await client.post(
+            BASE + "/authorize-retry",
+            headers=HEADERS,
+            json={
+                **approval,
+                "reason": "Another authorization must not replace the audit",
+            },
+        )
+    ).status_code == 409
+    claims = await asyncio.gather(
+        *[client.post(BASE + "/claim", headers=HEADERS) for _ in range(5)]
+    )
+    assert all(c.status_code == 200 for c in claims)
+    retries = [c.json() for c in claims if c.json()]
+    assert len(retries) == 1
+    retry = retries[0]
+    assert retry["assessment_id"] != original["assessment_id"]
+    for field in (
+        "seed",
+        "agent_id",
+        "artifact_sha256",
+        "bench_version",
+        "screened_image_sha256",
+    ):
+        assert retry[field] == original[field]
+    retried_report = {**report, "assessment_id": retry["assessment_id"]}
+    result = await client.post(
+        BASE + f"/{retry['assessment_id']}/result",
+        headers=HEADERS,
+        json={"lease_token": retry["lease_token"], "report": retried_report},
+    )
+    assert result.status_code == 200, result.text
+    child_approval = {
+        **approval,
+        "assessment_id": retry["assessment_id"],
+        "expected_report_sha256": result.json()["report_sha256"],
+    }
+    assert (
+        await client.post(
+            BASE + "/authorize-retry", headers=HEADERS, json=child_approval
+        )
+    ).status_code == 409
+    assert (
+        await client.post(BASE + "/authorize-retry", headers=HEADERS, json=approval)
+    ).status_code == 200
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    assert listing["reserved_last_day_microusd"] == 60_000_000
+    parent = next(
+        i for i in listing["items"] if i["assessment_id"] == original["assessment_id"]
+    )
+    assert parent["retry_assessment_id"] == retry["assessment_id"]
+    assert parent["retry_authorization"] == authorization
+    assert result.json()["retry_of"] == original["assessment_id"]
+    assert (
+        await client.get(BASE + f"/{original['assessment_id']}/report", headers=HEADERS)
+    ).json() == report
+    assert "lease_token" not in str(listing) and "seed" not in str(listing)
+    async with session_maker() as db:
+        assert await db.scalar(select(func.count()).select_from(Score)) == 0
+
+
+async def test_authorization_waits_for_rolling_budget_without_erasing_reservations(
+    app, client, session_maker, monkeypatch
+):
+    await install(app, session_maker, monkeypatch, count=5)
+    original, _, approval = await failed_attempt(client)
+    for _ in range(4):
+        await failed_attempt(client)
+    response = await client.post(
+        BASE + "/authorize-retry", headers=HEADERS, json=approval
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["reserved_last_day_microusd"] == 150_000_000
+    assert response.json()["next_budget_slot_at"] is not None
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+    async with session_maker() as db, db.begin():
+        parent = await db.get(ConversationAssessment, UUID(original["assessment_id"]))
+        parent.created_at = datetime.now(UTC) - timedelta(days=1, seconds=1)
+    retried = (await client.post(BASE + "/claim", headers=HEADERS)).json()
+    assert retried["seed"] == original["seed"]
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    assert listing["reserved_last_day_microusd"] == 150_000_000
+    assert len(listing["items"]) == 6
+    assert all(item["reserved_microusd"] == 30_000_000 for item in listing["items"])
+
+
+@pytest.mark.parametrize("guard", ["off", "rank", "image", "expired", "changed_report"])
+async def test_authorized_retry_rechecks_admission_guards(
+    app, client, session_maker, monkeypatch, guard
+):
+    entries = await install(app, session_maker, monkeypatch, count=1)
+    original, _, approval = await failed_attempt(client)
+    assert (
+        await client.post(BASE + "/authorize-retry", headers=HEADERS, json=approval)
+    ).status_code == 200
+    if guard == "off":
+        await client.post(
+            BASE + "/settings",
+            headers=HEADERS,
+            json={
+                "mode": "off",
+                "expected_revision": 0,
+                "actor": "operator@example.com",
+                "reason": "Stop paid shadow claims",
+                "confirmation": "APPLY CONVERSATION SHADOW SETTINGS",
+            },
+        )
+    elif guard == "rank":
+        entries[0].rank = 6
+    else:
+        async with session_maker() as db, db.begin():
+            parent = await db.get(
+                ConversationAssessment, UUID(original["assessment_id"])
+            )
+            if guard == "image":
+                agent = await db.get(Agent, entries[0].agent_id)
+                agent.screened_image_sha256 = "c" * 64
+            elif guard == "expired":
+                parent.retry_authorization = {
+                    **parent.retry_authorization,
+                    "expires_at": (
+                        datetime.now(UTC) - timedelta(seconds=1)
+                    ).isoformat(),
+                }
+            else:
+                parent.report = {**parent.report, "output_tokens": 999}
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None

@@ -5,6 +5,7 @@ import {
   conversationObservationsSchema,
   conversationReportSchema,
   conversationSettingsInputSchema,
+  conversationRetryInputSchema,
 } from '../lib/conversation.schemas'
 
 import { benchmarkCanarySchema, issueBenchmarkCanaryInputSchema,
@@ -3147,6 +3148,14 @@ export async function fetchConversationAssessments(rawInput: unknown = {}) {
 export async function setConversationSettings(actor: string, rawInput: unknown) {
   const input = conversationSettingsInputSchema.parse(rawInput)
   const payload = await platformAdminRequest('/api/v1/admin/conversation-assessments/settings', {
+    method: 'POST', body: { ...input, actor }, actor,
+  })
+  return conversationObservationsSchema.parse(payload)
+}
+
+export async function authorizeConversationRetry(actor: string, rawInput: unknown) {
+  const input = conversationRetryInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/conversation-assessments/authorize-retry', {
     method: 'POST', body: { ...input, actor }, actor,
   })
   return conversationObservationsSchema.parse(payload)
