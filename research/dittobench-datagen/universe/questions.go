@@ -400,8 +400,11 @@ func (w World) ContactCurrentPlan(index int) (QuestionPlan, error) {
 		// oracle; never skip structural validation or change the answer.
 		for variant := 1; variant < 32; variant++ {
 			err := w.validatePlan(plan)
+			if err == nil {
+				return plan, nil
+			}
 			if !errors.Is(err, errLexicalShortcut) {
-				return plan, err
+				return QuestionPlan{}, err
 			}
 			plan = w.contactCurrentSurface(index, index+variant)
 		}
