@@ -394,6 +394,18 @@ func (w World) ContactCurrentPlan(index int) (QuestionPlan, error) {
 	}
 	p := w.People[index]
 	plan := w.personPlan(oracleContactCurrent, index, w.contactCurrentQuestion(p, index), p.Email, p.PreviousEmail)
+	if w.v13Surface() {
+		// Isolation must retain this exact person and graph. If the first
+		// wording overlaps its evidence, try other V13 wordings of the same
+		// oracle; never skip structural validation or change the answer.
+		for variant := 1; variant < 32; variant++ {
+			err := w.validatePlan(plan)
+			if !errors.Is(err, errLexicalShortcut) {
+				return plan, err
+			}
+			plan = w.contactCurrentSurface(index, index+variant)
+		}
+	}
 	if err := w.validatePlan(plan); err != nil {
 		return QuestionPlan{}, err
 	}
