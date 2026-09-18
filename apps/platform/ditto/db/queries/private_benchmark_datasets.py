@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.db.models import PrivateBenchmarkDataset
 
 MAX_ARTIFACT_BYTES = 32 << 20
-MAX_RECEIPT_BYTES = 4 << 20
+MAX_RECEIPT_BYTES = 32 << 20  # Full surface receipts plus bounded retry history.
 _DIGEST = re.compile(r"[0-9a-f]{64}")
 
 

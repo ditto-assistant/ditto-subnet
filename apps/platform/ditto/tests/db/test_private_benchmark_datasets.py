@@ -14,6 +14,7 @@ from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 
 from ditto.db.models import PrivateBenchmarkDataset
 from ditto.db.queries.private_benchmark_datasets import (
+    MAX_RECEIPT_BYTES,
     PrivateDatasetError,
     PrivateDatasetIdentity,
     find_private_dataset,
@@ -83,13 +84,13 @@ async def test_full_profile_receipt_capacity_is_bounded(session_maker):
     key = identity()
     values = candidate(key)
     receipt = json.loads(values["validation_receipt_bytes"])
-    receipt["surface_provenance"] = "x" * (2 << 20)
+    receipt["surface_provenance"] = "x" * (6 << 20)
     values["validation_receipt_bytes"] = json.dumps(receipt).encode()
     async with session_maker() as session, session.begin():
         result = await pin_private_dataset(session, identity=key, **values)
     async with session_maker() as session:
         assert await find_private_dataset(session, identity=key) == result
-    receipt["surface_provenance"] = "x" * (4 << 20)
+    receipt["surface_provenance"] = "x" * MAX_RECEIPT_BYTES
     values["validation_receipt_bytes"] = json.dumps(receipt).encode()
     async with session_maker() as session, session.begin():
         with pytest.raises(PrivateDatasetError):

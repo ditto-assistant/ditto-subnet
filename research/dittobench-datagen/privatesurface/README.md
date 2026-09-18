@@ -80,3 +80,23 @@ semantic receipt may be up to 4 MiB for a full-profile run.
 Launch still requires real complete artifact production, semantic negative
 controls, measured honest and adversarial runs, durable preparation, closure and
 reveal, guarded readiness, reviewed deployment and a private end-to-end canary.
+# Complete-checkpoint recovery
+
+`cmd/private-recover` is an offline **trusted-operator** finalization tool for
+an owner-only checkpoint written by `ProduceWithDiagnostics`. It is not an
+upload API, a semantic validator, or a way to approve failed/partial generation.
+Diagnostics are unsigned local evidence; only the operator's own authenticated
+checkpoint may be used. Never accept a miner-provided checkpoint.
+
+Pin its SHA-256, the original profile digest and profile JSON. The tool requires
+those pins, rejects shared/symlinked/oversized inputs, regenerates the original
+base byte-for-byte, requires exactly one successful diagnostic per surface,
+checks all surface hashes and completion identities, and reruns mechanical
+artifact validation. It emits to a new owner-only directory without network
+calls. Missing, rejected or inconsistent surfaces fail closed.
+
+Full-profile retry audits can exceed 4 MiB even when every surface succeeds.
+The producer and Platform now share a 32 MiB receipt bound; Platform's appended
+migration preserves all content-hash and immutability constraints. The full
+rejected-attempt audit is retained, not dropped to fit. A recovered candidate
+still needs adversarial qualification and normal Platform pinning/issuance.

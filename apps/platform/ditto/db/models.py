@@ -91,7 +91,7 @@ class PrivateBenchmarkDataset(Base):
             "dataset_sha256 = encode(sha256(dataset_bytes), 'hex') AND "
             "validation_receipt_sha256 = "
             "encode(sha256(validation_receipt_bytes), 'hex') AND "
-            "octet_length(validation_receipt_bytes) BETWEEN 1 AND 4194304",
+            "octet_length(validation_receipt_bytes) BETWEEN 1 AND 33554432",
             name="content_hashes",
         ),
         CheckConstraint(

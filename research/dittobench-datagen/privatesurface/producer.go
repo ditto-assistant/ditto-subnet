@@ -25,6 +25,10 @@ const endpoint = "https://openrouter.ai/api/v1/chat/completions"
 const maxResponse = 1 << 20
 const maxSurfaceAttempts = 5
 
+// MaxReceiptBytes includes the successful receipt and bounded retry audit for
+// every surface of a full run. Keep Platform's MAX_RECEIPT_BYTES in sync.
+const MaxReceiptBytes = 32 << 20
+
 var errSemantic = errors.New("private producer: semantic validation rejected")
 var errProtected = errors.New("private producer: protected rewrite rejected")
 var errTransient = errors.New("private producer: transient provider failure")
@@ -448,6 +452,10 @@ func (c *Client) ProduceWithDiagnostics(ctx context.Context, base gen.DatasetArt
 	if ctx.Err() != nil {
 		return nil, nil, errors.New("private producer: cancelled")
 	}
+	return finalize(ctx, base, c.profile, results, receipts, protected...)
+}
+
+func finalize(ctx context.Context, base gen.DatasetArtifact, profile Profile, results cachedResults, receipts []SurfaceReceipt, protected ...[]string) ([]byte, []byte, error) {
 	artifact, err := gen.ApplyPrivateSurface(ctx, base, results, results, protected...)
 	if err != nil {
 		return nil, nil, err
@@ -460,9 +468,12 @@ func (c *Client) ProduceWithDiagnostics(ctx context.Context, base gen.DatasetArt
 	if err != nil || len(output) > gen.MaxPrivateArtifactBytes {
 		return nil, nil, errors.New("private producer: invalid artifact size")
 	}
-	profile, _ := c.profile.Digest()
-	receipt, err := json.Marshal(Receipt{Schema: "private-surface-validation-v1", Accepted: true, BaseSHA256: digest(baseBytes), DatasetSHA256: digest(output), ProfileSHA256: profile, Profile: c.profile, CreatedAt: time.Now().UTC(), Surfaces: receipts})
-	if err != nil || len(receipt) > 4<<20 {
+	profileSHA, err := profile.Digest()
+	if err != nil {
+		return nil, nil, err
+	}
+	receipt, err := json.Marshal(Receipt{Schema: "private-surface-validation-v1", Accepted: true, BaseSHA256: digest(baseBytes), DatasetSHA256: digest(output), ProfileSHA256: profileSHA, Profile: profile, CreatedAt: time.Now().UTC(), Surfaces: receipts})
+	if err != nil || len(receipt) > MaxReceiptBytes {
 		return nil, nil, errors.New("private producer: invalid receipt size")
 	}
 	return output, receipt, nil
