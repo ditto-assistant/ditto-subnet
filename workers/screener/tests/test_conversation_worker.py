@@ -63,7 +63,8 @@ async def test_failed_delivery_keeps_private_evidence_and_cannot_rebill_same_cla
                 tokens=0,
                 spent_microusd=0,
                 unmetered=False,
-                failed=False,
+                failed=True,
+                failure={"code": "unsupported_message_content", "stage": "request"},
             )
 
     evaluations = []
@@ -101,4 +102,10 @@ async def test_failed_delivery_keeps_private_evidence_and_cannot_rebill_same_cla
     saved = report_path.read_text()
     assert "provider-only-secret" not in saved and claim.seed not in saved
     assert json.loads(saved)["spent_microusd"] == 1050
+    assert json.loads(saved)["harness_usage"]["failure"] == {
+        "code": "unsupported_message_content",
+        "stage": "request",
+        "http_status": None,
+    }
+    assert json.loads(saved)["grades"] is None
     assert len([p for p, _ in calls if p.endswith("/result")]) == 1

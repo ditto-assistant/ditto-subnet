@@ -98,6 +98,14 @@ class ConversationLaunch(ConversationClaim):
     screened_image_size_bytes: Annotated[int, Field(strict=True, gt=0, le=8 << 30)]
 
 
+class RelayFailure(WireModel):
+    """Private first-failure metadata; no prompts, headers or exception text."""
+
+    code: Annotated[str, Field(pattern=r"^[a-z0-9_]{1,80}$")]
+    stage: Literal["request", "provider"]
+    http_status: Annotated[int, Field(strict=True, ge=100, le=599)] | None = None
+
+
 class HarnessUsage(WireModel):
     profile: Literal["conversation-openrouter-oss20b-pplx768-v1"]
     requests: Annotated[int, Field(strict=True, ge=0, le=300)]
@@ -106,6 +114,7 @@ class HarnessUsage(WireModel):
     unmetered: bool
     failed: bool
     cost_is_upper_bound: bool = False
+    failure: RelayFailure | None = None
 
 
 class Exchange(WireModel):

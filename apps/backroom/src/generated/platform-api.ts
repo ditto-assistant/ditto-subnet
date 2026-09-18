@@ -17441,6 +17441,7 @@ export interface components {
             cost_is_upper_bound: boolean;
             /** Failed */
             failed: boolean;
+            failure?: components["schemas"]["RelayFailure"] | null;
             /**
              * Profile
              * @constant
@@ -24529,6 +24530,21 @@ export interface components {
             report: components["schemas"]["ReceiptDiagnosticReport"];
             /** Stale */
             stale: boolean;
+        };
+        /**
+         * RelayFailure
+         * @description Private first-failure metadata; no prompts, headers or exception text.
+         */
+        RelayFailure: {
+            /** Code */
+            code: string;
+            /** Http Status */
+            http_status?: number | null;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "request" | "provider";
         };
         /**
          * RelayRecoveryTelemetryView

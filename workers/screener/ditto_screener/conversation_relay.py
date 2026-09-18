@@ -30,6 +30,10 @@ BUDGET = 5_000_000
 MAX_REQUESTS = 300
 
 
+class RelayError(ValueError):
+    """Only fixed, source-owned codes may be persisted as private diagnostics."""
+
+
 class Relay:
     def __init__(self, key: str, state_file: Path):
         self.key = key
@@ -41,7 +45,29 @@ class Relay:
         self.unmetered = False
         self.cost_is_upper_bound = False
         self.failed = False
+        self.failure: dict[str, Any] | None = None
         self.save()
+
+    def fail(self, exc: Exception, stage: str) -> None:
+        # Caller holds the dispatch lock. Preserve the original error when an
+        # untrusted client retries; never store exception text, URLs or bodies.
+        self.failed = True
+        if self.failure is None:
+            code = "unexpected_error"
+            status = None
+            if isinstance(exc, RelayError):
+                code = str(exc)
+            elif isinstance(exc, HTTPError):
+                code, status = "provider_http_error", exc.code
+            elif isinstance(exc, TimeoutError):
+                code = "timeout"
+            elif isinstance(exc, json.JSONDecodeError):
+                code = "invalid_json"
+            elif isinstance(exc, (KeyError, TypeError, IndexError)):
+                code = "invalid_response_shape"
+            elif isinstance(exc, OSError):
+                code = "transport_error"
+            self.failure = {"code": code, "stage": stage, "http_status": status}
 
     def save(self) -> None:
         # The host owns this pre-created file; only the trusted relay mounts it.
@@ -57,6 +83,7 @@ class Relay:
                         "unmetered": self.unmetered,
                         "failed": self.failed,
                         "cost_is_upper_bound": self.cost_is_upper_bound,
+                        "failure": self.failure,
                     }
                 )
             )
@@ -70,11 +97,11 @@ class Relay:
             not isinstance(tool, dict) or tool.get("type") != "function"
             for tool in tools
         ):
-            raise ValueError("only client-side function tools are supported")
+            raise RelayError("only_client_side_function_tools_are_supported")
         if path in {"/v1/responses", "/responses", "/api/v1/responses"}:
             inputs = body.get("input")
             if not isinstance(inputs, (str, list)) or body.get("previous_response_id"):
-                raise ValueError("stateless text input required")
+                raise RelayError("stateless_text_input_required")
             if isinstance(inputs, list):
                 for item in inputs:
                     if not isinstance(item, dict) or item.get(
@@ -85,17 +112,17 @@ class Relay:
                         "function_call_output",
                         "reasoning",
                     }:
-                        raise ValueError("unsupported response input")
+                        raise RelayError("unsupported_response_input")
                     content = item.get("content")
                     if isinstance(content, list) and any(
                         not isinstance(part, dict)
                         or part.get("type") not in {"input_text", "output_text"}
                         for part in content
                     ):
-                        raise ValueError("text-only response input required")
+                        raise RelayError("text_only_response_input_required")
             output = body.get("max_output_tokens", 4096)
             if type(output) is not int or not 1 <= output <= 8192 or body.get("stream"):
-                raise ValueError("invalid response output limit")
+                raise RelayError("invalid_response_output_limit")
             response_payload: dict[str, Any] = {
                 k: body[k]
                 for k in (
@@ -136,7 +163,7 @@ class Relay:
                 or not 1 <= len(inputs) <= 128
                 or not all(isinstance(s, str) for s in inputs)
             ):
-                raise ValueError("invalid embedding input")
+                raise RelayError("invalid_embedding_input")
             return (
                 "embeddings",
                 {
@@ -158,10 +185,10 @@ class Relay:
             "/chat/completions",
             "/api/v1/chat/completions",
         }:
-            raise ValueError("unsupported inference route")
+            raise RelayError("unsupported_inference_route")
         messages = body.get("messages")
         if not isinstance(messages, list) or not 1 <= len(messages) <= 256:
-            raise ValueError("invalid messages")
+            raise RelayError("invalid_messages")
         # Text-only instrument: remote images/audio and provider extensions can
         # introduce unbounded cost or retrieval outside the conversation.
         for message in messages:
@@ -172,16 +199,28 @@ class Relay:
                 "assistant",
                 "tool",
             }:
-                raise ValueError("invalid message")
+                raise RelayError("invalid_message")
             content = message.get("content")
-            if content is not None and not isinstance(content, str):
-                raise ValueError("only text messages are supported")
+            if isinstance(content, list):
+                # Rig's OpenAI client serializes system text as content parts.
+                # Preserve the text and part boundaries, with no image/audio or
+                # provider extensions allowed through this text-only lane.
+                if any(
+                    not isinstance(part, dict)
+                    or set(part) != {"type", "text"}
+                    or part["type"] != "text"
+                    or not isinstance(part["text"], str)
+                    for part in content
+                ):
+                    raise RelayError("unsupported_message_content")
+            elif content is not None and not isinstance(content, str):
+                raise RelayError("unsupported_message_content")
         output = body.get("max_completion_tokens", body.get("max_tokens", 4096))
         if type(output) is not int or not 1 <= output <= 8192:
-            raise ValueError("invalid output limit")
+            raise RelayError("invalid_output_limit")
         effort = body.get("reasoning_effort", "medium")
         if effort not in {"low", "medium", "high"}:
-            raise ValueError("invalid reasoning effort")
+            raise RelayError("invalid_reasoning_effort")
         payload: dict[str, Any] = {
             k: body[k]
             for k in (
@@ -210,11 +249,17 @@ class Relay:
             }
         )
         if body.get("stream"):
-            raise ValueError("streaming is not supported by this instrument")
+            raise RelayError("streaming_is_not_supported_by_this_instrument")
         return "chat/completions", payload, False
 
     def post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        route, payload, embed = self.payload(path, body)
+        try:
+            route, payload, embed = self.payload(path, body)
+        except Exception as exc:
+            with self.lock:
+                self.fail(exc, "request")
+                self.save()
+            raise
         encoded = json.dumps(payload, ensure_ascii=False).encode()
         input_bound = len(encoded) + 8192
         output_bound = (
@@ -232,7 +277,7 @@ class Relay:
                 or self.requests >= MAX_REQUESTS
                 or self.spent + reservation > BUDGET
             ):
-                raise ValueError("inference budget unavailable")
+                raise RelayError("inference_budget_unavailable")
             self.spent += reservation
             self.requests += 1
             self.unmetered = True
@@ -253,7 +298,7 @@ class Relay:
                 with opener.open(request, timeout=110) as response:
                     data = response.read(MAX_RESPONSE + 1)
                 if len(data) > MAX_RESPONSE:
-                    raise ValueError("oversized provider response")
+                    raise RelayError("oversized_provider_response")
                 result = json.loads(data)
                 usage = result["usage"]
                 prompt = usage.get(
@@ -281,7 +326,7 @@ class Relay:
                     ):
                         cost += tariff
                     else:
-                        raise ValueError("unverifiable BYOK fee")
+                        raise RelayError("unverifiable_byok_fee")
                     self.cost_is_upper_bound = True
                 if embed and cost is None and type(prompt) is int:
                     # Embeddings can omit dollars. Preserve a clearly labelled
@@ -297,7 +342,7 @@ class Relay:
                     or not math.isfinite(cost)
                     or not 0 <= cost * 1_000_000 <= reservation
                 ):
-                    raise ValueError("unverifiable provider usage")
+                    raise RelayError("unverifiable_provider_usage")
                 self.spent += math.ceil(cost * 1_000_000) - reservation
                 self.tokens += prompt + completion
                 self.unmetered = False
@@ -307,7 +352,7 @@ class Relay:
                         for item in sorted(result["data"], key=lambda i: i["index"])
                     ]
                     if any(len(v) != 768 for v in vectors):
-                        raise ValueError("embedding dimension mismatch")
+                        raise RelayError("embedding_dimension_mismatch")
                     result = {
                         "model": body.get("model", EMBED_MODEL),
                         "embeddings": vectors,
@@ -315,8 +360,8 @@ class Relay:
                         "prompt_eval_count": prompt,
                     }
                 return result
-            except Exception:
-                self.failed = True  # Never issue a paid fallback or retry.
+            except Exception as exc:
+                self.fail(exc, "provider")  # Never issue a paid fallback or retry.
                 raise
             finally:
                 self.save()
@@ -334,9 +379,9 @@ def harness_request(
     if (body is None and path != "/health") or (
         body is not None and (path not in {"/run", "/seed"} or len(body) > MAX_BODY)
     ):
-        raise ValueError("unsupported harness route")
+        raise RelayError("unsupported_harness_route")
     if type(timeout) is not int or not 1 <= timeout <= 110:
-        raise ValueError("invalid harness timeout")
+        raise RelayError("invalid_harness_timeout")
     request = urllib.request.Request(
         "http://agent:8080" + path,
         data=body,
@@ -351,7 +396,7 @@ def harness_request(
     with response:
         data = response.read(64_001)
         if len(data) > 64_000:
-            raise ValueError("oversized harness response")
+            raise RelayError("oversized_harness_response")
         return response.status, data
 
 
@@ -359,7 +404,7 @@ def harness_stdio() -> None:
     """Trusted Docker-exec transport; no published host port or caller headers."""
     raw = sys.stdin.buffer.read(200_001)
     if len(raw) > 200_000:
-        raise ValueError("oversized harness envelope")
+        raise RelayError("oversized_harness_envelope")
     envelope = json.loads(raw)
     body = envelope["body"]
     decoded = base64.b64decode(body, validate=True) if body is not None else None
@@ -395,18 +440,18 @@ def serve(relay: Relay) -> None:
             try:
                 length = int(self.headers.get("Content-Length", "0"))
                 if not 0 < length <= MAX_BODY or self.headers.get("Transfer-Encoding"):
-                    raise ValueError("invalid request size")
+                    raise RelayError("invalid_request_size")
                 raw = self.rfile.read(length)
                 if len(raw) != length:
-                    raise ValueError("truncated request")
+                    raise RelayError("truncated_request")
                 body = json.loads(raw)
                 if not isinstance(body, dict):
-                    raise ValueError("invalid body")
+                    raise RelayError("invalid_body")
                 payload = relay.post(self.path, body)
                 status = 200
-            except Exception:
+            except Exception as exc:
                 with relay.lock:
-                    relay.failed = True
+                    relay.fail(exc, "request")
                     relay.save()
                 payload = {"error": {"message": "conversation inference unavailable"}}
                 status = 502

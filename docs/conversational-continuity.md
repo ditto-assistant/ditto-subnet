@@ -105,12 +105,11 @@ unevaluated candidates together as though both had the same composite.
    normalize the screened image, start a fresh rootless container on an internal
    network, attach a separately capped trusted relay and persist the report
    before one result delivery. No Platform or judge credential enters the miner.
-4. Set the fallback submission fee to **200,000,000 RAO (0.2 TAO)**. Migrated
-   databases use append-only submission settings, including fresh installations.
-   Backroom returns the current fee and an exact `fee_change_request` with the
-   current revision, unchanged cooldown and 0.2 TAO amount. Apply that request
-   through the existing audited submission-settings control when activating;
-   already-issued payment reservations retain their quoted amounts.
+4. Preserve the live submission fee during shadow activation. The approved
+   2026-09-18 rollout retains **100,000,000 RAO (0.1 TAO)**. Backroom's
+   `fee_change_request` is a separate proposal, not an activation requirement
+   or authorization to change the fee. Any future fee change requires its own
+   explicit approval and audited submission-settings revision.
 5. Calibrate on cleared leaders, ordinary starter-kit agents and intentionally
    memoryless/incoherent controls, with repeated blinded runs. Measure agreement
    with human judgments, ranking variance, false failures, cost and latency.
@@ -154,6 +153,12 @@ exact serving-provider profile. Route overrides and paid hosted tools are
 removed or refused; every dispatch reserves against the $5 cap before sending.
 Provider failure poisons the relay. Missing dollar receipts for metered embedding
 usage produce a labelled price-ceiling bound, not invented actual spend.
+Chat accepts both plain text and arrays of text parts, including the system
+message shape emitted by Rig's OpenAI client. Multimodal parts remain refused.
+Private reports retain the first relay failure's fixed code, request/provider
+stage and optional HTTP status. They never include exception text, request URLs,
+headers or provider bodies. Subsequent client retries cannot overwrite that
+diagnostic or dispatch more paid inference.
 BYOK Router fees exclude the separate provider invoice. For those responses the
 meter retains the provider tariff plus Router fee as a labelled upper bound;
 pre-dispatch reservations include the possible 5% BYOK fee. A zero Router charge
@@ -233,3 +238,21 @@ live provider preflight passed Astra function calling, GPT-OSS-20B chat and
 768-dimensional Perplexity embeddings with usage receipts. Full live assessment,
 release adoption and corpus calibration remain separate proof steps; record their
 actual outcomes before declaring shadow activation complete.
+
+### Initial shadow containment (2026-09-18)
+
+All five initially admitted top-five assessments ended `incomplete` with
+`harness_inference_incomplete`, no completed exchanges and no score. Backroom
+revision 2 paused new admissions at 18:28:05Z; no attempt was running. The live
+fee remained 0.1 TAO and the rolling reservation remained $150. The old reports
+did not retain the underlying relay exception. Source inspection and an offline
+request reproduction identify a rejected Rig system-text array; they do not
+establish that this explains every failed submission.
+
+Terminal identities remain terminal after a relay release or mode change.
+Do not change an artifact, benchmark epoch or instrument identity to bypass
+that rule, or clear an old reservation to create budget headroom. A paid rerun
+requires explicit audited manual retry authorization and admission within the
+unchanged rolling cap. The current lane has no manual retry endpoint; ordinary
+shadow reactivation alone cannot rerun these five identities. A successful
+synthetic smoke is not a completed top-five assessment.
