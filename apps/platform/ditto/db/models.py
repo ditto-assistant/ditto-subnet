@@ -9917,3 +9917,45 @@ class ValidatorReceiptDiagnostic(Base):
         TIMESTAMP(timezone=True), nullable=False
     )
     report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+
+
+class ConversationAssessment(Base):
+    __tablename__ = "conversation_assessments"
+
+    assessment_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    instrument: Mapped[str] = mapped_column(Text, nullable=False)
+    seed: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_token: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    base_quality_micros: Mapped[int] = mapped_column(Integer, nullable=False)
+    reserved_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"]),
+        Index("conversation_created_at", "created_at"),
+        UniqueConstraint(
+            "agent_id",
+            "artifact_sha256",
+            "bench_version",
+            "instrument",
+            name="conversation_assessment_identity",
+        ),
+        CheckConstraint(
+            "base_quality_micros BETWEEN 0 AND 1000000",
+            name="conversation_base_quality",
+        ),
+        CheckConstraint(
+            "reserved_microusd = 30000000", name="conversation_reserved_cost"
+        ),
+        CheckConstraint("bench_version >= 9", name="conversation_bench_version"),
+    )

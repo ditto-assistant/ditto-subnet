@@ -799,6 +799,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/conversation-assessments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Observations */
+        get: operations["observations_api_v1_admin_conversation_assessments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/conversation-assessments/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim */
+        post: operations["claim_api_v1_admin_conversation_assessments_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/conversation-assessments/{assessment_id}/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Report */
+        get: operations["get_report_api_v1_admin_conversation_assessments__assessment_id__report_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/conversation-assessments/{assessment_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit Result */
+        post: operations["submit_result_api_v1_admin_conversation_assessments__assessment_id__result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/copy-court/recommendations": {
         parameters: {
             query?: never;
@@ -15952,6 +16020,194 @@ export interface components {
             scope: string;
             settings: components["schemas"]["ContinualRetestSettings"];
         };
+        /** ConversationClaim */
+        ConversationClaim: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Assessment Id
+             * Format: uuid
+             */
+            assessment_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Harness Budget Microusd
+             * @default 5000000
+             * @constant
+             */
+            harness_budget_microusd: 5000000;
+            /**
+             * Judge Budget Microusd
+             * @default 25000000
+             * @constant
+             */
+            judge_budget_microusd: 25000000;
+            /**
+             * Lease Token
+             * Format: uuid
+             */
+            lease_token: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Seed */
+            seed: string;
+        };
+        /** ConversationObservation */
+        ConversationObservation: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Assessment Id
+             * Format: uuid
+             */
+            assessment_id: string;
+            /** Base Quality Micros */
+            base_quality_micros: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Conversation Micros */
+            conversation_micros: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error Code */
+            error_code: string | null;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Proposed Quality Micros */
+            proposed_quality_micros: number | null;
+            /** Reserved Microusd */
+            reserved_microusd: number;
+            /** Spent Microusd */
+            spent_microusd: number | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "leased" | "completed" | "incomplete" | "expired";
+        };
+        /** ConversationObservations */
+        ConversationObservations: {
+            /** Current Submission Fee Rao */
+            current_submission_fee_rao: number;
+            /** Daily Budget Microusd */
+            daily_budget_microusd: number;
+            fee_change_request: components["schemas"]["AdminSubmissionSettingsRequest"];
+            /** Instrument */
+            instrument: string;
+            /** Items */
+            items: components["schemas"]["ConversationObservation"][];
+            /** Judge Model */
+            judge_model: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /**
+             * Proposed Submission Fee Rao
+             * @default 200000000
+             * @constant
+             */
+            proposed_submission_fee_rao: 200000000;
+            /** Reserved Last Day Microusd */
+            reserved_last_day_microusd: number;
+        };
+        /** ConversationReport */
+        ConversationReport: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Assessment Id
+             * Format: uuid
+             */
+            assessment_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Error Code */
+            error_code?: string | null;
+            /** Exchanges */
+            exchanges: components["schemas"]["Exchange"][];
+            grades?: components["schemas"]["GradeSheet"] | null;
+            /** Input Tokens */
+            input_tokens: number;
+            /**
+             * Instrument
+             * @default conversational-continuity-v1
+             * @constant
+             */
+            instrument: "conversational-continuity-v1";
+            /** Judge Requests */
+            judge_requests: number;
+            /**
+             * Model
+             * @default gpt-6-astra
+             * @constant
+             */
+            model: "gpt-6-astra";
+            /** Output Tokens */
+            output_tokens: number;
+            /** Provider Model */
+            provider_model: string;
+            /** Reserved Microusd */
+            reserved_microusd: number;
+            /**
+             * Rubric Sha256
+             * @default 0ad55fd9b1c2df67935db3431b4448212203c9d67ec2d21f23516fd51e024a40
+             */
+            rubric_sha256: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Spent Microusd */
+            spent_microusd: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "incomplete";
+            /** Story Sha256 */
+            story_sha256: string;
+            /**
+             * Unmetered
+             * @default false
+             */
+            unmetered: boolean;
+        };
+        /** ConversationResultRequest */
+        ConversationResultRequest: {
+            /**
+             * Lease Token
+             * Format: uuid
+             */
+            lease_token: string;
+            report: components["schemas"]["ConversationReport"];
+        };
         /**
          * CopyCourtSettings
          * @description Strict, secret-free triage posture for copy-kind ATH holds.
@@ -16726,6 +16982,17 @@ export interface components {
             /** Send Address */
             send_address: string;
         };
+        /** Exchange */
+        Exchange: {
+            /** Assistant */
+            assistant: string;
+            /** Session */
+            session: number;
+            /** Turn Id */
+            turn_id: number;
+            /** User */
+            user: string;
+        };
         /**
          * FailJobRequest
          * @description Signed request to hand a still-leased ticket back after a failed attempt.
@@ -17015,6 +17282,11 @@ export interface components {
             revision?: string | null;
             /** Version */
             version?: string | null;
+        };
+        /** GradeSheet */
+        GradeSheet: {
+            /** Probes */
+            probes: components["schemas"]["ProbeGrade"][];
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -19353,6 +19625,22 @@ export interface components {
             signature: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /** ProbeGrade */
+        ProbeGrade: {
+            /**
+             * Dimension
+             * @enum {string}
+             */
+            dimension: "recall" | "updating" | "application" | "coherence" | "boundaries";
+            /** Quote */
+            quote: string;
+            /** Rationale */
+            rationale: string;
+            /** Score */
+            score: number;
+            /** Turn Id */
+            turn_id: number;
         };
         /** ProviderCircuitSnapshot */
         ProviderCircuitSnapshot: {
@@ -30940,6 +31228,140 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ContinualRetestSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    observations_api_v1_admin_conversation_assessments_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationObservations"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_api_v1_admin_conversation_assessments_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationClaim"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_report_api_v1_admin_conversation_assessments__assessment_id__report_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                assessment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationReport"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_result_api_v1_admin_conversation_assessments__assessment_id__result_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                assessment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationObservation"];
                 };
             };
             /** @description Validation Error */

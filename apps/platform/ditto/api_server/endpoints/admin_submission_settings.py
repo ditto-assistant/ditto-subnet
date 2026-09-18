@@ -48,7 +48,7 @@ def _default_revision() -> RevisionModel:
         parent_revision=0,
         cooldown_seconds=DEFAULT_SUBMISSION_COOLDOWN_SECONDS,
         fee_amount_rao=DEFAULT_SUBMISSION_FEE_RAO,
-        reason="Built-in submission cooldown and 0.04 TAO fee",
+        reason="Built-in submission cooldown and 0.2 TAO fee",
         actor="platform",
         created_at=None,
     )

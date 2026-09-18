@@ -16,7 +16,7 @@ from ditto.db.queries.submission_deposit_address import (
 )
 
 DEFAULT_SUBMISSION_COOLDOWN_SECONDS = 3600
-DEFAULT_SUBMISSION_FEE_RAO = 40_000_000
+DEFAULT_SUBMISSION_FEE_RAO = 200_000_000
 MIN_SUBMISSION_COOLDOWN_SECONDS = 60
 MAX_SUBMISSION_COOLDOWN_SECONDS = 86400
 # A finalized payment may recover its admission for 24 hours. An unpaid

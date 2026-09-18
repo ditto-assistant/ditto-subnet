@@ -1,3 +1,5 @@
+import { conversationAssessmentInputSchema } from '../lib/conversation.schemas'
+import { fetchConversationAssessments } from './admin.service'
 import '@tanstack/react-start/server-only'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
@@ -582,6 +584,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Idempotently observe one current score snapshot. No scoring effect.',
   get_screener_review_settings:
     'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
+  get_conversation_assessments:
+    'Read conversation assessment evidence, costs and shadow scores.',
   get_screener_fanout_shadow:
     'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
   get_copy_court_settings:
@@ -1957,6 +1961,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerReviewControl()),
+  )
+
+  registerTool(
+    'get_conversation_assessments',
+    {
+      title: 'Get conversational continuity assessments',
+      description: 'Read top-five Astra conversation assessment state, cost reservations and proposed quality. Pass assessment_id to inspect the private transcript and rubric evidence. Shadow results never change rewards or screening decisions. Requires backroom:read.',
+      inputSchema: conversationAssessmentInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchConversationAssessments(input)),
   )
 
   registerTool(

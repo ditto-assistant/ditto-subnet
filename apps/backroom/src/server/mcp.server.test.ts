@@ -178,6 +178,7 @@ describe('Backroom MCP tools', () => {
         'create_screener_bootstrap_grant',
         'get_screener_review_settings',
         'get_screener_fanout_shadow',
+        'get_conversation_assessments',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
         'rotate_screener_policy_manifest',
@@ -334,7 +335,8 @@ describe('Backroom MCP tools', () => {
     // measured and merged; none of them is a tutorial.
     // Four canary operations add explicit lease identity/digest/CAS inputs;
     // measured catalog is 133,733 bytes. Descriptions remain short summaries.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(134_500)
+    // One bounded conversation observation tool adds ~900 bytes.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(135_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -2108,6 +2110,37 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/screener-fanout-shadow?status=succeeded&limit=25&offset=0',
+      expect.any(Object),
+    )
+    await client.close()
+    await server.close()
+  })
+
+  it('reads private conversation evidence through a read-only tool', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const assessmentId = '11111111-1111-4111-8111-111111111111'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      assessment_id: assessmentId,
+      agent_id: '22222222-2222-4222-8222-222222222222',
+      instrument: 'conversational-continuity-v1',
+      model: 'gpt-6-astra',
+      status: 'incomplete',
+      error_code: 'judge_cost_limit',
+      exchanges: [],
+      grades: null,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_conversation_assessments',
+      arguments: { assessment_id: assessmentId },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      status: 'incomplete', error_code: 'judge_cost_limit', grades: null,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/conversation-assessments/${assessmentId}/report`,
       expect.any(Object),
     )
     await client.close()

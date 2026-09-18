@@ -499,6 +499,9 @@ class ApiServerConfig:
     backoff never reaches zero rate: a champion whose interval flatlines at the
     cap is itself the signal that the field has gone stagnant."""
 
+    conversation_shadow_enabled: bool = False
+    """Admit top-five Astra conversation assessments; never changes reward scores."""
+
     efficiency_bonus: EfficiencyBonusConfig = field(
         default_factory=EfficiencyBonusConfig
     )
@@ -935,6 +938,12 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     cloudrun = _parse_cloudrun_screening_config_from_env()
 
     return ApiServerConfig(
+        conversation_shadow_enabled=os.environ.get(
+            "DITTO_CONVERSATION_SHADOW_ENABLED", "false"
+        )
+        .strip()
+        .lower()
+        in _TRUTHY,
         source_emission_confirmation_enabled=(
             os.environ.get("DITTO_SOURCE_EMISSION_CONFIRMATION_ENABLED", "true").lower()
             in _TRUTHY
