@@ -28,6 +28,7 @@ const maxSurfaceAttempts = 5
 var errSemantic = errors.New("private producer: semantic validation rejected")
 var errProtected = errors.New("private producer: protected rewrite rejected")
 var errTransient = errors.New("private producer: transient provider failure")
+var errTruncated = errors.New("private producer: provider output token limit")
 
 const retryPrompt = ` An earlier candidate failed independent semantic validation. Stay closer to the source. Keep any phrase you cannot safely paraphrase verbatim and only rewrite safe surrounding phrasing. Return the source unchanged if no safe rewrite exists. Do not weaken any requirement above.`
 
@@ -64,7 +65,7 @@ func (p Profile) Digest() (string, error) {
 			return "", errors.New("private producer: invalid reasoning profile")
 		}
 	}
-	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "five-total-candidates-including-transient-retries-backoff-1s", "exact-byte-identity-validation-v1", "schema-bound-final-preservation-v1", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
+	raw, _ := json.Marshal([]any{"private-surface-producer-v1", "typo-provenance-and-masking-v1", "per-candidate-global-protection-v1", "five-total-candidates-including-transient-and-truncation-retries-backoff-1s", "exact-byte-identity-validation-v1", "schema-bound-final-preservation-v1", p, rewritePrompt, contextPrompt, validatePrompt, retryPrompt, preservationPrompt, maxSurfaceAttempts, "zdr;data_collection=deny;no-fallback;strict-json", 0.7, 0.0, 4096})
 	return digest(raw), nil
 }
 
@@ -218,7 +219,7 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 	if result.Choices[0].FinishReason != "stop" {
 		switch result.Choices[0].FinishReason {
 		case "length":
-			return fail("provider output token limit")
+			return nil, CompletionReceipt{}, errTruncated
 		case "error":
 			return nil, CompletionReceipt{}, errTransient
 		case "content_filter":
@@ -393,7 +394,7 @@ func (c *Client) ProduceWithDiagnostics(ctx context.Context, base gen.DatasetArt
 				var reasons []string
 				for attempt := 0; attempt < maxSurfaceAttempts; attempt++ {
 					after, receipt, err = c.probeOne(ctx, req, attempt, check)
-					if !errors.Is(err, errSemantic) && !errors.Is(err, errProtected) && !errors.Is(err, errTransient) {
+					if !errors.Is(err, errSemantic) && !errors.Is(err, errProtected) && !errors.Is(err, errTransient) && !errors.Is(err, errTruncated) {
 						break
 					}
 					rejected = append(rejected, receipt)

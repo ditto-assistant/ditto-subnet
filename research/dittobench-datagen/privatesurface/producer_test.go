@@ -338,3 +338,35 @@ func TestTransientRecoveryStillRequiresSemanticValidation(t *testing.T) {
 		t.Fatal("transient failure not recorded")
 	}
 }
+
+func TestTruncatedOutputRecoveryIsBoundedAndValidated(t *testing.T) {
+	for _, recoverAfterFirst := range []bool{false, true} {
+		calls, validations := 0, 0
+		c := fakeClient(t, func(n int, request map[string]any) (int, any) {
+			calls++
+			if !recoverAfterFirst || n == 1 {
+				out := completion(`{"text":"TRUNCATED must never be accepted"}`).(map[string]any)
+				out["choices"].([]any)[0].(map[string]any)["finish_reason"] = "length"
+				return 200, out
+			}
+			if request["model"] == "validator-v1" {
+				validations++
+				return 200, completion(`{"accepted":true}`)
+			}
+			return 200, completion(`{"text":"Please consider the source text."}`)
+		})
+		base := gen.DatasetArtifact{BenchVersion: 13, SurfaceSalt: 1, ToolCases: []protocol.ToolCase{{ID: "t", Prompt: "source text"}}}
+		data, raw, err := c.Produce(context.Background(), base, 1)
+		if recoverAfterFirst {
+			if err != nil || calls != 3 || validations != 1 || strings.Contains(string(data), "TRUNCATED") {
+				t.Fatalf("invalid recovery: calls=%d validations=%d err=%v", calls, validations, err)
+			}
+			var receipt Receipt
+			if json.Unmarshal(raw, &receipt) != nil || len(receipt.Surfaces[0].RejectedReasons) != 1 {
+				t.Fatal("truncation rejection was not recorded")
+			}
+		} else if err == nil || calls != maxSurfaceAttempts || data != nil || raw != nil {
+			t.Fatalf("truncation bypassed retry boundary: calls=%d err=%v", calls, err)
+		}
+	}
+}

@@ -231,6 +231,27 @@ func (b *storyV2Builder) pickPerson(excluded ...int) int {
 	}
 }
 
+// Keep story operands out of ordinary invoice records. Independent random
+// streams can still draw identical amounts; that must not make a valid seed
+// fail the story-only evidence invariant. Walk deterministically on collision
+// without perturbing the RNG stream for unaffected seeds.
+func (b *storyV2Builder) privateMoneyCents(candidate, minimum, span int) int {
+	for offset := 0; offset < span; offset++ {
+		value := minimum + (candidate-minimum+offset)%span
+		blocked := false
+		for _, p := range b.w.Projects {
+			if value == p.OriginalCents || value == p.CorrectedCents || value == p.PaidCents {
+				blocked = true
+				break
+			}
+		}
+		if !blocked {
+			return value
+		}
+	}
+	panic("story money range exhausted")
+}
+
 func (b *storyV2Builder) buildArc(index int, kind StoryKind, theme StoryEventKind, personIndex, projectIndex, tripIndex int, lessonSlot, disagree, forceRevision bool) (StoryArc, []Story) {
 	r := b.r
 	w := b.w
@@ -420,16 +441,16 @@ func (b *storyV2Builder) buildArc(index int, kind StoryKind, theme StoryEventKin
 		case EventApprovalCapped:
 			status = "approved"
 			if wantMoney {
-				capCents := 800_000 + r.Intn(4_000_000)
-				spentCents := 100_000 + r.Intn(capCents/2)
+				capCents := b.privateMoneyCents(800_000+r.Intn(4_000_000), 800_000, 4_000_000)
+				spentCents := b.privateMoneyCents(100_000+r.Intn(capCents/2), 100_000, capCents/2)
 				e.Slots["cap"] = money(capCents)
 				e.Slots["spent"] = money(spentCents)
 				v2.Quantity = &StoryQuantity{Kind: "money", Value: capCents - spentCents, Base: capCents, Delta: spentCents, Op: "subtract", Memory: e.Memory, Operand: money(capCents), Operand2: money(spentCents)}
 				quantityStated = true
 			} else {
-				capCents := 800_000 + r.Intn(4_000_000)
+				capCents := b.privateMoneyCents(800_000+r.Intn(4_000_000), 800_000, 4_000_000)
 				e.Slots["cap"] = money(capCents)
-				e.Slots["spent"] = money(100_000 + r.Intn(capCents/2))
+				e.Slots["spent"] = money(b.privateMoneyCents(100_000+r.Intn(capCents/2), 100_000, capCents/2))
 			}
 		case EventContactRouteChanged:
 			if routeFrom == "" {
