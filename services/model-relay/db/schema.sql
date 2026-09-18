@@ -3327,7 +3327,7 @@ CREATE TABLE public.private_benchmark_datasets (
     base_bytes bytea NOT NULL,
     dataset_bytes bytea NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT ck_private_benchmark_datasets_content_hashes CHECK (((base_sha256 = encode(sha256(base_bytes), 'hex'::text)) AND (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text)) AND (validation_receipt_sha256 = encode(sha256(validation_receipt_bytes), 'hex'::text)) AND ((octet_length(validation_receipt_bytes) >= 1) AND (octet_length(validation_receipt_bytes) <= 4194304)))),
+    CONSTRAINT ck_private_benchmark_datasets_content_hashes CHECK (((base_sha256 = encode(sha256(base_bytes), 'hex'::text)) AND (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text)) AND (validation_receipt_sha256 = encode(sha256(validation_receipt_bytes), 'hex'::text)) AND ((octet_length(validation_receipt_bytes) >= 1) AND (octet_length(validation_receipt_bytes) <= 33554432)))),
     CONSTRAINT ck_private_benchmark_datasets_digest_format CHECK (((identity_sha256 ~ '^[0-9a-f]{64}$'::text) AND (transform_profile_sha256 ~ '^[0-9a-f]{64}$'::text) AND (validation_receipt_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_private_benchmark_datasets_run_size CHECK ((run_size = ANY (ARRAY['small'::text, 'medium'::text, 'full'::text]))),
     CONSTRAINT ck_private_benchmark_datasets_scope CHECK (((length(scope) >= 1) AND (length(scope) <= 256))),
