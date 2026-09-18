@@ -166,6 +166,9 @@ class SourceEmissionCollector:
         )
 
     async def _sweep_provider(self, substrate: Any) -> None:
+        # Durable payouts must not wait for a full scan batch to succeed.
+        # Keep archive verification and provider fallback on the same path.
+        await self.resolve_pending_payouts(substrate)
         finalized_hash = await substrate.get_chain_finalised_head()
         header = await substrate.get_block_header(block_hash=finalized_hash)
         number = header.get("header", header)["number"]

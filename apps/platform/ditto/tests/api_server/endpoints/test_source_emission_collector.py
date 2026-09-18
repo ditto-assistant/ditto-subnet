@@ -563,3 +563,36 @@ async def test_same_block_reveal_pays_exact_submission_before_new_same_hotkey_cl
         await _collector(app, session_maker).resolve_pending_payouts(SimpleNamespace())
         == 0
     )
+
+
+async def test_pending_payout_resolves_before_failing_block_scan(
+    app, client, session_maker, monkeypatch
+):
+    a, b = await _prepare(app, session_maker)
+    assert (await _post(client, _signed(a))).status_code == 200
+    collector = _collector(app, session_maker)
+    await collector.process_block(_observed(a, 200, reveal=True), None)
+    await collector.process_block(_observed(a, 201, payout=True), _payout(a, 201))
+    monkeypatch.setattr(
+        "ditto.chain.source_emission_verifier.verify_finalized_weight_commit",
+        AsyncMock(),
+    )
+    scan = AsyncMock(side_effect=RuntimeError("RPC work limit exceeded"))
+    monkeypatch.setattr(
+        "ditto.api_server.source_emission_collector.read_source_emission_block", scan
+    )
+    substrate = SimpleNamespace(
+        get_chain_finalised_head=AsyncMock(return_value=_hash(202)),
+        get_block_header=AsyncMock(return_value={"header": {"number": 202}}),
+    )
+    with pytest.raises(RuntimeError, match="RPC work limit exceeded"):
+        await collector._sweep_provider(substrate)
+    scan.assert_awaited_once()
+    async with session_maker() as session:
+        aid = UUID(a["provenance"]["champion_agent_id"])
+        bid = UUID(b["provenance"]["champion_agent_id"])
+        reveals = await get_king_reveal(session, agent_ids=[aid, bid])
+        assert reveals[aid].emission_confirmed_at == datetime.fromtimestamp(
+            _payout(a, 201).block_timestamp, UTC
+        )
+        assert bid not in reveals or reveals[bid].emission_confirmed_at is None
