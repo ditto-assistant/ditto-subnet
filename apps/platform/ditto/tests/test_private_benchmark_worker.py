@@ -127,6 +127,7 @@ async def test_worker_failure_is_terminal_and_never_pins(
         ("profile_sha256", "b" * 64),
         ("timeout_seconds", 10801),
         ("concurrency", 17),
+        ("rewrite_mode", "unapproved-mode"),
         ("max_cost_usd", 0),
         ("max_cost_usd", float("nan")),
         ("max_cost_usd", float("inf")),
@@ -170,6 +171,34 @@ async def test_world_readable_root_rejected(tmp_path):
     config.work_root.chmod(0o755)
     with pytest.raises(PrivateWorkerError):
         await verify_producer(config)
+
+
+def test_rewrite_mode_is_explicit_and_legacy_arguments_are_unchanged(tmp_path):
+    config = producer(tmp_path, "a" * 64)
+    assert "-rewrite-mode" not in config.arguments()
+    literal = replace(config, rewrite_mode="literal-text-v1")
+    assert literal.arguments() == [
+        "-rewrite-mode",
+        "literal-text-v1",
+        *config.arguments(),
+    ]
+
+
+async def test_literal_mode_is_passed_during_profile_inspection(tmp_path):
+    config = producer(tmp_path, "a" * 64)
+    text = config.executable.read_text().replace(
+        "args = sys.argv[1:]",
+        'args = sys.argv[1:]\nassert args[:2] == ["-rewrite-mode", "literal-text-v1"]',
+    )
+    config.executable.write_text(text)
+    config = replace(
+        config,
+        executable_sha256=hashlib.sha256(config.executable.read_bytes()).hexdigest(),
+        rewrite_mode="literal-text-v1",
+    )
+    await verify_producer(config)
+    with pytest.raises(PrivateWorkerError, match="profile digest mismatch"):
+        await verify_producer(replace(config, profile_sha256="b" * 64))
 
 
 def test_bounded_read_rejects_hardlinks_and_oversize(tmp_path):
