@@ -7,10 +7,22 @@
   gather_facts: false
   vars_files:
     - ../roles/hetzner_screener_fleet/defaults/main.yml
-  vars:
-    screener_fleet_conversation_enabled: true
-    screener_fleet_x509_enabled: true
   tasks:
+    # vars_files override play vars. Set the two capabilities after loading the
+    # shared defaults so the materializer keeps its existing writable key path.
+    - name: Select the existing federation and optional conversation capability
+      ansible.builtin.set_fact:
+        screener_fleet_conversation_enabled: true
+        screener_fleet_x509_enabled: true
+
+    - name: Verify the materializer resolves only writable secret destinations
+      ansible.builtin.assert:
+        that:
+          - screener_fleet_conversation_enabled | bool
+          - screener_fleet_x509_enabled | bool
+          - screener_fleet_source_review_key_file == screener_fleet_secrets_dir + '/source-review-api-key'
+          - screener_fleet_conversation_key_file == screener_fleet_secrets_dir + '/conversation-openrouter-key'
+
     - name: Verify existing federation and released worker before convergence
       ansible.builtin.command:
         argv:
