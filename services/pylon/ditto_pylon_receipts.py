@@ -17,6 +17,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pylon_service.db.database import Base, session_factory
+from scalecodec.utils.ss58 import ss58_decode
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -471,6 +472,17 @@ async def prepare_commit(
             raise StopRetrying("receipt preparation race")
 
 
+def _account_id(value: Any) -> bytes:
+    """Compare decoded AccountId32 and persisted SS58 by their public key."""
+    if not isinstance(value, str):
+        raise ValueError("invalid commit account identity")
+    encoded = value[2:] if value.startswith("0x") else ss58_decode(value)
+    account = bytes.fromhex(encoded)
+    if len(account) != 32:
+        raise ValueError("commit account identity must be AccountId32")
+    return account
+
+
 async def finalize_commit(
     block_hash: str,
     block: dict[str, Any],
@@ -516,7 +528,7 @@ async def finalize_commit(
             raise ValueError("unsupported commit event schema")
         hotkey, netuid, commit_hash, reveal_round = attrs
         if (
-            hotkey != task.hotkey
+            _account_id(hotkey) != _account_id(task.hotkey)
             or netuid != row["netuid"]
             or str(commit_hash).removeprefix("0x") != attempt["ciphertext_hash"]
             or reveal_round != attempt["reveal_round"]

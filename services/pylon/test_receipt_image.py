@@ -20,10 +20,13 @@ from pylon_service.api._unstable.api import IdentityController
 from pylon_service.db.database import Base
 from pylon_service.db.models import WeightTask
 from pylon_service.guards import identity_auth_guard
+from scalecodec.utils.ss58 import ss58_decode
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from turbobt.subnet import SubnetWeights
 from turbobt.substrate.extrinsic import ExtrinsicResult
+
+HOTKEY = "5HEouuDaDASnWdqDwYtwQATS5z916W9DyDAtK6WyB2jPRReb"
 
 
 def body():
@@ -72,7 +75,7 @@ class ReceiptImageTests(unittest.IsolatedAsyncioTestCase):
         self.run_patch.start()
         self.service = SimpleNamespace(
             identity=SimpleNamespace(identity_name="validator"),
-            contact_router=SimpleNamespace(hotkey="validator-hotkey"),
+            contact_router=SimpleNamespace(hotkey=HOTKEY),
         )
 
     async def asyncTearDown(self):
@@ -100,7 +103,7 @@ class ReceiptImageTests(unittest.IsolatedAsyncioTestCase):
                 "event_id": "TimelockedWeightsCommitted",
                 "event": {
                     "attributes": [
-                        "validator-hotkey",
+                        HOTKEY,
                         118,
                         "0x"
                         + hashlib.blake2b(
@@ -350,6 +353,25 @@ class ReceiptImageTests(unittest.IsolatedAsyncioTestCase):
             "uncertain",
         )
 
+    async def test_finalization_rejects_wrong_or_malformed_account_id(self):
+        for account in ("0x" + "ff" * 32, "0x01", "0x" + "gg" * 32, "invalid", None):
+            with self.subTest(account=account):
+                row = await self.create()
+                async with receipt.record_task(row["task_id"]):
+                    await self.prepare(row)
+                    events = self.events()
+                    events[1]["event"]["attributes"][0] = account
+                    with self.assertRaises(ValueError):
+                        await receipt.finalize_commit(
+                            "0x" + "c" * 64,
+                            {"block": {"header": {"number": 1024}}},
+                            "0x" + "d" * 64,
+                            2,
+                            events,
+                        )
+                final = await receipt.get_request(self.service, 118, row["request_id"])
+                self.assertEqual(final["status"], "uncertain")
+
     async def test_actual_finalization_adapter_captures_receipt(self):
         row = await self.create()
         extrinsic_hash = "0x" + "d" * 64
@@ -364,6 +386,8 @@ class ReceiptImageTests(unittest.IsolatedAsyncioTestCase):
                 return statuses()
 
         events = [{**event, "extrinsic_idx": 0} for event in self.events()]
+        # Installed TurboBT decodes AccountId as hex (observed block 9092425).
+        events[1]["event"]["attributes"][0] = "0x" + ss58_decode(HOTKEY)
         substrate = SimpleNamespace(
             author=SimpleNamespace(unwatchExtrinsic=AsyncMock()),
             chain=SimpleNamespace(
