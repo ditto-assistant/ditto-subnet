@@ -2996,7 +2996,7 @@ async def submit_weight_receipt(
     if not _verify_signature(
         validator_hotkey,
         weight_receipt_signing_message(receipt, request_body.timestamp),
-        request_body.signature,
+        request_body.signature.removeprefix("0x"),
     ):
         raise ValidatorAuthError("weight receipt signature verification failed")
     try:

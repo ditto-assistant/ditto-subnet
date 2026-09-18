@@ -233,3 +233,16 @@ async def test_same_hotkey_and_vector_cannot_name_another_artifact_or_pin(
             )
             == 0
         )
+
+
+async def test_validator_prefixed_receipt_signature_is_accepted(
+    app, client, session_maker
+):
+    """PlatformClient emits 0x-prefixed hex; exercise that exact wire format."""
+    raw = await _setup(app, session_maker)
+    body = _signed(raw)
+    body["signature"] = "0x" + body["signature"]
+    result = await _post(client, body)
+    assert result.status_code == 200, result.text
+    body["receipt"]["attempt"]["commit_block"] += 1
+    assert (await _post(client, body)).status_code == 401
