@@ -373,7 +373,7 @@ func TestCaseURLPreservesV13ProvenanceRoute(t *testing.T) {
 	srv := &server{broker: broker}
 	_, _, err := srv.runCaseWithModelAttribution(runner.TrustSandbox(context.Background()),
 		"session", harness.URL, caseID, "question", nil,
-		runner.CaseOptions{BenchVersion: protocol.BenchVersionV13, InferenceBaseURL: expected})
+		scoredCaseOptions(protocol.BenchVersionV13, gateway, caseID, "", ""))
 	if err != nil {
 		t.Fatal(err)
 	}

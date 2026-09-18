@@ -1982,7 +1982,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 		c := toolCases[i]
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
-		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
+		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, c.ID, caseToolEndpoint, toolRunUserID))
 		observed := toolSrv.Observed(c.ID)
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
@@ -2153,12 +2153,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				uid = wave.UserID
 			}
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
-			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{
-				ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion,
-				// v13: name the case in the inference base URL so a per-run model
-				// client is attributable under concurrent /run (empty below v13).
-				InferenceBaseURL: v13CaseInferenceBaseURL(req.BenchVersion, harnessInferenceGateway, mc.ID),
-			})
+			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, mc.ID, caseToolEndpoint, uid))
 			observedCalls := toolSrv.Observed(mc.ID)
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp
