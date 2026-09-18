@@ -9793,3 +9793,16 @@ class ValidatorNameCache(Base):
             name="validator_name_cache_stake_weight_check",
         ),
     )
+
+
+class ValidatorReceiptDiagnostic(Base):
+    """Latest authenticated relay observation per subnet and validator."""
+
+    __tablename__ = "validator_receipt_diagnostics"
+    netuid: Mapped[int] = mapped_column(Integer, primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    signed_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)

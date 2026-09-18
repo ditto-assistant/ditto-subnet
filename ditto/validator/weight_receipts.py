@@ -6,11 +6,12 @@ import asyncio
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from time import monotonic, time
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticObservation
 from ditto.api_models.weight_receipt import (
     FinalizedWeightReceipt,
     WeightProvenance,
@@ -64,7 +65,14 @@ class WeightReceiptRelay:
             self.diagnostics,
             recovery_status=status,
             recovery_observed_at=int(time()),
-            **counts,
+            page_receipts=counts.get("page_receipts", self.diagnostics.page_receipts),
+            page_finalized=counts.get(
+                "page_finalized", self.diagnostics.page_finalized
+            ),
+            page_forwarded=counts.get(
+                "page_forwarded", self.diagnostics.page_forwarded
+            ),
+            page_deferred=counts.get("page_deferred", self.diagnostics.page_deferred),
         )
 
     def schedule_recovery(self) -> None:
@@ -84,6 +92,17 @@ class WeightReceiptRelay:
             return
         async with self._recovery_lock:
             await self._recover()
+            report = getattr(self.platform, "submit_receipt_diagnostics", None)
+            if callable(report):
+                try:
+                    async with asyncio.timeout(3):
+                        await report(
+                            ReceiptDiagnosticObservation.model_validate(
+                                asdict(self.diagnostics)
+                            )
+                        )
+                except Exception:  # noqa: BLE001 - diagnostic failure never blocks weights
+                    logger.debug("receipt diagnostic reporting deferred")
 
     async def _recover(self) -> None:
         """Bounded recovery includes old jobs after a stateless worker restart."""

@@ -235,6 +235,77 @@ async def test_same_hotkey_and_vector_cannot_name_another_artifact_or_pin(
         )
 
 
+async def test_relay_diagnostics_authenticated_latest_only(app, client, session_maker):
+    from ditto.api_models.receipt_diagnostics import (
+        ReceiptDiagnosticObservation,
+        ReceiptDiagnosticReport,
+        SubmitReceiptDiagnostics,
+        diagnostic_signing_message,
+    )
+    from ditto.db.models import ValidatorReceiptDiagnostic
+
+    await _setup(app, session_maker)
+    now = int(datetime.now(UTC).timestamp())
+
+    def signed(timestamp, status="uncertain"):
+        report = ReceiptDiagnosticReport(
+            validator_hotkey=_HOTKEY,
+            netuid=app.state.config.chain.netuid,
+            timestamp=timestamp,
+            observation=ReceiptDiagnosticObservation(
+                submission_status=status,
+                submission_observed_at=timestamp,
+                recovery_status="page_complete",
+            ),
+        )
+        return SubmitReceiptDiagnostics(
+            report=report,
+            signature="0x" + bytes(_KEY.sign(diagnostic_signing_message(report))).hex(),
+        ).model_dump(mode="json")
+
+    async def post(body):
+        return await client.post(
+            "/api/v1/validator/receipt-diagnostics",
+            json=body,
+            headers={"X-Validator-Hotkey": _HOTKEY},
+        )
+
+    body = signed(now)
+    body["report"]["observation"]["submission_status"] = "accepted"
+    assert (await post(body)).status_code == 401
+    assert (await post(signed(1))).status_code == 401
+    result = await post(signed(now))
+    assert result.status_code == 200, result.text
+    assert (await post(signed(now - 1, "accepted"))).status_code == 200
+    async with session_maker() as session:
+        row = await session.get(
+            ValidatorReceiptDiagnostic, (app.state.config.chain.netuid, _HOTKEY)
+        )
+        assert row.report["observation"]["submission_status"] == "uncertain"
+        assert row.signed_at == now
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ValidatorWeightReceipt)
+            )
+            == 0
+        )
+
+    from dataclasses import replace
+
+    app.state.config = replace(
+        app.state.config, admin_api_token="test-admin-token-at-least-32-characters"
+    )
+    status = await client.get(
+        "/api/v1/admin/artifact-release-settings",
+        headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
+    )
+    assert status.status_code == 200, status.text
+    observation = status.json()["release_gate"]["receipt_diagnostics"][0]
+    assert observation["report"]["validator_hotkey"] == _HOTKEY
+    assert observation["stale"] is False
+    assert status.json()["release_gate"]["confirmed_kings"] == 0
+
+
 async def test_validator_prefixed_receipt_signature_is_accepted(
     app, client, session_maker
 ):

@@ -6090,6 +6090,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/receipt-diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Receipt Diagnostics
+         * @description Store latest signed observation; never consumed by emission verification.
+         */
+        post: operations["submit_receipt_diagnostics_api_v1_validator_receipt_diagnostics_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/top5-confirmation-job": {
         parameters: {
             query?: never;
@@ -23951,6 +23971,70 @@ export interface components {
             scope: string;
             settings: components["schemas"]["QueuePolicySettings"];
         };
+        /** ReceiptDiagnosticObservation */
+        ReceiptDiagnosticObservation: {
+            /**
+             * Page Deferred
+             * @default 0
+             */
+            page_deferred: number;
+            /**
+             * Page Finalized
+             * @default 0
+             */
+            page_finalized: number;
+            /**
+             * Page Forwarded
+             * @default 0
+             */
+            page_forwarded: number;
+            /**
+             * Page Receipts
+             * @default 0
+             */
+            page_receipts: number;
+            /** Recovery Observed At */
+            recovery_observed_at?: number | null;
+            /**
+             * Recovery Status
+             * @enum {string}
+             */
+            recovery_status: "not_attempted" | "unsupported" | "reading_pylon" | "validating_claim" | "forwarded" | "page_complete" | "reading_pylon_failed" | "validating_claim_failed" | "forwarding_platform_failed" | "acknowledging_pylon_failed" | "validating_page_failed";
+            /** Submission Observed At */
+            submission_observed_at?: number | null;
+            /**
+             * Submission Status
+             * @enum {string}
+             */
+            submission_status: "not_attempted" | "missing_provenance_or_transport" | "invalid_provenance" | "submitting_pylon" | "unsupported" | "accepted" | "uncertain";
+        };
+        /** ReceiptDiagnosticReport */
+        ReceiptDiagnosticReport: {
+            /** Netuid */
+            netuid: number;
+            observation: components["schemas"]["ReceiptDiagnosticObservation"];
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+            /** Timestamp */
+            timestamp: number;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** ReceiptDiagnosticRow */
+        ReceiptDiagnosticRow: {
+            /**
+             * Received At
+             * Format: date-time
+             */
+            received_at: string;
+            report: components["schemas"]["ReceiptDiagnosticReport"];
+            /** Stale */
+            stale: boolean;
+        };
         /**
          * RelayRecoveryTelemetryView
          * @description Ticket-level abort evidence retained by the benchmark control plane.
@@ -26453,6 +26537,13 @@ export interface components {
              * @default 0
              */
             pending_receipt_count: number;
+            /** Receipt Diagnostics */
+            receipt_diagnostics?: components["schemas"]["ReceiptDiagnosticRow"][];
+            /**
+             * Receipt Diagnostics Has More
+             * @default false
+             */
+            receipt_diagnostics_has_more: boolean;
             /** Rows */
             rows: components["schemas"]["SourceReleaseEligibilityRow"][];
             /** Rows Has More */
@@ -27332,6 +27423,12 @@ export interface components {
              * @constant
              */
             weight_eligible: false;
+        };
+        /** SubmitReceiptDiagnostics */
+        SubmitReceiptDiagnostics: {
+            report: components["schemas"]["ReceiptDiagnosticReport"];
+            /** Signature */
+            signature: string;
         };
         /**
          * SubmitScoreRequest
@@ -40621,6 +40718,43 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    submit_receipt_diagnostics_api_v1_validator_receipt_diagnostics_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-validator-hotkey"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitReceiptDiagnostics"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

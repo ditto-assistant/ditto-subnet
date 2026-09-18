@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -12,12 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.artifact_release_settings import (
     AdminArtifactReleaseSettingsRequest,
     AdminArtifactReleaseSettingsResponse,
+    ReceiptDiagnosticRow,
     SourceReleaseEligibilityRow,
     SourceReleaseGateStatus,
 )
 from ditto.api_models.artifact_release_settings import (
     ArtifactReleaseSettingsRevision as RevisionModel,
 )
+from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure, release_confirmation
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -28,6 +31,7 @@ from ditto.db.models import (
     SourceEmissionCollectorCursor,
     SourceEmissionPayout,
     SourceEmissionPayoutResolution,
+    ValidatorReceiptDiagnostic,
     ValidatorWeightReceipt,
 )
 from ditto.db.queries.artifact_release_settings import (
@@ -154,6 +158,17 @@ async def get_settings(
             .exists(),
         )
     )
+    diagnostic_rows = list(
+        await session.scalars(
+            select(ValidatorReceiptDiagnostic)
+            .where(ValidatorReceiptDiagnostic.netuid == netuid)
+            .order_by(
+                ValidatorReceiptDiagnostic.received_at.desc(),
+                ValidatorReceiptDiagnostic.validator_hotkey,
+            )
+            .limit(65)
+        )
+    )
     return AdminArtifactReleaseSettingsResponse(
         current=_revision(rows[0]) if rows else _default_revision(),
         history=[_revision(row) for row in rows],
@@ -171,6 +186,15 @@ async def get_settings(
             last_payout_attributed=resolution is not None,
             unresolved_payout_count=int(unresolved or 0),
             pending_receipt_count=int(receipts or 0),
+            receipt_diagnostics=[
+                ReceiptDiagnosticRow(
+                    report=ReceiptDiagnosticReport.model_validate(row.report),
+                    received_at=row.received_at,
+                    stale=(datetime.now(UTC) - row.received_at).total_seconds() > 300,
+                )
+                for row in diagnostic_rows[:64]
+            ],
+            receipt_diagnostics_has_more=len(diagnostic_rows) > 64,
             pending_kings=total - confirmed,
             confirmed_kings=confirmed,
             rows=[

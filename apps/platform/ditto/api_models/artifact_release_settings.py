@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure
 
 
@@ -43,6 +44,13 @@ class SourceReleaseEligibilityRow(BaseModel):
     emission_ledger_digest: str | None
 
 
+class ReceiptDiagnosticRow(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    report: ReceiptDiagnosticReport
+    received_at: datetime
+    stale: bool
+
+
 class SourceReleaseGateStatus(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -57,6 +65,10 @@ class SourceReleaseGateStatus(BaseModel):
     last_payout_attributed: bool = False
     unresolved_payout_count: int = 0
     pending_receipt_count: int = 0
+    receipt_diagnostics: list[ReceiptDiagnosticRow] = Field(
+        default_factory=list, max_length=64
+    )
+    receipt_diagnostics_has_more: bool = False
     pending_kings: int
     confirmed_kings: int
     rows: Annotated[list[SourceReleaseEligibilityRow], Field(max_length=25)]

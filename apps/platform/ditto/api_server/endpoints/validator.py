@@ -54,6 +54,7 @@ import bittensor
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy import func, or_, select
+from sqlalchemy.dialects.postgresql import insert as diagnostic_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
@@ -89,6 +90,10 @@ from ditto.api_models.queue_policy_settings import (
     DeferredSourceReviewSettings,
     PrevGenCarryoverSettings,
     QueuePolicySettings,
+)
+from ditto.api_models.receipt_diagnostics import (
+    SubmitReceiptDiagnostics,
+    diagnostic_signing_message,
 )
 from ditto.api_models.stack_health import (
     ValidatorStackHealth,
@@ -234,6 +239,7 @@ from ditto.db.models import (
     ScreeningAttempt,
     ScreeningQuarantine,
     ValidatorHeartbeat,
+    ValidatorReceiptDiagnostic,
     ValidatorTicket,
 )
 from ditto.db.queries.agents import get_agent_by_id
@@ -2964,6 +2970,52 @@ async def _validated_heartbeat_work(
         confirmation_progress=stored_confirmation_progress,
         claimed_slots=claimed,
     )
+
+
+@router.post("/receipt-diagnostics")
+async def submit_receipt_diagnostics(
+    request: Request,
+    request_body: SubmitReceiptDiagnostics,
+    validator_hotkey: ValidatorDep,
+    session: SessionDep,
+) -> dict[str, bool]:
+    """Store latest signed observation; never consumed by emission verification."""
+    if len(await request.body()) > 8192:
+        raise HTTPException(status_code=413, detail="diagnostic payload too large")
+    report = request_body.report
+    now = datetime.now(UTC)
+    if (
+        report.validator_hotkey != validator_hotkey
+        or report.netuid != request.app.state.config.chain.netuid
+    ):
+        raise ValidatorAuthError("diagnostic identity mismatch")
+    if abs(int(now.timestamp()) - report.timestamp) > _HEARTBEAT_MAX_SKEW_SECONDS:
+        raise ValidatorAuthError("diagnostic timestamp outside window")
+    if not _verify_signature(
+        validator_hotkey,
+        diagnostic_signing_message(report),
+        request_body.signature.removeprefix("0x"),
+    ):
+        raise ValidatorAuthError("diagnostic signature verification failed")
+    stmt = diagnostic_insert(ValidatorReceiptDiagnostic).values(
+        netuid=report.netuid,
+        validator_hotkey=validator_hotkey,
+        signed_at=report.timestamp,
+        received_at=now,
+        report=report.model_dump(mode="json"),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["netuid", "validator_hotkey"],
+        set_={
+            "signed_at": stmt.excluded.signed_at,
+            "received_at": stmt.excluded.received_at,
+            "report": stmt.excluded.report,
+        },
+        where=ValidatorReceiptDiagnostic.signed_at < report.timestamp,
+    )
+    async with session.begin():
+        await session.execute(stmt)
+    return {"accepted": True}
 
 
 @router.post(

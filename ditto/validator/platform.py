@@ -70,6 +70,12 @@ from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
 )
+from ditto.api_models.receipt_diagnostics import (
+    ReceiptDiagnosticObservation,
+    ReceiptDiagnosticReport,
+    SubmitReceiptDiagnostics,
+    diagnostic_signing_message,
+)
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.validator import (
     ArtifactResponse,
@@ -295,6 +301,31 @@ class PlatformClient:
             or config.platform_api_url
         ).rstrip("/")
         self._headers = {"X-Validator-Hotkey": config.validator_hotkey}
+
+    async def submit_receipt_diagnostics(
+        self, observation: ReceiptDiagnosticObservation
+    ) -> None:
+        report = ReceiptDiagnosticReport(
+            validator_hotkey=self._config.validator_hotkey,
+            netuid=self._config.netuid,
+            timestamp=int(datetime.now(UTC).timestamp()),
+            observation=observation,
+        )
+        body = SubmitReceiptDiagnostics(
+            report=report,
+            signature="0x"
+            + bytes(self._keypair.sign(diagnostic_signing_message(report))).hex(),
+        )
+        response = await self._client.post(
+            f"{self._base}{_PREFIX}/receipt-diagnostics",
+            json=body.model_dump(mode="json"),
+            headers=self._headers,
+            timeout=3.0,
+        )
+        if response.status_code not in (200, 404):
+            raise PlatformError(
+                f"receipt diagnostics rejected ({response.status_code})"
+            )
 
     async def submit_weight_receipt(
         self, receipt: FinalizedWeightReceipt
