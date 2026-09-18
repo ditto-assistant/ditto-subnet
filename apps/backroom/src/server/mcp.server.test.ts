@@ -214,6 +214,7 @@ describe('Backroom MCP tools', () => {
         'list_copy_court_recommendations',
         'apply_copy_court_settings',
         'list_hotkey_bans',
+        'list_team_canaries',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
         'get_agent_coding_certifications',
@@ -351,7 +352,8 @@ describe('Backroom MCP tools', () => {
     // one-line bench v13+ confirmation seed anchor read (its notes live in the
     // detailed help) lands at 25_047, so the bound moves to 25_200;
     // the one-line bench v13 gate-evidence and dispute-kind notes on the score
-    // and dispute tools land at 25_237, so it moves to 25_400.
+    // and dispute tools land at 25_237, so it moves to 25_400. The one-line
+    // team-canary read (list_team_canaries) fits under that bound.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
       25_400,
     )
@@ -1123,6 +1125,7 @@ describe('Backroom MCP tools', () => {
       list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
       list_hotkey_bans: { maxLimit: 200, maxDefault: 50 },
+      list_team_canaries: { maxLimit: 200, maxDefault: 50 },
       get_leaderboard: { maxLimit: 200, maxDefault: 50 },
       get_validator_fleet: { maxLimit: 200, maxDefault: 50 },
       list_validator_assignments: { maxLimit: 200, maxDefault: 50 },
@@ -5123,6 +5126,62 @@ describe('Backroom MCP tools', () => {
     )
     await writeConnection.client.close()
     await writeConnection.server.close()
+  })
+
+  it('lists audited team canaries read-only with the agents each excludes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const exclusionId = '3f1c9d27-b40a-4e6b-9c1d-2a7f0e5b8c41'
+    const agentId = '11ad9203-0860-40a9-9432-059b4ef68865'
+    const listing = {
+      total: 1,
+      exclusions: [
+        {
+          exclusion_id: exclusionId,
+          kind: 'team_canary',
+          miner_hotkey: '5FKbkmKbJHTgsELVPigLJqbmovaviDN7dHZzX7UJ6xoqG4fx',
+          artifact_sha256: 'c1'.repeat(32),
+          reason: 'team canary for hosted coding certification',
+          created_by: 'peyton@omniaura.ai',
+          created_at: '2026-09-14T00:00:00Z',
+          agent_id: agentId,
+          screened_image_sha256: 'e3'.repeat(32),
+          bound_by: 'peyton@omniaura.ai',
+          bound_reason: 'bound after the screened image was verified',
+          bound_at: '2026-09-14T01:00:00Z',
+          matched_agents: [
+            {
+              agent_id: agentId,
+              status: 'scored',
+              sha256: 'c1'.repeat(32),
+              screened_image_sha256: 'e3'.repeat(32),
+              state: 'bound',
+              competition_excluded: true,
+            },
+          ],
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(listing))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const connection = await connect([BACKROOM_READ_SCOPE])
+    const response = await connection.client.callTool({
+      name: 'list_team_canaries',
+      arguments: { limit: 50, offset: 0 },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      total: 1,
+      count: 1,
+      returned: 1,
+      has_more: false,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/noncompetitive-canaries?limit=50&offset=0',
+      expect.anything(),
+    )
+    await connection.client.close()
+    await connection.server.close()
   })
 
   it('answers owner attestations on read scope alone, keeping every grade and revoked links', async () => {

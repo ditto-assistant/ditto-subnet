@@ -34,10 +34,13 @@ afterEach(() => {
   document.body.classList.remove("entity-page");
 });
 
-function renderPanel(names: Record<string, string> = {}): void {
+function renderPanel(
+  names: Record<string, string> = {},
+  boardEntries: typeof entries = entries,
+): void {
   render(() => (
     <EntityPanel
-      entries={() => entries}
+      entries={() => boardEntries}
       operations={() => operations}
       validatorNames={() => names}
       currentBench={() => 7}
@@ -148,6 +151,22 @@ describe("EntityPanel miner tenant", () => {
     const openFull = document.getElementById("d-open-full");
     expect(openFull).toHaveAttribute("href", "/miner/" + topEntry.miner_hotkey);
     expect(document.getElementById("d-stats")?.classList.contains("pipeline-mode")).toBe(false);
+  });
+
+  it("labels a finalized, scored team canary as a canary in the chip and rank row", () => {
+    const canaryEntries = rankEntries(
+      (leaderboard.entries ?? []).map((entry, index) =>
+        index === 0 ? { ...entry, eligible: false, finalized: true, team_canary: true } : entry,
+      ),
+    );
+    const canary = canaryEntries.find((entry) => entry.team_canary === true);
+    if (!canary) throw new Error("missing canary entry");
+    renderPanel({}, canaryEntries);
+    visit("/#/overview?miner=" + canary.miner_hotkey);
+    expect(document.getElementById("d-bench")).toHaveTextContent("Unranked · team canary");
+    const stats = document.getElementById("d-stats")?.textContent ?? "";
+    expect(stats).toContain("unranked (team canary)");
+    expect(stats).not.toContain("unranked (provisional");
   });
 
   it("keeps the deep run evidence off the profile — no per-validator consensus block", () => {
