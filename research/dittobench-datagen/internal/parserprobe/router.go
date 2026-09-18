@@ -1,6 +1,7 @@
 package parserprobe
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -56,7 +57,7 @@ func trainRouter(benchVersion int, runSize string, first int64, n int) (*router,
 	for i := 0; i < n; i++ {
 		a, err := gen.GenerateDataset(first+int64(i), prof, benchVersion)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("seed %d: %w", first+int64(i), err)
 		}
 		for _, mc := range a.MemoryCases {
 			add("mem:"+routerLabel(mc.QuestionType), mc.Question)

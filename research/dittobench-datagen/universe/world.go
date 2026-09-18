@@ -249,6 +249,9 @@ func GenerateForVersion(seed int64, scale, benchVersion int) World {
 		}
 		w.People = append(w.People, p)
 	}
+	if v13 {
+		recoverV13CrossUserAnchors(&w, scale)
+	}
 
 	seenProjects := map[string]bool{}
 	seenProjectAliases := map[string]bool{}
