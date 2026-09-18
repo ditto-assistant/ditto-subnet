@@ -142,6 +142,7 @@ type Report struct {
 	RunSize         string       `json:"run_size"`
 	Source          string       `json:"source"`
 	RouterSeeds     int          `json:"router_seeds"`
+	RouterFirstSeed int64        `json:"router_first_seed,omitempty"`
 	Seeds           []SeedReport `json:"seeds"`
 	GIH             *Variant     `json:"gih_aggregate"`
 	Router          *Variant     `json:"router_aggregate,omitempty"`
@@ -153,21 +154,15 @@ type Report struct {
 
 // Run executes the probe over generated seeds or supplied artifacts.
 func Run(opts Options) (Report, error) {
-	if opts.RunSize == "" {
-		opts.RunSize = "full"
+	var err error
+	opts, err = checkedOptions(opts)
+	if err != nil {
+		return Report{}, err
 	}
-	if opts.Seeds <= 0 && len(opts.Artifacts) == 0 {
-		return Report{}, fmt.Errorf("at least one seed or artifact is required")
-	}
-	report := Report{BenchVersion: opts.BenchVersion, RunSize: opts.RunSize, Source: "generated", GIH: newVariant(), RouterSeeds: opts.RouterSeeds}
+	report := Report{BenchVersion: opts.BenchVersion, RunSize: opts.RunSize, Source: "generated", GIH: newVariant(), RouterSeeds: opts.RouterSeeds, RouterFirstSeed: opts.RouterFirstSeed}
 	var rt *router
 	if opts.RouterSeeds > 0 {
-		first := opts.RouterFirstSeed
-		if first == 0 {
-			first = opts.FirstSeed + int64(opts.Seeds) + 1000
-		}
-		var err error
-		rt, err = trainRouter(opts.BenchVersion, opts.RunSize, first, opts.RouterSeeds)
+		rt, err = trainRouter(opts.BenchVersion, opts.RunSize, opts.RouterFirstSeed, opts.RouterSeeds)
 		if err != nil {
 			return Report{}, fmt.Errorf("train router: %w", err)
 		}
