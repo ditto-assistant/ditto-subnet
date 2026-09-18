@@ -139,7 +139,7 @@ describe("server-backed quick filters (row 10)", () => {
       ["under_review", "Integrity review 53", "false"],
       ["waiting_validator", "Waiting for validators 3", "false"],
       ["queued", "Queued work 3", "false"],
-      ["downloadable", "Downloadable 0", "false"],
+      ["downloadable", "Source releases 0", "false"],
     ]);
     // The summary is a live region; the clear affordance hides until a
     // filter is active.
@@ -189,6 +189,36 @@ describe("server-backed quick filters (row 10)", () => {
     expect(last.get("downloadable")).toBe("true");
     expect(last.get("page")).toBe("1");
     expect(location.pathname + location.search).toBe("/submissions?downloadable=true");
+  });
+
+  it("shows the exact pending disclosure deadline in the source releases view", async () => {
+    history.replaceState(null, "", "/submissions?downloadable=true");
+    syncFromLocation();
+    stubActivityFetch(() => ({
+      ...activity,
+      entries: [
+        {
+          ...activity.entries![0],
+          artifact_release: {
+            status: "embargoed",
+            emission_confirmed_at: "2026-07-31T12:00:00Z",
+            available_at: "2026-08-01T12:00:00Z",
+            embargo_hours: 24,
+            download_available: false,
+          },
+        },
+      ],
+      total: 1,
+      downloadable_count: 1,
+    }));
+    render(() => <SubmissionsPage />);
+    await waitFor(() =>
+      expect(document.querySelector(".source-release-note.embargoed")?.textContent).toBe(
+        "Pending disclosure · Downloadable Aug 1, 2026, 12:00 UTC",
+      ),
+    );
+    expect(activityRequests().pop()?.get("downloadable")).toBe("true");
+    expect(document.querySelector('[data-activity-count="downloadable"]')?.textContent).toBe("1");
   });
 
   it("states unavailability outright — never sample rows", async () => {

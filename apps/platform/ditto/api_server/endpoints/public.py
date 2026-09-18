@@ -5569,7 +5569,8 @@ def _public_activity_response(
         else sum(
             1
             for row, _ in projected
-            if artifact_releases[row.agent.agent_id].download_available
+            if artifact_releases[row.agent.agent_id].status
+            in ("available", "embargoed")
         )
     )
     if requested_statuses and not already_paginated:
@@ -5582,7 +5583,8 @@ def _public_activity_response(
         projected = [
             (row, row_status)
             for row, row_status in projected
-            if artifact_releases[row.agent.agent_id].download_available
+            if artifact_releases[row.agent.agent_id].status
+            in ("available", "embargoed")
         ]
 
     total = precomputed_total if precomputed_total is not None else len(projected)
@@ -6080,6 +6082,7 @@ async def activity(
         quorum=SCORING_QUORUM,
         policy=release_policy,
         now=now,
+        include_pending=True,
     )
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
     from ditto.db.queries.name_claims import active_handle_claims

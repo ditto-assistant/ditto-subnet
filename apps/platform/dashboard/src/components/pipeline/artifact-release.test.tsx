@@ -55,7 +55,9 @@ describe("completed winner earnings source release", () => {
         "48 hours after this submission earned winner emissions in a completed tempo",
       ),
     });
-    expect(artifactReleaseNote(release)?.text).toContain("Privacy window ·");
+    expect(artifactReleaseNote(release)?.text).toBe(
+      "Pending disclosure · Downloadable Sep 19, 2026, 12:00 UTC",
+    );
   });
   it("offers the download when the server confirms earnings and release availability", () => {
     render(() => (

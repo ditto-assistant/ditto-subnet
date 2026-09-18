@@ -212,8 +212,9 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   signed download URLs, source hashes, payments, and raw screener/build logs are
   never included in this listing.
   `downloadable=true` narrows the listing to submissions whose derived release
-  state currently permits a public source download; it composes with status and
-  search filters. `downloadable_count` reports that population after search but
+  state is available or awaiting its confirmed payout-based embargo deadline;
+  pending rows expose `artifact_release.available_at` but no download. It composes
+  with status and search filters. `downloadable_count` reports that population after search but
   before status filtering so the dashboard can label the quick filter.
   Each waiting entry also carries `validator_queue_rank` and
   `validator_queue_gate` — the queue preview, described next.

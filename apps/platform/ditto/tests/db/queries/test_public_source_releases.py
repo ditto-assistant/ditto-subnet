@@ -258,6 +258,14 @@ async def test_agrees_with_the_public_route_projection(
         now=available_at - timedelta(seconds=1),
     )
 
+    assert agent_id in await available_public_source_agent_ids(
+        session,
+        quorum=_QUORUM,
+        policy=_PUBLIC_120H,
+        now=available_at - timedelta(seconds=1),
+        include_pending=True,
+    )
+
 
 class TestPolicyAsOf:
     """Judging a past upload needs the window that was in force back then."""

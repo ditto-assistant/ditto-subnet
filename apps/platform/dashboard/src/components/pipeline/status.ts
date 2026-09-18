@@ -56,7 +56,7 @@ export const ACTIVITY_FILTER_LABELS: Record<string, string> = {
   under_review: "Integrity review",
   waiting_validator: "Waiting for validators",
   queued: "Queued work",
-  downloadable: "Downloadable",
+  downloadable: "Source releases",
 };
 
 /**

@@ -221,12 +221,14 @@ async def available_public_source_agent_ids(
     quorum: int,
     policy: ArtifactReleasePolicy,
     now: datetime,
+    include_pending: bool = False,
 ) -> set[UUID]:
-    """Return currently downloadable source ids without scanning submissions.
+    """Return eligible source ids, optionally including scheduled disclosures.
 
     Kingship is intentionally the leading relation: it is the tiny eligibility
     ledger, while ``agents`` is the unbounded public activity history. Only the
-    already-confirmed, embargo-complete kings reach the score-quorum window.
+    confirmed kings reach the score-quorum window. Pending disclosures may be
+    listed without changing the download endpoint or its embargo enforcement.
     """
     if not policy.releases_publicly:
         return set()
@@ -237,7 +239,11 @@ async def available_public_source_agent_ids(
             .join(Agent, Agent.agent_id == AgentKingship.agent_id)
             .where(
                 AgentKingship.emission_confirmed_at.is_not(None),
-                AgentKingship.emission_confirmed_at <= cutoff,
+                *(
+                    []
+                    if include_pending
+                    else [AgentKingship.emission_confirmed_at <= cutoff]
+                ),
                 Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
             )
         )

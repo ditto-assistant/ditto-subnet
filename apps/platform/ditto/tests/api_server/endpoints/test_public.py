@@ -7493,6 +7493,25 @@ class TestPublicActivity:
             status=AgentStatus.LIVE,
             name="alpha private",
         )
+        pending_id = await _seed_k3(
+            session_maker,
+            miner=_MINER_B,
+            composites=[0.61, 0.64, 0.67],
+            status=AgentStatus.LIVE,
+        )
+        await _crown(session_maker, agent_id=pending_id, first_crowned_at=now)
+        unearned_id = await _seed_k3(
+            session_maker,
+            miner=_MINER_B,
+            composites=[0.61, 0.64, 0.67],
+            status=AgentStatus.LIVE,
+        )
+        await _crown(
+            session_maker,
+            agent_id=unearned_id,
+            first_crowned_at=now,
+            emission_confirmed_at=None,
+        )
         _install_db(app, session_maker)
 
         response = await client.get(
@@ -7513,8 +7532,21 @@ class TestPublicActivity:
                 params={"downloadable": "true", "status": "rejected"},
             )
         ).json()
-        assert no_matches["downloadable_count"] == 1
+        assert no_matches["downloadable_count"] == 2
         assert no_matches["total"] == 0
+
+        releases = (
+            await client.get("/api/v1/public/activity", params={"downloadable": "true"})
+        ).json()
+        assert releases["total"] == 2
+        entries = {entry["agent_id"]: entry for entry in releases["entries"]}
+        assert set(entries) == {downloadable_id, pending_id}
+        pending = entries[pending_id]["artifact_release"]
+        assert pending["status"] == "embargoed"
+        assert pending["download_available"] is False
+        assert datetime.fromisoformat(
+            pending["available_at"].replace("Z", "+00:00")
+        ) == (now + timedelta(hours=pending["embargo_hours"]))
 
     async def test_exposes_latest_platform_score_time_for_finalized_agents(
         self,

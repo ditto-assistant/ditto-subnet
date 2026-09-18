@@ -57,7 +57,7 @@ export function artifactReleaseCopy(
   if (release.status === "embargoed") {
     return {
       state: "embargoed",
-      label: "Privacy window",
+      label: "Pending disclosure",
       detail: release.available_at
         ? "Source unlocks " +
           relTimeUntil(release.available_at) +
@@ -111,7 +111,17 @@ export function artifactReleaseNote(
     text:
       copy.label +
       (copy.state === "embargoed" && release?.available_at
-        ? " · " + relTimeUntil(release.available_at)
+        ? " · Downloadable " +
+          new Date(release.available_at).toLocaleString("en-US", {
+            timeZone: "UTC",
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          }) +
+          " UTC"
         : ""),
   };
 }
