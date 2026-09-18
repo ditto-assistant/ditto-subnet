@@ -53,9 +53,11 @@ func TestPrivateDatasetExactBytesReachProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	// This is a synthetic delivery fixture, never qualification evidence.
-	a.ToolCases[0].Prompt = "A unique private tool presentation."
-	a.MemoryCases[0].Question = "A unique private memory presentation."
-	a.MemoryWaves[0].Pairs[0].Prompt = "A unique private seed presentation."
+	// Preserve protected values and context bindings: the decoder must not
+	// accept the old fixture, which replaced entire requests with empty facts.
+	a.ToolCases[0].Prompt = "A unique private tool presentation. " + a.ToolCases[0].Prompt
+	a.MemoryCases[0].Question = "A unique private memory presentation. " + a.MemoryCases[0].Question
+	a.MemoryWaves[0].Pairs[0].Prompt = "A unique private seed presentation. " + a.MemoryWaves[0].Pairs[0].Prompt
 	raw, err := a.Marshal()
 	if err != nil {
 		t.Fatal(err)
