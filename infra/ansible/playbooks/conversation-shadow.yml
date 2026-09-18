@@ -1,0 +1,68 @@
+---
+# Install only the shadow consumer capability on an already-converged fleet.
+# No host/VM/chain configuration changes. Activate new claims through Backroom.
+- name: Install the conversation shadow capability on the primary screener
+  hosts: screener_partition
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../roles/hetzner_screener_fleet/defaults/main.yml
+  vars:
+    screener_fleet_conversation_enabled: true
+    screener_fleet_x509_enabled: true
+  tasks:
+    - name: Verify existing federation and released worker before convergence
+      ansible.builtin.command:
+        argv:
+          - "{{ screener_fleet_active_worker_venv }}/bin/python"
+          - -c
+          - "import ditto_screener.conversation_worker"
+      changed_when: false
+
+    - name: Install the bounded secret materializer
+      ansible.builtin.template:
+        src: ../roles/hetzner_screener_fleet/templates/materialize-source-review-secret.sh.j2
+        dest: /usr/local/sbin/ditto-screener-source-review-secret
+        owner: root
+        group: root
+        mode: "0755"
+        validate: /bin/bash -n %s
+
+    - name: Install the secret materializer service
+      ansible.builtin.template:
+        src: ../roles/hetzner_screener_fleet/templates/ditto-screener-source-review-secret.service.j2
+        dest: /etc/systemd/system/ditto-screener-source-review-secret.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Materialize through the existing exact-subject federation
+      ansible.builtin.systemd:
+        name: ditto-screener-source-review-secret.service
+        state: restarted
+        daemon_reload: true
+      no_log: true
+
+    - name: Create a conversation-only worker override directory
+      ansible.builtin.file:
+        path: /etc/systemd/system/ditto-screener-worker@.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the optional capability without replacing existing worker limits
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ditto-screener-worker@.service.d/conversation.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Service]
+          Environment=SCREENER_CONVERSATION_OPENROUTER_KEY_FILE={{ screener_fleet_conversation_key_file }}
+          Environment=SCREENER_CONVERSATION_SPOOL_DIR={{ screener_fleet_state_dir }}/workers/%i/conversation
+          TimeoutStopSec=70min
+
+    - name: Reload systemd (the release updater drains and restarts workers)
+      ansible.builtin.systemd:
+        daemon_reload: true

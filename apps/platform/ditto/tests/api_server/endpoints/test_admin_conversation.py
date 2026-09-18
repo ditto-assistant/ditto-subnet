@@ -9,9 +9,11 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from fastapi import Request
 from sqlalchemy import func, select
 
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.endpoints.screener import require_screener
 from ditto.db.models import Agent, AgentStatus, ConversationAssessment, Score
 from ditto_screening_protocol.conversation import DIMENSIONS, ConversationReport
 from ditto_screening_protocol.conversation_story import story, story_digest
@@ -118,6 +120,77 @@ async def test_off_and_unauthorized_do_not_reserve(
     assert listing["mode"] == "off" and listing["items"] == []
 
 
+async def test_audited_switch_stops_claims_and_rejects_stale_revision(
+    app, client, session_maker, monkeypatch
+):
+    await install(app, session_maker, monkeypatch, enabled=False)
+    payload = {
+        "mode": "shadow",
+        "expected_revision": 0,
+        "actor": "operator@example.com",
+        "reason": "Start the bounded shadow canary",
+        "confirmation": "APPLY CONVERSATION SHADOW SETTINGS",
+    }
+    changed = await client.post(BASE + "/settings", headers=HEADERS, json=payload)
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["settings_revision"] == 1
+    assert changed.json()["settings_actor"] == payload["actor"]
+    assert (
+        await client.post(BASE + "/settings", headers=HEADERS, json=payload)
+    ).status_code == 409
+    payload.update(mode="off", expected_revision=1)
+    assert (
+        await client.post(BASE + "/settings", headers=HEADERS, json=payload)
+    ).status_code == 200
+    assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
+
+
+async def test_worker_claim_is_image_bound_and_result_requires_its_owner(
+    app, client, session_maker, monkeypatch
+):
+    await install(app, session_maker, monkeypatch)
+
+    async def worker(request: Request):
+        request.state.screener_node_status = "active"
+        return request.headers.get("x-test-worker", "worker-one")
+
+    app.dependency_overrides[require_screener] = worker
+    storage = SimpleNamespace(
+        presigned_get_url=AsyncMock(return_value="https://artifacts.example/image.tar")
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.screener_conversation.get_storage_client",
+        AsyncMock(return_value=storage),
+    )
+    worker_base = "/api/v1/screener/conversation-assessments"
+    response = await client.post(worker_base + "/claim")
+    assert response.status_code == 200, response.text
+    claim = response.json()
+    assert claim["screened_image_url"] == "https://artifacts.example/image.tar"
+    report = report_for(claim)
+    payload = {"lease_token": claim["lease_token"], "report": report}
+    path = worker_base + f"/{claim['assessment_id']}/result"
+    assert (
+        await client.post(path, headers={"x-test-worker": "worker-two"}, json=payload)
+    ).status_code == 403
+    assert (await client.post(path, json=payload)).status_code == 422
+    report["harness_usage"] = {
+        "profile": "conversation-openrouter-oss20b-pplx768-v1",
+        "requests": 60,
+        "tokens": 10000,
+        "spent_microusd": 30000,
+        "unmetered": False,
+        "failed": False,
+    }
+    report["judge_cost_is_upper_bound"] = False
+    accepted = await client.post(path, json=payload)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["spent_microusd"] == 36000
+    listing = (await client.get(BASE, headers=HEADERS)).json()
+    assert "seed" not in str(listing) and "lease_token" not in str(listing)
+    assert "screened_image_url" not in str(listing)
+
+
 async def test_concurrent_claims_only_admit_top_five_once(
     app, client, session_maker, monkeypatch
 ):
@@ -127,12 +200,21 @@ async def test_concurrent_claims_only_admit_top_five_once(
     )
     assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
     claims = [r.json() for r in responses if r.json()]
-    assert len(claims) == 5
+    assert len(claims) == 1  # Global paid concurrency is one, even across workers.
+    for _ in range(4):
+        current = claims[-1]
+        response = await client.post(
+            BASE + f"/{current['assessment_id']}/result",
+            headers=HEADERS,
+            json={"lease_token": current["lease_token"], "report": report_for(current)},
+        )
+        assert response.status_code == 200, response.text
+        claims.append((await client.post(BASE + "/claim", headers=HEADERS)).json())
     assert {c["agent_id"] for c in claims} == {str(e.agent_id) for e in entries[:5]}
     assert len({c["seed"] for c in claims}) == 5
     listing = (await client.get(BASE, headers=HEADERS)).json()
     assert listing["reserved_last_day_microusd"] == 150_000_000
-    assert all(i["proposed_quality_micros"] is None for i in listing["items"])
+    assert sum(i["proposed_quality_micros"] is None for i in listing["items"]) == 1
 
 
 async def test_bound_immutable_report_projects_quality_without_writing_scores(

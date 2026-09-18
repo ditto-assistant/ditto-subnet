@@ -47,3 +47,15 @@ class ConversationObservations(WireModel):
     current_submission_fee_rao: int
     fee_change_request: AdminSubmissionSettingsRequest
     items: Annotated[list[ConversationObservation], Field(max_length=100)]
+    settings_revision: int = 0
+    settings_actor: str | None = None
+    settings_reason: str | None = None
+    settings_updated_at: datetime | None = None
+
+
+class ConversationSettingsRequest(WireModel):
+    expected_revision: Annotated[int, Field(strict=True, ge=0)]
+    mode: Literal["off", "shadow"]
+    actor: Annotated[str, Field(min_length=3, max_length=200)]
+    reason: Annotated[str, Field(min_length=10)]
+    confirmation: Literal["APPLY CONVERSATION SHADOW SETTINGS"]

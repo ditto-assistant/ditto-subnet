@@ -6,6 +6,10 @@ export const conversationAssessmentInputSchema = z.object({
 })
 
 export const conversationObservationsSchema = z.object({
+  settings_revision: z.number().int().nonnegative().default(0),
+  settings_actor: z.string().nullable().optional(),
+  settings_reason: z.string().nullable().optional(),
+  settings_updated_at: z.string().nullable().optional(),
   mode: z.enum(['off', 'shadow']),
   instrument: z.string(),
   judge_model: z.string(),
@@ -46,3 +50,10 @@ export const conversationReportSchema = z.object({
   model: z.literal('gpt-6-astra'),
   error_code: z.string().nullable(),
 }).passthrough().nullable()
+
+export const conversationSettingsInputSchema = z.object({
+  expected_revision: z.number().int().nonnegative(),
+  mode: z.enum(['off', 'shadow']),
+  reason: z.string().min(10),
+  confirmation: z.literal('APPLY CONVERSATION SHADOW SETTINGS'),
+})

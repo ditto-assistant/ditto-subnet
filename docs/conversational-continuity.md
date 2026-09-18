@@ -101,9 +101,10 @@ unevaluated candidates together as though both had the same composite.
    adapter, Astra conversation tool loop, and enforced budgets.
 2. Durable Platform top-five reservations/results and a read-only Backroom tool
    exposing pending/completed/incomplete state, cost and proposed composite.
-3. Standalone specialized worker command accepts a claim and isolated harness
-   endpoint, emits replayable evidence, and submits it through the trusted control
-   plane. Provisioning continues to use the existing sandbox and metered relay.
+3. Idle enrolled screener workers claim one assessment globally, verify and
+   normalize the screened image, start a fresh rootless container on an internal
+   network, attach a separately capped trusted relay and persist the report
+   before one result delivery. No Platform or judge credential enters the miner.
 4. Set the fallback submission fee to **200,000,000 RAO (0.2 TAO)**. Migrated
    databases use append-only submission settings, including fresh installations.
    Backroom returns the current fee and an exact `fee_change_request` with the
@@ -120,20 +121,47 @@ unevaluated candidates together as though both had the same composite.
 
 ## Running the shadow instrument
 
-After migrating Platform, `DITTO_CONVERSATION_SHADOW_ENABLED=true` enables
-admission. It is off by default. A trusted controller calls
-`POST /api/v1/admin/conversation-assessments/claim` to reserve the next current
-top-five candidate (or receives null). Admission reserves $25 for Astra and $5
-for the harness, with a $150 rolling daily cap. The database never automatically
-reissues failed or expired claims. The claim contains private story entropy and
-a lease token: store it with mode 0600.
+After migrating Platform, use `get_conversation_assessments` and
+`set_conversation_settings` in Backroom. Apply `mode: shadow` with the current
+`settings_revision`, an operator reason and confirmation
+`APPLY CONVERSATION SHADOW SETTINGS`. The append-only settings revision is the
+live authority. `off` stops new claims; an already admitted job may finish.
+The default is off. There is no enforce mode.
 
-The existing isolated sandbox launcher must verify the claim's screened-image
-archive digest, start a fresh submitted process, and attach an inference relay
-with a **separately enforced $5 cap**. This change does not provision that sandbox
-or relay. A bare arbitrary HTTP endpoint is not sufficient deployment evidence;
-the CLI deliberately accepts only explicit loopback origins. The examiner cannot
-verify the identity of an already running endpoint from its health response.
+Idle enrolled workers call the `/api/v1/screener/conversation-assessments` claim
+and result endpoints using their rotating node principal. Claim admission is
+serialized globally: at most one live assessment, $25 reserved for Astra and $5
+for the harness, with a $150 rolling daily cap. Failed/expired identities are
+never automatically reissued. Image download capabilities and story seeds stay
+private. Reports bind artifact, screened archive, instrument and claim owner.
+
+The launcher uses a rootless Docker daemon, verifies archive size and digest,
+reuses the screener's config/layer normalization and checks the loaded image ID.
+The fresh miner has a read-only root, bounded tmpfs, CPU/memory/PID caps and one
+internal network. Only its trusted inference sidecar also joins an egress
+network. The miner receives placeholder keys and a public TLS CA, never the
+provider key, Docker socket, private certificate key or report state.
+
+Production Astra calls use OpenRouter's stateless Responses API with
+`openai/gpt-6-astra`, OpenAI-only routing, no provider fallback and the same
+$10/$50 price ceiling. The harness profile is separately versioned as
+`conversation-openrouter-oss20b-pplx768-v1`: GPT-OSS-20B chat/Responses and
+Perplexity 768-dimensional embeddings. It does not claim to be the benchmark's
+exact serving-provider profile. Route overrides and paid hosted tools are
+removed or refused; every dispatch reserves against the $5 cap before sending.
+Provider failure poisons the relay. Missing dollar receipts for metered embedding
+usage produce a labelled price-ceiling bound, not invented actual spend.
+
+Deploy the released code first. The focused
+`infra/ansible/playbooks/conversation-shadow.yml` playbook installs the worker
+capability using the existing exact-subject X.509 federation and existing
+`validator-openrouter-key` access. It preserves current fleet channel limits.
+Its systemd override sets `SCREENER_CONVERSATION_OPENROUTER_KEY_FILE` and a private
+per-worker `SCREENER_CONVERSATION_SPOOL_DIR`; absent settings leave the consumer
+inert. Drain/restart workers after convergence. Enable claims through Backroom
+only after runtime isolation and provider preflight checks pass.
+
+The standalone CLI remains useful for an explicitly provisioned local sandbox:
 
 From `workers/screener`, with the judge key available only to the trusted process:
 
@@ -152,9 +180,10 @@ token, not rerun the assessment. The result endpoint is idempotent for byte-equi
 canonical reports and rejects conflicting replacements.
 
 `get_conversation_assessments` in Backroom lists state, reserved cost, observed
-**judge-only** spend, proposed composite and the fee-change payload. Supply
-`assessment_id` for the private transcript and grades. Harness relay costs must be
-reconciled separately; a $30 reservation is not a claim of $30 actual spend.
+combined actual spend when both receipts are known, proposed composite and the
+fee-change payload. Supply `assessment_id` for the private transcript, grades,
+judge usage and harness usage. Upper bounds remain labelled in the private
+report; a $30 reservation is not a claim of $30 actual spend.
 
 ## Local validation (2026-09-18)
 
@@ -176,3 +205,12 @@ reconciled separately; a $30 reservation is not a claim of $30 actual spend.
 - No live Astra assessment, real-submission calibration, deployment, reward
   activation or production fee mutation was performed. Runtime/schema tests do
   not establish the grader's quality, repeatability or measured provider cost.
+
+### Production-path validation in progress
+
+The enrolled-worker endpoints, serial admission, audited mode switch, rootless
+launcher and fixed upstream relay now have local regression coverage. A bounded
+live provider preflight passed Astra function calling, GPT-OSS-20B chat and
+768-dimensional Perplexity embeddings with usage receipts. Full live assessment,
+release adoption and corpus calibration remain separate proof steps; record their
+actual outcomes before declaring shadow activation complete.

@@ -158,6 +158,22 @@ class PlatformClient:
         async with self._credential_lock:
             return await self._refresh_auth_headers(Path(path))
 
+    async def conversation_request(
+        self, path: str, payload: dict[str, Any] | None = None
+    ) -> Any:
+        """One dispatch only; an uncertain claim or result is never replayed."""
+        response = await self._client.post(
+            self._base + _PREFIX + "/conversation-assessments" + path,
+            json=payload,
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"conversation control returned HTTP {response.status_code}"
+            )
+        return response.json()
+
     async def _refresh_auth_headers(self, path: Path) -> dict[str, str]:
         """Serialize credential rotation across every worker on one node."""
         lock_path = path.with_name(f".{path.name}.refresh.lock")

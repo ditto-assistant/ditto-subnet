@@ -833,6 +833,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/conversation-assessments/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Settings */
+        post: operations["set_settings_api_v1_admin_conversation_assessments_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/conversation-assessments/{assessment_id}/report": {
         parameters: {
             query?: never;
@@ -5110,6 +5127,40 @@ export interface paths {
          * @description Keep trusted Kaniko deletion failures visible after zero-replica suspension.
          */
         post: operations["record_trusted_image_build_cleanup_api_v1_screener_controller_trusted_image_builds__build_id__cleanup_required_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/conversation-assessments/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim */
+        post: operations["claim_api_v1_screener_conversation_assessments_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/conversation-assessments/{assessment_id}/result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Result */
+        post: operations["result_api_v1_screener_conversation_assessments__assessment_id__result_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -16063,6 +16114,58 @@ export interface components {
             /** Seed */
             seed: string;
         };
+        /**
+         * ConversationLaunch
+         * @description Private launch inputs, returned only to the authenticated worker.
+         */
+        ConversationLaunch: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Assessment Id
+             * Format: uuid
+             */
+            assessment_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Harness Budget Microusd
+             * @default 5000000
+             * @constant
+             */
+            harness_budget_microusd: 5000000;
+            /**
+             * Judge Budget Microusd
+             * @default 25000000
+             * @constant
+             */
+            judge_budget_microusd: 25000000;
+            /**
+             * Lease Token
+             * Format: uuid
+             */
+            lease_token: string;
+            /** Screened Image Id */
+            screened_image_id: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Screened Image Size Bytes */
+            screened_image_size_bytes: number;
+            /** Screened Image Url */
+            screened_image_url: string;
+            /** Seed */
+            seed: string;
+        };
         /** ConversationObservation */
         ConversationObservation: {
             /**
@@ -16133,6 +16236,17 @@ export interface components {
             proposed_submission_fee_rao: 200000000;
             /** Reserved Last Day Microusd */
             reserved_last_day_microusd: number;
+            /** Settings Actor */
+            settings_actor?: string | null;
+            /** Settings Reason */
+            settings_reason?: string | null;
+            /**
+             * Settings Revision
+             * @default 0
+             */
+            settings_revision: number;
+            /** Settings Updated At */
+            settings_updated_at?: string | null;
         };
         /** ConversationReport */
         ConversationReport: {
@@ -16155,6 +16269,7 @@ export interface components {
             /** Exchanges */
             exchanges: components["schemas"]["Exchange"][];
             grades?: components["schemas"]["GradeSheet"] | null;
+            harness_usage?: components["schemas"]["HarnessUsage"] | null;
             /** Input Tokens */
             input_tokens: number;
             /**
@@ -16163,6 +16278,11 @@ export interface components {
              * @constant
              */
             instrument: "conversational-continuity-v1";
+            /**
+             * Judge Cost Is Upper Bound
+             * @default true
+             */
+            judge_cost_is_upper_bound: boolean;
             /** Judge Requests */
             judge_requests: number;
             /**
@@ -16207,6 +16327,25 @@ export interface components {
              */
             lease_token: string;
             report: components["schemas"]["ConversationReport"];
+        };
+        /** ConversationSettingsRequest */
+        ConversationSettingsRequest: {
+            /** Actor */
+            actor: string;
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "APPLY CONVERSATION SHADOW SETTINGS";
+            /** Expected Revision */
+            expected_revision: number;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow";
+            /** Reason */
+            reason: string;
         };
         /**
          * CopyCourtSettings
@@ -17292,6 +17431,29 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** HarnessUsage */
+        HarnessUsage: {
+            /**
+             * Cost Is Upper Bound
+             * @default false
+             */
+            cost_is_upper_bound: boolean;
+            /** Failed */
+            failed: boolean;
+            /**
+             * Profile
+             * @constant
+             */
+            profile: "conversation-openrouter-oss20b-pplx768-v1";
+            /** Requests */
+            requests: number;
+            /** Spent Microusd */
+            spent_microusd: number;
+            /** Tokens */
+            tokens: number;
+            /** Unmetered */
+            unmetered: boolean;
         };
         /**
          * HeldLease
@@ -31305,6 +31467,41 @@ export interface operations {
             };
         };
     };
+    set_settings_api_v1_admin_conversation_assessments_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationObservations"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_report_api_v1_admin_conversation_assessments__assessment_id__report_get: {
         parameters: {
             query?: never;
@@ -38842,6 +39039,76 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_api_v1_screener_conversation_assessments_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationLaunch"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    result_api_v1_screener_conversation_assessments__assessment_id__result_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                assessment_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConversationResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConversationObservation"];
+                };
             };
             /** @description Validation Error */
             422: {

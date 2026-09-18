@@ -456,7 +456,19 @@ class ScreenerWorker:
                 f"{required_policy}, received {queue.required_policy_version}"
             )
         if not queue.items:
-            return 0
+            # Only an idle primary worker may consume the optional shadow lane;
+            # the Platform serializes its global budget and active assessment.
+            from ditto_screener.conversation_worker import consume
+
+            heartbeat_stop = asyncio.Event()
+            heartbeat = asyncio.create_task(
+                self._heartbeat_while_active(heartbeat_stop)
+            )
+            try:
+                return int(await consume(self._config, self._platform))
+            finally:
+                heartbeat_stop.set()
+                await heartbeat
         logger.info("screener sweep: %d agent(s) to screen", len(queue.items))
         done = 0
         for item in queue.items:

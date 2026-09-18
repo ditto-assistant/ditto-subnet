@@ -1,5 +1,5 @@
-import { conversationAssessmentInputSchema } from '../lib/conversation.schemas'
-import { fetchConversationAssessments } from './admin.service'
+import { conversationAssessmentInputSchema, conversationSettingsInputSchema } from '../lib/conversation.schemas'
+import { fetchConversationAssessments, setConversationSettings } from './admin.service'
 import '@tanstack/react-start/server-only'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
@@ -331,6 +331,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_inference_concurrency_settings',
   'start_runtime_profile',
   'set_submission_cooldown',
+  'set_conversation_settings',
   'unban_hotkey',
   'set_source_release_policy',
   'set_burn_settings',
@@ -585,7 +586,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screener_review_settings:
     'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
   get_conversation_assessments:
-    'Read conversation assessment evidence, costs and shadow scores.',
+    'Read conversation evidence and spend.',
+  set_conversation_settings:
+    'Set shadow mode by revision.',
   get_screener_fanout_shadow:
     'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
   get_copy_court_settings:
@@ -1984,6 +1987,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchScreenerFanoutShadow(input)),
+  )
+
+  registerTool(
+    'set_conversation_settings',
+    {
+      title: 'Set conversation shadow mode',
+      description: 'Apply an audited conversation shadow setting using the revision from get_conversation_assessments. Off stops new claims; an active assessment may finish within its existing budget. Only off and shadow exist; this never changes rewards, fees, or screening decisions. Requires backroom:write.',
+      inputSchema: conversationSettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => setConversationSettings(props.session.email, input)),
   )
 
   registerTool(

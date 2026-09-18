@@ -9938,7 +9938,8 @@ class ConversationAssessment(Base):
     )
     base_quality_micros: Mapped[int] = mapped_column(Integer, nullable=False)
     reserved_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    report: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         ForeignKeyConstraint(["agent_id"], ["agents.agent_id"]),
@@ -9958,4 +9959,16 @@ class ConversationAssessment(Base):
             "reserved_microusd = 30000000", name="conversation_reserved_cost"
         ),
         CheckConstraint("bench_version >= 9", name="conversation_bench_version"),
+    )
+
+
+class ConversationSettingsRevision(Base):
+    __tablename__ = "conversation_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
     )

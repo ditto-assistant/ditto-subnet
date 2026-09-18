@@ -29,6 +29,7 @@ def upgrade() -> None:
         sa.Column("base_quality_micros", sa.Integer(), nullable=False),
         sa.Column("reserved_microusd", sa.BigInteger(), nullable=False),
         sa.Column("report", postgresql.JSONB(), nullable=True),
+        sa.Column("worker_hotkey", sa.Text(), nullable=True),
         sa.UniqueConstraint(
             "agent_id",
             "artifact_sha256",
@@ -48,7 +49,16 @@ def upgrade() -> None:
     op.create_index(
         "conversation_created_at", "conversation_assessments", ["created_at"]
     )
+    op.create_table(
+        "conversation_settings_revisions",
+        sa.Column("revision", sa.Integer(), primary_key=True),
+        sa.Column("enabled", sa.Boolean(), nullable=False),
+        sa.Column("actor", sa.Text(), nullable=False),
+        sa.Column("reason", sa.Text(), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+    )
 
 
 def downgrade() -> None:
+    op.drop_table("conversation_settings_revisions")
     op.drop_table("conversation_assessments")

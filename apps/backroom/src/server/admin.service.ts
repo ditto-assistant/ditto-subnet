@@ -4,6 +4,7 @@ import {
   conversationAssessmentInputSchema,
   conversationObservationsSchema,
   conversationReportSchema,
+  conversationSettingsInputSchema,
 } from '../lib/conversation.schemas'
 
 import { benchmarkCanarySchema, issueBenchmarkCanaryInputSchema,
@@ -3140,5 +3141,13 @@ export async function fetchConversationAssessments(rawInput: unknown = {}) {
     return conversationReportSchema.parse(payload)
   }
   const payload = await platformAdminRequest(`/api/v1/admin/conversation-assessments?limit=${input.limit}`)
+  return conversationObservationsSchema.parse(payload)
+}
+
+export async function setConversationSettings(actor: string, rawInput: unknown) {
+  const input = conversationSettingsInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/conversation-assessments/settings', {
+    method: 'POST', body: { ...input, actor }, actor,
+  })
   return conversationObservationsSchema.parse(payload)
 }

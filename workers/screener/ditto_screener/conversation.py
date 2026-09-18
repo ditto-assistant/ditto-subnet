@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import math
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
@@ -69,6 +70,7 @@ class JudgeMeter:
         self.output_tokens = 0
         self.provider_model = JUDGE_MODEL
         self.unmetered = False
+        self.cost_is_upper_bound = False
         self._resolved_model: str | None = None
 
     def reserve(self, body: dict[str, Any]) -> tuple[int, int]:
@@ -112,13 +114,27 @@ class JudgeMeter:
             input_tokens * self.limits.input_microusd_per_token
             + output_tokens * self.limits.output_microusd_per_token
         )
+        # OpenRouter includes the billed amount (including cache discounts).
+        # Direct OpenAI usage is priced conservatively at the pinned tariff.
+        billed = usage.get("cost")
+        if billed is None:
+            self.cost_is_upper_bound = True
+        if billed is not None:
+            if (
+                type(billed) not in {int, float}
+                or not math.isfinite(billed)
+                or not 0 <= billed * 1_000_000 <= reservation[0]
+            ):
+                raise AssessmentFailure("judge_cost_unverifiable")
+            actual = math.ceil(billed * 1_000_000)
         self.spent += actual - reservation[0]
         self.unmetered = False
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
         model = response.get("model")
         if not isinstance(model, str) or not (
-            model == JUDGE_MODEL or model.startswith(JUDGE_MODEL + "-")
+            model.removeprefix("openai/") == JUDGE_MODEL
+            or model.removeprefix("openai/").startswith(JUDGE_MODEL + "-")
         ):
             raise AssessmentFailure("judge_model_mismatch")
         if self._resolved_model is not None and self._resolved_model != model:
@@ -248,16 +264,36 @@ class MemoryHarness:
 
 
 class AstraExaminer:
-    def __init__(self, client: httpx.AsyncClient, limits: Limits):
+    def __init__(
+        self,
+        client: httpx.AsyncClient,
+        limits: Limits,
+        *,
+        provider: Literal["openai", "openrouter"] = "openai",
+    ):
         self.client, self.limits = client, limits
         self.meter = JudgeMeter(limits)
+        self.provider = provider
 
     async def _request(self, body: dict[str, Any]) -> dict[str, Any]:
+        url = "https://api.openai.com/v1/responses"
+        if self.provider == "openrouter":
+            url = "https://openrouter.ai/api/v1/responses"
+            body = {
+                **body,
+                "model": "openai/" + JUDGE_MODEL,
+                "provider": {
+                    "only": ["OpenAI"],
+                    "allow_fallbacks": False,
+                    "data_collection": "deny",
+                    "max_price": {"prompt": 10, "completion": 50},
+                },
+            }
         reservation = self.meter.reserve(body)
         async with asyncio.timeout(self.limits.operation_seconds):
             response = await bounded_post(
                 self.client,
-                "https://api.openai.com/v1/responses",
+                url,
                 body,
                 max_bytes=256_000,
             )
@@ -414,6 +450,7 @@ async def evaluate(
         "reserved_microusd": examiner.limits.judge_microusd,
         "spent_microusd": meter.spent,
         "unmetered": meter.unmetered,
+        "judge_cost_is_upper_bound": meter.cost_is_upper_bound,
     }
     try:
         return ConversationReport(

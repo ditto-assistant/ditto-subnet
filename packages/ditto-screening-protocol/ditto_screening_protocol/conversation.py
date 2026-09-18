@@ -90,6 +90,24 @@ class ConversationClaim(WireModel):
     harness_budget_microusd: Literal[5_000_000] = 5_000_000
 
 
+class ConversationLaunch(ConversationClaim):
+    """Private launch inputs, returned only to the authenticated worker."""
+
+    screened_image_url: Annotated[str, Field(max_length=8192)]
+    screened_image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    screened_image_size_bytes: Annotated[int, Field(strict=True, gt=0, le=8 << 30)]
+
+
+class HarnessUsage(WireModel):
+    profile: Literal["conversation-openrouter-oss20b-pplx768-v1"]
+    requests: Annotated[int, Field(strict=True, ge=0, le=300)]
+    tokens: Annotated[int, Field(strict=True, ge=0)]
+    spent_microusd: Annotated[int, Field(strict=True, ge=0, le=5_000_000)]
+    unmetered: bool
+    failed: bool
+    cost_is_upper_bound: bool = False
+
+
 class Exchange(WireModel):
     turn_id: Annotated[int, Field(strict=True, ge=1, le=TURN_COUNT)]
     session: Annotated[int, Field(strict=True, ge=1, le=10)]
@@ -149,6 +167,8 @@ class ConversationReport(WireModel):
     reserved_microusd: Annotated[int, Field(strict=True, ge=0)]
     spent_microusd: Annotated[int, Field(strict=True, ge=0)]
     unmetered: bool = False
+    harness_usage: HarnessUsage | None = None
+    judge_cost_is_upper_bound: bool = True
 
     @model_validator(mode="after")
     def validate_evidence(self) -> ConversationReport:

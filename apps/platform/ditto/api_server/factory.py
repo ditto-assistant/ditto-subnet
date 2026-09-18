@@ -142,6 +142,9 @@ from ditto.api_server.endpoints.admin_benchmark_canary import (
 from ditto.api_server.endpoints.admin_conversation import (
     router as admin_conversation_router,
 )
+from ditto.api_server.endpoints.screener_conversation import (
+    router as screener_conversation_router,
+)
 from ditto.api_server.endpoints.validator_coding_hosted import HostedCodingControl
 from ditto.api_server.endpoints.validator_coding_hosted import (
     router as validator_coding_hosted_router,
@@ -742,6 +745,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
     app.include_router(admin_conversation_router, prefix="/api/v1")
+    app.include_router(screener_conversation_router, prefix="/api/v1")
 
     # Serve the public dashboard SPA same-origin at ``/`` so the platform is the
     # transparency front door (its ``/api/v1/public/*`` calls need no CORS). The

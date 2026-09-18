@@ -29,10 +29,14 @@ Environment=DOCKER_CONFIG={{ screener_fleet_state_dir }}/workers/%i/docker
 # screener's private state tree. This parent is owned by the rootless daemon;
 # each invocation stages a unique, worker-owned child inside it.
 Environment=SCREENER_GATEWAY_STATE_ROOT={{ screener_fleet_gateway_state_root }}
+{% if screener_fleet_conversation_enabled %}
+Environment=SCREENER_CONVERSATION_OPENROUTER_KEY_FILE={{ screener_fleet_conversation_key_file }}
+Environment=SCREENER_CONVERSATION_SPOOL_DIR={{ screener_fleet_state_dir }}/workers/%i/conversation
+{% endif %}
 ExecStart={{ screener_fleet_active_worker_venv }}/bin/ditto-screener
 Restart=always
 RestartSec=10
-TimeoutStopSec=35min
+TimeoutStopSec=70min
 KillSignal=SIGTERM
 NoNewPrivileges=true
 PrivateTmp=true
