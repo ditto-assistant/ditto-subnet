@@ -71,13 +71,13 @@ from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
 )
+from ditto.api_models.private_dataset import PrivateDatasetRequest
 from ditto.api_models.receipt_diagnostics import (
     ReceiptDiagnosticObservation,
     ReceiptDiagnosticReport,
     SubmitReceiptDiagnostics,
     diagnostic_signing_message,
 )
-from ditto.api_models.private_dataset import PrivateDatasetRequest
 from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.validator import (
     ArtifactResponse,
