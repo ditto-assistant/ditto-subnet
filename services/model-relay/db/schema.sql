@@ -4449,6 +4449,19 @@ CREATE TABLE public.validator_queue_withdrawals (
 
 
 --
+-- Name: validator_receipt_diagnostics; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.validator_receipt_diagnostics (
+    netuid integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    signed_at bigint NOT NULL,
+    received_at timestamp with time zone NOT NULL,
+    report jsonb NOT NULL
+);
+
+
+--
 -- Name: validator_request_nonces; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6413,6 +6426,14 @@ ALTER TABLE ONLY public.validator_queue_reinstatements
 
 ALTER TABLE ONLY public.validator_queue_withdrawals
     ADD CONSTRAINT pk_validator_queue_withdrawals PRIMARY KEY (withdrawal_id);
+
+
+--
+-- Name: validator_receipt_diagnostics pk_validator_receipt_diagnostics; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.validator_receipt_diagnostics
+    ADD CONSTRAINT pk_validator_receipt_diagnostics PRIMARY KEY (netuid, validator_hotkey);
 
 
 --

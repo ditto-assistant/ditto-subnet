@@ -105,6 +105,7 @@ paths = [
   "ditto/api_models/upload.py",
   "ditto/api_models/validator.py",
   "ditto/api_models/weight_receipt.py",
+  "ditto/api_models/receipt_diagnostics.py",
   "ditto/api_models/validator_capabilities.py",
   "ditto/api_models/validator_confirmation.py",
   "ditto/api_models/validator_updater.py",
