@@ -14,7 +14,10 @@ without the explicit versioned rescreen.
 For **policy v13**, read the complete
 [published checklist](../../../../workers/screener/docs/policy-v13.md) and
 [opaque-verification companion](../../../../workers/screener/docs/policy-v13-opaque-verification.md).
-These govern over the historical examples below:
+Also read the [decision-path checklist](decision-path-review.md), which
+operationalizes existing v13 safeguards for every effective engine and deciding
+call. The v14 draft remains prospective; do not infer activation from its
+presence. These govern over the historical examples below:
 
 - Evaluate I1–I8 and S1–S3 independently, with exact-artifact evidence and all
   applicable safe harbors and mandatory verification requirements.

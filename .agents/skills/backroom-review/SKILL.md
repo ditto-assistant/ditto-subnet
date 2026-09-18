@@ -54,6 +54,11 @@ SHA-256, and `agent_status`. Screenshots, rank, and truncated keys are leads.
 
 ## Inspect the served path
 
+For policy v13, read [decision-path review](references/decision-path-review.md)
+before any clearance or rejection. Apply it to every effective engine,
+including gateways, retry/critic stages and downstream response writers.
+The v14 draft is not an activated policy or a new miner-documentation rule.
+
 Use `list_screening_source_files`, `read_screening_source_file`, and
 `search_screening_source` to trace:
 

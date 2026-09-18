@@ -205,9 +205,11 @@ operational configuration. Pending work remains temporary until that deadline.
 ## Activation and implementation boundary
 
 This draft neither increments `SCREENING_POLICY_VERSION` nor raises an
-activation ceiling, changes screening prompts, signs v14 decisions, rescreens
+activation ceiling, signs v14 decisions, rescreens
 agents, changes benchmark scoring or modifies eligibility. V13 remains the
-applicable policy until an authorized v14 activation takes effect.
+applicable policy until an authorized v14 activation takes effect. Companion
+screener and operator-review prompt updates reinforce existing v13 safeguards;
+they do not implement v14 evidence-schema enforcement or activate this draft.
 
 Before v14 is schedulable, all v13 prerequisites and the following must have
 published, tested evidence:

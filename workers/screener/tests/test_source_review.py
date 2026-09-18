@@ -2976,7 +2976,7 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v25-policy-v13"
+    assert _prompt_revision(13) == "source-review-v26-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -5032,8 +5032,10 @@ def test_review_transcript_compaction_keeps_stable_prefix_and_recent_turns() -> 
     assert sum(row.get("role") == "assistant" for row in compacted) == 3
 
 
+@pytest.mark.parametrize("policy_version", [12, 13])
 async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
     tmp_path: Path,
+    policy_version: int,
 ) -> None:
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
@@ -5046,6 +5048,13 @@ async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
         "evidence": [],
         "summary": "General model-backed request path.",
     }
+    final = _with_policy_v10_invariants(final)
+    if policy_version == 12:
+        final["invariants"] = [
+            item
+            for item in final["invariants"]
+            if item["invariant"] != "i8_evaluation_independence"
+        ]
     areas = [
         "served_entrypoint",
         "retrieval",
@@ -5097,6 +5106,7 @@ async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
     observation = await _agent(key, httpx.MockTransport(handler)).review(
         str(_archive(tmp_path, "fn main() { call_model(); }")),
         artifact_sha256=_SHA,
+        policy_version=policy_version,
     )
 
     assert observation.ok and observation.risk_level == "low"
@@ -5104,10 +5114,12 @@ async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
     assert seen[1]["reasoning"] == {"effort": "high"}
     assert seen[0]["prompt_cache_key"] == seen[1]["prompt_cache_key"]
     assert len(str(seen[0]["prompt_cache_key"])) <= 64
-    assert any(
-        "notes ledger now covers every served-path area" in str(row.get("content"))
-        for row in seen[1]["messages"]
+    expected_nudge = (
+        "not a completeness certificate"
+        if policy_version == 13
+        else "notes ledger now covers every served-path area"
     )
+    assert any(expected_nudge in str(row.get("content")) for row in seen[1]["messages"])
     assert "BATCH RELATED READS" in str(seen[0]["messages"][0]["content"])
 
 

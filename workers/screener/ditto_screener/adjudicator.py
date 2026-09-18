@@ -42,6 +42,7 @@ from pathlib import Path
 
 import httpx
 
+from ditto_screener.decision_path_prompt import DECISION_PATH_GUIDANCE
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.source_review import (
     TarSourceRepository,
@@ -75,7 +76,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v5-policy-v13"
+        return "adjudicator-v6-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 
@@ -362,7 +363,8 @@ def _system_prompt(policy_version: int) -> str:
     if policy_version == 13:
         return (
             f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
-            f"{_POLICY_V12_PROMPT_TAIL}\n\n{_POLICY_V13_PROMPT_TAIL}"
+            f"{_POLICY_V12_PROMPT_TAIL}\n\n{_POLICY_V13_PROMPT_TAIL}\n\n"
+            f"{DECISION_PATH_GUIDANCE}"
         )
     raise AssertionError("validated policy was not rendered")
 

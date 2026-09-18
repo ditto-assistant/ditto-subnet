@@ -28,6 +28,11 @@ from ditto_screener.category_guards import (
     find_unmatchable_category_guards,
     guard_report,
 )
+from ditto_screener.decision_path_prompt import (
+    DECISION_PATH_GUIDANCE,
+    V13_BATCH_READS_GUIDANCE,
+    V13_COVERAGE_NUDGE,
+)
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.review_provider import (
@@ -74,7 +79,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v25-policy-v13"
+        return "source-review-v26-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -1914,12 +1919,13 @@ but neither proves misconduct. Final operator eligibility outcomes are CLEAR or
 REJECT with a reason and violation_proven flag; screening pass, quarantine,
 retry and review states remain processing evidence, not those final outcomes.
 """
-_POLICY_TAILS[13] = _POLICY_TAILS[12] + _POLICY_V13_ADDENDUM
+_POLICY_TAILS[13] = (
+    _POLICY_TAILS[12] + _POLICY_V13_ADDENDUM + "\n" + DECISION_PATH_GUIDANCE
+)
 
 
-# Version-independent L1 throughput guidance (added by the L1 bounding work).
-# Appended to every policy tail so the batching rules apply under each
-# implemented screening-policy version.
+# Historical L1 throughput guidance. V13 uses path-complete guidance instead
+# of treating one cleared note per broad area as a completeness certificate.
 _BATCH_READS_GUIDANCE = """
 BATCH RELATED READS. In each inspection turn, request every independent file
 read, search, or binary analysis you already know you need for that area in one
@@ -1940,7 +1946,10 @@ def _source_review_system_prompt(policy_version: int) -> str:
             f"{policy_version} is not implemented by this build "
             f"(implements {sorted(_POLICY_TAILS)})"
         ) from None
-    prompt = _SYSTEM_PROMPT_HEAD + tail + _BATCH_READS_GUIDANCE
+    batch_guidance = (
+        V13_BATCH_READS_GUIDANCE if policy_version >= 13 else _BATCH_READS_GUIDANCE
+    )
+    prompt = _SYSTEM_PROMPT_HEAD + tail + batch_guidance
     if policy_version >= 13:
         prompt = prompt.replace(
             "one decision for each I1 through I7.",
@@ -3702,7 +3711,14 @@ class OpenRouterSourceReviewAgent:
                 if _coverage_complete(notes) and not coverage_nudged:
                     coverage_nudged = True
                     messages.append(
-                        {"role": "user", "content": _COVERAGE_COMPLETE_NUDGE}
+                        {
+                            "role": "user",
+                            "content": (
+                                V13_COVERAGE_NUDGE
+                                if policy_version >= 13
+                                else _COVERAGE_COMPLETE_NUDGE
+                            ),
+                        }
                     )
                 if progress is not None:
                     progress(_step + 1, self._max_steps)

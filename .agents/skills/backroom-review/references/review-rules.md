@@ -11,6 +11,11 @@ verification. The historical v10-v12 calibration below does not override them.
 Refuting a finding does not by itself satisfy v13 CLEAR; missing verification
 follows the published failure-domain and retry/deadline procedure.
 
+Apply the [decision-path checklist](decision-path-review.md) to v13 reviews,
+including finding-backed holds. A refuted lead or one cleared engine does not
+clear other effective paths. The v14 draft does not add current rejection
+grounds or miner evidence requirements.
+
 ## Evidence priority
 
 1. Served runtime dispatch and answer construction.
