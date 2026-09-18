@@ -55,6 +55,22 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_WRITE_SCOPE])
   })
 
+  it('requires write scope to reserve or bind a team canary', async () => {
+    for (const action of ['reserve', 'bind']) {
+      const request = new Request('https://backroom.dittobench.ai/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'set_team_canary', arguments: { action } },
+        }),
+      })
+      expect(await callsWriteTool(request)).toBe(true)
+      expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_WRITE_SCOPE])
+    }
+  })
+
   it('leaves the owner footprint on the ordinary read scope', async () => {
     // Coldkeys are identity metadata from the payment ledger, not miner source.
     // The artifact scope exists for source (tarballs, file listings, diffs), so
