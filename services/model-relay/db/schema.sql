@@ -2468,6 +2468,64 @@ ALTER SEQUENCE public.continual_retest_settings_revisions_revision_seq OWNED BY 
 
 
 --
+-- Name: conversation_assessments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.conversation_assessments (
+    assessment_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    screened_image_sha256 text NOT NULL,
+    bench_version integer NOT NULL,
+    instrument text NOT NULL,
+    seed text NOT NULL,
+    lease_token uuid NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    base_quality_micros integer NOT NULL,
+    reserved_microusd bigint NOT NULL,
+    report jsonb,
+    worker_hotkey text,
+    CONSTRAINT ck_conversation_assessments_conversation_base_quality CHECK (((base_quality_micros >= 0) AND (base_quality_micros <= 1000000))),
+    CONSTRAINT ck_conversation_assessments_conversation_bench_version CHECK ((bench_version >= 9)),
+    CONSTRAINT ck_conversation_assessments_conversation_reserved_cost CHECK ((reserved_microusd = 30000000))
+);
+
+
+--
+-- Name: conversation_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.conversation_settings_revisions (
+    revision integer NOT NULL,
+    enabled boolean NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+
+
+--
+-- Name: conversation_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.conversation_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: conversation_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.conversation_settings_revisions_revision_seq OWNED BY public.conversation_settings_revisions.revision;
+
+
+--
 -- Name: copy_court_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4763,6 +4821,13 @@ ALTER TABLE ONLY public.continual_retest_settings_revisions ALTER COLUMN revisio
 
 
 --
+-- Name: conversation_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversation_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.conversation_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: copy_court_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -5612,6 +5677,14 @@ ALTER TABLE ONLY public.continual_retest_settings_revisions
 
 
 --
+-- Name: conversation_assessments conversation_assessment_identity; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversation_assessments
+    ADD CONSTRAINT conversation_assessment_identity UNIQUE (agent_id, artifact_sha256, bench_version, instrument);
+
+
+--
 -- Name: copy_court_settings_revisions copy_court_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6169,6 +6242,22 @@ ALTER TABLE ONLY public.confirmation_retest_authorizations
 
 ALTER TABLE ONLY public.continual_retest_settings_revisions
     ADD CONSTRAINT pk_continual_retest_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: conversation_assessments pk_conversation_assessments; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversation_assessments
+    ADD CONSTRAINT pk_conversation_assessments PRIMARY KEY (assessment_id);
+
+
+--
+-- Name: conversation_settings_revisions pk_conversation_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversation_settings_revisions
+    ADD CONSTRAINT pk_conversation_settings_revisions PRIMARY KEY (revision);
 
 
 --
@@ -7426,6 +7515,13 @@ CREATE INDEX confirmation_tickets_open_deadline_idx ON public.confirmation_bundl
 --
 
 CREATE UNIQUE INDEX continual_retest_settings_scope_revision_idx ON public.continual_retest_settings_revisions USING btree (scope, revision);
+
+
+--
+-- Name: conversation_created_at; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX conversation_created_at ON public.conversation_assessments USING btree (created_at);
 
 
 --
@@ -8961,6 +9057,14 @@ ALTER TABLE ONLY public.coding_hosted_terminal_reservations
 
 ALTER TABLE ONLY public.confirmation_inference_requests
     ADD CONSTRAINT fk_confirmation_inference_requests_grant_id_confirmatio_7cd5 FOREIGN KEY (grant_id) REFERENCES public.confirmation_inference_grants(grant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: conversation_assessments fk_conversation_assessments_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.conversation_assessments
+    ADD CONSTRAINT fk_conversation_assessments_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id);
 
 
 --
