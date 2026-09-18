@@ -7,6 +7,11 @@ on:
       - scripts/test-coding-hosted-connectivity-kernel.py
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
+      - ditto/tests/test_coding_hosted_worker_credentials.py
+      - ditto/tests/test_coding_hosted_worker_credentials_journal_check.py
+      - ditto/tests/test_coding_hosted_guarded_run.py
+      - pyproject.toml
+      - uv.lock
   push:
     branches: [main]
     paths:
@@ -14,6 +19,11 @@ on:
       - scripts/test-coding-hosted-connectivity-kernel.py
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
+      - ditto/tests/test_coding_hosted_worker_credentials.py
+      - ditto/tests/test_coding_hosted_worker_credentials_journal_check.py
+      - ditto/tests/test_coding_hosted_guarded_run.py
+      - pyproject.toml
+      - uv.lock
 
 permissions:
   contents: read
@@ -95,7 +105,7 @@ jobs:
 
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/gcp-coding-hosted-worker-credentials.yml playbooks/gcp-coding-hosted-worker-credentials-cleanup.yml playbooks/gcp-coding-hosted-worker-credentials-journal-check.yml playbooks/hetzner-screener-fleet.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
 
@@ -124,3 +134,56 @@ jobs:
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i localhost, tests/coding-hosted-postgres-environment.yml
+
+      # The rehearsal runs the worker credential materialization role's enabled
+      # tasks through ansible-core 2.21.2 against a temporary tree with stand-in
+      # credentials. It needs network for uvx, so it runs here and not in every
+      # root pytest shard.
+      - name: Rehearse native worker credential materialization guards against a temporary tree
+        working-directory: ${{ github.workspace }}
+        env:
+          DITTO_ANSIBLE_REHEARSAL: "1"
+        run: >-
+          uv run --locked --only-group dev --with pyyaml==6.0.3
+          pytest -p no:cacheprovider -rs
+          ditto/tests/test_coding_hosted_worker_credentials.py
+
+      - name: Prove native worker credential materialization stays disabled
+        run: >-
+          uvx --from ansible-core==2.21.2 ansible-playbook --check
+          -i localhost, tests/coding-hosted-worker-credentials.yml
+
+      - name: Prove native worker credential removal stays disabled
+        run: >-
+          uvx --from ansible-core==2.21.2 ansible-playbook --check
+          -i localhost, tests/coding-hosted-worker-credentials-cleanup.yml
+
+      - name: Prove the native worker credential log spot-check stays disabled
+        run: >-
+          uvx --from ansible-core==2.21.2 ansible-playbook --check
+          -i localhost, tests/coding-hosted-worker-credentials-journal-check.yml
+
+      # The spot-check rehearsal runs the real module through ansible-core
+      # 2.21.2 against synthetic credential files, journal exports, logs and
+      # temp trees. It needs network for uvx, so it runs here.
+      - name: Rehearse the native worker credential log spot-check against synthetic logs
+        working-directory: ${{ github.workspace }}
+        env:
+          DITTO_ANSIBLE_REHEARSAL: "1"
+        run: >-
+          uv run --locked --only-group dev --with pyyaml==6.0.3
+          pytest -p no:cacheprovider -rs
+          ditto/tests/test_coding_hosted_worker_credentials_journal_check.py
+
+      # The guarded entry point's rehearsal runs the real script with
+      # uv run --locked --script against a synthetic checkout and ansible-core
+      # 2.21.2. It needs network for uv, so it runs here and not in every root
+      # pytest shard, which still runs the structural guard tests.
+      - name: Rehearse the guarded entry point for the native Coding secret roles
+        working-directory: ${{ github.workspace }}
+        env:
+          DITTO_ANSIBLE_REHEARSAL: "1"
+        run: >-
+          uv run --locked --only-group dev
+          pytest -p no:cacheprovider -rs
+          ditto/tests/test_coding_hosted_guarded_run.py
