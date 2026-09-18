@@ -10,6 +10,7 @@ import {
   createBackroomMcpServer,
   type McpGrantProps,
 } from './mcp.server'
+import { fetchCodingControlPlane } from './admin.service'
 
 const session: BackroomSession = {
   version: 2,
@@ -52,6 +53,51 @@ function readTextResult(response: unknown) {
 
 function readJsonResult(response: unknown) {
   return JSON.parse(readTextResult(response)) as unknown
+}
+
+function codingAllowlistRevision(
+  revision: number,
+  overrides: Record<string, unknown> = {},
+) {
+  const entries = (overrides.entries as Array<unknown> | undefined) ?? []
+  return {
+    revision,
+    parent_revision: revision - 1,
+    enabled: entries.length > 0,
+    integrity: 'valid',
+    effective: entries.length > 0 ? 'exact_tuples' : 'refuse_all',
+    entries,
+    checksum: 'a'.repeat(64),
+    reason: 'restrict certification to the team canary',
+    actor: 'peyton@omniaura.ai',
+    created_at: `2026-09-1${revision}T00:00:00Z`,
+    ...overrides,
+    ...(overrides.integrity === 'invalid' ? { effective: 'refuse_all', entries: [] } : {}),
+  }
+}
+
+function codingCertificationLease(leaseId: string, status: string) {
+  return {
+    lease_id: leaseId,
+    agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+    artifact_sha256: 'b'.repeat(64),
+    screened_image_sha256: 'c'.repeat(64),
+    bench_version: 12,
+    coding_contract_version: 1,
+    validator_hotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+    status,
+    issued_at: '2026-09-14T00:00:00Z',
+    claimed_at: status === 'issued' ? null : '2026-09-14T00:01:00Z',
+    aborted_at: null,
+    deadline: '2026-09-14T00:20:00Z',
+    deadline_passed: true,
+    receipt_window_ends_at: '2026-09-14T00:22:00Z',
+    claim_allowlist_revision: status === 'issued' ? null : 1,
+    aborted_allowlist_revision: null,
+    inference_grant_status: status === 'issued' ? null : 'revoked',
+    receipt_status: status === 'completed' ? 'failed' : null,
+    weight_eligible: false,
+  }
 }
 
 afterEach(() => {
@@ -192,6 +238,7 @@ describe('Backroom MCP tools', () => {
         'set_continual_retest_settings',
         'set_core_qualification_policy',
         'refresh_agent_core_qualification',
+        'set_coding_certification_allowlist',
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
         'set_validator_slot_settings',
@@ -334,6 +381,10 @@ describe('Backroom MCP tools', () => {
     // measured and merged; none of them is a tutorial.
     // Four canary operations add explicit lease identity/digest/CAS inputs;
     // measured catalog is 133,733 bytes. Descriptions remain short summaries.
+    // The coding-certification canary adds a single open-object write envelope
+    // (~450 chars); its allowlist and lease reads ride inside
+    // get_coding_control_plane and get_agent_coding_certifications, and its
+    // fields live in get_backroom_tool_help.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(134_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
@@ -351,9 +402,11 @@ describe('Backroom MCP tools', () => {
     // one-line bench v13+ confirmation seed anchor read (its notes live in the
     // detailed help) lands at 25_047, so the bound moves to 25_200;
     // the one-line bench v13 gate-evidence and dispute-kind notes on the score
-    // and dispute tools land at 25_237, so it moves to 25_400.
+    // and dispute tools land at 25_237, so it moves to 25_400; the four
+    // one-line benchmark canary tools plus the coding-certification canary
+    // write line land at 25_467 together, so it moves to 25_600.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      25_400,
+      25_600,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -7241,7 +7294,26 @@ describe('Backroom MCP tools', () => {
         },
       ],
     }
-    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    const leases = {
+      total: 1,
+      limit: 10,
+      offset: 0,
+      leases: [
+        {
+          ...codingCertificationLease('22222222-2222-4222-8222-222222222222', 'completed'),
+          agent_id: agentId,
+        },
+      ],
+      weight_eligible: false,
+    }
+    let leaseStatus = 200
+    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) =>
+      String(input).includes('/coding-certification-leases')
+        ? Response.json(leaseStatus === 200 ? leases : { detail: 'unavailable' }, {
+            status: leaseStatus,
+          })
+        : Response.json(payload),
+    )
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
 
@@ -7262,6 +7334,26 @@ describe('Backroom MCP tools', () => {
       agent_id: agentId,
       coding_certified: true,
       active_certification_count: 1,
+      certification_leases: {
+        available: true,
+        total: 1,
+        leases: [{ status: 'completed', receipt_status: 'failed', claim_allowlist_revision: 1 }],
+      },
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/coding-certification-leases?agent_id=${agentId}&limit=10`,
+      expect.anything(),
+    )
+    leaseStatus = 503
+    const degraded = await client.callTool({
+      name: 'get_agent_coding_certifications',
+      arguments: { agentId, limit: 25 },
+    })
+    expect(degraded.isError, readTextResult(degraded)).not.toBe(true)
+    expect(readJsonResult(degraded)).toMatchObject({
+      agent_id: agentId,
+      active_certification_count: 1,
+      certification_leases: { available: false },
     })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/coding-certifications?limit=25`,
@@ -7538,13 +7630,41 @@ describe('Backroom MCP tools', () => {
       shadow_only: true,
       weight_eligible: false,
     }
-    const fetchMock = vi.fn().mockImplementation(async (url: string) => Response.json(
-      url.includes('/coding-catalog/releases')
-        ? catalog
-        : url.includes('/coding-private-v2-releases')
-          ? privateV2
-          : native,
-    ))
+    const current = codingAllowlistRevision(2, { enabled: true, integrity: 'invalid' })
+    const certificationAllowlist = {
+      enabled: false,
+      integrity: 'invalid',
+      effective: 'refuse_all',
+      current,
+      history: [],
+      max_entries: 16,
+      weight_eligible: false,
+    }
+    const certificationLeases = {
+      total: 1,
+      limit: 10,
+      offset: 0,
+      leases: [codingCertificationLease('11111111-1111-4111-8111-111111111111', 'completed')],
+      weight_eligible: false,
+    }
+    let certificationStatus = 200
+    let leaseBody: unknown = certificationLeases
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      if (url.includes('/coding-certification-allowlist')) {
+        return Response.json(
+          certificationStatus === 200 ? certificationAllowlist : { detail: 'Not Found' },
+          { status: certificationStatus },
+        )
+      }
+      if (url.includes('/coding-certification-leases')) return Response.json(leaseBody)
+      return Response.json(
+        url.includes('/coding-catalog/releases')
+          ? catalog
+          : url.includes('/coding-private-v2-releases')
+            ? privateV2
+            : native,
+      )
+    })
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     try {
@@ -7553,18 +7673,47 @@ describe('Backroom MCP tools', () => {
         arguments: { limit: 25 },
       })
       expect(response.isError, readTextResult(response)).not.toBe(true)
+      const { history: _history, ...allowlistWithoutHistory } = certificationAllowlist
       expect(readJsonResult(response)).toEqual({
         catalog,
         private_v2: privateV2,
         native,
+        certification_allowlist: { available: true, ...allowlistWithoutHistory },
+        certification_leases: { available: true, ...certificationLeases },
         shadow_only: true,
         weight_eligible: false,
       })
+      expect(readTextResult(response)).not.toMatch(/grant_id|bearer/)
+      // The embedded canary state is bounded independently of the catalog limit.
       expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual([
         'https://platform-api.heyditto.ai/api/v1/admin/coding-catalog/releases?limit=25',
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-certification-allowlist?history_limit=0',
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-certification-leases?limit=10',
         'https://platform-api.heyditto.ai/api/v1/admin/coding-control-plane?limit=25',
         'https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=25',
       ])
+
+      // A Platform that lacks or fails the canary endpoints still serves the
+      // Coding control plane, with explicit unavailable markers.
+      certificationStatus = 404
+      leaseBody = { leases: 'not a lease page' }
+      const degraded = await client.callTool({
+        name: 'get_coding_control_plane',
+        arguments: { limit: 25 },
+      })
+      expect(degraded.isError, readTextResult(degraded)).not.toBe(true)
+      const degradedBody = readJsonResult(degraded) as Record<string, Record<string, unknown>>
+      expect(degradedBody.native).toEqual(native)
+      expect(degradedBody.certification_allowlist).toMatchObject({ available: false })
+      expect(degradedBody.certification_leases).toMatchObject({ available: false })
+      expect(String(degradedBody.certification_allowlist.error)).toMatch(/404|not found/i)
+
+      // The console loader discards canary state, so it never requests it.
+      fetchMock.mockClear()
+      await fetchCodingControlPlane({ limit: 25 })
+      expect(
+        fetchMock.mock.calls.some(([url]) => String(url).includes('/coding-certification-')),
+      ).toBe(false)
     } finally {
       await client.close()
       await server.close()
@@ -8016,6 +8165,126 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('restricts the strict coding certification allowlist with exact local guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const entry = {
+      agent_id: agentId,
+      artifact_sha256: 'b'.repeat(64),
+      screened_image_sha256: 'c'.repeat(64),
+      validator_hotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+    }
+    const { screened_image_sha256: _image, ...entryWithoutImage } = entry
+    const applied = {
+      enabled: true,
+      integrity: 'valid',
+      effective: 'exact_tuples',
+      current: codingAllowlistRevision(2, { entries: [entry] }),
+      history: [codingAllowlistRevision(2, { entries: [entry] }), codingAllowlistRevision(1)],
+      max_entries: 16,
+      weight_eligible: false,
+      aborted_lease_count: 1,
+      revoked_inference_grant_count: 1,
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(applied))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const help = readJsonResult(
+        await client.callTool({
+          name: 'get_backroom_tool_help',
+          arguments: { tool: 'set_coding_certification_allowlist' },
+        }),
+      ) as { guidance: string }
+      for (const needle of [
+        'expectedRevision',
+        'APPLY CODING CERTIFICATION ALLOWLIST ENABLED <entry count>',
+        'APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL',
+        'aborted_lease_count',
+        'screened_image_sha256',
+        'no admin certification bypass',
+      ]) {
+        expect(help.guidance).toContain(needle)
+      }
+
+      const base = {
+        expectedRevision: 1,
+        reason: 'restrict certification to the team canary',
+      }
+      for (const refused of [
+        // A refuse-all revision cannot carry tuples.
+        { ...base, enabled: false, entries: [entry], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL' },
+        // There is no open enabled revision.
+        { ...base, enabled: true, entries: [], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 0' },
+        // The legacy "disabled" phrase no longer applies anything.
+        { ...base, enabled: false, entries: [], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST DISABLED' },
+        { ...base, enabled: true, entries: [entry, entry], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 2' },
+        { ...base, enabled: true, entries: [{ ...entry, agent_id: 'not-a-uuid' }], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+        // The tuple binds the exact screened image: no omission, wildcard, or extra field.
+        { ...base, enabled: true, entries: [entryWithoutImage], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+        { ...base, enabled: true, entries: [{ ...entry, screened_image_sha256: '*' }], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+        { ...base, enabled: true, entries: [{ ...entry, screened_image_sha256: 'C'.repeat(64) }], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+        { ...base, enabled: true, entries: [{ ...entry, screened_image_digest: 'c'.repeat(64) }], confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1' },
+      ]) {
+        const response = await client.callTool({
+          name: 'set_coding_certification_allowlist',
+          arguments: refused,
+        })
+        expect(response.isError, JSON.stringify(refused)).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      const written = await client.callTool({
+        name: 'set_coding_certification_allowlist',
+        arguments: {
+          ...base,
+          enabled: true,
+          entries: [entry],
+          confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1',
+        },
+      })
+      expect(written.isError, readTextResult(written)).not.toBe(true)
+      expect(readJsonResult(written)).toMatchObject({
+        effective: 'exact_tuples',
+        aborted_lease_count: 1,
+        revoked_inference_grant_count: 1,
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/coding-certification-allowlist',
+      )
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({
+        expected_revision: 1,
+        enabled: true,
+        entries: [entry],
+        reason: 'restrict certification to the team canary',
+        actor: 'peyton@omniaura.ai',
+        confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1',
+      })
+
+      const refuseAll = await client.callTool({
+        name: 'set_coding_certification_allowlist',
+        arguments: {
+          ...base,
+          expectedRevision: 2,
+          enabled: false,
+          confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL',
+        },
+      })
+      expect(refuseAll.isError, readTextResult(refuseAll)).not.toBe(true)
+      expect(JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body))).toMatchObject({
+        enabled: false,
+        entries: [],
+        confirmation: 'APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL',
+      })
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('serves authoritative scores, leaderboard, and history to a read-only grant without the admin token', async () => {

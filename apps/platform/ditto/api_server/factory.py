@@ -70,6 +70,7 @@ from ditto.api_server.endpoints import (
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
     admin_coding_catalog_router,
+    admin_coding_certification_canary_router,
     admin_coding_certifications_router,
     admin_coding_control_plane_router,
     admin_coding_evaluations_router,
@@ -712,6 +713,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_copy_court_router, prefix="/api/v1")
     app.include_router(admin_confirmation_seed_anchors_router, prefix="/api/v1")
     app.include_router(admin_coding_certifications_router, prefix="/api/v1")
+    app.include_router(admin_coding_certification_canary_router, prefix="/api/v1")
     app.include_router(admin_coding_control_plane_router, prefix="/api/v1")
     app.include_router(admin_coding_catalog_router, prefix="/api/v1")
     app.include_router(admin_coding_private_v2_releases_router, prefix="/api/v1")

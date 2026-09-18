@@ -18,7 +18,11 @@ Public-canary inference uses a separate table,
 `coding_certification_inference_grants`. One grant is uniquely bound to one
 claimed `coding_certification_leases` row. Creation does not require a private
 coding ticket or a prior certified receipt; it rechecks the claimed lease,
-current screened image, and canonical locked policy digest. The grant SHA is
+current screened image, the strict operator certification allowlist (through
+the shared lease authority gate), and canonical locked policy digest, all on the
+database clock. Grant access ends at the lease deadline, not its receipt window.
+Lease expiry and allowlist tightening revoke the grant (see
+`coding-certification-lease.md`). The grant SHA is
 the parsed policy digest, not the pack file hash. The capability-revoke path
 reuses `/coding-shadow/inference-revoke-capability` with the lease UUID in
 `ticket_id` so the existing Go revoker accepts it.

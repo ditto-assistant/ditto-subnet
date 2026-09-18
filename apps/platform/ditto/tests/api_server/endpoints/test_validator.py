@@ -47,7 +47,11 @@ from ditto.api_models.coding_certification import (
     _canonical_json_bytes,
     coding_certification_signing_message,
 )
+from ditto.api_models.coding_certification_admin import (
+    coding_certification_allowlist_checksum,
+)
 from ditto.api_models.coding_certification_leases import (
+    CODING_CERTIFICATION_RECEIPT_GRACE_SECONDS,
     CodingCertificationLeaseStatus,
 )
 from ditto.api_models.coding_inference import (
@@ -106,6 +110,9 @@ from ditto.api_server.dependencies import (
     get_storage_client,
 )
 from ditto.api_server.endpoints import validator as validator_endpoint
+from ditto.api_server.endpoints import (
+    validator_coding_certification as certification_endpoint,
+)
 from ditto.api_server.endpoints.validator import (
     _fresh_submission_lane_due,
     _heartbeat_signing_message,
@@ -129,6 +136,7 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     CodingCapabilityCertification,
+    CodingCertificationAllowlistRevision,
     CodingCertificationInferenceGrant,
     CodingCertificationInferenceRequest,
     CodingCertificationLease,
@@ -162,6 +170,11 @@ from ditto.db.queries.audit import (
     append_audit_entry,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
+from ditto.db.queries.coding_certification_leases import (
+    CodingCertificationLeaseNotAvailableError,
+    abort_coding_certification_lease,
+    claim_coding_certification_lease,
+)
 from ditto.db.queries.confirmation_scores import (
     ConfirmationSeedScore,
     append_confirmation_scores,
@@ -182,6 +195,9 @@ from ditto.db.queries.retry_budget import (
 )
 from ditto.db.queries.rollout_dispatch import ROLLOUT_DISPATCH_LOCK_KEY
 from ditto.db.queries.tickets import issue_confirmation_ticket
+from ditto.tests.db.queries.test_coding_certification_leases import (
+    admit_certification_tuples,
+)
 from ditto.tests.legacy_era import retired_era_writes_allowed
 
 # Real dev keypairs: sign for real so _verify_signature runs end to end. The k=3
@@ -13554,11 +13570,24 @@ async def _seed_claimed_certification_lease(
     *,
     screened_image_sha256: str = "12" * 32,
     status: str = CodingCertificationLeaseStatus.CLAIMED.value,
+    admit: bool = True,
 ) -> UUID:
     lease_id = uuid4()
     now = datetime.now(UTC)
     issued = now - timedelta(minutes=1)
     deadline = now + timedelta(minutes=20)
+    admitted: int | None = None
+    if admit:
+        # The certification allowlist refuses every tuple until one is admitted.
+        async with maker() as session:
+            async with session.begin():
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                artifact_sha256 = agent.sha256
+            admitted = await admit_certification_tuples(
+                session,
+                (agent_id, artifact_sha256, screened_image_sha256, _VALIDATOR_HOTKEY),
+            )
     async with maker() as session, session.begin():
         agent = await session.get(Agent, agent_id)
         assert agent is not None
@@ -13661,6 +13690,7 @@ async def _seed_claimed_certification_lease(
                 issued_at=issued,
                 deadline=deadline,
                 claimed_at=now if status == "claimed" else None,
+                claim_allowlist_revision=admitted if status == "claimed" else None,
                 authority=authority,
             )
         )
@@ -14040,6 +14070,442 @@ async def test_shadow_coding_certification_accepts_unused_inference_without_sett
     assert accepted.json()["status"] == "failed"
     assert accepted.json()["accepted"] is True
     assert accepted.json()["active"] is False
+
+
+_RECEIPT_GRACE = timedelta(seconds=CODING_CERTIFICATION_RECEIPT_GRACE_SECONDS)
+
+
+def _unused_inference_receipt(
+    *, issued_at: datetime, certification_id: str = "cert-endpoint-001"
+) -> CodingCapabilityCertificationReceipt:
+    receipt = _coding_certification_receipt(
+        certification_id=certification_id,
+        issued_at_unix=int(issued_at.timestamp()),
+    )
+    payload = receipt.model_dump(mode="json", by_alias=True)
+    payload["status"] = "failed"
+    payload["failure_stage"] = "run"
+    payload["failure_code"] = "coding_inference_not_observed"
+    payload["model_evidence"] = None
+    return _finalize_coding_receipt(payload)
+
+
+async def _move_certification_deadline(
+    maker: async_sessionmaker[AsyncSession],
+    lease_id: UUID,
+    *,
+    deadline: datetime,
+) -> None:
+    async with maker() as session, session.begin():
+        lease = await session.get(CodingCertificationLease, lease_id)
+        assert lease is not None
+        lease.issued_at = deadline - timedelta(minutes=10)
+        lease.claimed_at = deadline - timedelta(minutes=9)
+        lease.deadline = deadline
+
+
+async def _certification_state(
+    maker: async_sessionmaker[AsyncSession], lease_id: UUID
+) -> tuple[str, int]:
+    async with maker() as session, session.begin():
+        stored = await session.get(CodingCertificationLease, lease_id)
+        receipts = await session.scalar(
+            select(func.count())
+            .select_from(CodingCapabilityCertification)
+            .where(CodingCapabilityCertification.lease_id == lease_id)
+        )
+    assert stored is not None and stored.claimed_at is not None
+    return stored.status, int(receipts or 0)
+
+
+async def test_shadow_coding_certification_refuses_receipt_after_receipt_window(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    now = datetime.now(UTC)
+    late = _unused_inference_receipt(issued_at=now - timedelta(minutes=5))
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, late)
+    await _move_certification_deadline(
+        session_maker, lease_id, deadline=now - _RECEIPT_GRACE - timedelta(seconds=30)
+    )
+    _install_db(app, session_maker)
+    _install_chain(app)
+    refused = await client.post(
+        f"/api/v1/validator/agent/{agent_id}/coding-certification",
+        json=_coding_certification_payload(agent_id, lease_id, receipt=late),
+    )
+    assert refused.status_code == 404, refused.text
+    assert await _certification_state(session_maker, lease_id) == ("expired", 0)
+
+
+async def test_shadow_coding_certification_accepts_receipt_in_window_and_completes(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    now = datetime.now(UTC)
+    receipt = _unused_inference_receipt(issued_at=now - timedelta(minutes=5))
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
+    # The runner used its whole lease; the receipt lands 30 seconds later.
+    await _move_certification_deadline(
+        session_maker, lease_id, deadline=now - timedelta(seconds=30)
+    )
+    _install_db(app, session_maker)
+    _install_chain(app)
+    app.state.config = replace(
+        app.state.config, admin_api_token="test-admin-token-at-least-32-characters"
+    )
+    endpoint = f"/api/v1/validator/agent/{agent_id}/coding-certification"
+    payload = _coding_certification_payload(agent_id, lease_id, receipt=receipt)
+    accepted = await client.post(endpoint, json=payload)
+    assert accepted.status_code == 200, accepted.text
+    assert await _certification_state(session_maker, lease_id) == ("completed", 1)
+
+    # Long after the receipt window, the receipted lease is still terminal:
+    # neither a claim retry, an abort, nor an issue can expire it.
+    await _move_certification_deadline(
+        session_maker, lease_id, deadline=now - timedelta(minutes=15)
+    )
+    async with session_maker() as session:
+        for operation in (
+            claim_coding_certification_lease,
+            abort_coding_certification_lease,
+        ):
+            async with session.begin():
+                with pytest.raises(CodingCertificationLeaseNotAvailableError):
+                    await operation(
+                        session, validator_hotkey=_VALIDATOR_HOTKEY, lease_id=lease_id
+                    )
+    assert await _certification_state(session_maker, lease_id) == ("completed", 1)
+    replay = await client.post(endpoint, json=payload)
+    assert replay.status_code == 200 and replay.json()["idempotent"] is True
+    # A second, different receipt for the completed lease is a conflict; it
+    # never adds a row or reopens the lease.
+    double = await client.post(
+        endpoint,
+        json=_coding_certification_payload(
+            agent_id,
+            lease_id,
+            receipt=_unused_inference_receipt(
+                issued_at=now - timedelta(minutes=4),
+                certification_id="cert-endpoint-double",
+            ),
+        ),
+    )
+    assert double.status_code == 409, double.text
+    assert await _certification_state(session_maker, lease_id) == ("completed", 1)
+
+    audit = await client.get(
+        f"/api/v1/admin/coding-certification-leases?agent_id={agent_id}",
+        headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
+    )
+    assert audit.status_code == 200, audit.text
+    row = audit.json()["leases"][0]
+    assert row["status"] == "completed" and row["receipt_status"] == "failed"
+    assert row["deadline_passed"] is True
+
+
+async def test_shadow_coding_certification_never_persists_a_refused_tuple(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    admin_headers = {"Authorization": "Bearer test-admin-token-at-least-32-characters"}
+    _install_db(app, session_maker)
+    _install_chain(app)
+    app.state.config = replace(
+        app.state.config, admin_api_token="test-admin-token-at-least-32-characters"
+    )
+
+    # Tightened through the admin write while the settled lease is claimed.
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    receipt = _coding_certification_receipt()
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
+    certified = await _seed_canary_complete_settlement(session_maker, lease_id, receipt)
+    current = await client.get(
+        "/api/v1/admin/coding-certification-allowlist", headers=admin_headers
+    )
+    other = {
+        "agent_id": str(uuid4()),
+        "artifact_sha256": _SHA256,
+        "screened_image_sha256": "12" * 32,
+        "validator_hotkey": _VALIDATOR_HOTKEY,
+    }
+    tightened = await client.post(
+        "/api/v1/admin/coding-certification-allowlist",
+        headers=admin_headers,
+        json={
+            "expected_revision": current.json()["current"]["revision"],
+            "enabled": True,
+            "entries": [other],
+            "reason": "move the canary to a different agent",
+            "actor": "operator@example.com",
+            "confirmation": "APPLY CODING CERTIFICATION ALLOWLIST ENABLED 1",
+        },
+    )
+    assert tightened.status_code == 200, tightened.text
+    assert tightened.json()["aborted_lease_count"] == 1
+    endpoint = f"/api/v1/validator/agent/{agent_id}/coding-certification"
+    refused = await client.post(
+        endpoint,
+        json=_coding_certification_payload(agent_id, lease_id, receipt=certified),
+    )
+    assert refused.status_code == 403, refused.text
+    assert "not allowlisted" in refused.text
+    assert await _certification_state(session_maker, lease_id) == ("aborted", 0)
+
+
+async def test_shadow_coding_certification_corrupt_allowlist_refuses_claimed_receipt(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install_db(app, session_maker)
+    _install_chain(app)
+    # A corrupt revision refuses the receipt while the lease is still claimed;
+    # re-admitting the tuple is the only thing that lets the same receipt in.
+    second_agent = await _seed_agent(
+        session_maker, status=AgentStatus.EVALUATING, name="beta-agent"
+    )
+    second = _coding_certification_receipt(certification_id="cert-endpoint-002")
+    second_lease = await _seed_claimed_certification_lease(
+        session_maker, second_agent, second
+    )
+    second_certified = await _seed_canary_complete_settlement(
+        session_maker, second_lease, second
+    )
+    async with session_maker() as session, session.begin():
+        latest = await session.scalar(
+            select(func.max(CodingCertificationAllowlistRevision.revision))
+        )
+        session.add(
+            CodingCertificationAllowlistRevision(
+                parent_revision=int(latest or 0),
+                enabled=True,
+                entries=[
+                    {
+                        "agent_id": str(second_agent),
+                        "artifact_sha256": _SHA256,
+                        "screened_image_sha256": "12" * 32,
+                        "validator_hotkey": _VALIDATOR_HOTKEY,
+                    }
+                ],
+                checksum=coding_certification_allowlist_checksum(
+                    enabled=True, entries=[]
+                ),
+                reason="tampered revision fixture",
+                actor="test",
+            )
+        )
+    second_endpoint = f"/api/v1/validator/agent/{second_agent}/coding-certification"
+    second_payload = _coding_certification_payload(
+        second_agent, second_lease, receipt=second_certified
+    )
+    corrupt = await client.post(second_endpoint, json=second_payload)
+    assert corrupt.status_code == 403, corrupt.text
+    assert await _certification_state(session_maker, second_lease) == ("claimed", 0)
+    async with session_maker() as session:
+        await admit_certification_tuples(
+            session, (second_agent, _SHA256, "12" * 32, _VALIDATOR_HOTKEY)
+        )
+    admitted = await client.post(second_endpoint, json=second_payload)
+    assert admitted.status_code == 200, admitted.text
+    assert admitted.json()["active"] is True
+    assert await _certification_state(session_maker, second_lease) == (
+        "completed",
+        1,
+    )
+
+
+async def test_shadow_coding_certification_replay_stays_idempotent_under_refuse_all(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    receipt = _unused_inference_receipt(issued_at=datetime.now(UTC))
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    endpoint = f"/api/v1/validator/agent/{agent_id}/coding-certification"
+    payload = _coding_certification_payload(agent_id, lease_id, receipt=receipt)
+    assert (await client.post(endpoint, json=payload)).status_code == 200
+    async with session_maker() as session, session.begin():
+        latest = await session.scalar(
+            select(func.max(CodingCertificationAllowlistRevision.revision))
+        )
+        session.add(
+            CodingCertificationAllowlistRevision(
+                parent_revision=int(latest or 0),
+                enabled=False,
+                entries=[],
+                checksum=coding_certification_allowlist_checksum(
+                    enabled=False, entries=[]
+                ),
+                reason="refuse every certification tuple",
+                actor="test",
+            )
+        )
+
+    # An exact replay of an accepted receipt writes nothing, so it is answered
+    # from the stored row even though the allowlist now refuses everything.
+    replay = await client.post(endpoint, json=payload)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["idempotent"] is True
+    # Any new receipt for the tuple is refused before the agent row is locked.
+    other = _unused_inference_receipt(
+        issued_at=datetime.now(UTC), certification_id="cert-endpoint-002"
+    )
+    refused = await client.post(
+        endpoint, json=_coding_certification_payload(agent_id, lease_id, receipt=other)
+    )
+    assert refused.status_code == 403, refused.text
+    assert await _certification_state(session_maker, lease_id) == ("completed", 1)
+
+
+async def test_shadow_coding_certification_refusal_does_not_wait_on_the_agent_lock(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    receipt = _unused_inference_receipt(issued_at=datetime.now(UTC))
+    lease_id = await _seed_claimed_certification_lease(
+        session_maker, agent_id, receipt, admit=False
+    )
+    _install_db(app, session_maker)
+    _install_chain(app)
+    async with session_maker() as holder:
+        await holder.begin()
+        await holder.execute(
+            select(Agent).where(Agent.agent_id == agent_id).with_for_update()
+        )
+        try:
+            refused = await asyncio.wait_for(
+                client.post(
+                    f"/api/v1/validator/agent/{agent_id}/coding-certification",
+                    json=_coding_certification_payload(
+                        agent_id, lease_id, receipt=receipt
+                    ),
+                ),
+                timeout=5,
+            )
+        finally:
+            await holder.rollback()
+    assert refused.status_code == 403, refused.text
+    assert await _certification_state(session_maker, lease_id) == ("claimed", 0)
+
+
+class _SkewedDatetime(datetime):
+    skew = timedelta(0)
+
+    @classmethod
+    def now(cls, tz=None):  # type: ignore[no-untyped-def, override]
+        return datetime.now(tz) + cls.skew
+
+
+async def test_shadow_coding_certification_deadline_ignores_app_clock_skew(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_db(app, session_maker)
+    _install_chain(app)
+    monkeypatch.setattr(certification_endpoint, "datetime", _SkewedDatetime)
+    now = datetime.now(UTC)
+
+    # App clock an hour slow: the database still sees the window closed.
+    slow = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    late = _unused_inference_receipt(issued_at=now - timedelta(minutes=5))
+    late_lease = await _seed_claimed_certification_lease(session_maker, slow, late)
+    await _move_certification_deadline(
+        session_maker, late_lease, deadline=now - _RECEIPT_GRACE - timedelta(seconds=5)
+    )
+    _SkewedDatetime.skew = -timedelta(hours=1)
+    refused = await client.post(
+        f"/api/v1/validator/agent/{slow}/coding-certification",
+        json=_coding_certification_payload(slow, late_lease, receipt=late),
+    )
+    assert refused.status_code == 404, refused.text
+    assert await _certification_state(session_maker, late_lease) == ("expired", 0)
+
+    # App clock an hour fast: the database still sees the window open.
+    fast = await _seed_agent(
+        session_maker, status=AgentStatus.EVALUATING, name="fast-clock-agent"
+    )
+    timely = _unused_inference_receipt(
+        issued_at=now - timedelta(minutes=5), certification_id="cert-endpoint-002"
+    )
+    timely_lease = await _seed_claimed_certification_lease(session_maker, fast, timely)
+    await _move_certification_deadline(
+        session_maker, timely_lease, deadline=now - timedelta(seconds=20)
+    )
+    _SkewedDatetime.skew = timedelta(hours=1)
+    accepted = await client.post(
+        f"/api/v1/validator/agent/{fast}/coding-certification",
+        json=_coding_certification_payload(fast, timely_lease, receipt=timely),
+    )
+    assert accepted.status_code == 200, accepted.text
+    assert await _certification_state(session_maker, timely_lease) == ("completed", 1)
+
+
+async def test_shadow_coding_certification_lock_wait_cannot_make_a_receipt_timely(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+    async with session_maker() as session, session.begin():
+        db_now = cast(datetime, await session.scalar(select(func.clock_timestamp())))
+    receipt = _unused_inference_receipt(issued_at=db_now - timedelta(minutes=5))
+    lease_id = await _seed_claimed_certification_lease(session_maker, agent_id, receipt)
+    window_ends = db_now + timedelta(seconds=2)
+    await _move_certification_deadline(
+        session_maker, lease_id, deadline=window_ends - _RECEIPT_GRACE
+    )
+    _install_db(app, session_maker)
+    _install_chain(app)
+
+    async with session_maker() as holder, session_maker() as observer:
+        await holder.begin()
+        await holder.execute(
+            select(CodingCertificationLease)
+            .where(CodingCertificationLease.lease_id == lease_id)
+            .with_for_update()
+        )
+        submitted = asyncio.create_task(
+            client.post(
+                f"/api/v1/validator/agent/{agent_id}/coding-certification",
+                json=_coding_certification_payload(agent_id, lease_id, receipt=receipt),
+            )
+        )
+        blocked_at: datetime | None = None
+        for _ in range(100):
+            async with observer.begin():
+                waiting = await observer.scalar(
+                    text(
+                        "SELECT count(*) FROM pg_stat_activity "
+                        "WHERE datname = current_database() "
+                        "AND wait_event_type = 'Lock'"
+                    )
+                )
+                if waiting:
+                    blocked_at = cast(
+                        datetime, await observer.scalar(select(func.clock_timestamp()))
+                    )
+                    break
+            await asyncio.sleep(0.02)
+        # The request reached the lease lock while its receipt window was open.
+        assert blocked_at is not None and blocked_at < window_ends
+        await asyncio.sleep(max((window_ends - blocked_at).total_seconds(), 0) + 0.5)
+        await holder.rollback()
+        refused = await submitted
+    assert refused.status_code == 404, refused.text
+    assert await _certification_state(session_maker, lease_id) == ("expired", 0)
 
 
 async def test_shadow_coding_certification_rejects_unbound_legacy_certified_replay(

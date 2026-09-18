@@ -20,6 +20,9 @@ from ditto.api_server.endpoints.admin_burn_settings import (
 from ditto.api_server.endpoints.admin_coding_catalog import (
     router as admin_coding_catalog_router,
 )
+from ditto.api_server.endpoints.admin_coding_certification_canary import (
+    router as admin_coding_certification_canary_router,
+)
 from ditto.api_server.endpoints.admin_coding_certifications import (
     router as admin_coding_certifications_router,
 )
@@ -199,6 +202,7 @@ __all__ = [
     "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
     "admin_copy_review_router",
+    "admin_coding_certification_canary_router",
     "admin_coding_certifications_router",
     "admin_coding_control_plane_router",
     "admin_coding_catalog_router",

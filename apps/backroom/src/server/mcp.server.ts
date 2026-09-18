@@ -84,6 +84,7 @@ import {
   getCoreQualificationPolicyInputSchema,
   refreshAgentCoreQualificationInputSchema,
   setCoreQualificationPolicyMcpInputSchema,
+  setCodingCertificationAllowlistMcpInputSchema,
   agentScoresLookupInputSchema,
   scoreLeaderboardInputSchema,
   ownerFootprintLookupInputSchema,
@@ -162,10 +163,10 @@ import {
   fetchLeaseRevocations,
   batchRetryValidation,
   fetchAgentScoringReadiness,
-  fetchAgentCodingCertifications,
+  fetchAgentCodingCertificationsWithLeases,
   fetchCodingCatalogReleases,
   fetchCodingPrivateV2Releases,
-  fetchCodingControlPlane,
+  fetchCodingControlPlaneWithCertification,
   registerCodingPrivateV2Release,
   quarantineCodingPrivateV2Release,
   retireCodingPrivateV2Release,
@@ -179,6 +180,7 @@ import {
   fetchCoreQualificationPolicy,
   refreshAgentCoreQualification,
   setCoreQualificationPolicy,
+  setCodingCertificationAllowlist,
   fetchBenchmarkContractRefresh,
   fetchBenchmarkContractMigration,
   migrateBenchmarkContract,
@@ -319,6 +321,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_continual_retest_settings',
   'set_core_qualification_policy',
   'refresh_agent_core_qualification',
+  'set_coding_certification_allowlist',
   'set_queue_policy_settings',
   'apply_screener_review_settings',
   'rotate_screener_policy_manifest',
@@ -551,7 +554,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_coding_private_v2_releases:
     'Read native v2 registrations; never launches.',
   get_coding_control_plane:
-    'Read unified Coding authority state.',
+    'Read unified Coding authority state, including the certification allowlist and leases.',
   register_coding_private_v2_release:
     'Register signed, non-selectable native v2.',
   quarantine_coding_private_v2_release:
@@ -580,6 +583,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read one artifact-bound shadow qualification history.',
   refresh_agent_core_qualification:
     'Idempotently observe one current score snapshot. No scoring effect.',
+  set_coding_certification_allowlist:
+    'Append a strict certification allowlist revision; read its tool help first.',
   get_screener_review_settings:
     'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
   get_screener_fanout_shadow:
@@ -1462,11 +1467,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Inspect agent coding certifications',
       description:
-        'Shadow coding-capability receipts for one agent UUID. weight_eligible is always false; never feeds ranking or Tool+Memory scores. Requires backroom:read.',
+        'Shadow coding-capability receipts for one agent UUID, plus certification_leases: that agent\'s newest 10 certification lease rows, or {available:false,error} when that audit is unavailable (status issued | claimed | completed | aborted | expired, where completed means the receipt was accepted and is terminal; deadline, receipt_window_ends_at, deadline_passed on the Platform clock, claim_allowlist_revision, aborted_allowlist_revision, grant and receipt status; never grant ids, bearer digests, broker keys, or image locators). An overdue lease keeps its stored status until Platform next touches it. weight_eligible is always false; never feeds ranking or Tool+Memory scores. Requires backroom:read.',
       inputSchema: agentCodingCertificationInputSchema,
       annotations: toolAnnotations('read'),
     },
-    async (input) => result(await fetchAgentCodingCertifications(input)),
+    async (input) => result(await fetchAgentCodingCertificationsWithLeases(input)),
   )
 
   registerTool(
@@ -1498,11 +1503,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get unified Coding control-plane state',
       description:
-        'Read the contract-v1 catalog and distinct native private-v2 registry in one bounded snapshot. Reports permanent shadow and weight-zero flags. It does not establish fresh provider access, key custody, host qualification, canary completion or rollout approval and performs no mutation.',
+        'Read the contract-v1 catalog and distinct native private-v2 registry in one bounded snapshot, plus the strict contract-v1 certification canary state: certification_allowlist (enabled, effective refuse_all | exact_tuples, integrity valid | invalid, and the current revision, where 0 is the built-in refuse-all default; no history) and certification_leases (the newest 10 lease rows across agents). Each is {available:false,error} instead when Platform cannot serve it; the rest of the snapshot is unaffected. Reports permanent shadow and weight-zero flags. It does not establish fresh provider access, key custody, host qualification, canary completion or rollout approval and performs no mutation.',
       inputSchema: getCodingCatalogInputSchema,
       annotations: toolAnnotations('read'),
     },
-    async (input) => result(await fetchCodingControlPlane(input)),
+    async (input) => result(await fetchCodingControlPlaneWithCertification(input)),
   )
 
   registerTool(
@@ -1667,6 +1672,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => refreshAgentCoreQualification(input, props.session.email)),
+  )
+
+  registerTool(
+    'set_coding_certification_allowlist',
+    {
+      title: 'Set coding certification allowlist',
+      description:
+        'Append one complete, strict coding-certification allowlist revision. Read get_coding_control_plane first: certification_allowlist.current.revision is expectedRevision, and certification_leases shows in-flight leases. Arguments: expectedRevision (integer), enabled (boolean), entries (1-16 exact {agent_id, artifact_sha256, screened_image_sha256, validator_hotkey} tuples when enabled, none when enabled=false; screened_image_sha256 is the current verified screened-image digest, so a rebuild needs a new revision), reason (at least 8 characters), and confirmation, exactly "APPLY CODING CERTIFICATION ALLOWLIST ENABLED <entry count>" or "APPLY CODING CERTIFICATION ALLOWLIST REFUSE ALL". Platform refuses every certification lease issue, claim, harness launch, grant, and receipt unless the latest intact revision lists that exact tuple; with no revision, a refuse-all revision, or a corrupt revision (integrity=invalid) it refuses everything. There is no wildcard, no open revision, and no admin certification bypass. In the same transaction the write aborts every issued or claimed lease it does not admit (aborted_lease_count) and revokes every live certification inference grant it does not admit (revoked_inference_grant_count); completed (receipted) leases are never touched. Invalid shapes, duplicate tuples, and a wrong confirmation are refused before any Platform call. The signed-in operator email is the audit actor. Requires backroom:write.',
+      inputSchema: setCodingCertificationAllowlistMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => setCodingCertificationAllowlist(input, props.session.email)),
   )
 
   registerTool(
