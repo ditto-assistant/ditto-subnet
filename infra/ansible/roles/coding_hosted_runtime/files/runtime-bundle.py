@@ -15,7 +15,13 @@ import sys
 import tarfile
 from pathlib import Path, PurePosixPath
 
-SCHEMA = "dittobench-coding-hosted-runtime-bundle-v2"
+# v3 adds the rootless-netns router listener helper and pins its hash in the
+# receipt. pack writes only v3. Previously approved v2 bundles, and rollbacks to
+# them, stay installable and verifiable; they cannot run rootless-netns mode.
+SCHEMA = "dittobench-coding-hosted-runtime-bundle-v3"
+SCHEMA_V2 = "dittobench-coding-hosted-runtime-bundle-v2"
+WORKER = "bin/dittobench-coding-hosted-worker"
+ROUTER_LISTENER = "bin/dittobench-coding-router-listener"
 BASE = Path("/opt/ditto-coding-hosted")
 PYTHON = Path("/usr/bin/python3.13")
 MAX_ARCHIVE = 4 << 30
@@ -29,6 +35,9 @@ PACKAGES = (
     "libc6",
 )
 ROOTS = ("bin/", "apps/platform/", "packages/ditto-screening-protocol/")
+# Static amd64 ELF executables required by each schema. The listener helper is
+# started only by the worker, from the worker's own installed bundle directory.
+EXECUTABLES = {SCHEMA_V2: (WORKER,), SCHEMA: (WORKER, ROUTER_LISTENER)}
 
 
 class Parser(argparse.ArgumentParser):
@@ -107,7 +116,8 @@ def metadata(value, revision):
             "weight_eligible",
         }
     )
-    require(value["schema"] == SCHEMA and value["source_revision"] == revision)
+    require(value["schema"] in EXECUTABLES and value["source_revision"] == revision)
+    executables = EXECUTABLES[value["schema"]]
     require(value["shadow_only"] is True and value["weight_eligible"] is False)
     require(re.fullmatch(r"[0-9a-f]{64}", value["python_sha256"]) is not None)
     packages = value["debian_packages"]
@@ -132,14 +142,32 @@ def metadata(value, revision):
             require(type(item["executable"]) is bool)
             require(re.fullmatch(r"[0-9a-f]{64}", item["sha256"]) is not None)
     required = {
-        "bin/dittobench-coding-hosted-worker",
+        *executables,
         "apps/platform/ditto/coding_hosted_worker.py",
         "apps/platform/.venv/bin/python",
         "apps/platform/uv.lock",
     }
     require(required <= entries.keys())
-    require(entries["bin/dittobench-coding-hosted-worker"].get("executable") is True)
+    require(all(entries[name].get("executable") is True for name in executables))
+    # A v2 bundle cannot carry a helper that its receipt would not pin.
+    require(value["schema"] != SCHEMA_V2 or ROUTER_LISTENER not in entries)
     return value
+
+
+def receipt_for(value, archive_sha):
+    receipt = {
+        "schema": value["schema"],
+        "source_revision": value["source_revision"],
+        "archive_sha256": archive_sha,
+        "worker_sha256": value["files"][WORKER]["sha256"],
+        "manifest_sha256": hashlib.sha256(canonical(value)).hexdigest(),
+        "shadow_only": True,
+        "weight_eligible": False,
+        "worker_started": False,
+    }
+    if value["schema"] == SCHEMA:
+        receipt["router_listener_sha256"] = value["files"][ROUTER_LISTENER]["sha256"]
+    return receipt
 
 
 def base_packages():
@@ -304,7 +332,7 @@ def inspect(stream, expected_sha, revision):
                 )
                 require(header.mode == (0o555 if item["executable"] else 0o444))
                 offset = stream.tell()
-                if name == "bin/dittobench-coding-hosted-worker":
+                if name in EXECUTABLES[value["schema"]]:
                     elf = stream.read(20)
                     require(
                         elf[:6] == b"\x7fELF\x02\x01"
@@ -348,18 +376,7 @@ def materialize(stream, value, records, destination, archive_sha):
         if "link" in item:
             resolved = (destination / name).resolve(strict=True)
             require(resolved == PYTHON or resolved.is_relative_to(destination))
-    receipt = {
-        "schema": SCHEMA,
-        "source_revision": value["source_revision"],
-        "archive_sha256": archive_sha,
-        "worker_sha256": value["files"]["bin/dittobench-coding-hosted-worker"][
-            "sha256"
-        ],
-        "manifest_sha256": hashlib.sha256(canonical(value)).hexdigest(),
-        "shadow_only": True,
-        "weight_eligible": False,
-        "worker_started": False,
-    }
+    receipt = receipt_for(value, archive_sha)
     with (destination / "bundle-receipt.json").open("xb") as target:
         target.write(canonical(receipt))
         os.fchmod(target.fileno(), 0o444)
@@ -419,19 +436,7 @@ def verify_tree(value, destination, archive_sha):
     require(
         receipt.stat().st_size <= 4096 and stat.S_IMODE(receipt.stat().st_mode) == 0o444
     )
-    expected = {
-        "schema": SCHEMA,
-        "source_revision": value["source_revision"],
-        "archive_sha256": archive_sha,
-        "worker_sha256": value["files"]["bin/dittobench-coding-hosted-worker"][
-            "sha256"
-        ],
-        "manifest_sha256": hashlib.sha256(canonical(value)).hexdigest(),
-        "shadow_only": True,
-        "weight_eligible": False,
-        "worker_started": False,
-    }
-    require(receipt.read_bytes() == canonical(expected))
+    require(receipt.read_bytes() == canonical(receipt_for(value, archive_sha)))
 
 
 def main():
@@ -494,7 +499,7 @@ def main():
             }
         else:
             receipt = {
-                "schema": SCHEMA,
+                "schema": value["schema"],
                 "source_revision": args.revision,
                 "archive_sha256": args.sha256,
                 "files": len(value["files"]),
