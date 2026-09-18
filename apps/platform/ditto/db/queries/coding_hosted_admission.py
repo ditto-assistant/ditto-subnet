@@ -289,6 +289,31 @@ async def _locked_assignment(
     return row
 
 
+def release_available(
+    release: CodingPrivateV2Release | None, *, inactive: object, registration_sha: str
+) -> bool:
+    """Lock-agnostic: the caller decides whether these rows were read for update."""
+    return (
+        release is not None
+        and release.registration_sha256 == registration_sha
+        and not inactive
+        and release.shadow_only is True
+        and release.weight_eligible is False
+    )
+
+
+def artifact_available(
+    agent: Agent | None, *, artifact_sha: str, image_sha: str
+) -> bool:
+    """Lock-agnostic: the caller decides whether this row was read for update."""
+    return (
+        agent is not None
+        and agent.sha256 == artifact_sha
+        and agent.screened_image_sha256 == image_sha
+        and agent.status in SCOREABLE_AGENT_STATUSES
+    )
+
+
 async def _lock_authorities(
     session: AsyncSession,
     release_id: UUID,
@@ -303,23 +328,14 @@ async def _lock_authorities(
     inactive = await session.scalar(
         select(exists().where(CodingPrivateV2ReleaseEvent.release_row_id == release_id))
     )
-    if (
-        release is None
-        or release.registration_sha256 != registration_sha
-        or inactive
-        or release.shadow_only is not True
-        or release.weight_eligible is not False
+    if not release_available(
+        release, inactive=inactive, registration_sha=registration_sha
     ):
         raise HostedAdmissionError("hosted release is unavailable")
     agent = await session.get(
         Agent, agent_id, with_for_update=True, populate_existing=True
     )
-    if (
-        agent is None
-        or agent.sha256 != artifact_sha
-        or agent.screened_image_sha256 != image_sha
-        or agent.status not in SCOREABLE_AGENT_STATUSES
-    ):
+    if not artifact_available(agent, artifact_sha=artifact_sha, image_sha=image_sha):
         raise HostedAdmissionError("hosted screened artifact is unavailable")
 
 
