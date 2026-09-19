@@ -74,7 +74,7 @@ class ConversationRuntime:
             raise AssessmentFailure("sandbox_operation_failed")
         return out.decode().strip()
 
-    def transport(self, *, timeout: int = 110) -> httpx.AsyncBaseTransport:
+    def transport(self, *, timeout: int = 120) -> httpx.AsyncBaseTransport:
         return HarnessTransport(self, timeout=timeout)
 
     async def preflight(self) -> None:
@@ -298,7 +298,9 @@ class ConversationRuntime:
 
 
 class HarnessTransport(httpx.AsyncBaseTransport):
-    def __init__(self, runtime: ConversationRuntime, *, timeout: int = 110):
+    def __init__(self, runtime: ConversationRuntime, *, timeout: int = 120):
+        if type(timeout) is not int or not 1 <= timeout <= 120:
+            raise ValueError("invalid harness timeout")
         self.runtime = runtime
         self.timeout = timeout
 
@@ -317,19 +319,37 @@ class HarnessTransport(httpx.AsyncBaseTransport):
                 else None,
             }
         ).encode()
-        raw = await self.runtime.docker(
-            "exec",
-            "--interactive",
-            self.runtime.relay,
-            "python",
-            "/relay.py",
-            "harness",
-            input_data=envelope,
-            timeout=self.timeout + 5,
-        )
+        operation = request.url.path.removeprefix("/")
+        if operation not in {"run", "seed", "health"}:
+            raise AssessmentFailure("invalid_harness_transport_request")
+        try:
+            raw = await self.runtime.docker(
+                "exec",
+                "--interactive",
+                self.runtime.relay,
+                "python",
+                "/relay.py",
+                "harness",
+                input_data=envelope,
+                timeout=self.timeout + 5,
+            )
+        except TimeoutError as exc:
+            raise AssessmentFailure(f"harness_{operation}_timeout") from exc
+        except AssessmentFailure as exc:
+            raise AssessmentFailure(f"harness_{operation}_exec_failed") from exc
         if len(raw) > 100_000:
             raise AssessmentFailure("harness_transport_response_too_large")
         result = json.loads(raw)
+        if isinstance(result, dict) and "error" in result:
+            code = result["error"]
+            if not isinstance(code, str) or code not in {
+                "timeout",
+                "connection_failed",
+                "response_too_large",
+                "transport_failed",
+            }:
+                raise AssessmentFailure("invalid_harness_transport_response")
+            raise AssessmentFailure(f"harness_{operation}_{code}")
         status = result["status"]
         data = base64.b64decode(result["body"], validate=True)
         if type(status) is not int or not 100 <= status <= 599 or len(data) > 64_000:

@@ -154,7 +154,12 @@ internal network. Only its trusted inference sidecar also joins an egress
 network. The miner receives placeholder keys and a public TLS CA, never the
 provider key, Docker socket, private certificate key or report state.
 Host requests reach only `/health`, `/run`, and `/seed` through a bounded Docker
-exec helper in the trusted sidecar. No container port is published. This works
+exec helper in the trusted sidecar. No container port is published.
+The bridge honors the existing 120-second operation ceiling (including the
+outer wall-clock deadline). Its fixed error codes identify `run`, `seed`, or
+`health` plus timeout, connection, response-size, or helper-execution failure.
+Only these codes reach the private Backroom report; exception text, headers,
+URLs and sandbox stderr are never exported. No request is retried by the bridge. This works
 with internal-only rootless networks and does not depend on host port forwarding.
 
 Production Astra calls use OpenRouter's stateless Responses API with

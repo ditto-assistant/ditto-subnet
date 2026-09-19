@@ -202,10 +202,17 @@ class MemoryHarness:
         self.started = False
 
     async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        async with asyncio.timeout(self.limits.operation_seconds):
-            return await bounded_post(
-                self.client, self.url + path, body, max_bytes=self.limits.response_bytes
-            )
+        try:
+            async with asyncio.timeout(self.limits.operation_seconds):
+                return await bounded_post(
+                    self.client,
+                    self.url + path,
+                    body,
+                    max_bytes=self.limits.response_bytes,
+                )
+        except (TimeoutError, httpx.TimeoutException) as exc:
+            operation = "seed" if path == "/seed" else "run"
+            raise AssessmentFailure(f"harness_{operation}_timeout") from exc
 
     async def converse(self, turn: StoryTurn) -> Exchange:
         if turn.turn_id != len(self.exchanges) + 1 or turn.turn_id > 30:

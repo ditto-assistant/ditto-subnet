@@ -19,7 +19,7 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 MODEL = "openai/gpt-oss-20b"
 EMBED_MODEL = "perplexity/pplx-embed-v1-0.6b"
@@ -377,14 +377,14 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def harness_request(
-    path: str, body: bytes | None, *, timeout: int = 110
+    path: str, body: bytes | None, *, timeout: int = 120
 ) -> tuple[int, bytes]:
     """Fixed-target host ingress; never forwards a caller's headers or origin."""
     if (body is None and path != "/health") or (
         body is not None and (path not in {"/run", "/seed"} or len(body) > MAX_BODY)
     ):
         raise RelayError("unsupported_harness_route")
-    if type(timeout) is not int or not 1 <= timeout <= 110:
+    if type(timeout) is not int or not 1 <= timeout <= 120:
         raise RelayError("invalid_harness_timeout")
     request = urllib.request.Request(
         "http://agent:8080" + path,
@@ -406,16 +406,32 @@ def harness_request(
 
 def harness_stdio() -> None:
     """Trusted Docker-exec transport; no published host port or caller headers."""
-    raw = sys.stdin.buffer.read(200_001)
-    if len(raw) > 200_000:
-        raise RelayError("oversized_harness_envelope")
-    envelope = json.loads(raw)
-    body = envelope["body"]
-    decoded = base64.b64decode(body, validate=True) if body is not None else None
-    status, data = harness_request(
-        envelope["path"], decoded, timeout=envelope["timeout"]
-    )
-    print(json.dumps({"status": status, "body": base64.b64encode(data).decode()}))
+    try:
+        raw = sys.stdin.buffer.read(200_001)
+        if len(raw) > 200_000:
+            raise RelayError("oversized_harness_envelope")
+        envelope = json.loads(raw)
+        body = envelope["body"]
+        decoded = base64.b64decode(body, validate=True) if body is not None else None
+        status, data = harness_request(
+            envelope["path"], decoded, timeout=envelope["timeout"]
+        )
+        result = {"status": status, "body": base64.b64encode(data).decode()}
+    except Exception as exc:
+        # Return only a fixed vocabulary over trusted stdout. Never expose an
+        # exception string, URL, response body, or traceback from the sandbox.
+        if isinstance(exc, TimeoutError) or (
+            isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError)
+        ):
+            code = "timeout"
+        elif isinstance(exc, (URLError, ConnectionError)):
+            code = "connection_failed"
+        elif isinstance(exc, RelayError) and str(exc) == "oversized_harness_response":
+            code = "response_too_large"
+        else:
+            code = "transport_failed"
+        result = {"error": code}
+    print(json.dumps(result))
 
 
 def serve(relay: Relay) -> None:

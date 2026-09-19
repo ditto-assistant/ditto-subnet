@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Smoke the released launcher with a disposable synthetic image; no inference."""
 
+import argparse
 import asyncio
 import hashlib
 import json
@@ -29,9 +30,10 @@ def docker(*args):
     ).stdout.strip()
 
 
-SERVER = """import json, ssl, urllib.request
+SERVER = """import json, ssl, time, urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class Handler(BaseHTTPRequestHandler):
+    turns = 0
     def log_message(self, *args): pass
     def respond(self, body):
         data=json.dumps(body).encode();self.send_response(200)
@@ -40,15 +42,19 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
         if self.path == '/seed': self.respond({'pairs':len(body['pairs'])}); return
+        Handler.turns += 1
+        if Handler.turns == 9: time.sleep(__SLOW_SECONDS__)
         result=json.load(urllib.request.urlopen('https://openrouter.ai/api/v1/models',timeout=5))
         self.respond({'final_text':'TLS relay verified: '+result['data'][0]['id']})
 HTTPServer(('0.0.0.0',8080),Handler).serve_forever()
 """
 
 
-async def main(directory):
+async def main(directory, slow_turn_seconds):
     root = Path(directory)
-    (root / "fixture.py").write_text(SERVER)
+    (root / "fixture.py").write_text(
+        SERVER.replace("__SLOW_SECONDS__", str(slow_turn_seconds))
+    )
     (root / "fixture.py").chmod(0o444)
     (root / "Dockerfile").write_text(
         "FROM "
@@ -101,7 +107,7 @@ async def main(directory):
     try:
         url = await runtime.start()
         async with real_client(
-            trust_env=False, timeout=20, transport=runtime.transport()
+            trust_env=False, timeout=120, transport=runtime.transport()
         ) as client:
             harness = MemoryHarness(client, url, Limits())
             for turn in story(launch.seed):
@@ -120,6 +126,7 @@ async def main(directory):
                 "launcher": "passed",
                 "exchanges": 30,
                 "sessions": 10,
+                "slow_turn_seconds": slow_turn_seconds,
                 "tls_relay": True,
                 "provider_requests": usage.requests,
                 "cleanup": "passed",
@@ -131,10 +138,14 @@ async def main(directory):
     )
 
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--slow-turn-seconds", type=int, choices=range(116), default=0)
+args = parser.parse_args()
+
 try:
     security = json.loads(docker("info", "--format", "{{json .SecurityOptions}}"))
     assert any("rootless" in item for item in security), "a rootless daemon is required"
     with tempfile.TemporaryDirectory(prefix="conversation-preflight-") as directory:
-        asyncio.run(main(directory))
+        asyncio.run(main(directory, args.slow_turn_seconds))
 finally:
     subprocess.run(["docker", "image", "rm", fixture], capture_output=True, timeout=60)

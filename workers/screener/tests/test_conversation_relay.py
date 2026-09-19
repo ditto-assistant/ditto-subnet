@@ -1,7 +1,8 @@
+import contextlib
 import io
 import json
 from concurrent.futures import ThreadPoolExecutor
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 
 import pytest
 
@@ -10,7 +11,9 @@ from ditto_screener.conversation_relay import (
     EMBED_MODEL,
     MODEL,
     Relay,
+    RelayError,
     harness_request,
+    harness_stdio,
 )
 from ditto_screening_protocol.conversation import HarnessUsage
 
@@ -254,7 +257,7 @@ def test_harness_ingress_is_fixed_target_and_response_bounded(monkeypatch):
     class Opener:
         def open(self, request, *, timeout):
             requests.append(request)
-            assert timeout == 110
+            assert timeout == 120
             response = io.BytesIO(b'{"pairs":1}')
             response.status = 200
             return response
@@ -280,3 +283,85 @@ def test_harness_ingress_is_fixed_target_and_response_bounded(monkeypatch):
     monkeypatch.setattr("urllib.request.build_opener", lambda *_: LargeOpener())
     with pytest.raises(ValueError, match="oversized"):
         harness_request("/health", None)
+
+
+@pytest.mark.parametrize(
+    "failure,code",
+    [
+        (TimeoutError("private body"), "timeout"),
+        (URLError(TimeoutError("private URL")), "timeout"),
+        (URLError("private hostname"), "connection_failed"),
+        (ConnectionResetError("private request"), "connection_failed"),
+        (RelayError("oversized_harness_response"), "response_too_large"),
+        (ValueError("private JSON"), "transport_failed"),
+    ],
+)
+def test_bridge_failures_are_fixed_codes_without_tracebacks(
+    monkeypatch, capsys, failure, code
+):
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise failure
+
+    monkeypatch.setattr("ditto_screener.conversation_relay.harness_request", fail)
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.TextIOWrapper(io.BytesIO(b'{"path":"/run","body":"e30=","timeout":120}')),
+    )
+    harness_stdio()
+    output = capsys.readouterr()
+    assert json.loads(output.out) == {"error": code}
+    assert output.err == "" and "private" not in output.out
+    assert len(calls) == 1  # Error reporting never repeats the HTTP operation.
+
+
+def test_real_socket_deadline_survives_stdio_without_paid_requests(monkeypatch, capsys):
+    import threading
+    import time
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    calls = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *_args):
+            pass
+
+        def do_POST(self):
+            calls.append(self.path)
+            time.sleep(1.1)
+            self.send_response(200)
+            self.end_headers()
+            with contextlib.suppress(BrokenPipeError):
+                self.wfile.write(b'{"final_text":"private answer"}')
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    real = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    class LoopbackOnly:
+        def open(self, request, *, timeout):
+            assert request.full_url == "http://agent:8080/run"
+            local = urllib.request.Request(
+                f"http://127.0.0.1:{server.server_port}/run", data=request.data
+            )
+            return real.open(local, timeout=timeout)
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_: LoopbackOnly())
+    monkeypatch.setattr(
+        "sys.stdin",
+        io.TextIOWrapper(io.BytesIO(b'{"path":"/run","body":"e30=","timeout":1}')),
+    )
+    try:
+        harness_stdio()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join()
+    output = capsys.readouterr()
+    assert json.loads(output.out) == {"error": "timeout"}
+    assert output.err == "" and "private" not in output.out
+    assert calls == ["/run"]
