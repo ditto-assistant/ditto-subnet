@@ -23,6 +23,17 @@ func (runtimeFactFixture) Plan(_ context.Context, r universe.V13FactRenderReques
 		p.Records[i] = strings.Join(r.Required[i], " ")
 	}
 	p.Question = "Question about " + r.Subject
+	if r.QuestionTemplate != "" {
+		p.Question = r.QuestionTemplate
+	}
+	for _, f := range r.Facts {
+		if f.Mode == "history" && f.Sequence == 0 {
+			p.Records[f.Record] = "Initial state: " + p.Records[f.Record]
+		}
+		if f.Mode == "history" && f.Sequence == 1 {
+			p.Records[f.Record] = "Final update: " + p.Records[f.Record]
+		}
+	}
 	return p, nil
 }
 func (runtimeFactFixture) Check(context.Context, universe.V13FactRenderRequest, universe.V13FactRenderPlan) error {

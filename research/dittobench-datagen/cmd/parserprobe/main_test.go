@@ -20,6 +20,17 @@ func (structuralRenderer) Plan(_ context.Context, r universe.V13FactRenderReques
 	for i := range p.Records {
 		p.Records[i] = strings.Join(r.Required[i], " ")
 	}
+	if r.QuestionTemplate != "" {
+		p.Question = r.QuestionTemplate
+	}
+	for _, f := range r.Facts {
+		if f.Mode == "history" && f.Sequence == 0 {
+			p.Records[f.Record] = "Initial state: " + p.Records[f.Record]
+		}
+		if f.Mode == "history" && f.Sequence == 1 {
+			p.Records[f.Record] = "Final update: " + p.Records[f.Record]
+		}
+	}
 	return p, nil
 }
 

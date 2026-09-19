@@ -14,6 +14,72 @@ type factRenderFixture struct {
 	reject        bool
 }
 
+func TestV13RenderRequirementsFollowEvaluatorOperators(t *testing.T) {
+	w := v13FactWorld{Entity: "project", Purpose: "data room", Query: []v13FactQuery{{"read", "next_action"}, {"latest", "responsible"}}}
+	w.Facts = []v13Fact{
+		{Entity: w.Entity, Field: "next_action", Value: factValue("book kickoff", "action"), Mode: "static", Record: 0},
+		{Entity: w.Entity, Field: "responsible", Value: factValue("Ada", "person"), Mode: "history", Record: 0, Order: 0},
+		{Entity: w.Entity, Field: "responsible", Value: factValue("Bea", "person"), Mode: "history", Record: 1, Order: 1},
+		{Entity: w.Entity, Field: "neutral", Value: factValue("note", "text"), Mode: "static", Record: 2},
+	}
+	r, err := v13FactRenderRequest(w, v13Schema{Action: "next_action", Responsible: "responsible"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Revision != "v13-structured-fact-render-v3" || len(r.Query) != 2 {
+		t.Fatal("tuple obligation lost")
+	}
+	for _, q := range r.Query {
+		if !strings.Contains(q.Requirement, "VALUE") || r.Bindings[q.Field] == "" {
+			t.Fatal("query value obligation missing")
+		}
+	}
+	if !strings.Contains(r.Facts[1].Relation, "Initial state") || !strings.Contains(r.Facts[2].Relation, "Final update") {
+		t.Fatal("history relies on record order")
+	}
+	if !strings.Contains(v13AssertionRelation("independent", 0), "SOLE launch approver") || !strings.Contains(v13QueryRequirement("conflict"), "not whether the people personally agree") {
+		t.Fatal("source assignment confused with speaker claims")
+	}
+	for _, op := range []string{"read", "latest", "latest_date", "conflict", "set_after_update"} {
+		if v13QueryRequirement(op) == "" {
+			t.Fatalf("missing operator %s", op)
+		}
+	}
+	if v13QueryRequirement("unknown") != "" {
+		t.Fatal("unsupported operator accepted")
+	}
+	r.QuestionTemplate = "What is " + r.Query[0].Field + " for " + r.Subject + " and who is the final " + r.Query[1].Field + "?"
+	p, err := (&factRenderFixture{}).Plan(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BindV13FactRenderPlan(r, p); err != nil {
+		t.Fatal(err)
+	}
+	bad := p
+	bad.Question = "Who is the " + r.Query[1].Field + " responsible for the " + r.Query[0].Field + " for " + r.Subject + "?"
+	if _, err := BindV13FactRenderPlan(r, bad); err == nil {
+		t.Fatal("action obligation silently removed")
+	}
+	bad = p
+	bad.Records[0] = strings.TrimPrefix(bad.Records[0], "Initial state: ")
+	if _, err := BindV13FactRenderPlan(r, bad); err == nil {
+		t.Fatal("implicit initial history accepted")
+	}
+	bad = p
+	bad.Records[1] = strings.TrimPrefix(bad.Records[1], "Final update: ")
+	if _, err := BindV13FactRenderPlan(r, bad); err == nil {
+		t.Fatal("implicit final history accepted")
+	}
+	for _, marker := range []string{"replaces", "replaced", "replacing", "supersedes", "superseded", "superseding"} {
+		valid := p
+		valid.Records[1] = marker + " the original state: " + strings.TrimPrefix(p.Records[1], "Final update: ")
+		if _, err := BindV13FactRenderPlan(r, valid); err != nil {
+			t.Fatalf("explicit replacement %s rejected: %v", marker, err)
+		}
+	}
+}
+
 func TestV13DatedPlanCannotInferRecordChronology(t *testing.T) {
 	w := v13FactWorld{Entity: "project", Purpose: "work", Query: []v13FactQuery{{Op: "read", Field: "role"}}}
 	for i := 0; i < 3; i++ {
@@ -40,7 +106,7 @@ func TestV13DatedPlanCannotInferRecordChronology(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Facts[0].Mode = "history"
-	p.Records[0] = "Later " + p.Records[0]
+	p.Records[0] = "Initially " + p.Records[0]
 	if _, err := BindV13FactRenderPlan(r, p); err != nil {
 		t.Fatal("explicit history chronology rejected")
 	}
@@ -76,6 +142,17 @@ func (f *factRenderFixture) Plan(_ context.Context, r V13FactRenderRequest) (V13
 		p.Records[i] = strings.Join(tokens, " ")
 	}
 	p.Question = "Question about " + r.Subject
+	if r.QuestionTemplate != "" {
+		p.Question = r.QuestionTemplate
+	}
+	for _, f := range r.Facts {
+		if f.Mode == "history" && f.Sequence == 0 {
+			p.Records[f.Record] = "Initial state: " + p.Records[f.Record]
+		}
+		if f.Mode == "history" && f.Sequence == 1 {
+			p.Records[f.Record] = "Final update: " + p.Records[f.Record]
+		}
+	}
 	return p, nil
 }
 func (f *factRenderFixture) Check(_ context.Context, r V13FactRenderRequest, p V13FactRenderPlan) error {
@@ -108,6 +185,9 @@ func TestV13FactRenderChecksEveryWorldAndPreservesTruth(t *testing.T) {
 			t.Fatalf("plans=%d checks=%d", f.plans, f.checks)
 		}
 		for i, c := range got {
+			if c.Plan.Case.Question != want[i].Plan.Case.Question {
+				t.Fatal("renderer changed compiled query")
+			}
 			if c.Plan.Case.ExpectedAnswer != want[i].Plan.Case.ExpectedAnswer || !reflect.DeepEqual(c.Plan.Case.Claims, want[i].Plan.Case.Claims) {
 				t.Fatal("renderer changed answer authority")
 			}
@@ -127,6 +207,9 @@ func TestV13FactRenderChecksEveryWorldAndPreservesTruth(t *testing.T) {
 			t.Fatal("personal worlds not independently checked")
 		}
 		for i, c := range got {
+			if c.Plan.Case.Question != want[i].Plan.Case.Question {
+				t.Fatal("renderer changed personal compiled query")
+			}
 			if c.Plan.Case.ExpectedAnswer != want[i].Plan.Case.ExpectedAnswer || !reflect.DeepEqual(c.Plan.Case.Claims, want[i].Plan.Case.Claims) {
 				t.Fatal("personal authority drift")
 			}

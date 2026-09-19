@@ -15,16 +15,17 @@ import (
 // are represented by tokens; a renderer can rearrange language, not invent or
 // substitute the literal facts. This request is private producer input.
 type V13FactRenderRequest struct {
-	Revision        string               `json:"revision"`
-	Subject         string               `json:"subject"`
-	SubjectEntity   string               `json:"subject_entity"`
-	SubjectMode     string               `json:"subject_mode"`
-	Facts           []V13RenderAssertion `json:"facts"`
-	Query           []V13RenderQuery     `json:"query"`
-	Bindings        map[string]string    `json:"bindings"`
-	Required        [3][]string          `json:"record_required_tokens"`
-	Allowed         [3][]string          `json:"record_allowed_tokens"`
-	QuestionAllowed []string             `json:"question_allowed_tokens"`
+	Revision         string               `json:"revision"`
+	Subject          string               `json:"subject"`
+	SubjectEntity    string               `json:"subject_entity"`
+	SubjectMode      string               `json:"subject_mode"`
+	Facts            []V13RenderAssertion `json:"facts"`
+	Query            []V13RenderQuery     `json:"query"`
+	Bindings         map[string]string    `json:"bindings"`
+	Required         [3][]string          `json:"record_required_tokens"`
+	Allowed          [3][]string          `json:"record_allowed_tokens"`
+	QuestionAllowed  []string             `json:"question_allowed_tokens"`
+	QuestionTemplate string               `json:"question_template,omitempty"`
 }
 
 type V13RenderAssertion struct {
@@ -36,9 +37,43 @@ type V13RenderAssertion struct {
 	Date                 string `json:"date,omitempty"`
 	Kind                 string `json:"kind"`
 	Unit                 string `json:"unit,omitempty"`
+	Relation             string `json:"relation"`
 }
 
-type V13RenderQuery struct{ Op, Field, Meaning string }
+type V13RenderQuery struct{ Op, Field, Meaning, Requirement string }
+
+// These describe the evaluator's operators, not model-selected interpretations
+// of prose. Each query entry is a separate answer obligation.
+func v13QueryRequirement(op string) string {
+	switch op {
+	case "read":
+		return "Explicitly ask for the VALUE of this field, not merely mention the field while asking for another value."
+	case "latest":
+		return "Explicitly ask for the final current VALUE of this field after its superseding update."
+	case "latest_date":
+		return "Ask which occurrence has the latest explicit occurrence date, regardless of record order."
+	case "conflict":
+		return "Ask which person each independent source names as the sole launch approver and whether those assignments agree. Compare the records, not whether the people personally agree."
+	case "set_after_update":
+		return "Ask for the complete current set after the stated removal and addition, retaining all unaffected initial members."
+	default:
+		return ""
+	}
+}
+
+func v13AssertionRelation(mode string, sequence int) string {
+	switch mode {
+	case "history":
+		if sequence == 0 {
+			return "Initial state, explicitly superseded by the final update. Merely saying had or was does not establish this ordering. Record position and note timestamp do not establish state chronology."
+		}
+		return "Final update, explicitly superseding the initial state of this same field. No further update follows."
+	case "independent":
+		return "This source identifies the value person as the SOLE launch approver for the entity. The person is the assigned approver, not the speaker or maker of a claim. No source has priority."
+	default:
+		return mode
+	}
+}
 
 type V13FactRenderPlan struct {
 	Records  [3]string `json:"records"`
@@ -64,7 +99,7 @@ func V13FactRenderDigest(value any) (string, error) {
 }
 
 func v13FactRenderRequest(w v13FactWorld, s v13Schema, business bool) (V13FactRenderRequest, error) {
-	r := V13FactRenderRequest{Revision: "v13-structured-fact-render-v2", Bindings: map[string]string{}, SubjectMode: "named entity"}
+	r := V13FactRenderRequest{Revision: "v13-structured-fact-render-v3", Bindings: map[string]string{}, SubjectMode: "named entity"}
 	if _, err := w.evaluate(); err != nil {
 		return r, err
 	}
@@ -94,11 +129,12 @@ func v13FactRenderRequest(w v13FactWorld, s v13Schema, business bool) (V13FactRe
 	fields := map[string]string{}
 	for i, f := range w.Facts {
 		a := V13RenderAssertion{Record: f.Record, Entity: bind("entity", f.Entity), Field: bind("field", f.Field), Value: fmt.Sprintf("{{value%d}}", i), Mode: f.Mode, Sequence: f.Order, Kind: f.Value.Kind, Unit: f.Value.Unit, Meaning: meaning[f.Field]}
+		a.Relation = v13AssertionRelation(f.Mode, f.Order)
 		if a.Meaning == "" {
 			a.Meaning = f.Field
 		}
 		if f.Mode == "independent" {
-			a.Meaning = "independent launch-approval claim; no source supersedes another"
+			a.Meaning = "person identified by this independent source as the sole launch approver; no source supersedes another"
 		}
 		fields[f.Field] = a.Field
 		r.Bindings[a.Value] = f.Value.Surface
@@ -127,9 +163,13 @@ func v13FactRenderRequest(w v13FactWorld, s v13Schema, business bool) (V13FactRe
 			m = q.Field
 		}
 		if q.Op == "conflict" {
-			m = "launch-approval claims; report the named people and agreement/disagreement"
+			m = "exclusive launch-approver assignments; report the people named by the sources and whether the assignments agree"
 		}
-		r.Query = append(r.Query, V13RenderQuery{q.Op, fields[q.Field], m})
+		requirement := v13QueryRequirement(q.Op)
+		if requirement == "" {
+			return r, fmt.Errorf("unsupported render query operator")
+		}
+		r.Query = append(r.Query, V13RenderQuery{Op: q.Op, Field: fields[q.Field], Meaning: m, Requirement: requirement})
 		r.QuestionAllowed = append(r.QuestionAllowed, fields[q.Field])
 	}
 	// The final materialized task supplies this exact entity/remit binding
@@ -146,6 +186,8 @@ func v13FactRenderRequest(w v13FactWorld, s v13Schema, business bool) (V13FactRe
 
 var v13RenderToken = regexp.MustCompile(`\{\{[a-z]+[0-9]+\}\}`)
 var v13RelativeChronology = regexp.MustCompile(`(?i)\b(later|earlier|then|subsequently|afterwards?|beforehand)\b`)
+var v13InitialHistory = regexp.MustCompile(`(?i)\b(initial|initially|original|originally|opening|outset)\b`)
+var v13FinalHistory = regexp.MustCompile(`(?i)\b(final|latest|supersedes|superseded|superseding|replaces|replaced|replacing)\b`)
 
 // BindV13FactRenderPlan is structural validation ONLY. Independent Check is
 // mandatory before any returned text can be used for a generated case.
@@ -187,12 +229,23 @@ func BindV13FactRenderPlan(r V13FactRenderRequest, p V13FactRenderPlan) (V13Fact
 			if fact.Record == i && fact.Mode == "dated" && v13RelativeChronology.MatchString(text) {
 				return bound, fmt.Errorf("relative chronology forbidden in dated record; use the explicit date token")
 			}
+			if fact.Record == i && fact.Mode == "history" {
+				if fact.Sequence == 0 && !v13InitialHistory.MatchString(text) {
+					return bound, fmt.Errorf("history record must explicitly identify initial/original state")
+				}
+				if fact.Sequence == 1 && !v13FinalHistory.MatchString(text) {
+					return bound, fmt.Errorf("history record must explicitly identify final superseding update")
+				}
+			}
 		}
 		v, err := bind(text, r.Allowed[i], r.Required[i])
 		if err != nil {
 			return bound, err
 		}
 		bound.Records[i] = v
+	}
+	if r.QuestionTemplate != "" && p.Question != r.QuestionTemplate {
+		return bound, fmt.Errorf("question must exactly preserve the compiled query template")
 	}
 	q, err := bind(p.Question, r.QuestionAllowed, []string{r.Subject})
 	if err != nil {
@@ -209,6 +262,13 @@ func applyV13FactRender(ctx context.Context, w v13FactWorld, s v13Schema, busine
 	req, err := v13FactRenderRequest(w, s, business)
 	if err != nil {
 		return m, nil, err
+	}
+	// The typed evaluator's query compiler, not the prose author, owns which
+	// values are requested. Its presentation-seeded wording still varies.
+	// Only role/subject tokens are exposed to the author, never answer values.
+	req.QuestionTemplate = strings.ReplaceAll(m.Question, req.Bindings[req.Subject], req.Subject)
+	for _, q := range req.Query {
+		req.QuestionTemplate = strings.ReplaceAll(req.QuestionTemplate, req.Bindings[q.Field], q.Field)
 	}
 	plan := cached
 	if plan == nil {

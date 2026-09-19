@@ -268,7 +268,7 @@ func renderV13Fact(f v13Fact, correction string, seed int64, key string) (string
 	case "dated":
 		forms = []string{"On %[5]s, %[1]s logged the %[2]s %[3]s.", "The %[2]s %[3]s for %[1]s happened on %[5]s.", "%[1]s's %[2]s record dates %[3]s to %[5]s."}
 	case "independent":
-		forms = []string{"This independent record names %[3]s as the launch approver for %[1]s. It does not supersede any other record.", "For %[1]s, this record credits %[3]s with launch sign-off. This is an independent claim, not a correction to another record.", "Launch approval for %[1]s is attributed to %[3]s here; this record has no priority over the other independent record."}
+		forms = []string{"This independent record names %[3]s as the sole launch approver for %[1]s. It does not supersede any other record.", "For %[1]s, this record identifies %[3]s as the only launch approver. This is an independent assignment, not a correction to another record.", "The sole launch approver for %[1]s is identified here as %[3]s; this record has no priority over the other independent record."}
 	case "set_member":
 		forms = []string{"The original %[2]s for %[1]s includes %[3]s.", "%[3]s is on the initial %[2]s for %[1]s."}
 	case "set_remove":
@@ -299,7 +299,7 @@ func renderV13FactQuery(w v13FactWorld, seed int64) (string, error) {
 		case "latest_date":
 			forms = []string{"which %[2]s happened most recently for %[1]s? Name the event, not its date.", "for %[1]s, name the last %[2]s by occurrence date, not by note order."}
 		case "conflict":
-			forms = []string{"do the independent records agree about launch approval for %[1]s? Name everyone they credit and state agree or disagree.", "for %[1]s, give the launch approver named in each independent record and say whether those records agree."}
+			forms = []string{"do the independent records agree about the sole launch approver for %[1]s? Name everyone they identify and state whether those assignments agree or disagree.", "for %[1]s, give the sole launch approver named in each independent record and say whether those assignments agree."}
 		case "set_after_update":
 			forms = []string{"what items remain on the %[2]s for %[1]s after the recorded changes? Give the complete list."}
 		default:
