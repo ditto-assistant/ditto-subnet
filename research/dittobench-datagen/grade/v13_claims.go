@@ -50,6 +50,7 @@ import (
 // claimLexicon is the English structural vocabulary merged with the lexicon
 // of the case's question language (multilingual.For). Every list is folded.
 type claimLexicon struct {
+	setMembership                 bool // Completed removal is nonmembership only for set claims.
 	rejection, contrast, boundary []string
 	pastStrong, pastWeak, current []string
 	correction, hedge, enumerator []string
@@ -404,6 +405,15 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 				}
 			}
 			seg.past = anyBounded(context, lex.pastStrong)
+			if lex.setMembership {
+				// Only completed, clause-final passive removal. Plans, modal
+				// uncertainty, negated removal and reassertions stay candidates.
+				for _, suffix := range []string{" has been removed", " was removed", " is removed"} {
+					if strings.HasSuffix(context, suffix) && !anyBounded(context, lex.hedge) {
+						seg.past = true
+					}
+				}
+			}
 			seg.weakPast = !seg.past && anyBounded(context, lex.pastWeak)
 			seg.current = anyBounded(seg.text, lex.current)
 			seg.echo = anyBounded(seg.text, lex.echo)
@@ -414,10 +424,25 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 		afterContrast = false
 		afterColon = false
 	}
+	finishChunk := func(w string, next int) {
+		if strings.HasSuffix(w, ",") || strings.HasSuffix(w, ")") || strings.HasSuffix(w, ":") || w == "—" || w == "–" || w == "-" {
+			colon := strings.HasSuffix(w, ":")
+			flush()
+			rejected = false
+			afterColon = colon
+		}
+		if next < len(words) && (strings.HasPrefix(words[next], "(") || words[next] == "—" || words[next] == "–") {
+			flush()
+			rejected = false
+		}
+	}
 	for i := 0; i < len(words); {
 		if n := matchPhraseAt(words, i, lex.protected); n > 0 {
 			cur = append(cur, words[i:i+n]...)
 			i += n
+			// Protect the semantic phrase, not punctuation following it. A
+			// historical explanation after "video meeting," is another clause.
+			finishChunk(words[i-1], i)
 			continue
 		}
 		if n := matchPhraseAt(words, i, lex.rejection); n > 0 {
@@ -455,17 +480,7 @@ func segmentSentenceV13(sentence string, lex claimLexicon) []segment {
 		w := words[i]
 		cur = append(cur, w)
 		i++
-		if strings.HasSuffix(w, ",") || strings.HasSuffix(w, ")") || strings.HasSuffix(w, ":") ||
-			w == "—" || w == "–" || w == "-" {
-			colon := strings.HasSuffix(w, ":")
-			flush()
-			rejected = false
-			afterColon = colon
-		}
-		if i < len(words) && (strings.HasPrefix(words[i], "(") || words[i] == "—" || words[i] == "–") {
-			flush()
-			rejected = false
-		}
+		finishChunk(w, i)
 	}
 	flush()
 	return out
