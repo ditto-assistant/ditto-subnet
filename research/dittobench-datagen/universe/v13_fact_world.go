@@ -13,6 +13,7 @@ import (
 // shorthand is evidence of a status, not a second independently mutable fact.
 type v13FactValue struct {
 	Canonical, Surface, Kind string
+	Unit                     string
 	Accept                   []string
 }
 
@@ -54,6 +55,10 @@ func (w v13FactWorld) evaluate() ([]v13FactValue, error) {
 		}
 		switch f.Mode {
 		case "static", "independent":
+		case "set_member", "set_remove", "set_add":
+			if f.Order < 0 || f.Value.Kind != protocol.ClaimKindSetMember {
+				return nil, fmt.Errorf("invalid set assertion")
+			}
 		case "history":
 			if f.Order < 0 {
 				return nil, fmt.Errorf("negative fact chronology")
@@ -77,6 +82,14 @@ func (w v13FactWorld) evaluate() ([]v13FactValue, error) {
 		if len(matched) == 0 {
 			return nil, fmt.Errorf("query lacks evidence")
 		}
+		if q.Op == "set_after_update" {
+			values, err := evaluateV13FactSet(matched)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, values...)
+			continue
+		}
 		mode := map[string]string{"read": "static", "latest": "history", "latest_date": "dated", "conflict": "independent"}[q.Op]
 		if mode == "" {
 			return nil, fmt.Errorf("unsupported query operator")
@@ -85,7 +98,7 @@ func (w v13FactWorld) evaluate() ([]v13FactValue, error) {
 			if f.Mode != mode {
 				return nil, fmt.Errorf("mixed evidence semantics")
 			}
-			if f.Value.Kind != matched[0].Value.Kind {
+			if f.Value.Kind != matched[0].Value.Kind || f.Value.Unit != matched[0].Value.Unit {
 				return nil, fmt.Errorf("mixed value types for one field")
 			}
 		}
@@ -125,6 +138,46 @@ func (w v13FactWorld) evaluate() ([]v13FactValue, error) {
 		}
 	}
 	return out, nil
+}
+
+func evaluateV13FactSet(facts []v13Fact) ([]v13FactValue, error) {
+	var initial, updates []v13Fact
+	for _, f := range facts {
+		switch f.Mode {
+		case "set_member":
+			initial = append(initial, f)
+		case "set_remove", "set_add":
+			updates = append(updates, f)
+		default:
+			return nil, fmt.Errorf("mixed set evidence semantics")
+		}
+	}
+	if len(initial) == 0 || len(updates) != 2 {
+		return nil, fmt.Errorf("unsupported set history")
+	}
+	sort.Slice(initial, func(i, j int) bool { return initial[i].Order < initial[j].Order })
+	sort.Slice(updates, func(i, j int) bool { return updates[i].Order < updates[j].Order })
+	if updates[0].Mode != "set_remove" || updates[1].Mode != "set_add" || updates[0].Order != 0 || updates[1].Order != 1 {
+		return nil, fmt.Errorf("unsupported set operations")
+	}
+	present := map[string]bool{}
+	for i, f := range initial {
+		if present[f.Value.Canonical] || (i > 0 && initial[i-1].Order == f.Order) {
+			return nil, fmt.Errorf("ambiguous initial set")
+		}
+		present[f.Value.Canonical] = true
+	}
+	drop, add := updates[0].Value.Canonical, updates[1].Value.Canonical
+	if !present[drop] || present[add] {
+		return nil, fmt.Errorf("invalid set mutation")
+	}
+	var values []v13FactValue
+	for _, f := range initial {
+		if f.Value.Canonical != drop {
+			values = append(values, f.Value)
+		}
+	}
+	return append(values, updates[1].Value), nil
 }
 
 // Build world mutations before rendering. This is the only place that maps
@@ -215,6 +268,12 @@ func renderV13Fact(f v13Fact, correction string, seed int64, key string) (string
 		forms = []string{"On %[5]s, %[1]s logged the %[2]s %[3]s.", "The %[2]s %[3]s for %[1]s happened on %[5]s.", "%[1]s's %[2]s record dates %[3]s to %[5]s."}
 	case "independent":
 		forms = []string{"This independent record names %[3]s as the launch approver for %[1]s. It does not supersede any other record.", "For %[1]s, this record credits %[3]s with launch sign-off. This is an independent claim, not a correction to another record.", "Launch approval for %[1]s is attributed to %[3]s here; this record has no priority over the other independent record."}
+	case "set_member":
+		forms = []string{"The original %[2]s for %[1]s includes %[3]s.", "%[3]s is on the initial %[2]s for %[1]s."}
+	case "set_remove":
+		forms = []string{"The update removed %[3]s from the %[2]s for %[1]s.", "For %[1]s, %[3]s is no longer required on the %[2]s."}
+	case "set_add":
+		forms = []string{"The update added %[3]s to the %[2]s for %[1]s; all items not explicitly removed remain required.", "The %[2]s for %[1]s now also requires %[3]s; every original item except the one explicitly removed is still required."}
 	default:
 		return "", fmt.Errorf("unrenderable fact mode")
 	}
@@ -240,6 +299,8 @@ func renderV13FactQuery(w v13FactWorld, seed int64) (string, error) {
 			forms = []string{"which %[2]s happened most recently for %[1]s? Name the event, not its date.", "for %[1]s, name the last %[2]s by occurrence date, not by note order."}
 		case "conflict":
 			forms = []string{"do the independent records agree about launch approval for %[1]s? Name everyone they credit and state agree or disagree.", "for %[1]s, give the launch approver named in each independent record and say whether those records agree."}
+		case "set_after_update":
+			forms = []string{"what items remain on the %[2]s for %[1]s after the recorded changes? Give the complete list."}
 		default:
 			return "", fmt.Errorf("unrenderable fact query")
 		}
@@ -292,6 +353,7 @@ func renderV13FactMember(w v13FactWorld, s v13Schema, seed int64, milestone stri
 	for _, v := range values {
 		expected = append(expected, v.Canonical)
 		m.Claims = append(m.Claims, v13Claim(v.Kind, v.Canonical, v.Accept, 1/float64(len(values))))
+		m.Claims[len(m.Claims)-1].Unit = v.Unit
 		if len(values) > 1 {
 			m.Items = append(m.Items, v.Canonical)
 			m.ItemKinds = append(m.ItemKinds, "")
