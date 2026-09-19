@@ -13,6 +13,7 @@
 // Usage:
 //
 //	graderaudit -artifact dataset.json -transcripts transcripts.jsonl [-json]
+//	graderaudit -artifact private.json -artifact-sha256 TRUSTED_PIN -artifact-seed LEASE_SEED -run-size small -transcripts transcripts.jsonl [-json]
 //	graderaudit -bench-version 9 -seeds 40 [-run-size full] [-json]
 //
 // The artifact is the canonical DatasetArtifact JSON (generate -out). The
@@ -811,10 +812,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("graderaudit", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	artifactPath := fs.String("artifact", "", "path to the canonical DatasetArtifact JSON")
+	artifactSHA := fs.String("artifact-sha256", "", "trusted private artifact SHA256 (required for private artifacts)")
+	artifactSeed := fs.Int64("artifact-seed", 0, "expected private lease seed (required explicitly for private artifacts)")
 	transcriptPath := fs.String("transcripts", "", "path to JSONL transcripts ({case_id, response} per line)")
 	benchVersion := fs.Int("bench-version", 0, "generate and audit this benchmark version")
 	seedCount := fs.Int("seeds", 0, "number of deterministic generated seeds to audit (1..N)")
-	runSize := fs.String("run-size", "full", "generated audit profile: small | medium | full")
+	runSize := fs.String("run-size", "full", "generated or private-artifact audit profile: small | medium | full")
 	asJSON := fs.Bool("json", false, "emit machine-readable JSON")
 	releaseGateMode := fs.Bool("release-gate", false, "verify every supported bench version and grading policy floor owns an audit bank (fails closed)")
 	if err := fs.Parse(args); err != nil {
@@ -824,7 +827,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
 	}
 
-	transcriptMode := *artifactPath != "" || *transcriptPath != ""
+	seedProvided := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "artifact-seed" {
+			seedProvided = true
+		}
+	})
+	transcriptMode := *artifactPath != "" || *transcriptPath != "" || *artifactSHA != "" || seedProvided
 	cannedMode := *benchVersion != 0 || *seedCount != 0
 	switch {
 	case *releaseGateMode && (transcriptMode || cannedMode):
@@ -841,7 +850,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if *artifactPath == "" || *transcriptPath == "" {
 			return fmt.Errorf("artifact mode requires both -artifact and -transcripts")
 		}
-		return runTranscriptAudit(*artifactPath, *transcriptPath, *asJSON, stdout, stderr)
+		return runTranscriptAudit(*artifactPath, *transcriptPath, *artifactSHA, *artifactSeed, seedProvided, *runSize, *asJSON, stdout, stderr)
 	case cannedMode:
 		if *benchVersion == 0 || *seedCount == 0 {
 			return fmt.Errorf("generated mode requires both -bench-version and -seeds")
@@ -920,14 +929,14 @@ func writeGeneratedAndRobustnessReport(w io.Writer, report generatedAndRobustnes
 	return nil
 }
 
-func runTranscriptAudit(artifactPath, transcriptPath string, asJSON bool, stdout, stderr io.Writer) error {
+func runTranscriptAudit(artifactPath, transcriptPath, trustedSHA string, expectedSeed int64, seedProvided bool, runSize string, asJSON bool, stdout, stderr io.Writer) error {
 	ab, err := os.ReadFile(artifactPath)
 	if err != nil {
 		return fmt.Errorf("read artifact: %w", err)
 	}
-	var artifact gen.DatasetArtifact
-	if err := json.Unmarshal(ab, &artifact); err != nil {
-		return fmt.Errorf("parse artifact: %w", err)
+	artifact, err := restoreTranscriptAuthority(ab, trustedSHA, expectedSeed, seedProvided, runSize)
+	if err != nil {
+		return err
 	}
 
 	tf, err := os.Open(transcriptPath)
@@ -988,6 +997,26 @@ func runTranscriptAudit(artifactPath, transcriptPath string, asJSON bool, stdout
 			k, s.Graded, s.Credited, s.Disqualified, s.TypedZero)
 	}
 	return nil
+}
+
+// A locally recomputed digest is not an external approval. Private transcript
+// audits require an explicit trusted pin/identity and use the reconstructed
+// artifact so JSON-excluded claims and restraint rules are not silently lost.
+func restoreTranscriptAuthority(raw []byte, trustedSHA string, expectedSeed int64, seedProvided bool, runSize string) (gen.DatasetArtifact, error) {
+	var artifact gen.DatasetArtifact
+	if err := json.Unmarshal(raw, &artifact); err != nil {
+		return artifact, fmt.Errorf("parse artifact: %w", err)
+	}
+	if artifact.FactGeneration == nil && artifact.SurfaceSalt == 0 {
+		if trustedSHA != "" || seedProvided {
+			return gen.DatasetArtifact{}, fmt.Errorf("private identity flags require a private artifact")
+		}
+		return artifact, nil
+	}
+	if trustedSHA == "" || !seedProvided {
+		return gen.DatasetArtifact{}, fmt.Errorf("private transcript audit requires -artifact-sha256 and -artifact-seed")
+	}
+	return gen.DecodePrivateArtifact(raw, trustedSHA, expectedSeed, runSize)
 }
 
 func writeCannedReport(w io.Writer, report cannedReport, asJSON bool) error {
