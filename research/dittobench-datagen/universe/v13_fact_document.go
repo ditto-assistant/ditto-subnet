@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const V13FactDocumentRevision = "v13-fact-document-v1"
+const V13FactDocumentRevision = "v13-fact-document-v2"
 
 // A document is compiled from typed source state, never from previously
 // rendered prose. Record boundaries preserve joins, evidence placement and
@@ -18,6 +18,8 @@ type V13DocumentAssertion struct {
 	Arguments map[string]string `json:"arguments"`
 }
 type V13FactDocumentRecord struct {
+	// Empty means stored evidence. Requests express intent, never completion.
+	Role          string                 `json:"role,omitempty"`
 	Assertions    []V13DocumentAssertion `json:"assertions"`
 	MinBytes      int                    `json:"min_bytes"`
 	MaxBytes      int                    `json:"max_bytes"`
@@ -58,6 +60,9 @@ func ValidateV13FactDocumentRequest(r V13FactDocumentRequest) error {
 	}
 	used := map[string]bool{}
 	for _, record := range r.Records {
+		if record.Role != "" && record.Role != "request" {
+			return invalid()
+		}
 		if len(record.Assertions) == 0 || record.MinBytes < 1 || record.MaxBytes < record.MinBytes || record.MaxBytes > 16000 {
 			return invalid()
 		}

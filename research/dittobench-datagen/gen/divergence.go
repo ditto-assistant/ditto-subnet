@@ -97,8 +97,16 @@ const v13DivergenceMoneyCap = 3
 // on the full profile) and only stamps the contract version on each case;
 // benchVersion 12 is exactly the frozen v12 output.
 func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([]StagedCase, []protocol.MemoryPair) {
+	cases, pairs, _ := buildParserDivergenceSources(seed, count, benchVersion)
+	return cases, pairs
+}
+
+// Retained at the state draw; never recovered from rendered records or grades.
+type divergenceFactSource struct{ Kind, Subject, Actual, Other, Speaker string }
+
+func buildParserDivergenceSources(seed int64, count, benchVersion int) ([]StagedCase, []protocol.MemoryPair, []divergenceFactSource) {
 	if count <= 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	r := v12DivergenceRand(seed)
 	// v13 (#1827): the fixed "2026-02-<ordinal>T<8+ordinal>:15" pattern named
@@ -111,6 +119,7 @@ func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([
 	rounds := count / 4
 	cases := make([]StagedCase, 0, count)
 	pairs := make([]protocol.MemoryPair, 0, count)
+	var sources []divergenceFactSource
 	ordinal := 0
 
 	// add wires one case: a single seeded memory pair carrying both the surface
@@ -154,6 +163,7 @@ func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([
 		rightGiven, rightSur := v12DistinctName(r, ordinal, wrongGiven, wrongSur)
 		wrongName := wrongGiven + " " + wrongSur
 		rightName := rightGiven + " " + rightSur
+		sources = append(sources, divergenceFactSource{Kind: "negation", Actual: rightName, Other: wrongName})
 		add(round, QTParserDivergenceNegation,
 			fmt.Sprintf("One thing to keep straight in my records: my dentist is not Dr. %s. My current dentist is Dr. %s.", wrongName, rightName),
 			"Understood — I'll keep only your current dentist on file.",
@@ -164,6 +174,7 @@ func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([
 		// ── Retraction / correction-supersession ──────────────────────────────
 		oldBank := v12Bank(r)
 		newBank := v12DistinctBank(r, oldBank)
+		sources = append(sources, divergenceFactSource{Kind: "supersession", Actual: newBank, Other: oldBank})
 		add(round, QTParserDivergenceRetraction,
 			fmt.Sprintf("Update to my finances: you used to have me down as banking with %s. As of last month I moved every account over to %s, so %s is my bank now.", oldBank, newBank, newBank),
 			"Got it — updating your bank to the new one.",
@@ -175,6 +186,11 @@ func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([
 		project := humandata.Surname(r, 3*ordinal) + " " + v12ProjectSuffixes[r.Intn(len(v12ProjectSuffixes))]
 		hypoDollars := 3000 + r.Intn(7000)
 		realDollars := 500 + r.Intn(2500)
+		kind := "hypothetical_invoice"
+		if benchVersion >= protocol.BenchVersionV13 {
+			kind = "hypothetical_seats"
+		}
+		sources = append(sources, divergenceFactSource{Kind: kind, Subject: project, Actual: fmt.Sprint(realDollars), Other: fmt.Sprint(hypoDollars)})
 		if benchVersion >= protocol.BenchVersionV13 {
 			// Keep the hypothetical-vs-actual reasoning, without spending the
 			// monetary budget already reserved for invoice temporal twins.
@@ -197,6 +213,7 @@ func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([
 		narrator := humandata.GivenName(r, 4*ordinal)
 		wrongCode := 1000 + r.Intn(9000)
 		rightCode := v12DistinctCode(r, wrongCode)
+		sources = append(sources, divergenceFactSource{Kind: "source_priority", Speaker: narrator, Actual: fmt.Sprint(rightCode), Other: fmt.Sprint(wrongCode)})
 		add(round, QTParserDivergenceReported,
 			fmt.Sprintf("%s insisted the front-door code was %d, but my own note says it is %d. My note is the one to trust.", narrator, wrongCode, rightCode),
 			"Understood — I'll trust your own note for the door code.",
@@ -204,7 +221,7 @@ func buildParserDivergenceForVersion(seed int64, count int, benchVersion int) ([
 			fmt.Sprintf("%d", rightCode), fmt.Sprintf("%d", wrongCode), protocol.AnswerNumber,
 			[]string{narrator})
 	}
-	return cases, pairs
+	return cases, pairs, sources
 }
 
 // v12DistinctName draws a full name that differs from (given, surname) in both

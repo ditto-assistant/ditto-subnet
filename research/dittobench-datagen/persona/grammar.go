@@ -38,6 +38,18 @@ func Expand(r *rand.Rand, g Grammar, root string) string {
 }
 
 func expandSymbol(r *rand.Rand, g Grammar, symbol string, depth int) string {
+	return expandSymbolObserved(r, g, symbol, depth, nil)
+}
+
+// ExpandWithChoices retains source production selections without parsing the
+// generated text or changing the RNG stream. Repeated symbols retain order.
+func ExpandWithChoices(r *rand.Rand, g Grammar, root string) (string, map[string][]string) {
+	choices := map[string][]string{}
+	text := expandSymbolObserved(r, g, root, 0, func(symbol, alternative string) { choices[symbol] = append(choices[symbol], alternative) })
+	return text, choices
+}
+
+func expandSymbolObserved(r *rand.Rand, g Grammar, symbol string, depth int, observe func(string, string)) string {
 	if depth > maxGrammarDepth {
 		return ""
 	}
@@ -46,6 +58,9 @@ func expandSymbol(r *rand.Rand, g Grammar, symbol string, depth int) string {
 		return "#" + symbol + "#"
 	}
 	alt := alts[r.Intn(len(alts))]
+	if observe != nil {
+		observe(symbol, alt)
+	}
 	if !strings.Contains(alt, "#") {
 		return alt
 	}
@@ -62,7 +77,7 @@ func expandSymbol(r *rand.Rand, g Grammar, symbol string, depth int) string {
 			break
 		}
 		b.WriteString(alt[:i])
-		b.WriteString(expandSymbol(r, g, alt[i+1:i+1+j], depth+1))
+		b.WriteString(expandSymbolObserved(r, g, alt[i+1:i+1+j], depth+1, observe))
 		alt = alt[i+1+j+1:]
 	}
 	return b.String()

@@ -582,6 +582,8 @@ func v13Sentence(s string) string {
 // the restraint half; the act half is the grounded action. Both halves share
 // the family grammar; only the seeded record differs.
 func v13BuildRestraintMember(seed int64, world universe.World, family v13RestraintFamily, group, member int, ask bool, caseID string) (result protocol.ToolCase) {
+	var source *protocol.ToolDecisionSource
+	var request *protocol.ToolRequestSource
 	// All tool prerequisites coexist in one user graph. A decision twin must
 	// therefore name its own visible context, not rely on the grader's hidden
 	// case-to-record attachment. The context is independent of ask/act and
@@ -589,10 +591,16 @@ func v13BuildRestraintMember(seed int64, world universe.World, family v13Restrai
 	// Apply the same scope to request and record, including the response, and
 	// protect the reference through public noise and private paraphrasing.
 	defer func() {
+		result.RequestSource = request
 		if len(result.PrerequisitePairs) == 0 {
 			return
 		}
 		ref := protocol.OpaqueCaseID(seed, "v13-planning-context:"+string(family), group*256+member)
+		if source != nil {
+			source.Context = ref
+			source.PairID = result.PrerequisitePairs[0].PairID
+			result.DecisionSource = source
+		}
 		result.Prompt = fmt.Sprintf("For planning context %s: %s", ref, result.Prompt)
 		for i := range result.PrerequisitePairs {
 			pair := &result.PrerequisitePairs[i]
@@ -639,6 +647,11 @@ func v13BuildRestraintMember(seed int64, world universe.World, family v13Restrai
 		levels := groupRNG.Perm(len(v13EffortLevels))
 		stored := v13EffortLevels[levels[0]]
 		styles := v13EffortStyles[groupRNG.Intn(len(v13EffortStyles))]
+		if ask {
+			source = &protocol.ToolDecisionSource{Kind: "effort_unsettled", Values: map[string]string{"first_style": styles[0], "second_style": styles[1]}}
+		} else {
+			source = &protocol.ToolDecisionSource{Kind: "effort_default", Values: map[string]string{"level": stored}}
+		}
 		prompt := v13Sentence(v13Expand(seed, salt, v13LeadIns, v13EffortVerbs, []string{" "}, v13EffortNouns, v13EffortTails, v13Trailers))
 		if ask {
 			// The record names the two STYLES the user keeps switching between,
@@ -663,6 +676,11 @@ func v13BuildRestraintMember(seed int64, world universe.World, family v13Restrai
 	case v13FamilyCalendar:
 		title := v13CalendarTitles[groupRNG.Intn(len(v13CalendarTitles))]
 		when := v13CalendarWhens[groupRNG.Intn(len(v13CalendarWhens))]
+		if ask {
+			source = &protocol.ToolDecisionSource{Kind: "calendar_undated", Values: map[string]string{"title": title}}
+		} else {
+			source = &protocol.ToolDecisionSource{Kind: "calendar_dated", Values: map[string]string{"title": title, "when": when}}
+		}
 		prompt := v13Sentence(v13Expand(seed, salt, v13LeadIns, v13CalendarVerbs, v13CalendarTails, v13Trailers))
 		if ask {
 			rec := record(
@@ -691,12 +709,14 @@ func v13BuildRestraintMember(seed int64, world universe.World, family v13Restrai
 			// read ("Kes or Dana first?"), never on the alias already in the prompt.
 			askerA := world.People[(group*3+member+1)%len(world.People)]
 			askerB := world.People[(group*3+member+2)%len(world.People)]
+			source = &protocol.ToolDecisionSource{Kind: "recipient_undecided", Values: map[string]string{"first_person": askerA.Nickname, "second_person": askerB.Nickname, "project": project.Alias}}
 			rec := record(
 				fmt.Sprintf("Both %s and %s have asked for the %s update but I haven't decided who gets it first.", askerA.Nickname, askerB.Nickname, project.Alias),
 				"Understood — tell me who it goes to when you decide.")
 			return noCall(prompt, "no recipient is decided for this update: ask who should receive it, citing the people who asked; do not send",
 				rec, restraint(protocol.RestraintClarifyFirst, "gmail_send", v13SlotLexicon["gmail_send"], []string{askerA.Nickname, askerB.Nickname}), project.Alias, askerA.Nickname, askerB.Nickname)
 		}
+		source = &protocol.ToolDecisionSource{Kind: "recipient_decided", Values: map[string]string{"person": person.Nickname, "email": person.Email, "project": project.Alias}}
 		rec := record(
 			fmt.Sprintf("%s (%s) is waiting on the %s update from me — if I say email them the update, that's who.", person.Nickname, person.Email, project.Alias),
 			"Got it — that's the recipient for that update.")
@@ -708,7 +728,9 @@ func v13BuildRestraintMember(seed int64, world universe.World, family v13Restrai
 
 	case v13FamilyNegation:
 		question := v13GeneralKnowledge[(group*3+member)%len(v13GeneralKnowledge)]
+		request = &protocol.ToolRequestSource{Kind: "general_search", Values: map[string]string{"topic": question}}
 		if ask {
+			request.Kind = "general_no_search"
 			prompt := v13Pick(seed, salt+":lead", v13NegationLeads) + question + "?"
 			return noCall(prompt, "answer from general knowledge; the user negated the search cue, so no tool", nil,
 				restraint(protocol.RestraintNoCall, "search_web", nil, nil))
@@ -718,7 +740,9 @@ func v13BuildRestraintMember(seed int64, world universe.World, family v13Restrai
 
 	case v13FamilyAbstention:
 		pair := v13Unknowables[(group*3+member)%len(v13Unknowables)]
+		request = &protocol.ToolRequestSource{Kind: "general_search", Values: map[string]string{"topic": pair[1]}}
 		if ask {
+			request = &protocol.ToolRequestSource{Kind: "unobservable_query", Values: map[string]string{"topic": pair[0]}}
 			prompt := v13Pick(seed, salt+":lead", v13UnknowableLeads) + pair[0] + "?"
 			return noCall(prompt, "the question is unknowable: answer honestly without calling any tool", nil,
 				restraint(protocol.RestraintNoCall, "search_web", nil, nil))
@@ -741,6 +765,7 @@ func v13BuildRestraintMember(seed int64, world universe.World, family v13Restrai
 		if !ask {
 			value = pref.Rejected[groupRNG.Intn(len(pref.Rejected))]
 		}
+		request = &protocol.ToolRequestSource{Kind: "setting_ensure", Values: map[string]string{"setting": noun, "value": value}}
 		verbs := []string{"make sure", "double-check that", "confirm", "see to it that", "check that"}
 		prompt := v13Sentence(v13Expand(seed, salt, v13LeadIns, verbs) + fmt.Sprintf(" my Ditto %s is %s", noun, value) + v13Pick(seed, salt+":trailer", v13Trailers))
 		if ask {
@@ -945,6 +970,8 @@ func applyV13MutationsAndEffectReads(seed int64, world universe.World, worldCarr
 		tc := cases[i]
 		tc.Prompt = question
 		tc.EffectAnswer = value
+		tc.DecisionSource = &protocol.ToolDecisionSource{Kind: "read_" + fact.subject, PairID: pairID, Values: map[string]string{"value": value}, Previous: tc.DecisionSource}
+		tc.RequestSource = nil // The new read replaces the old request, not its retained evidence.
 		tc.MaxToolCalls = 2
 		tc.ExpectedBehavior = "retrieve the planted fact from your own memory (any internal trajectory) and answer with its value; any non-memory tool call is misrouting"
 		tc.PrerequisitePairs = append([]protocol.MemoryPair(nil), tc.PrerequisitePairs...)
@@ -963,11 +990,13 @@ func applyV13MutationsAndEffectReads(seed int64, world universe.World, worldCarr
 func v13WorldMemoryUpdate(seed int64, rng *rand.Rand, base protocol.ToolCase, world universe.World, index int) protocol.ToolCase {
 	p := world.Projects[index%len(world.Projects)]
 	day := v13Weekdays[rng.Intn(len(v13Weekdays))]
+	source := &protocol.ToolMutationSource{Kind: "handoff_correction", TargetPairID: p.ToolNotePairID, ProjectAlias: p.Alias, Client: p.Client, Day: day}
 	prompt := fmt.Sprintf(v13Pick(seed, fmt.Sprintf("update:%d", index), v13UpdatePrompts), p.Alias, p.Client, day)
 	claim := v13FactUpdateClaim("handoff", day)
 	protected := []string{p.Alias, p.Client, day}
 	if rng.Intn(5) < 2 {
 		lead := world.People[p.Lead]
+		source.Reviewer = lead.Nickname
 		prompt += fmt.Sprintf(v13Pick(seed, fmt.Sprintf("update-second:%d", index), v13UpdateSecondFacts), lead.Nickname)
 		reviewer := v13FactUpdateClaim("reviewer", lead.Nickname)
 		claim = protocol.Claim{
@@ -990,6 +1019,7 @@ func v13WorldMemoryUpdate(seed int64, rng *rand.Rand, base protocol.ToolCase, wo
 	tc := fuzzyWorldTool(base.ID, "world_memory_update", prompt, canonical,
 		"resolve the project's mutable handoff note and record the corrected fact in it — updating in place, or deleting the note and saving the corrected fact, are equally correct; never overwrite canonical project evidence")
 	tc.AlternativeExpectedTools = [][]protocol.ToolSpec{alternative}
+	tc.MutationSource = source
 	tc.PrerequisitePairs = base.PrerequisitePairs
 	tc.WritingProtected = append(append([]string(nil), base.WritingProtected...), protected...)
 	return tc
@@ -1010,6 +1040,7 @@ func v13WorldMemoryDelete(seed int64, base protocol.ToolCase, world universe.Wor
 		}},
 	}}, "resolve the uniquely described disposable note and delete that pair without removing canonical contact facts")
 	tc.PrerequisitePairs = base.PrerequisitePairs
+	tc.MutationSource = &protocol.ToolMutationSource{Kind: "contact_receipt_deletion", TargetPairID: p.ToolNotePairID, Nickname: p.Nickname, Relation: p.Relation, Employer: p.Employer, Email: p.Email, PreviousEmail: p.PreviousEmail, EventContext: p.Context}
 	tc.WritingProtected = append(append([]string(nil), base.WritingProtected...), p.Nickname, p.Context, p.Relation, p.Employer)
 	return tc
 }
@@ -1055,22 +1086,16 @@ func v13WorldBusinessWorkflowClaims(tc protocol.ToolCase, world universe.World) 
 // v13FollowUpUpdateRead asks for the mutated handoff day; the answer exists
 // only in the harness's post-mutation store.
 func v13FollowUpUpdateRead(seed int64, caseID string, mutation protocol.ToolCase, world universe.World, k int) protocol.ToolCase {
-	var project universe.Project
-	var day string
-	for _, spec := range mutation.ExpectedTools {
-		if spec.Name != "update_memory" {
-			continue
-		}
-		for j := range world.Projects {
-			if world.Projects[j].ToolNotePairID == spec.RequiredArgs["pair_id"] {
-				project = world.Projects[j]
-			}
-		}
-		day = strings.TrimPrefix(spec.RequiredArgs["content"], "handoff is ")
+	source := mutation.MutationSource
+	if source == nil || source.Kind != "handoff_correction" {
+		panic("v13 follow-up requires typed handoff change")
 	}
+	project := universe.Project{Alias: source.ProjectAlias, Client: source.Client}
+	day := source.Day
 	prompt := fmt.Sprintf(v13Pick(seed, fmt.Sprintf("follow-up-update:%d", k), v13FollowUpUpdatePrompts), project.Alias, project.Client)
 	return protocol.ToolCase{
 		ID: caseID, Category: V13MutationFollowUpCategory, Prompt: prompt,
+		RequestSource:    &protocol.ToolRequestSource{Kind: "handoff_query", Values: map[string]string{"project": project.Alias, "client": project.Client}},
 		ExpectedTools:    []protocol.ToolSpec{{Name: "search_memories"}},
 		MaxToolCalls:     2,
 		ExpectedBehavior: "answer from your own store with the handoff day recorded by the earlier correction; any non-memory tool call is misrouting",
@@ -1086,20 +1111,15 @@ func v13FollowUpUpdateRead(seed int64, caseID string, mutation protocol.ToolCase
 
 // v13FollowUpDeleteRead asks for the contact the delete had to preserve.
 func v13FollowUpDeleteRead(seed int64, caseID string, mutation protocol.ToolCase, world universe.World, k int) protocol.ToolCase {
-	var person universe.Person
-	for _, spec := range mutation.ExpectedTools {
-		if spec.Name != "delete_memory" {
-			continue
-		}
-		for j := range world.People {
-			if world.People[j].ToolNotePairID == spec.RequiredArgs["pair_id"] {
-				person = world.People[j]
-			}
-		}
+	source := mutation.MutationSource
+	if source == nil || source.Kind != "contact_receipt_deletion" {
+		panic("v13 follow-up requires typed contact change")
 	}
+	person := universe.Person{Nickname: source.Nickname, Relation: source.Relation, Employer: source.Employer, Email: source.Email, PreviousEmail: source.PreviousEmail}
 	prompt := fmt.Sprintf(v13Pick(seed, fmt.Sprintf("follow-up-delete:%d", k), v13FollowUpDeletePrompts), person.Nickname, person.Relation, person.Employer)
 	return protocol.ToolCase{
 		ID: caseID, Category: V13MutationFollowUpCategory, Prompt: prompt,
+		RequestSource:    &protocol.ToolRequestSource{Kind: "contact_query", Values: map[string]string{"nickname": person.Nickname, "relationship": person.Relation, "employer": person.Employer}},
 		ExpectedTools:    []protocol.ToolSpec{{Name: "search_memories"}},
 		MaxToolCalls:     2,
 		ExpectedBehavior: "answer from your own store with the contact's current address, which the earlier cleanup had to preserve; any non-memory tool call is misrouting",
@@ -1126,7 +1146,7 @@ func v13StaleEmail(person universe.Person) []string {
 // identical across states; the planted record decides the correct outcome.
 // Returns the planning record, the expected tools, the forbidden tools, the
 // behavior, the category, and the protected terms.
-func v13StateDependentRoute(seed int64, index int, world universe.World, project universe.Project, route int) (record protocol.MemoryPair, prompt string, expected []protocol.ToolSpec, forbidden []string, behavior, category string, protected []string) {
+func v13StateDependentRoute(seed int64, index int, world universe.World, project universe.Project, route int) (record protocol.MemoryPair, prompt string, expected []protocol.ToolSpec, forbidden []string, behavior, category string, protected []string, source *protocol.ToolDecisionSource) {
 	exists := v13Pick(seed, fmt.Sprintf("v13-route-state:%d", index), []string{"exists", "absent"}) == "exists"
 	pairID := protocol.OpaqueCaseID(seed, "v13-tool-route", index)
 	record = protocol.MemoryPair{PairID: pairID, SessionID: protocol.OpaqueCaseID(seed, "v13-tool-route-session", index), Timestamp: protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-tool-route-%d", index)).Next()}
@@ -1142,7 +1162,10 @@ func v13StateDependentRoute(seed int64, index int, world universe.World, project
 		}), project.Alias, day)
 		record.Prompt = fmt.Sprintf("Calendar state for %q at %s.", project.Alias, project.Client)
 		protected = []string{project.Alias, project.Client, title, day}
+		source = &protocol.ToolDecisionSource{Kind: "route_calendar_absent", PairID: pairID, Values: map[string]string{"project": project.Alias, "client": project.Client, "title": title}}
+		source.RequestedDay = day
 		if exists {
+			source.Kind = "route_calendar_exists"
 			record.Response = fmt.Sprintf("The %s is already on the calendar as %q — I'd rather not double-book it, so when I ask, find the existing entry and tell me where it sits.", title, title)
 			expected = []protocol.ToolSpec{{
 				Name: "calendar_search_events", RequiredArgs: map[string]string{"query": title},
@@ -1170,7 +1193,10 @@ func v13StateDependentRoute(seed int64, index int, world universe.World, project
 		record.Prompt = fmt.Sprintf("Who the %q numbers go to (%s).", project.Alias, project.Client)
 		protected = []string{project.Alias, project.Client, requester.Nickname, requester.Email, planned.Nickname, planned.Email}
 		to := planned
+		source = &protocol.ToolDecisionSource{Kind: "route_email_planned", PairID: pairID, Values: map[string]string{"project": project.Alias, "client": project.Client, "person": planned.Nickname, "email": planned.Email}}
 		if exists {
+			source.Kind = "route_email_requested"
+			source.Values["person"], source.Values["email"] = requester.Nickname, requester.Email
 			record.Response = fmt.Sprintf("%s emailed me asking for the %q numbers — the reply goes back to them at %s.", requester.Nickname, project.Alias, requester.Email)
 			to = requester
 			behavior = "a request is on record: reply to the person who asked, at their address"
@@ -1183,5 +1209,5 @@ func v13StateDependentRoute(seed int64, index int, world universe.World, project
 			RequiredArgClaims: map[string]protocol.Claim{"to": {Kind: "email", Expected: to.Email, Accept: []string{to.Nickname, to.Name}, Critical: true}},
 		}}
 	}
-	return record, prompt, expected, forbidden, behavior, category, protected
+	return record, prompt, expected, forbidden, behavior, category, protected, source
 }

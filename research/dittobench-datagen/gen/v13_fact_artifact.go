@@ -8,7 +8,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
-const V13FactGenerationRevision = "v13-fact-generation-v3"
+const V13FactGenerationRevision = "v13-fact-generation-v5"
 
 // V13FactGeneration stays inside the trusted private artifact. WorldSeed is
 // independent of the public lease seed and controls both memory and fixtures.
@@ -39,11 +39,23 @@ func GenerateV13FactDataset(ctx context.Context, leaseSeed, worldSeed, presentat
 		return DatasetArtifact{}, err
 	}
 	tools, _ := GenerateToolsForVersion(rng, worldSeed, prof.Tools, 13)
+	tools, err = renderToolDecisionFacts(ctx, tools, recorder)
+	if err != nil {
+		return DatasetArtifact{}, err
+	}
+	tools, err = renderMutationRequests(ctx, tools, recorder)
+	if err != nil {
+		return DatasetArtifact{}, err
+	}
+	tools, err = renderToolRequests(ctx, tools, recorder)
+	if err != nil {
+		return DatasetArtifact{}, err
+	}
 	suite, err := generateV13WorldMemorySuiteWithFacts(ctx, worldSeed, prof.Mem, prof.Waves, 13, presentationSeed, recorder)
 	if err != nil {
 		return DatasetArtifact{}, err
 	}
-	iso, err := GenerateIsolationForVersion(worldSeed, prof.Mem, prof.Waves, prof.IsoCases, 13)
+	iso, err := generateWorldIsolationWithFacts(ctx, worldSeed, prof.Mem, prof.IsoCases, 13, recorder)
 	if err != nil {
 		return DatasetArtifact{}, err
 	}

@@ -67,7 +67,7 @@ func FactProfileDigest(profile Profile) (string, error) {
 	if _, err := profile.Digest(); err != nil {
 		return "", err
 	}
-	return universe.V13FactRenderDigest([]any{"fact-renderer-v8", profile, factAuthorPrompt, factCheckPrompt, factPlanSchema(), factVerdictSchema(), factDocumentAuthorPrompt, factDocumentCheckPrompt, factDocumentSchema(1), "document-single-record-author-calls-full-document-check-1-through-16", "document-max-two-structural-attempts-per-record", "author-bindings-withheld", "checker-concrete-assertions", "exact-model-provider-identity", "three-record-token-plan", "max-two-author-structural-attempts", "no-semantic-or-transport-retry", 0.8, 0.0})
+	return universe.V13FactRenderDigest([]any{"fact-renderer-v9", profile, factAuthorPrompt, factCheckPrompt, factPlanSchema(), factVerdictSchema(), factDocumentAuthorPrompt, factDocumentCheckPrompt, factDocumentSchema(1), "document-single-record-author-calls-full-document-check-1-through-16", "document-max-two-structural-attempts-per-record", "author-bindings-withheld", "checker-concrete-assertions", "exact-model-provider-identity", "three-record-token-plan", "max-two-author-structural-attempts", "no-semantic-or-transport-retry", 0.8, 0.0})
 }
 
 func exactFactIdentity(receipt CompletionReceipt, model string) bool {

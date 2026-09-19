@@ -339,7 +339,17 @@ func generateV13WorldMemorySuiteWithFacts(ctx context.Context, seed int64, n, nW
 	suite.Cases = append(suite.Cases, integrity...)
 	suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, injectionPairs...)
 	if envelope.Divergence > 0 {
-		cases, pairs := buildParserDivergenceForVersion(seed, envelope.Divergence, benchVersion)
+		cases, pairs, sources := buildParserDivergenceSources(seed, envelope.Divergence, benchVersion)
+		if renderer != nil {
+			documents, ok := renderer.(universe.V13FactDocumentRenderer)
+			if !ok {
+				return MemorySuite{}, fmt.Errorf("v13 fact divergence: document renderer required")
+			}
+			pairs, err = renderDivergenceFacts(ctx, cases, pairs, sources, documents)
+			if err != nil {
+				return MemorySuite{}, err
+			}
+		}
 		for i := range cases {
 			cases[i].Case.BenchVersion = benchVersion
 		}
@@ -348,7 +358,18 @@ func generateV13WorldMemorySuiteWithFacts(ctx context.Context, seed int64, n, nW
 		suite.ParserDivergenceCases = len(cases)
 		suite.V13Slots[V13SlotDivergence] = len(cases)
 	}
-	for _, family := range BuildFamilyCompilerV13(seed, envelope.RecordQuantity) {
+	families := BuildFamilyCompilerV13(seed, envelope.RecordQuantity)
+	if renderer != nil {
+		documents, ok := renderer.(universe.V13FactDocumentRenderer)
+		if !ok {
+			return MemorySuite{}, fmt.Errorf("v13 fact quantity: document renderer required")
+		}
+		families, err = renderQuantityFacts(ctx, families, documents)
+		if err != nil {
+			return MemorySuite{}, err
+		}
+	}
+	for _, family := range families {
 		suite.Cases = append(suite.Cases, family.Staged)
 		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, family.Pairs...)
 		suite.FamilyCompilerCases++

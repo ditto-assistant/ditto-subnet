@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -266,6 +267,13 @@ func v8IsolationProjection(seed int64, primaryN, isoCases, benchVersion int) (pr
 }
 
 func generateV8WorldIsolation(seed int64, primaryN, isoCases, benchVersion int) (IsolationSuite, error) {
+	return generateWorldIsolationWithFacts(context.Background(), seed, primaryN, isoCases, benchVersion, nil)
+}
+
+func generateWorldIsolationWithFacts(ctx context.Context, seed int64, primaryN, isoCases, benchVersion int, renderer universe.V13FactDocumentRenderer) (IsolationSuite, error) {
+	if isoCases <= 0 {
+		return IsolationSuite{}, nil
+	}
 	primary, secondary, sources, err := v8IsolationProjection(seed, primaryN, isoCases, benchVersion)
 	if err != nil {
 		return IsolationSuite{}, err
@@ -354,6 +362,22 @@ func generateV8WorldIsolation(seed int64, primaryN, isoCases, benchVersion int) 
 		suite.ReviewPlans = append(suite.ReviewPlans, plan)
 	}
 
+	if renderer != nil {
+		for i := 0; i < isoCases; i++ {
+			r, err := isolationFactDocument(secondary.People[i])
+			if err != nil {
+				return IsolationSuite{}, err
+			}
+			plan, err := universe.RenderV13FactDocument(ctx, r, renderer)
+			if err != nil {
+				return IsolationSuite{}, err
+			}
+			for group, prompt := range plan.Records {
+				suite.SecondaryWave.Pairs[group*isoCases+i].Prompt = prompt
+			}
+		}
+		return suite, nil
+	}
 	waves := []protocol.SeedRequest{suite.SecondaryWave}
 	applyV8MemoryWritingNoise(seed^isolationSalt, suite.Cases, waves)
 	applyV8AssistantVoice(seed^isolationSalt, universe.UserName(seed^isolationSalt), waves)

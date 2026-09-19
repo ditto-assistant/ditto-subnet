@@ -19,6 +19,23 @@ func documentFixture() V13FactDocumentRequest {
 	return r
 }
 
+func TestV13FactDocumentRoleAuthority(t *testing.T) {
+	r := documentFixture()
+	before, _ := V13FactRenderDigest(r)
+	r.Records[0].Role = "request"
+	if err := ValidateV13FactDocumentRequest(r); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := V13FactRenderDigest(r)
+	if before == after {
+		t.Fatal("role not bound to replay identity")
+	}
+	r.Records[0].Role = "answer"
+	if ValidateV13FactDocumentRequest(r) == nil {
+		t.Fatal("unknown role accepted")
+	}
+}
+
 // Structural fixture only; never semantic qualification.
 type documentRendererFixture struct {
 	factRenderFixture

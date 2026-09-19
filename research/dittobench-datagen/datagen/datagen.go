@@ -1420,9 +1420,18 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 		category := "v10_state_dependent_routing"
 		var extraProtected []string
 		route := routes.Intn(routeCount)
+		var decisionSource *protocol.ToolDecisionSource
+		if benchVersion >= protocol.BenchVersionV13 && route < 3 {
+			kind := []string{"route_one_off", "route_new_workflow", "route_existing_workflow"}[route]
+			values := map[string]string{"project": project.Alias, "client": project.Client}
+			if route != 0 {
+				values["workflow"] = project.Name
+			}
+			decisionSource = &protocol.ToolDecisionSource{Kind: kind, PairID: pairID, Values: values}
+		}
 		if route >= 3 {
 			var record protocol.MemoryPair
-			record, prompt, expected, forbidden, behavior, category, extraProtected = v13StateDependentRoute(seed, i, world, project, route)
+			record, prompt, expected, forbidden, behavior, category, extraProtected, decisionSource = v13StateDependentRoute(seed, i, world, project, route)
 			planningPrompt, planningResponse, pairID = record.Prompt, record.Response, record.PairID
 		}
 		switch route {
@@ -1446,6 +1455,7 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 		originalProtected := cases[i].WritingProtected
 		tc := fuzzyWorldTool(cases[i].ID, category, prompt, expected, behavior)
 		tc.ForbiddenTools = forbidden
+		tc.DecisionSource = decisionSource
 		routeRecord := protocol.MemoryPair{
 			PairID: pairID, SessionID: fmt.Sprintf("v10-tool-route-%02d", projectIndex), Timestamp: "2026-01-15T10:00:00Z",
 			Prompt: planningPrompt, Response: planningResponse,
@@ -1804,7 +1814,9 @@ func (w worldPrompts) contactEmail(caseID string, world universe.World, index in
 	prompt := w.expand("contact-email", index, v13WorldContactEmailGrammar, map[string]string{
 		"subject": needle.Subject, "nickname": p.Nickname, "relation": p.Relation, "city": p.City, "context": p.Context,
 	})
-	return fuzzyWorldTool(caseID, "world_contact_research_email_result_usage", prompt, []protocol.ToolSpec{{Name: "search_web"}, {Name: "gmail_send", RequiredArgs: map[string]string{"to": p.Email, "body": needle.Value}}}, "resolve the person and current email, research the live value, and send that value to the right person")
+	tc := fuzzyWorldTool(caseID, "world_contact_research_email_result_usage", prompt, []protocol.ToolSpec{{Name: "search_web"}, {Name: "gmail_send", RequiredArgs: map[string]string{"to": p.Email, "body": needle.Value}}}, "resolve the person and current email, research the live value, and send that value to the right person")
+	tc.RequestSource = &protocol.ToolRequestSource{Kind: "world_contact_email", Values: map[string]string{"subject": needle.Subject, "nickname": p.Nickname, "relationship": p.Relation, "city": p.City, "event": p.Context}}
+	return tc
 }
 
 func (w worldPrompts) memoryDelete(caseID string, world universe.World, index int) protocol.ToolCase {
@@ -1834,7 +1846,11 @@ func (w worldPrompts) themeDiscoverSet(caseID string, world universe.World, salt
 	if w.v13() {
 		prompt = w.expand("theme-discover", salt, v13WorldThemeDiscoverGrammar, map[string]string{"accent": misspellAliasV13(world.Accent, w.seed, salt)})
 	}
-	return fuzzyWorldTool(caseID, "world_theme_discover_set", prompt, []protocol.ToolSpec{{Name: "discover_capabilities"}, {Name: "set_accent_color", RequiredArgs: map[string]string{"color": world.Accent}}}, "discover the available appearance setting and apply the user's personal accent")
+	tc := fuzzyWorldTool(caseID, "world_theme_discover_set", prompt, []protocol.ToolSpec{{Name: "discover_capabilities"}, {Name: "set_accent_color", RequiredArgs: map[string]string{"color": world.Accent}}}, "discover the available appearance setting and apply the user's personal accent")
+	if w.v13() {
+		tc.RequestSource = &protocol.ToolRequestSource{Kind: "world_accent_request", Values: map[string]string{"preference": "personal Ditto accent preference"}}
+	}
+	return tc
 }
 
 func (w worldPrompts) businessWorkflow(caseID string, world universe.World, index int) protocol.ToolCase {
@@ -1846,7 +1862,11 @@ func (w worldPrompts) businessWorkflow(caseID string, world universe.World, inde
 			"alias": fmt.Sprintf("%q", p.Alias), "client": p.Client, "nickname": lead.Nickname,
 		})
 	}
-	return fuzzyWorldTool(caseID, "world_business_workflow", prompt, []protocol.ToolSpec{{Name: "list_workflows"}, {Name: "create_workflow", RequiredArgs: map[string]string{"name": p.Name, "steps": lead.Email}}}, "resolve the project, its formal name, and current reviewer contact; then check existing workflows and create the requested reusable workflow")
+	tc := fuzzyWorldTool(caseID, "world_business_workflow", prompt, []protocol.ToolSpec{{Name: "list_workflows"}, {Name: "create_workflow", RequiredArgs: map[string]string{"name": p.Name, "steps": lead.Email}}}, "resolve the project, its formal name, and current reviewer contact; then check existing workflows and create the requested reusable workflow")
+	if w.v13() {
+		tc.RequestSource = &protocol.ToolRequestSource{Kind: "world_workflow", Values: map[string]string{"project": p.Alias, "client": p.Client, "reviewer": lead.Nickname}}
+	}
+	return tc
 }
 
 func (w worldPrompts) linkRead(caseID string) protocol.ToolCase {
@@ -1857,7 +1877,9 @@ func (w worldPrompts) linkRead(caseID string) protocol.ToolCase {
 	// The case id is the per-case identity here (no world index), so two
 	// link-read cases in one run do not share a frame.
 	prompt := persona.ExpandSlots(persona.HashRand(w.seed, "v13-world", "link-read", caseID), v13Bank(w.seed, "world:link-read", v13WorldLinkReadGrammar), "root", map[string]string{"subject": needle.Subject})
-	return fuzzyWorldTool(caseID, "world_link_chain_result_usage", prompt, []protocol.ToolSpec{{Name: "search_web"}, {Name: "read_links"}}, "find and read the live source, then report the served value")
+	tc := fuzzyWorldTool(caseID, "world_link_chain_result_usage", prompt, []protocol.ToolSpec{{Name: "search_web"}, {Name: "read_links"}}, "find and read the live source, then report the served value")
+	tc.RequestSource = &protocol.ToolRequestSource{Kind: "link_chain_result_usage", Values: map[string]string{"subject": needle.Subject}}
+	return tc
 }
 
 func (w worldPrompts) agentJob(caseID string, world universe.World, index int) protocol.ToolCase {
@@ -2177,8 +2199,9 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 	for i := 0; i < n; i++ {
 		cat := cats[order[i]]
 		var tmpl string
+		var grammarChoices map[string][]string
 		if cat.grammar != nil {
-			tmpl = persona.Expand(r, bankFor(cat.name, cat.grammar), "root")
+			tmpl, grammarChoices = persona.ExpandWithChoices(r, bankFor(cat.name, cat.grammar), "root")
 		} else {
 			tmpl = cat.templates[r.Intn(len(cat.templates))]
 		}
@@ -2273,6 +2296,58 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 			Prompt:          prompt,
 			AllowExtraTools: cat.allowExtra,
 		}
+		if benchVersion >= protocol.BenchVersionV13 {
+			tc.RequestSource = v13GrammarRequestSource(cat.name, grammarChoices)
+			switch cat.name {
+			case "agent_read_not_run":
+				target := "existing background jobs"
+				for _, key := range []string{"jobsref", "onejob"} {
+					if len(grammarChoices[key]) > 0 {
+						target = grammarChoices[key][0]
+						break
+					}
+				}
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: cat.name, Values: map[string]string{"target": target}}
+			case "automation_list":
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: cat.name, Values: map[string]string{"target": "scheduled workflows"}}
+			case "tool_discovery":
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: cat.name, Values: map[string]string{"capability": grammarChoices["cap"][0]}}
+			case "set_effort":
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: "effort_intent_" + argValue, Values: map[string]string{"setting": "reasoning effort"}}
+			case "settings":
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: "theme_intent_" + argValue, Values: map[string]string{"setting": "Ditto color mode"}}
+			case "agent_run_not_read", "feedback", "memory_save_not_search", "calendar_create", "calendar_search", "multi_web_read", "parallel_web_image", "recipe_create", "set_tool_prefs":
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: cat.name, Values: map[string]string{"item": filler}}
+			case "automation_not_job":
+				task := "send my news digest"
+				switch grammarChoices["root"][0] {
+				case "Set up my standup summary to run %s.":
+					task = "send my standup summary"
+				case "Have my summary go out %s, on its own #timer#.":
+					task = "send my summary"
+				case "I want my digest #delivered# %s — make that a workflow.":
+					task = "have my digest " + grammarChoices["delivered"][0]
+				}
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: cat.name, Values: map[string]string{"schedule": filler, "task": task}}
+			case "multi_image_edit":
+				change := ""
+				switch grammarChoices["root"][0] {
+				case "Make an image of %s, then brighten it.":
+					change = "increase brightness"
+				case "Generate %s and then add more detail.":
+					change = "add more detail"
+				case "Create a picture of %s and tweak the colors.":
+					change = "adjust the colors"
+				default:
+					change = grammarChoices["tweak"][0]
+				}
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: cat.name, Values: map[string]string{"subject": filler, "change": change}}
+			case "web_search", "route_web_not_memory", "stale_context_web", "image_create", "artifacts_create", "agent_job", "agent_workflow", "workflow_not_job":
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: cat.name, Values: map[string]string{"item": filler}}
+			case "web_result_usage", "multi_web_result_usage", "web_recovery_result_usage", "link_chain_result_usage":
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: cat.name, Values: map[string]string{"subject": filler}}
+			}
+		}
 
 		switch {
 		case len(seq) == 0:
@@ -2314,6 +2389,10 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		if benchVersion >= protocol.BenchVersionV8 && cat.name == "memory_fetch" {
 			pairID := protocol.OpaqueCaseID(seed, "tool-memory-fetch", i)
 			phone := fmt.Sprintf("+1-212-555-%04d", r.Intn(10000))
+			if benchVersion >= protocol.BenchVersionV13 {
+				tc.DecisionSource = &protocol.ToolDecisionSource{Kind: "record_accountant", PairID: pairID, Values: map[string]string{"person": "Morgan Lee", "year": "2024", "phone": phone}}
+				tc.RequestSource = &protocol.ToolRequestSource{Kind: "accountant_phone", Values: map[string]string{"year": "2024"}}
+			}
 			questions := []string{
 				"What is the phone number of my accountant for 2024?",
 				"Can you find the number for the accountant who handled my 2024 taxes?",
@@ -2345,6 +2424,9 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		}
 		if benchVersion >= protocol.BenchVersionV8 && cat.name == "stale_context_web" {
 			pairID := protocol.OpaqueCaseID(seed, "tool-stale-context", i)
+			if benchVersion >= protocol.BenchVersionV13 {
+				tc.DecisionSource = &protocol.ToolDecisionSource{Kind: "record_stale_context", PairID: pairID, Values: map[string]string{"subject": filler}}
+			}
 			notePrompt := fmt.Sprintf("I was reading about %s last year and saved a few notes, but I know they may be out of date now.", filler)
 			if benchVersion >= protocol.BenchVersionV13 {
 				notePrompt = fmt.Sprintf(persona.Expand(r, bankFor("stale-context-note", v13StaleContextPairGrammar), "root"), filler)

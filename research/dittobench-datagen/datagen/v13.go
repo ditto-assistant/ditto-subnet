@@ -267,6 +267,7 @@ func applyV13ToolBench(seed int64, cases []protocol.ToolCase) {
 		}
 		w := coined.Workflows[v13ToolPick(seed, i, "recipe-workflow", len(coined.Workflows))]
 		cases[i].Prompt = fmt.Sprintf(v13RecipeTemplates[v13ToolPick(seed, i, "recipe-tmpl", len(v13RecipeTemplates))], w.Cadence)
+		cases[i].RequestSource = &protocol.ToolRequestSource{Kind: "saved_workflow_run", Values: map[string]string{"cadence": w.Cadence}}
 		cases[i].ExpectedTools = []protocol.ToolSpec{{Name: "list_workflows"}, {Name: "run_workflow", RequiredArgs: map[string]string{"name": w.Name}}}
 		cases[i].MaxToolCalls = 2
 		cases[i].ExpectedBehavior = "list saved workflows, then run the one whose cadence the user named"
@@ -361,6 +362,7 @@ func v13DecoyCase(seed int64, prior protocol.ToolCase, decoy catalog.Decoy, inde
 	return protocol.ToolCase{
 		ID:               prior.ID,
 		Category:         "decoy_" + decoy.Shape.Key + "_result_usage",
+		RequestSource:    &protocol.ToolRequestSource{Kind: "decoy_result_" + decoy.Shape.Key, Values: map[string]string{"brand": decoy.Brand, "subject": needle.Subject}},
 		Prompt:           decoy.Prompt(v13ToolPick(seed, index, "decoy-prompt", len(decoy.Shape.Prompts)), needle.Subject),
 		ExpectedTools:    []protocol.ToolSpec{{Name: decoy.Name}},
 		MaxToolCalls:     1,
@@ -562,6 +564,11 @@ func v13DiscoveryCase(seed int64, prior protocol.ToolCase, inv catalog.Inventory
 	// WritingProtected[0] is the alias as emitted (tests read it back); the
 	// qualifier follows. textnoise protects each word of a multiword entry.
 	tc.WritingProtected = []string{alias.Text, pair.Qualifier}
+	qualifier := ""
+	if nearMiss {
+		qualifier = pair.Qualifier
+	}
+	tc.RequestSource = v13AppearanceRequestSource(options, canonical, kind, qualifier)
 	return tc
 }
 
@@ -623,8 +630,10 @@ func v13UnexpectedCase(seed int64, prior protocol.ToolCase, co toolexec.Coined, 
 	focus := co.Workflows[co.Focus]
 	var tool, prompt string
 	var protect []string
+	var source *protocol.ToolRequestSource
 	switch family {
 	case "schedules_result_usage":
+		source = &protocol.ToolRequestSource{Kind: family, Values: map[string]string{"cadence": focus.Cadence}}
 		tool = "list_schedules"
 		prompts := v13UnexpectedPrompts[family]
 		prompt = fmt.Sprintf(prompts[v13ToolPick(seed, index, "unexpected-prompt", len(prompts))], focus.Cadence)
@@ -633,14 +642,17 @@ func v13UnexpectedCase(seed int64, prior protocol.ToolCase, co toolexec.Coined, 
 		tool = "search_tools"
 		caps := []string{"convert a file between formats", "fetch live exchange rates", "resize a batch of images", "pull rows from a spreadsheet", "look up a package's latest version"}
 		cap := caps[v13ToolPick(seed, index, "unexpected-cap", len(caps))]
+		source = &protocol.ToolRequestSource{Kind: family, Values: map[string]string{"capability": cap}}
 		prompts := v13UnexpectedPrompts[family]
 		prompt = fmt.Sprintf(prompts[v13ToolPick(seed, index, "unexpected-prompt", len(prompts))], cap)
 	case "sandbox_result_usage":
+		source = &protocol.ToolRequestSource{Kind: family, Values: map[string]string{"routine": co.Routine}}
 		tool = "run_code"
 		prompts := v13UnexpectedPrompts[family]
 		prompt = fmt.Sprintf(prompts[v13ToolPick(seed, index, "unexpected-prompt", len(prompts))], co.Routine)
 		protect = strings.Fields(co.Routine)
 	default: // agent_jobs_result_usage
+		source = &protocol.ToolRequestSource{Kind: family, Values: map[string]string{"job": co.Jobs[0]}}
 		tool = "list_agent_jobs"
 		prompts := v13UnexpectedPrompts["agent_jobs_result_usage"]
 		prompt = fmt.Sprintf(prompts[v13ToolPick(seed, index, "unexpected-prompt", len(prompts))], co.Jobs[0])
@@ -649,6 +661,7 @@ func v13UnexpectedCase(seed int64, prior protocol.ToolCase, co toolexec.Coined, 
 	return protocol.ToolCase{
 		ID:               prior.ID,
 		Category:         family,
+		RequestSource:    source,
 		Prompt:           prompt,
 		ExpectedTools:    []protocol.ToolSpec{{Name: tool}},
 		MaxToolCalls:     1,

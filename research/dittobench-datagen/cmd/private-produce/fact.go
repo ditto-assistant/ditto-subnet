@@ -69,7 +69,9 @@ func runFactProducer(seed int64, size, out string, profile privatesurface.Profil
 	if err := writePrivate(out, "dataset.json", raw); err != nil {
 		return err
 	}
-	receipt, _ := json.Marshal(map[string]any{"revision": "v13-fact-candidate-v1", "dataset_sha256": pin, "profile_sha256": profileSHA, "run_size": size, "calls": call, "qualified": false, "semantic_coverage": "business-personal-programs-stories-ordinary-world-import-and-registration-only", "remaining_surface_qualification_required": true})
+	// Rendering and replay are not semantic qualification. In particular this
+	// candidate receipt must never be accepted as a rollout validation receipt.
+	receipt, _ := json.Marshal(map[string]any{"revision": "v13-fact-candidate-v2", "generation_revision": gen.V13FactGenerationRevision, "dataset_sha256": pin, "profile_sha256": profileSHA, "run_size": size, "calls": call, "qualified": false, "semantic_coverage": "not-qualified", "remaining_surface_qualification_required": true})
 	if err := writePrivate(out, "fact-candidate.json", receipt); err != nil {
 		return err
 	}

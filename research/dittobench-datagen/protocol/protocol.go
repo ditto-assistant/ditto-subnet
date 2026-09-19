@@ -126,16 +126,35 @@ const (
 // For a fuzzy case MaxToolCalls describes the expected task envelope, not a hard
 // cap; AllowExtraTools permits longer creative trajectories without a call-count
 // penalty. Run-level token efficiency remains a separate scoring signal.
+// ToolDecisionSource is generator-only state retained at the decision draw.
+// It contains neither expected tools nor grading claims and never crosses wire.
+type ToolDecisionSource struct {
+	Previous     *ToolDecisionSource
+	Kind         string
+	Context      string
+	PairID       string
+	Values       map[string]string
+	RequestedDay string
+}
+
+type ToolRequestSource struct {
+	Kind   string
+	Values map[string]string
+}
+
 type ToolCase struct {
-	ID               string     `json:"id"`
-	Category         string     `json:"category"`
-	Prompt           string     `json:"prompt"`
-	ExpectedTools    []ToolSpec `json:"expected_tools"`
-	MaxToolCalls     int        `json:"max_tool_calls"`
-	AllowExtraTools  bool       `json:"allow_extra_tools"`
-	Unordered        bool       `json:"unordered,omitempty"`
-	FuzzyTrajectory  bool       `json:"fuzzy_trajectory,omitempty"`
-	ExpectedBehavior string     `json:"expected_behavior,omitempty"`
+	RequestSource    *ToolRequestSource  `json:"-"`
+	MutationSource   *ToolMutationSource `json:"-"`
+	DecisionSource   *ToolDecisionSource `json:"-"`
+	ID               string              `json:"id"`
+	Category         string              `json:"category"`
+	Prompt           string              `json:"prompt"`
+	ExpectedTools    []ToolSpec          `json:"expected_tools"`
+	MaxToolCalls     int                 `json:"max_tool_calls"`
+	AllowExtraTools  bool                `json:"allow_extra_tools"`
+	Unordered        bool                `json:"unordered,omitempty"`
+	FuzzyTrajectory  bool                `json:"fuzzy_trajectory,omitempty"`
+	ExpectedBehavior string              `json:"expected_behavior,omitempty"`
 	// PrerequisitePairs are validator-internal, seed-bound routing facts loaded
 	// before the tool phase. In V8 the first prerequisite payload is the initial
 	// shared world: the harness store is intentionally preserved through every
@@ -197,6 +216,13 @@ type ToolCase struct {
 	// mutation has been asked. The harness projection places the follow-up
 	// well after its mutation in the run order. Never serialized.
 	RunAfterCaseID string `json:"-"`
+}
+
+// ToolMutationSource is the underlying change, retained before prompts and
+// grading claims are compiled. Follow-up questions consume this same state.
+type ToolMutationSource struct {
+	Kind, TargetPairID, ProjectAlias, Client, Day, Reviewer          string
+	Nickname, Relation, Employer, Email, PreviousEmail, EventContext string
 }
 
 // AnswerKind values: how a memory case is graded deterministically. Grading is

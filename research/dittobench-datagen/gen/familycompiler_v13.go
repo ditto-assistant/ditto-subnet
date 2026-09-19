@@ -139,8 +139,10 @@ var familyV2ConventionForms = map[string][]string{
 // model the cue-reading and fixed-recipe solvers. Only Staged.Case (opaque id
 // + question) and Pairs cross the harness wire.
 type FamilyV2Case struct {
-	Staged StagedCase
-	Pairs  []protocol.MemoryPair
+	// Subject is retained from the world draw, never recovered from prose.
+	Subject string `json:"-"`
+	Staged  StagedCase
+	Pairs   []protocol.MemoryPair
 	// Shape is the question asked: plain (the standing figure) or direction
 	// (raise / lower / unchanged plus the standing figure).
 	Shape string
@@ -318,7 +320,8 @@ func BuildFamilyCompilerV13(seed int64, count int) []FamilyV2Case {
 		correct := FamilyV2Effect(convention, opening, magnitude, settled)
 
 		fc := FamilyV2Case{
-			Shape: slot.shape, Paired: slot.paired, Unit: unit, Cue: cue,
+			Subject: subject,
+			Shape:   slot.shape, Paired: slot.paired, Unit: unit, Cue: cue,
 			Opening: opening, Magnitude: magnitude, Settled: settled,
 			Convention: convention, Correct: correct,
 		}
