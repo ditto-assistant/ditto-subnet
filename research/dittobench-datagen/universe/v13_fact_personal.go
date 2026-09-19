@@ -1,6 +1,7 @@
 package universe
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -138,6 +139,17 @@ func renderV13PersonalFactPlan(p v13PersonalFactPlan, seed int64) (v13Member, er
 // the seeded personal domain mix, calendar anchors and grading units. It is an
 // opt-in migration path, not a completed private dataset or qualification.
 func GenerateV13PersonalFactPrograms(worldSeed, presentationSeed int64, count int) ([]V10GeneratedCase, error) {
+	return generateV13PersonalFactPrograms(context.Background(), worldSeed, presentationSeed, count, nil)
+}
+
+func GenerateV13RenderedPersonalFactPrograms(ctx context.Context, worldSeed, presentationSeed int64, count int, renderer V13FactRenderer) ([]V10GeneratedCase, error) {
+	if renderer == nil {
+		return nil, fmt.Errorf("explicit fact renderer required")
+	}
+	return generateV13PersonalFactPrograms(ctx, worldSeed, presentationSeed, count, renderer)
+}
+
+func generateV13PersonalFactPrograms(ctx context.Context, worldSeed, presentationSeed int64, count int, renderer V13FactRenderer) ([]V10GeneratedCase, error) {
 	if count <= 0 || count%4 != 0 {
 		return nil, fmt.Errorf("personal fact count must be a positive multiple of four")
 	}
@@ -147,6 +159,7 @@ func GenerateV13PersonalFactPrograms(worldSeed, presentationSeed int64, count in
 	for group := 0; group < count/4; group++ {
 		g := d.drawPersonalGroup(group, V13PersonalDomains[domains[group%len(domains)]])
 		var baseAnswer string
+		var basePlan *V13FactRenderPlan
 		for variant, relation := range []string{protocol.RelationBase, protocol.RelationRendererInvariant, protocol.RelationDistractorInvariant, protocol.RelationCausalCounterfactual} {
 			p, err := buildV13PersonalFactPlan(worldSeed, group, g, variant == 3)
 			if err != nil {
@@ -159,6 +172,20 @@ func GenerateV13PersonalFactPrograms(worldSeed, presentationSeed int64, count in
 			m, err := renderV13PersonalFactPlan(p, renderSeed)
 			if err != nil {
 				return nil, err
+			}
+			if renderer != nil {
+				plan := basePlan
+				if variant == 1 {
+					plan = nil
+				}
+				var chosen *V13FactRenderPlan
+				m, chosen, err = applyV13FactRender(ctx, p.World, v13Schema{}, false, m, renderer, plan)
+				if err != nil {
+					return nil, err
+				}
+				if variant == 0 {
+					basePlan = chosen
+				}
 			}
 			if variant == 0 {
 				baseAnswer = m.Expected
@@ -175,6 +202,9 @@ func GenerateV13PersonalFactPrograms(worldSeed, presentationSeed int64, count in
 			}
 			generated := materializeV13PersonalCase(worldSeed, group, variant, protocol.OpaqueCaseID(worldSeed, "v13-personal-group", group), v13PersonalRenderers[(group+variant)%len(v13PersonalRenderers)], g, m, relation, answerRelation, variant == 2)
 			generated.Provenance.Revision = "dittobench-v13-personal-fact-world-v1"
+			if renderer != nil {
+				generated.Provenance.Revision = "dittobench-v13-authored-personal-fact-world-v1"
+			}
 			out = append(out, generated)
 		}
 	}

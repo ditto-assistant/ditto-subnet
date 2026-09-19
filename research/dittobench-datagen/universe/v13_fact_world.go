@@ -1,6 +1,7 @@
 package universe
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -443,6 +444,19 @@ func v13FactDistractor(d *v13Draws, s v13Schema, g v13Group, counter bool) ([]v1
 // opt-in until private-artifact production/validation and qualification are
 // migrated together. It must not be presented as a full private dataset.
 func GenerateV13FactPrograms(worldSeed, presentationSeed int64, count int) ([]V10GeneratedCase, error) {
+	return generateV13FactPrograms(context.Background(), worldSeed, presentationSeed, count, nil)
+}
+
+// GenerateV13RenderedFactPrograms authors directly from typed facts and checks
+// each concrete world, including counterfactuals, before materialization.
+func GenerateV13RenderedFactPrograms(ctx context.Context, worldSeed, presentationSeed int64, count int, renderer V13FactRenderer) ([]V10GeneratedCase, error) {
+	if renderer == nil {
+		return nil, fmt.Errorf("explicit fact renderer required")
+	}
+	return generateV13FactPrograms(ctx, worldSeed, presentationSeed, count, renderer)
+}
+
+func generateV13FactPrograms(ctx context.Context, worldSeed, presentationSeed int64, count int, renderer V13FactRenderer) ([]V10GeneratedCase, error) {
 	if count <= 0 || count%4 != 0 {
 		return nil, fmt.Errorf("fact program count must be a positive multiple of four")
 	}
@@ -456,6 +470,7 @@ func GenerateV13FactPrograms(worldSeed, presentationSeed int64, count int) ([]V1
 	for group := 0; group < count/4; group++ {
 		g := d.drawGroup(group)
 		var baseAnswer string
+		var basePlan *V13FactRenderPlan
 		for variant, relation := range []string{protocol.RelationBase, protocol.RelationRendererInvariant, protocol.RelationDistractorInvariant, protocol.RelationCausalCounterfactual} {
 			w, err := buildV13FactWorld(d, s, group, g, variant == 3)
 			if err != nil {
@@ -470,6 +485,29 @@ func GenerateV13FactPrograms(worldSeed, presentationSeed int64, count int) ([]V1
 			m, err := renderV13FactMember(w, s, renderSeed, milestone)
 			if err != nil {
 				return nil, err
+			}
+			if renderer != nil {
+				hasThird := false
+				for _, f := range w.Facts {
+					hasThird = hasThird || f.Record == 2
+				}
+				if !hasThird {
+					value := factValue(milestone, protocol.ClaimKindDate)
+					value.Unit = "day"
+					w.Facts = append(w.Facts, v13Fact{Entity: g.Alias, Field: "planned milestone review date", Value: value, Mode: "static", Record: 2})
+				}
+				plan := basePlan
+				if variant == 1 {
+					plan = nil
+				}
+				var chosen *V13FactRenderPlan
+				m, chosen, err = applyV13FactRender(ctx, w, s, true, m, renderer, plan)
+				if err != nil {
+					return nil, err
+				}
+				if variant == 0 {
+					basePlan = chosen
+				}
 			}
 			decoys, distractors := v13FactDistractor(d, s, g, variant == 3)
 			m.Distractors = distractors
@@ -496,6 +534,9 @@ func GenerateV13FactPrograms(worldSeed, presentationSeed int64, count int) ([]V1
 			}
 			generated := materializeV13Case(d, s, digest, v13Ontology(s), group, variant, protocol.OpaqueCaseID(worldSeed, "v13-metamorphic-group", group), v10Renderers[(group+variant)%len(v10Renderers)], g, m, relation, answerRelation, variant == 2)
 			generated.Provenance.Revision = "dittobench-v13-fact-world-v1"
+			if renderer != nil {
+				generated.Provenance.Revision = "dittobench-v13-authored-fact-world-v1"
+			}
 			out = append(out, generated)
 		}
 	}
