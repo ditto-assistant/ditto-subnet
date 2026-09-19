@@ -93,8 +93,15 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
     lifted: list[KothEntry] = []
     for entry in entries:
         receipt = entry.v9_confirmation
-        confirmations = entry.confirmation_composites
-        seeds = entry.confirmation_seeds
+        history = _confirmation_history(entry)
+        confirmations = (
+            tuple(history.values())
+            if history is not None
+            else entry.confirmation_composites
+        )
+        seeds = (
+            tuple(history.keys()) if history is not None else entry.confirmation_seeds
+        )
         paired_composites: tuple[float, ...] | None = None
         paired_seeds: tuple[int, ...] | None = None
         if (
@@ -125,8 +132,17 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
                 ),
                 completed_wave_composites=(
                     ()
-                    if receipt is not None or confirmations is None
-                    else tuple(confirmations)
+                    if receipt is not None
+                    else (
+                        tuple(history.values())
+                        if history is not None
+                        and entry.continual_aggregate_method == "mean_after_quorum"
+                        else (
+                            ()
+                            if entry.confirmation_composites is None
+                            else tuple(entry.confirmation_composites)
+                        )
+                    )
                 ),
                 confirmation_composites=paired_composites,
                 confirmation_seeds=paired_seeds,
@@ -136,6 +152,28 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
             )
         )
     return lifted
+
+
+def _confirmation_history(entry: LedgerEntry) -> dict[int, float] | None:
+    """Collapse modern continual evidence exactly as the validator fold does."""
+    records = entry.confirmation_history
+    if not records:
+        return None
+    grouped: dict[int, list[float]] = {}
+    for record in records:
+        grouped.setdefault(record.seed, []).append(record.composite)
+    collapsed = {seed: _median(values) for seed, values in grouped.items() if values}
+    if not collapsed:
+        return None
+    return dict(sorted(collapsed.items())[:TOP5_MAX_CONFIRMATION_SEEDS])
+
+
+def _median(values: Sequence[float]) -> float:
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2.0
 
 
 @dataclass(frozen=True)

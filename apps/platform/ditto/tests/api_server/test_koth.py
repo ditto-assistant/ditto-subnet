@@ -86,6 +86,122 @@ def test_partial_or_missing_wave_keeps_canonical_median() -> None:
     assert effective_composite(entry) == 0.8
 
 
+def test_wire_projection_uses_modern_continual_history_for_the_crown() -> None:
+    """The pin projection must crown the same agent as the validator fold."""
+    from ditto.api_models import LedgerEntry
+
+    tea_id = UUID("2b38d4ba-84c3-42a5-8536-5b6808c28da8")
+    aceron_id = UUID("d2db3c2d-845a-49dd-a5a7-220565105640")
+    tea_history = [
+        0.579671,
+        0.781746,
+        0.708357,
+        0.771431,
+        0.672000,
+        0.691532,
+        0.773150,
+        0.757889,
+        0.754746,
+        0.728296,
+        0.723026,
+        0.680713,
+        0.772821,
+        0.700503,
+        0.756775,
+    ]
+    aceron_history = [
+        0.780463,
+        0.777087,
+        0.709116,
+        0.698918,
+        0.740944,
+        0.719711,
+        0.779429,
+        0.772639,
+        0.739666,
+        0.756713,
+        0.766487,
+        0.755073,
+        0.769070,
+        0.781538,
+        0.762603,
+    ]
+
+    def wire(
+        *,
+        agent_id: UUID,
+        hotkey_digit: str,
+        composite: float,
+        quorum: tuple[float, float, float],
+        history: list[float],
+        minutes: int,
+    ) -> LedgerEntry:
+        return LedgerEntry.model_validate(
+            {
+                "miner_hotkey": "5" + hotkey_digit * 47,
+                "agent_id": str(agent_id),
+                "composite": composite,
+                "n": 351,
+                "first_seen": (_T0 + timedelta(minutes=minutes)).isoformat(),
+                "sha256": "ab" * 32,
+                "run_id": f"run-{hotkey_digit}",
+                "seed": 1,
+                "validator_hotkey": "5" + "9" * 47,
+                "status": "scored",
+                "bench_version": 12,
+                "score_proofs": [
+                    {
+                        "validator_hotkey": "5" + str(index + 1) * 47,
+                        "run_id": f"proof-{index}",
+                        "composite": value,
+                        "seed": index,
+                    }
+                    for index, value in enumerate(quorum)
+                ],
+                "confirmation_history": [
+                    {
+                        "seed": index,
+                        "composite": value,
+                        "validator_hotkey": "5" + "8" * 47,
+                        "bench_version": 12,
+                    }
+                    for index, value in enumerate(history)
+                ],
+                "continual_aggregate_method": "mean_after_quorum",
+            }
+        )
+
+    tea = wire(
+        agent_id=tea_id,
+        hotkey_digit="1",
+        composite=0.773685,
+        quorum=(0.750677, 0.773685, 0.780940),
+        history=tea_history,
+        minutes=0,
+    )
+    aceron = wire(
+        agent_id=aceron_id,
+        hotkey_digit="2",
+        composite=0.717829,
+        quorum=(0.507748, 0.717829, 0.737537),
+        history=aceron_history,
+        minutes=60,
+    )
+
+    lifted = koth_entries_from_ledger([tea, aceron])
+    projection = project_koth(lifted, incumbent_agent_id=tea_id)
+
+    assert [entry.raw_rank for entry in lifted] == [1, 2]
+    assert effective_composite(lifted[0]) == pytest.approx(0.7309976666666667)
+    assert effective_composite(lifted[1]) == pytest.approx(0.7373650555555555)
+    assert projection is not None
+    assert projection.champion.agent_id == aceron_id
+    assert projection.tail[0].agent_id == tea_id
+    decision = _dethrone_decision(lifted[1], lifted[0])
+    assert decision.method == "paired"
+    assert decision.dethrones
+
+
 def test_efficiency_bonus_multiplies_the_continual_score() -> None:
     entry = _entry(
         1,
