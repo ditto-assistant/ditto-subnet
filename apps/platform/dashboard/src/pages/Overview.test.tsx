@@ -10,9 +10,13 @@ import {
   harnessMeasuredVersions,
   harnessUnmeasuredVersions,
   loadMemoryField,
+  memoryChartVersion,
   memoryTimelineHtml,
+  memoryVersionHtml,
   resetMemoryFieldCache,
+  timeTicks,
 } from "../components/overview/memory-timeline";
+import type { MemoryFieldEntry } from "../components/overview/memory-timeline";
 import { resetBoardState, setLeaderboardVersionView } from "../components/board/board-state";
 import { refreshAllEndpoints } from "../data/useEndpoint";
 import { fx, fxScore, pct } from "../lib/format";
@@ -96,6 +100,18 @@ function el(id: string): HTMLElement {
   return node;
 }
 
+/** Parse a chart builder's markup and return its SVG. */
+function svgOf(html: string): SVGSVGElement {
+  const host = document.createElement("div");
+  host.innerHTML = html;
+  return host.querySelector("svg") as SVGSVGElement;
+}
+
+/** A child's leading class, for asserting layout order. */
+function firstClass(node: Element): string | undefined {
+  return node.className.split(" ")[0];
+}
+
 async function waitForBoard(): Promise<void> {
   await waitFor(() => {
     expect(document.querySelectorAll("#rows tr[data-i]").length).toBeGreaterThan(0);
@@ -107,25 +123,26 @@ async function waitForBoard(): Promise<void> {
 // ruled band above the split, so none of it sits below the fold or behind
 // the chart, and the clock appears once per screen.
 describe("overview masthead", () => {
-  it("leads the page with one band — champion, vitals ledger, payout clock — above the split", async () => {
+  it("reads vitals, then the timeline beside the crown and clock, then the full-width board", async () => {
     renderOverview();
     await waitForBoard();
     const section = document.querySelector('section.page[data-page="overview"]') as HTMLElement;
-    const masthead = section.querySelector(".overview-masthead") as HTMLElement;
-    expect(masthead).toBeTruthy();
-    // The band is the page's first reading line; the two-pane split follows.
-    expect(section.firstElementChild).toBe(masthead);
-    expect(masthead.nextElementSibling?.classList.contains("overview-split")).toBe(true);
-    // Three instruments, in reading order, inside the one frame.
-    const cells = Array.from(masthead.children).map((el) => el.className.split(" ")[0]);
-    expect(cells).toEqual(["champion-box", "snapshot", "overview-clock"]);
+    const rows = Array.from(section.children).map(firstClass);
+    // Three reading rows in order: vitals, evidence beside the crown, standings.
+    expect(rows).toEqual(["overview-vitals", "overview-split", "overview-main"]);
+    const split = section.querySelector(".overview-split") as HTMLElement;
+    expect(Array.from(split.children).map(firstClass)).toEqual(["overview-rail", "overview-side"]);
+    // The side column stacks the two instruments a reader checks against the
+    // timeline: who reigns, then when the next payout lands.
+    const side = split.querySelector(".overview-side") as HTMLElement;
+    expect(Array.from(side.children).map(firstClass)).toEqual(["champion-box", "overview-clock"]);
     // The clock is a second mount of the rail's instrument under its own id,
     // so the page never carries two #epoch-clock.
-    expect(masthead.querySelector("#overview-epoch-clock.epoch-clock")).toBeTruthy();
+    expect(side.querySelector("#overview-epoch-clock.epoch-clock")).toBeTruthy();
     expect(document.querySelectorAll("#epoch-clock")).toHaveLength(0);
-    expect(masthead.querySelector("#overview-epoch-clock")?.textContent).toContain(
-      "Next payout in",
-    );
+    expect(side.querySelector("#overview-epoch-clock")?.textContent).toContain("Next payout in");
+    // The board is no longer a scrolling rail pane: it follows the split.
+    expect(section.querySelector(".overview-main #leaderboard-block")).toBeTruthy();
     // The rail's copy folds away while this page is on at rail widths, so
     // the reading appears once per screen; the phone top bar keeps its own.
     const shellCss = readFileSync(join(HERE, "..", "styles", "shell.css"), "utf-8").replace(
@@ -135,40 +152,31 @@ describe("overview masthead", () => {
     expect(shellCss).toContain(
       '@media (min-width: 961px) { .layout:has(.page.active[data-page="overview"]) .sidebar > .epoch-clock { display: none; } }',
     );
-    expect(cssNorm).toContain(
-      "@media (max-width: 960px) { .overview-masthead > .overview-clock { display: none; } }",
-    );
   });
 
-  it("lays the vitals ledger out as three ruled rows: population, scores, machine", async () => {
+  it("lays the vitals out as four count cards over a strip of score readings", async () => {
     renderOverview();
     await waitForBoard();
-    const lines = Array.from(document.querySelectorAll(".stat-ledger .ledger-line"));
-    expect(lines.map((line) => line.getAttribute("data-ledger"))).toEqual([
-      "population",
-      "population",
-      "population",
-      "scores",
-      "scores",
-      "scores",
-      "machine",
-      "machine",
-      "machine",
-    ]);
-    expect(lines.map((line) => line.querySelector("dd")?.id)).toEqual([
+    const cards = Array.from(document.querySelectorAll(".stat-cards .ledger-line"));
+    const strip = Array.from(document.querySelectorAll(".stat-strip .ledger-line"));
+    // Who is here and what is running, as cards; where scores stand, as a strip.
+    expect(cards.map((line) => line.querySelector("dd")?.id)).toEqual([
       "h-miners",
       "c-miners",
       "h-agents",
+      "h-validators",
+    ]);
+    expect(strip.map((line) => line.querySelector("dd")?.id)).toEqual([
       "c-top",
       "c-median",
       "c-spread",
-      "h-validators",
       "h-scores",
       "h-last",
     ]);
-    expect(cssNorm).toContain(
-      ".stat-ledger { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));",
-    );
+    // Every reading is still a dt/dd pair; nothing but the pair sits in a line.
+    for (const line of [...cards, ...strip]) {
+      expect(Array.from(line.children).map((child) => child.tagName)).toEqual(["DT", "DD"]);
+    }
   });
 });
 
@@ -466,6 +474,12 @@ describe("off-network harness comparison (row 2)", () => {
     await waitForBoard();
     const rail = document.querySelector(".overview-rail") as HTMLElement;
     expect(rail.firstElementChild?.classList.contains("harness-comparison")).toBe(true);
+    // The chart opens on the board's version; the cross-version story is one
+    // toggle away and keeps its own title and lead.
+    await waitFor(() =>
+      expect(el("harness-comparison-title").textContent).toBe("Memory scores on Bench v7"),
+    );
+    fireEvent.click(document.querySelector('[data-chart-mode="all"]') as HTMLElement);
     expect(el("harness-comparison-title").textContent).toBe("How far miners have taken memory");
     expect(document.querySelector("details.harness-comparison-method")).toBeTruthy();
     const section = document.querySelector(".harness-comparison") as HTMLElement;
@@ -546,6 +560,8 @@ describe("off-network harness comparison (row 2)", () => {
 describe("memory timeline field + champion (row 5)", () => {
   it("plots every finalized run as a field dot and crowns the reigning champion", async () => {
     renderOverview();
+    await waitForBoard();
+    fireEvent.click(document.querySelector('[data-chart-mode="all"]') as HTMLElement);
     await waitFor(
       () => {
         expect(document.querySelectorAll(".timeline-field").length).toBeGreaterThan(0);
@@ -557,10 +573,14 @@ describe("memory timeline field + champion (row 5)", () => {
     const plate = document.querySelector(".timeline-champion-plate") as SVGGElement;
     // Champion identity comes from the live emissions fold's hotkey.
     expect(plate.getAttribute("aria-label")).toContain(championEntry.agent_name as string);
-    // The plate rect sits in the annotation gutter above the plot (top=34,
-    // plateY = top - plateH - 5 = 8 on the landscape branch).
+    // The plate rect sits in the annotation gutter: below the generation
+    // header (46) and wholly above the plot top (header 46 + gutter 34 = 80)
+    // on the landscape branch, so it never covers a label or a run.
     const rect = plate.querySelector("rect") as SVGRectElement;
-    expect(Number(rect.getAttribute("y"))).toBeLessThan(34);
+    const plateTop = Number(rect.getAttribute("y"));
+    const plateBottom = plateTop + Number(rect.getAttribute("height"));
+    expect(plateTop).toBeGreaterThanOrEqual(46);
+    expect(plateBottom).toBeLessThanOrEqual(80);
   });
 
   it("fetches each contract's board once and refetches only the newest", async () => {
@@ -574,6 +594,19 @@ describe("memory timeline field + champion (row 5)", () => {
     // newest board is allowed to refetch.
     expect(v6).toBe(1);
     expect(v7).toBe(2);
+  });
+
+  it("keeps refetching the active contract while a rollout collects", async () => {
+    // Mid-rollout the chart shows the settled v6 while v7 collects, and v6
+    // can still receive finalized runs; a v6 board fetched once would freeze
+    // its dots and awaiting-quorum count while its record line kept moving.
+    const paths: string[] = [];
+    restoreFetch = installFetch({ onRequest: (p) => paths.push(p) });
+    await loadMemoryField([5, 6, 7], [7, 6]);
+    await loadMemoryField([5, 6, 7], [7, 6]);
+    const count = (v: number): number =>
+      paths.filter((p) => p === "/public/leaderboard?bench_version=" + v).length;
+    expect([count(5), count(6), count(7)]).toEqual([1, 2, 2]);
   });
 
   it("keeps the rendered graph mounted when unchanged data is refetched", async () => {
@@ -599,7 +632,9 @@ describe("memory timeline field + champion (row 5)", () => {
 
   it("gives every contract an equal band and says so in the reading notes", async () => {
     renderOverview();
-    await waitFor(() => expect(document.querySelector(".memory-timeline-svg")).toBeTruthy(), {
+    await waitForBoard();
+    fireEvent.click(document.querySelector('[data-chart-mode="all"]') as HTMLElement);
+    await waitFor(() => expect(document.querySelector(".timeline-era-label")).toBeTruthy(), {
       timeout: 4000,
     });
     const section = document.querySelector(".harness-comparison") as HTMLElement;
@@ -835,5 +870,203 @@ describe("dethrone floor source of truth", () => {
     // The compact history mounts under the board with the newest pin first.
     await waitFor(() => expect(el("crown-history").textContent).toContain("pin #24,281"));
     expect(document.querySelectorAll("#crown-history tbody tr").length).toBeLessThanOrEqual(6);
+  });
+});
+
+describe("overview Coding shadow column", () => {
+  it("gives Coding its own column on the overview, right after Scores", async () => {
+    renderOverview();
+    await waitForBoard();
+    const headers = Array.from(document.querySelectorAll("#board thead th"), (th) =>
+      (th.textContent ?? "").replace(/[↕▲▼]/g, "").trim(),
+    );
+    expect(headers.indexOf("Coding status")).toBe(headers.indexOf("Scores") + 1);
+    const rows = document.querySelectorAll("#rows tr[data-i]");
+    expect(document.querySelectorAll("#rows tr[data-i] td.coding-status-cell")).toHaveLength(
+      rows.length,
+    );
+    expect(rows[0]?.querySelector("td.coding-status-cell")).toHaveTextContent("not evaluated");
+    // Only the emissions header carries the fold-fed tip id.
+    expect(document.querySelectorAll("#emissions-col-tip")).toHaveLength(1);
+  });
+});
+
+describe("memory chart follows the leaderboard's benchmark version", () => {
+  const timeline = loadFixture<TimelinePayload>("bench-timeline");
+  const v7Records = (timeline.points ?? []).filter((point) => point.bench_version === 7);
+  const baseOptions = {
+    width: 900,
+    phoneViewport: false,
+    rollout: null,
+    championHotkey: null,
+    fieldByVersion: {} as Record<number, MemoryFieldEntry[]>,
+    pendingByVersion: {} as Record<number, number>,
+    now: Date.parse("2026-07-31T12:00:00Z"),
+  };
+
+  it("opens on the board's version with a time axis and the record as a step", async () => {
+    renderOverview();
+    await waitForBoard();
+    await waitFor(() =>
+      expect(
+        document.querySelector(".memory-timeline-svg")?.getAttribute("data-timeline-version"),
+      ).toBe("7"),
+    );
+    expect(document.querySelector('[data-chart-mode="version"]')).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(document.querySelector('[data-chart-mode="version"]')?.textContent).toBe("Bench v7");
+    // One contract: no generation bands, a time axis, and a stepped record.
+    expect(document.querySelectorAll(".timeline-era-label")).toHaveLength(0);
+    expect(document.querySelectorAll(".timeline-time-label").length).toBeGreaterThan(1);
+    expect(document.querySelector(".record-step")?.getAttribute("d")).toMatch(/H[\d.]+ V[\d.]+/);
+    // The current rollout still crowns its champion.
+    await waitFor(() => expect(document.querySelector(".timeline-champion-plate")).toBeTruthy(), {
+      timeout: 4000,
+    });
+  });
+
+  it("switches with the leaderboard's version pills and drops the crown on an archive", async () => {
+    renderOverview();
+    await waitForBoard();
+    fireEvent.click(document.querySelector('[data-leaderboard-version="6"]') as HTMLElement);
+    await waitFor(
+      () => {
+        expect(el("harness-comparison-title").textContent).toBe("Memory scores on Bench v6");
+        expect(
+          document.querySelector(".memory-timeline-svg")?.getAttribute("data-timeline-version"),
+        ).toBe("6");
+      },
+      { timeout: 4000 },
+    );
+    // KOTH emissions apply to the current rollout; an archive has no crown.
+    expect(document.querySelector(".timeline-champion-plate")).toBeNull();
+    // All versions is chart-local: it does not move the board.
+    fireEvent.click(document.querySelector('[data-chart-mode="all"]') as HTMLElement);
+    await waitFor(() =>
+      expect(document.querySelectorAll(".timeline-era-label").length).toBeGreaterThan(2),
+    );
+    expect(document.querySelector('[data-leaderboard-version="6"]')).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("places every record in time order inside the version's own window", () => {
+    const result = memoryVersionHtml(timeline, 7, baseOptions);
+    expect(result.kind).toBe("chart");
+    const svg = svgOf((result as { html: string }).html);
+    const xs = Array.from(svg.querySelectorAll("circle.timeline-point.miner"), (c) =>
+      Number(c.getAttribute("cx")),
+    );
+    expect(xs).toHaveLength(v7Records.length);
+    for (let i = 1; i < xs.length; i += 1)
+      expect(xs[i]).toBeGreaterThanOrEqual(xs[i - 1] as number);
+    // Hermes and OpenClaw were both measured on v7: two flat reference levels.
+    expect(svg.querySelectorAll(".timeline-reference")).toHaveLength(2);
+    expect(svg.querySelector(".timeline-unmeasured")).toBeNull();
+    // v7 is the newest release, so the record holds to the chart's "now".
+    expect(svg.querySelector(".record-hold")).toBeTruthy();
+  });
+
+  it("marks where a superseded version's successor was released", () => {
+    const result = memoryVersionHtml(timeline, 6, {
+      ...baseOptions,
+      fieldByVersion: {
+        6: [
+          {
+            version: 6,
+            score: 0.9,
+            composite: 0.9,
+            name: "late",
+            agentId: "late",
+            hotkey: "hk",
+            firstSeen: Date.parse("2026-07-26T00:00:00Z"),
+          },
+        ],
+      },
+    });
+    const svg = svgOf((result as { html: string }).html);
+    expect(svg.querySelector(".timeline-successor")?.getAttribute("aria-label")).toContain(
+      "Bench v7 released",
+    );
+  });
+
+  it("names a missing reference measurement instead of drawing a zero", () => {
+    const withV9 = {
+      ...timeline,
+      releases: [
+        ...(timeline.releases ?? []),
+        { bench_version: 9, released_at: "2026-07-29T00:00:00Z", activated_at: null, title: "v9" },
+      ],
+      points: [
+        ...(timeline.points ?? []),
+        {
+          recorded_at: "2026-07-29T06:00:00Z",
+          bench_version: 9,
+          agent_id: "r9",
+          agent_name: "r9",
+          miner_hotkey: "hk9",
+          memory_mean: 0.5,
+          composite: 0.5,
+          score_count: 3,
+        },
+      ],
+    } as TimelinePayload;
+    const svg = svgOf((memoryVersionHtml(withV9, 9, baseOptions) as { html: string }).html);
+    expect(svg.querySelectorAll(".timeline-reference")).toHaveLength(0);
+    expect(svg.querySelector(".timeline-unmeasured")?.getAttribute("aria-label")).toContain(
+      "not a score of zero",
+    );
+  });
+
+  it("states an empty or unpublished version instead of drawing an empty plot", () => {
+    const empty = memoryVersionHtml(
+      { ...timeline, points: (timeline.points ?? []).filter((p) => p.bench_version !== 7) },
+      7,
+      { ...baseOptions, pendingByVersion: { 7: 2 } },
+    );
+    expect(empty).toEqual({
+      kind: "state",
+      text: "No finalized runs on Bench v7 yet. 2 scored submissions are awaiting quorum and will appear once validators finalize them.",
+    });
+    expect(memoryVersionHtml(timeline, 99, baseOptions)).toEqual({
+      kind: "state",
+      text: "Bench v99 has no published release in the benchmark timeline, so there is no memory history to chart.",
+    });
+  });
+
+  it("picks the board's version, then the rollout's, then the newest release", () => {
+    const releases = timeline.releases ?? [];
+    const board = { active: 6, current: 7 };
+    // The board decides when it has a version; mid-rollout that is the
+    // settled one, not the version still collecting.
+    expect(
+      memoryChartVersion({ settledView: false, bench: board, rolloutActive: 5, releases }),
+    ).toBe(7);
+    expect(
+      memoryChartVersion({ settledView: true, bench: board, rolloutActive: 5, releases }),
+    ).toBe(6);
+    // A failed leaderboard must not strand the chart on "waiting".
+    const none = { active: null, current: null };
+    expect(
+      memoryChartVersion({ settledView: false, bench: none, rolloutActive: 6, releases }),
+    ).toBe(6);
+    expect(
+      memoryChartVersion({ settledView: false, bench: none, rolloutActive: null, releases }),
+    ).toBe(7);
+    expect(
+      memoryChartVersion({ settledView: false, bench: none, rolloutActive: null, releases: [] }),
+    ).toBeNull();
+  });
+
+  it("aligns time ticks to whole steps", () => {
+    const start = Date.parse("2026-07-25T04:09:00Z");
+    const ticks = timeTicks(start, start + 30 * 3_600_000, 6);
+    expect(ticks.length).toBeGreaterThan(1);
+    expect(ticks.length).toBeLessThanOrEqual(6);
+    for (const tick of ticks) expect(new Date(tick).getUTCMinutes()).toBe(0);
+    expect(ticks[0]).toBeGreaterThanOrEqual(start);
   });
 });

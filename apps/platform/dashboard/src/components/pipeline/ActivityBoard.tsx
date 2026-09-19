@@ -117,6 +117,27 @@ function EvidenceNote(props: { label: string; text: string; lines?: number }): J
   );
 }
 
+/** One dot per quorum seat, filled for each accepted score. It restates the
+ * "2 of 3" beside it at a glance, so it stays out of the accessibility tree,
+ * and it reads the count from that same text so the two can never disagree.
+ * Anything that is not a plain "count of quorum" reading draws no dots. */
+function QuorumDots(props: { progress: string }): JSX.Element {
+  const seats = (): boolean[] => {
+    const match = /^(\d+) of (\d+)/.exec(props.progress);
+    if (!match) return [];
+    const quorum = Math.min(9, Number(match[2]));
+    const count = Math.min(quorum, Number(match[1]));
+    return Array.from({ length: quorum }, (_, index) => index < count);
+  };
+  return (
+    <Show when={seats().length}>
+      <span class="quorum-dots" aria-hidden="true">
+        <For each={seats()}>{(filled) => <i classList={{ filled }} />}</For>
+      </span>
+    </Show>
+  );
+}
+
 function StageCell(props: { entry: ActivityRow }): JSX.Element {
   const e = () => props.entry;
   const stage = () => activityStage(e().status);
@@ -345,6 +366,7 @@ export function ActivityBoard(props: { store: ActivityStore }): JSX.Element {
                         >
                           {progress()}
                         </span>
+                        <QuorumDots progress={progress()} />
                       </td>
                       <td class="num hide-sm submitted-cell" title={e.submitted_at}>
                         {relTime(e.submitted_at)}

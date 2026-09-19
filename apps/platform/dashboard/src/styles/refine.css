@@ -1,0 +1,172 @@
+/* ── Refine layer ──────────────────────────────────────────────────────────
+   Imported after the calm layer. Two jobs, no markup changes:
+
+   1. Define the three scales the monolith port never had. The ported sheets
+      carry 18 distinct border-radius values (--radius was used 5 times out
+      of ~190 declarations), ~20 font sizes with 148 of ~210 declarations
+      crammed into the 11-13px band, and no spacing scale at all. That is
+      why the board reads flat: everything is nearly the same size, so
+      nothing carries hierarchy.
+
+   2. Revive the two tokens the monolith referenced but never defined
+      (tokens.css says so explicitly). --bad is read by 12 error-state rules
+      that currently resolve to nothing, so danger text renders as inherited
+      body colour.
+
+   This layer strengthens the calm layer's flat editorial direction: it adds
+   no shadows, no borders, and no new surfaces. Data-encoding colours (tool
+   gold, memory plum, the era ramp) are never touched — their meaning is
+   fixed by tokens.css and must not follow a restyle. */
+
+:root {
+  /* Type: a 1.25 scale off the 15px body set in base.css. 11-12px is
+     reserved for mono labels and captions, where it belongs. */
+  --t-micro: 11px;
+  --t-xs: 12px;
+  --t-sm: 13px;
+  --t-base: 15px;
+  --t-md: 17px;
+  --t-lg: 21px;
+  --t-xl: 26px;
+  --t-2xl: 32px;
+  --t-3xl: 40px;
+
+  /* Radius: the five steps that matter, replacing 18 ad-hoc values. */
+  --r-xs: 3px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-pill: 999px;
+
+  /* Space: 4px grid. */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 20px;
+  --s-6: 24px;
+  --s-8: 32px;
+  --s-10: 40px;
+  --s-12: 48px;
+
+  /* Referenced by the ported sheets, never defined until now. */
+  --bad: var(--danger);
+  /* overview.css reads var(--shadow); the calm layer wants one flat surface,
+     so it resolves to nothing rather than staying an invalid declaration. */
+  --shadow: none;
+}
+
+/* ── Masthead: let the champion lead ───────────────────────────────────── */
+/* The champion name and the composite are the page's headline. They were
+   sized within 6px of the stat ledger beside them, so the eye had no entry
+   point. */
+.champion-name,
+.champion-name .entity-link {
+  font-size: var(--t-2xl);
+  letter-spacing: -0.03em;
+}
+.champion-kicker,
+#champion-box-kicker {
+  font-size: var(--t-xs);
+}
+
+/* ── Stat ledger: quiet labels, confident figures ──────────────────────── */
+/* Labels and values were 12px and 22px of the same family — close enough to
+   read as one grey field. Widening that gap is the single cheapest gain in
+   hierarchy on the page. */
+.ledger-label,
+.stat-ledger dt {
+  font-size: var(--t-xs);
+  color: var(--text-faint);
+}
+.ledger-value,
+.stat-ledger dd {
+  margin-top: var(--s-1);
+  font-size: var(--t-xl);
+  letter-spacing: -0.025em;
+}
+/* The figures grew, so the band reclaims the difference from its own leading
+   rather than pushing the board down a rank. */
+.stat-ledger {
+  gap: var(--s-3) var(--s-8);
+}
+.overview-masthead {
+  padding-bottom: var(--s-5);
+}
+.overview-split {
+  margin-top: var(--s-6);
+}
+
+/* ── Section headings ──────────────────────────────────────────────────── */
+.harness-comparison h2,
+.section-head h2,
+.harness-comparison-title {
+  font-size: var(--t-lg);
+}
+
+/* ── Leaderboard rhythm ────────────────────────────────────────────────── */
+/* The overview rail is a 100vh pane: every 4px of row padding costs a row of
+   ranking. 14px block padding plus a loud context line fitted four rows on a
+   1440x900 laptop. */
+.overview-main #board td {
+  padding-block: var(--s-3);
+}
+
+/* The Coding shadow row is explicitly non-authoritative — it "does not affect
+   composite, rank, weights, or emissions". On the overview rail its label is
+   already hidden (overview.css hides .score-stack-label to save width), which
+   left the placeholder stranded: ten rows each ending in an uppercase mono
+   "NOT EVALUATED" attached to nothing. Drop the row on the rail and it reads
+   as ranking again; the full Leaderboard page keeps it, label intact. */
+.overview-main #board .coding-shadow-row {
+  display: none;
+}
+
+/* Where the row does show, the placeholder is a footnote, not a headline. */
+.coding-shadow-placeholder {
+  font: 400 var(--t-micro) / 1.2 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-faint);
+}
+.score-stack-context {
+  font-size: var(--t-micro);
+  letter-spacing: 0;
+  color: var(--text-faint);
+}
+
+/* ── Radius: one scale ─────────────────────────────────────────────────── */
+/* Chips, pills and switches carried 3/4/5/6/7/9/10/12px corners depending on
+   which ported sheet defined them last. Unifying them is invisible per
+   element and obvious across a page. */
+.leaderboard-version-switch .activity-filter,
+.activity-filter,
+.chip,
+.emission-badge,
+.reference-badge,
+.retry-chip {
+  border-radius: var(--r-sm);
+}
+.card,
+.snapshot,
+.board,
+.operations-panel,
+.activity,
+.fleet-table,
+.ath-review-card,
+.artifact-release-card,
+.run-telemetry-panel {
+  border-radius: var(--r-md);
+}
+
+/* ── Data-availability banner ──────────────────────────────────────────── */
+/* shell.css hardcodes Tailwind amber (rgba(251,191,36,…) and #fcd34d), which
+   ignores all five palettes and both modes — on the light Parchment theme it
+   renders pale amber on pale amber. Route it through the warn encoding, which
+   is validated for contrast in both modes. */
+.banner {
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--warn) 10%, var(--bg-elev));
+  border-color: color-mix(in oklab, var(--warn) 38%, var(--border));
+  color: var(--banner-text);
+}

@@ -4,12 +4,12 @@
 // - Continual-retest cards project into Evaluating by active slot, not
 //   lifecycle, so the headline cannot claim zero while the board renders live
 //   work.
-import { cleanup, render } from "@solidjs/testing-library";
+import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { syncFromLocation } from "../../stores/routeStore";
 import type { FleetReport } from "../../types/fleet";
-import { PipelineBoard, RescreenNotice } from "./PipelineBoard";
+import { PipelineBoard, RescreenNotice, ScoringDetail } from "./PipelineBoard";
 import {
   QUEUE_GATES,
   pipelineBoardStage,
@@ -18,7 +18,7 @@ import {
   queueRelevantBenchmark,
 } from "./pipeline";
 import { policyScreeningLabel } from "../pipeline/status";
-import type { PipelineEntryExt } from "./pipeline";
+import type { IndexedEntry, PipelineEntryExt } from "./pipeline";
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
@@ -591,5 +591,107 @@ describe("stated absence", () => {
       "Loading…",
     );
     expect(container.querySelector("#pipeline-admission-count")?.textContent).toBe("–");
+  });
+});
+
+describe("scoring selection and the run panel", () => {
+  const scoring = (agentId: string, runs: number[]): PipelineEntryExt =>
+    waiting({
+      agent_id: agentId,
+      name: agentId,
+      status: "evaluating",
+      validator_queue_rank: null,
+      score_count: 1,
+      quorum: 3,
+      active_benchmarks: runs.map((percent, index) => ({
+        slot_id: "slot-" + index,
+        stage: "running_benchmark",
+        percent,
+        completed_checks: Math.round((percent / 100) * 351),
+        total_checks: 351,
+        bench_version: 7,
+        started_at: "2026-07-31T13:50:00Z",
+      })),
+    });
+
+  it("selects a Scoring card on a plain click instead of navigating", () => {
+    const selected: string[] = [];
+    const { container } = render(() => (
+      <PipelineBoard
+        entries={[scoring("diana", [36, 38, 40]), scoring("thief", [32])]}
+        statusCounts={{ evaluating: 4 }}
+        unavailable={false}
+        loading={false}
+        screeners={null}
+        activeVersion={7}
+        selectedScoringKey={null}
+        onSelectScoring={(key) => selected.push(key)}
+      />
+    ));
+    const cards = container.querySelectorAll<HTMLAnchorElement>(
+      "#pipeline-evaluating .pipeline-item",
+    );
+    expect(cards.length).toBe(2);
+    // Still a real link, so a modified click opens the full history natively.
+    expect(cards[1]!.getAttribute("href")).toContain("thief");
+    expect(cards[1]!.getAttribute("aria-label")).toContain("Show run progress for thief");
+    fireEvent.click(cards[1]!);
+    expect(selected).toEqual(["a:thief"]);
+    expect(location.search).not.toContain("agent=");
+    // Every run keeps its own progress element on the card.
+    expect(container.querySelectorAll("#pipeline-evaluating .benchmark-progress").length).toBe(4);
+  });
+
+  it("marks the selected card and leaves other lanes' cards navigational", () => {
+    const entries = [
+      scoring("diana", [36]),
+      waiting({ agent_id: "queued", validator_queue_rank: 1 }),
+    ];
+    const { container } = render(() => (
+      <PipelineBoard
+        entries={entries}
+        statusCounts={{ evaluating: 1, waiting_validator: 1 }}
+        unavailable={false}
+        loading={false}
+        screeners={null}
+        activeVersion={7}
+        selectedScoringKey={"a:diana"}
+        onSelectScoring={() => undefined}
+      />
+    ));
+    const card = container.querySelector("#pipeline-evaluating .pipeline-item");
+    expect(card).toHaveAttribute("aria-current", "true");
+    expect(card?.querySelector(".pipeline-selected-chip")?.textContent).toBe("Selected");
+    const waitingCard = container.querySelector("#pipeline-wait-validator .pipeline-item");
+    expect(waitingCard?.getAttribute("aria-label")).toMatch(/^View /);
+    expect(waitingCard?.hasAttribute("aria-current")).toBe(false);
+  });
+
+  it("lists every run with its percent and checks, numbered rather than attributed", () => {
+    const item: IndexedEntry = { entry: scoring("diana", [36, 38, 40]), index: 0, key: "diana" };
+    let closed = false;
+    const { container } = render(() => (
+      <ScoringDetail item={item} onClose={() => (closed = true)} />
+    ));
+    expect(container.querySelector("#scoring-detail-title")?.textContent).toBe("diana");
+    expect(container.querySelector(".scoring-detail-quorum strong")?.textContent).toBe("1 of 3");
+    const runs = Array.from(container.querySelectorAll(".scoring-run"), (row) => [
+      row.querySelector(".scoring-run-label")?.textContent,
+      row.querySelector(".scoring-run-pct")?.textContent,
+      row.querySelector(".scoring-run-checks")?.textContent,
+    ]);
+    expect(runs).toEqual([
+      ["Run 1", "36%", "126 of 351 checks"],
+      ["Run 2", "38%", "133 of 351 checks"],
+      ["Run 3", "40%", "140 of 351 checks"],
+    ]);
+    expect(container.textContent).not.toMatch(/slot-\d|validator_hotkey/);
+    fireEvent.click(container.querySelector(".scoring-detail-close")!);
+    expect(closed).toBe(true);
+  });
+
+  it("renders nothing when no submission is selected", () => {
+    const { container } = render(() => <ScoringDetail item={null} onClose={() => undefined} />);
+    expect(container.querySelector(".scoring-detail")).toBeNull();
   });
 });
