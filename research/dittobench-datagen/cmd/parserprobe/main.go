@@ -76,16 +76,10 @@ func main() {
 				fmt.Fprintf(os.Stderr, "parserprobe: %s carries unsupported bench_version %d\n", path, a.BenchVersion)
 				os.Exit(2)
 			}
-			if a.SurfaceSalt != 0 {
-				// JSON omits claims, restraint rules and effect answers. Restore
-				// them from the current contract while retaining exact private text.
-				// This local content hash is not an external qualification approval.
-				h := sha256.Sum256(raw)
-				a, err = gen.DecodePrivateArtifact(raw, hex.EncodeToString(h[:]), a.Seed, *runSize)
-				if err != nil {
-					fmt.Fprintln(os.Stderr, "parserprobe: private artifact contract rejected")
-					os.Exit(2)
-				}
+			a, err = restoreProbeAuthority(raw, a, *runSize)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "parserprobe: private artifact contract rejected")
+				os.Exit(2)
 			}
 			opts.Artifacts = append(opts.Artifacts, a)
 			opts.BenchVersion = a.BenchVersion
@@ -131,6 +125,17 @@ func main() {
 		fmt.Fprintln(os.Stderr, "parserprobe: INCOMPLETE coverage; scores are not surface qualification")
 		os.Exit(1)
 	}
+}
+
+// JSON omits claims, restraint rules and effect answers. Restore them from
+// the current contract while retaining exact private text. This local content
+// hash is not an external qualification approval.
+func restoreProbeAuthority(raw []byte, a gen.DatasetArtifact, size string) (gen.DatasetArtifact, error) {
+	if a.SurfaceSalt == 0 && a.FactGeneration == nil {
+		return a, nil
+	}
+	h := sha256.Sum256(raw)
+	return gen.DecodePrivateArtifact(raw, hex.EncodeToString(h[:]), a.Seed, size)
 }
 
 func printSummary(w *os.File, r parserprobe.Report) {

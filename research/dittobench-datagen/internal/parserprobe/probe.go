@@ -322,7 +322,7 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 		if a.BenchVersion >= protocol.BenchVersionV13 {
 			// Fixture ownership stays on the evaluator side. The inverse gets
 			// only the same response method available over the served tool API.
-			fixture := toolexec.BuildFixtureForVersion(a.Seed, tc, a.BenchVersion)
+			fixture := toolexec.BuildFixtureForVersion(a.ExecutionWorldSeed(), tc, a.BenchVersion)
 			if discovered, matched := tp.discoveryPrediction(tc.Prompt, fixture.Result); matched {
 				pred = discovered
 			}
