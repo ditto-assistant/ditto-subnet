@@ -869,6 +869,7 @@ class PlatformClient:
                         operation=f"image part {part_number} mint",
                         json=part_request.model_dump(mode="json"),
                         headers=await self._auth_headers(),
+                        retry_transient=True,
                     )
                     part_upload = ScreenedImagePartUploadResponse.model_validate(
                         part_response.json()
@@ -880,6 +881,7 @@ class PlatformClient:
                         content=part,
                         headers=part_upload.required_headers,
                         accepted=frozenset({200, 201, 204}),
+                        retry_transient=True,
                     )
                     etag = stored.headers.get("etag")
                     if not etag:
@@ -936,23 +938,48 @@ class PlatformClient:
         *,
         operation: str,
         accepted: frozenset[int] = frozenset({200}),
+        retry_transient: bool = False,
         **kwargs: Any,
     ) -> httpx.Response:
-        """Issue exactly one image request; the operator retries parked work."""
-        try:
-            response = await self._client.request(
-                method,
-                url,
-                timeout=_IMAGE_REQUEST_TIMEOUT,
-                **kwargs,
+        """Issue an image request, retrying only idempotent multipart operations.
+
+        Minting a URL for the same multipart part is read-only, and uploading a
+        part again replaces that same part number.  Initiating, completing, and
+        aborting an upload have no idempotency contract, so callers leave their
+        ``retry_transient`` flag false and preserve the operator-retry path.
+        """
+        last_error = f"{operation} did not run"
+        for retry_index in range(len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1):
+            try:
+                response = await self._client.request(
+                    method,
+                    url,
+                    timeout=_IMAGE_REQUEST_TIMEOUT,
+                    **kwargs,
+                )
+            except httpx.HTTPError as error:
+                last_error = f"{operation} failed: {error}"
+                transient = retry_transient
+            else:
+                if response.status_code in accepted:
+                    return response
+                last_error = (
+                    f"{operation} rejected ({response.status_code}): "
+                    f"{response.text[:200]}"
+                )
+                transient = retry_transient and _is_transient_platform_status(
+                    response.status_code
+                )
+            if not transient or retry_index >= len(_TRANSIENT_PLATFORM_RETRY_DELAYS):
+                raise PlatformError(last_error)
+            delay = _TRANSIENT_PLATFORM_RETRY_DELAYS[retry_index]
+            logger.warning(
+                "%s; retrying idempotent multipart operation in %.0fs",
+                last_error,
+                delay,
             )
-        except httpx.HTTPError as error:
-            raise PlatformError(f"{operation} failed: {error}") from error
-        if response.status_code in accepted:
-            return response
-        raise PlatformError(
-            f"{operation} rejected ({response.status_code}): {response.text[:200]}"
-        )
+            await asyncio.sleep(delay)
+        raise PlatformError(last_error)  # pragma: no cover
 
     async def _abort_screened_image_upload(
         self,
