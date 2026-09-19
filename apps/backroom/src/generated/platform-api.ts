@@ -3696,6 +3696,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/admin-activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Activity */
+        get: operations["list_activity_api_v1_public_admin_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/agent/{agent_id}/artifact": {
         parameters: {
             query?: never;
@@ -20204,6 +20221,40 @@ export interface components {
              * @description Total pages, or one when there are no entries.
              */
             total_pages: number;
+        };
+        /** PublicAdminActivity */
+        PublicAdminActivity: {
+            /** Action */
+            action: string;
+            /** Details */
+            details: {
+                [key: string]: unknown;
+            };
+            /** Http Status */
+            http_status: number | null;
+            /** Id */
+            id: number;
+            /** Method */
+            method: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Source */
+            source: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "succeeded" | "failed" | "recorded" | "unknown";
+        };
+        /** PublicAdminActivityPage */
+        PublicAdminActivityPage: {
+            /** Items */
+            items: components["schemas"]["PublicAdminActivity"][];
+            /** Next Before */
+            next_before: number | null;
         };
         /**
          * PublicAdmissionRetry
@@ -36802,6 +36853,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicActivityResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_activity_api_v1_public_admin_activity_get: {
+        parameters: {
+            query?: {
+                q?: string;
+                status?: ("succeeded" | "failed" | "recorded" | "unknown") | null;
+                before?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicAdminActivityPage"];
                 };
             };
             /** @description Validation Error */

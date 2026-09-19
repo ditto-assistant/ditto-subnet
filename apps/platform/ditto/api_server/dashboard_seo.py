@@ -160,6 +160,16 @@ CRAWLABLE_PAGES: tuple[tuple[str, str, str, str], ...] = (
     ),
 )
 
+CRAWLABLE_PAGES += (
+    (
+        "/activity",
+        "activity",
+        "Admin activity · Ditto SN118",
+        "Public audit history of Backroom actions, settings changes, "
+        "and canary requests.",
+    ),
+)
+
 CRAWLABLE_PAGE_PATHS: tuple[str, ...] = tuple(
     path for path, _page, _title, _desc in CRAWLABLE_PAGES if path != "/"
 )

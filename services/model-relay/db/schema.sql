@@ -859,6 +859,53 @@ SET default_tablespace = '';
 SET default_table_access_method = heap;
 
 --
+-- Name: admin_activity; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.admin_activity (
+    id bigint NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    action text NOT NULL,
+    method text NOT NULL,
+    actor text,
+    details jsonb NOT NULL,
+    source text NOT NULL
+);
+
+
+--
+-- Name: admin_activity_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.admin_activity_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: admin_activity_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.admin_activity_id_seq OWNED BY public.admin_activity.id;
+
+
+--
+-- Name: admin_activity_outcomes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.admin_activity_outcomes (
+    activity_id bigint NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    status text NOT NULL,
+    http_status integer,
+    CONSTRAINT ck_admin_activity_outcomes_admin_activity_outcome_status CHECK ((status = ANY (ARRAY['succeeded'::text, 'failed'::text, 'recorded'::text])))
+);
+
+
+--
 -- Name: agent_kingship; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4789,6 +4836,13 @@ CREATE TABLE public.validator_weights_fold_history (
 
 
 --
+-- Name: admin_activity id; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_activity ALTER COLUMN id SET DEFAULT nextval('public.admin_activity_id_seq'::regclass);
+
+
+--
 -- Name: artifact_fetch_audit seq; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -5984,6 +6038,22 @@ ALTER TABLE ONLY public.owner_attestations
 
 
 --
+-- Name: admin_activity pk_admin_activity; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_activity
+    ADD CONSTRAINT pk_admin_activity PRIMARY KEY (id);
+
+
+--
+-- Name: admin_activity_outcomes pk_admin_activity_outcomes; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_activity_outcomes
+    ADD CONSTRAINT pk_admin_activity_outcomes PRIMARY KEY (activity_id);
+
+
+--
 -- Name: agent_kingship pk_agent_kingship; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7133,6 +7203,13 @@ ALTER TABLE ONLY public.validator_slot_settings_revisions
 
 ALTER TABLE ONLY public.validator_tickets
     ADD CONSTRAINT validator_tickets_pkey PRIMARY KEY (agent_id, bench_version, validator_hotkey);
+
+
+--
+-- Name: admin_activity_recorded_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX admin_activity_recorded_idx ON public.admin_activity USING btree (recorded_at, id);
 
 
 --
@@ -8875,6 +8952,14 @@ ALTER TABLE ONLY public.evaluation_payments
 
 ALTER TABLE ONLY public.evaluation_payments
     ADD CONSTRAINT evaluation_payments_credit_for_agent_id_fkey FOREIGN KEY (credit_for_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: admin_activity_outcomes fk_admin_activity_outcomes_activity_id_admin_activity; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.admin_activity_outcomes
+    ADD CONSTRAINT fk_admin_activity_outcomes_activity_id_admin_activity FOREIGN KEY (activity_id) REFERENCES public.admin_activity(id);
 
 
 --

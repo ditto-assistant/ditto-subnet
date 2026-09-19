@@ -658,10 +658,17 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # PublicCacheMiddleware wraps gzip. Cache hits skip both endpoint/DB work
     # and compression while request-id logging still records every request.
     app.add_middleware(PublicCacheMiddleware)
+    from ditto.api_server.admin_activity import AdminActivityMiddleware
+
+    app.add_middleware(AdminActivityMiddleware)
     app.add_middleware(AuthPassThroughMiddleware)
     app.add_middleware(RequestIDMiddleware)
 
     register_exception_handlers(app)
+
+    from ditto.api_server.endpoints.public_admin_activity import (
+        router as activity_router,
+    )
 
     app.include_router(health_router)
     app.include_router(metrics_router)
@@ -673,6 +680,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         # the same paths on both roles.
         app.include_router(inference_router, prefix="/api/v1")
         return app
+    app.include_router(activity_router, prefix="/api/v1")
     app.include_router(attestation_router, prefix="/api/v1")
     app.include_router(name_claims_router, prefix="/api/v1")
     app.include_router(miner_avatars_router, prefix="/api/v1")

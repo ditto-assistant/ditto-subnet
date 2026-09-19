@@ -197,6 +197,8 @@ async def require_admin(
     request: Request,
     authorization: Annotated[str | None, Header()] = None,
 ) -> None:
+    from ditto.api_server.admin_activity import begin_admin_activity
+
     expected = request.app.state.config.admin_api_token
     if expected is None:
         raise HTTPException(status_code=503, detail="admin API is not configured")
@@ -205,6 +207,7 @@ async def require_admin(
         raise HTTPException(status_code=401, detail="missing admin bearer token")
     if not secrets.compare_digest(authorization[len(prefix) :], expected):
         raise HTTPException(status_code=401, detail="invalid admin bearer token")
+    await begin_admin_activity(request)
 
 
 AdminDep = Annotated[None, Depends(require_admin)]

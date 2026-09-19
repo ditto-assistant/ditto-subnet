@@ -9990,3 +9990,38 @@ class ConversationSettingsRevision(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
+
+
+class AdminActivity(Base):
+    """Durable intent, committed before an authenticated administrative write."""
+
+    __tablename__ = "admin_activity"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    action: Mapped[str] = mapped_column(Text)
+    method: Mapped[str] = mapped_column(Text)
+    actor: Mapped[str | None] = mapped_column(Text)
+    details: Mapped[dict] = mapped_column(_JSON_VARIANT)
+    source: Mapped[str] = mapped_column(Text)
+    __table_args__ = (Index("admin_activity_recorded_idx", "recorded_at", "id"),)
+
+
+class AdminActivityOutcome(Base):
+    """Append-only completion; absence means outcome unknown, never success."""
+
+    __tablename__ = "admin_activity_outcomes"
+    activity_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    status: Mapped[str] = mapped_column(Text)
+    http_status: Mapped[int | None] = mapped_column(Integer)
+    __table_args__ = (
+        ForeignKeyConstraint(["activity_id"], ["admin_activity.id"]),
+        CheckConstraint(
+            "status IN ('succeeded', 'failed', 'recorded')",
+            name="admin_activity_outcome_status",
+        ),
+    )
