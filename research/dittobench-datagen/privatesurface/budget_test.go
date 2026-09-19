@@ -26,6 +26,27 @@ func TestSpendBudgetConcurrentAdmissionAndUnknownCharges(t *testing.T) {
 	}
 }
 
+func TestFactVerifierRouteReservesFullReasoningBound(t *testing.T) {
+	p := Profile{RewriteModel: "openai/gpt-4.1", RewriteProvider: "azure", ValidatorModel: "openai/gpt-5.4-mini", ValidatorProvider: "azure", ValidatorReasoning: "medium"}
+	c, err := NewClient(p, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.EnableBudget(4, func(BudgetSnapshot) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	reserved, err := c.budget.reserve(1000)
+	if err != nil || reserved < 2.56 {
+		t.Fatal("reasoning output bound not reserved")
+	}
+	if _, err := c.budget.reserve(1000); err == nil {
+		t.Fatal("concurrent reservation exceeds cap")
+	}
+	if !exactFactIdentity(CompletionReceipt{Model: "openai/gpt-5.4-mini", Provider: "Azure"}, p.ValidatorModel) || exactFactIdentity(CompletionReceipt{Model: "openai/gpt-5.4-mini", Provider: "OpenAI"}, p.ValidatorModel) {
+		t.Fatal("verifier identity not exact")
+	}
+}
+
 func TestSpendBudgetKnownChargesAndFailClosedAccounting(t *testing.T) {
 	for _, cost := range []*float64{nil, ptrCost(-1), ptrCost(math.NaN()), ptrCost(math.Inf(1)), ptrCost(99)} {
 		b := &spendBudget{state: BudgetSnapshot{LimitUSD: 10}, checkpoint: func(BudgetSnapshot) error { return nil }}

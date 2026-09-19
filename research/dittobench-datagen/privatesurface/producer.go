@@ -133,6 +133,14 @@ func NewClient(profile Profile, apiKey string) (*Client, error) {
 }
 
 func (c *Client) complete(ctx context.Context, model, provider, system string, input any, field, kind string, temperature float64) (json.RawMessage, CompletionReceipt, error) {
+	fieldType := any(kind)
+	if field == "text" && kind == "string" {
+		fieldType = []string{"string", "null"}
+	}
+	return c.completeSchema(ctx, model, provider, system, input, field, map[string]any{"type": fieldType}, temperature)
+}
+
+func (c *Client) completeSchema(ctx context.Context, model, provider, system string, input any, field string, fieldSchema map[string]any, temperature float64) (json.RawMessage, CompletionReceipt, error) {
 	fail := func(reason string) (json.RawMessage, CompletionReceipt, error) {
 		return nil, CompletionReceipt{}, errors.New("private producer: " + reason)
 	}
@@ -140,16 +148,12 @@ func (c *Client) complete(ctx context.Context, model, provider, system string, i
 	if err != nil || len(data) > 128<<10 {
 		return fail("invalid input size")
 	}
-	fieldType := any(kind)
-	if field == "text" && kind == "string" {
-		fieldType = []string{"string", "null"}
-	}
 	payload := map[string]any{
 		"model": model, "temperature": temperature, "max_tokens": 4096, "stream": false,
 		"provider": map[string]any{"only": []string{provider}, "allow_fallbacks": false, "require_parameters": true, "data_collection": "deny", "zdr": true},
 		"messages": []map[string]string{{"role": "system", "content": system}, {"role": "user", "content": string(data)}},
 		"response_format": map[string]any{"type": "json_schema", "json_schema": map[string]any{
-			"name": "private_surface", "strict": true, "schema": map[string]any{"type": "object", "additionalProperties": false, "required": []string{field}, "properties": map[string]any{field: map[string]any{"type": fieldType}}},
+			"name": "private_surface", "strict": true, "schema": map[string]any{"type": "object", "additionalProperties": false, "required": []string{field}, "properties": map[string]any{field: fieldSchema}},
 		}},
 	}
 	reasoning := c.profile.ValidatorReasoning

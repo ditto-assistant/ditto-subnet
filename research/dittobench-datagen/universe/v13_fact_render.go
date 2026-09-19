@@ -17,6 +17,7 @@ import (
 type V13FactRenderRequest struct {
 	Revision        string               `json:"revision"`
 	Subject         string               `json:"subject"`
+	SubjectEntity   string               `json:"subject_entity"`
 	SubjectMode     string               `json:"subject_mode"`
 	Facts           []V13RenderAssertion `json:"facts"`
 	Query           []V13RenderQuery     `json:"query"`
@@ -63,7 +64,7 @@ func V13FactRenderDigest(value any) (string, error) {
 }
 
 func v13FactRenderRequest(w v13FactWorld, s v13Schema, business bool) (V13FactRenderRequest, error) {
-	r := V13FactRenderRequest{Revision: "v13-structured-fact-render-v1", Bindings: map[string]string{}, SubjectMode: "named entity"}
+	r := V13FactRenderRequest{Revision: "v13-structured-fact-render-v2", Bindings: map[string]string{}, SubjectMode: "named entity"}
 	if _, err := w.evaluate(); err != nil {
 		return r, err
 	}
@@ -108,7 +109,10 @@ func v13FactRenderRequest(w v13FactWorld, s v13Schema, business bool) (V13FactRe
 			tokens = append(tokens, a.Date)
 		}
 		r.Required[f.Record] = append(r.Required[f.Record], a.Entity, a.Value)
-		if business && f.Mode != "independent" {
+		// Only opaque schema roles require literal field tokens. Ordinary
+		// descriptive fields (e.g. a neutral planned milestone date) may be
+		// expressed naturally and remain subject to independent checking.
+		if business && meaning[f.Field] != "" && f.Mode != "independent" {
 			r.Required[f.Record] = append(r.Required[f.Record], a.Field)
 		}
 		if a.Date != "" {
@@ -128,6 +132,10 @@ func v13FactRenderRequest(w v13FactWorld, s v13Schema, business bool) (V13FactRe
 		r.Query = append(r.Query, V13RenderQuery{q.Op, fields[q.Field], m})
 		r.QuestionAllowed = append(r.QuestionAllowed, fields[q.Field])
 	}
+	// The final materialized task supplies this exact entity/remit binding
+	// separately from the authored records. Make it explicit to the checker
+	// rather than asking it to infer an opaque alias from an unrelated remit.
+	r.SubjectEntity = bind("entity", w.Entity)
 	for i := range r.Required {
 		if len(r.Required[i]) == 0 {
 			return r, fmt.Errorf("render request has an unsupported empty record")
@@ -137,6 +145,7 @@ func v13FactRenderRequest(w v13FactWorld, s v13Schema, business bool) (V13FactRe
 }
 
 var v13RenderToken = regexp.MustCompile(`\{\{[a-z]+[0-9]+\}\}`)
+var v13RelativeChronology = regexp.MustCompile(`(?i)\b(later|earlier|then|subsequently|afterwards?|beforehand)\b`)
 
 // BindV13FactRenderPlan is structural validation ONLY. Independent Check is
 // mandatory before any returned text can be used for a generated case.
@@ -159,7 +168,7 @@ func BindV13FactRenderPlan(r V13FactRenderRequest, p V13FactRenderPlan) (V13Fact
 		}
 		for _, token := range required {
 			if seen[token] == 0 {
-				return "", fmt.Errorf("render omitted a required fact binding")
+				return "", fmt.Errorf("render omitted required token %s", token)
 			}
 		}
 		for _, n := range seen {
@@ -174,6 +183,11 @@ func BindV13FactRenderPlan(r V13FactRenderRequest, p V13FactRenderPlan) (V13Fact
 		return v13RenderToken.ReplaceAllStringFunc(text, func(token string) string { return r.Bindings[token] }), nil
 	}
 	for i, text := range p.Records {
+		for _, fact := range r.Facts {
+			if fact.Record == i && fact.Mode == "dated" && v13RelativeChronology.MatchString(text) {
+				return bound, fmt.Errorf("relative chronology forbidden in dated record; use the explicit date token")
+			}
+		}
 		v, err := bind(text, r.Allowed[i], r.Required[i])
 		if err != nil {
 			return bound, err

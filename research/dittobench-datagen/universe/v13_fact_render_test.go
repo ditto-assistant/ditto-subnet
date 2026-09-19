@@ -3,6 +3,7 @@ package universe
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +12,61 @@ import (
 type factRenderFixture struct {
 	plans, checks int
 	reject        bool
+}
+
+func TestV13DatedPlanCannotInferRecordChronology(t *testing.T) {
+	w := v13FactWorld{Entity: "project", Purpose: "work", Query: []v13FactQuery{{Op: "read", Field: "role"}}}
+	for i := 0; i < 3; i++ {
+		w.Facts = append(w.Facts, v13Fact{Entity: w.Entity, Field: fmt.Sprintf("role%d", i), Value: factValue("value", "text"), Mode: "static", Record: i})
+	}
+	w.Query[0].Field = "role0"
+	r, err := v13FactRenderRequest(w, v13Schema{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := (&factRenderFixture{}).Plan(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Facts[0].Mode = "dated"
+	for _, word := range []string{"Later", "earlier", "then", "subsequently", "afterward"} {
+		bad := p
+		bad.Records[0] = word + " " + bad.Records[0]
+		if _, err := BindV13FactRenderPlan(r, bad); err == nil {
+			t.Fatal("date chronology inferred from record order")
+		}
+	}
+	if _, err := BindV13FactRenderPlan(r, p); err != nil {
+		t.Fatal(err)
+	}
+	r.Facts[0].Mode = "history"
+	p.Records[0] = "Later " + p.Records[0]
+	if _, err := BindV13FactRenderPlan(r, p); err != nil {
+		t.Fatal("explicit history chronology rejected")
+	}
+}
+
+func TestV13FactRenderRequiresOpaqueRolesNotDescriptiveFields(t *testing.T) {
+	w := v13FactWorld{Entity: "project", Purpose: "data room", Query: []v13FactQuery{{Op: "read", Field: "opaqueowner"}}}
+	for i, field := range []string{"opaqueowner", "planned milestone review date", "neutral note"} {
+		w.Facts = append(w.Facts, v13Fact{Entity: w.Entity, Field: field, Value: factValue("value", "text"), Mode: "static", Record: i})
+	}
+	r, err := v13FactRenderRequest(w, v13Schema{Owner: "opaqueowner"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Bindings[r.SubjectEntity] != w.Entity || r.Bindings[r.Subject] != w.Purpose {
+		t.Fatal("missing explicit entity/remit binding")
+	}
+	for i, a := range r.Facts {
+		required := false
+		for _, token := range r.Required[i] {
+			required = required || token == a.Field
+		}
+		if required != (i == 0) {
+			t.Fatal("opaque and descriptive field requirements conflated")
+		}
+	}
 }
 
 func (f *factRenderFixture) Plan(_ context.Context, r V13FactRenderRequest) (V13FactRenderPlan, error) {

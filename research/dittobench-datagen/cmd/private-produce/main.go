@@ -28,6 +28,7 @@ func main() {
 }
 
 func run() error {
+	generation := flag.String("generation", "legacy-rewrite", "legacy-rewrite|fact-world (fact-world is not yet rollout-qualified)")
 	seed := flag.Int64("seed", 0, "explicit nonnegative benchmark seed")
 	runSize := flag.String("run-size", "small", "small|medium|full")
 	out := flag.String("output", "", "NEW private output directory (required)")
@@ -43,9 +44,15 @@ func run() error {
 	profileOnly := flag.Bool("profile-sha", false, "print profile digest without inference or artifacts")
 	maxCost := flag.Float64("max-cost-usd", 0, "required per-invocation allocation from the remaining total spending budget")
 	flag.Parse()
+	if *generation != "legacy-rewrite" && *generation != "fact-world" {
+		return errors.New("private producer: unknown generation mode")
+	}
 	profile := privatesurface.Profile{RewriteModel: *rewriteModel, RewriteProvider: *rewriteProvider, ValidatorModel: *validatorModel, ValidatorProvider: *validatorProvider, RewriteReasoning: *rewriteReasoning, ValidatorReasoning: *validatorReasoning}
 	if *profileOnly {
 		digest, err := profile.Digest()
+		if *generation == "fact-world" {
+			digest, err = privatesurface.FactProfileDigest(profile)
+		}
 		if err != nil {
 			return err
 		}
@@ -54,6 +61,12 @@ func run() error {
 	}
 	if *seed < 0 || *out == "" || *probe < 0 || *probe > 32 {
 		return errors.New("private producer: invalid arguments")
+	}
+	if *generation == "fact-world" {
+		if *probe != 0 || *saltFile != "" {
+			return errors.New("fact producer: legacy probes and salt files are not supported")
+		}
+		return runFactProducer(*seed, *runSize, *out, profile, *maxCost)
 	}
 	client, err := privatesurface.NewClient(profile, os.Getenv("OPENROUTER_API_KEY"))
 	if err != nil {
