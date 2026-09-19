@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -14,6 +15,28 @@ import (
 
 // Structural fixture only, not semantic validation or rollout evidence.
 type structuralRenderer struct{}
+
+func (structuralRenderer) PlanDocument(_ context.Context, r universe.V13FactDocumentRequest) (universe.V13FactDocumentPlan, error) {
+	p := universe.V13FactDocumentPlan{}
+	for _, record := range r.Records {
+		unique := map[string]bool{}
+		for _, a := range record.Assertions {
+			for _, token := range a.Arguments {
+				unique[token] = true
+			}
+		}
+		tokens := make([]string, 0, len(unique))
+		for token := range unique {
+			tokens = append(tokens, token)
+		}
+		sort.Strings(tokens)
+		p.Records = append(p.Records, strings.Repeat(" Neutral texture.", 60)+strings.Join(tokens, " ")+strings.Repeat(" Neutral texture.", 60))
+	}
+	return p, nil
+}
+func (structuralRenderer) CheckDocument(context.Context, universe.V13FactDocumentRequest, universe.V13FactDocumentPlan) error {
+	return nil
+}
 
 func (structuralRenderer) Plan(_ context.Context, r universe.V13FactRenderRequest) (universe.V13FactRenderPlan, error) {
 	p := universe.V13FactRenderPlan{Question: "Question about " + r.Subject}

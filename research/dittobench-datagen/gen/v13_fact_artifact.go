@@ -7,7 +7,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
-const V13FactGenerationRevision = "v13-fact-generation-v1"
+const V13FactGenerationRevision = "v13-fact-generation-v2"
 
 // V13FactGeneration stays inside the trusted private artifact. WorldSeed is
 // independent of the public lease seed and controls both memory and fixtures.
@@ -20,7 +20,7 @@ type V13FactGeneration struct {
 }
 
 // GenerateV13FactDataset is the opt-in private fact producer. Business and
-// personal programs are authored from typed facts; remaining families retain
+// personal programs and stories are authored from typed facts; remaining families retain
 // their world-derived generators, under private world entropy. No legacy
 // typo or text-to-text rewrite pass runs. This API alone does not qualify a
 // dataset or authorize a production lease.

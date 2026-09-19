@@ -83,6 +83,19 @@ type StoryEvent struct {
 	// Slots are the resolved rendering slots (who, what, channel, from, to,
 	// unit, ...). Values are canonical strings; prose is compiled from them.
 	Slots map[string]string `json:"slots,omitempty"`
+	// Retained at the state draw, never recovered from qtyphrase. Excluded
+	// from legacy serialization so the public generator contract is unchanged.
+	QuantityEffect *StoryQuantityEffect `json:"-"`
+}
+
+// StoryQuantityEffect contains evidence operands, never a computed answer.
+// replace uses Operand as the replacement and Operand2 as the superseded value;
+// add/subtract use Operand as the base and Operand2 as the change.
+type StoryQuantityEffect struct {
+	Kind     string
+	Op       string
+	Operand  string
+	Operand2 string
 }
 
 // StoryNextAction is the typed {who, what, channel} claim set of the latest

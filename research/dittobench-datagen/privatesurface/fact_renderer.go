@@ -25,15 +25,18 @@ Check each assertion's relation, including EXPLICIT initial/superseded history l
 Reject missing evidence, invented motives/background facts, assumed gender, reversed negation/chronology, role swaps, extra updates, and leading questions revealing graded answers. A business glossary binds opaque role names to field_meaning separately; do not require repetition. Stylistic freedom is allowed. When uncertain reject. Return only the verdict object, without markdown fences.`
 
 type FactRenderAudit struct {
-	Attempt       int
-	Phase         string
-	RequestSHA256 string
-	PlanSHA256    string
-	Accepted      bool
-	Failure       string
-	Reason        string
-	Receipt       CompletionReceipt
-	Plan          *universe.V13FactRenderPlan
+	Attempt             int
+	Phase               string
+	RequestSHA256       string
+	PlanSHA256          string
+	Accepted            bool
+	Failure             string
+	Reason              string
+	Receipt             CompletionReceipt
+	Plan                *universe.V13FactRenderPlan
+	DocumentPlan        *universe.V13FactDocumentPlan `json:",omitempty"`
+	ParentRequestSHA256 string                        `json:",omitempty"`
+	DocumentRecord      *int                          `json:",omitempty"`
 }
 
 type FactRenderer struct {
@@ -64,7 +67,7 @@ func FactProfileDigest(profile Profile) (string, error) {
 	if _, err := profile.Digest(); err != nil {
 		return "", err
 	}
-	return universe.V13FactRenderDigest([]any{"fact-renderer-v7", profile, factAuthorPrompt, factCheckPrompt, factPlanSchema(), factVerdictSchema(), "author-bindings-withheld", "checker-concrete-assertions", "exact-model-provider-identity", "three-record-token-plan", "max-two-author-structural-attempts", "no-semantic-or-transport-retry", 0.8, 0.0})
+	return universe.V13FactRenderDigest([]any{"fact-renderer-v8", profile, factAuthorPrompt, factCheckPrompt, factPlanSchema(), factVerdictSchema(), factDocumentAuthorPrompt, factDocumentCheckPrompt, factDocumentSchema(1), "document-single-record-author-calls-full-document-check-1-through-16", "document-max-two-structural-attempts-per-record", "author-bindings-withheld", "checker-concrete-assertions", "exact-model-provider-identity", "three-record-token-plan", "max-two-author-structural-attempts", "no-semantic-or-transport-retry", 0.8, 0.0})
 }
 
 func exactFactIdentity(receipt CompletionReceipt, model string) bool {

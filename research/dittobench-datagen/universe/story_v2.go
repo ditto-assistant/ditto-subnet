@@ -437,6 +437,7 @@ func (b *storyV2Builder) buildArc(index int, kind StoryKind, theme StoryEventKin
 			}
 			if quantityKind != "money" {
 				e.Slots["qtybase"] = fmt.Sprintf("%d %s", baseQty, unit)
+				e.QuantityEffect = &StoryQuantityEffect{Kind: unit, Op: "initial", Operand: e.Slots["qtybase"]}
 			}
 		case EventApprovalCapped:
 			status = "approved"
@@ -452,6 +453,7 @@ func (b *storyV2Builder) buildArc(index int, kind StoryKind, theme StoryEventKin
 				e.Slots["cap"] = money(capCents)
 				e.Slots["spent"] = money(b.privateMoneyCents(100_000+r.Intn(capCents/2), 100_000, capCents/2))
 			}
+			e.QuantityEffect = &StoryQuantityEffect{Kind: "money", Op: "subtract", Operand: e.Slots["cap"], Operand2: e.Slots["spent"]}
 		case EventContactRouteChanged:
 			if routeFrom == "" {
 				routeFrom = uniqueEmail("Review Team", v2.Subject, 9000+index*4, true, map[string]bool{})
@@ -481,6 +483,7 @@ func (b *storyV2Builder) buildArc(index int, kind StoryKind, theme StoryEventKin
 					phrase = fmt.Sprintf("their version takes %d %s off the %d %s %s had quoted", deltaQty, unit, baseQty, unit, provider1)
 				}
 				e.Slots["qtyphrase"] = phrase
+				e.QuantityEffect = &StoryQuantityEffect{Kind: unit, Op: op, Operand: fmt.Sprintf("%d %s", baseQty, unit), Operand2: fmt.Sprintf("%d %s", deltaQty, unit)}
 				v2.Quantity = &StoryQuantity{Kind: unit, Value: value, Base: baseQty, Delta: deltaQty, Op: op, Memory: e.Memory, Operand: fmt.Sprintf("%d %s", baseQty, unit), Operand2: fmt.Sprintf("%d %s", deltaQty, unit)}
 				quantityStated = true
 			}
@@ -491,7 +494,10 @@ func (b *storyV2Builder) buildArc(index int, kind StoryKind, theme StoryEventKin
 				status = "postponed"
 			}
 			e.Slots["status"] = b.surfaces[status]
-			e.Slots["qtyphrase"] = fmt.Sprintf("the schedule slipped by %d %s", 1+r.Intn(9), []string{"days", "weeks"}[r.Intn(2)])
+			delay := 1 + r.Intn(9)
+			delayUnit := []string{"days", "weeks"}[r.Intn(2)]
+			e.Slots["qtyphrase"] = fmt.Sprintf("the schedule slipped by %d %s", delay, delayUnit)
+			e.QuantityEffect = &StoryQuantityEffect{Kind: delayUnit, Op: "delay", Operand: fmt.Sprintf("%d %s", delay, delayUnit)}
 		case EventCorrection:
 			status = "corrected"
 			e.Slots["status"] = b.surfaces[status]
@@ -501,10 +507,12 @@ func (b *storyV2Builder) buildArc(index int, kind StoryKind, theme StoryEventKin
 					newQty = maxInt(1, baseQty-deltaQty)
 				}
 				e.Slots["qtyphrase"] = fmt.Sprintf("the count is now %d %s, not the %d %s first written down", newQty, unit, baseQty, unit)
+				e.QuantityEffect = &StoryQuantityEffect{Kind: unit, Op: "replace", Operand: fmt.Sprintf("%d %s", newQty, unit), Operand2: fmt.Sprintf("%d %s", baseQty, unit)}
 				v2.Quantity = &StoryQuantity{Kind: unit, Value: newQty, Base: baseQty, Delta: newQty, Op: "replace", Memory: e.Memory, Operand: fmt.Sprintf("%d %s", newQty, unit), Operand2: fmt.Sprintf("%d %s", baseQty, unit)}
 				quantityStated = true
 			} else {
 				e.Slots["qtyphrase"] = fmt.Sprintf("the count is now %d %s, not the %d %s first written down", baseQty+deltaQty, unit, baseQty, unit)
+				e.QuantityEffect = &StoryQuantityEffect{Kind: unit, Op: "replace", Operand: fmt.Sprintf("%d %s", baseQty+deltaQty, unit), Operand2: fmt.Sprintf("%d %s", baseQty, unit)}
 			}
 		case EventHandoffAssigned:
 			prev := owner
@@ -558,6 +566,7 @@ func (b *storyV2Builder) buildArc(index int, kind StoryKind, theme StoryEventKin
 			if events[i].Kind == EventVendorSwapped || events[i].Kind == EventProviderSwapped {
 				newQty := baseQty + deltaQty
 				events[i].Slots["qtyphrase"] = fmt.Sprintf("their version adds %d %s to the %d %s %s had quoted", deltaQty, unit, baseQty, unit, provider1)
+				events[i].QuantityEffect = &StoryQuantityEffect{Kind: unit, Op: "add", Operand: fmt.Sprintf("%d %s", baseQty, unit), Operand2: fmt.Sprintf("%d %s", deltaQty, unit)}
 				v2.Quantity = &StoryQuantity{Kind: unit, Value: newQty, Base: baseQty, Delta: deltaQty, Op: "add", Memory: events[i].Memory, Operand: fmt.Sprintf("%d %s", baseQty, unit), Operand2: fmt.Sprintf("%d %s", deltaQty, unit)}
 				quantityStated = true
 				break
@@ -927,8 +936,9 @@ func (b *storyV2Builder) compileDecoy(arcIndex int, arc StoryArc, person Person,
 	}
 	return Story{
 		ID: protocol.OpaqueCaseID(b.seed, "world-story-v2-decoy-memory", arcIndex), PairID: v2.DecoyPairID,
-		SessionID: protocol.OpaqueCaseID(b.seed, "world-story-v2-session", arcIndex*8+7),
-		Kind:      v2.Kind, Domain: storyV2Domain(r, v2.Kind), Title: storyV2Titles[r.Intn(len(storyV2Titles))],
+		DecoySource: &StoryDecoySource{Alias: v2.DecoyAlias, Person: person.Nickname, Owner: b.w.People[owner].Name, Provider: provider, ProviderKind: v2.SequenceNoun, Reference: key, ReferenceKind: storyJoinKeyShapes[shape].noun, Status: b.surfaces[status]},
+		SessionID:   protocol.OpaqueCaseID(b.seed, "world-story-v2-session", arcIndex*8+7),
+		Kind:        v2.Kind, Domain: storyV2Domain(r, v2.Kind), Title: storyV2Titles[r.Intn(len(storyV2Titles))],
 		Beginning: beginning, Middle: StorySection{Summary: storyFill(persona.Expand(r, storyV2OpenerGrammar, "middle"), slots), Events: middle}, End: end,
 		Characters: []StoryCharacter{{Name: person.Name, Role: "the person the thread started with", Relationship: person.Relation}, {Name: b.w.People[owner].Name, Role: "owner of the sibling thread"}},
 		Problems: []StoryProblem{

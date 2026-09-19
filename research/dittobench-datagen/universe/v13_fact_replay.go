@@ -10,10 +10,11 @@ import (
 // artifact's digest has been verified against trusted issuance authority.
 // Never send this transcript or its request hashes to an untrusted harness.
 type V13FactRenderEvent struct {
-	Phase         string             `json:"phase"`
-	RequestSHA256 string             `json:"request_sha256"`
-	PlanSHA256    string             `json:"plan_sha256"`
-	Plan          *V13FactRenderPlan `json:"plan,omitempty"`
+	Phase         string               `json:"phase"`
+	RequestSHA256 string               `json:"request_sha256"`
+	PlanSHA256    string               `json:"plan_sha256"`
+	Plan          *V13FactRenderPlan   `json:"plan,omitempty"`
+	DocumentPlan  *V13FactDocumentPlan `json:"document_plan,omitempty"`
 }
 
 // V13RecordingFactRenderer records only successful author/check operations.
@@ -74,6 +75,10 @@ func cloneV13RenderEvents(events []V13FactRenderEvent) []V13FactRenderEvent {
 			p := *out[i].Plan
 			out[i].Plan = &p
 		}
+		if out[i].DocumentPlan != nil {
+			p := cloneV13DocumentPlan(*out[i].DocumentPlan)
+			out[i].DocumentPlan = &p
+		}
 	}
 	return out
 }
@@ -97,7 +102,7 @@ func NewV13ReplayFactRenderer(events []V13FactRenderEvent) *V13ReplayFactRendere
 	return &V13ReplayFactRenderer{events: cloneV13RenderEvents(events)}
 }
 
-func (r *V13ReplayFactRenderer) take(phase string, req V13FactRenderRequest) (V13FactRenderEvent, error) {
+func (r *V13ReplayFactRenderer) take(phase string, req any) (V13FactRenderEvent, error) {
 	fail := func() (V13FactRenderEvent, error) {
 		r.failed = true
 		return V13FactRenderEvent{}, errors.New("fact replay: transcript mismatch")
@@ -123,7 +128,7 @@ func (r *V13ReplayFactRenderer) Plan(ctx context.Context, req V13FactRenderReque
 	if err != nil {
 		return V13FactRenderPlan{}, err
 	}
-	if e.Plan == nil {
+	if e.Plan == nil || e.DocumentPlan != nil {
 		r.failed = true
 		return V13FactRenderPlan{}, errors.New("fact replay: missing plan")
 	}
@@ -149,7 +154,7 @@ func (r *V13ReplayFactRenderer) Check(ctx context.Context, req V13FactRenderRequ
 		return err
 	}
 	digest, err := V13FactRenderDigest(plan)
-	if err != nil || e.Plan != nil || digest != e.PlanSHA256 {
+	if err != nil || e.Plan != nil || e.DocumentPlan != nil || digest != e.PlanSHA256 {
 		r.failed = true
 		return errors.New("fact replay: checked rendering mismatch")
 	}

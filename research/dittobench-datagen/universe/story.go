@@ -89,6 +89,19 @@ type Story struct {
 	// ArcIndex is the owning StoryArc for story v2 memories (including the
 	// spurious near-name decoy). The v8 script does not set it.
 	ArcIndex int `json:"arc_index,omitempty"`
+	// DecoySource retains independently drawn decoy facts before prose exists.
+	DecoySource *StoryDecoySource `json:"-"`
+}
+
+type StoryDecoySource struct {
+	Alias         string
+	Person        string
+	Owner         string
+	Provider      string
+	ProviderKind  string
+	Reference     string
+	ReferenceKind string
+	Status        string
 }
 
 // StoryArc joins a personal origin, a business decision, and a later outcome.

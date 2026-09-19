@@ -235,6 +235,15 @@ func generateV13WorldMemorySuiteWithFacts(ctx context.Context, seed int64, n, nW
 	}
 	scale, _ := v8WorldProfile(n)
 	world := universe.GenerateForVersion(seed, scale, benchVersion)
+	if renderer != nil {
+		documents, ok := renderer.(universe.V13FactDocumentRenderer)
+		if !ok {
+			return MemorySuite{}, fmt.Errorf("v13 fact world: story renderer required")
+		}
+		if err := world.RenderV13FactStories(ctx, documents); err != nil {
+			return MemorySuite{}, err
+		}
+	}
 	allocation := world.V13Allocation(envelope.Isolation)
 	decision, err := buildV13Abstention(seed, n, world, allocation, benchVersion)
 	if err != nil {
