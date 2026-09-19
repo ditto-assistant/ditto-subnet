@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,7 +11,59 @@ import (
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/toolexec"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
+
+type runtimeFactFixture struct{}
+
+func (runtimeFactFixture) Plan(_ context.Context, r universe.V13FactRenderRequest) (universe.V13FactRenderPlan, error) {
+	var p universe.V13FactRenderPlan
+	for i := range p.Records {
+		p.Records[i] = strings.Join(r.Required[i], " ")
+	}
+	p.Question = "Question about " + r.Subject
+	return p, nil
+}
+func (runtimeFactFixture) Check(context.Context, universe.V13FactRenderRequest, universe.V13FactRenderPlan) error {
+	return nil
+}
+
+func TestPrivateFactWorldFixturesMatchVerifiedArtifact(t *testing.T) {
+	a, err := gen.GenerateV13FactDataset(context.Background(), 42, 731, 92713, "small", runtimeFactFixture{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, raw, err := a.SHA256Hex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := gen.DecodePrivateArtifact(raw, pin, 42, "small")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures := executionToolFixtures(verified)
+	if len(fixtures) != len(a.ToolCases) {
+		t.Fatal("wrong case identity map")
+	}
+	differentFromLease := false
+	for _, c := range a.ToolCases {
+		want := toolexec.BuildFixtureForVersion(731, c, 13)
+		wrong := toolexec.BuildFixtureForVersion(42, c, 13)
+		if !reflect.DeepEqual(fixtures[c.ID], want) {
+			t.Fatal("fixture used wrong world")
+		}
+		differentFromLease = differentFromLease || !reflect.DeepEqual(want, wrong)
+	}
+	if !differentFromLease {
+		t.Fatal("fixture does not exercise private-world distinction")
+	}
+	for _, f := range verified.ToolFixtures {
+		if fixtures[f.CaseID].NeedleText() != f.Needle {
+			t.Fatal("served fixture differs from artifact pin")
+		}
+	}
+}
 
 func TestPrivateDatasetAdmission(t *testing.T) {
 	valid := submitRequest{BenchVersion: 13, PrivateDatasetMode: privateDatasetMode, PrivateDatasetBytes: []byte("{}"), ExpectedDatasetSHA256: strings.Repeat("a", 64)}

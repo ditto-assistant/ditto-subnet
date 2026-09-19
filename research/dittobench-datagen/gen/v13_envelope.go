@@ -1,6 +1,7 @@
 package gen
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -221,6 +222,10 @@ func (e V13MemoryEnvelope) worldPlanSelection() universe.WorldPlanSelection {
 // V13MemoryEnvelope rather than from a residual budget. The isolation slot is added by
 // the pipeline (GenerateIsolationForVersion) exactly as before.
 func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (MemorySuite, error) {
+	return generateV13WorldMemorySuiteWithFacts(context.Background(), seed, n, nWaves, benchVersion, 0, nil)
+}
+
+func generateV13WorldMemorySuiteWithFacts(ctx context.Context, seed int64, n, nWaves, benchVersion int, presentationSeed int64, renderer universe.V13FactRenderer) (MemorySuite, error) {
 	if nWaves < 1 {
 		nWaves = 1
 	}
@@ -256,13 +261,22 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	if err != nil {
 		return MemorySuite{}, err
 	}
-	business, err := universe.GenerateV13Programs(seed, envelope.BusinessPrograms)
+	var business []universe.V10GeneratedCase
+	if renderer != nil {
+		business, err = universe.GenerateV13RenderedFactPrograms(ctx, seed, presentationSeed, envelope.BusinessPrograms, renderer)
+	} else {
+		business, err = universe.GenerateV13Programs(seed, envelope.BusinessPrograms)
+	}
 	if err != nil {
 		return MemorySuite{}, err
 	}
 	var personal []universe.V10GeneratedCase
 	if envelope.PersonalPrograms > 0 {
-		personal, err = universe.GenerateV13PersonalPrograms(seed, envelope.PersonalPrograms)
+		if renderer != nil {
+			personal, err = universe.GenerateV13RenderedPersonalFactPrograms(ctx, seed, presentationSeed, envelope.PersonalPrograms, renderer)
+		} else {
+			personal, err = universe.GenerateV13PersonalPrograms(seed, envelope.PersonalPrograms)
+		}
 		if err != nil {
 			return MemorySuite{}, err
 		}

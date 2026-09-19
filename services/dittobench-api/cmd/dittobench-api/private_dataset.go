@@ -5,9 +5,18 @@ import (
 
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
 
 const privateDatasetMode = "platform-private-v1"
+
+func executionToolFixtures(a gen.DatasetArtifact) map[string]toolexec.Fixture {
+	fixtures := make(map[string]toolexec.Fixture, len(a.ToolCases))
+	for _, c := range a.ToolCases {
+		fixtures[c.ID] = toolexec.BuildFixtureForVersion(a.ExecutionWorldSeed(), c, a.BenchVersion)
+	}
+	return fixtures
+}
 
 func (s *server) datasetFeatures() []string {
 	features := []string{"git_subdir"}

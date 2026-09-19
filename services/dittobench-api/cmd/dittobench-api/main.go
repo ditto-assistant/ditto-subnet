@@ -1519,10 +1519,6 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// back the mock endpoint stood up below). The hashed artifact — assembled by
 	// gen.BuildArtifact so the run path and the generate service produce identical
 	// bytes for a seed — recomputes the fixture digests from the same (seed, case).
-	toolFixtureByInternalID := make(map[string]toolexec.Fixture, len(toolCases))
-	for _, c := range toolCases {
-		toolFixtureByInternalID[c.ID] = toolexec.BuildFixtureForVersion(seed, c, req.BenchVersion)
-	}
 	// The hashed artifact covers the secondary isolation graph too (when present),
 	// so a dispute re-scores the exact multi-graph seeding.
 	artifact, artifactErr := gen.BuildArtifactForVersion(seed, req.BenchVersion, toolCases, memSuite.Cases, memWaves)
@@ -1544,6 +1540,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			return
 		}
 	}
+	// Private worlds change both case identities and fixture contents. Build
+	// fixtures only after selecting the verified artifact, never from the
+	// public lease seed or the discarded public cases.
+	executionWorldSeed := artifact.ExecutionWorldSeed()
+	toolFixtureByInternalID := executionToolFixtures(artifact)
 	if hashErr != nil {
 		log.Printf("run %s: dataset hashing failed: %v", runID, hashErr)
 	}
@@ -1875,7 +1876,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				return
 			}
 		}
-		toolSrv.Register(sc.Case.ID, toolexec.BuildFixtureForVersion(seed, protocol.ToolCase{ID: internalID}, req.BenchVersion))
+		toolSrv.Register(sc.Case.ID, toolexec.BuildFixtureForVersion(executionWorldSeed, protocol.ToolCase{ID: internalID}, req.BenchVersion))
 	}
 	toolSourceIP := ""
 	if handle != nil {

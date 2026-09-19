@@ -42,6 +42,9 @@ type DatasetArtifact struct {
 	// unchanged; a non-zero salt is what a post-acceptance reproduction passes
 	// back (`generate -surface-salt`).
 	SurfaceSalt uint64 `json:"surface_salt,omitempty"`
+	// FactGeneration is private reconstruction authority. Never project it to
+	// a harness; its world seed and transcript belong only to trusted runtime.
+	FactGeneration *V13FactGeneration `json:"fact_generation,omitempty"`
 	// Catalog pins the per-seed tool surface a bench_version 13+ run advertises
 	// (catalog.CatalogForSeed): paraphrased descriptions, enum schemas, and the
 	// seed's coined decoy tools. It is a pure function of (seed, bench_version),

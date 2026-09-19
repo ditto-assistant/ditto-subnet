@@ -57,6 +57,8 @@ type TranslationPass interface {
 
 // SurfaceOptions parameterises the v13 surface pass.
 type SurfaceOptions struct {
+	// Only the fact artifact producer may skip legacy typo/rewriting stages.
+	factGrounded bool
 	// Salt keys every surface draw. 0 is the public rehearsal default.
 	Salt uint64
 	// Translation, when set, runs over every rendered surface after typo v2.
@@ -115,6 +117,9 @@ func V13ApplyArtifactSurfacePass(seed int64, benchVersion int, artifact *Dataset
 	}
 	for i := range artifact.ToolCases {
 		rotatePairs(artifact.ToolCases[i].PrerequisitePairs)
+	}
+	if opts.factGrounded {
+		return
 	}
 
 	// Stage 2: typo v2. A stable per-(seed, salt) share of every surface class

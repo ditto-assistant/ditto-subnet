@@ -2,12 +2,14 @@ package gen
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 const MaxPrivateArtifactBytes = 32 << 20
@@ -36,8 +38,28 @@ func DecodePrivateArtifact(raw []byte, expectedSHA string, seed int64, runSize s
 	if err := json.Unmarshal(raw, &artifact); err != nil {
 		return fail("invalid JSON")
 	}
-	if artifact.Seed != seed || artifact.BenchVersion != 13 || artifact.SurfaceSalt == 0 {
+	if artifact.Seed != seed || artifact.BenchVersion != 13 {
 		return fail("dataset identity mismatch")
+	}
+	if recipe := artifact.FactGeneration; recipe != nil {
+		if recipe.Revision != V13FactGenerationRevision || artifact.SurfaceSalt != 0 {
+			return fail("unsupported fact generation contract")
+		}
+		replay := universe.NewV13ReplayFactRenderer(recipe.Events)
+		base, err := GenerateV13FactDataset(context.Background(), seed, recipe.WorldSeed, recipe.PresentationSeed, runSize, replay)
+		if err != nil || replay.Complete() != nil {
+			return fail("fact reconstruction failed")
+		}
+		want, err := base.Marshal()
+		got, marshalErr := artifact.Marshal()
+		if err != nil || marshalErr != nil || !bytes.Equal(want, got) {
+			return fail("fact artifact contract mismatch")
+		}
+		// Returning regenerated authority preserves JSON-excluded grader rules.
+		return base, nil
+	}
+	if artifact.SurfaceSalt == 0 {
+		return fail("missing private generation contract")
 	}
 	profile, ok := ProfileForVersion(runSize, 13)
 	if !ok {
