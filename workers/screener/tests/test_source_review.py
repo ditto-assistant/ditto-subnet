@@ -5023,13 +5023,60 @@ def test_review_transcript_compaction_keeps_stable_prefix_and_recent_turns() -> 
         }
     ]
 
-    compacted = source_review_module._compacted_review_messages(messages, notes)
+    compacted = source_review_module._compacted_review_messages(
+        messages,
+        notes,
+        inspections=({"tool": "read_file", "path": "src/main.rs"},),
+        step=6,
+        max_steps=48,
+        read_bytes=4096,
+        max_read_bytes=8_000_000,
+    )
 
     assert compacted[:2] == messages[:2]
-    assert "recorded notes ledger" in str(compacted[2]["content"])
+    checkpoint = str(compacted[2]["content"])
+    assert "host-built durable checkpoint" in checkpoint
+    assert '"remaining_coverage"' in checkpoint
+    assert '"path":"src/main.rs"' in checkpoint
+    assert '"step":6' in checkpoint
     assert "large-output-0" not in json.dumps(compacted)
     assert "large-output-5" in json.dumps(compacted)
     assert sum(row.get("role") == "assistant" for row in compacted) == 3
+
+
+def test_review_transcript_compacts_before_first_note() -> None:
+    messages: list[dict[str, object]] = [
+        {"role": "system", "content": "stable-system"},
+        {"role": "user", "content": "stable-inventory"},
+    ]
+    for turn in range(5):
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [_tool(f"read-{turn}", "search", {"query": "x"})],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": f"read-{turn}",
+                    "content": f"large-output-{turn}",
+                },
+            ]
+        )
+
+    compacted = source_review_module._compacted_review_messages(
+        messages,
+        [],
+        inspections=({"tool": "search"},),
+        step=5,
+        max_steps=48,
+    )
+
+    assert compacted[:2] == messages[:2]
+    assert '"notes":[]' in str(compacted[2]["content"])
+    assert "large-output-0" not in json.dumps(compacted)
+    assert "large-output-4" in json.dumps(compacted)
 
 
 @pytest.mark.parametrize("policy_version", [12, 13])
