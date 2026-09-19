@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
@@ -27,7 +28,13 @@ func (artifactFactRenderer) PlanDocument(_ context.Context, r universe.V13FactDo
 			tokens = append(tokens, token)
 		}
 		sort.Strings(tokens)
-		p.Records = append(p.Records, strings.Repeat(" Neutral texture.", 60)+strings.Join(tokens, " ")+strings.Repeat(" Neutral texture.", 60))
+		text := strings.Join(tokens, " ")
+		if record.InteriorFacts {
+			text = strings.Repeat(" Neutral texture.", 60) + text + strings.Repeat(" Neutral texture.", 60)
+		} else if record.MinBytes > 1 {
+			text += strings.Repeat(" Neutral texture.", 15)
+		}
+		p.Records = append(p.Records, text)
 	}
 	return p, nil
 }
@@ -79,7 +86,74 @@ func TestV13FactArtifactRoundTrip(t *testing.T) {
 			if got.ExecutionWorldSeed() != 731 || got.Seed != 42 || got.SurfaceSalt != 0 {
 				t.Fatal("world/lease identity or surface contract drift")
 			}
+			profile, _ := ProfileForVersion(size, 13)
+			scale, _ := v8WorldProfile(profile.Mem)
+			world := universe.GenerateForVersion(731, scale, 13)
+			if err := world.RenderV13FactStories(context.Background(), artifactFactRenderer{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := world.RenderV13FactOrdinaryWorld(context.Background(), artifactFactRenderer{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := world.RenderV13FactBusinessImport(context.Background(), artifactFactRenderer{}); err != nil {
+				t.Fatal(err)
+			}
+			shared := map[string]protocol.MemoryPair{}
+			for _, p := range world.Pairs {
+				p.Prompt = v13RotateInjectionMarkers(v13SurfaceSeed(731, 0), p.Prompt)
+				shared[p.PairID] = p
+			}
+			matched := 0
+			seenWorld := map[string]bool{}
+			for _, tc := range got.ToolCases {
+				for _, p := range tc.PrerequisitePairs {
+					if mem, ok := shared[p.PairID]; ok {
+						matched++
+						seenWorld[p.PairID] = true
+						if mem.Prompt != p.Prompt || mem.SessionID != p.SessionID || mem.Timestamp != p.Timestamp {
+							t.Fatal("tool and memory phases disagree on rendered world")
+						}
+					}
+				}
+			}
+			if matched < len(world.InitialPairs(world.StagedCorrectionMembership(world.V13Allocation(0)))) {
+				t.Fatal("initial world did not reach tool prerequisites")
+			}
+			for _, p := range world.InitialPairs(world.StagedCorrectionMembership(world.V13Allocation(0))) {
+				if !seenWorld[p.PairID] {
+					t.Fatal("specific initial world record omitted from tool seed")
+				}
+			}
 		})
+	}
+}
+
+func TestFactPrerequisiteReconciliationBoundaries(t *testing.T) {
+	p := protocol.MemoryPair{PairID: "shared", SessionID: "session", Timestamp: "time", Prompt: "old", Response: "old response"}
+	toolOnly := protocol.MemoryPair{PairID: "tool-only", Prompt: "scoped decision"}
+	checked := p
+	checked.Prompt = "checked"
+	checked.Response = "checked response"
+	future := protocol.MemoryPair{PairID: "future", Prompt: "later correction"}
+	tools := []protocol.ToolCase{{ID: "tool", PrerequisitePairs: []protocol.MemoryPair{p, toolOnly}}}
+	waves := []protocol.SeedRequest{{UserID: PrimaryUser, Pairs: []protocol.MemoryPair{checked, future}}, {UserID: "other-user", Pairs: []protocol.MemoryPair{{PairID: "shared", Prompt: "other user's value"}}}}
+	out, err := reconcileFactPrerequisites(tools, waves)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out[0].PrerequisitePairs) != 2 || out[0].PrerequisitePairs[0] != checked || out[0].PrerequisitePairs[1] != toolOnly || tools[0].PrerequisitePairs[0] != p {
+		t.Fatal("reconciliation changes scope, stage or source")
+	}
+	waves[0].Pairs[0].SessionID = "different"
+	if _, err := reconcileFactPrerequisites(tools, waves); err == nil {
+		t.Fatal("session identity mismatch accepted")
+	}
+	waves[0].Pairs[0] = checked
+	conflict := checked
+	conflict.Prompt = "conflicting"
+	waves = append(waves, protocol.SeedRequest{UserID: PrimaryUser, Pairs: []protocol.MemoryPair{conflict}})
+	if _, err := reconcileFactPrerequisites(tools, waves); err == nil {
+		t.Fatal("inconsistent shared identity accepted")
 	}
 }
 

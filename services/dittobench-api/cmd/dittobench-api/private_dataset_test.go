@@ -32,7 +32,13 @@ func (runtimeFactFixture) PlanDocument(_ context.Context, r universe.V13FactDocu
 			tokens = append(tokens, token)
 		}
 		sort.Strings(tokens)
-		p.Records = append(p.Records, strings.Repeat(" Neutral texture.", 60)+strings.Join(tokens, " ")+strings.Repeat(" Neutral texture.", 60))
+		text := strings.Join(tokens, " ")
+		if record.InteriorFacts {
+			text = strings.Repeat(" Neutral texture.", 60) + text + strings.Repeat(" Neutral texture.", 60)
+		} else if record.MinBytes > 1 {
+			text += strings.Repeat(" Neutral texture.", 15)
+		}
+		p.Records = append(p.Records, text)
 	}
 	return p, nil
 }

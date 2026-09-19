@@ -37,11 +37,14 @@ type StagedCase struct {
 // the cases with their unlock wave, the retained paraphrase-stats field, and the
 // Tier-B count.
 type MemorySuite struct {
-	Waves        []protocol.SeedRequest
-	Cases        []StagedCase
-	Stats        protocol.ParaphraseStats
-	TierBCases   int
-	SeedingWaves int
+	// FactWorldPairs carries the checked world to tool-phase initial seeding.
+	// It is internal compiler state, not an extra wave or harness payload.
+	FactWorldPairs []protocol.MemoryPair `json:"-"`
+	Waves          []protocol.SeedRequest
+	Cases          []StagedCase
+	Stats          protocol.ParaphraseStats
+	TierBCases     int
+	SeedingWaves   int
 	// LifecycleCases counts the write-then-read lifecycle cases in the suite
 	// (instruction + read halves; see gen/lifecycle.go). Advisory telemetry.
 	LifecycleCases int

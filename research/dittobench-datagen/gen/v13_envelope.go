@@ -243,6 +243,12 @@ func generateV13WorldMemorySuiteWithFacts(ctx context.Context, seed int64, n, nW
 		if err := world.RenderV13FactStories(ctx, documents); err != nil {
 			return MemorySuite{}, err
 		}
+		if err := world.RenderV13FactOrdinaryWorld(ctx, documents); err != nil {
+			return MemorySuite{}, err
+		}
+		if err := world.RenderV13FactBusinessImport(ctx, documents); err != nil {
+			return MemorySuite{}, err
+		}
 	}
 	allocation := world.V13Allocation(envelope.Isolation)
 	decision, err := buildV13Abstention(seed, n, world, allocation, benchVersion)
@@ -311,6 +317,9 @@ func generateV13WorldMemorySuiteWithFacts(ctx context.Context, seed int64, n, nW
 			V13SlotIntegrity: len(integrity), V13SlotIsolation: envelope.Isolation,
 		},
 		AbstentionCases: len(decision), PointInTimeCases: 2 * len(temporal),
+	}
+	if renderer != nil {
+		suite.FactWorldPairs = append([]protocol.MemoryPair(nil), world.Pairs...)
 	}
 	for i := range suite.Waves {
 		suite.Waves[i] = protocol.SeedRequest{UserID: PrimaryUser, Wave: i}

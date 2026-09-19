@@ -4,10 +4,11 @@ import (
 	"context"
 	"errors"
 
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
-const V13FactGenerationRevision = "v13-fact-generation-v2"
+const V13FactGenerationRevision = "v13-fact-generation-v3"
 
 // V13FactGeneration stays inside the trusted private artifact. WorldSeed is
 // independent of the public lease seed and controls both memory and fixtures.
@@ -20,7 +21,7 @@ type V13FactGeneration struct {
 }
 
 // GenerateV13FactDataset is the opt-in private fact producer. Business and
-// personal programs and stories are authored from typed facts; remaining families retain
+// personal programs, stories and ordinary world records are authored from typed facts; remaining families retain
 // their world-derived generators, under private world entropy. No legacy
 // typo or text-to-text rewrite pass runs. This API alone does not qualify a
 // dataset or authorize a production lease.
@@ -48,6 +49,11 @@ func GenerateV13FactDataset(ctx context.Context, leaseSeed, worldSeed, presentat
 	}
 	suite.Cases = append(suite.Cases, iso.Cases...)
 	waves := MergeMemoryWaves(suite.Waves, iso.SecondaryWave)
+	checkedGraph := append([]protocol.SeedRequest{{UserID: PrimaryUser, Pairs: suite.FactWorldPairs}}, waves...)
+	tools, err = reconcileFactPrerequisites(tools, checkedGraph)
+	if err != nil {
+		return DatasetArtifact{}, err
+	}
 	artifact, err := BuildArtifactForVersionWithSurface(worldSeed, 13, tools, suite.Cases, waves, SurfaceOptions{factGrounded: true})
 	if err != nil {
 		return DatasetArtifact{}, err
@@ -55,6 +61,37 @@ func GenerateV13FactDataset(ctx context.Context, leaseSeed, worldSeed, presentat
 	artifact.Seed = leaseSeed
 	artifact.FactGeneration = &V13FactGeneration{Revision: V13FactGenerationRevision, WorldSeed: worldSeed, PresentationSeed: presentationSeed, Events: recorder.Events()}
 	return artifact, nil
+}
+
+// Tool prerequisites and memory waves seed one shared graph. Use the same
+// checked text for shared identities without moving a future correction into
+// the earlier tool phase or replacing tool-only decision-twin records.
+func reconcileFactPrerequisites(tools []protocol.ToolCase, waves []protocol.SeedRequest) ([]protocol.ToolCase, error) {
+	shared := map[string]protocol.MemoryPair{}
+	for _, wave := range waves {
+		if wave.UserID != "" && wave.UserID != PrimaryUser {
+			continue
+		}
+		for _, pair := range wave.Pairs {
+			if old, ok := shared[pair.PairID]; ok && old != pair {
+				return nil, errors.New("fact dataset: inconsistent shared memory identity")
+			}
+			shared[pair.PairID] = pair
+		}
+	}
+	out := append([]protocol.ToolCase(nil), tools...)
+	for i := range out {
+		out[i].PrerequisitePairs = append([]protocol.MemoryPair(nil), tools[i].PrerequisitePairs...)
+		for j, pair := range out[i].PrerequisitePairs {
+			if checked, ok := shared[pair.PairID]; ok {
+				if pair.SessionID != checked.SessionID || pair.Timestamp != checked.Timestamp {
+					return nil, errors.New("fact dataset: prerequisite identity mismatch")
+				}
+				out[i].PrerequisitePairs[j] = checked
+			}
+		}
+	}
+	return out, nil
 }
 
 // ExecutionWorldSeed must be used by trusted runtime fixture construction.
