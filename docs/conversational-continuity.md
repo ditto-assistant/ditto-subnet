@@ -130,7 +130,7 @@ The default is off. There is no enforce mode.
 Idle enrolled workers call the `/api/v1/screener/conversation-assessments` claim
 and result endpoints using their rotating node principal. Claim admission is
 serialized globally: at most one live assessment, $25 reserved for Astra and $5
-for the harness, with a $150 rolling daily cap. Failed/expired identities are
+for the harness, with a $180 rolling daily cap. Failed/expired identities are
 never automatically reissued. Image download capabilities and story seeds stay
 private. Reports bind artifact, screened archive, instrument and claim owner.
 

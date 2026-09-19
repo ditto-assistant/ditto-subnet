@@ -405,28 +405,41 @@ async def test_manual_retry_preserves_history_and_never_retries_twice(
         assert await db.scalar(select(func.count()).select_from(Score)) == 0
 
 
-async def test_authorization_waits_for_rolling_budget_without_erasing_reservations(
+async def test_cap_admits_one_extra_retry_then_waits_without_erasing_reservations(
     app, client, session_maker, monkeypatch
 ):
     await install(app, session_maker, monkeypatch, count=5)
     original, _, approval = await failed_attempt(client)
-    for _ in range(4):
+    second, _, second_approval = await failed_attempt(client)
+    for _ in range(3):
         await failed_attempt(client)
     response = await client.post(
         BASE + "/authorize-retry", headers=HEADERS, json=approval
     )
     assert response.status_code == 200, response.text
+    assert response.json()["daily_budget_microusd"] == 180_000_000
     assert response.json()["reserved_last_day_microusd"] == 150_000_000
+    assert response.json()["next_budget_slot_at"] is None
+    retry, _, _ = await failed_attempt(client)
+    assert retry["seed"] == original["seed"]
+    assert retry["agent_id"] == original["agent_id"]
+    # Even an independently authorized second retry cannot reserve a seventh slot.
+    response = await client.post(
+        BASE + "/authorize-retry", headers=HEADERS, json=second_approval
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["reserved_last_day_microusd"] == 180_000_000
     assert response.json()["next_budget_slot_at"] is not None
     assert (await client.post(BASE + "/claim", headers=HEADERS)).json() is None
     async with session_maker() as db, db.begin():
         parent = await db.get(ConversationAssessment, UUID(original["assessment_id"]))
         parent.created_at = datetime.now(UTC) - timedelta(days=1, seconds=1)
     retried = (await client.post(BASE + "/claim", headers=HEADERS)).json()
-    assert retried["seed"] == original["seed"]
+    assert retried["seed"] == second["seed"]
     listing = (await client.get(BASE, headers=HEADERS)).json()
-    assert listing["reserved_last_day_microusd"] == 150_000_000
-    assert len(listing["items"]) == 6
+    assert listing["reserved_last_day_microusd"] == 180_000_000
+    assert listing["current_submission_fee_rao"] == 40_000_000
+    assert len(listing["items"]) == 7
     assert all(item["reserved_microusd"] == 30_000_000 for item in listing["items"])
 
 

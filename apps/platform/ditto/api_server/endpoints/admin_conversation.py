@@ -42,7 +42,7 @@ from ditto_screening_protocol.conversation_story import story, story_digest
 router = APIRouter(prefix="/admin/conversation-assessments", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
-DAILY_BUDGET_MICROUSD = 150_000_000
+DAILY_BUDGET_MICROUSD = 180_000_000
 RUN_RESERVATION_MICROUSD = 30_000_000
 
 

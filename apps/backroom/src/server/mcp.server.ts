@@ -1996,7 +1996,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     'authorize_conversation_retry',
     {
       title: 'Authorize one conversation retry',
-      description: 'Authorize exactly one audited retry of an original terminal harness_inference_incomplete report, binding its artifact and report digest. Authorization expires after 48 hours. The worker rechecks top-five eligibility, shadow mode, global concurrency and unchanged $30 per-attempt / $150 rolling daily reservations before claiming. Preserves the original report, seed, and reservation. Never changes fees or rewards. Requires backroom:write.',
+      description: 'Authorize exactly one audited retry of an original terminal harness_inference_incomplete report, binding its artifact and report digest. Authorization expires after 48 hours. The worker rechecks top-five eligibility, shadow mode, global concurrency and unchanged $30 per-attempt / $180 rolling daily reservations before claiming. Preserves the original report, seed, and reservation. Never changes fees or rewards. Requires backroom:write.',
       inputSchema: conversationRetryInputSchema,
       annotations: toolAnnotations('write', true),
     },
