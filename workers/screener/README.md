@@ -210,6 +210,8 @@ allowed-optimization and benchmark-emulation boundary,
 inspection contract, and
 [docs/l2-source-review.md](docs/l2-source-review.md) for the Terra/GLM/SOL models,
 isolated coding harness, evidence, budgets, and canary/rollback contract,
+[docs/single-sol-review.md](docs/single-sol-review.md) for the report-only
+single-Sol calibration and its durable context-compaction checkpoint,
 [docs/l4-adjudication.md](docs/l4-adjudication.md) for the automated
 clear/reject court that resolves a hold instead of queuing it, and
 [docs/deployment.md](docs/deployment.md) for deployment secrets, health checks,

@@ -1987,11 +1987,21 @@ _COMPACTED_TURNS_TO_KEEP = 3
 
 
 def _compacted_review_messages(
-    messages: list[dict[str, object]], notes: list[dict[str, object]]
+    messages: list[dict[str, object]],
+    notes: list[dict[str, object]],
+    *,
+    inspections: Sequence[Mapping[str, object]] = (),
+    step: int = 0,
+    max_steps: int = 0,
+    read_bytes: int = 0,
+    max_read_bytes: int = 0,
 ) -> list[dict[str, object]]:
-    """Bound request context after the notes ledger becomes authoritative."""
-    if not notes:
-        return messages
+    """Bound context with a durable checkpoint, even before the first note.
+
+    The checkpoint retains determinations, bounded inspection provenance,
+    remaining served-path obligations, and budget position. Dropped tool
+    output is never summarized as evidence; exact source must be re-read.
+    """
     assistant_indices = [
         index
         for index, message in enumerate(messages)
@@ -2000,14 +2010,33 @@ def _compacted_review_messages(
     if len(assistant_indices) <= _COMPACTED_TURNS_TO_KEEP:
         return messages
     cutoff = assistant_indices[-_COMPACTED_TURNS_TO_KEEP]
-    ledger = json.dumps(notes, sort_keys=True, separators=(",", ":"))
+    cleared = {
+        str(note.get("area"))
+        for note in notes
+        if note.get("kind") == "cleared" and note.get("area") in _COVERAGE_AREAS
+    }
+    checkpoint = {
+        "version": 1,
+        "notes": notes,
+        "inspections": list(inspections)[-64:],
+        "remaining_coverage": sorted(_COVERAGE_AREAS - cleared),
+        "budget": {
+            "step": step,
+            "max_steps": max_steps,
+            "read_bytes": read_bytes,
+            "max_read_bytes": max_read_bytes,
+        },
+    }
+    encoded = json.dumps(checkpoint, sort_keys=True, separators=(",", ":"))
     return [
         *messages[:2],
         {
             "role": "user",
             "content": (
-                "[Earlier inspection turns compacted. Their durable working "
-                f"state is the recorded notes ledger: {ledger}]"
+                "[Earlier inspection turns compacted. Continue from this "
+                "host-built durable checkpoint. It records provenance, not "
+                "the dropped source contents; re-read exact source before "
+                f"citing it. Checkpoint: {encoded}]"
             ),
         },
         *messages[cutoff:],
@@ -2396,6 +2425,7 @@ class TarSourceRepository:
             raise ValueError("static preflight mode must be off, shadow, or enforce")
         self._archive_path = archive_path
         self._static_preflight_v2_mode = static_preflight_v2_mode
+        self._compaction_count = 0
         self._binary_analysis_cache: dict[str, dict[str, object]] = {}
         members: list[_Member] = []
         seen: set[str] = set()
@@ -3424,6 +3454,11 @@ class OpenRouterSourceReviewAgent:
         )
         self._transport = transport
 
+    @property
+    def compaction_count(self) -> int:
+        """Number of model turns that used a compacted checkpoint."""
+        return self._compaction_count
+
     async def review(
         self,
         archive_path: str,
@@ -3434,6 +3469,7 @@ class OpenRouterSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> SourceReviewObservation:
         notes: list[dict[str, object]] = []
+        self._compaction_count = 0
         try:
             api_key = self._read_api_key()
             repository = TarSourceRepository(
@@ -3556,6 +3592,7 @@ class OpenRouterSourceReviewAgent:
         coverage_nudged = False
         tool_correction_used = False
         read_files: set[str] = set()
+        inspections: list[dict[str, object]] = []
         runtime_source_read = False
         if progress is not None:
             progress(0, self._max_steps)
@@ -3596,10 +3633,21 @@ class OpenRouterSourceReviewAgent:
                             ),
                         }
                     )
+                request_messages = _compacted_review_messages(
+                    messages,
+                    notes,
+                    inspections=inspections,
+                    step=_step,
+                    max_steps=self._max_steps,
+                    read_bytes=delivered,
+                    max_read_bytes=self._max_read_bytes,
+                )
+                if request_messages is not messages:
+                    self._compaction_count += 1
                 message = await self._completion_message(
                     client,
                     api_key,
-                    _compacted_review_messages(messages, notes),
+                    request_messages,
                     timeout=request_timeout,
                     reasoning_effort=_phase_reasoning_effort(
                         self._reasoning_effort, assessment=assessment_phase
@@ -3689,8 +3737,12 @@ class OpenRouterSourceReviewAgent:
                     output = _execute_tool(repository, name, arguments)
                     inspection_calls += 1
                     noteless_calls += 1
+                    inspection: dict[str, object] = {"tool": name}
+                    path = arguments.get("path")
+                    if isinstance(path, str):
+                        inspection["path"] = path[:240]
+                    inspections.append(inspection)
                     if name == "read_file":
-                        path = arguments.get("path")
                         if isinstance(path, str):
                             read_files.add(path)
                         runtime_source_read = runtime_source_read or (
