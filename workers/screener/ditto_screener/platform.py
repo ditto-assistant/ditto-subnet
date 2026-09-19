@@ -915,6 +915,7 @@ class PlatformClient:
                         operation=f"image part {part_number} mint",
                         json=part_request.model_dump(mode="json"),
                         headers=await self._auth_headers(),
+                        transient_retry_delays=_TRANSIENT_PLATFORM_RETRY_DELAYS,
                     )
                     part_upload = ScreenedImagePartUploadResponse.model_validate(
                         part_response.json()
@@ -926,6 +927,7 @@ class PlatformClient:
                         content=part,
                         headers=part_upload.required_headers,
                         accepted=frozenset({200, 201, 204}),
+                        transient_retry_delays=_TRANSIENT_PLATFORM_RETRY_DELAYS,
                     )
                     etag = stored.headers.get("etag")
                     if not etag:
