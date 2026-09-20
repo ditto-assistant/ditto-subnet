@@ -469,8 +469,8 @@ caller-supplied harness URLs, so it guards against abuse:
   The prebuilt-image path is therefore rejected on the public practice API and
   is only enabled on validator-owned sandbox deployments by the narrow
   `DITTOBENCH_ALLOW_SCREENED_IMAGES=1` opt-in. The validator must keep that API
-  private. `DITTOBENCH_ALLOW_PRIVATE_HARNESS` remains separate and is only
-  needed when local source/image URLs themselves resolve to private addresses.
+  private. `DITTOBENCH_ALLOW_PRIVATE_HARNESS` is mutually exclusive with it: the
+  API refuses to start when both are truthy.
   Imported archive and local runner tags are removed after each run so validator
   disks do not accumulate submission images.
 - Benchmark v7 and v8 require the screener-built, digest- and image-ID-bound

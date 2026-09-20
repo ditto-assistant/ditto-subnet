@@ -255,6 +255,9 @@ func main() {
 	allowPrivate := envBool("DITTOBENCH_ALLOW_PRIVATE_HARNESS")
 	allowScreenedImages := envBool("DITTOBENCH_ALLOW_SCREENED_IMAGES")
 	requireTicketInference := envBool("DITTOBENCH_REQUIRE_TICKET_INFERENCE")
+	if err := validatePrivateHarnessPosture(allowPrivate, allowScreenedImages); err != nil {
+		log.Fatalf("%v", err)
+	}
 	logReleaseIdentity(identity)
 	runner.Configure(allowPrivate)
 	if allowPrivate {
@@ -2962,6 +2965,16 @@ func pinnedOrFreshSeed(pinned int64) int64 {
 		return pinned
 	}
 	return gen.FreshSeed()
+}
+
+// validatePrivateHarnessPosture fails closed when the relaxed SSRF guard is
+// combined with the trusted validator image path: a validator-owned scorer must
+// never fetch tarballs or screened images from link-local/RFC1918 targets.
+func validatePrivateHarnessPosture(allowPrivate, allowScreenedImages bool) error {
+	if allowPrivate && allowScreenedImages {
+		return errors.New("DITTOBENCH_ALLOW_PRIVATE_HARNESS cannot be combined with DITTOBENCH_ALLOW_SCREENED_IMAGES; unset the private-harness flag on validator-owned scorers")
+	}
+	return nil
 }
 
 // envBool reports whether an env var is set to a truthy value.
