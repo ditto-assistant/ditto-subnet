@@ -292,6 +292,25 @@ async def test_known_runtime_transition_resets_provenance(chain: tuple) -> None:
     assert block.reset_reason == "runtime_changed"
 
 
+@pytest.mark.parametrize("upgrade", [False, True])
+async def test_v467_artifact_preserves_reveal_and_resets_upgrade_boundary(
+    chain: tuple, upgrade: bool
+) -> None:
+    substrate, state = chain
+    v466 = "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e"
+    v467 = "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2"
+    state["runtime"] = v466 if upgrade else v467
+    state["post_runtime"] = v467
+    block = await read_source_emission_block(substrate, netuid=118, block=100)
+    assert block.runtime_code_hash == v467
+    if upgrade:
+        assert block.reset_reason == "runtime_changed"
+        assert not block.updates and not block.is_payout
+    else:
+        assert block.reset_reason is None
+        assert block.updates[0].commit_ciphertext_hash is not None
+
+
 @pytest.fixture
 def commit_chain(chain: tuple) -> tuple:
     import hashlib
