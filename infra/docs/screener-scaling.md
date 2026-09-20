@@ -189,6 +189,33 @@ probe supplies a deterministic Platform/model mock and a fake probe-only model
 key; production Secret Manager bootstrap remains covered by the controller and
 worker contract tests.
 
+## Capacity event retention
+
+`screener_capacity_events` is an append-only audit table, so Platform prunes it
+instead of letting reconciliation and provider lifecycle events accumulate.
+
+- **Window:** 30 days by default, set with
+  `SCREENER_CAPACITY_EVENT_RETENTION_DAYS`. `0` keeps every event and disables
+  pruning; any other value must be at least 7, so a typo cannot erase incident
+  history. The window in effect is returned as `event_retention_days` by
+  `GET /api/v1/admin/screener-capacity` (and therefore `get_screener_capacity`),
+  with `null` meaning pruning is off.
+- **Mechanism:** a Platform-role janitor sweeps hourly. It lists the
+  environments holding events once, then runs up to 20 transactions, each
+  deleting at most 1,000 expired events **per environment**, against the
+  `(environment, created_at)` index. Every environment has its own budget, so a
+  backlog in one cannot starve another, and an environment stops being visited
+  once a batch comes back short. Readers keep seeing recent history while it
+  runs. An advisory lock stops replicas from multiplying the batch size, and an
+  event exactly at the cutoff is kept. A failed batch is retried by the next
+  sweep.
+- **Signals:** `ditto_screener_capacity_event_janitor_runs_total{outcome}`
+  (`deleted`, `busy`, `error`), `ditto_screener_capacity_event_janitor_deleted_total`
+  and `ditto_screener_capacity_event_janitor_duration_seconds`. The deleted
+  counter moves per batch, so it stays accurate when a sweep ends busy or
+  fails part-way. Alert on a sustained `error` rate; failures are also logged as
+  `screener capacity event janitor sweep failed`.
+
 ## Stand-up order
 
 No repository merge deploys or mutates production. Keep the existing GCE MIG

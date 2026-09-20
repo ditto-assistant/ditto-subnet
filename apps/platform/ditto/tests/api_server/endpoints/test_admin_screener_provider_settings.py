@@ -204,6 +204,7 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
     control = capacity.json()["provider_control"]
     assert control["current"]["revision"] == revision
     assert control["current"]["settings"]["build_provider_priority"] == ["gcp"]
+    assert capacity.json()["event_retention_days"] == 30
 
     stale = await client.post(
         _PATH,
@@ -215,6 +216,30 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
         ),
     )
     assert stale.status_code == 409
+
+
+@pytest.mark.parametrize(("configured", "reported"), [(0, None), (30, 30), (90, 90)])
+async def test_capacity_view_reports_the_event_retention_window(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    configured: int,
+    reported: int | None,
+) -> None:
+    _install(app, session_maker)
+    app.state.config = replace(
+        app.state.config,
+        screener_auth=replace(
+            app.state.config.screener_auth,
+            capacity_event_retention_days=configured,
+        ),
+    )
+
+    capacity = await client.get("/api/v1/admin/screener-capacity", headers=_HEADERS)
+
+    assert capacity.status_code == 200, capacity.text
+    # Zero means "keep everything", which the operator sees as no window at all.
+    assert capacity.json()["event_retention_days"] == reported
 
 
 async def test_provider_settings_require_gcp_and_exact_confirmation(

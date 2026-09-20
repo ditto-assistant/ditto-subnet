@@ -66,6 +66,7 @@ function capacity(overrides: Partial<ScreenerCapacityView> = {}): ScreenerCapaci
     },
     nodes: [],
     events: [],
+    event_retention_days: 30,
     builds: [],
     provider_jobs: [],
     provider_control: {

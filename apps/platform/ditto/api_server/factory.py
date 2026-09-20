@@ -170,6 +170,9 @@ from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
 from ditto.api_server.runtime_profiles import RuntimeProfileStore
+from ditto.api_server.screener_capacity_event_janitor import (
+    ScreenerCapacityEventJanitor,
+)
 from ditto.api_server.screener_policy_activation import (
     ScreenerPolicyActivationResolver,
 )
@@ -424,6 +427,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await nonce_janitor.start()
             app.state.validator_nonce_janitor = nonce_janitor
+
+            capacity_event_janitor = ScreenerCapacityEventJanitor(
+                session_maker=app.state.session_maker,
+                retention_days=config.screener_auth.capacity_event_retention_days,
+            )
+            stack.push_async_callback(capacity_event_janitor.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await capacity_event_janitor.start()
+            app.state.screener_capacity_event_janitor = capacity_event_janitor
 
             # Copy-hold triage court. Settings-gated: with no revision (or
             # mode off) each tick is a cheap no-op, so the loop runs on the

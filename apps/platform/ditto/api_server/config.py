@@ -73,6 +73,11 @@ def _http_origin(value: str) -> tuple[str, str, int] | None:
     return parsed.scheme, parsed.hostname.lower(), port or default_port
 
 
+DEFAULT_CAPACITY_EVENT_RETENTION_DAYS = 30
+# Floor for a non-zero window so a typo cannot erase incident-review history.
+MIN_CAPACITY_EVENT_RETENTION_DAYS = 7
+
+
 @dataclass(frozen=True)
 class ScreenerAuthConfig:
     """Credentials accepted by the platform-operated screener endpoints."""
@@ -94,6 +99,9 @@ class ScreenerAuthConfig:
 
     controller_lease_seconds: int = 180
     """Fencing lease renewed by the single normal capacity writer."""
+
+    capacity_event_retention_days: int = DEFAULT_CAPACITY_EVENT_RETENTION_DAYS
+    """Age past which capacity audit events are pruned; ``0`` keeps them all."""
 
     @property
     def enabled(self) -> bool:
@@ -707,6 +715,24 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         raise ApiServerConfigError(
             "screener bootstrap, node token, and controller lease TTLs must be integers"
         ) from error
+    try:
+        screener_capacity_event_retention_days = int(
+            os.environ.get(
+                "SCREENER_CAPACITY_EVENT_RETENTION_DAYS",
+                str(DEFAULT_CAPACITY_EVENT_RETENTION_DAYS),
+            )
+        )
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "SCREENER_CAPACITY_EVENT_RETENTION_DAYS must be an integer"
+        ) from error
+    if screener_capacity_event_retention_days != 0 and (
+        screener_capacity_event_retention_days < MIN_CAPACITY_EVENT_RETENTION_DAYS
+    ):
+        raise ApiServerConfigError(
+            "SCREENER_CAPACITY_EVENT_RETENTION_DAYS must be 0 (keep all) or at "
+            f"least {MIN_CAPACITY_EVENT_RETENTION_DAYS}"
+        )
     minimum_validator_version = (
         os.environ.get("DITTO_MIN_VALIDATOR_SOFTWARE_VERSION", "0.7.0").strip() or None
     )
@@ -969,6 +995,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             bootstrap_ttl_seconds=screener_bootstrap_ttl_seconds,
             node_token_ttl_seconds=screener_node_token_ttl_seconds,
             controller_lease_seconds=screener_controller_lease_seconds,
+            capacity_event_retention_days=screener_capacity_event_retention_days,
         ),
         validator_names=parse_validator_names_config_from_env(),
         validator_compatibility=ValidatorCompatibilityConfig(

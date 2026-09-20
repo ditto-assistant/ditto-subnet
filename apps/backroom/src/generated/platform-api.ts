@@ -25881,6 +25881,8 @@ export interface components {
         ScreenerCapacityView: {
             /** Builds */
             builds?: components["schemas"]["TrustedImageBuildView"][];
+            /** Event Retention Days */
+            event_retention_days?: number | null;
             /** Events */
             events: components["schemas"]["ScreenerCapacityEventView"][];
             /** Node Controls */

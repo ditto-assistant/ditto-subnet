@@ -70,6 +70,19 @@ VALIDATOR_NONCE_JANITOR_DELETED = Counter(
     "ditto_validator_nonce_janitor_deleted_total",
     "Expired validator replay guards deleted by the periodic janitor.",
 )
+SCREENER_CAPACITY_EVENT_JANITOR_RUNS = Counter(
+    "ditto_screener_capacity_event_janitor_runs_total",
+    "Bounded screener capacity event retention sweeps, by outcome.",
+    ("outcome",),
+)
+SCREENER_CAPACITY_EVENT_JANITOR_DELETED = Counter(
+    "ditto_screener_capacity_event_janitor_deleted_total",
+    "Expired screener capacity audit events deleted by the periodic janitor.",
+)
+SCREENER_CAPACITY_EVENT_JANITOR_DURATION_SECONDS = Histogram(
+    "ditto_screener_capacity_event_janitor_duration_seconds",
+    "Duration of screener capacity event retention sweeps.",
+)
 LEDGER_PIN_MATERIALIZATIONS = Counter(
     "ditto_ledger_pin_materializations_total",
     "Epoch-pinned validator ledger builds, by outcome "

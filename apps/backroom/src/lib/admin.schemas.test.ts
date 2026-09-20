@@ -291,6 +291,13 @@ describe('admin API schemas', () => {
     expect(parsed.required_rollout_mode).toBe('enforce')
   })
 
+  it('reports the capacity event retention window and null when pruning is off', () => {
+    const base = { snapshot: null, nodes: [], events: [] }
+    expect(screenerCapacityViewSchema.parse({ ...base, event_retention_days: 30 }).event_retention_days).toBe(30)
+    expect(screenerCapacityViewSchema.parse({ ...base, event_retention_days: null }).event_retention_days).toBeNull()
+    expect(screenerCapacityViewSchema.parse(base).event_retention_days).toBeNull()
+  })
+
   it('preserves the fenced multi-provider capacity contract', () => {
     const parsed = screenerCapacityViewSchema.parse({
       snapshot: {

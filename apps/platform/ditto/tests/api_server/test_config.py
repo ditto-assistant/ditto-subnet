@@ -131,6 +131,37 @@ class TestParseApiServerConfigFromEnv:
             )
         )
 
+    def test_capacity_event_retention_defaults_to_thirty_days(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.delenv("SCREENER_CAPACITY_EVENT_RETENTION_DAYS", raising=False)
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.screener_auth.capacity_event_retention_days == 30
+
+    @pytest.mark.parametrize(("raw", "expected"), [("0", 0), ("7", 7), ("90", 90)])
+    def test_capacity_event_retention_accepts_zero_or_at_least_a_week(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: int
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("SCREENER_CAPACITY_EVENT_RETENTION_DAYS", raw)
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.screener_auth.capacity_event_retention_days == expected
+
+    @pytest.mark.parametrize("raw", ["1", "6", "-5", "thirty", ""])
+    def test_capacity_event_retention_rejects_unsafe_values(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("SCREENER_CAPACITY_EVENT_RETENTION_DAYS", raw)
+
+        with pytest.raises(ApiServerConfigError):
+            parse_api_server_config_from_env(commit_hash="abc")
+
     def test_private_coding_catalog_config_is_optional_and_separate(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

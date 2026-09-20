@@ -805,6 +805,8 @@ export const screenerCapacityViewSchema = z.object({
   snapshot: screenerCapacitySnapshotSchema.nullable(),
   nodes: z.array(screenerCapacityNodeSchema),
   events: z.array(screenerCapacityEventSchema),
+  // Capacity events older than this many days are pruned; null keeps them all.
+  event_retention_days: z.number().int().nonnegative().nullable().default(null),
   builds: z.array(trustedImageBuildSchema).default([]),
   provider_jobs: z.array(z.object({
     job_id: z.string().uuid(),

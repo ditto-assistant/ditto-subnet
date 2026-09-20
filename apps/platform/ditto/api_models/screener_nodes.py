@@ -650,6 +650,8 @@ class ScreenerCapacityView(BaseModel):
     snapshot: ScreenerCapacitySnapshotResponse | None
     nodes: list[ScreenerNodeView]
     events: list[ScreenerCapacityEventView]
+    event_retention_days: int | None = None
+    """Capacity events older than this are pruned; ``None`` keeps them all."""
     builds: list[TrustedImageBuildView] = Field(default_factory=list)
     provider_jobs: list[ScreenerProviderJobView] = Field(default_factory=list)
     provider_control: ScreenerProviderSettingsControl

@@ -707,6 +707,7 @@ async def retry_trusted_image_build(
 
 @router.get("/screener-capacity", response_model=ScreenerCapacityView)
 async def screener_capacity(
+    request: Request,
     _admin: AdminDep,
     session: SessionDep,
     environment: Annotated[str, Query(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod",
@@ -864,6 +865,9 @@ async def screener_capacity(
         snapshot=snapshot_view,
         nodes=nodes,
         events=events,
+        event_retention_days=(
+            request.app.state.config.screener_auth.capacity_event_retention_days or None
+        ),
         builds=[_build_view(row) for row in build_rows],
         provider_jobs=sorted(
             [
