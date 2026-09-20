@@ -3,6 +3,7 @@ package universe
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strconv"
 	"strings"
@@ -19,28 +20,46 @@ func TestV13EnterpriseSeedReplayAndQueryRotation(t *testing.T) {
 		if !reflect.DeepEqual(w, again) {
 			t.Fatal("seed replay")
 		}
-		for _, entity := range []string{"work-0000", "work-0001", "work-0002", "work-0003", "work-0004", "work-0005"} {
+		for i := 0; i < 6; i++ {
+			entity := enterpriseEntityID(seed, fmt.Sprintf("work-%04d", i))
 			q := V13EnterpriseQuery{Entity: entity, At: 8, Joins: []string{"team", "vendor", "owner"}, Field: "channel", Operation: "values"}
 			answer, err := EvaluateV13Enterprise(w, q)
 			if err != nil || len(answer) != 1 {
 				t.Fatalf("query rotation: %v %v", answer, err)
 			}
 			// Derive the independent expected owner from source history.
-			vendor := "vendor-" + strings.TrimPrefix(entity, "work-")
+			vendor := enterpriseEntityID(seed, fmt.Sprintf("vendor-%04d", i))
 			owner := ""
 			for _, e := range w.Events {
 				if e.Entity == vendor && e.Field == "owner" && e.At == 8 {
 					owner = e.Value
 				}
 			}
-			if answer[0] != owner+"@fictional.example" {
+			channel := ""
+			for _, e := range w.Events {
+				if e.Entity == owner && e.Field == "channel" {
+					channel = e.Value
+				}
+			}
+			if channel == "" || answer[0] != channel {
 				t.Fatal("wrong three-hop answer")
 			}
 			q.Joins = []string{"team"}
 			q.Field = "members"
 			q.Operation = "count"
 			answer, err = EvaluateV13Enterprise(w, q)
-			if err != nil || answer[0] != "3" {
+			members := map[string]bool{}
+			team := enterpriseEntityID(seed, fmt.Sprintf("team-%04d", i))
+			for _, e := range w.Events {
+				if e.Entity == team && e.Field == "members" && e.At <= 8 {
+					if e.Operation == "add" {
+						members[e.Value] = true
+					} else {
+						delete(members, e.Value)
+					}
+				}
+			}
+			if err != nil || answer[0] != strconv.Itoa(len(members)) {
 				t.Fatalf("set history: %v %v", answer, err)
 			}
 			q.At = 3
@@ -54,7 +73,7 @@ func TestV13EnterpriseSeedReplayAndQueryRotation(t *testing.T) {
 
 func TestV13EnterpriseFormatsPreserveWorld(t *testing.T) {
 	w, _ := GenerateV13Enterprise(42, 3, 5)
-	w.Events = append(w.Events, V13EnterpriseEvent{"work-0000", "note", "Quoted \"handoff\", owner list\nsecond line | \\ end", 0, "assign"})
+	w.Events = append(w.Events, V13EnterpriseEvent{enterpriseEntityID(42, "work-0000"), "note", "Quoted \"handoff\", owner list\nsecond line | \\ end", 0, "assign"})
 	for _, format := range []string{"csv", "json"} {
 		for seed := int64(0); seed < 8; seed++ {
 			text, err := RenderV13EnterpriseData(w, seed, format)
@@ -107,6 +126,10 @@ func TestV13EnterpriseRejectsInvalidHistory(t *testing.T) {
 		{"team-0000", "members", "person-0000-1", 0, "remove"},
 		{"work-0000", "status", "active", 99, "remove"},
 	} {
+		bad.Entity = enterpriseEntityID(3, bad.Entity)
+		if enterpriseReferenceFields[bad.Field] || enterpriseSetFields[bad.Field] {
+			bad.Value = enterpriseEntityID(3, bad.Value)
+		}
 		copy := w
 		copy.Events = append(append([]V13EnterpriseEvent(nil), w.Events...), bad)
 		if _, err := copy.state(0); err == nil {
@@ -118,6 +141,7 @@ func TestV13EnterpriseRejectsInvalidHistory(t *testing.T) {
 		{Entity: "work-0000", At: 5, Joins: []string{"status"}, Field: "channel", Operation: "values"},
 		{Entity: "work-0000", At: 5, Field: "status", Operation: "guess"},
 	} {
+		q.Entity = enterpriseEntityID(3, q.Entity)
 		if _, err := EvaluateV13Enterprise(w, q); err == nil {
 			t.Fatal("accepted unsupported query")
 		}
@@ -128,7 +152,7 @@ func TestV13EnterpriseUnrelatedWorldGrowthPreservesAnswers(t *testing.T) {
 	for seed := int64(0); seed < 30; seed++ {
 		small, _ := GenerateV13Enterprise(seed, 2, 7)
 		large, _ := GenerateV13Enterprise(seed, 20, 7)
-		q := V13EnterpriseQuery{Entity: "work-0000", At: 6, Joins: []string{"team", "vendor", "owner"}, Field: "channel", Operation: "values"}
+		q := V13EnterpriseQuery{Entity: enterpriseEntityID(seed, "work-0000"), At: 6, Joins: []string{"team", "vendor", "owner"}, Field: "channel", Operation: "values"}
 		a, err := EvaluateV13Enterprise(small, q)
 		if err != nil {
 			t.Fatal(err)
