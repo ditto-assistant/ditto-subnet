@@ -3,7 +3,7 @@
 import os
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 from fastapi import HTTPException, Request
 from sqlalchemy import func, select
@@ -123,20 +123,11 @@ async def resolve_private_dataset(
 
 
 async def lease_dataset_sha(
-    request: Request, generator: DatasetGenerator, *, seed: int, bench_version: int
+    _request: Request, generator: DatasetGenerator, *, seed: int, bench_version: int
 ) -> str:
-    if bench_version != 13:
-        return await generator.generate(seed, bench_version=bench_version)
-    if generator.run_size is None:
-        raise HTTPException(503, "private dataset run profile is unavailable")
-    config = request.app.state.config.private_preparation
-    sessions = getattr(request.app.state, "private_preparation_sessions", None)
-    if config.profile_sha256 is None or sessions is None:
-        raise HTTPException(503, "private V13 production is not configured")
-    return await resolve_private_dataset(
-        sessions,
-        config,
-        seed=seed,
-        run_size=generator.run_size,
-        now=datetime.now(UTC),
-    )
+    # Owner-approved prelaunch V13 contract: deterministic seed generation.
+    # This is not a fallback after failed private production. The private
+    # producer/storage APIs remain available for research, but new production
+    # leases never enqueue model-authored datasets. Future private issuance
+    # needs a separately versioned, reviewed activation.
+    return await generator.generate(seed, bench_version=bench_version)

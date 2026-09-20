@@ -117,10 +117,12 @@ async def test_failed_work_is_not_requeued_or_refunded(session_maker):
         await resolve(session_maker, config, seed=43)
 
 
-async def test_old_versions_keep_public_generator_path():
+@pytest.mark.parametrize("version", [12, 13])
+async def test_production_versions_use_public_generator_without_private_config(version):
     generator = AsyncMock()
     generator.generate.return_value = "a" * 64
     assert (
-        await lease_dataset_sha(None, generator, seed=42, bench_version=12) == "a" * 64
+        await lease_dataset_sha(None, generator, seed=42, bench_version=version)
+        == "a" * 64
     )
-    generator.generate.assert_awaited_once_with(42, bench_version=12)
+    generator.generate.assert_awaited_once_with(42, bench_version=version)

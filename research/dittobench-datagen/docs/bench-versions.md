@@ -24,7 +24,7 @@ applied to an existing version. It ships as a new one.
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
-| 13 (pre-activation) | `2027-05-01` | The typed-semantic contract (#1518): label-insufficiency, an unregenerable surface pass (salt 0 = public rehearsal), causal model dependence, provenance over containment, a published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Runtime execution is available; Platform activation remains a separate owner decision after #1521 calibration. |
+| 13 (pre-activation) | `2027-05-01` | Deterministic typed worlds and compositional enterprise records; model-authored private wording deferred to V14. A published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Same seed and generator revision reproduce the dataset. Activation follows exact-candidate qualification and canary evidence. |
 
 ## V10 generator-as-spec contract
 
@@ -476,11 +476,14 @@ expected tool specs. v12 changes what competence a run must demonstrate, not the
 transport. Run sizes, the deterministic grader, the inference boundary,
 LongMemEval floors, and the v9 efficiency stack all carry forward unchanged.
 
-## Bench v13 (private, typed-semantic contract)
+## Bench v13 (deterministic, typed-semantic contract)
 
-v13 is the contract issue #1518 defines: **typed semantic outcomes graded
-through claim sets, on a surface a harness cannot regenerate, with the graded
-value causally traced to a model completion the relay observed.** It answers
+The owner's prelaunch scope correction defers private-world delivery and
+model-authored wording to V14. V13 uses **typed semantic outcomes graded
+through claim sets, deterministic compositional records, and relay-observed
+model provenance.** Public seeds and generator revisions reproduce its data;
+neither a large combinatorial space nor rollout timing is a privacy or Sybil
+resistance guarantee. Legitimate parsing/filtering remains allowed. It answers
 the 2026-09-13 top-of-board review (operator-private records
 `sn118-top5-board-review-2026-09-13.json` and
 `sn118-bench-v12-adversary-briefing.md`, held with the Backroom board-review
@@ -518,11 +521,13 @@ authority for anything a subsection summarises.
 1. **Label-insufficiency.** For every family, knowing the family label and the
    extractable operands must be insufficient to score — stored state, a
    per-seed served artifact, or a time anchor must decide.
-2. **Unregenerable surface (v13.0, not v13.1).** The surface a harness sees
-   (renderings, names, language/typo draws, decoy set, inventories, fixtures)
-   must not be recomputable from the public repo plus the published seed. The
-   public v13 surface pass is the pre-pass; the private pass is a v13.0
-   activation blocker (see *The surface pass and the open owner decision*).
+2. **Deterministic consistency.** Records and questions derive from the same
+   typed state. Enterprise records use shared grammar for relevant and
+   irrelevant facts, and are not rewritten after rendering. The private pass
+   is retained as deferred research, not a V13 activation requirement. New
+   leases require signed `deterministic_v13_datasets` capability backed by the
+   scorer feature `v13-deterministic-enterprise-v1`; old V13 support alone is
+   insufficient.
 3. **Causal model dependence.** The graded value must have been produced by a
    model completion the relay observed, and must not appear in any
    harness-authored prompt span except spans hash-matched to `/seed` records
@@ -558,7 +563,11 @@ review (flag only) → penalize (graduated, capped) → enforce (zero); enforce 
 reserved for provable signals and is a fleet-wide operator decision after
 #1521 shows 0 false zeros per honest pattern. Never enforce retroactively.
 
-### Adversary model this contract must defeat
+### Adversary controls and deferred research
+
+This matrix distinguishes controls from research objectives, not proven attack
+defeat. Source-aware parser success is reported honestly; missing parser coverage
+is not resistance. Private-surface/GIH-ceiling claims are deferred to V14.
 
 | Class | Ids | Made score-negative by |
 |---|---|---|
@@ -567,18 +576,18 @@ reserved for provable signals and is a fleet-wide operator decision after
 | Sign sheets / money formula / closed programs | S4 S13 S7 | money cap (≤12% target / 15% hard), record-stated ops, sign variance, typed claims |
 | Exact-output arg recipes | S5 | paraphrase-accepting argument claims (reward side) + causal gate + screener I5 (punish side) |
 | Draft replacement / slot rewrites / hedged slots | S6 S7 S14 | claim-span provenance gate; prose graded, slot tie-break; stuffing quantifier |
-| Generator fingerprint tables, regex routers, typo tricks | S8 S11 S12 | grammars → private surface pass; typo v2; multilingual via private translation; parserprobe ceiling |
+| Generator fingerprint tables, regex routers, typo tricks | S8 S11 S12 | typed state, compositional rendering and served-evidence evaluation; private wording/ceiling deferred |
 | Marker-keyed compaction, ingest-time compilation | S9 N5 N10 | same-turn corrections (primary), point-in-time twins (`as_of_twin`), `/seed` label-leak fix |
 | Host tool plans / class collapse | S10 | effect-graded retrieval, cue-unreliable mutations |
 | Injection wrapper stripping | S15 | data-inside-envelope + envelope-free injections with a mock-observable forbidden action |
-| Trained routers / distilled generators / planner prose | N1 N2 N9 | label-insufficiency + unregenerable surface + causal gate |
-| Seed regeneration / answer-key regression | N3 | CRN block binding + egress proof (#1854); surface pass |
+| Trained routers / distilled generators / planner prose | N1 N2 N9 | label-insufficiency and observed causal gate; no unreconstructibility claim |
+| Seed regeneration / answer-key regression | N3 | block binding and execution/source controls; deterministic data is reproducible |
 | Voting / attribution theatre | N4 N8 | provenance gate, cost factor over choices + tokens (shadow), pair post-pass |
-| Layout / language inference from public generator tables | N6 | private surface pass (layouts and languages unannounced) |
+| Layout / language inference from public generator tables | N6 | deterministic layout variation; private translation deferred |
 | Fixture memorisation | N7 | per-seed coined fixtures |
 | In-run twin pairing / forced discordance | N11 | distributionally matched triplets, ≤ chance acceptance |
 | Edit-distance-only option picking | N12 | near-miss inventories with a margin test |
-| **Generator-inverse harness + launder (GIH)** | **N13** | unregenerable surface pass + causal gate; `cmd/parserprobe` ceiling in CI |
+| **Generator-inverse harness + launder (GIH)** | **N13** | source-aware parser coverage and relay-evidenced causal gate; private ceiling deferred |
 | **Router trained on 10k locally generated seeds** | **N14** | same as N13; W13 training-data declaration in screener policy v14 (#1857) |
 
 Both axes are in scope; the tool-bench, story-v2, surfaces, seeds and
@@ -975,9 +984,9 @@ sums, and a three-edge contact lookup. Format/noise variants preserve answers;
 causal event edits change answers. CSV, JSON, Markdown, Slack-style, email and
 synthetic transcript records share the same typed history. Record order is not
 chronology. Questions and evidence are preserved byte-exact through the legacy
-artifact surface pass. The private fact-renderer route remains unchanged in this
-layer; switching Platform issuance to the deterministic candidate is a separate
-release prerequisite, not a fallback on private-production failure.
+artifact surface pass. Platform issues deterministic V13 datasets directly; it
+does not enqueue private production, even if a deferred private profile remains
+configured. Generator failure remains failure, never a private/public fallback.
 
 Vectors: `TestV13EnterpriseScoredGroups`,
 `TestV13EnterpriseCaseAnswersFromServedRecords`, and
@@ -993,7 +1002,13 @@ arithmetic rendered into the records rather than held only in hidden state.
 It is a pre-activation contract pin, not evidence of private-surface calibration.
 v2–v12 vectors do not move; if one does, the gating is wrong.
 
-### The surface pass and the open owner decision (#1832)
+### Deterministic launch and deferred private surface research (#1832)
+
+The owner decision is now explicit: V13 production uses the public deterministic
+generator; private model-authored transforms are deferred to V14. Private
+producer/validation code remains for research, but is not invoked by new V13
+leases. The following APIs describe retained surface research, not live private
+generation or evidence that public seed regeneration is impossible.
 
 `gen/v13_surface.go` (`V13ApplyArtifactSurfacePass`) renders every
 harness-visible surface as a function of `(seed, surface salt)`: the
@@ -1016,17 +1031,11 @@ regenerated from the public generator scores zero on the canary.
   `TestV13SurfacePassProtectsGradedValues` (#1832)) — and is recorded on the
   artifact as `surface_salt`, an audit field that never reaches the harness
   wire.
-- **Open owner decision (Owner decision — default taken: ship the shared
-  groundwork, decide the exchange separately).** Which side holds the salt is
-  not decided by this contract: (A) a validator commit-reveal salt
-  (`sha256(salt)` in the job claim, revealed in the signed score report,
-  `scores.dataset_salt/_commitment`, `reproduction_command --salt`), or (B) a
-  Platform-side private paraphrase/translation pass over the pinned
-  grammar-expanded artifact with a published passed-dataset SHA. Both are
-  surface-only; neither ships a salt exchange in v13.0's contract PRs.
-  Deferral is not an option for v13.0 *activation*: until one lands, every
-  surface defence above is regenerable from the public repo, the parserprobe
-  ceilings stay report-only, and the GIH scores ≈ oracle by construction.
+- **Deferred, not silently enabled.** A future private contract needs its own
+  generation identity, custody/receipt checks and honest/adversarial evidence.
+  No secret salt exchange or private translation is required for V13 launch.
+  The public parser control must remain complete; high parser accuracy is not
+  disguised as private protection or a failed model evaluation.
 
 ### Multilingual fraction (issue #1831)
 

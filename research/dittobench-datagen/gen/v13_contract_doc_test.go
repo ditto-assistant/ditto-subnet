@@ -38,7 +38,7 @@ const (
 	v13WireProtocolDoc     = "../../../services/dittobench-api/PROTOCOL.md"
 	v13StarterProtocolDoc  = "../../../miners/dittobench-starter-kit/PROTOCOL.md"
 	v13StarterReadmeDoc    = "../../../miners/dittobench-starter-kit/README.md"
-	v13ContractSectionHead = "## Bench v13 (private, typed-semantic contract)"
+	v13ContractSectionHead = "## Bench v13 (deterministic, typed-semantic contract)"
 	v13WireSectionHead     = "### Harness wire version for Bench v10 and later"
 	v13WireSectionEnd      = "## Anti-copy signals"
 	v13StarterProtocolHead = "## Bench v13 additions (harness-visible)"

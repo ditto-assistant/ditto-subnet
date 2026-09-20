@@ -200,6 +200,7 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
             # contract. Individual tests narrow this list when they need to
             # exercise a missing-version boundary.
             "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13],
+            "deterministic_v13_datasets": True,
             "observed_at": int(now.timestamp()),
             "software_version": "1.3.0",
             "source_revision": revision,
@@ -2522,6 +2523,7 @@ def _post_v7_capabilities(now: datetime) -> tuple[dict, dict]:
     capabilities, stack = _capabilities(now)
     scorer = capabilities["scorer_benchmarks"]
     scorer["supported_bench_versions"] = [8, 9, 10]
+    scorer.pop("deterministic_v13_datasets", None)
     scorer.pop("v7_calibration")
     return capabilities, stack
 
@@ -2626,11 +2628,26 @@ async def test_v9_rollout_rejects_the_fixed_medium_v8_route(
             )
 
 
+def test_v13_requires_exact_deterministic_contract_capability() -> None:
+    now = datetime.now(UTC)
+    heartbeat = _heartbeat(
+        "v13-candidate", now, versions=[7, 12, 13], protocol_version=18
+    )
+    heartbeat.capabilities["scorer_benchmarks"].pop("deterministic_v13_datasets", None)
+    assert heartbeat_supports_version(heartbeat, now=now, version=12)
+    assert not heartbeat_supports_version(heartbeat, now=now, version=13)
+    heartbeat.capabilities["scorer_benchmarks"]["deterministic_v13_datasets"] = True
+    assert heartbeat_supports_version(heartbeat, now=now, version=13)
+    heartbeat.capabilities["scorer_benchmarks"]["deterministic_v13_datasets"] = "true"
+    assert not heartbeat_supports_version(heartbeat, now=now, version=13)
+
+
 def _heartbeat(
     hotkey: str, now: datetime, *, versions: list[int], protocol_version: int = 8
 ) -> ValidatorHeartbeat:
     capabilities, stack = _capabilities(now)
     capabilities["scorer_benchmarks"]["supported_bench_versions"] = versions
+    capabilities["scorer_benchmarks"]["deterministic_v13_datasets"] = 13 in versions
     if 7 not in versions:
         capabilities["scorer_benchmarks"].pop("v7_calibration", None)
         capabilities["ticket_inference"] = False

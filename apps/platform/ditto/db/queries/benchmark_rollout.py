@@ -1421,6 +1421,10 @@ def verified_scorer_for_version(
         or version not in scorer.supported_bench_versions
     ):
         return None
+    # V13 has not activated publicly. Its corrected deterministic candidate
+    # must not be scheduled onto a scorer that only knows the earlier canary.
+    if version == 13 and not scorer.deterministic_v13_datasets:
+        return None
     if version >= 9 and not _scorer_meets_version_floor(
         heartbeat,
         scorer=scorer,

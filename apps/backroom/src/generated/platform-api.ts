@@ -25223,6 +25223,11 @@ export interface components {
          * @description Identity-bound benchmark support observed from the scorer sidecar.
          */
         ScorerBenchmarkCapability: {
+            /**
+             * Deterministic V13 Datasets
+             * @default false
+             */
+            deterministic_v13_datasets: boolean;
             /** Observed At */
             observed_at?: number | null;
             /**

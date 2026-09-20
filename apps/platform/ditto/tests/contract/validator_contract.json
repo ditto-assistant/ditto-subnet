@@ -7364,6 +7364,10 @@
       },
       "ScorerBenchmarkCapability": {
         "properties": {
+          "deterministic_v13_datasets": {
+            "default": false,
+            "type": "boolean"
+          },
           "observed_at": {
             "anyOf": [
               {

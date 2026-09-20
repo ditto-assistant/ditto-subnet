@@ -255,6 +255,13 @@ cases back into one queue and misses the run deadline with no per-case error.
 
 ## Bench v13 additions (harness-visible)
 
+The launch candidate is deterministic: the same seed and generator revision
+reproduce its typed worlds and compositional enterprise records. Private
+model-authored wording is deferred to V14. CSV, JSON, Markdown, pasted Slack-style
+messages, emails and synthetic transcripts are ordinary evidence; parsing them
+and filtering irrelevant facts is legitimate. No privacy guarantee is implied
+by the number of possible worlds. The harness wire shape remains unchanged.
+
 Bench v13 is the typed-semantic contract
 ([`bench-versions.md`](../../research/dittobench-datagen/docs/bench-versions.md),
 *Bench v13*). It reaches your harness as **wire version 9** with the same

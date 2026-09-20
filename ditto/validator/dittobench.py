@@ -1061,6 +1061,11 @@ class DittobenchClient:
         try:
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
+                deterministic_v13_datasets=(
+                    13 in observed_versions
+                    and isinstance(payload.get("features"), list)
+                    and "v13-deterministic-enterprise-v1" in payload["features"]
+                ),
                 private_datasets=(
                     13 in observed_versions
                     and isinstance(payload.get("features"), list)

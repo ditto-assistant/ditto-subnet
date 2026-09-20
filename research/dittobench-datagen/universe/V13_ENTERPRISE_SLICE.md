@@ -52,7 +52,9 @@ total envelope is unchanged. Trusted provenance protects these records from
 the legacy surface pass. Served CSV/JSON answers are independently replayed in
 tests. Negated structured answers are no longer accepted as positive claims.
 
-Platform issuance still requires its separate deterministic-route reconciliation;
-the private renderer route is not changed by this layer. No live activation,
-honest-model qualification or complete domain-specific workflow coverage is
-claimed. Public seed reproducibility is not privacy.
+The issuance layer now selects deterministic generation for new V13 leases and
+requires the exact scorer feature through signed capability negotiation. Private
+producer code remains available for deferred research but is not queued by
+production lease creation. No live activation, honest-model qualification or
+complete domain-specific workflow coverage is claimed. Public seed
+reproducibility is not privacy.

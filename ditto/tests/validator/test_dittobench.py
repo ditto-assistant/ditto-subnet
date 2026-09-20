@@ -329,7 +329,19 @@ async def test_v044_rolling_upgrade_negotiates_v8_and_preserves_capacity() -> No
 
 
 @pytest.mark.asyncio
-async def test_current_scorer_preserves_versions_and_run_capacity() -> None:
+@pytest.mark.parametrize(
+    "features,private,deterministic",
+    [
+        ([], False, False),
+        (["platform-private-v1"], True, False),
+        (["platform-fact-world-v1"], False, False),
+        (["platform-private-v1", "platform-fact-world-v1"], True, False),
+        (["v13-deterministic-enterprise-v1"], False, True),
+    ],
+)
+async def test_current_scorer_preserves_versions_and_run_capacity(
+    features, private, deterministic
+) -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -338,6 +350,7 @@ async def test_current_scorer_preserves_versions_and_run_capacity() -> None:
                 "source_revision": _REVISION,
                 "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
                 "full_run_capacity": 2,
+                "features": features,
             },
         )
 
@@ -351,6 +364,8 @@ async def test_current_scorer_preserves_versions_and_run_capacity() -> None:
         observed = await client.scorer_benchmark_capability(_stack())
 
     assert observed.status == "fresh_verified"
+    assert observed.private_datasets is private
+    assert observed.deterministic_v13_datasets is deterministic
     # The validator keeps the scorer's advertised set in the intersection: a
     # current scorer advertising v12 must reach the signed heartbeat, or the
     # Platform counts zero v12-capable validators (regression when

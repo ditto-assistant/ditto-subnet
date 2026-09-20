@@ -4103,9 +4103,16 @@ async def request_job(
             # the validator hotkey makes it distinct and publicly reproducible.
             # Persist the pin on the ticket so retries cannot rotate datasets.
             if ticket.bench_version == 13 and ticket.seed is None:
-                _assert_private_dataset_capability(heartbeat)
+                if heartbeat is None or not heartbeat_supports_version(
+                    heartbeat, now=now, version=13
+                ):
+                    raise HTTPException(
+                        503, "deterministic V13 scorer capability is unavailable"
+                    )
                 if seed_block_hash is None or generator.run_size is None:
-                    raise HTTPException(503, "private V13 seed binding is unavailable")
+                    raise HTTPException(
+                        503, "deterministic V13 seed binding is unavailable"
+                    )
             if seed_block_hash is not None and generator.run_size is not None:
                 expected_seed = derive_validator_seed(
                     seed_block_hash, agent.agent_id, payload.validator_hotkey
@@ -5647,8 +5654,14 @@ async def request_top5_confirmation_job(
             bench_version=canonical_version,
         )
         if canonical_version >= 3:
-            if canonical_version == 13:
-                _assert_private_dataset_capability(heartbeat)
+            if canonical_version == 13 and (
+                heartbeat is None or not heartbeat_supports_version(
+                    heartbeat, now=now, version=13
+                )
+            ):
+                raise HTTPException(
+                    503, "deterministic V13 scorer capability is unavailable"
+                )
             if generator.run_size is None:
                 raise HTTPException(
                     status_code=503,

@@ -642,6 +642,15 @@ intersection of broker-observed model tool selections and case-bound
 
 ### bench_version 13: the typed-semantic contract on the wire
 
+The launch candidate uses deterministic typed worlds, including compositional
+CSV/JSON/Markdown and pasted-message enterprise records. Model-authored private
+wording is deferred to V14. The scorer advertises
+`v13-deterministic-enterprise-v1`; validators sign the additive
+`deterministic_v13_datasets` capability. Platform requires that exact capability
+for V13 admission. Missing/false is not upgraded from generic V13 support.
+V12 and earlier capability decisions are unchanged. New V13 leases use public
+seed generation, never private preparation or a failure-triggered fallback.
+
 Bench v13 (`research/dittobench-datagen/docs/bench-versions.md`, *Bench v13*)
 changes what a scored run must demonstrate, not the transport: the harness
 still receives `bench_version` 9 (see *Harness wire version*), the same

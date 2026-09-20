@@ -5,12 +5,13 @@ import (
 
 	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 const privateDatasetMode = "platform-private-v1"
 
 func (s *server) datasetFeatures() []string {
-	features := []string{"git_subdir"}
+	features := []string{"git_subdir", universe.V13EnterpriseRevision}
 	if s.allowPrivateDatasets {
 		features = append(features, privateDatasetMode)
 	}

@@ -944,9 +944,11 @@ What loses, by construction:
   `counterfactual_insensitive`).
 - **Baked option pools and fixed served strings** — the seeded catalog,
   discovery inventories and coined fixtures make them wrong on most seeds.
-- **Regenerating the dataset from the public generator** — the surface pass
-  plants a regeneration canary; the public salt-0 rehearsal artifact is what
-  you practice on, never what you are scored on once the private pass lands.
+- **Benchmark emulation versus legitimate parsing** — V13 uses reproducible
+  deterministic worlds. Parse served CSV/JSON/Markdown and retrieve grounded
+  facts normally; do not replace the harness with a generator answer key.
+  Model-authored private wording and private seed delivery are deferred to V14.
+  No V13 claim of an unregenerable surface is made.
 
 Run the gate replay before you upload:
 
