@@ -2633,6 +2633,7 @@ def test_v13_requires_exact_deterministic_contract_capability() -> None:
     heartbeat = _heartbeat(
         "v13-candidate", now, versions=[7, 12, 13], protocol_version=18
     )
+    assert heartbeat.capabilities is not None
     heartbeat.capabilities["scorer_benchmarks"].pop("deterministic_v13_datasets", None)
     assert heartbeat_supports_version(heartbeat, now=now, version=12)
     assert not heartbeat_supports_version(heartbeat, now=now, version=13)

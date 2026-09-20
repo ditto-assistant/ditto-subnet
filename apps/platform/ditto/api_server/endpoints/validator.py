@@ -5655,9 +5655,8 @@ async def request_top5_confirmation_job(
         )
         if canonical_version >= 3:
             if canonical_version == 13 and (
-                heartbeat is None or not heartbeat_supports_version(
-                    heartbeat, now=now, version=13
-                )
+                heartbeat is None
+                or not heartbeat_supports_version(heartbeat, now=now, version=13)
             ):
                 raise HTTPException(
                     503, "deterministic V13 scorer capability is unavailable"
