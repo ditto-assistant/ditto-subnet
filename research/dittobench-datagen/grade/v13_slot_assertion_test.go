@@ -25,3 +25,18 @@ func TestV13SlotAssertionScope(t *testing.T) {
 		}
 	}
 }
+
+func TestV13SlotSiblingActionDoesNotSupersedeCurrentActor(t *testing.T) {
+	mc := protocol.MemoryCase{BenchVersion: 13, AnswerKind: protocol.AnswerList,
+		Claims: []protocol.Claim{
+			{Kind: protocol.ClaimKindEntity, Expected: "Brendan Leon", Accept: []string{"Buddy"}, Critical: true},
+			{Kind: protocol.ClaimKindAction, Expected: "cancel the old plan", Accept: []string{"cancel the old"}, Critical: true},
+			{Kind: protocol.ClaimKindChannel, Expected: "phone", Accept: []string{"telephone"}, Critical: true},
+		}}
+	if got := Memory(mc, protocol.RunResponse{Answer: "Buddy will cancel the old by telephone."}); got.Score != 1 {
+		t.Fatalf("current actor rejected because of sibling action vocabulary: %+v", got)
+	}
+	if got := Memory(mc, protocol.RunResponse{Answer: "Buddy will not cancel the old by telephone."}); got.Score != 0 {
+		t.Fatalf("outer negation hidden by sibling vocabulary: %+v", got)
+	}
+}

@@ -34,13 +34,18 @@ func gradeClaimSetV13(mc protocol.MemoryCase, resp protocol.RunResponse, an anal
 		// Negation intrinsic to a reviewed semantic value ("do not agree",
 		// "not happening") is not rejection of that value. An outer "not"
 		// still opens a rejected segment.
-		claimLex.protected = append(append([]string(nil), lex.protected...), foldV13(claim.Expected))
-		for _, accepted := range claim.Accept {
-			claimLex.protected = append(claimLex.protected, foldV13(accepted))
-		}
-		claimLex.semanticValues = append([]string{foldV13(claim.Expected)}, claim.Accept...)
-		for i := range claimLex.semanticValues {
-			claimLex.semanticValues[i] = foldV13(claimLex.semanticValues[i])
+		claimLex.protected = append([]string(nil), lex.protected...)
+		claimLex.semanticValues = nil
+		// Sibling claims can share a sentence. "Buddy will cancel the old"
+		// asserts Buddy now; the reviewed action phrase must not mark the
+		// entity/channel claims as historical. Protect semantic vocabulary,
+		// not the outer rejection/correction applying to that vocabulary.
+		for _, sibling := range mc.Claims {
+			for _, value := range append([]string{sibling.Expected}, sibling.Accept...) {
+				folded := foldV13(value)
+				claimLex.protected = append(claimLex.protected, folded)
+				claimLex.semanticValues = append(claimLex.semanticValues, folded)
+			}
 		}
 		sort.SliceStable(claimLex.semanticValues, func(i, j int) bool { return len(claimLex.semanticValues[i]) > len(claimLex.semanticValues[j]) })
 		if claim.Kind == protocol.ClaimKindDirection {
