@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule bounded BuildKit cache cleanup for the Ditto screener executor
+
+[Timer]
+OnCalendar={{ screener_cache_gc_on_calendar }}
+RandomizedDelaySec={{ screener_cache_gc_randomized_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

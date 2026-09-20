@@ -220,3 +220,6 @@
       host_vars and populate the {{ screener_mnemonic_secret }} secret, then
       re-run this play (or `systemctl start {{ screener_unit }}`).
   when: screener_hotkey | length == 0
+
+- name: Install the scheduled BuildKit cache cleanup
+  ansible.builtin.include_tasks: cache_gc.yml

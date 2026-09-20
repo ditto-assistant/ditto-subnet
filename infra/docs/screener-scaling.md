@@ -226,6 +226,76 @@ After `subnet-screener-1` is converged, use Backroom to:
 The exact Debian, inventory, vault, Ansible, activation, verification, and drain
 commands live in [`docs/hetzner-screener-fleet.md`](../../docs/hetzner-screener-fleet.md).
 
+## BuildKit cache cleanup on dedicated screener hosts
+
+The `screener_worker` role installs `ditto-screener-cache-gc.timer` and its
+oneshot service. It backs up the rootless executor's own builder GC
+(`workers/screener/deploy/rootless-daemon.json`, `defaultKeepStorage` 40GB) by
+running `docker builder prune --force --keep-storage <budget> [--filter
+until=<age>]` against the rootless executor socket only. BuildKit skips records
+used by an in-flight build, so a timer firing mid-build does not interrupt it.
+The job never uses `--all`, `docker system prune`, or image/volume/container
+pruning.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `screener_cache_gc_enabled` | `true` | `false` stops and disables the timer |
+| `screener_cache_gc_on_calendar` | `hourly` | systemd cadence (plus `screener_cache_gc_randomized_delay: 5min`) |
+| `screener_cache_gc_keep_storage` | `40GB` | retained cache budget; keep equal to the daemon budget |
+| `screener_cache_gc_min_age` | `1h` | records younger than this are never pruned; empty (`""`) means no age floor, by design |
+| `screener_cache_gc_df_path` | executor home | filesystem logged with `df -h`; the executor home (`/var/lib/ditto-screener-docker`) holds the daemon's data root, so it is the cache's mount. `df` of the home itself works for the unit user despite mode 0700; a path beneath it would not |
+| `screener_cache_gc_dry_run` | `false` | log policy and disk state, skip the prune |
+
+This timer is the second pass, not the only one: `update-screener.sh`
+(`maintain_cache`, ~line 313) already runs `docker builder prune --keep-storage`
+against the same rootless executor, and the daemon's builder GC is the
+continuous limit. The keep-storage budget therefore lives in THREE places
+(`rootless-daemon.json`, the updater's `SCREENER_CACHE_KEEP_STORAGE`, and
+`screener_cache_gc_keep_storage`) and must stay equal. The age floor is small
+on purpose: `update-screener.sh` (~line 324) uses no age filter because a floor
+exempts burst-created cache, which is exactly what overruns the budget; 1h only
+protects records from the current burst's in-flight builds, and `""` removes it.
+The timer's unit orders `After=` the executor but never `Wants=` it, so it can
+never start the daemon; an unreachable executor fails the run visibly.
+
+The 40GB budget deliberately preserves warm layers so requeued and resubmitted
+builds stay fast (cold builds exceed nine minutes, see #429); lowering it trades
+throughput for headroom. The host disk must leave room above the budget. Each
+run logs `docker system df` and `df -h` before and after to journald under
+`ditto-screener-cache-gc`; a failed prune or unreachable executor exits nonzero,
+leaving the unit in `failed` state.
+
+Inspect and operate manually (as an operator, against the rootless socket):
+
+```bash
+systemctl list-timers ditto-screener-cache-gc.timer
+systemctl status ditto-screener-cache-gc.service
+journalctl -u ditto-screener-cache-gc.service --since -1d
+export DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock
+docker system df; docker system df -v | sed -n '/Build cache/,$p'; df -h /
+sudo systemctl start ditto-screener-cache-gc.service   # run the bounded policy now
+docker builder prune --keep-storage 40GB --filter until=1h  # manual, same policy (asks for confirmation)
+```
+
+Emergency reclaim (interrupts warm-cache performance, never while a build is
+active: check `docker ps` first): `docker builder prune --all --force`.
+
+Coverage and UNVERIFIED items. CI runs the script's unit tests (fake `docker`),
+renders the units, and runs `tasks/cache_gc.yml` in `--check` mode for the
+enabled and disabled policy. That is not an idempotency or systemd test; a real
+idempotent second apply cannot be exercised in CI. Nothing here is proven on a
+real host. Before #541 can close, a dev host must confirm: `docker builder prune
+--keep-storage ... --filter until=...` behavior on the executor's Docker
+version; `systemd-analyze verify` on the units; the unit running as the deploy
+user with `SupplementaryGroups` under the hardened sandbox; that editing the
+cadence variables re-arms the running timer (a handler restarts it); and the
+before/after `docker system df`, `df -h`, timer status, and heartbeat health.
+
+Rollout: converge the host with the existing screener Ansible path (protected
+workflow, `--check --diff` first). Production verification records, before and
+after: `docker system df`, `df -h`, `systemctl status
+ditto-screener-cache-gc.timer`, and the screener heartbeat health in Backroom.
+
 ## Rollback
 
 Apply all three lanes as GCE-only to restore the GCE screening path after an

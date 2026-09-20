@@ -1,0 +1,39 @@
+[Unit]
+Description=Bounded BuildKit cache cleanup for the Ditto screener executor
+Documentation=https://github.com/ditto-assistant/ditto-subnet/blob/main/infra/docs/screener-scaling.md
+# After= only: the timer must never start the executor daemon.
+After={{ screener_executor_unit }}.service
+
+[Service]
+Type=oneshot
+User={{ screener_user }}
+Group={{ screener_group }}
+SupplementaryGroups={{ screener_executor_group }}
+Environment=DOCKER_HOST={{ screener_docker_host }}
+Environment=DOCKER_CONFIG=/tmp/docker-config
+Environment=SCREENER_CACHE_GC_KEEP_STORAGE={{ screener_cache_gc_keep_storage }}
+Environment=SCREENER_CACHE_GC_MIN_AGE={{ screener_cache_gc_min_age }}
+Environment=SCREENER_CACHE_GC_DF_PATH={{ screener_cache_gc_df_path }}
+Environment=SCREENER_CACHE_GC_DRY_RUN={{ screener_cache_gc_dry_run | bool | lower }}
+ExecStart={{ screener_cache_gc_bin }}
+SyslogIdentifier=ditto-screener-cache-gc
+TimeoutStartSec=30min
+Nice=10
+IOSchedulingClass=idle
+
+# Same boundary as the worker: reach only the empty rootless executor daemon.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+CapabilityBoundingSet=
+DevicePolicy=closed
+UMask=0077

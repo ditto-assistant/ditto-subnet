@@ -76,6 +76,38 @@ screener_mnemonic_secret: validator-hotkey-mnemonic
 # secret id in host_vars.
 screener_api_token_secret: ""
 
+# --- BuildKit cache cleanup (systemd oneshot + timer) ---
+# The rootless executor's cache grows continuously from untrusted builds. This
+# timer is a bounded SECOND pass: workers/screener/scripts/update-screener.sh
+# (maintain_cache, ~:313) already runs `docker builder prune --keep-storage` on
+# the same rootless executor, and the daemon's own builder GC
+# (workers/screener/deploy/rootless-daemon.json) is the continuous limit. The
+# keep-storage budget therefore lives in THREE places (daemon.json,
+# SCREENER_CACHE_KEEP_STORAGE for the updater, screener_cache_gc_keep_storage)
+# and MUST stay equal. Prunes never use --all, never touch containers, volumes
+# or images, and BuildKit skips records used by an in-flight build. Keep the
+# budget large enough that resubmissions and requeued re-screens still hit warm
+# layers (cold builds run 9+ minutes; see #429).
+screener_cache_gc_enabled: true # false stops and disables the timer
+screener_cache_gc_unit: ditto-screener-cache-gc
+screener_cache_gc_bin: /usr/local/sbin/ditto-screener-cache-gc
+screener_cache_gc_on_calendar: hourly # systemd OnCalendar cadence
+screener_cache_gc_randomized_delay: 5min
+# Storage to retain. Least-recently-used unused records beyond this are pruned.
+screener_cache_gc_keep_storage: 40GB
+# Minimum record age. Deliberately small: update-screener.sh (~:324) uses NO age
+# filter because an age floor exempts burst-created cache, which is exactly what
+# overruns the budget. Empty ("") means no age floor, by design.
+screener_cache_gc_min_age: 1h
+# Path whose filesystem is logged with df -h. Defaults to the executor home: the
+# rootless daemon's data root is <home>/docker/data, so it is on the same mount as
+# the BuildKit cache. df of the home itself works for the unit user even though
+# the home is mode 0700 (df needs search permission on the parents only); a path
+# beneath it would fail. Override if the cache is moved to another mount.
+screener_cache_gc_df_path: "{{ screener_executor_home }}"
+# true logs the policy and disk state but skips the prune (rehearsal).
+screener_cache_gc_dry_run: false
+
 # uv install location (used if uv isn't already on PATH from the base role).
 screener_uv_bin: /usr/local/bin/uv
 
