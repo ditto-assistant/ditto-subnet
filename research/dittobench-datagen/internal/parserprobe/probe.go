@@ -294,7 +294,7 @@ func Probe(a gen.DatasetArtifact, rt *router) (SeedReport, []string, map[string]
 			fam := rt.predict("mem:", ac.Question)
 			rq, rok := classifyWithin(a.BenchVersion, fam, ac.Question)
 			var rd derived
-			if a.BenchVersion >= protocol.BenchVersionV13 && (fam == "v13-open-program" || fam == "v13-personal-program" || strings.HasPrefix(fam, "world-story-") || strings.HasPrefix(fam, "record-quantity") || strings.HasPrefix(fam, "point-in-time") || strings.HasPrefix(fam, "injection-")) {
+			if a.BenchVersion >= protocol.BenchVersionV13 && (fam == "enterprise-composed-program" || fam == "v13-open-program" || fam == "v13-personal-program" || strings.HasPrefix(fam, "world-story-") || strings.HasPrefix(fam, "record-quantity") || strings.HasPrefix(fam, "point-in-time") || strings.HasPrefix(fam, "injection-")) {
 				rd = answerV13(st, ac.Question)
 				rok = rd.ok
 			} else if rok {
@@ -464,6 +464,7 @@ func classifyWithin(benchVersion int, family, question string) (parsedQuestion, 
 func knownFamilies(benchVersion int) map[string]bool {
 	out := map[string]bool{}
 	if benchVersion >= protocol.BenchVersionV13 {
+		out["enterprise-composed-program"] = true
 		out["v13-open-program"] = true
 		out["v13-personal-program"] = true
 		for _, f := range storyQuestionsV13 {

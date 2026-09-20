@@ -256,7 +256,19 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	if err != nil {
 		return MemorySuite{}, err
 	}
-	business, err := universe.GenerateV13Programs(seed, envelope.BusinessPrograms)
+	var business []universe.V10GeneratedCase
+	// The deterministic launch slice spends existing business slots, not
+	// extra score weight: 12 full-profile cases, 4 in smoke/medium.
+	enterpriseCount := min(12, envelope.BusinessPrograms)
+	legacyCount := envelope.BusinessPrograms - enterpriseCount
+	if legacyCount > 0 {
+		business, err = universe.GenerateV13Programs(seed, legacyCount)
+	}
+	if err == nil {
+		var enterprise []universe.V10GeneratedCase
+		enterprise, err = universe.GenerateV13EnterprisePrograms(seed, enterpriseCount)
+		business = append(business, enterprise...)
+	}
 	if err != nil {
 		return MemorySuite{}, err
 	}

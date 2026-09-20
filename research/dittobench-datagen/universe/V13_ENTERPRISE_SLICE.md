@@ -45,6 +45,14 @@ Semantic filtering that preserves all necessary evidence is legitimate.
    adversaries, and the same pinned honest harness on OSS20B versus OSS120B.
 5. Exact-head review, CI, merge/deploy, supported canary and rollout.
 
-This API is opt-in and not yet called by the scored V13 envelope. No change to
-active benchmark selection or scoring is made by this foundation. Public seed
-reproducibility is not privacy; no unreconstructibility claim is made.
+The deterministic V13 envelope now calls this API: 12 full-profile business
+slots (four small/medium) carry three-hop contacts, filtered membership counts
+and hour sums, with renderer/noise invariants and causal counterfactuals. The
+total envelope is unchanged. Trusted provenance protects these records from
+the legacy surface pass. Served CSV/JSON answers are independently replayed in
+tests. Negated structured answers are no longer accepted as positive claims.
+
+Platform issuance still requires its separate deterministic-route reconciliation;
+the private renderer route is not changed by this layer. No live activation,
+honest-model qualification or complete domain-specific workflow coverage is
+claimed. Public seed reproducibility is not privacy.

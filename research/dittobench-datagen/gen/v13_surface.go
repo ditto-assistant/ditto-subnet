@@ -8,6 +8,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/internal/textnoise"
 	"github.com/ditto-assistant/dittobench-datagen/persona"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 // Bench v13 surface pass. It supersedes the v12 pass for bench_version >= 13
@@ -98,6 +99,10 @@ func V13ApplyArtifactSurfacePass(seed int64, benchVersion int, artifact *Dataset
 	if benchVersion < protocol.BenchVersionV13 || artifact == nil {
 		return
 	}
+	// Typed enterprise documents already have compositional rendering. Preserve
+	// their exact serialization and questions across every legacy stage. Select
+	// them by trusted generator provenance, never by harness-supplied text.
+	defer preserveV13EnterpriseSurfaces(artifact)()
 	surfaceSeed := v13SurfaceSeed(seed, opts.Salt)
 	if opts.Salt != 0 {
 		artifact.SurfaceSalt = opts.Salt
@@ -221,6 +226,43 @@ func V13ApplyArtifactSurfacePass(seed int64, benchVersion int, artifact *Dataset
 				pair := &artifact.MemoryWaves[w].Pairs[j]
 				pair.Prompt = translate("pair:"+pair.PairID+":prompt", pair.Prompt)
 				pair.Response = translate("pair:"+pair.PairID+":response", pair.Response)
+			}
+		}
+	}
+}
+
+func preserveV13EnterpriseSurfaces(a *DatasetArtifact) func() {
+	questions := map[string]string{}
+	evidence := map[string]bool{}
+	for _, c := range a.MemoryCases {
+		if c.V10Provenance == nil || c.V10Provenance.Revision != universe.V13EnterpriseRevision {
+			continue
+		}
+		questions[c.ID] = c.Question
+		for _, id := range c.V10EvidencePairIDs {
+			evidence[id] = true
+		}
+	}
+	pairs := map[string]protocol.MemoryPair{}
+	for _, wave := range a.MemoryWaves {
+		for _, pair := range wave.Pairs {
+			if evidence[pair.PairID] {
+				pairs[pair.PairID] = pair
+			}
+		}
+	}
+	return func() {
+		for i := range a.MemoryCases {
+			if question, ok := questions[a.MemoryCases[i].ID]; ok {
+				a.MemoryCases[i].Question = question
+			}
+		}
+		for w := range a.MemoryWaves {
+			for i := range a.MemoryWaves[w].Pairs {
+				p := &a.MemoryWaves[w].Pairs[i]
+				if original, ok := pairs[p.PairID]; ok {
+					p.Prompt, p.Response = original.Prompt, original.Response
+				}
 			}
 		}
 	}

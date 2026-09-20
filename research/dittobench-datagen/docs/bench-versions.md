@@ -965,7 +965,28 @@ and scorer revision, and generate fresh artifacts before another canary.
 
 `TestV13KnownVector` (#1848) in `gen/publicvector_test.go` pins seed
 `123456789`, full profile:
-`133153f4f16c126b1759a4a125db474c9cb4288a4001b6f32f43492ce4b0f9a0`.
+`59bd8592ff8b820b2e0bb49ceb992940c9a45a2935a47ba8062b80707f85766a`.
+
+The deterministic launch candidate spends 12 of the existing 28 full-profile
+business-program slots on `v13-deterministic-enterprise-v1` (four of four in
+small/medium). Total score weight and all other slot counts remain unchanged.
+Three complete metamorphic groups cover filtered membership counts, allocated-hour
+sums, and a three-edge contact lookup. Format/noise variants preserve answers;
+causal event edits change answers. CSV, JSON, Markdown, Slack-style, email and
+synthetic transcript records share the same typed history. Record order is not
+chronology. Questions and evidence are preserved byte-exact through the legacy
+artifact surface pass. The private fact-renderer route remains unchanged in this
+layer; switching Platform issuance to the deterministic candidate is a separate
+release prerequisite, not a fallback on private-production failure.
+
+Vectors: `TestV13EnterpriseScoredGroups`,
+`TestV13EnterpriseCaseAnswersFromServedRecords`, and
+`TestV13EnterpriseArtifactPreservesTypedSurfaces`.
+
+The structured answer field remains authoritative, but a natural-language
+negation or superseded value inside it is not an asserted answer. It uses the
+same rejection/correction scope as final text (`TestV13SlotAssertionScope`).
+V2–V12 grading and dataset vectors are unchanged.
 This integrated pin includes every dedicated slot generator, opaque session
 ids and jittered timestamps, explicit-year calendar records, and story swap
 arithmetic rendered into the records rather than held only in hidden state.

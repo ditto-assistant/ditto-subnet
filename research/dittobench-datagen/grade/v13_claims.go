@@ -45,7 +45,9 @@ import (
 //     exposition while the marked amount is the claim.
 //
 // The engine works on the folded text of final_text (foldV13) and treats the
-// structured answer slot, when populated, as an unconditional assertion.
+// structured answer slot, when populated, as authoritative. Natural language
+// inside that slot still obeys rejection and correction scope; merely mentioning
+// a value ("not 0") is not an assertion of that value.
 
 // claimLexicon is the English structural vocabulary merged with the lexicon
 // of the case's question language (multilingual.For). Every list is folded.
@@ -553,7 +555,16 @@ func (an analysis) collect(extract extractor, equivalent func(slotKey, proseKey 
 	var out candidateSet
 	if an.slot != "" {
 		out.slotPopulated = true
-		slotMentions := extract(an.slot)
+		// Parse the authoritative slot with the same assertion rules as prose.
+		// The recursive call has an empty slot, so it uses only the no-slot
+		// branch below. Do not fall back to final_text when the slot rejects all
+		// candidate values.
+		slotAnalysis := analyzeV13("", an.slot, an.lex)
+		slotClaims := slotAnalysis.collect(extract, equivalent, cueRule, maxClaims)
+		var slotMentions []mention
+		for _, key := range slotClaims.keys {
+			slotMentions = append(slotMentions, mention{key: key})
+		}
 		if len(slotMentions) == 0 {
 			out.slotUnknown = true
 			out.keys = append(out.keys, "slot:unknown")

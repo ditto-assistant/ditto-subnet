@@ -7,6 +7,7 @@ import (
 
 	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
 )
 
 func TestV13GenerationIsExplicitAndNotActivated(t *testing.T) {
@@ -254,7 +255,8 @@ func (r *recordingTranslation) Translate(_ int64, salt uint64, location, text st
 }
 
 // TestV13TranslationHookCoversEverySurface proves the private-pass hand-off
-// sees every harness-visible surface exactly once and can rewrite all of them.
+// sees legacy surfaces exactly once. Typed enterprise records retain their
+// validated serialization rather than accepting post-render mutations.
 func TestV13TranslationHookCoversEverySurface(t *testing.T) {
 	prof, _ := ProfileForVersion("small", protocol.BenchVersionV13)
 	rec := &recordingTranslation{locations: map[string]int{}}
@@ -272,13 +274,29 @@ func TestV13TranslationHookCoversEverySurface(t *testing.T) {
 			}
 		}
 	}
+	typedPairs := map[string]bool{}
 	for _, c := range artifact.MemoryCases {
+		if c.V10Provenance != nil && c.V10Provenance.Revision == universe.V13EnterpriseRevision {
+			if strings.HasSuffix(c.Question, "⟨translated⟩") {
+				t.Fatal("typed question translated")
+			}
+			for _, id := range c.V10EvidencePairIDs {
+				typedPairs[id] = true
+			}
+			continue
+		}
 		if !strings.HasSuffix(c.Question, "⟨translated⟩") || rec.locations["case:"+c.ID] != 1 {
 			t.Fatalf("case %s not handed to the translation pass exactly once", c.ID)
 		}
 	}
 	for _, wave := range artifact.MemoryWaves {
 		for _, pair := range wave.Pairs {
+			if typedPairs[pair.PairID] {
+				if strings.HasSuffix(pair.Prompt, "⟨translated⟩") || strings.HasSuffix(pair.Response, "⟨translated⟩") {
+					t.Fatal("typed evidence translated")
+				}
+				continue
+			}
 			if !strings.HasSuffix(pair.Prompt, "⟨translated⟩") || !strings.HasSuffix(pair.Response, "⟨translated⟩") {
 				t.Fatalf("pair %s not translated", pair.PairID)
 			}

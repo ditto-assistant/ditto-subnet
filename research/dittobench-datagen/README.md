@@ -104,7 +104,7 @@ moves again with every later v13 lever. For the public full-profile seed
 | 9 (pre-activation) | `2027-01-01T00:00:00Z` | `b12edd3649dece3af415ad289a24a1a8615b7d906773e718ee637da14cbd541f` |
 | 10 (pre-activation) | `2027-02-01T00:00:00Z` | `04d6f3d9099dd9922f931d9a6f90caffd18e70d041d074986d68752ddf928a0f` |
 | 12 (pre-activation) | `2027-04-01T00:00:00Z` | `775e0eaf2d41c0cf4647c51f19c56ecc3bb6db37a780538bb7db745811ab91bb` |
-| 13 (pre-activation) | `2027-05-01T00:00:00Z` | `133153f4f16c126b1759a4a125db474c9cb4288a4001b6f32f43492ce4b0f9a0` |
+| 13 (pre-activation) | `2027-05-01T00:00:00Z` | `59bd8592ff8b820b2e0bb49ceb992940c9a45a2935a47ba8062b80707f85766a` |
 
 Each is regenerated and asserted by CI (`TestV2KnownVector` and friends), so a
 value here that disagrees with `cmd/generate` is a bug in this table, not in the

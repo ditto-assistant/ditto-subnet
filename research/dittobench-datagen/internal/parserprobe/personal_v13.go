@@ -70,6 +70,9 @@ func answerPersonalV13(st *store, question string) derived {
 }
 
 func answerV13(st *store, question string) derived {
+	if d := answerEnterpriseV13(st, question); d.ok {
+		return d
+	}
 	if d := answerBookedSeatsV13(st, question); d.ok {
 		return d
 	}

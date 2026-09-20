@@ -22,7 +22,9 @@ func TestV13CrossAnchorRecoveryRegression(t *testing.T) {
 	}
 }
 
-func TestV13CrossAnchorRecoveryPreservesQualificationSeed(t *testing.T) {
+// The prelaunch enterprise slice deliberately changes the former qualification
+// artifact. Pin its corrected bytes; old receipts do not qualify this candidate.
+func TestV13CrossAnchorRecoveryPinsCurrentCandidate(t *testing.T) {
 	profile, _ := ProfileForVersion("full", 13)
 	a, err := GenerateDataset(1294236556, profile, 13)
 	if err != nil {
@@ -32,7 +34,7 @@ func TestV13CrossAnchorRecoveryPreservesQualificationSeed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != "aa87ff7416d0b2cd2fa9d894b2741d315e830ae81707002c34d73783b1a3e6a3" {
+	if got := fmt.Sprintf("%x", sha256.Sum256(raw)); got != "0acb227a590f07c9257797657732fbe364d94dad0d4514afcfede050d644b965" {
 		t.Fatalf("qualification artifact changed: %s", got)
 	}
 }
