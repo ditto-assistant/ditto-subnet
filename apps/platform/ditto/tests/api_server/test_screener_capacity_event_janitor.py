@@ -131,10 +131,10 @@ def test_rejects_invalid_settings(
             ScreenerCapacityEventJanitor(session_maker=session_maker, **kwargs)
 
 
-def _fail_or_busy_on_call(
-    monkeypatch: pytest.MonkeyPatch, *, call: int, outcome: object
+def _fail_on_call(
+    monkeypatch: pytest.MonkeyPatch, *, call: int, error: Exception
 ) -> None:
-    """Run the real delete, but replace the ``call``-th batch with ``outcome``."""
+    """Run the real delete, but raise ``error`` on the ``call``-th batch."""
     real = janitor_module.delete_expired_screener_capacity_events
     calls = 0
 
@@ -142,9 +142,7 @@ def _fail_or_busy_on_call(
         nonlocal calls
         calls += 1
         if calls == call:
-            if isinstance(outcome, Exception):
-                raise outcome
-            return outcome
+            raise error
         return await real(session, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(
@@ -152,30 +150,12 @@ def _fail_or_busy_on_call(
     )
 
 
-async def test_busy_batch_keeps_the_rows_already_deleted_in_the_metric(
+async def test_failed_sweep_rolls_back_every_batch_and_counts_nothing(
     session_maker: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await _seed(session_maker, old=9, recent=0)
-    _fail_or_busy_on_call(monkeypatch, call=3, outcome=None)
-    janitor = ScreenerCapacityEventJanitor(
-        session_maker=session_maker, retention_days=30, batch_size=2
-    )
-    deleted_before, busy_before = _deleted(), _runs("busy")
-
-    # Batches 1 and 2 delete four rows before batch 3 finds the lock taken.
-    assert await janitor.sweep(now=_NOW) == 4
-    assert _deleted() == deleted_before + 4
-    assert _runs("busy") == busy_before + 1
-    assert await _count(session_maker) == 5
-
-
-async def test_failed_batch_keeps_the_rows_already_deleted_in_the_metric(
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    await _seed(session_maker, old=9, recent=0)
-    _fail_or_busy_on_call(monkeypatch, call=3, outcome=RuntimeError("boom"))
+    _fail_on_call(monkeypatch, call=3, error=RuntimeError("boom"))
     janitor = ScreenerCapacityEventJanitor(
         session_maker=session_maker, retention_days=30, batch_size=2
     )
@@ -183,7 +163,11 @@ async def test_failed_batch_keeps_the_rows_already_deleted_in_the_metric(
 
     with pytest.raises(RuntimeError, match="boom"):
         await janitor.sweep(now=_NOW)
-    assert _deleted() == deleted_before + 4
+
+    # One transaction per sweep: batches 1 and 2 were rolled back with batch 3,
+    # so nothing was deleted and the counter, which follows the commit, is unmoved.
+    assert await _count(session_maker) == 9
+    assert _deleted() == deleted_before
     assert _runs("error") == error_before + 1
 
 
@@ -246,15 +230,18 @@ async def test_deep_backlog_in_one_environment_does_not_starve_another(
     # only touches dev. The old shared budget would have spent both on dev.
     assert await janitor.sweep(now=_NOW) == 6
     async with session_maker() as session:
-        remaining = dict(
+        rows = (
             (
                 await session.execute(
                     select(ScreenerCapacityEvent.environment, func.count())
                     .group_by(ScreenerCapacityEvent.environment)
                     .order_by(ScreenerCapacityEvent.environment)
                 )
-            ).all()
+            )
+            .tuples()
+            .all()
         )
+    remaining: dict[str, int] = dict(rows)
     assert remaining == {"dev": 6, "prod": 1}
 
 
@@ -286,3 +273,44 @@ async def test_loop_survives_a_failed_sweep_and_stops_on_aclose(
     await asyncio.sleep(0.1)
     assert sweeps == settled  # no sweeps after aclose
     assert janitor._task is None
+
+
+async def test_second_janitor_cannot_sweep_between_the_first_janitors_batches(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Replicas share ONE deletion budget per sweep, not one per batch."""
+    await _seed(session_maker, old=10, recent=0)
+    real = janitor_module.delete_expired_screener_capacity_events
+    between_batches = asyncio.Event()
+    resume = asyncio.Event()
+    calls = 0
+
+    async def pausing(session: AsyncSession, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 2:  # the first sweep is now between its first and second batch
+            between_batches.set()
+            await resume.wait()
+        return await real(session, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        janitor_module, "delete_expired_screener_capacity_events", pausing
+    )
+    first = ScreenerCapacityEventJanitor(
+        session_maker=session_maker, retention_days=30, batch_size=2, max_batches=2
+    )
+    second = ScreenerCapacityEventJanitor(
+        session_maker=session_maker, retention_days=30, batch_size=2, max_batches=2
+    )
+    busy_before = _runs("busy")
+
+    task = asyncio.create_task(first.sweep(now=_NOW))
+    await asyncio.wait_for(between_batches.wait(), timeout=10)
+    # A staggered replica must find the sweep still owned, not start its own.
+    assert await second.sweep(now=_NOW) == 0
+    assert _runs("busy") == busy_before + 1
+    resume.set()
+
+    assert await task == 4  # max_batches * batch_size, one budget
+    assert await _count(session_maker) == 6  # a second budget was never spent

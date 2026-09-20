@@ -200,20 +200,24 @@ instead of letting reconciliation and provider lifecycle events accumulate.
   history. The window in effect is returned as `event_retention_days` by
   `GET /api/v1/admin/screener-capacity` (and therefore `get_screener_capacity`),
   with `null` meaning pruning is off.
-- **Mechanism:** a Platform-role janitor sweeps hourly. It lists the
-  environments holding events once, then runs up to 20 transactions, each
-  deleting at most 1,000 expired events **per environment**, against the
-  `(environment, created_at)` index. Every environment has its own budget, so a
-  backlog in one cannot starve another, and an environment stops being visited
-  once a batch comes back short. Readers keep seeing recent history while it
-  runs. An advisory lock stops replicas from multiplying the batch size, and an
-  event exactly at the cutoff is kept. A failed batch is retried by the next
-  sweep.
+- **Mechanism:** a Platform-role janitor sweeps hourly. Each sweep is **one
+  transaction** that takes a transaction-scoped advisory lock, lists the
+  environments holding events once, then runs up to 20 batches inside it, each
+  deleting at most 1,000 expired events **per environment** against the
+  `(environment, created_at)` index. Because the lock lives as long as that one
+  transaction, another Platform replica cannot start a sweep of its own between
+  batches, so replicas share a single deletion budget per sweep. Every
+  environment has its own budget, so a backlog in one cannot starve another, and
+  an environment stops being visited once a batch comes back short. Readers keep
+  seeing recent history while it runs (MVCC). An event exactly at the cutoff is
+  kept. A failure rolls back the whole sweep, so nothing is half-deleted, and the
+  next sweep retries it.
 - **Signals:** `ditto_screener_capacity_event_janitor_runs_total{outcome}`
   (`deleted`, `busy`, `error`), `ditto_screener_capacity_event_janitor_deleted_total`
   and `ditto_screener_capacity_event_janitor_duration_seconds`. The deleted
-  counter moves per batch, so it stays accurate when a sweep ends busy or
-  fails part-way. Alert on a sustained `error` rate; failures are also logged as
+  counter moves only after the sweep commits, so it never counts rows that a
+  failed sweep rolled back; a `busy` outcome means another replica owns the
+  sweep. Alert on a sustained `error` rate; failures are also logged as
   `screener capacity event janitor sweep failed`.
 
 ## Stand-up order

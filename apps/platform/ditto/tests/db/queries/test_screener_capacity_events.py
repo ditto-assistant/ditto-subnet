@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.db.models import ScreenerCapacityEvent
 from ditto.db.queries.screener_capacity_events import (
     SCREENER_CAPACITY_EVENT_JANITOR_LOCK_KEY,
+    acquire_screener_capacity_event_janitor_lock,
     delete_expired_screener_capacity_events,
     list_screener_capacity_event_environments,
 )
@@ -122,26 +123,34 @@ async def test_only_expired_rows_of_each_environment_are_removed(
     assert await _count(session_maker, "staging") == 1
 
 
-async def test_busy_sweep_does_not_wait_or_delete(
+async def test_lock_is_refused_while_another_transaction_holds_it(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    async with session_maker() as session, session.begin():
-        session.add(_event("prod", _CUTOFF - timedelta(days=1)))
-    async with session_maker() as holder:
-        await holder.begin()
+    async with session_maker() as holder, holder.begin():
+        assert await acquire_screener_capacity_event_janitor_lock(holder) is True
+        async with session_maker() as contender, contender.begin():
+            # try-lock: refused immediately, never waits.
+            assert (
+                await acquire_screener_capacity_event_janitor_lock(contender) is False
+            )
+    async with session_maker() as later, later.begin():
+        # The lock is transaction scoped, so it went away with the holder's.
+        assert await acquire_screener_capacity_event_janitor_lock(later) is True
+
+
+async def test_lock_is_still_taken_when_the_key_is_held_by_a_raw_advisory_lock(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The lock key is the public contract other replicas contend on."""
+    async with session_maker() as holder, holder.begin():
         await holder.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
             {"lock_key": SCREENER_CAPACITY_EVENT_JANITOR_LOCK_KEY},
         )
         async with session_maker() as contender, contender.begin():
             assert (
-                await delete_expired_screener_capacity_events(
-                    contender, environments=["prod"], before=_CUTOFF, limit=100
-                )
-                is None
+                await acquire_screener_capacity_event_janitor_lock(contender) is False
             )
-        await holder.rollback()
-    assert await _count(session_maker) == 1
 
 
 async def test_environment_with_no_expired_rows_is_left_alone(

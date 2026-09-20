@@ -30,23 +30,40 @@ async def list_screener_capacity_event_environments(
     return sorted(result)
 
 
+async def acquire_screener_capacity_event_janitor_lock(session: AsyncSession) -> bool:
+    """Try to take the sweep lock for the rest of the current transaction.
+
+    The lock is transaction scoped, so it is held exactly as long as the caller
+    keeps one transaction open. Run the whole bounded sweep inside it: taking it
+    per batch would let another replica start its own sweep between batches and
+    exceed the documented deletion budget. Returns ``False`` when another
+    replica holds it.
+    """
+    if session.get_bind().dialect.name != "postgresql":
+        # SQLite-backed unit tests do not exercise the production janitor.
+        return True
+    locked = await session.scalar(
+        text("SELECT pg_try_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
+        {"lock_key": SCREENER_CAPACITY_EVENT_JANITOR_LOCK_KEY},
+    )
+    return bool(locked)
+
+
 async def delete_expired_screener_capacity_events(
     session: AsyncSession,
     *,
     environments: Sequence[str],
     before: datetime,
     limit: int,
-) -> dict[str, int] | None:
+) -> dict[str, int]:
     """Delete up to ``limit`` events older than ``before`` in *each* environment.
 
     Every environment gets its own budget, so a backlog in one cannot starve
     another, and each environment is pruned against its own rows, which lets
     the ``(environment, created_at)`` index serve the scan. A row exactly at
-    ``before`` is kept.
+    ``before`` is kept. Returns the per-environment delete counts.
 
-    Returns the per-environment delete counts, or ``None`` when another replica
-    holds the transaction-scoped advisory lock, so replicas cannot multiply the
-    configured batch size.
+    The caller must already hold :func:`acquire_screener_capacity_event_janitor_lock`.
     """
     if limit <= 0:
         raise ValueError("screener capacity event janitor limit must be positive")
@@ -54,12 +71,6 @@ async def delete_expired_screener_capacity_events(
         # SQLite-backed unit tests do not exercise the production janitor;
         # keeping the SQL PostgreSQL-only stops a test-only query drifting.
         return dict.fromkeys(environments, 0)
-    locked = await session.scalar(
-        text("SELECT pg_try_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
-        {"lock_key": SCREENER_CAPACITY_EVENT_JANITOR_LOCK_KEY},
-    )
-    if not locked:
-        return None
     deleted: dict[str, int] = {}
     for environment in environments:
         result = await session.execute(
@@ -87,6 +98,7 @@ async def delete_expired_screener_capacity_events(
 
 __all__ = [
     "SCREENER_CAPACITY_EVENT_JANITOR_LOCK_KEY",
+    "acquire_screener_capacity_event_janitor_lock",
     "delete_expired_screener_capacity_events",
     "list_screener_capacity_event_environments",
 ]

@@ -10,6 +10,7 @@ from time import monotonic
 from typing import TYPE_CHECKING
 
 from ditto.db.queries.screener_capacity_events import (
+    acquire_screener_capacity_event_janitor_lock,
     delete_expired_screener_capacity_events,
     list_screener_capacity_event_environments,
 )
@@ -81,12 +82,17 @@ class ScreenerCapacityEventJanitor:
             await task
 
     async def sweep(self, *, now: datetime | None = None) -> int:
-        """Run up to ``max_batches`` transactions; exposed for real-DB tests.
+        """Run one bounded sweep in a single transaction; exposed for real-DB tests.
 
-        Environments are listed once, then each batch prunes at most
-        ``batch_size`` rows per environment. An environment drops out of later
-        batches as soon as one comes back short. The deleted counter moves per
-        batch, so a busy or failed later batch never hides earlier deletes.
+        The advisory lock is transaction scoped, so the whole sweep runs inside
+        one transaction: it is held for every batch, and a second replica cannot
+        start its own sweep in between. Environments are listed once, then each
+        batch prunes at most ``batch_size`` rows per environment, and an
+        environment drops out of later batches once one comes back short.
+
+        Because the sweep commits once, a failure rolls back every batch: nothing
+        is deleted and nothing is counted, and the next sweep retries. The
+        deleted counter therefore moves only after the commit.
         """
         if self._retention_days == 0:
             return 0
@@ -95,28 +101,25 @@ class ScreenerCapacityEventJanitor:
         total = 0
         try:
             async with self._session_maker() as session, session.begin():
+                if not await acquire_screener_capacity_event_janitor_lock(session):
+                    SCREENER_CAPACITY_EVENT_JANITOR_RUNS.labels(outcome="busy").inc()
+                    return 0
                 active = await list_screener_capacity_event_environments(session)
-            for _ in range(self._max_batches):
-                if not active:
-                    break
-                async with self._session_maker() as session, session.begin():
+                for _ in range(self._max_batches):
+                    if not active:
+                        break
                     deleted = await delete_expired_screener_capacity_events(
                         session,
                         environments=active,
                         before=before,
                         limit=self._batch_size,
                     )
-                if deleted is None:
-                    SCREENER_CAPACITY_EVENT_JANITOR_RUNS.labels(outcome="busy").inc()
-                    return total
-                batch_total = sum(deleted.values())
-                total += batch_total
-                SCREENER_CAPACITY_EVENT_JANITOR_DELETED.inc(batch_total)
-                active = [
-                    environment
-                    for environment in active
-                    if deleted[environment] >= self._batch_size
-                ]
+                    total += sum(deleted.values())
+                    active = [
+                        environment
+                        for environment in active
+                        if deleted[environment] >= self._batch_size
+                    ]
         except Exception:
             SCREENER_CAPACITY_EVENT_JANITOR_RUNS.labels(outcome="error").inc()
             logger.exception("screener capacity event janitor sweep failed")
@@ -126,6 +129,7 @@ class ScreenerCapacityEventJanitor:
                 monotonic() - started
             )
         SCREENER_CAPACITY_EVENT_JANITOR_RUNS.labels(outcome="deleted").inc()
+        SCREENER_CAPACITY_EVENT_JANITOR_DELETED.inc(total)
         return total
 
     async def _run(self) -> None:
