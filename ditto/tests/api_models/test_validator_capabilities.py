@@ -190,24 +190,26 @@ def test_deterministic_v13_capability_preserves_old_signatures_and_is_strict() -
         "software_version": "1.2.3",
         "source_revision": _REVISION,
     }
-    baseline = ScorerBenchmarkCapability(**legacy)
+    baseline = ScorerBenchmarkCapability.model_validate(legacy)
     assert "deterministic_v13_datasets" not in baseline.model_dump(mode="json")
     assert (
         baseline.model_dump_json()
-        == ScorerBenchmarkCapability(
-            **legacy, deterministic_v13_datasets=False
+        == ScorerBenchmarkCapability.model_validate(
+            legacy | {"deterministic_v13_datasets": False}
         ).model_dump_json()
     )
-    assert ScorerBenchmarkCapability(
-        **legacy, deterministic_v13_datasets=True
+    assert ScorerBenchmarkCapability.model_validate(
+        legacy | {"deterministic_v13_datasets": True}
     ).deterministic_v13_datasets
     for invalid in ("true", 1, None):
         with pytest.raises(ValidationError):
-            ScorerBenchmarkCapability(**legacy, deterministic_v13_datasets=invalid)
+            ScorerBenchmarkCapability.model_validate(
+                legacy | {"deterministic_v13_datasets": invalid}
+            )
     with pytest.raises(ValidationError):
-        ScorerBenchmarkCapability(
-            **(legacy | {"supported_bench_versions": (12,)}),
-            deterministic_v13_datasets=True,
+        ScorerBenchmarkCapability.model_validate(
+            legacy
+            | {"supported_bench_versions": (12,), "deterministic_v13_datasets": True}
         )
 
 
