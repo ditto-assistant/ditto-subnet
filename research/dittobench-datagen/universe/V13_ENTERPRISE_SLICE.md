@@ -13,10 +13,18 @@ event step. CSV and JSON serialize the same facts, without receiving a query,
 answer or relevance flag. Rendering has a separate deterministic seed.
 
 Six domain labels currently exercise a common relationship skeleton; this is
-NOT yet six domain-specific workflows. The generator's repeated remove/add
-sequence is an initial fixture, not completed arbitrary-history sampling.
-Current query operators are values/count; filter, aggregate, comparison,
-branching joins and compound answer programs remain delivery work.
+NOT yet six domain-specific workflows. The generator draws valid membership
+edits across multiple members, and opaque entity/channel bindings prevent
+suffix-based join inference. Programs now compose scalar/set reference follows,
+scalar equality filters and terminal projection/count/typed-hour sum. Comparison,
+broader domain-specific operations and tuple-answer programs remain delivery work.
+
+CSV, JSON and Markdown round-trip tests verify the same event histories across
+multiple documents. Slack-style, email and synthetic transcript frames express
+explicit assignment/add/remove semantics and use long records with shuffled
+events. No renderer receives a target query, so irrelevant and supporting facts
+share their format and grammar. These initial frames still need independent
+honest/adversarial runtime qualification; phrase-coverage tests alone are not it.
 
 Tests cover seed replay, three-hop answers checked against source events,
 historical set membership, query-target rotation, world growth and ordering
