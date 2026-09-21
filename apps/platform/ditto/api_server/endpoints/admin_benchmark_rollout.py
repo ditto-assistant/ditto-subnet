@@ -36,6 +36,8 @@ from ditto.api_server.queue_policy_settings import (
     resolve_queue_policy_settings,
 )
 from ditto.db.models import (
+    Agent,
+    BenchmarkRolloutMember,
     InferenceProviderRoute,
     InferenceRoutingPolicy,
     ValidatorHeartbeat,
@@ -51,11 +53,13 @@ from ditto.db.queries.benchmark_rollout import (
     create_rollout_snapshot,
     heartbeat_matches_inference_contract,
     historical_rescore_cohort,
+    open_rollout,
     rollout_for_desired_version,
     rollout_state,
     select_active_bench_version,
     supersede_open_rollout,
 )
+from ditto.db.queries.retry_state import classify_agent_retry_states
 
 router = APIRouter(prefix="/admin/benchmark-rollout", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -368,6 +372,7 @@ async def get_rollout_control(
     try:
         async with asyncio.timeout(_remaining(deadline)):
             state = await rollout_state(session)
+            state["retry_diagnostics"] = await rollout_retry_diagnostics(session)
             capability_counts = await capable_validator_counts(
                 session, versions=[contract.version for contract in contracts]
             )
@@ -456,6 +461,53 @@ async def get_rollout_control(
         "active_contract_candidates": candidates,
         "degraded_sections": degraded,
     }
+
+
+async def rollout_retry_diagnostics(session: AsyncSession) -> list[dict[str, object]]:
+    """Explain parked cohort work using the same read-only gates as recovery.
+
+    Durable rollout status is not a dispatch diagnosis: collecting can require
+    an operator after fail-once exhaustion. Do not change status, mint grants,
+    or reuse qualification_blockers (which describes screening enrollment).
+    """
+    rollout = await open_rollout(session)
+    if rollout is None:
+        return []
+    rows = (
+        await session.execute(
+            select(Agent, BenchmarkRolloutMember.position)
+            .join(
+                BenchmarkRolloutMember,
+                BenchmarkRolloutMember.agent_id == Agent.agent_id,
+            )
+            .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
+            .order_by(BenchmarkRolloutMember.position)
+        )
+    ).all()
+    states = await classify_agent_retry_states(
+        session,
+        agents=[agent for agent, _position in rows],
+        now=datetime.now(UTC),
+        require_work_available_validator=True,
+        rollout=rollout,
+        canonical_version=rollout.desired_version,
+    )
+    return [
+        {
+            "agent_id": str(agent.agent_id),
+            "agent_name": agent.name,
+            "bench_version": retry.bench_version,
+            "blocks_activation": position <= rollout.priority_cohort_target,
+            "state": retry.state,
+            "score_count": retry.score_count,
+            "recovery_allowed": retry.recovery_allowed,
+            "blocking_reason": retry.blocking_reason,
+            "earliest_retry_after": retry.earliest_retry_after,
+        }
+        for agent, position in rows
+        if (retry := states.get(agent.agent_id)) is not None
+        and retry.bench_version == rollout.desired_version
+    ]
 
 
 @router.get("/{desired_version}")

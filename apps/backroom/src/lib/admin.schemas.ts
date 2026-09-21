@@ -6341,6 +6341,17 @@ export const activeContractCandidateSchema = z.object({
 })
 
 export const benchmarkRolloutControlSchema = benchmarkRolloutStateSchema.extend({
+  retry_diagnostics: z.array(z.object({
+    agent_id: z.string().uuid(),
+    agent_name: z.string(),
+    bench_version: z.number().int().positive(),
+    blocks_activation: z.boolean(),
+    state: z.string(),
+    score_count: z.number().int().nonnegative(),
+    recovery_allowed: z.boolean(),
+    blocking_reason: z.string().nullable(),
+    earliest_retry_after: z.string().nullable(),
+  })).optional().default([]),
   contracts: z.array(benchmarkContractSchema),
   available_target_versions: z.array(z.number().int().positive()),
   active_contract_candidates: z.array(activeContractCandidateSchema),

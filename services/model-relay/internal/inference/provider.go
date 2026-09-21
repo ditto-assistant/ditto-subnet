@@ -741,12 +741,26 @@ func phaseErrorCode(err *httpError) string {
 // that envelope has no completion identity and must be classified before the
 // normal model/provider checks.
 func providerErrorEnvelope(payload map[string]any) (int64, string, bool) {
-	if len(payload) != 1 {
+	// OpenRouter also attaches a generation id and provider error metadata to
+	// body-level errors. These are diagnostic fields, not a successful model
+	// identity. This classifier never authorizes a replay: the receipt-free
+	// retry predicate remains separate and rejects envelopes carrying an id.
+	if !onlyJSONKeys(payload, "error", "id") {
 		return 0, "", false
 	}
+	if id, present := payload["id"]; present {
+		if value, ok := id.(string); !ok || value == "" {
+			return 0, "", false
+		}
+	}
 	errorPayload, ok := payload["error"].(map[string]any)
-	if !ok || len(errorPayload) != 2 {
+	if !ok || !onlyJSONKeys(errorPayload, "code", "message", "metadata") {
 		return 0, "", false
+	}
+	if metadata, present := errorPayload["metadata"]; present {
+		if _, ok := metadata.(map[string]any); !ok {
+			return 0, "", false
+		}
 	}
 	codeNumber, ok := isIntLiteral(errorPayload["code"])
 	if !ok {

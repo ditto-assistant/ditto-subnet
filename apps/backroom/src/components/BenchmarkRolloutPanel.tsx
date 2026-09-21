@@ -53,6 +53,16 @@ function statusCopy(state: BenchmarkRolloutControl) {
         tone: 'acid',
       } as const
     }
+    const exhausted = state.retry_diagnostics.filter(
+      (member) => member.blocks_activation && member.state === 'exhausted',
+    )
+    if (exhausted.length > 0) {
+      return {
+        label: `Benchmark v${state.desired_version} needs operator attention`,
+        detail: `${exhausted.map((member) => member.agent_name).join(', ')}: priority scoring attempts exhausted. Inspect validation retry evidence before recovery. Benchmark v${state.active_version} remains authoritative.`,
+        tone: 'red',
+      } as const
+    }
     return {
       label: `Benchmark v${state.desired_version} collecting`,
       detail: `Eligible top-five agents are gathering v${state.desired_version} scores. Benchmark v${state.active_version} remains authoritative until activation.`,

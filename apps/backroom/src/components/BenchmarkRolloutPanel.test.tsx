@@ -58,6 +58,7 @@ const ready: BenchmarkRolloutControl = {
   priority_complete: true,
   members: [],
   qualification_blockers: [],
+  retry_diagnostics: [],
   contracts,
   available_target_versions: [6],
   active_contract_candidates: [],
@@ -165,6 +166,22 @@ const v9CollectingWithStableMembership: BenchmarkRolloutControl = {
 
 describe('BenchmarkRolloutPanel', () => {
   afterEach(cleanup)
+
+  it('names exhausted priority work instead of implying scores are arriving', () => {
+    render(<BenchmarkRolloutPanel readOnly initialState={{
+      ...collecting,
+      retry_diagnostics: [{
+        agent_id: '842c28de-6b6c-445a-8c3f-cf5492422ef6',
+        agent_name: 'priority-fixture', bench_version: 6,
+        blocks_activation: true, state: 'exhausted', score_count: 1,
+        recovery_allowed: true, blocking_reason: null, earliest_retry_after: null,
+      }],
+    }} />)
+    expect(screen.getByText('Benchmark v6 needs operator attention')).toBeTruthy()
+    expect(screen.getByText(/priority-fixture: priority scoring attempts exhausted/)).toBeTruthy()
+    expect(startBenchmarkRollout).not.toHaveBeenCalled()
+    expect(selectActiveBenchmark).not.toHaveBeenCalled()
+  })
 
   beforeEach(() => {
     getBenchmarkRolloutControl.mockReset().mockResolvedValue(ready)

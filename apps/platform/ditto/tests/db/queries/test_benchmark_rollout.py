@@ -33,6 +33,7 @@ from ditto.api_server.endpoints.admin_benchmark_rollout import (
     _require_rollout_start_capacity,
     get_rollout,
     get_rollout_control,
+    rollout_retry_diagnostics,
     start_rollout,
     supersede_rollout,
 )
@@ -122,6 +123,73 @@ async def test_newest_contract_is_a_target_not_an_activation() -> None:
     assert CANARY_BENCH_VERSION == 13
     assert DEFAULT_BENCH_VERSION == 2
     assert LEGACY_BENCH_VERSION == 2
+
+
+async def test_rollout_diagnostics_expose_exhausted_priority_without_mutation(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.screener_policy_state import effective_screening_policy_version
+
+    now = datetime.now(UTC)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (agent_ids, rollout)):
+        agent_id = agent_ids[0]
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.SCORED
+        agent.screening_policy_version = effective_screening_policy_version()
+        await session.execute(
+            delete(Score).where(
+                Score.agent_id == agent_id,
+                Score.bench_version == rollout.desired_version,
+                Score.validator_hotkey != "validator-0",
+            )
+        )
+        _add_exhausted_tail_tickets(
+            session,
+            agent_id=agent_id,
+            now=now,
+            bench_version=rollout.desired_version,
+            attempt_count=1,
+            manual_retry_grants=0,
+        )
+        await session.flush()
+        tickets = list(
+            await session.scalars(
+                select(ValidatorTicket).where(
+                    ValidatorTicket.agent_id == agent_id,
+                    ValidatorTicket.bench_version == rollout.desired_version,
+                )
+            )
+        )
+        for ticket in tickets:
+            ticket.failure_reason = "infrastructure"
+            ticket.failure_detail = "provider_outage_parked"
+        await session.flush()
+        before = [(t.attempt_count, t.manual_retry_grants, t.status) for t in tickets]
+        diagnostics = await rollout_retry_diagnostics(session)
+        assert len(diagnostics) == 1
+        assert diagnostics[0] == {
+            "agent_id": str(agent_id),
+            "agent_name": agent.name,
+            "bench_version": rollout.desired_version,
+            "blocks_activation": True,
+            "state": "exhausted",
+            "score_count": 1,
+            "recovery_allowed": True,
+            "blocking_reason": None,
+            "earliest_retry_after": None,
+        }
+        assert before == [
+            (t.attempt_count, t.manual_retry_grants, t.status) for t in tickets
+        ]
+        assert rollout.status == "collecting"
+        tickets[0].status = TicketStatus.ISSUED
+        await session.flush()
+        running = await rollout_retry_diagnostics(session)
+        assert running[0]["state"] == "running"
+        assert running[0]["recovery_allowed"] is False
 
 
 async def test_admin_status_read_does_not_start_rollout(
