@@ -863,6 +863,79 @@ export const screenerCapacityViewSchema = z.object({
   node_controls: z.array(screenerNodeChannelSettingsControlSchema).default([]),
 })
 
+const infraRetryStateSchema = z.enum(['backoff', 'breaker_held', 'probe_due', 'due', 'capped'])
+const nonNegativeInt = z.number().int().nonnegative()
+const infraRetryBreakerPhaseSchema = z.enum(['closed', 'open', 'half_open'])
+
+/** Read-only view of Platform's automatic infrastructure-retry state (#475).
+ * Every number is derived from attempt history at read time. */
+export const screeningInfraRetryViewSchema = z.object({
+  generated_at: z.string(),
+  basis: z.string(),
+  policy: z.object({
+    auto_retry_reason_codes: z.array(z.string()),
+    base_backoff_seconds: nonNegativeInt,
+    max_backoff_seconds: nonNegativeInt,
+    jitter_fraction: z.number().nonnegative(),
+    auto_retry_max_age_seconds: nonNegativeInt,
+    auto_retry_max_streak: nonNegativeInt,
+    plan_max_claimable: nonNegativeInt,
+    breaker_distinct_agents: nonNegativeInt,
+    breaker_window_seconds: nonNegativeInt,
+    breaker_open_seconds: nonNegativeInt,
+    breaker_probe_interval_seconds: nonNegativeInt,
+    breaker_history_lookback_seconds: nonNegativeInt,
+  }),
+  summary: z.object({
+    parked_agents: nonNegativeInt,
+    by_state: z.record(infraRetryStateSchema, nonNegativeInt),
+    not_admitted: nonNegativeInt,
+    // Parked on a failure older than the max age with no operator retry; not listed.
+    aged_out_agents: nonNegativeInt,
+    open_breakers: nonNegativeInt,
+    half_open_breakers: nonNegativeInt,
+    breakers_total: nonNegativeInt,
+  }),
+  agents: z.array(z.object({
+    agent_id: z.string().uuid(),
+    attempt_id: z.string().uuid(),
+    reason_code: z.string(),
+    provider: z.string().nullable(),
+    lane: z.string().nullable(),
+    consecutive_failures: nonNegativeInt,
+    failed_at: z.string(),
+    backoff_until: z.string(),
+    next_retry_at: z.string(),
+    state: infraRetryStateSchema,
+    breaker_phase: infraRetryBreakerPhaseSchema.nullable(),
+    admitted: z.boolean(),
+    claim_outlook: z.enum(['ready', 'waiting_backoff', 'waiting_breaker', 'needs_operator', 'not_admitted']),
+  })),
+  agents_limit: nonNegativeInt,
+  agents_truncated: z.boolean(),
+  breakers: z.array(z.object({
+    reason_code: z.string(),
+    provider: z.string().nullable(),
+    lane: z.string().nullable(),
+    phase: infraRetryBreakerPhaseSchema,
+    opened_at: z.string().nullable(),
+    open_until: z.string().nullable(),
+    last_probe_at: z.string().nullable(),
+    next_probe_at: z.string().nullable(),
+    parked_agents: nonNegativeInt,
+  })),
+  breakers_limit: nonNegativeInt,
+  breakers_truncated: z.boolean(),
+})
+
+export type ScreeningInfraRetryView = z.infer<typeof screeningInfraRetryViewSchema>
+
+/** The retry view as the route and panel receive it. The read is isolated so a
+ * failure keeps the capacity page up, but the reason and HTTP status (when
+ * Platform answered) always travel with it. */
+export type ScreeningInfraRetryOutcome =
+  | { ok: true; view: ScreeningInfraRetryView }
+  | { ok: false; status: number | null; message: string }
 export type ScreenerCapacityView = z.infer<typeof screenerCapacityViewSchema>
 export type ScreenerCapacityNode = z.infer<typeof screenerCapacityNodeSchema>
 export type ScreenerHostSpecs = z.infer<typeof screenerHostSpecsSchema>

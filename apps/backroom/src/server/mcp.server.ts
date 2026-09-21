@@ -235,6 +235,7 @@ import {
   restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
+  fetchScreeningInfraRetries,
   updateScreenerProviderSettings,
   updateScreenerNodeChannelSettings,
   updateScreenerNodeReplayCapacity,
@@ -562,6 +563,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Artifact-bound coding certifications; weight_eligible is always false. Requires backroom:read.',
   get_screener_capacity:
     'Read screener capacity, provider priorities, and recent build, runtime, and source-review jobs before manual retry.',
+  get_screening_infra_retries:
+    'Read infra-failure retry state: policy, per-state counts, parked agents (next retry, failure count), per-signature breakers. Derived at read time.',
   set_screener_provider_settings:
     'Apply complete revisioned screener routing and bounded GCE overflow settings after reading get_screener_capacity.',
   set_screener_node_channel_settings:
@@ -2018,6 +2021,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerCapacity()),
+  )
+
+  registerTool(
+    'get_screening_infra_retries',
+    {
+      title: 'Get screening infrastructure retries',
+      description:
+        'Read how Platform is retrying screening attempts that failed on Ditto infrastructure (docker-build-infrastructure), and why an agent is or is not being retried. Returns the effective policy (backoff base/cap, jitter, max age, max consecutive failures, breaker threshold/window/open/probe durations, all in seconds); a summary with a count per state (backoff, breaker_held, probe_due, due, capped), not_admitted, aged_out_agents, open_breakers, half_open_breakers and breakers_total; the parked agents (agent id, latest attempt id, reason code, provider/lane, consecutive failure count, failed_at, backoff_until, next_retry_at, state, breaker_phase, admitted, claim_outlook), earliest next_retry_at first; and each signature\'s circuit breaker (phase, opened_at, open_until, last_probe_at, next_probe_at, parked agents). Everything is derived from screening attempt history at read time and nothing is stored, so it can lag a claim that lands a moment later. Agents in the capped state, and aged_out_agents (parked on an infrastructure failure older than the max age with no operator retry; counted, not listed individually), are never retried automatically and wait for an operator retry. The breaker is per signature (reason code, provider, lane). Breaker phase is computed at read time: open while now < open_until, half_open after that until a probe recovers or the failures age out of the history window (probes are allowed, nothing is held), closed otherwise; a half_open breaker with no parked agents is history, not a live hold. parked_agents counts agents parked now, not historical failures. claim_outlook ready means admitted with the backoff and breaker hold elapsed; the claim may still skip it (one probe per signature per pass, ownership rules); not_admitted, needs_operator, waiting_backoff and waiting_breaker say why not. Rows are bounded (agents_limit, breakers_limit); the summary counts everything and *_truncated says when rows were cut. Carries no error text, source, or miner identity. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchScreeningInfraRetries()),
   )
 
   registerTool(

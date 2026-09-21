@@ -268,6 +268,8 @@ import {
   confirmationSeedAnchorListSchema,
   confirmationSeedAnchorsInputSchema,
   screenerCapacityViewSchema,
+  screeningInfraRetryViewSchema,
+  type ScreeningInfraRetryOutcome,
   createScreenerBootstrapGrantInputSchema,
   screenerBootstrapGrantResponseSchema,
   screenerProviderSettingsControlSchema,
@@ -627,6 +629,26 @@ export async function fetchScreenerPolicyManifestControl() {
 export async function fetchScreenerCapacity() {
   const payload = await platformAdminRequest('/api/v1/admin/screener-capacity')
   return screenerCapacityViewSchema.parse(payload)
+}
+
+export async function fetchScreeningInfraRetries() {
+  const payload = await platformAdminRequest('/api/v1/admin/screening-infra-retries')
+  return screeningInfraRetryViewSchema.parse(payload)
+}
+
+/** Never throws: the capacity page renders without this view, but the message
+ * and HTTP status must stay visible rather than collapse into "unavailable". */
+export async function readScreeningInfraRetries(): Promise<ScreeningInfraRetryOutcome> {
+  try {
+    return { ok: true, view: await fetchScreeningInfraRetries() }
+  } catch (error) {
+    return {
+      ok: false,
+      status: error instanceof PlatformAdminError ? error.status : null,
+      // A schema-parse failure message can be long; the head names the field.
+      message: (error instanceof Error ? error.message : 'Unknown error reading infrastructure retries.').slice(0, 400),
+    }
+  }
 }
 
 export async function createScreenerBootstrapGrant(actor: string, rawInput: unknown) {

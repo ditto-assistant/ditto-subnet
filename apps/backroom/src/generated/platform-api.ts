@@ -2053,6 +2053,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-infra-retries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Screening Infra Retries
+         * @description Report infrastructure-retry policy, parked agents, and breakers.
+         */
+        get: operations["screening_infra_retries_api_v1_admin_screening_infra_retries_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-quarantines": {
         parameters: {
             query?: never;
@@ -19317,6 +19337,129 @@ export interface components {
             /** Windows */
             windows: components["schemas"]["InferenceLaneWindow"][];
         };
+        /** InfraRetryAgentView */
+        InfraRetryAgentView: {
+            /** Admitted */
+            admitted: boolean;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Backoff Until
+             * Format: date-time
+             */
+            backoff_until: string;
+            /** Breaker Phase */
+            breaker_phase?: ("closed" | "open" | "half_open") | null;
+            /**
+             * Claim Outlook
+             * @enum {string}
+             */
+            claim_outlook: "ready" | "waiting_backoff" | "waiting_breaker" | "needs_operator" | "not_admitted";
+            /** Consecutive Failures */
+            consecutive_failures: number;
+            /**
+             * Failed At
+             * Format: date-time
+             */
+            failed_at: string;
+            /** Lane */
+            lane?: string | null;
+            /**
+             * Next Retry At
+             * Format: date-time
+             */
+            next_retry_at: string;
+            /** Provider */
+            provider?: string | null;
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "backoff" | "breaker_held" | "probe_due" | "due" | "capped";
+        };
+        /** InfraRetryBreakerView */
+        InfraRetryBreakerView: {
+            /** Lane */
+            lane?: string | null;
+            /** Last Probe At */
+            last_probe_at?: string | null;
+            /** Next Probe At */
+            next_probe_at?: string | null;
+            /** Open Until */
+            open_until?: string | null;
+            /** Opened At */
+            opened_at?: string | null;
+            /** Parked Agents */
+            parked_agents: number;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "closed" | "open" | "half_open";
+            /** Provider */
+            provider?: string | null;
+            /** Reason Code */
+            reason_code: string;
+        };
+        /**
+         * InfraRetryPolicy
+         * @description The constants the planner runs with; durations are seconds.
+         */
+        InfraRetryPolicy: {
+            /** Auto Retry Max Age Seconds */
+            auto_retry_max_age_seconds: number;
+            /** Auto Retry Max Streak */
+            auto_retry_max_streak: number;
+            /** Auto Retry Reason Codes */
+            auto_retry_reason_codes: string[];
+            /** Base Backoff Seconds */
+            base_backoff_seconds: number;
+            /** Breaker Distinct Agents */
+            breaker_distinct_agents: number;
+            /** Breaker History Lookback Seconds */
+            breaker_history_lookback_seconds: number;
+            /** Breaker Open Seconds */
+            breaker_open_seconds: number;
+            /** Breaker Probe Interval Seconds */
+            breaker_probe_interval_seconds: number;
+            /** Breaker Window Seconds */
+            breaker_window_seconds: number;
+            /** Jitter Fraction */
+            jitter_fraction: number;
+            /** Max Backoff Seconds */
+            max_backoff_seconds: number;
+            /** Plan Max Claimable */
+            plan_max_claimable: number;
+        };
+        /** InfraRetrySummary */
+        InfraRetrySummary: {
+            /** Aged Out Agents */
+            aged_out_agents: number;
+            /** Breakers Total */
+            breakers_total: number;
+            /** By State */
+            by_state: {
+                [key: string]: number;
+            };
+            /** Half Open Breakers */
+            half_open_breakers: number;
+            /** Not Admitted */
+            not_admitted: number;
+            /** Open Breakers */
+            open_breakers: number;
+            /** Parked Agents */
+            parked_agents: number;
+        };
         /**
          * JobRequest
          * @description Signed request to claim one validator scoring ticket.
@@ -28154,6 +28297,30 @@ export interface components {
              */
             source: "platform" | "cache" | "bootstrap";
         };
+        /** ScreeningInfraRetryView */
+        ScreeningInfraRetryView: {
+            /** Agents */
+            agents?: components["schemas"]["InfraRetryAgentView"][];
+            /** Agents Limit */
+            agents_limit: number;
+            /** Agents Truncated */
+            agents_truncated: boolean;
+            /** Basis */
+            basis: string;
+            /** Breakers */
+            breakers?: components["schemas"]["InfraRetryBreakerView"][];
+            /** Breakers Limit */
+            breakers_limit: number;
+            /** Breakers Truncated */
+            breakers_truncated: boolean;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            policy: components["schemas"]["InfraRetryPolicy"];
+            summary: components["schemas"]["InfraRetrySummary"];
+        };
         /**
          * ScreeningVerificationReceiptRequest
          * @description Digest-only evidence emitted by the active trusted screener lease.
@@ -35629,6 +35796,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminScreeningFailureSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    screening_infra_retries_api_v1_admin_screening_infra_retries_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningInfraRetryView"];
                 };
             };
             /** @description Validation Error */

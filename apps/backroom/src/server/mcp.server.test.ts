@@ -174,6 +174,7 @@ describe('Backroom MCP tools', () => {
         'download_runtime_profile',
         'get_queue_policy_settings',
         'get_screener_capacity',
+        'get_screening_infra_retries',
         'set_screener_provider_settings',
         'set_screener_node_channel_settings',
         'set_screener_node_replay_capacity',
@@ -350,8 +351,9 @@ describe('Backroom MCP tools', () => {
     // Exact-agent continual retest diagnosis adds one bounded read schema.
     // One bounded L4 cohort read adds a compact schema and catalog line.
     // The two V13 clock tools and bounded, default-off replay control bring
-    // the measured catalog just above 142 KB.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(143_000)
+    // the measured catalog just above 142 KB. The no-input infra-retry read
+    // adds one more bounded catalog entry; measured 142,714 bytes together.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(142_900)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -370,8 +372,11 @@ describe('Backroom MCP tools', () => {
     // the one-line bench v13 gate-evidence and dispute-kind notes on the score
     // and dispute tools land at 25_237, so it moves to 25_400. The short
     // L4 cohort diagnostic adds one catalog line without another tutorial.
+    // The infra-retry read summary lands at 25,990, so the bound moves to 26_200.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      26_500, // Includes the V13 clock and independent replay summaries.
+      // Includes the V13 clock, independent replay, and infra-retry read
+      // summaries; measured 26,431 characters together.
+      26_600,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2195,6 +2200,78 @@ describe('Backroom MCP tools', () => {
     )
     await client.close()
     await server.close()
+  })
+
+  it('reads screening infrastructure retry state read-only and bounded', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const payload = {
+      generated_at: '2026-09-21T12:00:00Z',
+      basis: 'Derived from screening attempt history at read time; nothing is stored.',
+      policy: {
+        auto_retry_reason_codes: ['docker-build-infrastructure'],
+        base_backoff_seconds: 600, max_backoff_seconds: 3600, jitter_fraction: 0.2,
+        auto_retry_max_age_seconds: 86400, auto_retry_max_streak: 8, plan_max_claimable: 500,
+        breaker_distinct_agents: 3, breaker_window_seconds: 300, breaker_open_seconds: 600,
+        breaker_probe_interval_seconds: 300, breaker_history_lookback_seconds: 172800,
+      },
+      summary: {
+        parked_agents: 1,
+        by_state: { backoff: 0, breaker_held: 0, probe_due: 0, due: 0, capped: 1 },
+        not_admitted: 0, aged_out_agents: 2, open_breakers: 0, half_open_breakers: 0,
+        breakers_total: 1,
+      },
+      agents: [{
+        agent_id: '11111111-1111-4111-8111-111111111111',
+        attempt_id: '22222222-2222-4222-8222-222222222222',
+        reason_code: 'docker-build-infrastructure', provider: 'gcp', lane: 'buildkit',
+        consecutive_failures: 8, failed_at: '2026-09-21T11:00:00Z',
+        backoff_until: '2026-09-21T12:00:00Z', next_retry_at: '2026-09-21T12:00:00Z',
+        state: 'capped', breaker_phase: 'closed', admitted: true, claim_outlook: 'needs_operator',
+      }],
+      agents_limit: 200, agents_truncated: false,
+      breakers: [{
+        reason_code: 'docker-build-infrastructure', provider: 'gcp', lane: 'buildkit',
+        phase: 'closed', opened_at: null, open_until: null, last_probe_at: null,
+        next_probe_at: null, parked_agents: 1,
+      }],
+      breakers_limit: 50, breakers_truncated: false,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const listed = (await client.listTools()).tools.find(
+        (tool) => tool.name === 'get_screening_infra_retries',
+      )
+      expect(listed?.annotations?.readOnlyHint).toBe(true)
+      expect(listed?.description).toContain('Derived at read time')
+      const response = await client.callTool({ name: 'get_screening_infra_retries', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        summary: { by_state: { capped: 1 }, aged_out_agents: 2 },
+        agents: [{ state: 'capped', claim_outlook: 'needs_operator', consecutive_failures: 8 }],
+        policy: { auto_retry_max_streak: 8 },
+      })
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://platform-api.heyditto.ai/api/v1/admin/screening-infra-retries',
+        expect.any(Object),
+      )
+      const help = readJsonResult(
+        await client.callTool({
+          name: 'get_backroom_tool_help',
+          arguments: { tool: 'get_screening_infra_retries' },
+        }),
+      ) as { guidance: string }
+      expect(help.guidance).toContain('wait for an operator retry')
+      expect(help.guidance).toContain('per signature')
+      expect(help.guidance).toContain('earliest next_retry_at first')
+      expect(help.guidance).not.toContain('longest')
+      expect(help.guidance).toContain('half_open')
+      expect(help.guidance).toContain('aged_out_agents')
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('applies the conversation switch with the authenticated operator identity', async () => {
