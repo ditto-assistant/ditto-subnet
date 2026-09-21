@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -521,6 +522,61 @@ class CapacityDecisionTests(unittest.TestCase):
                 snapshot["last_provider_error_code"],
                 "PROVIDER_ROUTING_UNAVAILABLE",
             )
+
+    def test_gce_read_success_advances_success_timestamp_when_routing_fails(
+        self,
+    ) -> None:
+        # last_provider_success_at means "last successful GCE fleet read". It
+        # must advance on a good GCE read even if the routing read fails.
+        with TemporaryDirectory() as directory:
+            settings = _settings(Path(directory))
+            platform = _Platform(Demand(runnable=3, active=0, desired=2))
+            gce = _GCE()
+            before = datetime.now(UTC)
+            with (
+                patch.object(
+                    platform,
+                    "provider_routing",
+                    side_effect=ControllerError("provider settings unavailable"),
+                ),
+                patch(
+                    "screener_capacity.controller.PlatformControl",
+                    return_value=platform,
+                ),
+                patch("screener_capacity.controller.GCEFleet", return_value=gce),
+            ):
+                snapshot = reconcile(settings)
+            self.assertEqual(
+                snapshot["last_provider_error_code"],
+                "PROVIDER_ROUTING_UNAVAILABLE",
+            )
+            success_at = snapshot["last_provider_success_at"]
+            self.assertIsNotNone(success_at)
+            self.assertGreaterEqual(datetime.fromisoformat(success_at), before)
+            self.assertEqual(
+                platform.renewed[0]["last_provider_success_at"], success_at
+            )
+
+    def test_failed_gce_read_does_not_publish_success_timestamp(self) -> None:
+        for failing in ("target", "counts"):
+            with self.subTest(failing=failing), TemporaryDirectory() as directory:
+                settings = _settings(Path(directory))
+                platform = _Platform(Demand(runnable=3, active=0, desired=2))
+                gce = _GCE()
+                with (
+                    patch.object(
+                        gce, failing, side_effect=ControllerError("gce read failed")
+                    ),
+                    patch(
+                        "screener_capacity.controller.PlatformControl",
+                        return_value=platform,
+                    ),
+                    patch("screener_capacity.controller.GCEFleet", return_value=gce),
+                    self.assertRaises(ControllerError),
+                ):
+                    reconcile(settings)
+                # No snapshot (and so no fresh success timestamp) is sent.
+                self.assertEqual(platform.renewed, [])
 
     def test_targon_first_decomposed_lanes_use_gce_workers(self) -> None:
         with TemporaryDirectory() as directory:

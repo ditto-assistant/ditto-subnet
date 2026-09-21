@@ -700,6 +700,8 @@ export const screenerCapacitySnapshotSchema = z.object({
   gce_pending: z.number().int().nonnegative(),
   gce_draining: z.number().int().nonnegative(),
   fallback_reason: z.string().nullable(),
+  // Last successful GCE fleet read by the capacity controller. It can advance
+  // while provider routing is unavailable and says nothing about other providers.
   last_provider_success_at: z.string().nullable(),
   last_provider_error_code: z.string().nullable(),
   last_provider_error_at: z.string().nullable(),

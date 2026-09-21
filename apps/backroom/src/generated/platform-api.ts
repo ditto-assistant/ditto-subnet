@@ -27409,7 +27409,10 @@ export interface components {
             last_provider_error_at?: string | null;
             /** Last Provider Error Code */
             last_provider_error_code?: string | null;
-            /** Last Provider Success At */
+            /**
+             * Last Provider Success At
+             * @description Time of the last successful GCE fleet read by the capacity controller (managed-group target and instance counts). It advances whenever those GCE reads succeed, even when the provider-routing read fails in the same pass, and is not advanced when a GCE read fails. It does not indicate that any other provider (for example Targon) is healthy or has recovered.
+             */
             last_provider_success_at?: string | null;
             /** Provider Ready */
             provider_ready: boolean;
@@ -27477,7 +27480,10 @@ export interface components {
             last_provider_error_at?: string | null;
             /** Last Provider Error Code */
             last_provider_error_code?: string | null;
-            /** Last Provider Success At */
+            /**
+             * Last Provider Success At
+             * @description Time of the last successful GCE fleet read by the capacity controller (managed-group target and instance counts). It advances whenever those GCE reads succeed, even when the provider-routing read fails in the same pass, and is not advanced when a GCE read fails. It does not indicate that any other provider (for example Targon) is healthy or has recovered.
+             */
             last_provider_success_at?: string | null;
             /** Provider Ready */
             provider_ready: boolean;

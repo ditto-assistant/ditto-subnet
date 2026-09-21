@@ -2285,6 +2285,27 @@ describe('Backroom MCP tools', () => {
     }
   })
 
+  it('documents last_provider_success_at as the last GCE fleet read in the capacity tool help', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_backroom_tool_help',
+      arguments: { tool: 'get_screener_capacity' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const payload = readJsonResult(response) as { tool: string; guidance: string }
+    expect(payload.tool).toBe('get_screener_capacity')
+    // The field only proves a GCE fleet read succeeded; operators must not read it
+    // as another provider's health, and it can advance while routing is down.
+    expect(payload.guidance).toContain('last_provider_success_at is the last successful GCE fleet read')
+    expect(payload.guidance).toContain('not a health signal for any other provider')
+    expect(payload.guidance).toContain('can advance while provider routing is unavailable')
+
+    await client.close()
+    await server.close()
+  })
+
   it('applies the conversation switch with the authenticated operator identity', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValue(Response.json({

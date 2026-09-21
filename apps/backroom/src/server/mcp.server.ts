@@ -2046,7 +2046,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screener capacity',
       description:
-        'Read the live screener capacity snapshot, per-node identity, status, full-screen and channel concurrency controls and usage, provider-job inventory, recent controller events, and revisioned routing for build, runtime smoke, and source review. Provider routing is authoritative: Hetzner-first lanes handle base load, while the audited GCE overflow policy names the primary node, backlog multiple, minimum backlog, and maximum instances. GCE claims new unowned submissions on overflow or primary outage; it never retries a terminal Hetzner lane. Dashboard presentation and local defaults are not authoritative. Requires backroom:read and changes nothing.',
+        'Read the live screener capacity snapshot, per-node identity, status, full-screen and channel concurrency controls and usage, provider-job inventory, recent controller events, and revisioned routing for build, runtime smoke, and source review. Provider routing is authoritative: Hetzner-first lanes handle base load, while the audited GCE overflow policy names the primary node, backlog multiple, minimum backlog, and maximum instances. GCE claims new unowned submissions on overflow or primary outage; it never retries a terminal Hetzner lane. snapshot.last_provider_success_at is the last successful GCE fleet read, not a health signal for any other provider; it can advance while provider routing is unavailable. Dashboard presentation and local defaults are not authoritative. Requires backroom:read and changes nothing.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerCapacity()),
