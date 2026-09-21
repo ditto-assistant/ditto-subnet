@@ -54,10 +54,15 @@ _BASIS = (
     "individually, and an agent that reached auto_retry_max_streak is "
     "'capped': both wait for an operator retry. The breaker is per signature "
     "(reason code, provider, lane); half_open means its open window elapsed and "
-    "probes are allowed. agents are ordered by earliest next_retry_at first. "
-    "claim_outlook 'ready' means admitted with backoff and breaker elapsed; the "
-    "claim may still skip it (one probe per signature per pass, ownership "
-    "rules)."
+    "probes are allowed. A breaker with a known provider holds and probes only "
+    "workers on that provider: a worker on another provider can still claim "
+    "those agents by backoff alone (that run is not a probe). A signature with "
+    "no provider holds every worker. This view is computed with no particular "
+    "claimant, so breaker_held and waiting_breaker mean held for workers on "
+    "the signature's provider. agents are ordered by earliest next_retry_at "
+    "first. claim_outlook 'ready' means admitted with backoff and breaker "
+    "elapsed; the claim may still skip it (one probe per signature per pass, "
+    "ownership rules)."
 )
 
 

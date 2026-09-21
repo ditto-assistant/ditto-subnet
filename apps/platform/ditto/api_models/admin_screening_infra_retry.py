@@ -18,7 +18,10 @@ InfraRetryClaimOutlook = Literal[
     "ready", "waiting_backoff", "waiting_breaker", "needs_operator", "not_admitted"
 ]
 """``ready`` means admitted with the backoff and breaker hold elapsed; the claim
-may still skip it (one probe per signature per pass, ownership rules)."""
+may still skip it (one probe per signature per pass, ownership rules).
+``waiting_breaker`` is a hold for workers on the signature's provider (every
+worker when the signature has no provider); a worker on another provider can
+still claim the agent by backoff alone."""
 InfraRetryBreakerPhase = Literal["closed", "open", "half_open"]
 
 
@@ -74,7 +77,9 @@ class InfraRetryAgentView(BaseModel):
     backoff_until: datetime
     """End of this agent's own backoff, ignoring the breaker."""
     next_retry_at: datetime
-    """Earliest a claim may take it: backoff, then the breaker's next probe."""
+    """Earliest a claim may take it, seen with no particular claimant: backoff,
+    then the breaker's next probe. A worker on another provider than the
+    signature's is held by backoff alone."""
     state: InfraRetryState
     breaker_phase: InfraRetryBreakerPhase | None = None
     """``None`` when no breaker state exists for the agent's signature."""

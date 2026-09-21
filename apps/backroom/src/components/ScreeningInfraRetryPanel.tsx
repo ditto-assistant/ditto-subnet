@@ -8,7 +8,7 @@ type Agent = ScreeningInfraRetryView['agents'][number]
 
 const STATE_LABELS: Record<Agent['state'], string> = {
   backoff: 'In backoff',
-  breaker_held: 'Held by breaker',
+  breaker_held: 'Held by breaker (that provider)',
   probe_due: 'Probe due',
   due: 'Due now',
   capped: 'Capped (operator)',
@@ -17,7 +17,7 @@ const STATE_LABELS: Record<Agent['state'], string> = {
 const OUTLOOK_LABELS: Record<Agent['claim_outlook'], string> = {
   ready: 'Ready; the claim may still skip it',
   waiting_backoff: 'Waiting for backoff',
-  waiting_breaker: 'Waiting for breaker',
+  waiting_breaker: 'Waiting for breaker (workers on that provider)',
   needs_operator: 'Needs an operator retry',
   not_admitted: 'Not admitted by the claim guard',
 }
@@ -26,6 +26,14 @@ const PHASE_LABELS: Record<ScreeningInfraRetryView['breakers'][number]['phase'],
   closed: 'Closed',
   open: 'Open: holding retries',
   half_open: 'Half-open: probing',
+}
+
+/** Whom a breaker holds. The Platform claim only holds and probes workers on
+ * the signature's provider; another provider claims by backoff alone. */
+function breakerScope(provider: string | null) {
+  return provider
+    ? `Holds ${provider} workers only; other providers claim by backoff alone`
+    : 'No provider on the signature: holds every worker'
 }
 
 function failureLine(failure: { status: number | null; message: string }) {
@@ -118,7 +126,8 @@ export function ScreeningInfraRetryPanel({
             Derived from screening attempt history when this page loads; nothing is stored. Capped
             agents, and aged-out agents (last infrastructure failure older than the maximum age;
             counted, not listed individually), wait for an operator retry. The breaker is per signature: reason code,
-            provider, and lane.
+            provider, and lane. A breaker with a known provider holds only workers on that provider; a
+            worker on another provider can still claim its agents by backoff alone.
           </p>
         </div>
         <button
@@ -184,7 +193,12 @@ export function ScreeningInfraRetryPanel({
                           <span className="font-medium">{breaker.reason_code}</span>
                           <span className="block text-[var(--muted)]">{signatureLabel(breaker.provider, breaker.lane)}</span>
                         </td>
-                        <td className="py-2.5 pr-4">{PHASE_LABELS[breaker.phase]}</td>
+                        <td className="py-2.5 pr-4">
+                          {PHASE_LABELS[breaker.phase]}
+                          {breaker.phase === 'closed' ? null : (
+                            <span className="block text-[var(--muted)]">{breakerScope(breaker.provider)}</span>
+                          )}
+                        </td>
                         <td className="py-2.5 pr-4">{formatWhen(breaker.opened_at)}</td>
                         <td className="py-2.5 pr-4">{formatWhen(breaker.open_until)}</td>
                         <td className="py-2.5 pr-4">{formatWhen(breaker.last_probe_at)}</td>

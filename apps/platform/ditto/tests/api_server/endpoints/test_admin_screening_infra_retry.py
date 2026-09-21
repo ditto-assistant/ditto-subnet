@@ -143,6 +143,10 @@ async def test_empty_state_still_reports_policy(
         "capped": 0,
     }
     assert "Derived from screening attempt history" in body["basis"]
+    # A breaker holds workers on its provider only; the wording must say so.
+    assert "worker on another provider can still claim" in body["basis"]
+    assert "by backoff alone" in body["basis"]
+    assert "no particular claimant" in body["basis"]
 
 
 async def test_policy_block_equals_the_constants(

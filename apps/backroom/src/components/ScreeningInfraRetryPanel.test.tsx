@@ -89,12 +89,28 @@ describe('ScreeningInfraRetryPanel', () => {
     expect(screen.getByText('Half-open: probing')).toBeTruthy()
     expect(screen.getByText(/4 aged out/)).toBeTruthy()
     expect(screen.getByText(/1 open and\s+1 half-open of 2 breakers/)).toBeTruthy()
-    expect(screen.getByText('Held by breaker', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByText('Held by breaker (that provider)', { selector: 'span' })).toBeTruthy()
     expect(screen.getByText('Needs an operator retry')).toBeTruthy()
-    expect(screen.getByText('Waiting for breaker')).toBeTruthy()
+    expect(screen.getByText('Waiting for breaker (workers on that provider)')).toBeTruthy()
+    expect(screen.getAllByText(/other providers claim by backoff alone/)).toHaveLength(2)
+    expect(screen.getByText(/holds only workers on that provider/)).toBeTruthy()
+    expect(screen.getAllByText(/Holds gcp workers only/)).toHaveLength(2)
     expect(screen.queryByText(/longest/)).toBeNull()
     expect(screen.getByText('unknown provider / unknown lane')).toBeTruthy()
     expect(screen.getByText(/Showing the 2 agents with the earliest next retry, of\s+3 parked/)).toBeTruthy()
+  })
+
+  it('says a provider-less breaker holds every worker', () => {
+    const base = view()
+    render(
+      <ScreeningInfraRetryPanel
+        initialState={ok({
+          breakers: [{ ...base.breakers[0], provider: null, lane: null }],
+        })}
+      />,
+    )
+    expect(screen.getByText(/holds every worker/)).toBeTruthy()
+    expect(screen.queryByText(/other providers claim by backoff alone/)).toBeNull()
   })
 
   it('shows the real failure and its HTTP status, not a generic message', () => {

@@ -2267,6 +2267,8 @@ describe('Backroom MCP tools', () => {
       expect(help.guidance).toContain('earliest next_retry_at first')
       expect(help.guidance).not.toContain('longest')
       expect(help.guidance).toContain('half_open')
+      expect(help.guidance).toContain('a worker on another provider can still claim those agents by backoff alone')
+      expect(help.guidance).toContain('holds every worker')
       expect(help.guidance).toContain('aged_out_agents')
     } finally {
       await client.close()
