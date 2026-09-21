@@ -17,6 +17,12 @@ DEFERRED_REVIEW_KIND = "deferred_source_review"
 DEFERRED_REVIEW_REASON = "Score qualified this submission for deferred source review"
 DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
 INCONCLUSIVE_REASON_CODE = "source-review-inconclusive"
+# Public text written with INCONCLUSIVE_REASON_CODE. The dashboard keys its
+# "no finding" treatment on this exact string (SOURCE_REVIEW_INCONCLUSIVE_REASON
+# in dashboard/src/components/pipeline/status.ts); a parity test pins the two.
+SOURCE_REVIEW_INCONCLUSIVE_PUBLIC_REASON = (
+    "Bounded source review was inconclusive; held for review"
+)
 TOP_FIVE_SIZE = 5
 # A second, stronger deep review for every top-five entrant, including ones
 # that already passed the full pre-score screen. It shares the deferred hold

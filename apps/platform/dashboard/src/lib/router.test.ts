@@ -54,7 +54,7 @@ describe("PAGES registry", () => {
     });
     expect(PAGES.pipeline).toEqual({
       title: "Submission pipeline",
-      sub: "Every submission from upload to scored · admission, validation, and integrity review",
+      sub: "Every submission from upload to scored · admission, validation, and source review",
     });
     expect(PAGES.operations).toEqual({
       title: "Fleet",

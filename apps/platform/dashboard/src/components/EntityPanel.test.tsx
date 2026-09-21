@@ -259,7 +259,7 @@ describe("EntityPanel miner profile card", () => {
     await waitFor(() => expect(rows().length).toBe(2));
     // The submissions page vocabulary, not the raw wire status.
     expect(rows()[0]?.textContent).toContain("Scored");
-    expect(rows()[1]?.textContent).toContain("Source integrity review");
+    expect(rows()[1]?.textContent).toContain("Deferred source review");
     expect(rows()[1]?.textContent).not.toContain("under_review");
     const link = rows()[0]?.querySelector('a[data-entity-link="agent"]');
     expect(link).toHaveTextContent("luffy0");

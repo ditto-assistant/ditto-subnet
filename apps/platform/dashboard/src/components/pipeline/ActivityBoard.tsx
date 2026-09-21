@@ -29,7 +29,9 @@ import {
   ACTIVITY_FILTER_NAMES,
   activityStage,
   duplicateComparisonLabel,
+  isSourceReviewIncomplete,
   reviewEvidenceNotes,
+  SOURCE_REVIEW_INCOMPLETE_NOTE,
   validationProgress,
 } from "./status";
 import type { ActivityStatusEntry } from "./status";
@@ -119,7 +121,7 @@ function EvidenceNote(props: { label: string; text: string; lines?: number }): J
 
 function StageCell(props: { entry: ActivityRow }): JSX.Element {
   const e = () => props.entry;
-  const stage = () => activityStage(e().status);
+  const stage = () => activityStage(e().status, e());
   const note = () => artifactReleaseNote(e().artifact_release);
   return (
     <td class="stage-cell">
@@ -137,6 +139,9 @@ function StageCell(props: { entry: ActivityRow }): JSX.Element {
           />
         )}
       </For>
+      <Show when={isSourceReviewIncomplete(e())}>
+        <span class="stage-note">{SOURCE_REVIEW_INCOMPLETE_NOTE}</span>
+      </Show>
       <Show when={!e().review_reason && e().screening_reason}>
         {(reason) => <EvidenceNote label="Screening" text={reason()} lines={3} />}
       </Show>

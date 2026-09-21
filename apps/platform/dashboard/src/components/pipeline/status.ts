@@ -53,7 +53,7 @@ export const ACTIVITY_FILTER_NAMES: readonly string[] = [
 export const ACTIVITY_FILTER_LABELS: Record<string, string> = {
   all: "All",
   rejected: "Rejected",
-  under_review: "Integrity review",
+  under_review: "Deferred review",
   waiting_validator: "Waiting for validators",
   queued: "Queued work",
   downloadable: "Source releases",
@@ -64,10 +64,13 @@ export const ACTIVITY_FILTER_LABELS: Record<string, string> = {
  * closed benchmark generation (#462) read as history, not failure:
  * not_queued/retired are neutral, never "bad". #623 renamed the screening
  * stages to the mechanical-admission vocabulary: screening builds a verified
- * image, and "Source integrity review" is the conditional later branch —
+ * image, and "Deferred source review" is the conditional later branch —
  * deep source review is deferred until a score qualifies.
  */
-export function activityStage(status: string | null | undefined): ChipState {
+export function activityStage(
+  status: string | null | undefined,
+  entry?: { screening_reason?: string | null },
+): ChipState {
   const stages: Record<string, ChipState> = {
     uploaded: ["Waiting for admission", "progress"],
     waiting_screening: ["Waiting for admission", "progress"],
@@ -81,10 +84,37 @@ export function activityStage(status: string | null | undefined): ChipState {
     retired: ["Retired · earlier benchmark", ""],
     scored: ["Scored", "good"],
     live: ["Live", "good"],
-    under_review: ["Source integrity review", "warn"],
+    under_review: ["Deferred source review", "warn"],
     rejected: ["Rejected", "bad"],
   };
+  // A budget outcome is not an adverse signal: keep the chip neutral.
+  if (status === "under_review" && entry && isSourceReviewIncomplete({ status, ...entry })) {
+    return ["Deferred source review", ""];
+  }
   return (status != null && stages[status]) || ["Pending", ""];
+}
+
+/**
+ * The public reason Platform writes when the bounded automated source review
+ * ran out of budget without a finding (targon_screening.py, reason code
+ * `source-review-inconclusive`). The pipeline payload carries the reason text
+ * but not the code, so this is the one exact string the dashboard can key on.
+ */
+export const SOURCE_REVIEW_INCONCLUSIVE_REASON =
+  "Bounded source review was inconclusive; held for review";
+
+/** Shown next to a held submission whose automated review did not finish. */
+export const SOURCE_REVIEW_INCOMPLETE_NOTE =
+  "Automated review incomplete \u00b7 no finding. Awaiting operator review.";
+
+/** True when the hold is a review-budget outcome, not an adverse signal. */
+export function isSourceReviewIncomplete(entry: {
+  status?: string | null;
+  screening_reason?: string | null;
+}): boolean {
+  return (
+    entry.status === "under_review" && entry.screening_reason === SOURCE_REVIEW_INCONCLUSIVE_REASON
+  );
 }
 
 // ── Review-event evidence (#622/#636; monolith 6852–6881) ───────────────────
@@ -172,7 +202,7 @@ export function duplicateComparisonLabel(entry: ReviewEventFields): string {
  * build-only screening pass IS the active build stage — calling the image
  * "verified" before that build finishes was both redundant and temporally
  * false, so it renders nothing; a full review during screening names the
- * deferred branch, "Source integrity review".
+ * deferred branch, "Deferred source review".
  */
 export function policyScreeningLabel(entry: {
   status?: string | null;
@@ -182,7 +212,7 @@ export function policyScreeningLabel(entry: {
 }): string {
   if (entry.screening_build_only === true) return "";
   if (entry.screening_build_only === false && entry.status === "screening") {
-    return "Source integrity review";
+    return "Deferred source review";
   }
   const completed = Number(entry.screening_policy_version);
   const required = Number(entry.required_screening_policy_version);
@@ -328,10 +358,17 @@ export function validationDetail(e: ActivityStatusEntry): string {
   if (e.status === "waiting_screening")
     return "Queued for a screener to claim under the current policy.";
   if (e.status === "screening") return "A screener is currently checking this submission.";
-  if (e.status === "under_review")
-    return "This submission is held for integrity review. Existing scores do not clear the hold. The screening history below shows whether a deep review is running or an operator decision is pending.";
+  if (e.status === "under_review") {
+    const held =
+      "This submission is held for deferred source review. Existing scores do not clear the hold. ";
+    return isSourceReviewIncomplete(e)
+      ? held +
+          "The automated review ran out of budget before finishing, which is not a finding; an operator decision is pending."
+      : held +
+          "The screening history below shows whether a deep review is running or an operator decision is pending.";
+  }
   if (e.status === "rejected")
-    return "Screening or integrity review rejected this submission. Existing scores remain as history; see the review result for the policy version and reason.";
+    return "Screening or source review rejected this submission. Existing scores remain as history; see the review result for the policy version and reason.";
   if (e.status === "screening_failed")
     return "Screening could not complete. This is not a submission rejection. Check the admission retry status below for whether a retry is authorized or operator action is needed.";
   if (count >= quorum) {

@@ -110,7 +110,7 @@ CRAWLABLE_PAGES: tuple[tuple[str, str, str, str], ...] = (
         "Submission pipeline · Ditto SN118",
         (
             "Every SN118 submission from upload to scored: admission, "
-            "validation, and integrity review."
+            "validation, and source review."
         ),
     ),
     (

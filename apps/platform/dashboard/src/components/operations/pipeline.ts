@@ -348,7 +348,7 @@ export function pipelineAgentVersionLabel(version: number | string | null | unde
   return version == null ? "Legacy" : "v" + version;
 }
 
-// ── Source integrity review branch (weekend drift: #623/#635) ───────────────
+// ── Deferred source review branch (weekend drift: #623/#635) ───────────────
 
 export interface IntegrityReviewView {
   /** Authoritative status_counts.under_review, falling back to the rows the

@@ -42,7 +42,7 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   },
   pipeline: {
     title: "Submission pipeline",
-    sub: "Every submission from upload to scored · admission, validation, and integrity review",
+    sub: "Every submission from upload to scored · admission, validation, and source review",
   },
   operations: {
     title: "Fleet",

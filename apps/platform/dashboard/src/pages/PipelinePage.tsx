@@ -1,5 +1,5 @@
 // The submission-pipeline page: the atlas map (board, rescreen notice,
-// integrity-review branch) split out of the old single operations page so
+// deferred source review branch) split out of the old single operations page so
 // the flow reads as its own surface. Every panel consumes exactly ONE
 // /public/operations snapshot per tick, and the snapshot note states the
 // reconciliation plus its age (skew is visible, not papered over).
@@ -51,8 +51,9 @@ export function PipelinePage(
             <div class="atlas-label">
               <div>
                 <span class="atlas-note">
-                  Mechanical admission builds a verified image before validators. Source integrity
-                  review happens later only for qualifying or anomalous results.
+                  Mechanical admission builds a verified image before validators. Deferred source
+                  review happens later only for qualifying or anomalous results. A hold is neutral
+                  when the automated review only ran out of budget; the row says so.
                 </span>
                 <span class="atlas-note" id="operations-snapshot" aria-live="polite">
                   {snap.snapshotNote()}

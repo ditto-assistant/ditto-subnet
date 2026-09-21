@@ -18,6 +18,10 @@ import { ScreeningReview } from "../components/evidence/ScreeningReview";
 import { screeningPolicySummary, validationAttemptView } from "../components/evidence/labels";
 import { reviewPacket } from "../components/evidence/review-packet";
 import { createActivityStore } from "../components/pipeline/activity-store";
+import {
+  SOURCE_REVIEW_INCOMPLETE_NOTE,
+  SOURCE_REVIEW_INCONCLUSIVE_REASON,
+} from "../components/pipeline/status";
 import { syncFromLocation } from "../stores/routeStore";
 import { FIXTURE_TOP_AGENT_ID, installFixtureFetch, loadFixture } from "../test-fixtures";
 import type { ActivityPayload, AgentSummaryPayload } from "../types/pipeline";
@@ -136,7 +140,7 @@ describe("server-backed quick filters (row 10)", () => {
     expect(buttons).toEqual([
       ["all", "All 927", "true"],
       ["rejected", "Rejected 164", "false"],
-      ["under_review", "Integrity review 53", "false"],
+      ["under_review", "Deferred review 53", "false"],
       ["waiting_validator", "Waiting for validators 3", "false"],
       ["queued", "Queued work 3", "false"],
       ["downloadable", "Source releases 0", "false"],
@@ -906,7 +910,7 @@ describe("async agent evidence", () => {
     ["rejected", 2, "rejected this submission"],
     ["rejected", 3, "rejected this submission"],
     ["screening_failed", 3, "not a submission rejection"],
-    ["under_review", 3, "held for integrity review"],
+    ["under_review", 3, "held for deferred source review"],
     ["screening", 3, "currently checking"],
   ])("shows %s ahead of %i historical scores", async (status, score_count, expected) => {
     render(() => (
@@ -1187,6 +1191,40 @@ describe("async agent evidence", () => {
   });
 });
 
+// ── #562: a review-budget hold must not read as a finding ────────────────────
+describe("deferred source review chip (#562)", () => {
+  async function renderHeld(screening_reason: string): Promise<HTMLElement> {
+    const base = (activity.entries ?? [])[0] as Record<string, unknown>;
+    stubActivityFetch(() => ({
+      entries: [{ ...base, status: "under_review", screening_reason }],
+      status_counts: { under_review: 1 },
+      page: 1,
+      total_pages: 1,
+      total: 1,
+    }));
+    render(() => <SubmissionsPage />);
+    await waitFor(() => expect(document.querySelector(".stage-cell .stage")).toBeTruthy());
+    return document.querySelector(".stage-cell") as HTMLElement;
+  }
+
+  it("keeps an inconclusive-review hold neutral and says no finding was made", async () => {
+    const cell = await renderHeld(SOURCE_REVIEW_INCONCLUSIVE_REASON);
+    const chip = cell.querySelector(".stage") as HTMLElement;
+    expect(chip.textContent).toBe("Deferred source review");
+    expect(chip.classList.contains("warn")).toBe(false);
+    const notes = Array.from(cell.querySelectorAll(".stage-note"), (n) => n.textContent);
+    expect(notes).toContain(SOURCE_REVIEW_INCOMPLETE_NOTE);
+  });
+
+  it("keeps the warn chip and shows no such note for an anti-cheat hold", async () => {
+    const cell = await renderHeld("Submission held for anti-cheat review");
+    const chip = cell.querySelector(".stage") as HTMLElement;
+    expect(chip.textContent).toBe("Deferred source review");
+    expect(chip.classList.contains("warn")).toBe(true);
+    expect(cell.textContent).not.toContain(SOURCE_REVIEW_INCOMPLETE_NOTE);
+  });
+});
+
 // ── Weekend drift #622/#636 in the activity table ────────────────────────────
 // #622: the stage cell leads with the CURRENT review reason under its event
 // label, keeping the initial hold as labeled history. #636: past the
@@ -1216,7 +1254,7 @@ describe("review-event evidence in the table (#622/#636)", () => {
     render(() => <SubmissionsPage />);
     await waitFor(() => expect(document.querySelector(".stage-cell .stage")).toBeTruthy());
     const cell = document.querySelector(".stage-cell") as HTMLElement;
-    expect(cell.querySelector(".stage")?.textContent).toBe("Source integrity review");
+    expect(cell.querySelector(".stage")?.textContent).toBe("Deferred source review");
     const notes = Array.from(cell.querySelectorAll(".stage-note"), (note) => note.textContent);
     expect(notes[0]).toBe("Review reopened: manual re-check of tool-call provenance");
     expect(notes[1]).toBe("Initial hold: content near-duplicate of agent abc");
