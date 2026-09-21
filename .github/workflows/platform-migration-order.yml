@@ -11,16 +11,15 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # Main sweeps publish statuses across every open PR, so serialize them under
-  # one stable key. PR and merge-queue checks remain isolated by ref.
-  group: platform-migration-order-${{ github.event_name == 'push' && 'main-sweep' || github.head_ref || github.ref }}
-  cancel-in-progress: true
-
 jobs:
   migration-order:
     name: Platform migration order
     if: github.event_name != 'push'
+    # Per-ref check: a PR, merge-queue entry, or branch dispatch (the anti-copy
+    # refresh dispatches this by branch) replaces only its own earlier run.
+    concurrency:
+      group: platform-migration-order-${{ github.head_ref || github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -94,7 +93,21 @@ jobs:
 
   recheck-open-prs:
     name: Re-check open Platform migrations against new main
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    # Only main is authoritative: a dispatch from another branch (the anti-copy
+    # refresh dispatches this workflow per branch for that branch's own check)
+    # would run that branch's older copy of this workflow and script, and could
+    # displace the pending push sweep and then rewrite every open PR's status.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+    # Push and manual-on-main sweeps write migration-order/merge-result on every
+    # open PR, so they share one lane. Queue instead of cancelling: a sweep is
+    # never killed mid-write, and the run that started later (against the newer
+    # origin/main) always finishes last, so an older sweep cannot overwrite it.
+    # GitHub keeps only the newest pending run, so a burst of pushes collapses.
+    concurrency:
+      group: platform-migration-order-main-sweep
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     permissions:
       contents: read
