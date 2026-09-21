@@ -63,6 +63,15 @@ def test_context_index_paths_exist() -> None:
     )
 
 
+def test_bounty_payout_routes_to_treasury_governance_contract() -> None:
+    topic = lookup("maintenance treasury bounty payout")[0]
+    assert topic["id"] == "maintenance-treasury"
+    assert "docs/MAINTENANCE-TREASURY.md" in topic_list(topic, "read")
+    assert lookup("how do contributor bounties get paid")[0]["id"] == (
+        "maintenance-treasury"
+    )
+
+
 def test_discord_sweep_routes_to_browser_triage() -> None:
     topic = lookup("overnight Discord miner DM triage")[0]
     assert topic["id"] == "discord-miner-triage"

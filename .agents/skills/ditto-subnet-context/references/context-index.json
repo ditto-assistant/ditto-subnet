@@ -210,6 +210,19 @@
       "related": ["backroom-review", "mine", "validator-miner"]
     },
     {
+      "id": "maintenance-treasury",
+      "title": "Maintenance treasury and contributor bounties",
+      "keywords": ["maintenance treasury", "treasury", "bounty", "bounty claim", "bounty payout", "bounty board", "contributor bounty", "treasury custody", "treasury ledger"],
+      "summary": "Governance contract for the fee-funded SN118 maintenance treasury: funding, custody, bounty approval, alpha payouts, and the public ledger.",
+      "skills": ["ditto-subnet-platform"],
+      "owns": ["docs/MAINTENANCE-TREASURY.md"],
+      "read": ["docs/MAINTENANCE-TREASURY.md", "docs/OWNER-LINKS.md", "apps/platform/SECURITY.md"],
+      "search": ["rg -n 'EvaluationPayment|submission_deposit_address|append_audit_entry' apps/platform/ditto", "rg -n 'verify_signed_action|LINK_DOMAIN|get_registered_coldkey' apps/platform/ditto ditto/miner_cli"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["No GitHub issue, label, comment, merge, or Discord message can move treasury funds; only a signed approval recorded in the ledger can.", "Platform verifies and records treasury activity; it never holds a key that can spend treasury funds."],
+      "related": ["platform-api", "backroom", "contracts"]
+    },
+    {
       "id": "discord-miner-triage",
       "title": "Recurring Discord miner channel and DM triage",
       "keywords": ["discord triage", "miner dm triage", "scheduled discord", "overnight discord", "discord catch-up", "discord sweep"],
