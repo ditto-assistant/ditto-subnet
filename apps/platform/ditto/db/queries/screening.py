@@ -57,6 +57,7 @@ from ditto.db.queries.screening_infra_retry import (
     InfraRetryDecision,
     InfraSignature,
     plan_infra_retries,
+    screener_provider,
 )
 from ditto.db.queries.screening_retry import (
     failed_screening_retry_authorized,
@@ -904,7 +905,11 @@ async def claim_screening_attempts(
     # Infrastructure-parked agents retry on their own schedule: per-artifact
     # exponential backoff, then the fleet breaker. Planned under the claim lock
     # from persisted attempts, so every worker derives the same answer.
-    infra_plan = await plan_infra_retries(session, now=now)
+    infra_plan = await plan_infra_retries(
+        session,
+        now=now,
+        claimant_provider=await screener_provider(session, screener_hotkey),
+    )
     infra_decisions = infra_plan.decisions
     infra_auto_retry = (
         Agent.agent_id.in_(infra_plan.claimable_agent_ids)

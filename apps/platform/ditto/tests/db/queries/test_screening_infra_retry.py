@@ -22,9 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.db.models import (
     Agent,
     AgentStatus,
+    ScreenedImageUpload,
+    ScreenerNode,
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningRetryOverride,
+    SubmissionImageBuild,
     ValidatorQueueWithdrawal,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version
@@ -104,6 +107,7 @@ async def _add_attempt(
     provider: str | None = _PROVIDER,
     lane: str | None = _LANE,
     deadline: datetime | None = None,
+    screener_hotkey: str = _SCREENER,
 ) -> UUID:
     attempt_id = attempt_id or uuid4()
     async with session_maker() as session, session.begin():
@@ -111,7 +115,7 @@ async def _add_attempt(
             ScreeningAttempt(
                 attempt_id=attempt_id,
                 agent_id=agent_id,
-                screener_hotkey=_SCREENER,
+                screener_hotkey=screener_hotkey,
                 policy_version=SCREENING_FLOOR_POLICY_VERSION,
                 status=status,
                 started_at=started_at,
@@ -173,11 +177,12 @@ async def _claim(
     *,
     now: datetime,
     limit: int = 10,
+    hotkey: str = _SCREENER,
 ) -> list[UUID]:
     async with session_maker() as session, session.begin():
         claimed = await claim_screening_attempts(
             session,
-            screener_hotkey=_SCREENER,
+            screener_hotkey=hotkey,
             now=now,
             ttl=timedelta(minutes=45),
             limit=limit,
@@ -197,6 +202,33 @@ async def _running(session_maker: async_sessionmaker[AsyncSession]) -> list[UUID
                 select(ScreeningAttempt.agent_id).where(
                     ScreeningAttempt.status == "running"
                 )
+            )
+        )
+
+
+async def _verify_image(
+    session_maker: async_sessionmaker[AsyncSession],
+    agent_id: UUID,
+    attempt_id: UUID,
+    *,
+    hotkey: str = _SCREENER,
+) -> None:
+    """The verified screened-image upload a worker-built passing verdict carries."""
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenedImageUpload(
+                image_upload_id=uuid4(),
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                screener_hotkey=hotkey,
+                storage_upload_id="upload",
+                sha256="f" * 64,
+                size_bytes=1,
+                image_id="sha256:" + "f" * 64,
+                image_ref="registry/agent:screened",
+                status="verified",
+                expires_at=datetime.now(UTC) + timedelta(days=1),
+                verified_at=datetime.now(UTC),
             )
         )
 
@@ -231,6 +263,9 @@ async def _settle_probe(
             if status == "failed"
             else AgentStatus.EVALUATING
         )
+        attempt_id = attempt.attempt_id
+    if status == "passed":
+        await _verify_image(session_maker, agent_id, attempt_id)
 
 
 # --- backoff policy -------------------------------------------------------
@@ -1081,3 +1116,439 @@ async def test_agent_only_plan_skips_the_fleet_history_query(
     async with session_maker() as session:
         await plan_infra_retries(session, now=now, agent_ids=[agent_id])
     assert len(calls) == 1
+
+
+# --- lane-aware breaker ------------------------------------------------------
+
+_HETZNER_HOTKEY = "5GHetznerNodeHotkeyForInfraRetryTests000000000000"
+_HETZNER = "hetzner"
+
+
+async def _enroll_node(
+    session_maker: async_sessionmaker[AsyncSession], *, hotkey: str, provider: str
+) -> None:
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id=f"node-{provider}",
+                provider=provider,
+                provider_resource_id=f"resource-{provider}",
+                screener_hotkey=hotkey,
+                token_hash="a" * 64,
+                token_expires_at=datetime.now(UTC) + timedelta(days=1),
+            )
+        )
+
+
+async def _follow_up(
+    session_maker: async_sessionmaker[AsyncSession],
+    agent_id: UUID,
+    *,
+    status: str,
+    at: datetime,
+    hotkey: str,
+    provider: str | None = None,
+    lane: str | None = None,
+    reason_code: str | None = None,
+    with_image: bool = True,
+) -> UUID:
+    """A retry of ``agent_id`` that started at ``at`` on the worker ``hotkey``."""
+    attempt_id = await _add_attempt(
+        session_maker,
+        agent_id,
+        status=status,
+        started_at=at,
+        finished_at=at + timedelta(minutes=1),
+        reason_code=reason_code or (_CODE if status == "failed" else None),
+        provider=provider,
+        lane=lane,
+        screener_hotkey=hotkey,
+    )
+    if status == "passed" and with_image:
+        await _verify_image(session_maker, agent_id, attempt_id, hotkey=hotkey)
+    return attempt_id
+
+
+async def _gcp_breaker(session_maker, *, now: datetime):
+    plan = await _plan(session_maker, now=now)
+    return plan.breakers[(_CODE, _PROVIDER, _LANE)]
+
+
+async def test_cross_lane_success_does_not_close_the_breaker_or_use_its_probe(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _enroll_node(session_maker, hotkey=_HETZNER_HOTKEY, provider=_HETZNER)
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0)
+    opened = _opened_at(t0)
+    # One failed agent is retried on Hetzner and passes there.
+    await _follow_up(
+        session_maker,
+        agents[0],
+        status="passed",
+        at=opened + _SECOND,
+        hotkey=_HETZNER_HOTKEY,
+    )
+    now = opened + BREAKER_OPEN_DURATION + _SECOND
+
+    breaker = await _gcp_breaker(session_maker, now=now)
+
+    assert breaker.open
+    assert breaker.last_probe_at is None
+    # The single GCE probe is still unconsumed and the rest stay held.
+    assert len(await _claim(session_maker, now=now)) == 1
+
+
+async def test_cross_lane_failure_belongs_to_its_own_signature(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _enroll_node(session_maker, hotkey=_HETZNER_HOTKEY, provider=_HETZNER)
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0)
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker,
+        agents[0],
+        status="failed",
+        at=opened + _SECOND,
+        hotkey=_HETZNER_HOTKEY,
+        provider=_HETZNER,
+        lane=_LANE,
+    )
+    now = opened + BREAKER_OPEN_DURATION + _SECOND
+
+    plan = await _plan(session_maker, now=now)
+
+    gcp = plan.breakers[(_CODE, _PROVIDER, _LANE)]
+    assert gcp.open
+    assert gcp.last_probe_at is None
+    # The Hetzner failure is one failure of its own signature: no trip.
+    assert not plan.breakers[(_CODE, _HETZNER, _LANE)].open
+    assert len(await _claim(session_maker, now=now)) == 1
+
+
+async def test_same_lane_success_closes_and_other_lane_success_does_not(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _enroll_node(session_maker, hotkey=_HETZNER_HOTKEY, provider=_HETZNER)
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0, provider=_HETZNER, lane=_LANE)
+    opened = _opened_at(t0)
+    # A pass on the legacy (GCE) fleet says nothing about the Hetzner lane.
+    await _follow_up(
+        session_maker, agents[0], status="passed", at=opened + _SECOND, hotkey=_SCREENER
+    )
+    now = opened + BREAKER_OPEN_DURATION + _SECOND
+    plan = await _plan(session_maker, now=now)
+    assert plan.breakers[(_CODE, _HETZNER, _LANE)].open
+
+    # A pass on the Hetzner node closes it.
+    await _follow_up(
+        session_maker,
+        agents[1],
+        status="passed",
+        at=now,
+        hotkey=_HETZNER_HOTKEY,
+    )
+    plan = await _plan(session_maker, now=now + timedelta(minutes=2))
+    assert not plan.breakers[(_CODE, _HETZNER, _LANE)].open
+
+
+async def test_follow_up_through_the_image_build_lane_is_a_probe_not_a_recovery(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A retry built by the Platform image-build lane still paces the probes.
+
+    Placement (the claiming worker) is what a probe is; the lane it then used is
+    not known at claim time. But a pass through the image-build lane is no proof
+    the local build recovered, so it does not close the breaker.
+    """
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0)
+    opened = _opened_at(t0)
+    attempt = await _follow_up(
+        session_maker, agents[0], status="passed", at=opened + _SECOND, hotkey=_SCREENER
+    )
+    async with session_maker() as session, session.begin():
+        session.add(
+            SubmissionImageBuild(
+                build_id=uuid4(),
+                agent_id=agents[0],
+                attempt_id=attempt,
+                environment="prod",
+                artifact_sha256="e" * 64,
+                image_ref=f"ditto-screen/{agents[0]}-{attempt}:latest",
+                output_key="builds/x",
+            )
+        )
+    now = opened + BREAKER_OPEN_DURATION + _SECOND
+
+    breaker = await _gcp_breaker(session_maker, now=now)
+
+    assert breaker.open
+    assert breaker.last_probe_at == opened + _SECOND
+    assert breaker.next_probe_at == max(
+        opened + BREAKER_OPEN_DURATION, opened + _SECOND + BREAKER_PROBE_INTERVAL
+    )
+
+
+async def test_other_lane_worker_claims_held_retries_without_using_the_probe(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _enroll_node(session_maker, hotkey=_HETZNER_HOTKEY, provider=_HETZNER)
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0)
+    opened = _opened_at(t0)
+    held_at = opened + BREAKER_OPEN_DURATION - _SECOND
+    # The breaker holds retries on the failing GCE lane...
+    assert await _claim(session_maker, now=held_at) == []
+    # ...but not on Hetzner, and that run is no GCE probe.
+    (elsewhere,) = await _claim(
+        session_maker, now=held_at, limit=1, hotkey=_HETZNER_HOTKEY
+    )
+    assert elsewhere in agents
+    probe_at = opened + BREAKER_OPEN_DURATION + _SECOND
+    breaker = await _gcp_breaker(session_maker, now=probe_at)
+    assert breaker.open and breaker.last_probe_at is None
+    assert len(await _claim(session_maker, now=probe_at)) == 1
+
+
+async def _probe_state(session_maker, *, now, signature=(_CODE, _PROVIDER, _LANE)):
+    return (await _plan(session_maker, now=now)).breakers[signature]
+
+
+async def test_probe_that_later_fails_elsewhere_still_consumes_the_interval(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Placement, not the recorded failure metadata, defines a probe."""
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0)
+    opened = _opened_at(t0)
+    started = opened + BREAKER_OPEN_DURATION + _SECOND
+    attempt = await _add_attempt(
+        session_maker,
+        agents[0],
+        status="running",
+        started_at=started,
+        finished_at=None,
+        screener_hotkey=_SCREENER,
+    )
+    now = started + _SECOND
+    running = await _probe_state(session_maker, now=now)
+    assert running.last_probe_at == started
+
+    # It fails fast for a different reason on a different provider and lane.
+    async with session_maker() as session, session.begin():
+        row = await session.get(ScreeningAttempt, attempt)
+        assert row is not None
+        row.status = "failed"
+        row.finished_at = started + timedelta(seconds=30)
+        row.reason_code = _CODE
+        row.failure_provider = "targon"
+        row.failure_lane = "kaniko"
+    finished = await _probe_state(session_maker, now=now)
+
+    assert finished.last_probe_at == running.last_probe_at == started
+    assert finished.next_probe_at == started + BREAKER_PROBE_INTERVAL
+    # The next claim cannot probe again inside the interval.
+    assert (
+        await _claim(session_maker, now=started + BREAKER_PROBE_INTERVAL - _SECOND)
+        == []
+    )
+
+
+async def test_probe_classification_is_identical_running_and_finished(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0)
+    opened = _opened_at(t0)
+    started = opened + _SECOND
+    attempt = await _add_attempt(
+        session_maker,
+        agents[0],
+        status="running",
+        started_at=started,
+        finished_at=None,
+    )
+    now = opened + BREAKER_OPEN_DURATION + _SECOND
+    seen = [(await _probe_state(session_maker, now=now)).last_probe_at]
+    async with session_maker() as session, session.begin():
+        build = SubmissionImageBuild(
+            build_id=uuid4(),
+            agent_id=agents[0],
+            attempt_id=attempt,
+            environment="prod",
+            artifact_sha256="e" * 64,
+            image_ref=f"ditto-screen/{agents[0]}-{attempt}:latest",
+            output_key="builds/x",
+        )
+        session.add(build)
+    seen.append((await _probe_state(session_maker, now=now)).last_probe_at)
+    async with session_maker() as session, session.begin():
+        row = await session.get(ScreeningAttempt, attempt)
+        assert row is not None
+        row.status = "failed"
+        row.finished_at = started + _SECOND
+        row.reason_code = "targon-build-unavailable"
+        row.failure_provider = "targon"
+        row.failure_lane = "kaniko"
+    seen.append((await _probe_state(session_maker, now=now)).last_probe_at)
+    assert seen == [started] * 3
+
+
+@pytest.mark.parametrize("provider", ["home", "test", "targon"])
+async def test_probe_by_any_node_provider_paces_its_own_signature(
+    session_maker: async_sessionmaker[AsyncSession], provider: str
+) -> None:
+    hotkey = f"5GNodeHotkey{provider}ForInfraRetryTests0000000000000000"
+    await _enroll_node(session_maker, hotkey=hotkey, provider=provider)
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0, provider=provider)
+    opened = _opened_at(t0)
+    started = opened + BREAKER_OPEN_DURATION + _SECOND
+    await _add_attempt(
+        session_maker,
+        agents[0],
+        status="running",
+        started_at=started,
+        finished_at=None,
+        screener_hotkey=hotkey,
+    )
+    state = await _probe_state(
+        session_maker, now=started + _SECOND, signature=(_CODE, provider, _LANE)
+    )
+    assert state.last_probe_at == started
+    # A claimant on that provider is now held for the interval.
+    assert await _claim(session_maker, now=started + _SECOND, hotkey=hotkey) == []
+
+
+async def test_pass_closes_only_the_signatures_of_its_own_lane_in_a_mixed_history(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Fail on GCE (G), retry on Hetzner and fail (H), retry on GCE and pass."""
+    await _enroll_node(session_maker, hotkey=_HETZNER_HOTKEY, provider=_HETZNER)
+    t0 = datetime.now(UTC) - timedelta(hours=2)
+    step = BREAKER_WINDOW / (BREAKER_DISTINCT_AGENTS + 1)
+    # Trip G (gcp) and H (hetzner) with three failing agents each.
+    gcp_agents = await _tripped_fleet(session_maker, t0=t0)
+    hetzner_agents = await _tripped_fleet(
+        session_maker, t0=t0 + BREAKER_WINDOW * 2, provider=_HETZNER
+    )
+    later = t0 + BREAKER_WINDOW * 4
+    # One agent fails on GCE, then Hetzner, then passes on GCE.
+    mixed = gcp_agents[0]
+    await _follow_up(
+        session_maker,
+        mixed,
+        status="failed",
+        at=later,
+        hotkey=_HETZNER_HOTKEY,
+        provider=_HETZNER,
+        lane=_LANE,
+    )
+    await _follow_up(
+        session_maker, mixed, status="passed", at=later + step, hotkey=_SCREENER
+    )
+    now = later + BREAKER_OPEN_DURATION
+    plan = await _plan(session_maker, now=now)
+    assert not plan.breakers[(_CODE, _PROVIDER, _LANE)].open
+    assert plan.breakers[(_CODE, _HETZNER, _LANE)].open
+    assert hetzner_agents  # the H breaker's own agents are still parked
+
+
+async def test_mixed_history_mirror_hetzner_pass_does_not_close_gcp(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _enroll_node(session_maker, hotkey=_HETZNER_HOTKEY, provider=_HETZNER)
+    t0 = datetime.now(UTC) - timedelta(hours=2)
+    step = BREAKER_WINDOW / (BREAKER_DISTINCT_AGENTS + 1)
+    gcp_agents = await _tripped_fleet(session_maker, t0=t0)
+    await _tripped_fleet(session_maker, t0=t0 + BREAKER_WINDOW * 2, provider=_HETZNER)
+    later = t0 + BREAKER_WINDOW * 4
+    mixed = gcp_agents[0]
+    await _follow_up(
+        session_maker,
+        mixed,
+        status="failed",
+        at=later,
+        hotkey=_SCREENER,
+        provider=_PROVIDER,
+        lane=_LANE,
+    )
+    await _follow_up(
+        session_maker, mixed, status="passed", at=later + step, hotkey=_HETZNER_HOTKEY
+    )
+    plan = await _plan(session_maker, now=later + BREAKER_OPEN_DURATION)
+    assert plan.breakers[(_CODE, _PROVIDER, _LANE)].open
+    # The Hetzner pass followed only GCE failures: H is untouched.
+    assert plan.breakers[(_CODE, _HETZNER, _LANE)].open
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        # Policy-only rescreen: retained build evidence, never builds.
+        {
+            "status": "passed",
+            "with_image": False,
+            "reason_code": "policy-only-rescreen",
+        },
+        # Static tripwire fires before any build starts.
+        {"status": "quarantined", "with_image": False},
+        # Another reject (contract / duplicate) never reached the build.
+        {
+            "status": "rejected",
+            "with_image": False,
+            "reason_code": "container-harness-contract",
+        },
+    ],
+)
+async def test_outcomes_without_build_proof_do_not_close_the_breaker(
+    session_maker: async_sessionmaker[AsyncSession], outcome: dict
+) -> None:
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0)
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker, agents[0], at=opened + _SECOND, hotkey=_SCREENER, **outcome
+    )
+    state = await _probe_state(session_maker, now=opened + BREAKER_OPEN_DURATION)
+    assert state.open
+
+
+async def test_build_rejection_and_verified_image_do_close_the_breaker(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(session_maker, t0=t0)
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker,
+        agents[0],
+        status="rejected",
+        at=opened + _SECOND,
+        hotkey=_SCREENER,
+        reason_code="docker-build",
+        with_image=False,
+    )
+    state = await _probe_state(session_maker, now=opened + BREAKER_OPEN_DURATION)
+    assert not state.open
+
+
+async def test_claimant_rule_holds_the_failing_provider_and_frees_others(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    gcp_node = "5GGcpNodeHotkeyForInfraRetryTests0000000000000000000"
+    await _enroll_node(session_maker, hotkey=gcp_node, provider="gcp")
+    await _enroll_node(session_maker, hotkey=_HETZNER_HOTKEY, provider=_HETZNER)
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    await _tripped_fleet(session_maker, t0=t0)
+    held_at = _opened_at(t0) + BREAKER_OPEN_DURATION - _SECOND
+
+    # Both flavours of GCE worker (legacy fleet and an enrolled node) are held...
+    assert await _claim(session_maker, now=held_at) == []
+    assert await _claim(session_maker, now=held_at, hotkey=gcp_node) == []
+    # ...while a worker on another provider is not.
+    assert len(await _claim(session_maker, now=held_at, hotkey=_HETZNER_HOTKEY)) > 0

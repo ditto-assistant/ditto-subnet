@@ -16,6 +16,17 @@ module owns three things and nothing else:
 * the read model both use, so the claim path and a future operator surface read
   one derivation.
 
+Automatic retries are bounded by ``INFRA_AUTO_RETRY_MAX_AGE`` and
+``INFRA_AUTO_RETRY_MAX_STREAK``. A capped or aged-out agent stays
+``screening_failed`` and still needs a guarded operator review (the existing
+Backroom manual retry or clear). It NEVER becomes a miner rejection or a
+quarantine: nothing here writes a verdict.
+
+Deliberate behaviour beyond the base spec: while a known-provider breaker is
+open, a worker on ANOTHER provider claims those agents by backoff alone (its run
+is not on the faulty lane and is never a probe of it), and a failure there trips
+that provider's own signature. Workers on the failing provider stay held.
+
 Nothing here is stored. The streak, deadline, and breaker state are recomputed
 from ``screening_attempts`` on every call, so they are identical after a restart
 and on every worker. The retry count is deliberately NOT the inconclusive count
@@ -51,9 +62,12 @@ from sqlalchemy import (
 from ditto.db.models import (
     Agent,
     AgentStatus,
+    ScreenedImageUpload,
+    ScreenerNode,
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningRetryOverride,
+    SubmissionImageBuild,
 )
 from ditto.db.queries.screening_retry import latest_screening_attempt_id
 
@@ -98,9 +112,13 @@ BREAKER_PROBE_INTERVAL = timedelta(minutes=5)
 # this without a single new event simply re-trips from fresh failures.
 BREAKER_HISTORY_LOOKBACK = timedelta(hours=48)
 
-# Attempts that prove the failing lane got past the infrastructure step.
-_RECOVERY_STATUSES = ("passed", "quarantined")
-_RECOVERY_REJECT_REASON = "docker-build"  # the build ran and judged the archive
+# Recovery needs proof that the worker's local build ran and worked: a ``passed``
+# verdict carrying a verified screened-image upload (a policy-only rescreen, a
+# deferred source-only review and a pre-build tripwire quarantine finish without
+# one), or a deterministic ``docker-build`` rejection (the build ran and judged
+# the archive). A quarantine alone is not proof: the static preflight can quarantine
+# before any build starts.
+_RECOVERY_REJECT_REASON = "docker-build"
 
 # Beyond this the doubling is already clamped; it only keeps the shift small.
 _MAX_DOUBLINGS = 16
@@ -224,6 +242,14 @@ def failing_agents_query(cutoff: datetime) -> Select[tuple[UUID]]:
     )
 
 
+async def screener_provider(session: AsyncSession, hotkey: str) -> str:
+    """Provider of the worker holding ``hotkey`` (``gcp`` for the legacy fleet)."""
+    provider = await session.scalar(
+        select(ScreenerNode.provider).where(ScreenerNode.screener_hotkey == hotkey)
+    )
+    return provider or "gcp"
+
+
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
@@ -238,6 +264,51 @@ class _Row:
     finished_at: datetime | None
     provider: str | None
     lane: str | None
+    # Provider of the screener node whose hotkey ran the attempt, if enrolled.
+    node_provider: str | None = None
+    # A Platform-attested image build (not the worker's local build) ran for it.
+    has_image_build: bool = False
+
+    # A verified screened-image upload is bound to this attempt.
+    has_verified_image: bool = False
+
+    @property
+    def placement_provider(self) -> str:
+        """Provider of the worker that claimed the attempt.
+
+        Known at claim time and fixed for the attempt's life (the screener
+        hotkey never changes), unlike the failure metadata, which appears only
+        when the attempt ends. ``gcp`` for the legacy shared fleet, which has no
+        node row: the rule ``require_screener`` applies.
+        """
+        return self.node_provider or "gcp"
+
+    def is_probe_of(self, signature: InfraSignature) -> bool:
+        """Whether this retry was placed on the signature's provider.
+
+        A probe is defined by placement only, so it classifies identically while
+        running and after it ends, however it later fails, and whichever build
+        lane it ends up using. Metadata-free signatures (reason code alone) and
+        lane-only ones accept any retry, as before.
+        """
+        return (
+            signature.provider is None or self.placement_provider == signature.provider
+        )
+
+    def exercises(self, signature: InfraSignature) -> bool:
+        """Strict: the attempt demonstrably ran the signature's provider AND lane.
+
+        Used for recovery only. The lane is the recorded failure lane, else
+        ``buildkit`` (the worker's local build). A Platform image build makes the
+        lane unknown, and an unknown lane never matches a known one.
+        """
+        if signature.provider is None and signature.lane is None:
+            return True
+        provider = self.provider or self.placement_provider
+        lane = None if self.has_image_build else (self.lane or "buildkit")
+        return (signature.provider is None or provider == signature.provider) and (
+            signature.lane is None or lane == signature.lane
+        )
 
     @property
     def is_infra_failure(self) -> bool:
@@ -256,7 +327,7 @@ class _Row:
 
     @property
     def is_recovery(self) -> bool:
-        return self.status in _RECOVERY_STATUSES or (
+        return (self.status == "passed" and self.has_verified_image) or (
             self.status == "rejected" and self.reason_code == _RECOVERY_REJECT_REASON
         )
 
@@ -268,11 +339,14 @@ def _derive_breakers(
 
     Events per signature, in time order: a *failure* (finish of a failed
     infrastructure attempt), a *probe* (start of the next attempt of an agent
-    whose previous attempt failed with the signature: a retry that exercises the
-    lane again), and a *recovery* (that retry finishing ``passed``/``quarantined``
-    or judged by the build). The breaker trips when ``BREAKER_DISTINCT_AGENTS``
-    distinct agents fail inside ``BREAKER_WINDOW``, stays tripped through failed
-    probes, and closes on recovery.
+    in the run of failures just before it, when it was placed on that
+    signature's provider: see ``_Row.is_probe_of``), and a *recovery* (that probe
+    demonstrably running the signature's provider and lane, and finishing with
+    proof the local build worked: see ``_Row.is_recovery``). A retry on another
+    provider is neither: a failure there is a failure of its own signature, and a
+    success there proves nothing about this one. The breaker trips when
+    ``BREAKER_DISTINCT_AGENTS`` distinct agents fail inside ``BREAKER_WINDOW``,
+    stays tripped through failed probes, and closes on recovery.
     """
     # (time, order, kind, agent_id); order breaks ties failure < probe < recovery.
     events: dict[InfraSignature, list[tuple[datetime, int, str, UUID]]] = defaultdict(
@@ -280,22 +354,26 @@ def _derive_breakers(
     )
     for rows in histories:
         for index, row in enumerate(rows):
-            previous = rows[index - 1] if index > 0 else None
-            # A retry of an agent that failed with a signature exercises that
-            # lane again, whatever it then does (a failed probe is also a new
-            # failure below).
-            if (
-                previous is not None
-                and previous.is_infra_failure
-                and _aware(row.started_at) >= cutoff
-            ):
-                events[previous.signature].append(
-                    (_aware(row.started_at), 1, "probe", row.agent_id)
-                )
-                if row.is_recovery:
-                    events[previous.signature].append(
-                        (row.failed_at, 2, "recovery", row.agent_id)
+            # The contiguous run of infrastructure failures right before this
+            # attempt: every distinct signature in it is retried by this row, not
+            # only the last (fail on GCE, retry on Hetzner and fail, retry on GCE
+            # and pass must still close the GCE signature).
+            run: dict[InfraSignature, None] = {}
+            for earlier in reversed(rows[:index]):
+                if not earlier.is_infra_failure:
+                    break
+                run.setdefault(earlier.signature)
+            if _aware(row.started_at) >= cutoff:
+                for signature in run:
+                    if not row.is_probe_of(signature):
+                        continue
+                    events[signature].append(
+                        (_aware(row.started_at), 1, "probe", row.agent_id)
                     )
+                    if row.is_recovery and row.exercises(signature):
+                        events[signature].append(
+                            (row.failed_at, 2, "recovery", row.agent_id)
+                        )
             if row.is_infra_failure and row.failed_at >= cutoff:
                 events[row.signature].append(
                     (row.failed_at, 0, "failure", row.agent_id)
@@ -355,6 +433,7 @@ async def plan_infra_retries(
     agent_ids: Collection[UUID] | None = None,
     fleet_breakers: bool = False,
     fleet_scan: bool = True,
+    claimant_provider: str | None = None,
     claimable_limit: int | None = INFRA_PLAN_MAX_CLAIMABLE,
 ) -> InfraRetryPlan:
     """Decide, for every agent parked on an infrastructure failure, when it retries.
@@ -368,6 +447,11 @@ async def plan_infra_retries(
     every breaker, e.g. for an operator view. ``fleet_scan=False`` skips the
     fleet-wide history query altogether (per-agent backoff and streak only, no
     breaker), for callers such as the unauthenticated public endpoint.
+
+    ``claimant_provider`` is the provider of the worker asking to claim. A breaker
+    for a known-provider signature only holds a claimant on that provider; a
+    retry claimed elsewhere does not run on the faulty lane (and is not a probe
+    of it, see ``_derive_breakers``), so it is decided by backoff alone.
 
     A candidate must also have failed within ``INFRA_AUTO_RETRY_MAX_AGE``, and
     one whose streak reached ``INFRA_AUTO_RETRY_MAX_STREAK`` is decided
@@ -418,6 +502,21 @@ async def plan_infra_retries(
                 ScreeningAttempt.finished_at,
                 ScreeningAttempt.failure_provider,
                 ScreeningAttempt.failure_lane,
+                select(ScreenerNode.provider)
+                .where(ScreenerNode.screener_hotkey == ScreeningAttempt.screener_hotkey)
+                .correlate(ScreeningAttempt)
+                .scalar_subquery(),
+                exists(
+                    select(SubmissionImageBuild.build_id).where(
+                        SubmissionImageBuild.attempt_id == ScreeningAttempt.attempt_id
+                    )
+                ),
+                exists(
+                    select(ScreenedImageUpload.image_upload_id).where(
+                        ScreenedImageUpload.attempt_id == ScreeningAttempt.attempt_id,
+                        ScreenedImageUpload.status == "verified",
+                    )
+                ),
             )
             .where(history_scope)
             .order_by(
@@ -483,7 +582,15 @@ async def plan_infra_retries(
         state: DecisionState = "backoff" if now < backoff_until else "due"
         if streak >= INFRA_AUTO_RETRY_MAX_STREAK:
             state = "capped"
-        elif breaker is not None and breaker.open:
+        elif (
+            breaker is not None
+            and breaker.open
+            and (
+                claimant_provider is None
+                or latest.signature.provider is None
+                or claimant_provider == latest.signature.provider
+            )
+        ):
             assert breaker.next_probe_at is not None
             next_retry_at = max(backoff_until, breaker.next_probe_at)
             if now >= backoff_until:
