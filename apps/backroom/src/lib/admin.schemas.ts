@@ -3803,8 +3803,21 @@ export type ValidatorFleetMember = z.infer<typeof validatorFleetMemberSchema>
 
 // MCP fleet observability keeps identity the slot-cap console deliberately
 // drops: software_version, protocol, stack component revisions, scorer probe
-// identity, and updater current/candidate. Calibration manifests and per-check
-// progress stay out of the parse so one heartbeat cannot flood the catalog.
+// identity, and updater current/candidate. Progress is aggregate-only and
+// bounded to the eight supported slots; private per-check data stays out.
+const validatorRunProgressSchema = z.object({
+  agent_id: z.string().uuid(),
+  slot_id: z.string().max(64),
+  bench_version: z.number().int().positive(),
+  started_at: z.string().max(64),
+  stage: z.string().max(64).nullish().catch(null),
+  completed_checks: z.number().int().min(0).max(10_000).nullish().catch(null),
+  total_checks: z.number().int().min(1).max(10_000).nullish().catch(null),
+  percent: z.number().int().min(0).max(100).nullish().catch(null),
+  stalled: z.boolean().nullish().catch(null),
+  purpose: z.string().max(64).nullish().catch(null),
+})
+
 const validatorComponentIdentitySchema = z
   .object({
     image_digest: z.string().nullish().catch(null),
@@ -3904,6 +3917,10 @@ export const validatorFleetObservabilityMemberSchema = z
     healthy_slot_count: member.healthy_slots.length,
     active_benchmark_count: member.active_benchmarks.length,
     confirmation_benchmark_count: member.confirmation_benchmarks.length,
+    active_benchmarks: member.active_benchmarks.slice(0, 8).flatMap((raw) => {
+      const parsed = validatorRunProgressSchema.safeParse(raw)
+      return parsed.success ? [parsed.data] : []
+    }),
     orphaned_slot_count: member.orphaned_slots.length,
     claimed_slots: member.claimed_slots,
     disk_percent: member.system_metrics?.disk_percent ?? null,
