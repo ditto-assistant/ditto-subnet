@@ -18,8 +18,12 @@ SCRIPT = ROOT / "files" / "ditto-screener-cache-gc.sh"
 FAKE_DOCKER = """#!/usr/bin/env bash
 echo "$*" >> "$FAKE_DOCKER_LOG"
 case "$1" in
-  version) [[ "${FAKE_DOCKER_VERSION_FAIL:-}" == 1 ]] && { echo "cannot connect" >&2; exit 1; }
-           echo 28.0.0 ;;
+  version)
+    if [[ "${FAKE_DOCKER_VERSION_FAIL:-}" == 1 ]]; then
+      echo "cannot connect" >&2
+      exit 1
+    fi
+    echo 28.0.0 ;;
   info) echo /nonexistent ;;
   system) [[ "${FAKE_DOCKER_DF_FAIL:-}" == 1 ]] && { echo "df boom" >&2; exit 1; }
           echo "Build Cache 12 3 57.3GB 41.38GB" ;;
@@ -64,7 +68,10 @@ class CacheGcTest(unittest.TestCase):
         # prune, and never --all.
         for call in calls:
             self.assertNotIn("--all", call)
-            self.assertFalse(call.startswith(("system prune", "image", "container", "volume", "rm")), call)
+            self.assertFalse(
+                call.startswith(("system prune", "image", "container", "volume", "rm")),
+                call,
+            )
 
     def test_empty_min_age_means_no_age_floor(self):
         proc, calls = self.run_gc(SCREENER_CACHE_GC_MIN_AGE="")
@@ -100,7 +107,12 @@ class CacheGcTest(unittest.TestCase):
 
     def test_logs_before_and_after_state_and_policy(self):
         proc, _ = self.run_gc()
-        for needle in ("policy keep-storage=40GB min-age=1h", "before: docker system df", "after: docker system df", "done"):
+        for needle in (
+            "policy keep-storage=40GB min-age=1h",
+            "before: docker system df",
+            "after: docker system df",
+            "done",
+        ):
             self.assertIn(needle, proc.stdout)
 
     def test_dry_run_never_prunes(self):
@@ -129,10 +141,15 @@ class CacheGcTest(unittest.TestCase):
 
     def test_requires_explicit_rootless_docker_host(self):
         with tempfile.TemporaryDirectory() as tmp:
-            env = {"PATH": os.environ["PATH"], "HOME": tmp,
-                   "SCREENER_CACHE_GC_KEEP_STORAGE": "40GB",
-                   "SCREENER_CACHE_GC_MIN_AGE": "1h"}
-            proc = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+            env = {
+                "PATH": os.environ["PATH"],
+                "HOME": tmp,
+                "SCREENER_CACHE_GC_KEEP_STORAGE": "40GB",
+                "SCREENER_CACHE_GC_MIN_AGE": "1h",
+            }
+            proc = subprocess.run(
+                ["bash", str(SCRIPT)], env=env, capture_output=True, text=True
+            )
         self.assertNotEqual(proc.returncode, 0)
         self.assertIn("DOCKER_HOST", proc.stderr)
 
