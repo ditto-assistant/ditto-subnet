@@ -229,10 +229,12 @@ from ditto.db.queries.screening import (
     POLICY_ONLY_RESCREEN_REASON,
     claim_screening_attempts,
     get_screening_attempt,
+    infra_retry_agent_admitted,
     prerequisite_screening_predicates,
     screening_priority_order,
     try_acquire_screening_claim_lock,
 )
+from ditto.db.queries.screening_infra_retry import INFRA_AUTO_RETRY_REASON_CODES
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenResultOutcome,
@@ -5564,7 +5566,8 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
     if reason_code == "docker-build-infrastructure":
         return (
             "Docker build infrastructure failed before screening completed. This "
-            "is operator-owned and requires a manual retry."
+            "is operator-owned and is retried automatically with backoff for a "
+            "limited time, then held for an operator retry."
         )
     if reason_code == "docker-build" or normalized.startswith("build failed"):
         if (
@@ -6216,7 +6219,11 @@ async def submit_result(
         # fail-closed: the terminal attempt parks until an operator authorizes
         # one exact retry through Backroom.
         target = AgentStatus.SCREENING_FAILED
-        public_reason = "Screening was interrupted; manual retry required"
+        public_reason = (
+            _public_screening_reason(payload.detail, payload.reason_code)
+            if payload.reason_code in INFRA_AUTO_RETRY_REASON_CODES
+            else "Screening was interrupted; manual retry required"
+        )
     elif payload.outcome == ScreenResultOutcome.DETERMINISTIC_REJECT:
         target = AgentStatus.REJECTED
         public_reason = _public_screening_reason(payload.detail, payload.reason_code)
@@ -6578,6 +6585,20 @@ async def submit_result(
                 f"agent {agent_id} is {agent.status}, cannot apply verdict "
                 f"passed={payload.passed} (target {target})"
             )
+        if (
+            payload.outcome == ScreenResultOutcome.RETRYABLE_INFRA
+            and payload.reason_code in INFRA_AUTO_RETRY_REASON_CODES
+            and (
+                agent.status != AgentStatus.SCREENING_FAILED
+                or not await infra_retry_agent_admitted(session, agent_id)
+            )
+        ):
+            # Only a parked, admitted submission is picked up by the automatic
+            # retry. A retained scored/evaluating row, a held deferred review, or
+            # an agent withdrawn from the queue or the active era (the claim's
+            # ``prerequisite_admitted`` guard) still needs the operator, so it
+            # must not be promised one.
+            public_reason = "Screening was interrupted; manual retry required"
         if not late_deferred_result:
             agent.screening_reason = public_reason
             agent.screening_reason_code = (

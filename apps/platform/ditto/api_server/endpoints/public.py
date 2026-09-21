@@ -387,7 +387,12 @@ from ditto.db.queries.scores import (
 from ditto.db.queries.screening import (
     PROVIDER_BACKOFF_REASON_CODES,
     get_running_screening_attempts,
+    infra_retry_agent_admitted,
     list_screening_attempts,
+)
+from ditto.db.queries.screening_infra_retry import (
+    INFRA_AUTO_RETRY_REASON_CODES,
+    plan_infra_retries,
 )
 from ditto.db.queries.screening_retry import failed_screening_retry_authorized
 from ditto.db.queries.tickets import (
@@ -6864,7 +6869,8 @@ async def agent_pipeline(
         last_failure_infrastructure = bool(
             latest_attempt is not None
             and latest_attempt.status in ("failed", "expired")
-            and (latest_attempt.reason_code or "") in PROVIDER_BACKOFF_REASON_CODES
+            and (latest_attempt.reason_code or "")
+            in (*PROVIDER_BACKOFF_REASON_CODES, *INFRA_AUTO_RETRY_REASON_CODES)
         )
         next_retry_at: datetime | None = None
         if agent.status == AgentStatus.SCREENING:
@@ -6879,10 +6885,29 @@ async def agent_pipeline(
                 .where(ScreeningRetryOverride.attempt_id == latest_attempt.attempt_id)
                 .limit(1)
             )
+            scheduled = (
+                (
+                    await plan_infra_retries(
+                        session, now=now, agent_ids=[agent_id], fleet_scan=False
+                    )
+                ).decisions.get(agent_id)
+                if latest_attempt.reason_code in INFRA_AUTO_RETRY_REASON_CODES
+                # The claim never retries an agent withdrawn from the validator
+                # queue or from the active benchmark era; do not promise it.
+                and await infra_retry_agent_admitted(session, agent_id)
+                else None
+            )
             if overridden is not None:
                 retry_state = "retry_queued"
             elif latest_attempt.reason_code == "source-review-retryable-infra":
                 retry_state = "parked"
+            elif scheduled is not None and scheduled.state != "capped":
+                # Automatic, bounded retry: the miner sees the earliest start
+                # (per-artifact backoff; the fleet breaker is not consulted on
+                # this unauthenticated path). A capped or aged-out agent falls
+                # through to ``stuck``: an operator must retry it.
+                retry_state = "retry_queued"
+                next_retry_at = scheduled.next_retry_at
             elif last_failure_infrastructure:
                 retry_state = "stuck"
             else:

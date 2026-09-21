@@ -323,6 +323,29 @@ describe("admissionRetryLine (#1215)", () => {
     );
   });
 
+  it("promises an automatic retry only when a retry time is scheduled", () => {
+    const line = (next_retry_at: string) =>
+      admissionRetryLine(
+        {
+          state: "retry_queued",
+          attempt_count: 2,
+          next_retry_at,
+          last_failure_infrastructure: true,
+        },
+        now,
+      );
+    const head =
+      "A Ditto build infrastructure failure, not a miner failure. It retries automatically with backoff";
+    // A UTC wall clock, whatever offset the wire timestamp carries.
+    expect(line("2099-08-28T10:20:45Z")).toBe(head + ", no earlier than 2099-08-28 10:20 UTC.");
+    expect(line("2099-08-28T12:20:00+02:00")).toBe(
+      head + ", no earlier than 2099-08-28 10:20 UTC.",
+    );
+    // Already due, and an unparseable time, never print a raw or invalid date.
+    expect(line("2000-01-01T00:00:00Z")).toBe(head + " and is due for another attempt.");
+    expect(line("not-a-date")).toBe(head + ".");
+  });
+
   it("renders nothing without the block or for unknown states", () => {
     expect(admissionRetryLine(null, now)).toBe("");
     expect(admissionRetryLine({ state: "finished" }, now)).toBe("");

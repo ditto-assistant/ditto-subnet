@@ -617,6 +617,18 @@ class ScreeningAttempt(Base):
             name="screening_attempts_review_settings_binding_check",
         ),
         Index("screening_attempts_agent_started_idx", "agent_id", "started_at"),
+        # Bounds the fleet breaker's scan under the global claim lock. Must stay
+        # in step with ``screening_infra_retry._infra_failure_filters``.
+        Index(
+            "screening_attempts_infra_failed_idx",
+            "finished_at",
+            postgresql_where=text(
+                "status = 'failed' AND reason_code = 'docker-build-infrastructure'"
+            ),
+            sqlite_where=text(
+                "status = 'failed' AND reason_code = 'docker-build-infrastructure'"
+            ),
+        ),
         Index(
             "screening_attempts_one_running_idx",
             "agent_id",

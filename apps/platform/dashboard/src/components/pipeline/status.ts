@@ -401,7 +401,7 @@ export interface AdmissionRetryState {
  */
 export function admissionRetryLine(
   retry: AdmissionRetryState | null | undefined,
-  _now: Date = new Date(),
+  now: Date = new Date(),
 ): string {
   if (!retry) return "";
   const attempts = Number(retry.attempt_count) || 0;
@@ -410,6 +410,19 @@ export function admissionRetryLine(
   }
   if (retry.state === "queued") {
     return "Waiting for a screener slot; no attempt has started yet.";
+  }
+  if (retry.state === "retry_queued" && retry.next_retry_at) {
+    const infra =
+      "A Ditto build infrastructure failure, not a miner failure. It retries automatically with backoff";
+    const due = new Date(retry.next_retry_at);
+    if (Number.isNaN(due.getTime())) return infra + ".";
+    if (due.getTime() <= now.getTime()) {
+      return infra + " and is due for another attempt.";
+    }
+    // Fixed UTC rendering: never the viewer's locale or timezone.
+    return (
+      infra + ", no earlier than " + due.toISOString().slice(0, 16).replace("T", " ") + " UTC."
+    );
   }
   if (retry.state === "retry_queued") {
     return (

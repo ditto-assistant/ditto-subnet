@@ -3319,17 +3319,22 @@ class PublicScreeningAttempt(BaseModel):
 class PublicAdmissionRetry(BaseModel):
     """Live admission state for a submission still in build & admission.
 
-    Failed cost-bearing attempts never retry automatically. ``parked`` names a
-    source-review/provider failure (including OpenRouter throttling), while
-    ``stuck`` names another Ditto-owned infrastructure failure. Both require a
-    guarded Backroom retry. ``retry_queued`` means that exact retry has already
-    been authorized and is waiting for a screener slot.
+    Failed cost-bearing attempts never retry automatically, except a Docker build
+    infrastructure failure. ``parked`` names a source-review/provider failure
+    (including OpenRouter throttling), while ``stuck`` names another Ditto-owned
+    infrastructure failure. Both require a guarded Backroom retry.
+    ``retry_queued`` means a retry is waiting for a screener slot: either that
+    exact retry was authorized, or (with ``next_retry_at`` set) a Docker build
+    infrastructure failure is retried automatically with backoff, no earlier than
+    that time. After too many consecutive failures, or a long park, it reports
+    ``stuck`` and needs a guarded retry like any other.
     """
 
     state: Literal["queued", "running", "parked", "stuck", "retry_queued"]
     attempt_count: Annotated[int, Field(ge=0)]
     # Kept nullable for rolling compatibility with the pre-fail-once contract.
-    # Manual retries do not have a scheduled retry time.
+    # Manual retries do not have a scheduled retry time; an automatic
+    # infrastructure retry reports the earliest time it may start.
     next_retry_at: datetime | None = None
     last_failure_infrastructure: bool = False
 

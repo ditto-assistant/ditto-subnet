@@ -106,10 +106,14 @@ from ditto.db.models import (
     SubmissionImageBuild,
     SubmissionSourceReview,
     TrustedImageBuild,
+    ValidatorQueueWithdrawal,
     ValidatorTicket,
 )
 from ditto.db.queries.attestation import record_attestation
-from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
+from ditto.db.queries.benchmark_rollout import (
+    MIN_SCOREABLE_BENCH_VERSION,
+    active_bench_version,
+)
 from ditto.db.queries.screening import (
     _SCREENING_CLAIM_LOCK_KEY,
     MAX_SCREENING_EXPIRIES,
@@ -298,7 +302,8 @@ def test_unknown_container_contract_detail_stays_public_safe() -> None:
             "Dockerfile for UID 197108",
             "docker-build-infrastructure",
             "Docker build infrastructure failed before screening completed. This "
-            "is operator-owned and requires a manual retry.",
+            "is operator-owned and is retried automatically with backoff for a "
+            "limited time, then held for an operator retry.",
         ),
     ],
 )
@@ -10333,6 +10338,91 @@ class TestQuarantineReviewContext:
             attempt = await session.get(ScreeningAttempt, attempt_id)
             assert attempt is not None
             assert attempt.reason_code == "source-review-model-response-invalid"
+
+    async def test_docker_build_infrastructure_promises_only_the_automatic_retry(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The miner-facing text must match what the claim path really does."""
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claimed = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+                reason_code="docker-build-infrastructure",
+                detail="screener error: Docker build infrastructure: daemon down",
+            ),
+        )
+
+        assert response.status_code == 200
+        async with session_maker() as session:
+            refreshed = await session.get(Agent, agent_id)
+            assert refreshed is not None
+            assert refreshed.status == AgentStatus.SCREENING_FAILED
+            assert refreshed.screening_reason is not None
+            assert "retried automatically" in refreshed.screening_reason
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert attempt is not None
+            assert attempt.status == "failed"
+            assert attempt.reason_code == "docker-build-infrastructure"
+            assert attempt.public_reason == refreshed.screening_reason
+
+    async def test_withdrawn_agent_is_not_promised_an_automatic_retry(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The claim never retries a withdrawn agent, so the text must not say so."""
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claimed = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorQueueWithdrawal(
+                    withdrawal_id=uuid4(),
+                    agent_id=agent_id,
+                    bench_version=await active_bench_version(session),
+                    actor="operator@example.com",
+                    reason="withdrawn",
+                    expected_snapshot="x",
+                    score_count=0,
+                    ticket_snapshot=[],
+                    created_at=datetime.now(UTC),
+                )
+            )
+
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="retryable_infra",
+                reason_code="docker-build-infrastructure",
+                detail="screener error: Docker build infrastructure: daemon down",
+            ),
+        )
+
+        assert response.status_code == 200
+        async with session_maker() as session:
+            refreshed = await session.get(Agent, agent_id)
+            assert refreshed is not None
+            assert refreshed.screening_reason == (
+                "Screening was interrupted; manual retry required"
+            )
 
     async def test_inconclusive_finishes_attempt_and_stays_parked(
         self,
