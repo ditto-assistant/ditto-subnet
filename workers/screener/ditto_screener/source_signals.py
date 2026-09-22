@@ -12,7 +12,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ditto_screener.rust_test_items import is_rust_test_only_attribute
+from ditto_screener.rust_test_items import test_only_item_lines
 
 _MAX_LEADS = 32
 _MAX_LEADS_PER_RULE_FILE = 4
@@ -1774,6 +1774,7 @@ def find_decisive_malicious_source(
     files: Iterable[tuple[str, str]],
     *,
     explicitly_executable_paths: frozenset[str] = frozenset(),
+    include_test_only: bool = False,
 ) -> list[dict[str, object]]:
     """Return high-confidence, location-only findings for pre-build quarantine."""
     findings: list[dict[str, object]] = []
@@ -1785,6 +1786,15 @@ def find_decisive_malicious_source(
         lines = text.splitlines()
         if not lines:
             continue
+        # Rust test modules can live in the same file as the served entrypoint.
+        # The legacy preflight scans that entire file, so a test-only fixture
+        # must be blanked before its path and effect roles are paired. Keep
+        # line positions for the location-only finding and leave adjacent
+        # production items visible.
+        if not include_test_only and path.casefold().endswith(".rs"):
+            test_item_lines = _rust_test_item_lines(_mask_comments(text).splitlines())
+            if test_item_lines:
+                text = "\n".join(_blank_lines(lines, test_item_lines))
         # Three views of the same file, each with a different job:
         #   ``comment_masked`` — comments gone, string literals intact. Target
         #     roles (paths, secret names) live inside string literals.
@@ -1918,33 +1928,8 @@ def find_benchmark_emulation_fingerprints(
 
 
 def _rust_test_item_lines(code_lines: list[str]) -> frozenset[int]:
-    """1-based lines of Rust items an attribute restricts to the test build.
-
-    Braces are counted on the comment-masked view so a brace inside a comment
-    cannot open or close an item. Only attributes that affirmatively require
-    ``test`` count; ``cfg(not(test))`` and ``cfg(any(test, feature = ...))``
-    stay production-visible. A brace-less item (``mod tests;``, ``include!``)
-    ends at its semicolon, so the production item after it stays visible.
-    """
-    marked: set[int] = set()
-    for index, line in enumerate(code_lines):
-        if not is_rust_test_only_attribute(line):
-            continue
-        depth = 0
-        opened = False
-        for cursor in range(index, len(code_lines)):
-            marked.add(cursor + 1)
-            depth += code_lines[cursor].count("{")
-            depth -= code_lines[cursor].count("}")
-            if "{" in code_lines[cursor]:
-                opened = True
-            if opened and depth <= 0:
-                break
-            if not opened and (
-                code_lines[cursor].rstrip().endswith(";") or cursor > index + 8
-            ):
-                break
-    return frozenset(marked)
+    """Backward-compatible alias for the shared Rust test-item boundary."""
+    return test_only_item_lines(code_lines)
 
 
 def _blank_lines(lines: list[str], marked: frozenset[int]) -> list[str]:

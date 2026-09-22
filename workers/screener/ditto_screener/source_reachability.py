@@ -21,7 +21,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from ditto_screener.rust_test_items import is_rust_test_only_attribute
+from ditto_screener.rust_test_items import test_only_item_lines
+from ditto_screener.source_signals import mask_comments
 
 
 class ReachabilityState(StrEnum):
@@ -79,22 +80,8 @@ _DYNAMIC_MARKERS = re.compile(
 
 def _mask_rust_test_items(source: str) -> str:
     lines = source.splitlines()
-    for index, line in enumerate(lines):
-        if not is_rust_test_only_attribute(line):
-            continue
-        depth = 0
-        opened = False
-        for cursor in range(index, min(len(lines), index + 512)):
-            original = lines[cursor]
-            depth += original.count("{")
-            depth -= original.count("}")
-            lines[cursor] = ""
-            if "{" in original:
-                opened = True
-            if opened and depth <= 0:
-                break
-            if not opened and cursor > index + 8:
-                break
+    for line_number in test_only_item_lines(mask_comments(source).splitlines()):
+        lines[line_number - 1] = ""
     return "\n".join(lines)
 
 

@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from urllib.parse import urlsplit
 
-from ditto_screener.rust_test_items import is_rust_test_only_attribute
+from ditto_screener.rust_test_items import test_only_item_lines
 from ditto_screener.source_reachability import (
     ReachabilityEvidence,
     ReachabilityState,
@@ -83,25 +83,7 @@ def test_only_line_numbers(path: str, text: str) -> frozenset[int]:
         return frozenset(range(1, len(text.splitlines()) + 1))
     if not normalized.endswith(".rs"):
         return frozenset()
-    lines = mask_comments(text).splitlines()
-    marked: set[int] = set()
-    for index, line in enumerate(lines):
-        if not is_rust_test_only_attribute(line):
-            continue
-        depth = 0
-        opened = False
-        # Include attributes between cfg/test and the item itself.
-        for cursor in range(index, len(lines)):
-            marked.add(cursor + 1)
-            depth += lines[cursor].count("{")
-            depth -= lines[cursor].count("}")
-            if "{" in lines[cursor]:
-                opened = True
-            if opened and depth <= 0:
-                break
-            if not opened and cursor > index + 8:
-                break
-    return frozenset(marked)
+    return test_only_item_lines(mask_comments(text).splitlines())
 
 
 def mask_test_only_source(path: str, text: str) -> str:
@@ -299,6 +281,7 @@ def analyze_static_candidates_v2(
     raw_candidates = find_decisive_malicious_source(
         material,
         explicitly_executable_paths=frozenset(path for path, _ in material),
+        include_test_only=True,
     )
     by_path = dict(material)
     decisive: list[dict[str, object]] = []
