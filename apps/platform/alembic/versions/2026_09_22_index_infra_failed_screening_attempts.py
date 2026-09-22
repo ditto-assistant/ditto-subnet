@@ -1,7 +1,7 @@
 """index infrastructure-failed screening attempts for the fleet breaker
 
 Revision ID: 3c9d5e7a1b42
-Revises: e804a171db92
+Revises: c91e4b7a2d08
 Create Date: 2026-09-21
 
 ``claim_screening_attempts`` derives the docker-build-infrastructure fleet
@@ -33,7 +33,7 @@ from alembic import op
 from ditto.db.migration_lock import MAX_ATTEMPTS, backoff_delay, is_retryable, sqlstate
 
 revision: str = "3c9d5e7a1b42"
-down_revision: str | Sequence[str] | None = "e804a171db92"
+down_revision: str | Sequence[str] | None = "c91e4b7a2d08"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
