@@ -28,4 +28,5 @@ export const queryClient = new QueryClient({
 export const publicQueryKeys = {
   agentSummary: (agentId: string) => ["public", "agent", agentId, "summary"] as const,
   agentPipeline: (agentId: string) => ["public", "agent", agentId, "pipeline"] as const,
+  agentScores: (agentId: string) => ["public", "agent", agentId, "scores"] as const,
 };

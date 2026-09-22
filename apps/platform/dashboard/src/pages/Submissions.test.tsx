@@ -954,6 +954,57 @@ describe("async agent evidence", () => {
     expect(section.textContent).not.toContain("Running");
   });
 
+  it("fills score slots only for exact published runs on the existing dashboard", async () => {
+    const published = loadFixture<{
+      scores: Array<{
+        validator_hotkey: string;
+        bench_version: number;
+        ticket_deadline: string;
+        transcript_sha256: string;
+      }>;
+    }>("agent-top-scores").scores[0]!;
+    stubPipelineFetch(() =>
+      Promise.resolve(
+        pipelineResponse({
+          inference_runs: [
+            {
+              validator_hotkey: published.validator_hotkey,
+              bench_version: published.bench_version,
+              ticket_deadline: published.ticket_deadline,
+              status: "revoked",
+              cost_microusd: 701800,
+            },
+            {
+              validator_hotkey: published.validator_hotkey,
+              bench_version: published.bench_version,
+              ticket_deadline: "2026-07-31T05:58:23.126672Z",
+              status: "revoked",
+              cost_microusd: 250000,
+            },
+          ],
+        }),
+      ),
+    );
+
+    render(() => <AgentEvidence entry={summary} />);
+    await waitFor(() =>
+      expect(document.querySelectorAll(".inference-run .score-metrics")).toHaveLength(1),
+    );
+    const runs = document.querySelectorAll(".inference-run");
+    expect(runs).toHaveLength(2);
+    expect(runs[0]?.textContent).toContain("Tool");
+    expect(runs[0]?.textContent).toContain("Memory");
+    expect(runs[0]?.textContent).toContain("Gates");
+    expect(runs[0]?.textContent).toContain("Composite");
+    expect(runs[1]?.textContent).toContain("No accepted score for this lease");
+    expect(runs[1]?.querySelector(".score-metrics")).toBeNull();
+    const accepted = Array.from(document.querySelectorAll(".accepted-score")).find((row) =>
+      row.textContent?.includes(published.transcript_sha256),
+    );
+    expect(accepted?.querySelector(".score-metrics")?.textContent).toContain("Tool");
+    expect(SUBMISSIONS_CSS).toContain(".score-metrics");
+  });
+
   it("isolates a detail failure and retries from the section", async () => {
     let attempts = 0;
     stubPipelineFetch(() => {

@@ -59,6 +59,13 @@ import { CasesSection } from "./Cases";
 import { ScreeningDispute } from "./DisputeForm";
 import { ScreeningReview } from "./ScreeningReview";
 import { TelemetryLoader } from "./Telemetry";
+import { ScoreMetrics } from "./ScoreMetrics";
+import {
+  scoreForAcceptedResult,
+  scoreForInferenceRun,
+  type PublishedRunScore,
+  type PublishedScoresPayload,
+} from "./run-score";
 import { V9GateEvidence } from "./V9GateEvidence";
 import {
   benchmarkCohorts,
@@ -318,7 +325,8 @@ function ScreeningAttemptRow(props: { attempt: ScreeningAttempt; isOld: boolean 
         <Show when={a().quarantine_resolution_reason}>
           {(reason) => (
             <div class="attempt-resolution-reason">
-              <b>Operator reason:</b> {reason()}
+              <b>Operator reason</b>
+              <p>{reason()}</p>
             </div>
           )}
         </Show>
@@ -337,6 +345,7 @@ function AcceptedScoreView(props: {
   score: ScoredScore;
   index: number;
   complete: boolean;
+  publishedScores: () => PublishedRunScore[];
   config: () => BenchConfigPayload | undefined;
   glossary: () => GlossaryPayload | undefined;
 }): JSX.Element {
@@ -354,6 +363,7 @@ function AcceptedScoreView(props: {
         : "Generated from an unpredictable random fallback after submission commitment; no block provenance is available.";
   const transcriptTemplate = () => props.config()?.public_transcript_url_template || null;
   const telemetryTemplate = () => props.config()?.public_transcript_telemetry_url_template || null;
+  const publishedScore = () => scoreForAcceptedResult(score(), props.publishedScores());
   return (
     <div class="accepted-score">
       <div>
@@ -362,6 +372,11 @@ function AcceptedScoreView(props: {
           <span class="bench-version-badge">{benchLabel()}</span>
           {label()} · {accepted()}
         </span>
+        <ScoreMetrics
+          score={publishedScore()}
+          composite={score().composite}
+          v9Base={score().v9_base}
+        />
       </div>
       <div class="accepted-score-meta">
         <div class="accepted-score-meta-row">
@@ -432,8 +447,8 @@ function AcceptedScoreView(props: {
             </For>
           </div>
         </Show>
-        <Show when={score().v9_base}>{(evidence) => <V9GateEvidence evidence={evidence()} />}</Show>
       </div>
+      <Show when={score().v9_base}>{(evidence) => <V9GateEvidence evidence={evidence()} />}</Show>
       <CasesSection caseResults={score().case_results} glossary={props.glossary} />
     </div>
   );
@@ -443,6 +458,7 @@ function AcceptedScores(props: {
   pipeline: PipelineDetailPayload;
   config: () => BenchConfigPayload | undefined;
   glossary: () => GlossaryPayload | undefined;
+  publishedScores: () => PublishedRunScore[];
 }): JSX.Element {
   const quorum = () => Math.max(1, Number(props.pipeline.quorum) || 3);
   const deprioritized = () => props.pipeline.status === "below_score_floor";
@@ -489,6 +505,7 @@ function AcceptedScores(props: {
                         score={score as ScoredScore}
                         index={index()}
                         complete={complete}
+                        publishedScores={props.publishedScores}
                         config={props.config}
                         glossary={props.glossary}
                       />
@@ -731,7 +748,10 @@ function inferenceRunStatus(run: InferenceRun): [string, string] {
   return ["Closed", ""];
 }
 
-function InferenceRuns(props: { runs: InferenceRun[] }): JSX.Element {
+function InferenceRuns(props: {
+  runs: InferenceRun[];
+  publishedScores: () => PublishedRunScore[];
+}): JSX.Element {
   const runs = createMemo(() =>
     props.runs
       .slice()
@@ -800,6 +820,8 @@ function InferenceRuns(props: { runs: InferenceRun[] }): JSX.Element {
                     <For each={group.items}>
                       {(run) => {
                         const state = () => inferenceRunStatus(run);
+                        const publishedScore = () =>
+                          scoreForInferenceRun(run, props.publishedScores());
                         const chatTokens = () =>
                           (Number(run.prompt_tokens) || 0) + (Number(run.completion_tokens) || 0);
                         return (
@@ -834,6 +856,13 @@ function InferenceRuns(props: { runs: InferenceRun[] }): JSX.Element {
                                 </span>
                               </div>
                             </div>
+                            {publishedScore() ? (
+                              <ScoreMetrics score={publishedScore()} />
+                            ) : (
+                              <span class="inference-run-unscored">
+                                No accepted score for this lease
+                              </span>
+                            )}
                             <div class="inference-run-cost">
                               {formatMicrousd(run.cost_microusd)}
                             </div>
@@ -915,6 +944,25 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
     if (pipelineError()) return null;
     return pipelineData() || null;
   };
+  const publishedScoresQuery = createQuery<PublishedScoresPayload>(
+    () => {
+      const id = agentId();
+      const status = loadedPipeline()?.status ?? props.entry.status;
+      return {
+        queryKey: publicQueryKeys.agentScores(id),
+        queryFn: ({ signal }) =>
+          getJSON<PublishedScoresPayload>(
+            "/public/agent/" + encodeURIComponent(id) + "/scores",
+            signal,
+          ),
+        // The public ledger 404s before scoring. Never attach anonymous
+        // provisional scores to a validator's inference-spend lease.
+        enabled: Boolean(id) && (status === "scored" || status === "live"),
+      };
+    },
+    () => queryClient,
+  );
+  const publishedScores = (): PublishedRunScore[] => publishedScoresQuery.data?.scores ?? [];
 
   // #622/#636 (openActivityEntry 7986–7995): the current review reason leads
   // under its event label; a duplicate claim past the opening event reads as
@@ -1218,8 +1266,16 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
                     </Show>
                   </div>
                 </section>
-                <InferenceRuns runs={detail().inference_runs || []} />
-                <AcceptedScores pipeline={detail()} config={config} glossary={glossaryData} />
+                <InferenceRuns
+                  runs={detail().inference_runs || []}
+                  publishedScores={publishedScores}
+                />
+                <AcceptedScores
+                  pipeline={detail()}
+                  config={config}
+                  glossary={glossaryData}
+                  publishedScores={publishedScores}
+                />
                 <ConfirmationScores pipeline={detail()} entries={entries} />
                 <section class="pipeline-section" aria-labelledby="pipeline-validator-history">
                   <div class="pipeline-section-heading">

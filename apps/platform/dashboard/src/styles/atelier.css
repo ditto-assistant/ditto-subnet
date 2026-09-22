@@ -742,10 +742,31 @@ tbody td,
 .gate-chip,
 .rollout-chip,
 .stage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 9px;
   border: 1px solid color-mix(in oklch, currentColor 35%, transparent);
+  border-radius: 999px;
   background: color-mix(in oklch, currentColor 10%, transparent);
-  padding: 2px 7px;
-  font-size: var(--a-t-caption);
+  font-size: var(--a-t-micro);
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  vertical-align: middle;
+}
+
+.stage::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0;
+  border-radius: 50%;
+  background: currentColor;
+  transform: translateY(0);
 }
 
 /* ── Overview: command masthead ───────────────────────────────────────── */
@@ -1636,7 +1657,7 @@ tbody td,
   box-shadow:
     0 0 0 1px color-mix(in oklch, var(--border) 65%, transparent),
     0 28px 70px #000c;
-  padding: 22px 24px;
+  padding: 0;
 }
 
 .modal h3 {
@@ -2748,7 +2769,7 @@ tbody td,
 .side-theme,
 .theme-switch,
 .palette-option,
-.modal,
+.modal:not(.full-page),
 .pipeline-node,
 .pipeline-item {
   border-radius: var(--a-radius-card);
@@ -4078,5 +4099,1623 @@ header.top .pill {
   .page[data-page="pipeline"] .scoring-run progress,
   .page[data-page="pipeline"] .scoring-run .bench-bar {
     grid-column: 1 / -1;
+  }
+}
+
+/* ── Miner profile modal ────────────────────────────────────────────────
+   The drawer was reading as a thin black sheet. Rebuild it as an Atelier
+   instrument: champagne crown, denser standing ledger, boxed submissions. */
+
+.modal-back {
+  background:
+    radial-gradient(
+      900px 420px at 80% 0%,
+      color-mix(in oklch, var(--a-champagne) 10%, transparent),
+      transparent 55%
+    ),
+    color-mix(in oklch, #000 62%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.modal {
+  max-height: min(92vh, 920px);
+  padding: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 22%, var(--border-strong));
+  border-radius: 18px;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--a-champagne) 6%, var(--bg-elev)) 0%,
+      var(--bg-elev) 18%
+    ),
+    var(--bg-elev);
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--border) 50%, transparent),
+    0 32px 80px #000d,
+    inset 0 1px 0 color-mix(in oklch, #fff 6%, transparent);
+}
+
+.modal::-webkit-scrollbar {
+  width: 8px;
+}
+
+.modal::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block: 10px;
+}
+
+.modal::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--text) 28%, transparent);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.modal > .modal-actions,
+.modal > .dhead,
+.modal > .dk,
+.modal > #d-stats {
+  padding-inline: 22px;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.modal > #d-stats {
+  padding-bottom: 24px;
+}
+
+.modal > .modal-actions {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 0;
+  padding-top: 14px;
+  padding-bottom: 10px;
+  background: linear-gradient(180deg, var(--bg-elev) 70%, transparent);
+}
+
+/* ── Full-page entity routes (/miner/…, /agent/…) ───────────────────────
+   Same panel markup as the overlay drawer, but this is a real page: open
+   canvas, no dialog border, masthead instead of floating card. */
+
+body.entity-page {
+  background:
+    radial-gradient(
+      1100px 520px at 72% -10%,
+      color-mix(in oklch, var(--a-champagne) 7%, transparent),
+      transparent 62%
+    ),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+body.entity-page .modal-back {
+  display: none !important;
+}
+
+body.entity-page .modal,
+body.entity-page .modal.open,
+body.entity-page .modal.full-page {
+  position: relative !important;
+  top: auto !important;
+  left: auto !important;
+  z-index: 1;
+  width: min(1120px, calc(100vw - 48px)) !important;
+  max-width: 1120px;
+  max-height: none !important;
+  margin: 0 auto !important;
+  padding: 32px 0 72px !important;
+  overflow: visible !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  transform: none !important;
+  scrollbar-gutter: auto;
+}
+
+body.entity-page .modal > .modal-actions,
+body.entity-page .modal > .dhead,
+body.entity-page .modal > .dk,
+body.entity-page .modal > #d-stats {
+  padding-inline: 0;
+  max-width: none;
+}
+
+body.entity-page .modal > .modal-actions {
+  position: static;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 28px;
+  padding: 0;
+  background: transparent;
+}
+
+body.entity-page .modal-actions .back-dashboard {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 32%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne) 8%, transparent);
+  color: var(--a-champagne);
+  font: 650 12.5px/1 var(--sans);
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+body.entity-page .modal-actions .back-dashboard:hover {
+  border-color: color-mix(in oklch, var(--a-champagne) 55%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne) 14%, transparent);
+  color: var(--text);
+}
+
+body.entity-page .modal .dhead {
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  align-items: center;
+}
+
+body.entity-page .modal .dhead .miner-avatar.lg {
+  width: 56px;
+  height: 56px;
+}
+
+body.entity-page .modal h3 {
+  margin: 0;
+  font: 800 clamp(28px, 4vw, 40px)/1.05 var(--display);
+  letter-spacing: -0.045em;
+  color: var(--text);
+}
+
+body.entity-page .modal #d-bench {
+  min-height: 30px;
+  padding: 0 12px;
+}
+
+body.entity-page .modal .dk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 14px 0 0;
+  padding: 0 0 22px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 75%, transparent);
+  color: var(--text-dim);
+  font: 500 13px/1.35 var(--mono);
+}
+
+body.entity-page .modal #d-stats {
+  margin-top: 22px;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+body.entity-page .modal .stat-group,
+body.entity-page .modal details.miner-profile,
+body.entity-page .modal details.cases,
+body.entity-page .modal details.gloss,
+body.entity-page .modal .pipeline-section {
+  background:
+    linear-gradient(180deg, color-mix(in oklch, #fff 2.2%, transparent), transparent 42%),
+    color-mix(in oklch, var(--bg-elev) 72%, transparent);
+}
+
+@media (max-width: 720px) {
+  body.entity-page .modal,
+  body.entity-page .modal.open,
+  body.entity-page .modal.full-page {
+    width: calc(100vw - 32px) !important;
+    padding: 20px 0 56px !important;
+  }
+
+  body.entity-page .modal h3 {
+    font-size: clamp(24px, 7vw, 32px);
+  }
+}
+
+.modal-actions .open-full,
+.modal-actions .close {
+  min-height: 36px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg) 70%, transparent);
+  color: var(--text);
+  font: 650 12px/1 var(--sans);
+  letter-spacing: 0.01em;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.modal-actions .open-full {
+  padding: 0 12px;
+}
+
+.modal-actions .close {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+}
+
+.modal-actions .open-full:hover,
+.modal-actions .close:hover {
+  border-color: color-mix(in oklch, var(--a-champagne) 45%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne) 10%, var(--bg));
+  color: var(--a-champagne, var(--text));
+}
+
+.modal .dhead {
+  gap: 12px;
+  margin: 2px 0 0;
+  padding-top: 4px;
+  padding-right: 22px;
+  padding-bottom: 4px;
+}
+
+.modal h3 {
+  margin: 0;
+  font: 800 clamp(20px, 2.4vw, 26px)/1.1 var(--display);
+  letter-spacing: -0.04em;
+  color: var(--text);
+}
+
+.modal #d-bench {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font: 700 11px/1 var(--sans);
+  letter-spacing: 0.02em;
+  color: var(--a-champagne);
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 42%, transparent);
+  background: color-mix(in oklch, var(--a-champagne) 12%, transparent);
+}
+
+.modal #d-bench.prev {
+  color: var(--warn);
+  border-color: color-mix(in oklch, var(--warn) 48%, transparent);
+  background: color-mix(in oklch, var(--warn) 12%, transparent);
+}
+
+.modal #d-bench.plain {
+  color: var(--text-dim);
+  border-color: color-mix(in oklch, var(--border-strong) 80%, transparent);
+  background: transparent;
+}
+
+.modal #d-bench.champion {
+  color: var(--a-champagne);
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 55%, transparent);
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklch, var(--a-champagne) 22%, transparent),
+    color-mix(in oklch, var(--a-champagne) 8%, transparent)
+  );
+  box-shadow: 0 0 0 1px color-mix(in oklch, var(--a-champagne) 12%, transparent);
+}
+
+.modal .d-version {
+  color: var(--text-faint);
+  font: 650 12px/1 var(--mono);
+  letter-spacing: 0.02em;
+}
+
+.modal .dk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 8px 0 0;
+  padding-bottom: 18px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  color: var(--text-dim);
+  font: 500 12.5px/1.35 var(--mono);
+}
+
+.modal .dk-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg) 55%, transparent);
+  color: var(--text-faint);
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.modal #d-stats {
+  margin-top: 0;
+  padding-top: 18px;
+  padding-bottom: 22px;
+}
+
+.modal .stat-cols {
+  display: grid;
+  gap: 14px;
+}
+
+.modal .stat-group {
+  margin: 0;
+  padding: 14px 14px 10px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, color-mix(in oklch, #fff 2.5%, transparent), transparent 40%),
+    color-mix(in oklch, var(--bg) 55%, transparent);
+}
+
+.modal .stat-head {
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  color: var(--a-champagne, var(--text));
+  font: 750 11px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.modal .stat-row {
+  gap: 10px 18px;
+  padding: 9px 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 45%, transparent);
+}
+
+.modal .stat-row:last-of-type {
+  border-bottom: 0;
+}
+
+.modal .stat-row .k {
+  color: var(--text-faint);
+  font: 500 12.5px/1.35 var(--sans);
+}
+
+.modal .stat-row .v {
+  color: var(--text);
+  font: 650 13px/1.35 var(--sans);
+}
+
+.modal .best-submission-note {
+  margin: 12px 0 0;
+  padding: 10px 11px;
+  border-radius: 10px;
+  border: 1px dashed color-mix(in oklch, var(--border) 85%, transparent);
+  background: color-mix(in oklch, var(--bg) 40%, transparent);
+  color: var(--text-faint);
+  font: 500 12px/1.45 var(--sans);
+}
+
+.modal .miner-profile {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+}
+
+.modal .miner-profile > .muted {
+  margin: 0;
+}
+
+.modal .miner-profile-group {
+  margin-top: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg) 40%, transparent);
+  overflow: hidden;
+}
+
+.modal details.miner-profile,
+.modal details.cases,
+.modal details.gloss {
+  margin-top: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--bg) 40%, transparent);
+}
+
+.modal .miner-profile-group > .cgsum {
+  gap: 10px;
+  padding: 12px 14px;
+  background: color-mix(in oklch, var(--bg-elev) 55%, transparent);
+}
+
+.modal .miner-profile-body {
+  padding: 4px 14px 14px;
+}
+
+.modal .cgsum {
+  min-width: 0;
+}
+
+.modal .cgname {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.modal .cgtally {
+  flex: none;
+  margin-left: auto;
+}
+
+.modal details.miner-profile > summary,
+.modal details.cases > summary,
+.modal details.gloss > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--text);
+  font: 700 12.5px/1.2 var(--sans);
+  letter-spacing: 0.01em;
+}
+
+.modal details.miner-profile > summary::before,
+.modal details.cases > summary::before,
+.modal details.gloss > summary::before {
+  color: var(--a-champagne, var(--text-dim));
+}
+
+.modal .miner-profile-body {
+  padding: 0 14px 14px;
+}
+
+.modal .miner-subs-filters,
+.modal .activity-filter-list.miner-subs-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.modal .miner-subs-filters .activity-filter {
+  min-height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font: 650 11.5px/1 var(--sans);
+}
+
+.modal .miner-subs-filters .activity-filter[aria-pressed="true"],
+.modal .miner-subs-filters .activity-filter.active {
+  color: var(--a-champagne, var(--text));
+  border-color: color-mix(in oklch, var(--a-champagne, var(--accent)) 50%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne, var(--accent)) 14%, transparent);
+}
+
+.modal .miner-subs-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.modal .miner-subs-list .miner-sub {
+  padding: 11px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--bg-elev) 70%, transparent);
+  transition:
+    border-color 0.14s ease,
+    background 0.14s ease;
+}
+
+.modal .miner-subs-list .miner-sub:hover {
+  border-color: color-mix(in oklch, var(--a-champagne, var(--accent)) 35%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne, var(--accent)) 6%, var(--bg-elev));
+}
+
+.modal .miner-sub-main {
+  gap: 10px;
+  font: 650 13px/1.25 var(--sans);
+}
+
+.modal .miner-sub-time {
+  color: var(--text-faint);
+  font: 500 11.5px/1 var(--mono);
+}
+
+/* ── Agent submission evidence ──────────────────────────────────────────
+   Score masthead, family standing, and progress/details were still on the
+   purple callout dialect. Bring them onto Atelier champagne + soft cards. */
+
+.modal .pipeline-detail,
+.modal #d-stats.pipeline-mode {
+  --detail-space-xs: 4px;
+  --detail-space-sm: 8px;
+  --detail-space-md: 12px;
+  --detail-space-lg: 14px;
+  --detail-space-xl: 18px;
+  --detail-space-2xl: 22px;
+}
+
+.modal #d-stats.pipeline-mode {
+  margin-top: 6px;
+  padding-top: 14px;
+  padding-bottom: 22px;
+}
+
+.modal .score-headline {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+  padding: 0 0 16px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+}
+
+.modal .score-headline-item {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, color-mix(in oklch, #fff 2.5%, transparent), transparent 42%),
+    color-mix(in oklch, var(--bg) 55%, transparent);
+}
+
+.modal .score-headline-item.primary {
+  border-color: color-mix(in oklch, var(--a-champagne) 38%, var(--border));
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in oklch, var(--a-champagne) 12%, transparent),
+      transparent 55%
+    ),
+    color-mix(in oklch, var(--bg) 40%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--a-champagne) 10%, transparent);
+}
+
+.modal .score-headline-item.provisional {
+  border-color: color-mix(in oklch, var(--warn) 32%, var(--border));
+}
+
+.modal .score-headline-bench {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 28%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne) 10%, transparent);
+  color: var(--a-champagne);
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.modal .score-headline-value {
+  color: var(--text);
+  font: 800 28px/1 var(--display);
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal .score-headline-item.primary .score-headline-value {
+  font-size: clamp(34px, 4vw, 44px);
+  letter-spacing: -0.045em;
+}
+
+.modal .score-headline-item:not(.primary) .score-headline-value {
+  color: var(--text-dim);
+  font-size: 24px;
+}
+
+.modal .score-headline-state {
+  color: var(--good);
+  font: 650 11.5px/1.2 var(--sans);
+}
+
+.modal .score-headline-item.provisional .score-headline-state {
+  color: var(--warn);
+}
+
+.modal .family-standing {
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 28%, var(--border));
+  border-left: 3px solid var(--a-champagne);
+  border-radius: 14px;
+  background:
+    linear-gradient(
+      90deg,
+      color-mix(in oklch, var(--a-champagne) 8%, transparent),
+      transparent 42%
+    ),
+    color-mix(in oklch, var(--bg) 45%, transparent);
+}
+
+.modal .family-standing strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text);
+  font: 750 13.5px/1.25 var(--sans);
+  letter-spacing: -0.01em;
+}
+
+.modal .family-standing p {
+  margin: 0;
+  max-width: 68ch;
+  color: var(--text-dim);
+  font: 500 13px/1.5 var(--sans);
+  text-wrap: pretty;
+}
+
+.modal .pipeline-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(240px, 0.9fr);
+  gap: 14px;
+  margin: 0 0 6px;
+  padding: 0;
+  border-bottom: 0;
+}
+
+.modal .pipeline-current,
+.modal .pipeline-meta {
+  margin: 0;
+  padding: 14px 14px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, color-mix(in oklch, #fff 2.2%, transparent), transparent 40%),
+    color-mix(in oklch, var(--bg) 55%, transparent);
+}
+
+.modal .pipeline-summary h4,
+.modal .pipeline-section-heading h4 {
+  margin: 0 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  color: var(--a-champagne);
+  font: 750 11px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.modal .pipeline-current-message {
+  max-width: none;
+  margin: 0 0 12px;
+  color: var(--text);
+  font: 650 14px/1.45 var(--sans);
+  text-wrap: pretty;
+}
+
+.modal .pipeline-key-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px 16px;
+  margin: 0;
+}
+
+.modal .pipeline-key-facts > div {
+  min-width: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+}
+
+.modal .pipeline-key-facts dt,
+.modal .pipeline-meta-list dt {
+  color: var(--text-faint);
+  font: 650 10.5px/1.2 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.modal .pipeline-key-facts dd {
+  margin: 5px 0 0;
+  color: var(--text);
+  font: 700 13.5px/1.3 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+
+.modal .pipeline-meta-list {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+}
+
+.modal .pipeline-meta-list > div {
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+}
+
+.modal .pipeline-meta-list > div:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.modal .pipeline-meta-list dd {
+  margin: 5px 0 0;
+  color: var(--text);
+  font: 600 13px/1.4 var(--sans);
+}
+
+.modal .pipeline-meta-list code {
+  color: var(--text);
+  font: 500 11.5px/1.35 var(--mono);
+}
+
+.modal .pipeline-preliminary-value {
+  color: var(--a-champagne);
+  font: 750 18px/1 var(--display);
+}
+
+.modal .review-copy-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.modal .review-copy {
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg) 70%, transparent);
+  color: var(--text);
+  font: 650 12px/1 var(--sans);
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.modal .review-copy:hover,
+.modal .review-copy:focus-visible {
+  border-color: color-mix(in oklch, var(--a-champagne) 45%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne) 10%, var(--bg));
+  color: var(--a-champagne);
+}
+
+/* ── Per-question cases ───────────────────────────────────────────────── */
+
+.modal .coverview {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  background: color-mix(in oklch, var(--bg) 45%, transparent);
+  color: var(--text-dim);
+  font: 500 12.5px/1.4 var(--sans);
+}
+
+.modal .cgroup {
+  margin: 0 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg) 40%, transparent);
+  overflow: hidden;
+}
+
+.modal .cgroup:last-child {
+  margin-bottom: 0;
+}
+
+.modal .cgsum {
+  gap: 10px;
+  padding: 10px 12px;
+  background: color-mix(in oklch, var(--bg-elev) 55%, transparent);
+}
+
+.modal .cgsum:hover {
+  background: color-mix(in oklch, var(--a-champagne) 5%, var(--bg-elev));
+}
+
+.modal .cgname {
+  min-width: 0;
+  color: var(--text);
+  font: 650 13px/1.3 var(--sans);
+}
+
+.modal .cgname .muted {
+  color: var(--text-faint);
+  font-weight: 500;
+}
+
+.modal .cgtally {
+  gap: 8px;
+  padding-left: 10px;
+  border-left: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+}
+
+.modal .tb {
+  font: 700 11px/1 var(--mono);
+}
+
+.modal .cgmean {
+  min-width: 44px;
+  color: var(--text);
+  font: 700 13px/1 var(--mono);
+}
+
+.modal .cgmean.low {
+  color: color-mix(in oklch, var(--danger) 70%, var(--text-dim));
+}
+
+.modal .ckind {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font: 700 10px/1 var(--mono) !important;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.modal .ckind.tool {
+  color: var(--a-champagne);
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 40%, transparent);
+  background: color-mix(in oklch, var(--a-champagne) 10%, transparent);
+}
+
+.modal .ckind.memory {
+  color: color-mix(in oklch, var(--accent-2) 78%, var(--text));
+  border: 1px solid color-mix(in oklch, var(--accent-2) 36%, transparent);
+  background: color-mix(in oklch, var(--accent-2) 10%, transparent);
+}
+
+.modal .crow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 14px;
+  row-gap: 4px;
+  align-items: start;
+  margin: 0;
+  padding: 10px 12px 10px 34px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+  background: transparent;
+}
+
+.modal .cgroup .crow {
+  padding-left: 34px;
+}
+
+.modal .crow:last-child {
+  border-bottom: 0;
+}
+
+.modal .crow .cmain {
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.modal .crow .cscore {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 4px;
+  margin: 0;
+  min-width: 56px;
+}
+
+.modal .crow .cnote {
+  grid-column: 1;
+  margin: 2px 0 0;
+  color: var(--text-faint);
+  font: 500 12px/1.45 var(--sans);
+  font-style: normal;
+}
+
+.modal .ccat {
+  color: var(--text);
+  font: 600 13px/1.3 var(--sans);
+}
+
+.modal .cmeta {
+  color: var(--text-faint);
+  font: 500 11.5px/1.2 var(--mono);
+}
+
+.modal .cval {
+  color: var(--text);
+  font: 700 14px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.modal .cval.low {
+  color: color-mix(in oklch, var(--danger) 68%, var(--text-dim));
+}
+
+.modal .cval.good,
+.modal .cgmean.good {
+  color: var(--good);
+}
+
+/* ── Screener + history + benchmark runs ──────────────────────────────── */
+
+.modal .pipeline-history-region {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+}
+
+.modal .pipeline-history-heading h4,
+.modal .pipeline-section-heading h4 {
+  margin: 0;
+  padding: 0 0 8px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 75%, transparent);
+  color: var(--a-champagne);
+  font: 750 11px/1 var(--mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.modal .pipeline-history-heading {
+  margin-bottom: 14px;
+}
+
+.modal .pipeline-section {
+  margin: 0 0 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, color-mix(in oklch, #fff 2%, transparent), transparent 40%),
+    color-mix(in oklch, var(--bg) 50%, transparent);
+}
+
+.modal .pipeline-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 12px;
+}
+
+.modal .pipeline-section-heading h4 {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.modal .screening-policy-summary {
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--bg) 45%, transparent);
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+}
+
+.modal .screening-policy-summary-label {
+  color: var(--text-faint);
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.12em;
+}
+
+.modal .attempt {
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+  gap: 12px 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+}
+
+.modal .attempt:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.modal .attempt-version {
+  color: var(--text);
+  font: 700 12.5px/1.3 var(--sans);
+}
+
+.modal .attempt-main b {
+  font-weight: 650;
+}
+
+.modal .attempt-meta {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font: 500 12px/1.45 var(--sans);
+}
+
+.modal .attempt-time {
+  color: var(--text-faint);
+  font: 500 11.5px/1 var(--mono);
+}
+
+.modal .attempt-resolution-reason {
+  max-width: none;
+  margin-top: 10px;
+  padding: 12px 13px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 22%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne) 6%, var(--bg));
+}
+
+.modal .attempt-resolution-reason > b {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--a-champagne);
+  font: 750 10.5px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.modal .attempt-resolution-reason > p {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--text-dim);
+  font: 500 13px/1.55 var(--sans);
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.modal .screening-review {
+  margin-top: 8px;
+  border-color: color-mix(in oklch, var(--border) 90%, transparent);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--bg) 55%, transparent);
+}
+
+.modal .inference-spend-heading {
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.modal .inference-spend-heading > div:first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.modal .inference-spend-heading p {
+  max-width: 52ch;
+  margin: 6px 0 0;
+  color: var(--text-faint);
+  font: 500 12px/1.45 var(--sans);
+}
+
+.modal .inference-spend-totals {
+  gap: 4px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 24%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne) 7%, transparent);
+}
+
+.modal .inference-spend-totals strong {
+  color: var(--text);
+  font: 750 15px/1.25 var(--mono);
+}
+
+.modal .inference-spend-totals span {
+  color: var(--text-faint);
+  font: 500 11px/1.3 var(--mono);
+}
+
+.modal .inference-validator-group {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--bg-elev) 60%, transparent);
+}
+
+.modal .inference-validator-group summary {
+  min-height: 44px;
+  padding: 8px 12px;
+}
+
+.modal .inference-validator-group summary > strong {
+  color: var(--a-champagne);
+  font: 750 12.5px/1.3 var(--mono);
+}
+
+/* ── Accepted scores, retests, validator progress ─────────────────────── */
+
+.modal .benchmark-cohort + .benchmark-cohort {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+}
+
+.modal .benchmark-cohort-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 8px;
+}
+
+.modal .benchmark-cohort-heading h5 {
+  margin: 0;
+  color: var(--text);
+  font: 750 15px/1.25 var(--sans);
+  letter-spacing: -0.02em;
+}
+
+.modal .benchmark-cohort-summary {
+  color: var(--text-faint);
+  font: 500 11.5px/1.3 var(--mono);
+}
+
+.modal .accepted-score-note {
+  max-width: 74ch;
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  font: 500 12.5px/1.5 var(--sans);
+  text-wrap: pretty;
+}
+
+.modal .accepted-score-list {
+  display: grid;
+  gap: 12px;
+}
+
+.modal .accepted-score {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.15fr);
+  gap: 14px 18px;
+  margin: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--bg) 42%, transparent);
+}
+
+.modal .accepted-score:last-child {
+  border-bottom: 1px solid var(--border);
+}
+
+.modal .accepted-score > .v9-gate-evidence,
+.modal .accepted-score > details.cases {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.modal .accepted-score-value {
+  display: block;
+  color: var(--text);
+  font: 800 clamp(28px, 3.2vw, 36px)/1 var(--display);
+  letter-spacing: -0.04em;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal .accepted-score-label {
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-dim);
+  font: 500 12px/1.35 var(--sans);
+}
+
+.modal .bench-version-badge {
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in oklch, var(--a-champagne) 36%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne) 10%, transparent);
+  color: var(--a-champagne);
+  font: 700 10px/22px var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.modal .accepted-score .score-metrics {
+  max-width: none;
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.modal .score-metrics > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  border-radius: 10px;
+  background: color-mix(in oklch, var(--bg-elev) 55%, transparent);
+  align-content: start;
+  justify-content: stretch;
+}
+
+.modal .score-metrics dt {
+  color: var(--text-faint);
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.modal .score-metrics dd {
+  margin: 0;
+  color: var(--text);
+  font: 750 14px/1.2 var(--mono);
+}
+
+.modal .accepted-score-meta {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+  align-content: start;
+  padding: 2px 0;
+  border-left: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  padding-left: 14px;
+}
+
+.modal .accepted-score-meta-row {
+  margin: 0;
+  padding: 10px 0;
+  border: 0;
+  border-radius: 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 12px/1.45 var(--sans);
+  overflow-wrap: anywhere;
+}
+
+.modal .accepted-score-meta-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.modal .accepted-score-meta-row:first-child {
+  padding-top: 0;
+}
+
+.modal .accepted-score-meta-row b {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--a-champagne);
+  font: 750 10.5px/1.2 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.modal .accepted-score-meta-row code {
+  display: block;
+  margin: 2px 0 6px;
+  color: var(--text);
+  font: 500 11.5px/1.45 var(--mono);
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.modal .accepted-score-command {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.modal .accepted-score-command code {
+  flex: 1;
+  margin: 0;
+}
+
+.modal .run-telemetry-load {
+  margin-top: 8px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--bg) 70%, transparent);
+  color: var(--text);
+  font: 650 12px/1 var(--sans);
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.modal .run-telemetry-load:hover {
+  border-color: color-mix(in oklch, var(--a-champagne) 45%, var(--border));
+  background: color-mix(in oklch, var(--a-champagne) 10%, var(--bg));
+  color: var(--a-champagne);
+}
+
+.modal .v9-gate-evidence {
+  margin: 4px 0 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in oklch, var(--bg-elev) 55%, transparent);
+}
+
+.modal .v9-gate-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 4px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  color: var(--text);
+  font: 700 13px/1.3 var(--sans);
+}
+
+.modal .v9-gate-heading > span {
+  color: var(--text-faint);
+  font: 650 11px/1 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.modal .v9-gate-row {
+  padding: 12px 0;
+  border-top: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+}
+
+.modal .v9-gate-row:first-of-type {
+  border-top: 0;
+  padding-top: 10px;
+}
+
+.modal .v9-gate-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  color: var(--text);
+  font: 650 13px/1.3 var(--sans);
+}
+
+.modal .v9-gate-title > strong {
+  min-width: 0;
+}
+
+.modal .v9-gate-title .stage {
+  flex: none;
+  position: relative;
+  z-index: 1;
+}
+
+.modal .v9-gate-metrics {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+  color: var(--text-dim);
+  font: 500 12px/1.45 var(--sans);
+}
+
+.modal .v9-gate-evidence > p {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed color-mix(in oklch, var(--border) 70%, transparent);
+  color: var(--text-faint);
+  font: 500 11.5px/1.45 var(--sans);
+}
+
+.modal .accepted-score-final {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklch, var(--good) 28%, var(--border));
+  background: color-mix(in oklch, var(--good) 8%, transparent);
+  color: color-mix(in oklch, var(--good) 82%, var(--text));
+  font: 650 12.5px/1.45 var(--sans);
+}
+
+.modal .retest-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.modal .retest-summary > div {
+  display: grid;
+  gap: 6px;
+  padding: 12px 12px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, color-mix(in oklch, #fff 2.2%, transparent), transparent 45%),
+    color-mix(in oklch, var(--bg) 50%, transparent);
+}
+
+.modal .retest-summary span {
+  color: var(--text-faint);
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.modal .retest-summary strong {
+  color: var(--text);
+  font: 800 22px/1.1 var(--display);
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.modal .retest-samples {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in oklch, var(--border) 65%, transparent);
+}
+
+.modal .retest-samples summary {
+  gap: 10px;
+  min-height: 36px;
+  color: var(--text);
+  font: 650 12.5px/1.3 var(--sans);
+}
+
+.modal .retest-score-grid {
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.modal .retest-score-grid > span {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  background: color-mix(in oklch, var(--bg-elev) 55%, transparent);
+  font: 650 12.5px/1.2 var(--mono);
+}
+
+.modal .retest-score-grid b {
+  color: var(--a-champagne);
+  font: 700 10px/1 var(--mono);
+}
+
+.modal .benchmark-cohort-list {
+  display: grid;
+  gap: 12px;
+}
+
+.modal .benchmark-cohort-list .benchmark-cohort {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.modal .benchmark-cohort-list .attempt {
+  grid-template-columns: 92px minmax(0, 1fr) auto;
+  gap: 10px 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 55%, transparent);
+}
+
+.modal .benchmark-cohort-list .attempt:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.modal .attempt-main .stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font: 650 11.5px/1 var(--sans);
+}
+
+.modal .stage,
+.modal .v9-gate-title .stage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 0 9px;
+  line-height: 1;
+}
+
+.modal .stage::before {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin: 0;
+}
+
+.modal .attempt-main .stage.good {
+  color: var(--good);
+  border-color: color-mix(in oklch, var(--good) 45%, transparent);
+  background: color-mix(in oklch, var(--good) 10%, transparent);
+}
+
+@media (max-width: 800px) {
+  .modal .pipeline-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .modal .pipeline-meta {
+    border-top: 0;
+    padding-top: 14px;
+  }
+
+  .modal .inference-spend-heading {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .modal .inference-spend-totals {
+    text-align: left;
+  }
+
+  .modal .accepted-score {
+    grid-template-columns: 1fr;
+  }
+
+  .modal .retest-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .modal {
+    max-height: none;
+    border-radius: 16px 16px 0 0;
+  }
+
+  .modal .dhead {
+    padding-top: 8px;
+    padding-right: 22px;
+  }
+
+  .modal > .modal-actions {
+    left: 0;
+    right: 0;
+  }
+
+  .modal .score-headline {
+    grid-template-columns: 1fr;
+  }
+
+  .modal .attempt {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .modal .attempt > div:first-child {
+    grid-column: 1 / -1;
+  }
+
+  .modal .crow {
+    padding-left: 12px;
+  }
+
+  .modal .cgroup .crow {
+    padding-left: 12px;
+  }
+
+  .modal .retest-summary {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .modal .accepted-score .score-metrics {
+    grid-template-columns: 1fr;
   }
 }
