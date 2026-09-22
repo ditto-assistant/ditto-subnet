@@ -100,3 +100,11 @@ and `.claude/skills/<name>`.
   ref alone.
 - Verify every changed remote Git context with a fresh or empty BuildKit
   builder. A successful build against a warm local cache is not sufficient.
+
+## Bounty operations and contributor guidance
+
+Maintenance bounties funded under the SN118 5% treasury (parent epic #2054) are tracked on GitHub.
+- Read [docs/CONTRIBUTING_BOUNTIES.md](docs/CONTRIBUTING_BOUNTIES.md) before claiming or delivering bounty work.
+- Claims are strictly public via `ditto-bounty-claim:v1` signing or public issue reservation. No private DMs.
+- Pull request merge does NOT authorize payment. Merge, deployment verification, deliverable acceptance, and on-chain payment are distinct states.
+- Validate changes using component-specific commands rather than a blanket test suite.
