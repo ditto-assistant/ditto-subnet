@@ -27,6 +27,7 @@ describe("status vocabulary (row 10)", () => {
   it("keeps the canonical status whitelist and the quick-filter map", () => {
     expect(ACTIVITY_STATUSES).toEqual([
       "waiting_screening",
+      "screening_failed",
       "screening",
       "waiting_validator",
       "evaluating",
@@ -54,7 +55,11 @@ describe("status vocabulary (row 10)", () => {
     expect(activityStage("waiting_screening")).toEqual(["Waiting for admission", "progress"]);
     expect(activityStage("screening")).toEqual(["Image build & admission", "progress"]);
     expect(activityStage("screening_passed")).toEqual(["Admitted", "good"]);
-    expect(activityStage("screening_failed")).toEqual(["Admission interrupted", "warn"]);
+    expect(activityStage("screening_failed")).toEqual([
+      "Screening interrupted · retry required",
+      "warn",
+    ]);
+    expect(ACTIVITY_FILTERS.queued).not.toContain("screening_failed");
     expect(activityStage("waiting_validator")).toEqual(["Waiting for validators", "progress"]);
     expect(activityStage("evaluating")).toEqual(["Scoring", "progress"]);
     expect(activityStage("below_score_floor")).toEqual(["Low-priority completion", "warn"]);

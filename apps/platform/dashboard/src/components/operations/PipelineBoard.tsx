@@ -235,6 +235,7 @@ function PipelineCard(props: {
   const admissionLabel = () => {
     if (props.column !== "admission") return "";
     if (entry().status === "waiting_screening") return "Waiting for admission";
+    if (entry().status === "screening_failed") return "Screening interrupted · retry required";
     return screeningLabel() || "Building image & admission";
   };
   const policyLabel = () => (props.column === "admission" ? policyScreeningLabel(entry()) : "");
@@ -265,7 +266,7 @@ function PipelineCard(props: {
   // attribute drives the muted queued treatment and the active gold rail.
   const admissionState = () =>
     props.column === "admission"
-      ? entry().status === "waiting_screening"
+      ? entry().status !== "screening"
         ? "waiting"
         : "active"
       : undefined;
@@ -294,7 +295,7 @@ function PipelineCard(props: {
         <AdmissionStepTrack
           steps={admissionSteps(entry().screening_build_only)}
           stage={screener()?.screening_progress?.stage ?? null}
-          waiting={entry().status === "waiting_screening"}
+          waiting={entry().status !== "screening"}
         />
         {/* Source review is one segment of the track above and most of its
             wall-clock; the ladder opens that segment into the four stages
@@ -464,8 +465,15 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
             }
             const active = Number(props.statusCounts.screening || 0);
             const queued = Number(props.statusCounts.waiting_screening || 0);
-            if (active + queued <= 0) return "";
-            return active + " in progress · " + queued + " queued";
+            const interrupted = Number(props.statusCounts.screening_failed || 0);
+            if (active + queued + interrupted <= 0) return "";
+            return (
+              active +
+              " in progress · " +
+              queued +
+              " queued" +
+              (interrupted > 0 ? " · " + interrupted + " interrupted" : "")
+            );
           };
           // The count and the item window are reconciled independently. Keep
           // active admission work visible if a delayed snapshot has the count

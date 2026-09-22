@@ -18,6 +18,7 @@ export const ACTIVITY_PAGE_SIZE = 10;
  * filter state are always re-ordered against this list. */
 export const ACTIVITY_STATUSES: readonly string[] = [
   "waiting_screening",
+  "screening_failed",
   "screening",
   "waiting_validator",
   "evaluating",
@@ -73,7 +74,7 @@ export function activityStage(status: string | null | undefined): ChipState {
     waiting_screening: ["Waiting for admission", "progress"],
     screening: ["Image build & admission", "progress"],
     screening_passed: ["Admitted", "good"],
-    screening_failed: ["Admission interrupted", "warn"],
+    screening_failed: ["Screening interrupted · retry required", "warn"],
     waiting_validator: ["Waiting for validators", "progress"],
     evaluating: ["Scoring", "progress"],
     below_score_floor: ["Low-priority completion", "warn"],

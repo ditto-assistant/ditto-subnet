@@ -136,10 +136,10 @@ async def test_failed_submission_is_demand_only_with_latest_attempt_override(
     )
 
     statuses = {row.agent.agent_id: row.public_status for row in result.rows}
-    assert statuses[parked.agent_id] == "not_queued"
+    assert statuses[parked.agent_id] == "screening_failed"
     assert statuses[retry.agent_id] == "waiting_screening"
-    assert statuses[stale.agent_id] == "not_queued"
-    assert result.status_counts == {"not_queued": 2, "waiting_screening": 1}
+    assert statuses[stale.agent_id] == "screening_failed"
+    assert result.status_counts == {"screening_failed": 2, "waiting_screening": 1}
 
 
 async def _seed_large_activity(session: AsyncSession, *, count: int) -> None:

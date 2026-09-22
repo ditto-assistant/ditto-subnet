@@ -466,7 +466,7 @@ async def query_public_activity_page(
         ),
         (
             Agent.status == AgentStatus.SCREENING_FAILED,
-            literal("not_queued"),
+            literal("screening_failed"),
         ),
         (waiting_state & retired, literal("retired")),
         (
@@ -583,6 +583,7 @@ async def query_public_activity_page(
     else:
         board_statuses = (
             "waiting_screening",
+            "screening_failed",
             "screening",
             "waiting_validator",
             "below_score_floor",

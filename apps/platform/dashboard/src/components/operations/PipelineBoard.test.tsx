@@ -81,6 +81,20 @@ const codingShadow = (
 });
 
 describe("the Up next badge (#458)", () => {
+  it("keeps interrupted screenings visible without claiming active work", () => {
+    const container = board([waiting({ status: "screening_failed", agent_id: "failed" })], {
+      statusCounts: { screening_failed: 1 },
+    });
+    const card = container.querySelector("#pipeline-admission .pipeline-item");
+    expect(card).not.toBeNull();
+    expect(card?.textContent).toContain("Screening interrupted · retry required");
+    expect(card?.getAttribute("data-admission")).toBe("waiting");
+    expect(card?.getAttribute("aria-label")).toContain("retry required");
+    expect(card?.textContent).not.toContain("Building image & admission");
+    expect(card?.textContent).not.toContain("Historical");
+    expect(container.textContent).toContain("0 in progress · 0 queued · 1 interrupted");
+  });
+
   it("badges rank 1 only when nothing gates the lease", () => {
     const container = board([waiting({ validator_queue_rank: 1, agent_id: "head" })], {
       statusCounts: { waiting_validator: 1 },

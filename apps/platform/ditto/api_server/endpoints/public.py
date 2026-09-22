@@ -389,6 +389,7 @@ from ditto.db.queries.screening import (
     get_running_screening_attempts,
     list_screening_attempts,
 )
+from ditto.db.queries.screening_retry import failed_screening_retry_authorized
 from ditto.db.queries.tickets import (
     get_score_continuation_floor,
     get_score_continuation_floor_row,
@@ -541,6 +542,7 @@ _BENCHMARK_STALL_PER_CHECK = timedelta(seconds=60)
 _PUBLIC_ACTIVITY_STATUSES = frozenset(
     {
         "waiting_screening",
+        "screening_failed",
         "screening",
         "waiting_validator",
         "evaluating",
@@ -4780,7 +4782,7 @@ def _public_handle_status(raw: str) -> Literal["reserved", "disputed", "pending"
 _SS58_HOTKEY_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")
 _INTERNAL_TO_PUBLIC_STATUS = {
     "uploaded": "waiting_screening",
-    "screening_failed": "waiting_screening",
+    "screening_failed": "screening_failed",
     "screening": "screening",
     "screening_passed": "waiting_validator",
     "evaluating": "evaluating",
@@ -5247,6 +5249,7 @@ def _public_activity_status(
     score_continuation_floor: float | None = None,
     benchmark_admitted: bool = True,
     retired: bool = False,
+    screening_retry_authorized: bool = False,
 ) -> str:
     """Collapse internal moderation detail into stable public lifecycle labels."""
     needs_rescreen = (
@@ -5259,7 +5262,9 @@ def _public_activity_status(
     )
     if has_active_attempt or status == AgentStatus.SCREENING:
         return AgentStatus.SCREENING.value
-    if status in (AgentStatus.UPLOADED, AgentStatus.SCREENING_FAILED) or needs_rescreen:
+    if status == AgentStatus.SCREENING_FAILED:
+        return "waiting_screening" if screening_retry_authorized else "screening_failed"
+    if status == AgentStatus.UPLOADED or needs_rescreen:
         return "waiting_screening"
     if status in (AgentStatus.SCREENING_PASSED, AgentStatus.EVALUATING):
         # Checked before ``not_queued`` because it is the more specific and more
@@ -5601,6 +5606,7 @@ def _public_activity_response(
         # remains the authoritative route for full history and search.
         board_statuses = {
             "waiting_screening",
+            "screening_failed",
             "screening",
             "waiting_validator",
             "below_score_floor",
@@ -6731,6 +6737,16 @@ async def agent_summary(
         score_continuation_floor=score_floor,
         benchmark_admitted=admitted,
         retired=retired,
+        screening_retry_authorized=bool(
+            await session.scalar(
+                select(Agent.agent_id).where(
+                    Agent.agent_id == agent_id,
+                    failed_screening_retry_authorized(),
+                )
+            )
+        )
+        if row.agent.status == AgentStatus.SCREENING_FAILED
+        else False,
     )
 
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] = {}
@@ -7138,6 +7154,9 @@ async def agent_pipeline(
         )[agent_id],
         status=_public_activity_status(
             agent.status,
+            screening_retry_authorized=(
+                admission_retry is not None and admission_retry.state == "retry_queued"
+            ),
             screening_policy_version=agent.screening_policy_version,
             has_active_attempt=running_attempt is not None,
             has_active_validation=any(
