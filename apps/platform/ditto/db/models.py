@@ -10025,3 +10025,125 @@ class AdminActivityOutcome(Base):
             name="admin_activity_outcome_status",
         ),
     )
+
+
+class BountyAuditLogEntry(Base):
+    """Append-only, tamper-evident hash-chained bounty accounting ledger."""
+
+    __tablename__ = "bounty_audit_log"
+
+    seq: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    entry_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    repo: Mapped[str] = mapped_column(Text, nullable=False)
+    issue: Mapped[int] = mapped_column(Integer, nullable=False)
+    event: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    prev_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    entry_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("entry_id", name="bounty_audit_log_entry_id_key"),
+        Index("bounty_audit_log_claim_idx", "claim_id", "seq"),
+        Index("bounty_audit_log_repo_issue_idx", "repo", "issue", "seq"),
+    )
+
+
+class BountyLifecycleRecord(Base):
+    """Lifecycle state and financial settlement of an SN118 bounty claim."""
+
+    __tablename__ = "bounty_lifecycle_records"
+
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    repo: Mapped[str] = mapped_column(Text, nullable=False)
+    issue: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    commit_sha: Mapped[str | None] = mapped_column(Text, nullable=True)
+    claimant_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    payee_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    amount_tao: Mapped[float] = mapped_column(Float, nullable=False)
+
+    submitted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    accepted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    merged_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    deployed_verified_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    approved_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    paid_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extrinsic_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('claimed', 'submitted', 'accepted', 'merged', "
+            "'deployed_verified', 'approved', 'paid', 'rejected', 'appealed', "
+            "'cancelled', 'handed_off', 'payout_failed')",
+            name="bounty_lifecycle_status_check",
+        ),
+        CheckConstraint(
+            "status != 'paid' OR ("
+            "paid_at IS NOT NULL AND approved_at IS NOT NULL AND "
+            "deployed_verified_at IS NOT NULL AND merged_at IS NOT NULL AND "
+            "block_hash IS NOT NULL AND extrinsic_index IS NOT NULL)",
+            name="bounty_lifecycle_paid_requires_approval_and_merge",
+        ),
+        UniqueConstraint(
+            "repo", "issue", "commit_sha", name="bounty_lifecycle_work_key"
+        ),
+        Index("bounty_lifecycle_status_idx", "status"),
+        Index("bounty_lifecycle_claimant_idx", "claimant_hotkey"),
+        Index("bounty_lifecycle_payee_idx", "payee_coldkey"),
+    )
+
+
+class BountyPayoutReceiptRecord(Base):
+    """On-chain settlement receipt preventing double payment."""
+
+    __tablename__ = "bounty_payout_receipts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    payee_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    treasury_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    block_timestamp: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    verified_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "block_hash", "extrinsic_index", name="bounty_payout_receipts_tx_key"
+        ),
+        Index("bounty_payout_receipts_claim_idx", "claim_id"),
+    )
+
