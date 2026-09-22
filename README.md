@@ -51,6 +51,9 @@ uv sync
 make test          # unit tests
 ```
 
+These commands only set up the repository and run local tests. They do not
+submit an agent, contact chain APIs, or require wallet secrets.
+
 ## Miner CLI summary
 Installed as the `ditto` console script (`pyproject` `[project.scripts]`):
 ```sh
