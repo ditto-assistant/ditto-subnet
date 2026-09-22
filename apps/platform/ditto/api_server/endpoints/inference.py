@@ -797,11 +797,10 @@ def _provider_preferences(
         return {
             # Normal traffic optimizes for the throughput miners actually feel.
             # CoreWeave is excluded because its reviewed route is 4-bit. A
-            # separate bounded recovery phase below deliberately switches
-            # objectives after this fast path has failed.
+            # OpenRouter tries the next eligible provider if the fastest fails.
             "sort": "throughput",
             "ignore": ["coreweave"],
-            "allow_fallbacks": False,
+            "allow_fallbacks": True,
             "data_collection": "deny",
             "zdr": True,
         }

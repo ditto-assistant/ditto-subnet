@@ -538,7 +538,7 @@ func providerPreferences(routingMode, provider string, quantization string) map[
 		return map[string]any{
 			"sort":            "throughput",
 			"ignore":          []string{"coreweave"},
-			"allow_fallbacks": false,
+			"allow_fallbacks": true,
 			"data_collection": "deny",
 			"zdr":             true,
 		}

@@ -745,7 +745,7 @@ def test_aggregate_route_is_throughput_sorted_and_excludes_unreviewed_routes() -
     ) == {
         "sort": "throughput",
         "ignore": ["coreweave"],
-        "allow_fallbacks": False,
+        "allow_fallbacks": True,
         "data_collection": "deny",
         "zdr": True,
     }

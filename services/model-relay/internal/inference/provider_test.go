@@ -431,6 +431,22 @@ func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 	}
 }
 
+func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *testing.T) {
+	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "")
+	if aggregate["sort"] != "throughput" || aggregate["allow_fallbacks"] != true ||
+		aggregate["data_collection"] != "deny" || aggregate["zdr"] != true {
+		t.Fatalf("aggregate provider preferences: %v", aggregate)
+	}
+	ignored, ok := aggregate["ignore"].([]string)
+	if !ok || len(ignored) != 1 || ignored[0] != "coreweave" {
+		t.Fatalf("aggregate ignored providers: %v", aggregate["ignore"])
+	}
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8")
+	if adaptive["allow_fallbacks"] != false {
+		t.Fatalf("adaptive provider unexpectedly gained fallbacks: %v", adaptive)
+	}
+}
+
 func TestProviderErrorEnvelopePrecedesIdentityValidation(t *testing.T) {
 	var calls int
 	var slept time.Duration
