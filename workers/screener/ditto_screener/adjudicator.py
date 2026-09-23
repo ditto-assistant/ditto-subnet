@@ -1302,6 +1302,23 @@ class SourceReviewAdjudicator:
                         }
                     )
                     continue
+                # All calls in one assistant message are chosen before any
+                # tool result is returned. A verdict in that same batch must
+                # not gain credit for a sibling read_file/search result that
+                # the model had not seen when it made the decision. Nor may a
+                # duplicate verdict silently settle by whichever came first.
+                if len(tool_calls) != 1 and (
+                    decision_only
+                    or any(
+                        isinstance(call, dict)
+                        and isinstance(call.get("function"), dict)
+                        and call["function"].get("name") == "submit_adjudication"
+                        for call in tool_calls
+                    )
+                ):
+                    raise ValueError(
+                        "adjudicator verdict must be the sole call in its turn"
+                    )
                 for call in tool_calls:
                     call_id, name, arguments = _tool_call(call)
                     if name == "submit_adjudication":
@@ -1585,6 +1602,9 @@ def _assistant_message(payload: object) -> dict[str, object]:
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
         raise ValueError("adjudicator response has no choice")
+    finish_reason = choices[0].get("finish_reason")
+    if finish_reason is not None and finish_reason not in ("tool_calls", "stop"):
+        raise ValueError("adjudicator completion was not terminal")
     message = choices[0].get("message")
     if not isinstance(message, dict):
         raise ValueError("adjudicator response has no message")

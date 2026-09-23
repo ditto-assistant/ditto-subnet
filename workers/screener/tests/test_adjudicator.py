@@ -267,6 +267,52 @@ async def test_streamed_tool_call_is_assembled_before_verdict(tmp_path: Path) ->
     ]
 
 
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_truncated_completion_cannot_settle_a_verdict(
+    tmp_path: Path, streamed: bool
+) -> None:
+    call = _call(
+        "submit_adjudication",
+        {
+            "decision": "clear",
+            "clear_clause": "model_authors_graded_slot",
+            "reason": "syntactically complete but provider reports truncation",
+            "citations": [{"path": "src/main.rs", "line": 6}],
+        },
+    )
+    if streamed:
+        event = {
+            "choices": [
+                {
+                    "delta": {"tool_calls": [{"index": 0, **call}]},
+                    "finish_reason": "length",
+                }
+            ]
+        }
+        response = httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+        )
+    else:
+        response = httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "finish_reason": "length",
+                        "message": {"role": "assistant", "tool_calls": [call]},
+                    }
+                ]
+            },
+        )
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(lambda _request: response)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+
+
 async def test_truncated_stream_cannot_clear(tmp_path: Path) -> None:
     attempts = 0
     body = (
@@ -1247,6 +1293,66 @@ async def test_a_citation_the_court_never_read_clears_without_proof(
 
     assert result.decision == "escalate"
     assert result.clear_clause is None
+
+
+async def test_same_turn_read_cannot_certify_a_verdict(tmp_path: Path) -> None:
+    """The model chose both calls before it could see the read_file result."""
+    transport = _transport(
+        [
+            [
+                _call(
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 12},
+                ),
+                _call(
+                    "submit_adjudication",
+                    {
+                        "decision": "clear",
+                        "clear_clause": "model_authors_graded_slot",
+                        "reason": "asserted in the same turn as the source read",
+                        "citations": [{"path": "src/main.rs", "line": 6}],
+                    },
+                ),
+            ]
+        ]
+    )
+    result = await _adjudicator(_key(tmp_path), transport).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN]
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+
+
+async def test_decision_only_rejects_duplicate_verdicts(tmp_path: Path) -> None:
+    transport = _transport(
+        [
+            [
+                _call(
+                    "submit_adjudication",
+                    {
+                        "decision": "clear",
+                        "clear_clause": "model_authors_graded_slot",
+                        "reason": "first verdict",
+                        "citations": [{"path": "src/main.rs", "line": 6}],
+                    },
+                ),
+                _call(
+                    "submit_adjudication",
+                    {
+                        "decision": "reject",
+                        "reject_invariant": "i5_production_engine",
+                        "reason": "contradictory second verdict",
+                        "citations": [{"path": "src/main.rs", "line": 11}],
+                    },
+                ),
+            ]
+        ]
+    )
+    result = await _adjudicator(_key(tmp_path), transport).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], ledger_final=True
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
 
 
 async def test_a_hallucinated_path_clears_without_proof(tmp_path: Path) -> None:
