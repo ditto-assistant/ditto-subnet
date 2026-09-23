@@ -66,12 +66,13 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, S
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, BinaryIO, Literal, cast
+from urllib.parse import urlencode
 from uuid import UUID
 
 import httpx
 
 from ditto_screener.adjudicator import build_adjudicator
-from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL
+from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL, tool_capability
 from ditto_screener.heartbeat import (
     ScreenerProgressStage,
     source_review_progress_stage,
@@ -151,6 +152,7 @@ _CANARY_IMAGE = (
 _GATEWAY_ALIAS = "host.docker.internal"
 _CHAT_GATEWAY_PORT = 11435
 _EMBED_GATEWAY_PORT = 11434
+_TOOL_GATEWAY_PORT = 11436
 _OPENROUTER_SHIM_HOST = "openrouter.ai"
 _OPENROUTER_SHIM_CA_BUNDLE_PATH = "/run/dittobench/openrouter-shim-ca.pem"
 _HARNESS_ALIAS = "harness"
@@ -355,17 +357,16 @@ class _AuditRuntime:
     provider: Literal["platform", "chutes"] = _PRIMARY_HARNESS_PROVIDER
     seed_probe: _SeedProbe | None = None
     """Shadow-mode ``/seed`` observation; ``None`` when the probe is off."""
+    tool_route: str = ""
+    tool_key: bytes = b""
 
 
-# The fake gateway serves a benign `/tool` sink at the same host-container alias
-# the harness already uses for the model, so a tool-shaped challenge's
-# `tool_endpoint` is reachable from inside the harness network and carries no
-# screener-specific tell (it is the same host:port the model calls go to).
-_TOOL_ENDPOINT = f"http://{_GATEWAY_ALIAS}:{_CHAT_GATEWAY_PORT}/tool"
-
-
-def _with_tool_endpoint(request: Mapping[str, object]) -> dict[str, object]:
-    """Fill a reachable ``tool_endpoint`` for a tool-declaring challenge request.
+# The isolated fake gateway serves a case-bound capability on the scorer's
+# tool host and port. The harness sees the same endpoint shape as a scored run.
+def _with_tool_endpoint(
+    request: Mapping[str, object], *, tool_route: str, tool_key: bytes
+) -> dict[str, object]:
+    """Fill the scorer-shaped tool capability for a tool-declaring request.
 
     Returns a copy so the caller's mapping is not mutated. A request that
     already carries a ``tool_endpoint``, or declares no ``tools``, is returned
@@ -379,7 +380,26 @@ def _with_tool_endpoint(request: Mapping[str, object]) -> dict[str, object]:
     """
     payload = dict(request)
     if payload.get("tools") and not payload.get("tool_endpoint"):
-        payload["tool_endpoint"] = _TOOL_ENDPOINT
+        case_id = payload.get("case_id")
+        if not isinstance(case_id, str) or not case_id:
+            raise ValueError("tool challenge requires a case_id")
+        user_id = payload.get("user_id")
+        if not isinstance(user_id, str) or not user_id:
+            # The scorer binds V13 tool calls to a projected wire user. A
+            # randomly coined user keeps the private challenge on that wire.
+            user_id = secrets.token_hex(16)
+            payload["user_id"] = user_id
+        query = urlencode(
+            {
+                "cap": tool_capability(tool_key, case_id, user_id),
+                "case_id": case_id,
+                "user_id": user_id,
+            }
+        )
+        payload["tool_endpoint"] = (
+            f"http://{_GATEWAY_ALIAS}:{_TOOL_GATEWAY_PORT}"
+            f"/v1/tools/{tool_route}/tool?{query}"
+        )
     return payload
 
 
@@ -2745,12 +2765,16 @@ class BuildGate:
         # second round-trip (the gateway-encoded correctness oracle).
         response_text = secrets.token_hex(16)
         oracle_answer = secrets.token_hex(16)
+        tool_route = secrets.token_urlsafe(18)
+        tool_key = secrets.token_bytes(32)
         started, detail = await self._start_fake_gateway(
             gateway_container=gateway_container,
             network=network,
             response_text=response_text,
             oracle_answer=oracle_answer,
             state_dir=gateway_state_dir,
+            tool_route=tool_route,
+            tool_key=tool_key,
         )
         if not started:
             return _StageResult(False, detail, retryable=True), None
@@ -2809,6 +2833,8 @@ class BuildGate:
                 oracle_answer=oracle_answer,
                 gateway_state_file=str(Path(gateway_state_dir) / "model-called"),
                 seed_probe=seed_probe,
+                tool_route=tool_route,
+                tool_key=tool_key,
             ),
         )
 
@@ -2931,6 +2957,8 @@ class BuildGate:
         response_text: str,
         oracle_answer: str,
         state_dir: str,
+        tool_route: str,
+        tool_key: bytes,
     ) -> tuple[bool, str]:
         """Start the fake gateway beside the harness on an internal network."""
         try:
@@ -2988,6 +3016,10 @@ class BuildGate:
                 "-e",
                 f"DITTO_FAKE_GATEWAY_ORACLE_ANSWER={oracle_answer}",
                 "-e",
+                f"DITTO_FAKE_GATEWAY_TOOL_ROUTE={tool_route}",
+                "-e",
+                f"DITTO_FAKE_GATEWAY_TOOL_KEY={tool_key.hex()}",
+                "-e",
                 "DITTO_FAKE_GATEWAY_STATE_FILE=/state/model-called",
                 "-e",
                 "DITTO_FAKE_GATEWAY_TLS_CERT=/state/leaf.crt",
@@ -3009,7 +3041,7 @@ class BuildGate:
         probe = """\
 import socket
 import ssl
-for port in (11434, 11435):
+for port in (11434, 11435, 11436):
     socket.create_connection(('127.0.0.1', port), 2).close()
 context = ssl.create_default_context(cafile='/state/ca.crt')
 with socket.create_connection(('127.0.0.1', 443), 2) as raw:
@@ -3266,6 +3298,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             gateway_response_token=audit_runtime.gateway_response_token,
             oracle_answer=audit_runtime.oracle_answer,
             gateway_state_file=audit_runtime.gateway_state_file,
+            tool_route=audit_runtime.tool_route,
+            tool_key=audit_runtime.tool_key,
         )
         if (
             audit_runtime.provider != _PRIMARY_HARNESS_PROVIDER
@@ -3314,6 +3348,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             oracle_answer=audit_runtime.oracle_answer,
             gateway_state_file=audit_runtime.gateway_state_file,
             provider=_COMPAT_HARNESS_PROVIDER,
+            tool_route=audit_runtime.tool_route,
+            tool_key=audit_runtime.tool_key,
         )
         remaining = deadline - loop.time()
         if remaining <= 0:
@@ -3337,6 +3373,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             gateway_response_token=compatibility_runtime.gateway_response_token,
             oracle_answer=compatibility_runtime.oracle_answer,
             gateway_state_file=compatibility_runtime.gateway_state_file,
+            tool_route=compatibility_runtime.tool_route,
+            tool_key=compatibility_runtime.tool_key,
         )
         return second, compatibility_runtime
 
@@ -3384,6 +3422,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         gateway_response_token: str,
         gateway_state_file: str,
         oracle_answer: str | None = None,
+        tool_route: str = "",
+        tool_key: bytes = b"",
     ) -> ChallengeObservation:
         """Run one selected private challenge and retain only bounded evidence.
 
@@ -3397,7 +3437,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         # the model returns and proceed to the second model turn. Filled here
         # (not in the policy module) because only the gate knows the network
         # topology.
-        payload = _with_tool_endpoint(request)
+        payload = _with_tool_endpoint(request, tool_route=tool_route, tool_key=tool_key)
         calls_before = _gateway_call_count(gateway_state_file)
         started = asyncio.get_running_loop().time()
         code, out = await self._request_from_sidecar(

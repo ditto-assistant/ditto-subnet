@@ -15,6 +15,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 import httpx
@@ -2330,14 +2331,33 @@ async def test_private_challenge_keeps_a_usable_primary_observation(
 
 
 def test_with_tool_endpoint_fills_only_tool_declaring_requests() -> None:
-    from ditto_screener.gate import _TOOL_ENDPOINT, _with_tool_endpoint
+    from ditto_screener.fake_gateway import tool_capability
+    from ditto_screener.gate import _with_tool_endpoint
 
-    # Tool-declaring request with no endpoint: gets the reachable gateway sink.
-    filled = _with_tool_endpoint({"case_id": "c", "tools": [{"name": "search_web"}]})
-    assert filled["tool_endpoint"] == _TOOL_ENDPOINT
+    route = "aBc123_-aBc123_-aBc123_-"
+    key = bytes(range(32))
+
+    # The request has the scorer's route, case/user binding, and capability.
+    filled = _with_tool_endpoint(
+        {"case_id": "c0123456789abcdef", "tools": [{"name": "search_web"}]},
+        tool_route=route,
+        tool_key=key,
+    )
+    endpoint = urlsplit(filled["tool_endpoint"])
+    assert endpoint.netloc == "host.docker.internal:11436"
+    assert endpoint.path == f"/v1/tools/{route}/tool"
+    query = parse_qs(endpoint.query)
+    assert query == {
+        "cap": [tool_capability(key, "c0123456789abcdef", filled["user_id"])],
+        "case_id": ["c0123456789abcdef"],
+        "user_id": [filled["user_id"]],
+    }
+    assert len(filled["user_id"]) == 32
 
     # No tools: unchanged (no endpoint injected).
-    assert "tool_endpoint" not in _with_tool_endpoint({"case_id": "c"})
+    assert "tool_endpoint" not in _with_tool_endpoint(
+        {"case_id": "c"}, tool_route=route, tool_key=key
+    )
 
     # Explicit endpoint is preserved, not overwritten.
     kept = _with_tool_endpoint(
@@ -2345,13 +2365,15 @@ def test_with_tool_endpoint_fills_only_tool_declaring_requests() -> None:
             "case_id": "c",
             "tools": [{"name": "x"}],
             "tool_endpoint": "http://elsewhere/tool",
-        }
+        },
+        tool_route=route,
+        tool_key=key,
     )
     assert kept["tool_endpoint"] == "http://elsewhere/tool"
 
     # The input mapping is copied, never mutated.
     original = {"case_id": "c", "tools": [{"name": "x"}]}
-    _with_tool_endpoint(original)
+    _with_tool_endpoint(original, tool_route=route, tool_key=key)
     assert "tool_endpoint" not in original
 
 

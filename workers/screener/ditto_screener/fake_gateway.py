@@ -9,7 +9,10 @@ optional private behavioral challenge. The public v6 build gate never calls
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hashlib
+import hmac
 import json
 import os
 import random
@@ -18,6 +21,7 @@ import ssl
 import time
 from pathlib import Path
 from types import TracebackType
+from urllib.parse import parse_qs, urlsplit
 
 _CHAT_ROUTES = frozenset(
     {
@@ -51,6 +55,27 @@ LOCKED_HARNESS_MODEL = "qwen/qwen3-32b"
 _DEFAULT_ECHO_MODEL = "gpt-4o-mini"
 
 
+def tool_capability(key: bytes, case_id: str, user_id: str) -> str:
+    """Match the scorer's case/user-bound tool capability wire format."""
+    case = case_id.encode()
+    user = user_id.encode()
+    message = (
+        b"dittobench-tool-v1\n"
+        + str(len(case)).encode()
+        + b":"
+        + case
+        + b"\n"
+        + str(len(user)).encode()
+        + b":"
+        + user
+    )
+    return (
+        base64.urlsafe_b64encode(hmac.digest(key, message, hashlib.sha256))
+        .rstrip(b"=")
+        .decode()
+    )
+
+
 class FakeModelGateway:
     """Short-lived OpenAI-compatible HTTP server with observable call state.
 
@@ -78,6 +103,8 @@ class FakeModelGateway:
         latency_range: tuple[float, float] = (0.0, 0.0),
         surface: str = "all",
         ssl_context: ssl.SSLContext | None = None,
+        tool_route: str | None = None,
+        tool_key: bytes | None = None,
     ) -> None:
         self.response_text = response_text or secrets.token_hex(16)
         self._oracle_answer = oracle_answer
@@ -85,9 +112,13 @@ class FakeModelGateway:
         self._host = host
         self._port = port
         self._state_file = state_file
-        if surface not in {"all", "model", "embedding"}:
-            raise ValueError("surface must be all, model, or embedding")
+        if surface not in {"all", "model", "embedding", "tool"}:
+            raise ValueError("surface must be all, model, embedding, or tool")
         self._surface = surface
+        if surface == "tool" and (not tool_route or not tool_key):
+            raise ValueError("tool gateway requires a route and capability key")
+        self._tool_route = tool_route
+        self._tool_key = tool_key
         low, high = latency_range
         if low < 0 or high < low:
             raise ValueError("latency_range must be a non-negative (low, high) pair")
@@ -193,8 +224,8 @@ class FakeModelGateway:
             if len(raw_headers) > _MAX_HEADER_BYTES:
                 raise ValueError("headers too large")
             lines = raw_headers.decode("latin-1").split("\r\n")
-            method, path, _version = lines[0].split(" ", 2)
-            path = _route_path(path)
+            method, raw_path, _version = lines[0].split(" ", 2)
+            path = _route_path(raw_path)
             headers = {
                 key.strip().casefold(): value.strip()
                 for line in lines[1:]
@@ -294,6 +325,8 @@ class FakeModelGateway:
                 # nonce rides the assistant tool_calls message in the
                 # transcript), so a benign acknowledgement suffices.
                 payload = {"result": "ok", "error": ""}
+            elif self._surface == "tool":
+                status, payload = self._tool_response(method, raw_path, body)
             elif (
                 self._surface in {"all", "embedding"}
                 and method == "POST"
@@ -346,6 +379,37 @@ class FakeModelGateway:
         writer.close()
         with contextlib.suppress(ConnectionError):
             await writer.wait_closed()
+
+    def _tool_response(
+        self, method: str, raw_path: str, body: bytes
+    ) -> tuple[str, dict[str, object]]:
+        """Mirror the scorer broker's authorization and empty-body preflight."""
+        if _route_path(raw_path) != f"/v1/tools/{self._tool_route}/tool":
+            return "404 Not Found", {"error": "tool route not found"}
+        query = parse_qs(urlsplit(raw_path).query, keep_blank_values=True)
+        if any(len(values) != 1 for values in query.values()):
+            return "401 Unauthorized", {"error": "tool route unavailable"}
+        case_id = query.get("case_id", [""])[0]
+        user_id = query.get("user_id", [""])[0]
+        if method == "GET":
+            case_id, user_id = "health", ""
+        expected = tool_capability(self._tool_key or b"", case_id, user_id)
+        if not hmac.compare_digest(query.get("cap", [""])[0], expected):
+            return "401 Unauthorized", {"error": "tool route unavailable"}
+        if method == "GET":
+            return "204 No Content", {}
+        if method not in {"HEAD", "POST"}:
+            return "405 Method Not Allowed", {"error": "method not allowed"}
+        try:
+            call = json.loads(body)
+        except (UnicodeError, ValueError):
+            return "400 Bad Request", {"error": "invalid tool request"}
+        if not isinstance(call, dict):
+            return "400 Bad Request", {"error": "invalid tool request"}
+        if call.get("case_id") != case_id or call.get("user_id") != user_id:
+            return "401 Unauthorized", {"error": "tool route unavailable"}
+        # This is a benign execution sink; only model turns count as evidence.
+        return "200 OK", {"result": "ok", "error": ""}
 
     @staticmethod
     async def _read_request_body(
@@ -453,6 +517,13 @@ async def _serve_sidecar() -> None:
         latency_range=latency,
         surface="embedding",
     )
+    tool_gateway = FakeModelGateway(
+        host="0.0.0.0",
+        port=11436,
+        surface="tool",
+        tool_route=os.environ["DITTO_FAKE_GATEWAY_TOOL_ROUTE"],
+        tool_key=bytes.fromhex(os.environ["DITTO_FAKE_GATEWAY_TOOL_KEY"]),
+    )
     tls_context = _sidecar_tls_context()
     tls_gateway = (
         FakeModelGateway(
@@ -471,6 +542,7 @@ async def _serve_sidecar() -> None:
     async with contextlib.AsyncExitStack() as stack:
         await stack.enter_async_context(chat_gateway)
         await stack.enter_async_context(embed_gateway)
+        await stack.enter_async_context(tool_gateway)
         if tls_gateway is not None:
             await stack.enter_async_context(tls_gateway)
         await asyncio.Event().wait()

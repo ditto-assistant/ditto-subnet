@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ditto_screener.fake_gateway import FakeModelGateway
+from ditto_screener.fake_gateway import FakeModelGateway, tool_capability
 from ditto_screener.gate import _write_openrouter_shim_certs
 
 
@@ -370,3 +370,43 @@ async def test_tool_sink_returns_result_without_counting_a_model_call(
         assert body["result"] and not body["error"]
         assert gateway.model_calls == 0
         assert not state.exists() or state.read_text() == ""
+
+
+async def test_scorer_shaped_tool_route_authenticates_case_and_user() -> None:
+    route = "aBc123_-aBc123_-aBc123_-"
+    key = bytes(range(32))
+    case_id = "c0123456789abcdef"
+    user_id = "projected-user"
+    async with FakeModelGateway(
+        surface="tool", tool_route=route, tool_key=key
+    ) as gateway:
+        local_url = gateway.gateway_url.replace("host.docker.internal", "127.0.0.1")
+        endpoint = f"{local_url}/v1/tools/{route}/tool"
+        params = {
+            "cap": tool_capability(key, case_id, user_id),
+            "case_id": case_id,
+            "user_id": user_id,
+        }
+        async with httpx.AsyncClient() as client:
+            preflight = await client.head(endpoint, params=params)
+            authorized = await client.post(
+                endpoint,
+                params=params,
+                json={"case_id": case_id, "user_id": user_id, "name": "search_web"},
+            )
+            wrong_user = await client.post(
+                endpoint,
+                params=params,
+                json={"case_id": case_id, "user_id": "someone-else"},
+            )
+            wrong_cap = await client.head(endpoint, params={**params, "cap": "wrong"})
+            wrong_route = await client.head(
+                f"{local_url}/v1/tools/other/tool", params=params
+            )
+    assert preflight.status_code == 400
+    assert authorized.status_code == 200
+    assert authorized.json() == {"result": "ok", "error": ""}
+    assert wrong_user.status_code == 401
+    assert wrong_cap.status_code == 401
+    assert wrong_route.status_code == 404
+    assert gateway.model_calls == 0
