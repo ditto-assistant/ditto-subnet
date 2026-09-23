@@ -818,15 +818,22 @@ def _preload_ledger_evidence(
     return "\n".join(outputs), read_locations
 
 
-def _has_unreviewed_concern(
-    notes: Sequence[Mapping[str, object]], read_locations: set[tuple[str, int]]
+def _has_unreviewed_lead(
+    notes: Sequence[Mapping[str, object]],
+    finding: Mapping[str, object] | None,
+    read_locations: set[tuple[str, int]],
 ) -> bool:
     """A decision-only court cannot clear a concern it was never shown."""
-    for note in notes:
-        if note.get("kind") != "concern":
-            continue
-        path = note.get("path")
-        line = note.get("line")
+    leads: list[Mapping[str, object]] = [
+        note for note in notes if note.get("kind") == "concern"
+    ]
+    if isinstance(finding, Mapping):
+        evidence = finding.get("evidence")
+        if isinstance(evidence, list):
+            leads.extend(item for item in evidence if isinstance(item, Mapping))
+    for lead in leads:
+        path = lead.get("path")
+        line = lead.get("line")
         if (
             not isinstance(path, str)
             or not path
@@ -948,7 +955,7 @@ class SourceReviewAdjudicator:
             # The ledger can retain 48 notes but the one-turn court preloads
             # only 16 distinct locations. A later concern must not disappear
             # behind that bound while an earlier excerpt supports a CLEAR.
-            unreviewed_concerns = _has_unreviewed_concern(notes, preloaded_reads)
+            unreviewed_concerns = _has_unreviewed_lead(notes, finding, preloaded_reads)
             if not preloaded_evidence:
                 # The upstream layers retained a ledger but no usable source
                 # evidence. There is nothing for a court to decide; do not
@@ -1109,7 +1116,7 @@ class SourceReviewAdjudicator:
             return _escalate(
                 "adjudicator-evidence-incomplete",
                 "Automated adjudication did not receive every retained source "
-                "concern; held for operator review",
+                "lead; held for operator review",
                 model=self._model,
                 notes=notes,
                 policy_version=policy_version,
