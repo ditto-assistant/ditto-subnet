@@ -664,6 +664,42 @@ export const setScreenerNodeReplayCapacityInputSchema = z.object({
   confirmation: z.string(),
 })
 
+export const replayProcessReadinessSchema = z.object({
+  node_id: z.literal('subnet-screener-2'),
+  node_status: z.string(),
+  provider: z.string(),
+  provider_resource_id: z.string(),
+  screener_hotkey: z.string().min(1),
+  replay_capacity: z.number().int().min(0),
+  instance_id: z.literal('subnet-screener-2-worker-1'),
+  active_key_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  active_key_revision: z.number().int().positive().nullable(),
+  key_registered_at: z.string().nullable(),
+  heartbeat_seen_at: z.string().nullable(),
+  heartbeat_key_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  heartbeat_policy_version: z.number().int().nullable(),
+  heartbeat_release: z.string().nullable(),
+  minimum_runner_release: z.string().nullable(),
+  signed_heartbeat_fresh: z.boolean(),
+  release_qualified: z.boolean(),
+  ready_for_capacity_one: z.boolean(),
+  missing: z.array(z.string().min(1)).max(12),
+})
+
+export const registerReplayProcessKeyInputSchema = z.object({
+  expectedHotkey: z.string().min(1),
+  publicKeyHex: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+export const revokeReplayProcessKeyInputSchema = z.object({
+  expectedHotkey: z.string().min(1),
+  expectedKeySha256: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
 export function screenerNodeChannelSettingsConfirmation(
   nodeId: string,
   settings: z.infer<typeof screenerNodeChannelSettingsSchema>,

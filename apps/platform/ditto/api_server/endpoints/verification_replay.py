@@ -31,6 +31,7 @@ from ditto.api_models.verification_replay import (
     VerificationReplayState,
 )
 from ditto.api_server.dependencies import get_session, get_storage_client
+from ditto.api_server.endpoints import admin_screener_capacity
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.admin_screener_capacity import (
     _MIN_VERIFICATION_REPLAY_RUNNER_RELEASE,
@@ -95,8 +96,139 @@ class ReplayProcessKeyRevoke(BaseModel):
     confirmation: str
 
 
+class ReplayProcessReadiness(BaseModel):
+    """Bounded operator view; never returns a bearer or private signing key."""
+
+    node_id: str
+    node_status: str
+    provider: str
+    provider_resource_id: str
+    screener_hotkey: str
+    replay_capacity: int
+    instance_id: str
+    active_key_sha256: str | None
+    active_key_revision: int | None
+    key_registered_at: datetime | None
+    heartbeat_seen_at: datetime | None
+    heartbeat_key_sha256: str | None
+    heartbeat_policy_version: int | None
+    heartbeat_release: str | None
+    minimum_runner_release: str | None
+    signed_heartbeat_fresh: bool
+    release_qualified: bool
+    ready_for_capacity_one: bool
+    missing: list[str]
+
+
 def _process_instance(node_id: str, instance_id: str) -> bool:
     return node_id == "subnet-screener-2" and instance_id == f"{node_id}-worker-1"
+
+
+@admin_router.get("/process-keys/{node_id}", response_model=ReplayProcessReadiness)
+async def get_replay_process_readiness(
+    node_id: str, _admin: AdminDep, session: SessionDep
+) -> ReplayProcessReadiness:
+    """Read the exact signed-worker gate without inferring it from node health."""
+
+    if node_id != "subnet-screener-2":
+        raise HTTPException(404, "independent replay node not found")
+    node = await session.get(ScreenerNode, node_id)
+    if node is None:
+        raise HTTPException(404, "independent replay node not found")
+    instance_id = f"{node_id}-worker-1"
+    key = await session.scalar(
+        select(ScreenerReplayProcessKey).where(
+            ScreenerReplayProcessKey.node_id == node_id,
+            ScreenerReplayProcessKey.instance_id == instance_id,
+            ScreenerReplayProcessKey.status == "active",
+        )
+    )
+    heartbeat = await session.get(
+        ScreenerHeartbeat, (node.screener_hotkey, instance_id)
+    )
+    envelope = heartbeat.system_metrics if heartbeat is not None else None
+    marker = envelope.get("replay_process") if isinstance(envelope, dict) else None
+    marker_sha = marker.get("key_sha256") if isinstance(marker, dict) else None
+    marker_sha = marker_sha if isinstance(marker_sha, str) else None
+    parsed_release = (
+        fleet_release_from_heartbeat_envelope(envelope)
+        if isinstance(envelope, dict)
+        else None
+    )
+    release_text = parsed_release.version if parsed_release is not None else None
+    release_tuple = None
+    if isinstance(release_text, str):
+        parts = release_text.removeprefix("v").split(".")
+        if len(parts) == 3 and all(part.isdigit() for part in parts):
+            release_tuple = (int(parts[0]), int(parts[1]), int(parts[2]))
+    now = datetime.now(UTC)
+    seen_at = heartbeat.seen_at if heartbeat is not None else None
+    if seen_at is not None and seen_at.tzinfo is None:
+        seen_at = seen_at.replace(tzinfo=UTC)
+    fresh = (
+        key is not None
+        and heartbeat is not None
+        and seen_at is not None
+        and marker_sha == key.key_sha256
+        and heartbeat.policy_version == 13
+        and now - timedelta(seconds=300) <= seen_at <= now + timedelta(seconds=5)
+    )
+    minimum = admin_screener_capacity._MIN_VERIFICATION_REPLAY_RUNNER_RELEASE
+    release_ok = (
+        minimum is not None and release_tuple is not None and release_tuple >= minimum
+    )
+    missing: list[str] = []
+    if (
+        node.status != "active"
+        or node.environment != "prod"
+        or node.provider != "hetzner"
+    ):
+        missing.append("independent_node_active")
+    token_expires_at = node.token_expires_at
+    if token_expires_at.tzinfo is None:
+        token_expires_at = token_expires_at.replace(tzinfo=UTC)
+    if token_expires_at <= now:
+        missing.append("node_credential_current")
+    if key is None:
+        missing.append("active_process_key")
+    if not fresh:
+        missing.append("signed_worker_heartbeat_current")
+    if minimum is None:
+        missing.append("minimum_runner_release_pinned")
+    elif not release_ok:
+        missing.append("worker_release_qualified")
+    # Keep the operator diagnostic aligned with the actual capacity write gate:
+    # another fresh process on the same node, or a missing release attestation,
+    # must not appear ready even if worker-1 itself looks healthy.
+    if not await admin_screener_capacity._replay_workers_ready(
+        session, node=node, now=now
+    ):
+        missing.append("capacity_admission_gate")
+    return ReplayProcessReadiness(
+        node_id=node_id,
+        node_status=node.status,
+        provider=node.provider,
+        provider_resource_id=node.provider_resource_id,
+        screener_hotkey=node.screener_hotkey,
+        replay_capacity=node.verification_replay_capacity,
+        instance_id=instance_id,
+        active_key_sha256=key.key_sha256 if key is not None else None,
+        active_key_revision=key.revision if key is not None else None,
+        key_registered_at=key.registered_at if key is not None else None,
+        heartbeat_seen_at=seen_at,
+        heartbeat_key_sha256=marker_sha,
+        heartbeat_policy_version=heartbeat.policy_version
+        if heartbeat is not None
+        else None,
+        heartbeat_release=release_text,
+        minimum_runner_release=(
+            f"{minimum[0]}.{minimum[1]}.{minimum[2]}" if minimum is not None else None
+        ),
+        signed_heartbeat_fresh=bool(fresh),
+        release_qualified=release_ok,
+        ready_for_capacity_one=not missing,
+        missing=missing,
+    )
 
 
 @admin_router.post("/process-keys/{node_id}", status_code=204)

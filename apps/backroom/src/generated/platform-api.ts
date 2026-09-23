@@ -2713,7 +2713,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Get Replay Process Readiness
+         * @description Read the exact signed-worker gate without inferring it from node health.
+         */
+        get: operations["get_replay_process_readiness_api_v1_admin_screening_verification_replays_process_keys__node_id__get"];
         put?: never;
         /**
          * Register Replay Process Key
@@ -26384,6 +26388,50 @@ export interface components {
             reason: string;
         };
         /**
+         * ReplayProcessReadiness
+         * @description Bounded operator view; never returns a bearer or private signing key.
+         */
+        ReplayProcessReadiness: {
+            /** Active Key Revision */
+            active_key_revision: number | null;
+            /** Active Key Sha256 */
+            active_key_sha256: string | null;
+            /** Heartbeat Key Sha256 */
+            heartbeat_key_sha256: string | null;
+            /** Heartbeat Policy Version */
+            heartbeat_policy_version: number | null;
+            /** Heartbeat Release */
+            heartbeat_release: string | null;
+            /** Heartbeat Seen At */
+            heartbeat_seen_at: string | null;
+            /** Instance Id */
+            instance_id: string;
+            /** Key Registered At */
+            key_registered_at: string | null;
+            /** Minimum Runner Release */
+            minimum_runner_release: string | null;
+            /** Missing */
+            missing: string[];
+            /** Node Id */
+            node_id: string;
+            /** Node Status */
+            node_status: string;
+            /** Provider */
+            provider: string;
+            /** Provider Resource Id */
+            provider_resource_id: string;
+            /** Ready For Capacity One */
+            ready_for_capacity_one: boolean;
+            /** Release Qualified */
+            release_qualified: boolean;
+            /** Replay Capacity */
+            replay_capacity: number;
+            /** Screener Hotkey */
+            screener_hotkey: string;
+            /** Signed Heartbeat Fresh */
+            signed_heartbeat_fresh: boolean;
+        };
+        /**
          * RestoreScoredScreeningSnapshotRequest
          * @description Restore the last pre-activation pass for an exact scored cohort.
          *
@@ -37638,6 +37686,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminSourceSearchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_replay_process_readiness_api_v1_admin_screening_verification_replays_process_keys__node_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReplayProcessReadiness"];
                 };
             };
             /** @description Validation Error */
