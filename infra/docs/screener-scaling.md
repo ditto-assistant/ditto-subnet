@@ -260,7 +260,12 @@ commands live in [`docs/hetzner-screener-fleet.md`](../../docs/hetzner-screener-
 ## BuildKit cache cleanup on dedicated screener hosts
 
 The `screener_worker` role installs `ditto-screener-cache-gc.timer` and its
-oneshot service. It backs up the rootless executor's own builder GC
+oneshot service. The active `hetzner_screener_fleet` role now includes the
+same cache-only tasks for its persistent full screening workers, using their
+rootless executor socket and `ditto-screener` service identity. The disposable
+KVM build guests keep isolated per-job caches; this timer does not enter those
+guests or touch the host's rootful Docker daemon. It backs up the rootless
+executor's own builder GC
 (`workers/screener/deploy/rootless-daemon.json`, `defaultKeepStorage` 40GB) by
 running `docker builder prune --force --keep-storage <budget> [--filter
 until=<age>]` against the rootless executor socket only. BuildKit skips records
@@ -295,6 +300,12 @@ throughput for headroom. The host disk must leave room above the budget. Each
 run logs `docker system df` and `df -h` before and after to journald under
 `ditto-screener-cache-gc`; a failed prune or unreachable executor exits nonzero,
 leaving the unit in `failed` state.
+
+On Hetzner, `screener_fleet_cache_gc_*` controls this same policy. It is enabled
+only when `screener_fleet_runtime_enabled` is true, so a disposable rehearsal
+host never starts the timer. The timer retains the existing 40GB daemon budget;
+it makes cleanup observable and regular, but a warm-cache speedup must be
+measured from actual full-worker build durations after converge.
 
 Inspect and operate manually (as an operator, against the rootless socket):
 

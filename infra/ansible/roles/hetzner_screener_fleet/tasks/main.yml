@@ -926,3 +926,6 @@
   when:
     - screener_fleet_runtime_enabled
     - screener_fleet_auto_update_enabled
+
+- name: Converge the persistent screener BuildKit cache timer
+  ansible.builtin.include_tasks: cache_gc.yml

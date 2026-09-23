@@ -1,0 +1,20 @@
+---
+# The persistent full screening workers build on this rootless daemon. Reuse
+# only the bounded cache tasks, never the legacy GCP worker provisioning.
+- name: Install the bounded cache policy for the full screening workers
+  ansible.builtin.include_role:
+    name: screener_worker
+    tasks_from: cache_gc
+  vars:
+    screener_cache_gc_enabled: "{{ screener_fleet_runtime_enabled and screener_fleet_cache_gc_enabled }}"
+    screener_cache_gc_keep_storage: "{{ screener_fleet_cache_gc_keep_storage }}"
+    screener_cache_gc_min_age: "{{ screener_fleet_cache_gc_min_age }}"
+    screener_cache_gc_on_calendar: "{{ screener_fleet_cache_gc_on_calendar }}"
+    screener_cache_gc_randomized_delay: "{{ screener_fleet_cache_gc_randomized_delay }}"
+    screener_cache_gc_dry_run: "{{ screener_fleet_cache_gc_dry_run }}"
+    screener_cache_gc_df_path: "{{ screener_fleet_executor_home }}"
+    screener_user: "{{ screener_fleet_user }}"
+    screener_group: "{{ screener_fleet_group }}"
+    screener_executor_unit: ditto-screener-docker
+    screener_executor_group: "{{ screener_fleet_executor_group }}"
+    screener_docker_host: "{{ screener_fleet_rootless_docker_host }}"

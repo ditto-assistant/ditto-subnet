@@ -94,3 +94,25 @@
         tasks_from: cache_gc
       vars:
         screener_cache_gc_enabled: false
+
+# The active Hetzner role maps its persistent full worker's rootless socket and
+# service identity into the same cache-only tasks. Exercise that mapping rather
+# than rendering a second, unrelated copy of the policy.
+- name: Run Hetzner cache wiring in check mode
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Active fleet cache timer
+      ansible.builtin.include_role:
+        name: "{{ playbook_dir }}/../roles/hetzner_screener_fleet"
+        tasks_from: cache_gc
+      vars:
+        screener_fleet_runtime_enabled: true
+    - name: Rehearsal host leaves the timer disabled
+      ansible.builtin.include_role:
+        name: "{{ playbook_dir }}/../roles/hetzner_screener_fleet"
+        tasks_from: cache_gc
+      vars:
+        screener_fleet_runtime_enabled: false

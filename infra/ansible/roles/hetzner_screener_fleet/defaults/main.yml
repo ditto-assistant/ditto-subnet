@@ -62,6 +62,16 @@ screener_fleet_rootless_docker_host: unix:///run/ditto-screener-docker/docker.so
 screener_fleet_executor_user: ditto-builder
 screener_fleet_executor_group: ditto-builder
 screener_fleet_executor_home: /var/lib/ditto-screener-docker
+# Keep the rootless builder's 40 GB daemon GC budget warm while reclaiming
+# unused records on a predictable cadence. The cache-only tasks are shared
+# with the legacy GCP screener role; no guest VM or rootful Docker cache is
+# pruned. Disable this when rehearsing without the runtime.
+screener_fleet_cache_gc_enabled: true
+screener_fleet_cache_gc_keep_storage: 40GB
+screener_fleet_cache_gc_min_age: 1h
+screener_fleet_cache_gc_on_calendar: hourly
+screener_fleet_cache_gc_randomized_delay: 5min
+screener_fleet_cache_gc_dry_run: false
 # The rootless daemon cannot traverse the screener's private state tree. This
 # shared parent is owned by the daemon identity while the screener has group
 # write access; each gateway invocation still creates a unique 0711 child.
