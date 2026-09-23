@@ -4,9 +4,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"io/fs"
+	"math"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 const (
@@ -15,7 +20,26 @@ const (
 	publicCanaryProfileID       = "public-certification-v1"
 	maximumCanonicalBytes       = 1 << 20
 	lockedInferencePolicySHA256 = "6dd79225817b56ebf155f8344cd5faf752c8dd57802b21d6d2cbbae9cc2ff0b4"
+	// publicCanaryVisibleWorkspaceSHA256 binds the visible workspace, which the
+	// manifest does not list. It is the SHA-256 of the `sha256sum` lines
+	// ("<sha256>  <path>\n") for every workspace file, sorted by path with
+	// ignoredPackEntry applied. Reproduce it from the workspace directory with:
+	//
+	//	find . -type f ! -path '*/__pycache__/*' ! -name '*.pyc' ! -name .DS_Store |
+	//	  sed 's|^\./||' | LC_ALL=C sort | while read -r f; do sha256sum "$f"; done | sha256sum
+	publicCanaryVisibleWorkspaceSHA256 = "507ba560291def373968ed9d59f959d1fe814e816de5e8f650d8e7aa45cc8b1b"
+	maximumPackFileBytes               = 4 << 20
+	maximumPackTreeBytes               = 16 << 20
+	maximumPackTreeFiles               = 256
 )
+
+// packFile is one regular file of a verified capsule tree.
+type packFile struct {
+	path   string
+	sha256 string
+	size   int64
+	body   []byte
+}
 
 type PublicPack struct {
 	Root                  string
@@ -36,6 +60,9 @@ type PublicPack struct {
 	CPUQuotaMillis        uint32
 	MemoryLimitBytes      uint64
 	PidsLimit             uint32
+	// graderFiles is the manifest's grader_plan.grader_files, the only files
+	// the grader tree may contain.
+	graderFiles []packFile
 }
 
 func LoadPublicPack(repoRoot string) (PublicPack, error) {
@@ -99,13 +126,11 @@ func LoadPublicPack(repoRoot string) (PublicPack, error) {
 	manifestSHA := sha256.Sum256(body)
 	visible := filepath.Join(repoRoot, "research", "dittobench-coding-datagen", "certification", "v1", "capsules", publicCanaryTaskID, "visible", "workspace")
 	graderDir := filepath.Join(repoRoot, "research", "dittobench-coding-datagen", "certification", "v1", "capsules", publicCanaryTaskID, "grader")
-	if _, err := os.Stat(visible); err != nil {
-		return zero, ErrInvalid
+	graderFiles, err := manifestGraderFiles(grader["grader_files"])
+	if err != nil {
+		return zero, err
 	}
-	if _, err := os.Stat(graderDir); err != nil {
-		return zero, ErrInvalid
-	}
-	return PublicPack{
+	pack := PublicPack{
 		Root: repoRoot, CanaryManifestSHA256: hex.EncodeToString(manifestSHA[:]),
 		RunnerPlanSHA256: runnerSHA, GraderPlanSHA256: graderSHA,
 		ResourceProfileSHA256: resourceSHA, InferencePolicySHA256: lockedInferencePolicySHA256,
@@ -114,7 +139,187 @@ func LoadPublicPack(repoRoot string) (PublicPack, error) {
 		EditablePaths: stringSlice(runner["editable_paths"]), TestCommandIDs: stringSlice(runner["test_command_ids"]),
 		BuildCommandIDs: stringSlice(runner["build_command_ids"]),
 		CPUQuotaMillis:  uint32(cpus), MemoryLimitBytes: uint64(memoryMiB) * 1024 * 1024, PidsLimit: uint32(pids),
-	}, nil
+		graderFiles: graderFiles,
+	}
+	if err := pack.Verify(); err != nil {
+		return zero, err
+	}
+	return pack, nil
+}
+
+// Verify re-reads both capsule trees. The grader tree must contain exactly the
+// manifest's grader_files (path, size, and SHA-256), and the visible workspace
+// must match its pinned listing digest. Any other file, link, or special file
+// fails closed. Only ignoredPackEntry names (interpreter caches and Finder
+// metadata, never bundled) are skipped.
+func (pack PublicPack) Verify() error {
+	_, _, err := pack.verifiedTrees()
+	return err
+}
+
+func (pack PublicPack) verifiedTrees() (visible []packFile, grader []packFile, err error) {
+	if pack.VisibleDir == "" || pack.GraderDir == "" || len(pack.graderFiles) == 0 {
+		return nil, nil, ErrInvalid
+	}
+	visible, err = readPackTree(pack.VisibleDir)
+	if err != nil || packListingSHA256(visible) != publicCanaryVisibleWorkspaceSHA256 {
+		return nil, nil, ErrInvalid
+	}
+	grader, err = readPackTree(pack.GraderDir)
+	if err != nil || !sameFileSet(grader, pack.graderFiles) {
+		return nil, nil, ErrInvalid
+	}
+	return visible, grader, nil
+}
+
+// ignoredPackEntry is the one exclusion rule shared by the loader, the root
+// .dockerignore (**/__pycache__, **/*.pyc, **/.DS_Store), and the scorer image
+// tests. Ignored entries are neither verified nor bundled.
+func ignoredPackEntry(name string, directory bool) bool {
+	if directory {
+		return name == "__pycache__"
+	}
+	return name == ".DS_Store" || strings.HasSuffix(name, ".pyc")
+}
+
+// readPackTree returns every regular file under root in lexical walk order.
+func readPackTree(root string) ([]packFile, error) {
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() {
+		return nil, ErrInvalid
+	}
+	var files []packFile
+	var total int64
+	err = filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return ErrInvalid
+		}
+		if current == root {
+			return nil
+		}
+		if entry.IsDir() {
+			if ignoredPackEntry(entry.Name(), true) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return ErrInvalid
+		}
+		if ignoredPackEntry(entry.Name(), false) {
+			return nil
+		}
+		relative, err := filepath.Rel(root, current)
+		if err != nil {
+			return ErrInvalid
+		}
+		body, err := readBoundedPackFile(current)
+		if err != nil {
+			return err
+		}
+		total += int64(len(body))
+		if len(files) >= maximumPackTreeFiles || total > maximumPackTreeBytes {
+			return ErrInvalid
+		}
+		digest := sha256.Sum256(body)
+		files = append(files, packFile{
+			path: filepath.ToSlash(relative), sha256: hex.EncodeToString(digest[:]),
+			size: int64(len(body)), body: body,
+		})
+		return nil
+	})
+	if err != nil || len(files) == 0 {
+		return nil, ErrInvalid
+	}
+	return files, nil
+}
+
+func readBoundedPackFile(name string) ([]byte, error) {
+	handle, err := os.Open(name)
+	if err != nil {
+		return nil, ErrInvalid
+	}
+	defer handle.Close()
+	info, err := handle.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, ErrInvalid
+	}
+	body, err := io.ReadAll(io.LimitReader(handle, maximumPackFileBytes+1))
+	if err != nil || len(body) > maximumPackFileBytes {
+		return nil, ErrInvalid
+	}
+	return body, nil
+}
+
+func packListingSHA256(files []packFile) string {
+	sorted := append([]packFile(nil), files...)
+	sort.Slice(sorted, func(left, right int) bool { return sorted[left].path < sorted[right].path })
+	digest := sha256.New()
+	for _, file := range sorted {
+		_, _ = io.WriteString(digest, file.sha256+"  "+file.path+"\n")
+	}
+	return hex.EncodeToString(digest.Sum(nil))
+}
+
+func sameFileSet(actual []packFile, expected []packFile) bool {
+	if len(actual) != len(expected) {
+		return false
+	}
+	byPath := make(map[string]packFile, len(expected))
+	for _, file := range expected {
+		byPath[file.path] = file
+	}
+	for _, file := range actual {
+		want, ok := byPath[file.path]
+		if !ok || want.sha256 != file.sha256 || want.size != file.size {
+			return false
+		}
+		delete(byPath, file.path)
+	}
+	return len(byPath) == 0
+}
+
+func manifestGraderFiles(value any) ([]packFile, error) {
+	items, ok := value.([]any)
+	if !ok || len(items) == 0 || len(items) > maximumPackTreeFiles {
+		return nil, ErrInvalid
+	}
+	files := make([]packFile, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		entry, ok := item.(map[string]any)
+		if !ok || len(entry) != 3 {
+			return nil, ErrInvalid
+		}
+		name, _ := entry["path"].(string)
+		digest, _ := entry["sha256"].(string)
+		size, sizeOK := entry["size_bytes"].(float64)
+		if !validPackPath(name) || !validSHA256(digest) || !sizeOK || size < 0 ||
+			size > maximumPackFileBytes || size != math.Trunc(size) {
+			return nil, ErrInvalid
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return nil, ErrInvalid
+		}
+		seen[name] = struct{}{}
+		files = append(files, packFile{path: name, sha256: digest, size: int64(size)})
+	}
+	return files, nil
+}
+
+func validPackPath(value string) bool {
+	if value == "" || len(value) > 256 || strings.HasPrefix(value, "/") || path.Clean(value) != value ||
+		strings.ContainsAny(value, "\\\x00") {
+		return false
+	}
+	components := strings.Split(value, "/")
+	for index, component := range components {
+		if component == "" || component == "." || component == ".." ||
+			ignoredPackEntry(component, index < len(components)-1) {
+			return false
+		}
+	}
+	return true
 }
 
 func (pack PublicPack) Matches(request Request) bool {

@@ -51,7 +51,10 @@ type Config struct {
 	AllowCertificationImage bool
 	SeccompProfile          string
 	AppArmorProfile         string
-	hosted                  bool
+	// DockerHost selects a dedicated daemon endpoint. Empty inherits the
+	// process DOCKER_HOST.
+	DockerHost string
+	hosted     bool
 }
 
 func (config Config) validate() error {
@@ -84,7 +87,8 @@ func (config Config) validate() error {
 		!strings.HasSuffix(config.ImageRef, "@"+config.Manifest.GraderImageDigest) ||
 		strings.Count(config.ImageRef, "@") != 1 || strings.HasPrefix(config.ImageRef, "-") ||
 		strings.ContainsAny(config.ImageRef, " ,\t\r\n\x00") ||
-		!config.RequireRootless || !config.RequireIsolatedDaemon {
+		!config.RequireRootless || !config.RequireIsolatedDaemon ||
+		(config.DockerHost != "" && !ValidDedicatedDockerHost(config.DockerHost)) {
 		return errors.New("coding executor identity or daemon policy is invalid")
 	}
 	if !config.AuthoringOnly {

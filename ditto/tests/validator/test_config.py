@@ -7,8 +7,15 @@ from uuid import UUID
 
 import pytest
 
-from ditto.validator.config import FINNEY_BURN_HOTKEY, parse_validator_config_from_env
+from ditto.validator.config import (
+    FINNEY_BURN_HOTKEY,
+    CodingCanaryTarget,
+    parse_validator_config_from_env,
+)
 from ditto.validator.errors import ValidatorConfigError
+
+_AGENT_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_DIGEST = "a1" * 32
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 
@@ -371,6 +378,117 @@ class TestCodingCanaryConfig:
         )
         config = parse_validator_config_from_env()
         assert config.coding_canary_enabled is True
+        # Enabled without targets is inert: the worker refuses every lease.
+        assert config.coding_canary_targets == ()
+        assert config.coding_canary_validator_hotkey == ""
+
+    def _enable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_ENABLED", "true")
+        monkeypatch.setenv(
+            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
+            "coding-canary-control-token-0000000000000001",
+        )
+
+    def test_parses_exact_targets(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CANARY_TARGETS",
+            f"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:{'a1' * 32}:{'b1' * 32}, "
+            f"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:{'a2' * 32}:{'b2' * 32}",
+        )
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY",
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        )
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_targets == (
+            CodingCanaryTarget(
+                agent_id=UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+                artifact_sha256="a1" * 32,
+                screened_image_sha256="b1" * 32,
+            ),
+            CodingCanaryTarget(
+                agent_id=UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"),
+                artifact_sha256="a2" * 32,
+                screened_image_sha256="b2" * 32,
+            ),
+        )
+        assert config.coding_canary_validator_hotkey == (
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+        )
+
+    def test_same_agent_may_list_distinct_image_identities(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Platform's allowlist keys on all four fields, so one agent may be
+        # listed for two exact screened images; each tuple is still exact.
+        self._enable(monkeypatch)
+        agent = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        monkeypatch.setenv(
+            "VALIDATOR_CODING_CANARY_TARGETS",
+            f"{agent}:{'a1' * 32}:{'b1' * 32},{agent}:{'a1' * 32}:{'b2' * 32}",
+        )
+        config = parse_validator_config_from_env()
+        assert [
+            target.screened_image_sha256 for target in config.coding_canary_targets
+        ] == [
+            "b1" * 32,
+            "b2" * 32,
+        ]
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            # Agent-only entries no longer bind the artifact or image.
+            _AGENT_A,
+            f"{_AGENT_A}:{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:{_DIGEST}:{_DIGEST}",
+            f"not-a-uuid:{_DIGEST}:{_DIGEST}",
+            f"00000000-0000-0000-0000-000000000000:{_DIGEST}:{_DIGEST}",
+            f"AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA:{_DIGEST}:{_DIGEST}",
+            f"aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa:{_DIGEST}:{_DIGEST}",
+            f"{_AGENT_A}::{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:",
+            f"{_AGENT_A}:{'A1' * 32}:{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:{'B1' * 32}",
+            f"{_AGENT_A}:{'a' * 63}:{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:{'b' * 65}",
+            f"{_AGENT_A}:sha256:{_DIGEST}",
+            f"{_AGENT_A}:{_DIGEST}:{'g' * 64}",
+            f"{_AGENT_A}:{_DIGEST}:{_DIGEST},",
+            f"{_AGENT_A}:{_DIGEST}:{_DIGEST},{_AGENT_A}:{_DIGEST}:{_DIGEST}",
+            ",".join(
+                f"aaaaaaaa-aaaa-4aaa-8aaa-{index:012x}:{_DIGEST}:{_DIGEST}"
+                for index in range(1, 18)
+            ),
+        ],
+    )
+    def test_rejects_malformed_targets(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_TARGETS", value)
+        with pytest.raises(ValidatorConfigError, match="CODING_CANARY_TARGETS"):
+            parse_validator_config_from_env()
+
+    def test_rejects_a_malformed_target_hotkey(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._enable(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY", "0" * 48)
+        with pytest.raises(ValidatorConfigError, match="CANARY_VALIDATOR_HOTKEY"):
+            parse_validator_config_from_env()
+
+    def test_disabled_canary_ignores_target_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_TARGETS", "not-a-uuid")
+        monkeypatch.setenv("VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY", "bad")
+        config = parse_validator_config_from_env()
+        assert config.coding_canary_targets == ()
+        assert config.coding_canary_validator_hotkey == ""
 
 
 class TestRequiredConfig:

@@ -10,8 +10,13 @@ import (
 )
 
 const (
-	RequestSchema  = "dittobench-coding-certification-canary-request-v1"
-	ResponseSchema = "dittobench-coding-certification-canary-response-v1"
+	RequestSchema   = "dittobench-coding-certification-canary-request-v1"
+	ResponseSchema  = "dittobench-coding-certification-canary-response-v1"
+	ReadinessSchema = "dittobench-coding-certification-canary-readiness-v1"
+	CanaryPath      = "/v1/coding/certifier/canary"
+	ReadinessPath   = CanaryPath + "/readiness"
+
+	readinessTimeout = 20 * time.Second
 
 	maximumRequestBytes  = 64 << 10
 	maximumResponseBytes = 128 << 10
@@ -96,4 +101,31 @@ type Response struct {
 
 type Backend interface {
 	Certify(ctx context.Context, request Request) (Outcome, error)
+}
+
+// ReadinessCheck is the host's live executor eligibility. ExecutorDaemon means
+// the dedicated Docker endpoint is rootless and carries the isolated-daemon
+// label; RuntimeImage means the exact runtime image digest is present there.
+type ReadinessCheck struct {
+	ExecutorDaemon bool
+	RuntimeImage   bool
+}
+
+// ReadinessResponse is the read-only answer a validator requires before it
+// issues or claims a certification lease. It carries the loaded pack identity
+// so the validator can compare it with the issued lease before claiming.
+type ReadinessResponse struct {
+	Schema                string `json:"schema"`
+	CodingContractVersion int    `json:"coding_contract_version"`
+	WeightEligible        bool   `json:"weight_eligible"`
+	Ready                 bool   `json:"ready"`
+	Failure               string `json:"failure"`
+	PackLoaded            bool   `json:"pack_loaded"`
+	ExecutorDaemonReady   bool   `json:"executor_daemon_ready"`
+	RuntimeImageReady     bool   `json:"runtime_image_ready"`
+	CanaryManifestSHA256  string `json:"canary_manifest_sha256"`
+	RunnerPlanSHA256      string `json:"runner_plan_sha256"`
+	GraderPlanSHA256      string `json:"grader_plan_sha256"`
+	ResourceProfileSHA256 string `json:"resource_profile_sha256"`
+	InferencePolicySHA256 string `json:"inference_policy_sha256"`
 }

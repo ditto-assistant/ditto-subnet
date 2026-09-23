@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -16,12 +18,40 @@ import (
 
 const maxDockerControlOutput = 1 << 20
 
-type execDocker struct{}
+// execDocker runs the Docker CLI. An empty host inherits the process
+// DOCKER_HOST; a non-empty host selects that dedicated daemon for every call.
+type execDocker struct{ host string }
 
-func (execDocker) Output(ctx context.Context, args ...string) ([]byte, error) {
+func (docker execDocker) command(ctx context.Context, args ...string) *exec.Cmd {
+	command := exec.CommandContext(ctx, "docker", args...)
+	if docker.host != "" {
+		command.Env = dedicatedDockerEnvironment(os.Environ(), docker.host)
+	}
+	return command
+}
+
+// dedicatedDockerEnvironment drops every inherited DOCKER_* selector (context,
+// TLS, config directory, API version, host) and proxy variable, then selects
+// exactly the dedicated host. It mirrors sandbox's rule for the same daemon.
+func dedicatedDockerEnvironment(environ []string, host string) []string {
+	out := make([]string, 0, len(environ)+1)
+	for _, entry := range environ {
+		name, _, _ := strings.Cut(entry, "=")
+		upper := strings.ToUpper(name)
+		switch {
+		case strings.HasPrefix(upper, "DOCKER_"),
+			upper == "HTTP_PROXY", upper == "HTTPS_PROXY", upper == "ALL_PROXY", upper == "NO_PROXY":
+			continue
+		}
+		out = append(out, entry)
+	}
+	return append(out, "DOCKER_HOST="+host)
+}
+
+func (docker execDocker) Output(ctx context.Context, args ...string) ([]byte, error) {
 	var output boundedBuffer
 	output.maximum = maxDockerControlOutput
-	command := exec.CommandContext(ctx, "docker", args...)
+	command := docker.command(ctx, args...)
 	command.Stdout = &output
 	command.Stderr = &output
 	err := command.Run()
@@ -31,11 +61,30 @@ func (execDocker) Output(ctx context.Context, args ...string) ([]byte, error) {
 	return append([]byte(nil), output.Bytes()...), err
 }
 
-func (execDocker) Run(ctx context.Context, args ...string) error {
-	command := exec.CommandContext(ctx, "docker", args...)
+func (docker execDocker) Run(ctx context.Context, args ...string) error {
+	command := docker.command(ctx, args...)
 	command.Stdout = io.Discard
 	command.Stderr = io.Discard
 	return command.Run()
+}
+
+// ValidDedicatedDockerHost accepts only a local Unix-socket endpoint that is
+// not one of the conventional rootful daemon sockets. It is a static shape
+// check; rootless mode and the isolated-daemon label are verified live.
+func ValidDedicatedDockerHost(value string) bool {
+	path, found := strings.CutPrefix(value, "unix://")
+	if !found || len(path) < 2 || len(path) > 107 || !strings.HasPrefix(path, "/") ||
+		filepath.Clean(path) != path || !strings.HasSuffix(path, ".sock") {
+		return false
+	}
+	for _, character := range path {
+		if !(character >= 'a' && character <= 'z' || character >= 'A' && character <= 'Z' ||
+			character >= '0' && character <= '9' || character == '/' || character == '.' ||
+			character == '_' || character == '-') {
+			return false
+		}
+	}
+	return path != "/var/run/docker.sock" && path != "/run/docker.sock"
 }
 
 type boundedBuffer struct {
@@ -116,49 +165,15 @@ type dockerContainerInspection struct {
 }
 
 func (executor *Executor) preflightDocker(ctx context.Context) error {
-	securityRaw, err := executor.docker.Output(ctx, "info", "--format", "{{json .SecurityOptions}}")
+	if err := verifyRootlessIsolatedDaemon(ctx, executor.docker); err != nil {
+		return err
+	}
+	image, err := inspectSupervisorImage(
+		ctx, executor.docker, executor.config.ImageRef, executor.config.Manifest.GraderImageDigest,
+		executor.config.Manifest.GraderPlatform, executor.config.AllowCertificationImage,
+	)
 	if err != nil {
-		return fmt.Errorf("inspect coding Docker security options: %w", err)
-	}
-	var security []string
-	if err := json.Unmarshal(bytes.TrimSpace(securityRaw), &security); err != nil ||
-		!slices.ContainsFunc(security, func(value string) bool {
-			value = strings.ToLower(strings.TrimSpace(value))
-			return value == "rootless" || value == "name=rootless" || strings.HasPrefix(value, "name=rootless,")
-		}) {
-		return errors.New("coding Docker daemon is not rootless")
-	}
-	labelsRaw, err := executor.docker.Output(ctx, "info", "--format", "{{json .Labels}}")
-	if err != nil {
-		return fmt.Errorf("inspect coding Docker labels: %w", err)
-	}
-	if !daemonHasLabel(labelsRaw, isolatedDaemonLabel) {
-		return errors.New("coding Docker daemon lacks the isolated ownership label")
-	}
-	imageRaw, err := executor.docker.Output(ctx, "image", "inspect", executor.config.ImageRef)
-	if err != nil {
-		return fmt.Errorf("inspect coding supervisor image: %w", err)
-	}
-	var images []dockerImageInspection
-	if err := json.Unmarshal(bytes.TrimSpace(imageRaw), &images); err != nil || len(images) != 1 {
-		return errors.New("coding supervisor image inspection is invalid")
-	}
-	image := images[0]
-	digest := executor.config.Manifest.GraderImageDigest
-	digestMatches := slices.ContainsFunc(image.RepoDigests, func(value string) bool {
-		return strings.HasSuffix(value, "@"+digest)
-	})
-	if !digestMatches || !validDockerObjectID(image.ID) ||
-		image.OS+"/"+image.Architecture != executor.config.Manifest.GraderPlatform {
-		return errors.New("coding supervisor image digest or platform mismatch")
-	}
-	if len(image.Config.Volumes) != 0 || slices.ContainsFunc(image.Config.Env, credentialImageEnvironment) ||
-		image.Config.Labels["io.heyditto.dittobench.coding-supervisor-contract"] != "1" {
-		return errors.New("coding supervisor image declares a volume or credential-shaped environment")
-	}
-	if image.Config.Labels["io.heyditto.dittobench.coding-supervisor-fixture"] == "true" &&
-		!executor.config.AllowCertificationImage {
-		return errors.New("coding supervisor certification fixture is not a production grader image")
+		return err
 	}
 	executor.imageID = image.ID
 	executor.driverProfile = image.Config.Labels["io.heyditto.dittobench.coding-test-driver-profile"]
@@ -177,6 +192,69 @@ func (executor *Executor) preflightDocker(ctx context.Context) error {
 		}
 	}
 	return executor.probeContainerPolicy(ctx)
+}
+
+// verifyRootlessIsolatedDaemon is the daemon half of the executor preflight:
+// the selected endpoint must run rootless and carry the isolated-daemon label.
+func verifyRootlessIsolatedDaemon(ctx context.Context, docker dockerCLI) error {
+	securityRaw, err := docker.Output(ctx, "info", "--format", "{{json .SecurityOptions}}")
+	if err != nil {
+		return fmt.Errorf("inspect coding Docker security options: %w", err)
+	}
+	var security []string
+	if err := json.Unmarshal(bytes.TrimSpace(securityRaw), &security); err != nil ||
+		!slices.ContainsFunc(security, func(value string) bool {
+			value = strings.ToLower(strings.TrimSpace(value))
+			return value == "rootless" || value == "name=rootless" || strings.HasPrefix(value, "name=rootless,")
+		}) {
+		return errors.New("coding Docker daemon is not rootless")
+	}
+	labelsRaw, err := docker.Output(ctx, "info", "--format", "{{json .Labels}}")
+	if err != nil {
+		return fmt.Errorf("inspect coding Docker labels: %w", err)
+	}
+	if !daemonHasLabel(labelsRaw, isolatedDaemonLabel) {
+		return errors.New("coding Docker daemon lacks the isolated ownership label")
+	}
+	return nil
+}
+
+// inspectSupervisorImage is the image half of the executor preflight. The
+// exact digest must already be present locally; nothing is pulled.
+func inspectSupervisorImage(
+	ctx context.Context,
+	docker dockerCLI,
+	imageRef string,
+	digest string,
+	platform string,
+	allowCertificationImage bool,
+) (dockerImageInspection, error) {
+	var zero dockerImageInspection
+	imageRaw, err := docker.Output(ctx, "image", "inspect", imageRef)
+	if err != nil {
+		return zero, fmt.Errorf("inspect coding supervisor image: %w", err)
+	}
+	var images []dockerImageInspection
+	if err := json.Unmarshal(bytes.TrimSpace(imageRaw), &images); err != nil || len(images) != 1 {
+		return zero, errors.New("coding supervisor image inspection is invalid")
+	}
+	image := images[0]
+	digestMatches := slices.ContainsFunc(image.RepoDigests, func(value string) bool {
+		return strings.HasSuffix(value, "@"+digest)
+	})
+	if !digestMatches || !validDockerObjectID(image.ID) ||
+		image.OS+"/"+image.Architecture != platform {
+		return zero, errors.New("coding supervisor image digest or platform mismatch")
+	}
+	if len(image.Config.Volumes) != 0 || slices.ContainsFunc(image.Config.Env, credentialImageEnvironment) ||
+		image.Config.Labels["io.heyditto.dittobench.coding-supervisor-contract"] != "1" {
+		return zero, errors.New("coding supervisor image declares a volume or credential-shaped environment")
+	}
+	if image.Config.Labels["io.heyditto.dittobench.coding-supervisor-fixture"] == "true" &&
+		!allowCertificationImage {
+		return zero, errors.New("coding supervisor certification fixture is not a production grader image")
+	}
+	return image, nil
 }
 
 func validDockerObjectID(value string) bool {

@@ -167,6 +167,23 @@ def test_coding_datagen_change_is_shadow_only(components, ignored_paths) -> None
     )
 
 
+def test_certification_pack_change_rebuilds_the_scorer_image(
+    components, ignored_paths
+) -> None:
+    # The sandbox scorer image bakes certification/v1 for the default-off
+    # canary, so a pack edit must publish a scorer and validator stack.
+    assert selected(
+        components,
+        ignored_paths,
+        "research/dittobench-coding-datagen/certification/v1/manifest.json",
+    ) == {
+        "dittobench_coding_datagen",
+        "dittobench_coding_starter_kit",
+        "dittobench_api",
+        "validator_stack",
+    }
+
+
 def test_coding_datagen_workflow_is_release_owned(components, ignored_paths) -> None:
     assert selected(
         components, ignored_paths, ".github/workflows/coding-datagen-ci.yml"

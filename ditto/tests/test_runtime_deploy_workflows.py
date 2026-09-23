@@ -214,6 +214,66 @@ def test_shadow_coding_deploy_controls_are_default_off_and_split_by_process() ->
     assert "kill_timeout: relayKillTimeout" in ecosystem
 
 
+def test_coding_exchange_url_uses_the_validator_facing_platform_api_origin() -> None:
+    """Validators accept only {VALIDATOR_PLATFORM_API_URL}/api/v1/validator/...
+
+    ``PlatformClient`` compares the offered shadow and certification exchange
+    URLs byte-for-byte against its configured API base, and Platform derives the
+    certification URL from DITTO_CODING_INFERENCE_EXCHANGE_URL. Production's
+    inference origin differs from that API origin, so the exchange must be
+    rendered from the validator-facing origin instead.
+    """
+    ansible = ROOT / "infra/ansible"
+    defaults = yaml.safe_load(
+        (ansible / "roles/platform_app/defaults/main.yml").read_text()
+    )
+    tasks = (ansible / "roles/platform_app/tasks/main.yml").read_text()
+    prod = yaml.safe_load((ansible / "host_vars/ditto-platform-prod.yml").read_text())
+    dev = yaml.safe_load((ansible / "host_vars/ditto-platform-dev.yml").read_text())
+    validator_stack = yaml.safe_load(
+        (ansible / "roles/validator_stack/defaults/main.yml").read_text()
+    )
+
+    exchange_suffix = "/api/v1/validator/coding-shadow/inference-exchange"
+    # One default for every host: the validator-facing primary vhost.
+    assert defaults["platform_coding_validator_api_base_url"] == (
+        "https://{{ platform_domain }}"
+    )
+    assert defaults["platform_coding_shadow_inference_exchange_url"] == (
+        "{{ platform_coding_validator_api_base_url }}" + exchange_suffix
+    )
+    assert "platform_coding_validator_api_base_url" not in dev
+    assert "platform_coding_validator_api_base_url" not in prod
+    assert "platform_coding_shadow_enabled" not in prod
+
+    prod_base = "https://" + prod["platform_domain"]
+    # The split-origin host the assertion exists for: rendering the exchange
+    # from its inference origin would now fail activation.
+    assert prod_base != prod["platform_inference_public_base_url"]
+    validator_base = validator_stack["validator_stack_platform_api_url"].rstrip("/")
+    assert prod_base == validator_base
+
+    # Platform's _canary_exchange_url swaps only the suffix; the validator
+    # expects its own base plus the certification suffix.
+    rendered = prod_base + exchange_suffix
+    certification = rendered.removesuffix(exchange_suffix) + (
+        "/api/v1/validator/coding-certification-leases/inference-exchange"
+    )
+    assert certification == (
+        f"{validator_base}/api/v1/validator/"
+        "coding-certification-leases/inference-exchange"
+    )
+    assert (
+        "platform_coding_validator_api_base_url == 'https://' + platform_domain"
+        in tasks
+    )
+    assert (
+        "platform_coding_shadow_inference_exchange_url ==\n"
+        "        'https://' + platform_domain +\n"
+        "        '/api/v1/validator/coding-shadow/inference-exchange'"
+    ) in tasks
+
+
 def test_hippius_coding_evidence_custody_is_default_off_and_relay_blind() -> None:
     defaults_path = ROOT / "infra/ansible/roles/platform_app/defaults/main.yml"
     defaults = yaml.safe_load(defaults_path.read_text())

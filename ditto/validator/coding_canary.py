@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from base64 import urlsafe_b64encode
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Collection
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 from uuid import UUID
@@ -28,6 +28,7 @@ from ditto.api_models.coding_inference_grants import (
     CodingCertificationInferenceGrantOffer,
     CodingCertificationInferenceRevokeResponse,
 )
+from ditto.validator.config import CodingCanaryTarget
 from ditto.validator.errors import (
     PlatformError,
     PlatformInfrastructureError,
@@ -46,8 +47,89 @@ class CodingCanaryOutcome:
     harness_destroyed: Literal[True]
 
 
+@dataclass(frozen=True)
+class CodingCanaryReadiness:
+    """The scorer's ready pack identity, reported before any lease is issued."""
+
+    canary_manifest_sha256: str
+    runner_plan_sha256: str
+    grader_plan_sha256: str
+    resource_profile_sha256: str
+    inference_policy_sha256: str
+
+    def binds(self, authority: CodingCertificationLeaseAuthority) -> bool:
+        return (
+            authority.canary_manifest_sha256 == self.canary_manifest_sha256
+            and authority.runner_plan_sha256 == self.runner_plan_sha256
+            and authority.grader_plan_sha256 == self.grader_plan_sha256
+            and authority.resource_profile_sha256 == self.resource_profile_sha256
+            and authority.inference_policy_sha256 == self.inference_policy_sha256
+        )
+
+
+@dataclass(frozen=True)
+class CodingCanaryTargets:
+    """Exact certification canary targets. The empty default refuses everything.
+
+    A lease may be issued only for a listed agent and only when the listed
+    validator hotkey is exactly this validator's own hotkey, so a copied
+    configuration cannot make another validator run the canary. An issued or
+    claimed lease must also carry exactly a listed agent's artifact digest and
+    screened-image digest, or it is refused before any harness, grant, or
+    certify call.
+    """
+
+    entries: frozenset[CodingCanaryTarget] = field(default_factory=frozenset)
+    validator_hotkey: str = ""
+
+    @classmethod
+    def of(
+        cls, entries: Collection[CodingCanaryTarget], validator_hotkey: str
+    ) -> CodingCanaryTargets:
+        return cls(frozenset(entries), validator_hotkey)
+
+    @property
+    def agent_ids(self) -> frozenset[UUID]:
+        return frozenset(entry.agent_id for entry in self.entries)
+
+    def permits(self, agent_id: UUID, local_validator_hotkey: str) -> bool:
+        """Whether an offer for this agent may proceed to a lease issue."""
+
+        return (
+            bool(self.validator_hotkey)
+            and self.validator_hotkey == local_validator_hotkey
+            and agent_id.int != 0
+            and agent_id in self.agent_ids
+        )
+
+    def binds(
+        self,
+        authority: CodingCertificationLeaseAuthority,
+        local_validator_hotkey: str,
+    ) -> bool:
+        """Whether a lease authority is exactly one allowlisted four-field tuple."""
+
+        return (
+            self.permits(authority.agent_id, local_validator_hotkey)
+            and authority.validator_hotkey == self.validator_hotkey
+            and CodingCanaryTarget(
+                agent_id=authority.agent_id,
+                artifact_sha256=authority.agent_artifact_sha256,
+                screened_image_sha256=authority.screened_image_sha256,
+            )
+            in self.entries
+        )
+
+    def refuses_all(self, local_validator_hotkey: str) -> bool:
+        return (
+            not self.entries
+            or not self.validator_hotkey
+            or self.validator_hotkey != local_validator_hotkey
+        )
+
+
 class CodingCanaryRuntime(Protocol):
-    async def require_available(self) -> None: ...
+    async def require_ready(self) -> CodingCanaryReadiness: ...
 
     async def certify(
         self,
@@ -122,12 +204,16 @@ class CodingCanaryWorker:
             ],
             str,
         ],
+        validator_hotkey: str,
+        targets: CodingCanaryTargets,
         poll_seconds: float = 10.0,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        if not 1 <= poll_seconds <= 300:
+        if not 1 <= poll_seconds <= 300 or not validator_hotkey:
             raise ValueError("coding canary worker configuration is invalid")
         self._platform = platform
+        self._validator_hotkey = validator_hotkey
+        self._targets = targets
         self._runtime = runtime
         self._sign_receipt = sign_receipt
         self._poll_seconds = poll_seconds
@@ -141,6 +227,8 @@ class CodingCanaryWorker:
 
     def offer(self, agent_id: UUID, bench_version: int) -> None:
         if agent_id.int == 0 or type(bench_version) is not int or bench_version < 7:
+            return
+        if not self._targets.permits(agent_id, self._validator_hotkey):
             return
         try:
             self._queue.put_nowait((agent_id, bench_version))
@@ -175,15 +263,26 @@ class CodingCanaryWorker:
                 await _wait_or_stop(stop, self._poll_seconds)
 
     async def run_once(self) -> bool:
-        try:
-            await self._runtime.require_available()
-        except PlatformInfrastructureError:
-            return False
         if self._drain_requested is not None and self._drain_requested.is_set():
+            return False
+        if self._queue.empty():
+            return False
+        # Both refusals happen before the irreversible issue and claim: the
+        # scorer must prove its executor, daemon, runtime image, and pack are
+        # ready, and the queued agent must be an exact allowlisted target.
+        try:
+            readiness = await self._runtime.require_ready()
+        except PlatformInfrastructureError as error:
+            logger.warning("coding canary refused before issue: %s", error)
             return False
         try:
             agent_id, bench_version = self._queue.get_nowait()
         except asyncio.QueueEmpty:
+            return False
+        if not self._targets.permits(agent_id, self._validator_hotkey):
+            logger.warning(
+                "coding canary refused a non-allowlisted target agent=%s", agent_id
+            )
             return False
         try:
             issued = await self._issue(agent_id, bench_version)
@@ -195,6 +294,20 @@ class CodingCanaryWorker:
         if issued.status is not CodingCertificationLeaseStatus.ISSUED:
             raise PlatformInfrastructureError(
                 "coding certification lease was not issued exclusively"
+            )
+        if (
+            issued.authority.agent_id != agent_id
+            or issued.authority.validator_hotkey != self._validator_hotkey
+            or not self._targets.binds(issued.authority, self._validator_hotkey)
+        ):
+            await self._abort_issued(issued.authority.lease_id)
+            raise PlatformInfrastructureError(
+                "coding certification lease is not an allowlisted target"
+            )
+        if not readiness.binds(issued.authority):
+            await self._abort_issued(issued.authority.lease_id)
+            raise PlatformInfrastructureError(
+                "coding certification lease does not match the scorer pack"
             )
         claimed: CodingCertificationLeaseResponse | None = None
         offer: CodingCertificationInferenceGrantOffer | None = None
@@ -209,6 +322,20 @@ class CodingCanaryWorker:
             if claimed.status is not CodingCertificationLeaseStatus.CLAIMED:
                 raise PlatformInfrastructureError(
                     "coding certification lease claim did not become exclusive"
+                )
+            # The claimed authority must still be the exact allowlisted
+            # identity the issued lease named, before any harness launch.
+            if (
+                claimed.authority.lease_id != issued.authority.lease_id
+                or claimed.authority.agent_id != issued.authority.agent_id
+                or claimed.authority.agent_artifact_sha256
+                != issued.authority.agent_artifact_sha256
+                or claimed.authority.screened_image_sha256
+                != issued.authority.screened_image_sha256
+                or not self._targets.binds(claimed.authority, self._validator_hotkey)
+            ):
+                raise PlatformInfrastructureError(
+                    "coding certification lease is not an allowlisted target"
                 )
             harness = await self._platform.request_coding_certification_harness_launch(
                 claimed.authority.lease_id

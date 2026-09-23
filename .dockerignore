@@ -7,6 +7,12 @@
 .ruff_cache
 __pycache__
 *.pyc
+# Nested interpreter caches and Finder metadata. Patterns without **/ match
+# only at the context root. codingcanary.LoadPublicPack ignores exactly these
+# names, so a stray cache never reaches or disables the certification pack.
+**/__pycache__
+**/*.pyc
+**/.DS_Store
 **/target
 context-docs
 wandb

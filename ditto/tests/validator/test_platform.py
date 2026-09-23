@@ -2585,3 +2585,87 @@ def test_exchange_accepts_the_split_inference_host_and_nothing_else() -> None:
     ):
         with pytest.raises(PlatformError, match="not the platform"):
             asyncio.run(client.exchange_inference_grant(uuid4(), "key", hostile))
+
+
+def _coding_certification_grant_offer_payload(
+    lease_id: UUID, exchange_url: str
+) -> dict[str, object]:
+    return {
+        "schema": "dittobench-coding-certification-inference-grant-offer-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "grant_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "lease_id": str(lease_id),
+        "case_id": "PRACTICE-LEDGER-001",
+        "profile_capability_id": "public-certification-v1",
+        "inference_grant_sha256": "33" * 32,
+        "model": "openai/gpt-5.6-luna",
+        "provider_api": "openrouter",
+        "provider_route": "azure/eu",
+        "receipt_provider": "Azure",
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "provider_account_guardrail": "openrouter_private_account_v1",
+        "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+        "provider_cache_policy": "disabled_v1",
+        "reasoning_effort": "medium",
+        "request_budget": 32,
+        "prompt_token_budget": 10_000,
+        "completion_token_budget": 2_000,
+        "cost_budget_usd_micros": 1_000_000,
+        "expires_at": "2026-08-30T18:20:00Z",
+        "status": "pending",
+        "generation": 0,
+        "exchange_url": exchange_url,
+    }
+
+
+@pytest.mark.parametrize(
+    ("exchange_origin", "accepted"),
+    [
+        # Production Platform renders the exchange from the validator-facing
+        # API origin (platform_coding_validator_api_base_url).
+        ("https://platform-api.heyditto.ai", True),
+        # The inference origin is not an accepted exchange host, even though
+        # the ticket inference plane allowlists it.
+        ("https://dittobench.ai", False),
+        ("https://platform-api.heyditto.ai.invalid", False),
+    ],
+)
+async def test_coding_certification_grant_offer_requires_the_platform_api_origin(
+    exchange_origin: str, accepted: bool
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    lease_id = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    exchange_url = (
+        f"{exchange_origin}/api/v1/validator/"
+        "coding-certification-leases/inference-exchange"
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.url.host == "platform-api.heyditto.ai"
+        assert request.url.path == (
+            f"/api/v1/validator/coding-certification-leases/{lease_id}/inference-grant"
+        )
+        return httpx.Response(
+            200,
+            headers={"Cache-Control": "no-store"},
+            json=_coding_certification_grant_offer_payload(lease_id, exchange_url),
+        )
+
+    # The production validator stack renders this API URL with a trailing slash.
+    config = SimpleNamespace(
+        platform_api_url="https://platform-api.heyditto.ai/",
+        platform_inference_base_url="https://dittobench.ai",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        if accepted:
+            offer = await client.request_coding_certification_inference_grant(lease_id)
+            assert offer.exchange_url == exchange_url
+        else:
+            with pytest.raises(PlatformInfrastructureError, match="identity"):
+                await client.request_coding_certification_inference_grant(lease_id)
+    assert len(requests) == 1

@@ -129,3 +129,8 @@ jobs:
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i localhost, tests/coding-hosted-postgres-environment.yml
+
+      - name: Prove the validator certification canary stays default-off
+        run: >-
+          uvx --from ansible-core==2.21.2 ansible-playbook --check
+          -i localhost, tests/validator-stack-coding-canary.yml

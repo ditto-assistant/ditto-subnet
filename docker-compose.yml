@@ -198,13 +198,29 @@ services:
       # until an operator explicitly enables the complete rootless profile.
       DITTOBENCH_CODING_SHADOW_ENABLED: ${DITTOBENCH_CODING_SHADOW_ENABLED:-false}
       DITTOBENCH_CODING_CANARY_ENABLED: ${DITTOBENCH_CODING_CANARY_ENABLED:-false}
-      DITTOBENCH_CODING_CERTIFICATION_ROOT: ${DITTOBENCH_CODING_CERTIFICATION_ROOT:-}
+      # The build-verified certification/v1 pack baked into the scorer image.
+      # Read only when DITTOBENCH_CODING_CANARY_ENABLED is true, and not
+      # operator-selectable: a host-supplied root could substitute workspace or
+      # grader files that the manifest digest does not re-hash at runtime.
+      DITTOBENCH_CODING_CERTIFICATION_ROOT: /opt/ditto/coding/certification-root
       DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST: ${DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST:-}
       DITTOBENCH_CODING_PRIVATE_ROOT: /var/lib/dittobench-private-artifacts/coding-shadow-v1
       DITTOBENCH_CODING_POLICY_FILE: /opt/ditto/coding/coding_inference_policy_locked_v1.json
       DITTOBENCH_CODING_SOURCE_PORT: "11438"
       DITTOBENCH_CODING_SOURCE_PUBLIC_BASE_URL: http://host.docker.internal:11438
       DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY: ${DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY:-}
+      # The dedicated rootless coding daemon's local socket. Empty refuses every
+      # coding gate: coding harnesses and executors never use DOCKER_HOST above,
+      # the privileged rootful sandbox daemon that ordinary scoring uses. This
+      # file mounts no such socket yet; that daemon is a separate reviewed change.
+      DITTOBENCH_CODING_DOCKER_HOST: ${DITTOBENCH_CODING_DOCKER_HOST:-}
+      # The coding runtime's own egress network, proxy and in-namespace gateway
+      # on that dedicated daemon. They never fall back to the DITTOBENCH_SANDBOX_*
+      # values above, and the coding runtime mounts no OpenRouter shim CA bundle.
+      # Empty refuses every coding gate.
+      DITTOBENCH_CODING_EGRESS_NETWORK: ${DITTOBENCH_CODING_EGRESS_NETWORK:-}
+      DITTOBENCH_CODING_EGRESS_PROXY: ${DITTOBENCH_CODING_EGRESS_PROXY:-}
+      DITTOBENCH_CODING_HOST_GATEWAY_IP: ${DITTOBENCH_CODING_HOST_GATEWAY_IP:-}
       # Authorizes the validator's session prepare/activate/cancel calls. Same
       # anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the validator.
       DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
@@ -295,6 +311,11 @@ services:
       VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS: ${VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS:-}
       VALIDATOR_CODING_CANARY_ENABLED: ${VALIDATOR_CODING_CANARY_ENABLED:-false}
       VALIDATOR_CODING_CANARY_POLL_SECONDS: ${VALIDATOR_CODING_CANARY_POLL_SECONDS:-10}
+      # Exact certification canary targets, each
+      # <agent_id>:<artifact_sha256>:<screened_image_sha256>; empty refuses
+      # every lease.
+      VALIDATOR_CODING_CANARY_TARGETS: ${VALIDATOR_CODING_CANARY_TARGETS:-}
+      VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY: ${VALIDATOR_CODING_CANARY_VALIDATOR_HOTKEY:-}
       # The PINNED scorer revision links its identity into the binary, so the
       # only acceptable answer from /v1/capabilities is a binary-derived
       # revision. An environment-asserted revision from this pin means the
