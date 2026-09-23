@@ -29,6 +29,7 @@ from ditto.api_models.verification_replay import (
 )
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.endpoints.admin_screener_capacity import _replay_workers_ready
 from ditto.api_server.endpoints.screener import (
     ScreenerDep,
     _artifact_key,
@@ -375,6 +376,10 @@ async def claim_replay(
 ) -> VerificationReplayState | None:
     node = await _require_enrolled_replay_worker(request, worker, session)
     now = datetime.now(UTC)
+    # The capacity grant is durable, while worker health and release adoption
+    # can change after it is enabled. Recheck before issuing every new lease.
+    if not await _replay_workers_ready(session, node=node, now=now):
+        raise HTTPException(409, "fresh v13 replay-runner workers unavailable")
     active = await session.scalar(
         select(func.count()).where(
             ScreeningVerificationReplay.worker_hotkey == worker,

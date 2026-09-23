@@ -32,6 +32,7 @@ from ditto.api_server.endpoints.verification_replay import (
 from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
+    ScreenerHeartbeat,
     ScreenerNode,
     ScreeningAttempt,
     ScreeningQuarantine,
@@ -45,6 +46,19 @@ IMAGE = "b" * 64
 FIRST_WORKER = "5OriginalScreener"
 SECOND_WORKER = "5IndependentScreener"
 SECOND_NODE = "replay-independent"
+
+
+@pytest.fixture(autouse=True)
+def _test_replay_runner_release(monkeypatch):
+    from ditto.api_server.endpoints import admin_screener_capacity
+
+    # Production remains unset. Existing lease tests exercise the future
+    # report-only runner contract with a synthetic minimum release.
+    monkeypatch.setattr(
+        admin_screener_capacity,
+        "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE",
+        (0, 999, 0),
+    )
 
 
 def _request(storage=None, *, node_id=SECOND_NODE):
@@ -67,6 +81,7 @@ async def _enroll(
         if replay_capacity is None
         else {"verification_replay_capacity": replay_capacity}
     )
+    now = datetime.now(UTC)
     session.add(
         ScreenerNode(
             environment=environment,
@@ -75,11 +90,34 @@ async def _enroll(
             provider_resource_id=f"isolated-replay-{node_id}",
             screener_hotkey=hotkey,
             token_hash="f" * 64,
-            token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+            token_expires_at=now + timedelta(hours=1),
             status="active",
             **settings,
         )
     )
+    if replay_capacity:
+        session.add(
+            ScreenerHeartbeat(
+                screener_hotkey=hotkey,
+                instance_id=f"{node_id}-worker-1",
+                software_version="v0.999.0",
+                protocol_version=7,
+                policy_version=13,
+                state="polling",
+                first_seen_at=now,
+                reported_at=now,
+                seen_at=now,
+                signature="ab" * 64,
+                system_metrics={
+                    "release": {
+                        "builtin_policy_version": 13,
+                        "revision": "a" * 40,
+                        "version": "v0.999.0",
+                        "activated_at": int(now.timestamp()),
+                    }
+                },
+            )
+        )
     await session.commit()
 
 
@@ -167,6 +205,54 @@ def _payload(attempt_id, quarantine_id, image_id, **changes):
     }
     values.update(changes)
     return VerificationReplayCreate(**values)
+
+
+@pytest.mark.asyncio
+async def test_replay_claim_rechecks_worker_readiness_after_capacity_enabled(
+    session, monkeypatch
+):
+    from ditto.api_server.endpoints import admin_screener_capacity
+
+    agent_id, attempt_id, quarantine_id, image_id = await _seed(session)
+    created = await create_replay(
+        agent_id, _payload(attempt_id, quarantine_id, image_id), None, session
+    )
+    await _enroll(session, replay_capacity=1)
+    heartbeat = await session.get(
+        ScreenerHeartbeat, (SECOND_WORKER, f"{SECOND_NODE}-worker-1")
+    )
+    assert heartbeat is not None
+
+    # An old capacity grant cannot issue claims before the runner minimum is
+    # configured, nor after all node-2 worker heartbeats become stale.
+    monkeypatch.setattr(
+        admin_screener_capacity, "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE", None
+    )
+    with pytest.raises(HTTPException) as no_runner:
+        await claim_replay(_request(), SECOND_WORKER, session)
+    assert no_runner.value.status_code == 409
+    monkeypatch.setattr(
+        admin_screener_capacity,
+        "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE",
+        (0, 999, 0),
+    )
+    heartbeat.seen_at = datetime.now(UTC) - timedelta(minutes=6)
+    await session.commit()
+    with pytest.raises(HTTPException) as stale:
+        await claim_replay(_request(), SECOND_WORKER, session)
+    assert stale.value.status_code == 409
+
+    heartbeat.seen_at = datetime.now(UTC)
+    heartbeat.policy_version = 12
+    await session.commit()
+    with pytest.raises(HTTPException) as wrong_policy:
+        await claim_replay(_request(), SECOND_WORKER, session)
+    assert wrong_policy.value.status_code == 409
+
+    heartbeat.policy_version = 13
+    await session.commit()
+    claimed = await claim_replay(_request(), SECOND_WORKER, session)
+    assert claimed is not None and claimed.replay_id == created.replay_id
 
 
 @pytest.mark.asyncio
