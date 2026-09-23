@@ -1585,6 +1585,31 @@ def test_sampling_knobs_the_miner_owns_are_forwarded_unchanged() -> None:
     assert upstream["seed"] == 42
 
 
+def test_developer_message_preserves_trusted_system_and_reaches_v13_broker() -> None:
+    """The v13 broker must see application policy without rewriting host policy."""
+    messages = [
+        {"role": "system", "content": "Trusted validator system prompt"},
+        {"role": "developer", "content": "Agent application policy"},
+        {"role": "user", "content": "Question"},
+        {"role": "developer", "content": "Return a JSON decision"},
+    ]
+    payload = {"model": "openai/gpt-oss-20b", "messages": messages}
+
+    _validate_request_schema(payload)
+    upstream = _locked_upstream_payload(
+        payload, model="openai/gpt-oss-20b", max_tokens=256, bench_version=13
+    )
+
+    assert upstream["messages"] == messages
+    assert upstream["messages"][0] == messages[0]
+    assert [message["role"] for message in upstream["messages"]] == [
+        "system",
+        "developer",
+        "user",
+        "developer",
+    ]
+
+
 def test_unsupported_parameter_error_names_every_offending_key() -> None:
     """A miner must be able to discover which field broke the run."""
     with pytest.raises(HTTPException) as refused:

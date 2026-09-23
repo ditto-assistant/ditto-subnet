@@ -1380,6 +1380,9 @@ def _validate_request_schema(payload: dict[str, Any]) -> None:
             raise HTTPException(status_code=400, detail="invalid message")
         allowed = {
             "system": {"role", "content"},
+            # The v13 broker records developer messages as harness-authored
+            # spans. Keep them distinct from the validator's system prompt.
+            "developer": {"role", "content"},
             "user": {"role", "content"},
             "assistant": {
                 "role",

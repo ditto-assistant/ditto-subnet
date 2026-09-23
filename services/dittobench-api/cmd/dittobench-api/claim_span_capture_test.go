@@ -59,6 +59,17 @@ func TestClaimSpanCaptureBooksHarnessAndCompletionSpans(t *testing.T) {
 	}
 }
 
+func TestClaimSpanCaptureBooksDeveloperSeparatelyFromSystem(t *testing.T) {
+	session := v13Session("case-a")
+	attribution := beginClaimSpanCompletionLocked(session, 0, "")
+	request := []byte(`{"model":"m","messages":[{"role":"system","content":"Trusted validator instruction"},{"role":"developer","content":"Application-specific guidance"},{"role":"user","content":"Question"}]}`)
+	recordClaimSpanCompletionLocked(session, attribution, request, []byte(openAIResponse))
+	ledger := session.claimSpanCases["case-a"].ledger
+	if !ledger.HarnessFirst.Has("validator") || !ledger.HarnessFirst.Has("guidance") {
+		t.Fatal("system and developer spans must both remain harness-authored evidence")
+	}
+}
+
 func TestClaimSpanCaptureFirstSeenOrderingAcrossCalls(t *testing.T) {
 	session := v13Session("case-a")
 	first := beginClaimSpanCompletionLocked(session, 0, "")

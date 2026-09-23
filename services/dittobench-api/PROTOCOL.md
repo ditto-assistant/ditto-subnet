@@ -984,12 +984,18 @@ shape (top-level `system`, content blocks):
   `developer` messages, the user template, an assistant prefill, tool-role
   messages — noting which of them no earlier completion of the same case had
   already produced ("harness-first");
+
 - the value tokens of every **model-emitted** completion span — message
   content (including JSON-mode structured output), `tool_calls[].function.
   arguments` (a `final_answer` tool delivery), a legacy `function_call`, and
   Anthropic `text` / `tool_use` blocks;
 - the value tokens of every `tool_endpoint` **result** the validator served the
   case.
+
+The Platform chat gateway accepts `developer` messages as separate
+harness-authored instructions. It forwards their role and content without
+rewriting the validator-supplied `system_prompt`; the v13 broker records both
+spans for the same claim-provenance checks.
 
 Only 64-bit FNV-1a hashes of canonical value tokens are kept — never prompt
 text, completion text, or the answer key (which lives with the scorer and was
