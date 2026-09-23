@@ -191,6 +191,10 @@ class AdminScreeningVerificationState(BaseModel):
     verification_deadline: datetime | None
     deadline_provenance: str | None
     attempt_deadline: datetime | None
+    review_settings_revision: int | None
+    review_settings_instance_id: str | None
+    review_settings_scope: str | None
+    review_settings_checksum: str | None
     failure_domain: ScreeningFailureDomain | None
     automatic_retry_budget: int | None
     retries_used: int

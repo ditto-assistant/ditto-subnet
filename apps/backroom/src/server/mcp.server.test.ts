@@ -318,7 +318,7 @@ describe('Backroom MCP tools', () => {
     // (get_screening_decision_record, list_screening_decisions) and the
     // resolve_ath_review citation rule fit under the same bound (24_938 at
     // the time of writing). The exact-agent finalizer-state read adds one
-    // 167-character catalog line, so allow 25_600 without widening per-tool
+    // concise catalog line, so allow 25_600 without widening per-tool
     // tutorial text.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
       25_600,

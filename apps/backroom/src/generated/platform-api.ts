@@ -10008,6 +10008,8 @@ export interface components {
             attempt_id: string | null;
             /** Attempts Recorded */
             attempts_recorded: number;
+            /** Automatic Retry Budget */
+            automatic_retry_budget: number | null;
             /** Build Configuration */
             build_configuration: string | null;
             /** Deadline Provenance */
@@ -10044,10 +10046,16 @@ export interface components {
             quarantine_id: string | null;
             /** Reason Code */
             reason_code: string | null;
-            /** Retries Required */
-            retries_required: number | null;
             /** Retries Used */
             retries_used: number;
+            /** Review Settings Checksum */
+            review_settings_checksum: string | null;
+            /** Review Settings Instance Id */
+            review_settings_instance_id: string | null;
+            /** Review Settings Revision */
+            review_settings_revision: number | null;
+            /** Review Settings Scope */
+            review_settings_scope: string | null;
             /** Verification Deadline */
             verification_deadline: string | null;
             /** Verification Started At */

@@ -337,6 +337,18 @@ async def get_screening_verification_state(
         verification_deadline=deadline,
         deadline_provenance=provenance,
         attempt_deadline=attempt.deadline if attempt is not None else None,
+        review_settings_revision=(
+            attempt.review_settings_revision if attempt is not None else None
+        ),
+        review_settings_instance_id=(
+            attempt.review_settings_instance_id if attempt is not None else None
+        ),
+        review_settings_scope=(
+            attempt.review_settings_scope if attempt is not None else None
+        ),
+        review_settings_checksum=(
+            attempt.review_settings_checksum if attempt is not None else None
+        ),
         failure_domain=failure_domain,
         automatic_retry_budget=policy.automatic_retry_budget(failure_domain)
         if failure_domain
