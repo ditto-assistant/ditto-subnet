@@ -1189,7 +1189,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening verification readiness',
       description:
-        'Read exact v13 UUID/SHA/attempt receipts for 19 checks plus the conditional private package. `not_recorded` means no Platform receipt, not proof an external check never ran; `recorded_unverified` is not a pass. Current screening does not write these receipts. No CLEAR, REJECT, or retry. Requires backroom:artifact:read.',
+        'Read exact v13 UUID/SHA/attempt receipts for 19 checks plus the conditional private package. `not_recorded` means no Platform receipt, not proof an external check never ran; `recorded_unverified` is not a pass. `mechanically_verified` applies only to the archive/image identity checks and never authorizes CLEAR. No CLEAR, REJECT, or retry. Requires backroom:artifact:read.',
       inputSchema: screeningFailureDiagnosticInputSchema,
       annotations: toolAnnotations('read'),
     },

@@ -244,6 +244,10 @@ from ditto_screening_protocol import (
     SourceReviewObservationPayload,
     verdict_signing_message,
 )
+from ditto_screening_protocol.mechanical_verification import (
+    MECHANICAL_PROFILE_SHA256,
+    mechanical_evidence_sha256,
+)
 from ditto_screening_protocol.models import source_review_invariants_for_policy
 from ditto_screening_protocol.private_failure import (
     PRIVATE_FAILURE_DETAIL_LIMIT,
@@ -570,10 +574,12 @@ async def record_screening_verification_receipt(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
 ) -> None:
-    """Append one mechanical-check digest under the active v13 lease.
+    """Append one check digest under the active v13 lease.
 
     Only the authenticated owner of a running, unexpired attempt may write.
-    The row is intentionally evidence presence, not a check-pass or CLEAR.
+    Platform recomputes mechanical digests from the committed artifact and
+    verified image upload. Runtime rows remain observation-only. Neither kind
+    is a complete policy-v13 check pass or CLEAR authorization.
     A deterministic receipt ID makes an uncertain HTTP retry idempotent.
     """
     async with session.begin():
@@ -603,6 +609,15 @@ async def record_screening_verification_receipt(
         ):
             raise HTTPException(
                 status_code=409, detail="verification receipt lease is stale"
+            )
+        mechanical = payload.check_code in {"archive_sha", "build_image_digest"}
+        if mechanical and payload.evidence_sha256 != mechanical_evidence_sha256(
+            check_code=payload.check_code,
+            artifact_sha256=agent.sha256.lower(),
+            image_sha256=payload.image_sha256,
+        ):
+            raise HTTPException(
+                status_code=409, detail="mechanical receipt evidence digest mismatch"
             )
         if payload.check_code == "build_image_digest":
             verified_image = await session.scalar(
@@ -643,7 +658,7 @@ async def record_screening_verification_receipt(
                     check_code=payload.check_code,
                     evidence_sha256=payload.evidence_sha256,
                     image_sha256=payload.image_sha256,
-                    profile_sha256=None,
+                    profile_sha256=MECHANICAL_PROFILE_SHA256 if mechanical else None,
                     challenge_manifest_sha256=None,
                     worker_hotkey=screener_hotkey,
                     created_at=now,

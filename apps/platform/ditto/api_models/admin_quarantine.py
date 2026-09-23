@@ -211,7 +211,9 @@ class AdminScreeningVerificationReceipt(BaseModel):
 
 class AdminScreeningVerificationCheck(BaseModel):
     check_code: str
-    record_status: Literal["not_recorded", "recorded_unverified"]
+    record_status: Literal[
+        "not_recorded", "recorded_unverified", "mechanically_verified"
+    ]
     receipt_count: int
 
 
@@ -220,9 +222,10 @@ class AdminScreeningVerificationReadiness(BaseModel):
 
     `not_recorded` means there is no matching receipt in this Platform ledger;
     it does not prove the check never ran in an external system. The trusted
-    screener records only archive and built-image mechanical observations;
-    neither those receipts nor the small behavioral oracle can certify v13's
-    mandatory 19 checks or private 60-pair package.
+    screener records archive and built-image mechanical observations. Only
+    those checks can be `mechanically_verified` after Platform recomputes their
+    canonical digest and matches the committed artifact / verified image.
+    Neither status certifies the other 17 checks or private 60-pair package.
     """
 
     agent_id: UUID

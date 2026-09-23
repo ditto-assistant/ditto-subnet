@@ -131,6 +131,10 @@ from ditto_screening_protocol import (
     source_review_notes_digest,
     verdict_signing_message,
 )
+from ditto_screening_protocol.mechanical_verification import (
+    MECHANICAL_PROFILE_SHA256,
+    mechanical_evidence_sha256,
+)
 
 # Every use of SCREENING_POLICY_VERSION in this module means "the version the
 # platform REQUIRES," which — with no scheduled activation written — is the
@@ -951,9 +955,12 @@ async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
         "artifact_sha256": _SHA256,
         "policy_version": 13,
         "check_code": "archive_sha",
-        "evidence_sha256": "ab" * 32,
+        "evidence_sha256": mechanical_evidence_sha256(
+            check_code="archive_sha", artifact_sha256=_SHA256
+        ),
     }
     path = f"/api/v1/screener/agent/{agent_id}/verification-receipts"
+    forged = await client.post(path, json={**payload, "evidence_sha256": "ab" * 32})
     first = await client.post(path, json=payload)
     repeated = await client.post(path, json=payload)
     conflicting = await client.post(
@@ -981,6 +988,7 @@ async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
         )
         for index, check in enumerate(runtime_checks)
     ]
+    assert forged.status_code == 409
     assert first.status_code == 204, first.text
     assert repeated.status_code == 204, repeated.text
     assert conflicting.status_code == 409
@@ -998,6 +1006,8 @@ async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
     assert len(rows) == 6
     assert all(row.worker_hotkey == _SCREENER_HOTKEY for row in rows)
     assert all(row.image_sha256 is None for row in rows)
+    archive_row = next(row for row in rows if row.check_code == "archive_sha")
+    assert archive_row.profile_sha256 == MECHANICAL_PROFILE_SHA256
     app.state.config = replace(
         app.state.config,
         admin_api_token="test-admin-token-at-least-32-characters",
@@ -1015,7 +1025,7 @@ async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
         entry["check_code"]: entry["record_status"]
         for entry in readiness.json()["checks"]
     }
-    assert checks["archive_sha"] == "recorded_unverified"
+    assert checks["archive_sha"] == "mechanically_verified"
     assert all(checks[code] == "recorded_unverified" for code in runtime_checks)
     assert checks["private_metamorphic"] == "not_recorded"
 
@@ -1152,7 +1162,11 @@ async def test_v13_build_receipt_requires_verified_image_upload(
         "artifact_sha256": _SHA256,
         "policy_version": 13,
         "check_code": "build_image_digest",
-        "evidence_sha256": "ab" * 32,
+        "evidence_sha256": mechanical_evidence_sha256(
+            check_code="build_image_digest",
+            artifact_sha256=_SHA256,
+            image_sha256="cd" * 32,
+        ),
         "image_sha256": "cd" * 32,
     }
     absent = await client.post(path, json=payload)
@@ -1174,8 +1188,38 @@ async def test_v13_build_receipt_requires_verified_image_upload(
                 verified_at=now,
             )
         )
+    forged = await client.post(path, json={**payload, "evidence_sha256": "ab" * 32})
+    assert forged.status_code == 409
     accepted = await client.post(path, json=payload)
     assert accepted.status_code == 204, accepted.text
+    app.state.config = replace(
+        app.state.config, admin_api_token="test-admin-token-at-least-32-characters"
+    )
+    readiness_path = (
+        f"/api/v1/admin/screening-submissions/{agent_id}/attempts/"
+        f"{attempt_id}/verification-readiness"
+    )
+    headers = {
+        "Authorization": "Bearer test-admin-token-at-least-32-characters",
+        "X-Admin-Actor": "backroom:verification-reviewer",
+    }
+    readiness = await client.get(readiness_path, headers=headers)
+    assert readiness.status_code == 200
+    checks = {item["check_code"]: item for item in readiness.json()["checks"]}
+    assert checks["build_image_digest"]["record_status"] == "mechanically_verified"
+    async with session_maker() as session, session.begin():
+        image = await session.scalar(
+            select(ScreenedImageUpload).where(
+                ScreenedImageUpload.agent_id == agent_id,
+                ScreenedImageUpload.attempt_id == attempt_id,
+            )
+        )
+        assert image is not None
+        image.status = "aborted"
+    stale_image = await client.get(readiness_path, headers=headers)
+    assert stale_image.status_code == 200
+    checks = {item["check_code"]: item for item in stale_image.json()["checks"]}
+    assert checks["build_image_digest"]["record_status"] == "recorded_unverified"
 
 
 def _capacity_payload(epoch: str) -> dict[str, object]:
@@ -7341,21 +7385,56 @@ class TestQuarantineAdmin:
                         artifact_sha256=sha,
                         policy_version=13,
                         check_code="build_image_digest",
-                        evidence_sha256="e" * 64,
+                        evidence_sha256=mechanical_evidence_sha256(
+                            check_code="build_image_digest",
+                            artifact_sha256=sha,
+                            image_sha256="d" * 64,
+                        ),
                         image_sha256="d" * 64,
                         profile_sha256=None,
                         challenge_manifest_sha256=None,
                         worker_hotkey=_SCREENER_HOTKEY,
                     )
                 )
+            session.add(
+                ScreenedImageUpload(
+                    image_upload_id=uuid4(),
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    storage_upload_id="legacy-test-upload",
+                    sha256="d" * 64,
+                    size_bytes=123,
+                    image_id="sha256:" + "d" * 64,
+                    image_ref="ditto-screen/legacy:test",
+                    status="verified",
+                    expires_at=now + timedelta(minutes=8),
+                    verified_at=now,
+                )
+            )
+            session.add(
+                ScreeningVerificationReceipt(
+                    receipt_id=uuid4(),
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    artifact_sha256=artifact_sha256,
+                    policy_version=13,
+                    check_code="archive_sha",
+                    evidence_sha256="e" * 64,
+                    image_sha256=None,
+                    profile_sha256=MECHANICAL_PROFILE_SHA256,
+                    challenge_manifest_sha256=None,
+                    worker_hotkey=_SCREENER_HOTKEY,
+                )
+            )
         recorded = await client.get(path, headers=headers)
         assert recorded.status_code == 200, recorded.text
         body = recorded.json()
-        assert body["receipt_count"] == 1
-        assert len(body["receipts"]) == 1
-        assert body["receipts"][0]["evidence_sha256"] == "e" * 64
+        assert body["receipt_count"] == 2
+        assert len(body["receipts"]) == 2
         checks = {check["check_code"]: check for check in body["checks"]}
         assert checks["build_image_digest"]["record_status"] == "recorded_unverified"
+        assert checks["archive_sha"]["record_status"] == "recorded_unverified"
         assert checks["private_metamorphic"]["record_status"] == "not_recorded"
         assert body["private_metamorphic_applicability"] == "not_recorded"
         no_actor = await client.get(

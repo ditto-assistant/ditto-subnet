@@ -4415,7 +4415,7 @@ export const screeningVerificationReadinessSchema = z.object({
   attempt_status: z.string(),
   checks: z.array(z.object({
     check_code: z.string().regex(/^[a-z0-9_]{1,64}$/),
-    record_status: z.enum(['not_recorded', 'recorded_unverified']),
+    record_status: z.enum(['not_recorded', 'recorded_unverified', 'mechanically_verified']),
     receipt_count: z.number().int().nonnegative(),
   })).length(20),
   private_metamorphic_applicability: z.literal('not_recorded'),

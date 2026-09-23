@@ -141,6 +141,7 @@ from ditto.db.models import (
     BenchmarkRolloutMember,
     EvaluationPayment,
     Score,
+    ScreenedImageUpload,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
     ScreeningAttempt,
@@ -190,6 +191,10 @@ from ditto_screening_protocol import (
     AdjudicationRunDiagnostic,
     SourceReviewNote,
     source_review_notes_digest,
+)
+from ditto_screening_protocol.mechanical_verification import (
+    MECHANICAL_PROFILE_SHA256,
+    mechanical_evidence_sha256,
 )
 
 logger = logging.getLogger(__name__)
@@ -1906,11 +1911,11 @@ async def get_screening_verification_readiness(
     session: SessionDep,
     x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> AdminScreeningVerificationReadiness:
-    """Read exact-artifact verification receipts without implying completion.
+    """Read exact-artifact receipts with narrow mechanical verification status.
 
-    This first read foundation has no writer. Absence means no matching
-    Platform receipt, not proof that an external check never ran. Existing
-    screening/oracle results never synthesize mandatory-v13 receipts.
+    Absence means no matching Platform receipt, not proof that an external
+    check never ran. The two mechanically verified checks never imply full
+    policy-v13 completion; runtime/private observations remain unverified.
     """
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
@@ -1952,6 +1957,42 @@ async def get_screening_verification_readiness(
         )
     ).all()
     total = sum(counts.values())
+    verified_images = set(
+        (
+            await session.execute(
+                select(
+                    ScreenedImageUpload.sha256,
+                    ScreenedImageUpload.screener_hotkey,
+                ).where(
+                    ScreenedImageUpload.agent_id == agent_id,
+                    ScreenedImageUpload.attempt_id == attempt_id,
+                    ScreenedImageUpload.status == "verified",
+                )
+            )
+        ).all()
+    )
+    mechanically_verified: set[str] = set()
+    for row in rows:
+        if (
+            row.check_code not in {"archive_sha", "build_image_digest"}
+            or row.profile_sha256 != MECHANICAL_PROFILE_SHA256
+            or row.worker_hotkey != attempt.screener_hotkey
+            or (
+                row.check_code == "build_image_digest"
+                and (row.image_sha256, row.worker_hotkey) not in verified_images
+            )
+        ):
+            continue
+        try:
+            expected = mechanical_evidence_sha256(
+                check_code=row.check_code,
+                artifact_sha256=agent.sha256.lower(),
+                image_sha256=row.image_sha256,
+            )
+        except ValueError:
+            continue
+        if row.evidence_sha256 == expected:
+            mechanically_verified.add(row.check_code)
     logger.info(
         "admin_actor=%s read screening verification readiness agent_id=%s "
         "attempt_id=%s receipt_count=%d",
@@ -1969,9 +2010,13 @@ async def get_screening_verification_readiness(
         checks=[
             AdminScreeningVerificationCheck(
                 check_code=code,
-                record_status="recorded_unverified"
-                if counts.get(code, 0)
-                else "not_recorded",
+                record_status=(
+                    "mechanically_verified"
+                    if code in mechanically_verified
+                    else "recorded_unverified"
+                    if counts.get(code, 0)
+                    else "not_recorded"
+                ),
                 receipt_count=counts.get(code, 0),
             )
             for code in MANDATORY_V13_VERIFICATION_CHECKS
