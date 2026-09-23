@@ -2119,6 +2119,7 @@ async def get_screening_verification_readiness(
         clean_image_bound = bool(
             clean_attempt is not None
             and clean_agent is not None
+            and clean_agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
             and clean_attempt.agent_id == registration.clean_agent_id
             and clean_attempt.artifact_sha256 is not None
             and clean_attempt.artifact_sha256.lower()
@@ -2151,7 +2152,8 @@ async def get_screening_verification_readiness(
         ("known_benign_control_provenance", False, False),
         ("protected_blueprint_bank", False, False),
         ("sealed_store_reachable", False, False),
-        ("trusted_runner_key", registration_matches, False),
+        ("runner_hotkey_registration", registration_matches, False),
+        ("trusted_runner_key", False, False),
         ("fresh_isolated_paired_execution", False, False),
         ("powered_statistical_plan", False, False),
         ("all_19_checks_verified", False, False),

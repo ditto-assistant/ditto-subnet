@@ -7784,6 +7784,8 @@ class TestQuarantineAdmin:
         assert prerequisites["target_verified_image"] == "mechanically_verified"
         assert prerequisites["sealed_manifest_registration"] == "recorded_unverified"
         assert prerequisites["clean_image_candidate"] == "recorded_unverified"
+        assert prerequisites["runner_hotkey_registration"] == "recorded_unverified"
+        assert prerequisites["trusted_runner_key"] == "not_observed"
         assert prerequisites["known_benign_control_provenance"] == "not_observed"
         assert prerequisites["protected_blueprint_bank"] == "not_observed"
         assert prerequisites["fresh_isolated_paired_execution"] == "not_observed"
@@ -7792,6 +7794,20 @@ class TestQuarantineAdmin:
             target = await session.get(Agent, target_id)
             assert target is not None
             assert target.status == AgentStatus.QUARANTINED
+        async with session_maker() as session, session.begin():
+            clean = await session.get(Agent, clean_id)
+            assert clean is not None
+            clean.status = AgentStatus.QUARANTINED
+        stale_clean_readiness = await client.get(readiness_path, headers=headers)
+        assert stale_clean_readiness.status_code == 200
+        stale_prerequisites = {
+            item["code"]: item["status"]
+            for item in stale_clean_readiness.json()["private_package"]["prerequisites"]
+        }
+        assert stale_prerequisites["clean_image_candidate"] == "not_observed"
+        assert (
+            stale_clean_readiness.json()["private_package"]["clear_authorized"] is False
+        )
         legacy_id = await _seed_agent(
             session_maker, status=AgentStatus.QUARANTINED, name="legacy-held"
         )
