@@ -13,19 +13,23 @@ import pytest
 
 from ditto_screening_protocol.v13_private_clean_control import (
     compute_v13_generation_role_digest,
+    prepare_v13_matched_clean_control,
 )
 from ditto_screening_protocol.v13_private_package import (
     V13_PRIVATE_PROFILE_SHA256,
+    ArtifactCommitment,
     PrivatePackageRegistration,
     V13PrivateManifest,
     V13PrivatePair,
 )
 from ditto_screening_protocol.v13_private_seed import (
+    AuthenticatedGeneratorDerivationReceipt,
     AuthenticatedKnownBenignApproval,
     SealedSeedRecord,
     SeedGenerationGroup,
     V13SeedIssuanceUnavailable,
     VerifiedRoleCommitment,
+    _ordered_payload_digests_sha256,
     issue_v13_hidden_group_seeds,
     verify_v13_issued_matched_inventory,
 )
@@ -99,6 +103,36 @@ class PackageStore:
         return self.payloads[sha256]
 
 
+class GeneratorProvenance:
+    """Synthetic trusted-generator projection, only for contract tests."""
+
+    def __init__(self, registry: Registry, store: PackageStore, issued) -> None:
+        self.receipts: dict[str, AuthenticatedGeneratorDerivationReceipt] = {}
+        for role in ("target", "known_benign"):
+            registration = registry.packages[(issued.group_id, role)]
+            raw = store.manifests[registration.manifest_sha256]
+            manifest = V13PrivateManifest.model_validate_json(raw)
+            self.receipts[role] = AuthenticatedGeneratorDerivationReceipt(
+                group_id=issued.group_id,
+                role=role,
+                sealed_bundle_sha256=issued.sealed_bundle_sha256,
+                generator_revision="v13-private-case-generator-v1",
+                manifest_sha256=registration.manifest_sha256,
+                ordered_payload_digests_sha256=_ordered_payload_digests_sha256(
+                    manifest
+                ),
+                generated_at=manifest.generated_at,
+                derivation_attestation_sha256=hashlib.sha256(
+                    (role + registration.manifest_sha256).encode()
+                ).hexdigest(),
+            )
+
+    async def get_verified_derivation(
+        self, _group_id: UUID, role: Literal["target", "known_benign"]
+    ) -> AuthenticatedGeneratorDerivationReceipt:
+        return self.receipts[role]
+
+
 def register_matched_packages(
     registry: Registry,
     package_store: PackageStore,
@@ -139,7 +173,7 @@ def register_matched_packages(
             registry.group.control_receipt_sha256,
         ),
     ):
-        generated_at = registry.group.started_at + timedelta(seconds=10)
+        generated_at = registry.group.started_at + timedelta(minutes=1, seconds=10)
         manifest = V13PrivateManifest(
             agent_id=commitment.agent_id,
             attempt_id=commitment.attempt_id,
@@ -258,6 +292,30 @@ def test_group_issues_one_shared_two_seed_bundle_once() -> None:
     assert "seed" not in repr(store.records[registry.group.group_id])
     sealed = json.loads(store.records[registry.group.group_id].sealed_bytes)
     assert len(sealed["seeds_hex"]) == 2
+
+
+@pytest.mark.parametrize("role", ["target", "known_benign"])
+@pytest.mark.parametrize("fault", ["base_type", "wrong_policy", "missing_receipt"])
+def test_unverified_role_never_issues_seed(role: str, fault: str) -> None:
+    registry, store = fixture()
+    current = registry.roles[role]
+    if fault == "base_type":
+        registry.roles[role] = ArtifactCommitment.model_validate(
+            current.model_dump(mode="python")
+        )
+    elif fault == "wrong_policy":
+        registry.roles[role] = current.model_copy(update={"policy_version": 12})
+    else:
+        registry.roles[role] = current.model_copy(
+            update={"image_verification_receipt_sha256": None}
+        )
+    with pytest.raises(V13SeedIssuanceUnavailable):
+        asyncio.run(
+            issue_v13_hidden_group_seeds(
+                group_id=registry.group.group_id, registry=registry, store=store
+            )
+        )
+    assert store.create_calls == 0
 
 
 @pytest.mark.parametrize(
@@ -381,6 +439,7 @@ def test_matched_packages_require_issued_seeds_and_same_ordered_inventory() -> N
     )
     package_store = PackageStore()
     register_matched_packages(registry, package_store, issued.seed_commitments)
+    generator = GeneratorProvenance(registry, package_store, issued)
     matched = asyncio.run(
         verify_v13_issued_matched_inventory(
             issuance=issued,
@@ -391,10 +450,15 @@ def test_matched_packages_require_issued_seeds_and_same_ordered_inventory() -> N
             packages=registry,
             controls=registry,
             generations=registry,
+            generator_provenance=generator,
         )
     )
     assert matched.group_id == issued.group_id
     assert matched.pair_count == 60
+    assert (
+        matched.target_generator_receipt_sha256
+        == generator.receipts["target"].derivation_attestation_sha256
+    )
 
     # An internally matched pair package generated from different randomness
     # still cannot claim this group's previously issued seeds.
@@ -411,5 +475,97 @@ def test_matched_packages_require_issued_seeds_and_same_ordered_inventory() -> N
                 packages=registry,
                 controls=registry,
                 generations=registry,
+                generator_provenance=generator,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "preissued_manifest",
+        "preissued_registration",
+        "missing_receipt",
+        "wrong_bundle",
+        "wrong_payloads",
+        "wrong_role",
+        "wrong_revision",
+    ],
+)
+def test_generator_provenance_fails_closed(fault: str) -> None:
+    registry, seed_store = fixture()
+    issued = asyncio.run(
+        issue_v13_hidden_group_seeds(
+            group_id=registry.group.group_id, registry=registry, store=seed_store
+        )
+    )
+    package_store = PackageStore()
+    register_matched_packages(registry, package_store, issued.seed_commitments)
+    if fault in {"preissued_manifest", "preissued_registration"}:
+        # Preserve the valid group-start ordering enforced by #2177 while
+        # moving a target package to *before* the later sealed seed commit.
+        key = (issued.group_id, "target")
+        registration = registry.packages[key]
+        manifest = V13PrivateManifest.model_validate_json(
+            package_store.manifests[registration.manifest_sha256]
+        )
+        old_time = issued.committed_at - timedelta(seconds=20)
+        manifest = manifest.model_copy(update={"generated_at": old_time})
+        raw = json.dumps(
+            manifest.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        digest = hashlib.sha256(raw).hexdigest()
+        package_store.manifests[digest] = raw
+        updates = {"manifest_sha256": digest}
+        if fault == "preissued_registration":
+            updates["registered_at"] = issued.committed_at - timedelta(seconds=10)
+        registry.packages[key] = registration.model_copy(update=updates)
+        # The older matched-control preflight accepts this valid group-start
+        # order. The new issuer boundary must reject its pre-seed generation.
+        asyncio.run(
+            prepare_v13_matched_clean_control(
+                group_id=issued.group_id,
+                target=registry.roles["target"],
+                control=registry.roles["known_benign"],
+                store=package_store,
+                packages=registry,
+                controls=registry,
+                generations=registry,
+            )
+        )
+    generator = GeneratorProvenance(registry, package_store, issued)
+    target = generator.receipts["target"]
+    if fault == "missing_receipt":
+        generator.receipts["target"] = None
+    elif fault == "wrong_bundle":
+        generator.receipts["target"] = target.model_copy(
+            update={"sealed_bundle_sha256": "0" * 64}
+        )
+    elif fault == "wrong_payloads":
+        generator.receipts["target"] = target.model_copy(
+            update={"ordered_payload_digests_sha256": "0" * 64}
+        )
+    elif fault == "wrong_role":
+        generator.receipts["target"] = target.model_copy(
+            update={"role": "known_benign"}
+        )
+    elif fault == "wrong_revision":
+        generator.receipts["target"] = target.model_copy(
+            update={"generator_revision": ""}
+        )
+    with pytest.raises(V13SeedIssuanceUnavailable):
+        asyncio.run(
+            verify_v13_issued_matched_inventory(
+                issuance=issued,
+                target=registry.roles["target"],
+                control=registry.roles["known_benign"],
+                seed_store=seed_store,
+                package_store=package_store,
+                packages=registry,
+                controls=registry,
+                generations=registry,
+                generator_provenance=generator,
             )
         )

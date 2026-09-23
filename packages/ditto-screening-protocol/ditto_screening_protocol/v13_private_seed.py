@@ -31,6 +31,7 @@ from ditto_screening_protocol.v13_private_clean_control import (
 from ditto_screening_protocol.v13_private_package import (
     V13_PRIVATE_PROFILE_SHA256,
     ArtifactCommitment,
+    PrivatePackageRegistration,
     SealedPackageStore,
     V13PrivateManifest,
 )
@@ -149,7 +150,7 @@ class V13SeedIssueReceipt(BaseModel):
 
 
 class V13MatchedSeedInventoryReceipt(BaseModel):
-    """Digest-only matched inventory and seed proof, never a policy verdict."""
+    """Digest-only inventory with authenticated generation, not a policy verdict."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -159,6 +160,37 @@ class V13MatchedSeedInventoryReceipt(BaseModel):
     control_manifest_sha256: str = Field(pattern=_SHA_PATTERN)
     pair_inventory_sha256: str = Field(pattern=_SHA_PATTERN)
     pair_count: int = Field(ge=60, le=512)
+    target_generator_receipt_sha256: str = Field(pattern=_SHA_PATTERN)
+    control_generator_receipt_sha256: str = Field(pattern=_SHA_PATTERN)
+
+
+class AuthenticatedGeneratorDerivationReceipt(BaseModel):
+    """Projection of a separately authenticated private generator attestation.
+
+    Its adapter MUST verify an append-only signed generator record and that the
+    generator actually consumed the group's sealed seed bytes to produce the
+    listed payloads. A manifest label or caller-supplied digest is insufficient.
+    No production adapter exists in this default-off protocol.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    group_id: UUID
+    role: Literal["target", "known_benign"]
+    sealed_bundle_sha256: str = Field(pattern=_SHA_PATTERN)
+    generator_revision: Literal["v13-private-case-generator-v1"]
+    manifest_sha256: str = Field(pattern=_SHA_PATTERN)
+    ordered_payload_digests_sha256: str = Field(pattern=_SHA_PATTERN)
+    generated_at: datetime
+    derivation_attestation_sha256: str = Field(pattern=_SHA_PATTERN)
+
+
+class TrustedPrivateGeneratorProvenance(Protocol):
+    """Authenticate signed generator output and seed derivation privately."""
+
+    async def get_verified_derivation(
+        self, group_id: UUID, role: Literal["target", "known_benign"]
+    ) -> AuthenticatedGeneratorDerivationReceipt: ...
 
 
 class V13SeedIssuanceUnavailable(ValueError):
@@ -169,6 +201,22 @@ def _seed_commitment(group_id: UUID, seed: bytes) -> str:
     return hashlib.sha256(
         b"ditto-v13-private-group-seed-v1\0" + group_id.bytes + seed
     ).hexdigest()
+
+
+def _ordered_payload_digests_sha256(manifest: V13PrivateManifest) -> str:
+    """Bind the exact order and both payloads of every sealed case pair."""
+    payloads = [[pair.control_sha256, pair.variant_sha256] for pair in manifest.pairs]
+    return hashlib.sha256(
+        json.dumps(payloads, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _verified_role(value: object) -> VerifiedRoleCommitment:
+    if not isinstance(value, VerifiedRoleCommitment):
+        raise V13SeedIssuanceUnavailable("verified image commitment unavailable")
+    # model_copy(update=...) bypasses Pydantic validation; validate known
+    # fields again at this boundary instead of trusting the Protocol hint.
+    return VerifiedRoleCommitment.model_validate(value.model_dump(mode="python"))
 
 
 def _new_bundle(
@@ -265,9 +313,11 @@ async def issue_v13_hidden_group_seeds(
     try:
         async with asyncio.timeout(30):
             group = await registry.get_verified_group(group_id)
-            target = await registry.get_verified_role_commitment(group_id, "target")
-            control = await registry.get_verified_role_commitment(
-                group_id, "known_benign"
+            target = _verified_role(
+                await registry.get_verified_role_commitment(group_id, "target")
+            )
+            control = _verified_role(
+                await registry.get_verified_role_commitment(group_id, "known_benign")
             )
             approval = await registry.get_authenticated_approval(group.approval_id)
             if (
@@ -335,16 +385,22 @@ async def verify_v13_issued_matched_inventory(
     packages: TrustedGroupedPrivatePackageRegistry,
     controls: AuthenticatedControlRegistry,
     generations: TrustedGenerationRegistry,
+    generator_provenance: TrustedPrivateGeneratorProvenance,
 ) -> V13MatchedSeedInventoryReceipt:
-    """Require both generated roles to use the same issued seeds and cases.
+    """Require an authenticated generator attestation for both matched roles.
 
     After generation, #2177's sealed preflight validates both packages and
     their ordered pair inventory. This additionally checks that the inventory
     used the two commitments of the group's sealed, create-only seed record.
+    Commitment equality alone is only an inventory-label check: this function
+    also requires a trusted generator receipt attesting derivation from the
+    sealed bytes. With no production provenance adapter it cannot activate.
     It returns only digests. Execution and semantic attribution remain separate.
     """
     try:
         async with asyncio.timeout(60):
+            target = _verified_role(target)
+            control = _verified_role(control)
             sealed = await seed_store.read(issuance.group_id)
             group = await generations.get_verified_group(issuance.group_id)
             approval = await controls.get_authenticated_approval(group.approval_id)
@@ -401,6 +457,48 @@ async def verify_v13_issued_matched_inventory(
                 raise V13SeedIssuanceUnavailable(
                     "private issued inventory does not match"
                 )
+            generator_receipts: list[AuthenticatedGeneratorDerivationReceipt] = []
+            for role, manifest, manifest_sha256 in (
+                ("target", manifests[0], matched.target_manifest_sha256),
+                ("known_benign", manifests[1], matched.control_manifest_sha256),
+            ):
+                registration: PrivatePackageRegistration = (
+                    await packages.get_group_registration(issuance.group_id, role)
+                )
+                receipt = await generator_provenance.get_verified_derivation(
+                    issuance.group_id, role
+                )
+                if not isinstance(receipt, AuthenticatedGeneratorDerivationReceipt):
+                    raise V13SeedIssuanceUnavailable(
+                        "private generator attestation unavailable"
+                    )
+                receipt = AuthenticatedGeneratorDerivationReceipt.model_validate(
+                    receipt.model_dump(mode="python")
+                )
+                if (
+                    receipt.group_id != issuance.group_id
+                    or receipt.role != role
+                    or receipt.sealed_bundle_sha256 != issuance.sealed_bundle_sha256
+                    or receipt.manifest_sha256 != manifest_sha256
+                    or receipt.ordered_payload_digests_sha256
+                    != _ordered_payload_digests_sha256(manifest)
+                    or receipt.generated_at.tzinfo is None
+                    or manifest.generated_at.tzinfo is None
+                    or registration.registered_at.tzinfo is None
+                    or not (
+                        issuance.committed_at
+                        < receipt.generated_at
+                        == manifest.generated_at
+                        < registration.registered_at
+                    )
+                    or registration.manifest_sha256 != manifest_sha256
+                    or registration.generation_group_id != issuance.group_id
+                    or registration.generation_role != role
+                ):
+                    raise V13SeedIssuanceUnavailable(
+                        "private generator provenance unavailable"
+                    )
+                generator_receipts.append(receipt)
             return V13MatchedSeedInventoryReceipt(
                 group_id=issuance.group_id,
                 sealed_bundle_sha256=issuance.sealed_bundle_sha256,
@@ -408,6 +506,12 @@ async def verify_v13_issued_matched_inventory(
                 control_manifest_sha256=matched.control_manifest_sha256,
                 pair_inventory_sha256=matched.pair_inventory_sha256,
                 pair_count=matched.pair_count,
+                target_generator_receipt_sha256=generator_receipts[
+                    0
+                ].derivation_attestation_sha256,
+                control_generator_receipt_sha256=generator_receipts[
+                    1
+                ].derivation_attestation_sha256,
             )
     except (V13SeedIssuanceUnavailable, MatchedCleanControlUnavailable):
         raise V13SeedIssuanceUnavailable(
