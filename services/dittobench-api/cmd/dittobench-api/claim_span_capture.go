@@ -175,6 +175,15 @@ func beginClaimSpanCompletionLocked(session *brokerSession, caseGeneration uint6
 	if !claimSpanCaptureEnabled(session) {
 		return claimSpanAttribution{}
 	}
+	if binding := session.privateVerifier; binding != nil {
+		trimmed := strings.TrimSpace(claimed)
+		if trimmed != "" && trimmed != binding.caseID {
+			// A sole in-flight case would otherwise receive this completion by
+			// fallback. Keep the attempted cross-case identity visible to the
+			// private verifier without retaining the untrusted claim text.
+			binding.crossCaseClaims++
+		}
+	}
 	caseID, ok := claimSpanAttributedCaseLocked(session, caseGeneration, claimed)
 	if ok {
 		return claimSpanAttribution{enabled: true, caseID: caseID, exact: true}
