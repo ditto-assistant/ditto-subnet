@@ -54,11 +54,142 @@ from ditto_screener.policy import (
     SourceReviewObservation,
     load_policy_engine,
 )
+from ditto_screener.runtime_verification import runtime_evidence_sha256
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _ATTEMPT = UUID("7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300")
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+
+
+async def test_v13_shadow_runtime_observations_record_only_attempt_bound_digests(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = _gate_with(make_config(), _ok_run([]), tarball=_valid_tar())
+    calls = 0
+    requests: list[tuple[str, dict[str, object]]] = []
+
+    def gateway_count(_path: str) -> int:
+        return calls
+
+    async def request(
+        _container: str, url: str, *, payload: dict[str, object], timeout: float
+    ) -> tuple[int, str]:
+        nonlocal calls
+        assert timeout <= 20
+        requests.append((url, payload))
+        if url.endswith("/seed"):
+            return 0, '{"pairs":1,"subjects":0,"links":0}'
+        calls += 1
+        return 0, '{"final_text":"private synthetic answer"}'
+
+    gate._request_from_sidecar = request  # type: ignore[method-assign]
+    monkeypatch.setattr(gate_module, "_gateway_call_count", gateway_count)
+    receipts: dict[str, str] = {}
+
+    async def record(code: str, digest: str) -> None:
+        receipts[code] = digest
+
+    await gate._run_v13_runtime_observations(
+        audit_runtime=gate_module._AuditRuntime(
+            harness_base="http://harness:8080",
+            gateway_response_token="secret-a",
+            oracle_answer="secret-b",
+            gateway_state_file="/state/model-called",
+            tool_route="route",
+            tool_key=b"key",
+        ),
+        probe_container="gateway",
+        artifact_sha256="b" * 64,
+        image_id="sha256:" + "a" * 64,
+        bench_version=13,
+        deadline=None,
+        record=record,
+        include_runs=True,
+    )
+
+    assert set(receipts) == {
+        "health",
+        "ordinary_model_run",
+        "tool_selection_run",
+        "seed_memory_run",
+        "two_user_isolation",
+    }
+    assert all(len(digest) == 64 for digest in receipts.values())
+    assert len(requests) == 7
+    assert [url.rsplit("/", 1)[-1] for url, _ in requests] == [
+        "run",
+        "run",
+        "seed",
+        "run",
+        "seed",
+        "run",
+        "run",
+    ]
+    assert requests[1][1]["tool_endpoint"]
+    seeded_users = [
+        payload["user_id"] for url, payload in requests if url.endswith("/seed")
+    ]
+    assert len(set(seeded_users)) == 2
+    assert "private synthetic answer" not in repr(receipts)
+
+
+async def test_v13_runtime_observation_stops_at_failed_seed(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    gate = _gate_with(make_config(), _ok_run([]), tarball=_valid_tar())
+    calls = 0
+
+    def gateway_count(_path: str) -> int:
+        return calls
+
+    async def request(
+        _container: str, url: str, *, payload: dict[str, object], timeout: float
+    ) -> tuple[int, str]:
+        nonlocal calls
+        assert payload and timeout > 0
+        if url.endswith("/seed"):
+            return 22, "HTTP 500: secret"  # no memory or isolation receipt
+        calls += 1
+        return 0, '{"final_text":"ok"}'
+
+    gate._request_from_sidecar = request  # type: ignore[method-assign]
+    monkeypatch.setattr(gate_module, "_gateway_call_count", gateway_count)
+    receipts: list[str] = []
+
+    async def record(code: str, _digest: str) -> None:
+        receipts.append(code)
+
+    await gate._run_v13_runtime_observations(
+        audit_runtime=gate_module._AuditRuntime(
+            harness_base="http://harness:8080",
+            gateway_response_token="secret-a",
+            oracle_answer="secret-b",
+            gateway_state_file="/state/model-called",
+            tool_route="route",
+            tool_key=b"key",
+        ),
+        probe_container="gateway",
+        artifact_sha256="b" * 64,
+        image_id="sha256:" + "a" * 64,
+        bench_version=13,
+        deadline=None,
+        record=record,
+        include_runs=True,
+    )
+    assert receipts == ["health", "ordinary_model_run", "tool_selection_run"]
+
+
+def test_runtime_receipt_rejects_unbound_evidence() -> None:
+    with pytest.raises(ValueError, match="invalid image ID"):
+        runtime_evidence_sha256(
+            check_code="health",
+            artifact_sha256="b" * 64,
+            image_id="a" * 64,
+            request_sha256s=[],
+            response_sha256s=[],
+            broker_calls=0,
+        )
 
 
 def test_gateway_state_is_owned_by_worker_and_appendable_by_rootless_uid() -> None:

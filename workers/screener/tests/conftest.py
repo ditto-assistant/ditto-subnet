@@ -39,6 +39,7 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "seed_path": "/seed",
         "seed_probe_mode": "shadow",
         "seed_probe_timeout_seconds": 3.0,
+        "v13_runtime_receipts_mode": "off",
         "smoke_env": (("OPENROUTER_API_KEY", "sk-screener-smoke"),),
         "max_tarball_bytes": 4 * 1024 * 1024,
         "poll_seconds": 0.01,

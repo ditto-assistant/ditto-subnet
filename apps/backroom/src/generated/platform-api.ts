@@ -27333,8 +27333,9 @@ export interface components {
          * ScreeningVerificationReceiptRequest
          * @description Digest-only evidence emitted by the active trusted screener lease.
          *
-         *     This records execution of two mechanical checks. It is not a policy pass
-         *     or an authorization to release a source-integrity hold.
+         *     This records execution observations, not a policy pass or an authorization
+         *     to release a source-integrity hold. Runtime receipts remain unverified until
+         *     the complete v13 decision record is assembled.
          */
         ScreeningVerificationReceiptRequest: {
             /** Artifact Sha256 */
@@ -27348,7 +27349,7 @@ export interface components {
              * Check Code
              * @enum {string}
              */
-            check_code: "archive_sha" | "build_image_digest";
+            check_code: "archive_sha" | "build_image_digest" | "health" | "ordinary_model_run" | "tool_selection_run" | "seed_memory_run" | "two_user_isolation";
             /** Evidence Sha256 */
             evidence_sha256: string;
             /** Image Sha256 */

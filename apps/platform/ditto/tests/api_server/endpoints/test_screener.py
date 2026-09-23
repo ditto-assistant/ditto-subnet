@@ -963,11 +963,30 @@ async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
     wrong_check = await client.post(
         path, json={**payload, "check_code": "private_metamorphic"}
     )
+    runtime_checks = (
+        "health",
+        "ordinary_model_run",
+        "tool_selection_run",
+        "seed_memory_run",
+        "two_user_isolation",
+    )
+    runtime_results = [
+        await client.post(
+            path,
+            json={
+                **payload,
+                "check_code": check,
+                "evidence_sha256": f"{index + 1:02x}" * 32,
+            },
+        )
+        for index, check in enumerate(runtime_checks)
+    ]
     assert first.status_code == 204, first.text
     assert repeated.status_code == 204, repeated.text
     assert conflicting.status_code == 409
     assert stale.status_code == 409
     assert wrong_check.status_code == 422
+    assert all(result.status_code == 204 for result in runtime_results)
     async with session_maker() as session:
         rows = (
             await session.scalars(
@@ -976,9 +995,9 @@ async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
                 )
             )
         ).all()
-    assert len(rows) == 1
-    assert rows[0].worker_hotkey == _SCREENER_HOTKEY
-    assert rows[0].image_sha256 is None
+    assert len(rows) == 6
+    assert all(row.worker_hotkey == _SCREENER_HOTKEY for row in rows)
+    assert all(row.image_sha256 is None for row in rows)
     app.state.config = replace(
         app.state.config,
         admin_api_token="test-admin-token-at-least-32-characters",
@@ -997,6 +1016,7 @@ async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
         for entry in readiness.json()["checks"]
     }
     assert checks["archive_sha"] == "recorded_unverified"
+    assert all(checks[code] == "recorded_unverified" for code in runtime_checks)
     assert checks["private_metamorphic"] == "not_recorded"
 
 

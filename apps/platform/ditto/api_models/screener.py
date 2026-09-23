@@ -62,8 +62,9 @@ _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
 class ScreeningVerificationReceiptRequest(BaseModel):
     """Digest-only evidence emitted by the active trusted screener lease.
 
-    This records execution of two mechanical checks. It is not a policy pass
-    or an authorization to release a source-integrity hold.
+    This records execution observations, not a policy pass or an authorization
+    to release a source-integrity hold. Runtime receipts remain unverified until
+    the complete v13 decision record is assembled.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -71,7 +72,15 @@ class ScreeningVerificationReceiptRequest(BaseModel):
     attempt_id: UUID
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     policy_version: Literal[13]
-    check_code: Literal["archive_sha", "build_image_digest"]
+    check_code: Literal[
+        "archive_sha",
+        "build_image_digest",
+        "health",
+        "ordinary_model_run",
+        "tool_selection_run",
+        "seed_memory_run",
+        "two_user_isolation",
+    ]
     evidence_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     image_sha256: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
 

@@ -106,6 +106,7 @@ from ditto_screener.preflight_audit import (
     StaticPreflightAuditError,
     StaticPreflightAuditJournal,
 )
+from ditto_screener.runtime_verification import runtime_evidence_sha256
 from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     SourceReviewObservation,
@@ -1071,6 +1072,9 @@ class BuildGate:
         deadline: Deadline = None,
         publish_image: Callable[[BuiltImageArtifact], Awaitable[None]] | None = None,
         record_archive_verification: Callable[[], Awaitable[None]] | None = None,
+        record_runtime_verification: (
+            Callable[[str, str], Awaitable[None]] | None
+        ) = None,
         remote_build: Callable[[], Awaitable[RemoteImageArchive | None]] | None = None,
         remote_build_consumed: Callable[[UUID], Awaitable[None]] | None = None,
         remote_source_review: Callable[[], Awaitable[SourceReviewObservation | None]]
@@ -1646,6 +1650,23 @@ class BuildGate:
 
             if review_factory is not None:
                 review_task = asyncio.create_task(review_factory())
+
+            if (
+                policy_version == 13
+                and not targon_runtime_ok
+                and self._config.v13_runtime_receipts_mode == "shadow"
+                and record_runtime_verification is not None
+            ):
+                await self._run_v13_runtime_observations(
+                    audit_runtime=active_audit_runtime,
+                    probe_container=gateway_container,
+                    artifact_sha256=sha256.lower(),
+                    image_id=built_image_id,
+                    bench_version=bench_version,
+                    deadline=deadline,
+                    record=record_runtime_verification,
+                    include_runs=not build_only,
+                )
 
             async def run_challenge(
                 challenge_id: str, request: Mapping[str, object], timeout: float
@@ -3269,6 +3290,208 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             await asyncio.sleep(_PROBE_INTERVAL_SECONDS)
             waited += _PROBE_INTERVAL_SECONDS
         return False, f"/health never healthy within {deadline:g}s ({last})"
+
+    async def _run_v13_runtime_observations(
+        self,
+        *,
+        audit_runtime: _AuditRuntime,
+        probe_container: str,
+        artifact_sha256: str,
+        image_id: str,
+        bench_version: int,
+        deadline: Deadline,
+        record: Callable[[str, str], Awaitable[None]],
+        include_runs: bool,
+    ) -> None:
+        """Shadow-observe mandatory checks 3–7 in the isolated smoke network.
+
+        Every receipt remains ``recorded_unverified``. In particular, the fake
+        broker's text response cannot establish real tool choice, memory
+        correctness, or cross-user non-disclosure. Failed/incomplete requests
+        leave the corresponding check ``not_recorded``; they never change the
+        screening decision. A separate verifier must assess behavior and the
+        remaining v13 checks before any CLEAR.
+        """
+
+        async def emit(
+            code: str,
+            requests: list[str],
+            responses: list[str],
+            broker_calls: int,
+        ) -> None:
+            try:
+                digest = runtime_evidence_sha256(
+                    check_code=code,
+                    artifact_sha256=artifact_sha256,
+                    image_id=image_id,
+                    request_sha256s=requests,
+                    response_sha256s=responses,
+                    broker_calls=broker_calls,
+                )
+                await record(code, digest)
+            except Exception:  # noqa: BLE001 - shadow evidence cannot settle a screen
+                logger.warning("v13 runtime receipt unavailable check=%s", code)
+
+        await emit("health", [], [], 0)
+        if not include_runs:
+            return
+
+        # Reserve source-review/verdict time. Each request also has its own
+        # strict timeout; a slow harness cannot spend the whole lease here.
+        def budget_available() -> bool:
+            remaining = self._lease_remaining(deadline)
+            return remaining is None or remaining > 180.0
+
+        async def post(
+            path: str, payload: dict[str, object], *, seed_pairs: int = 0
+        ) -> tuple[str, str, int] | None:
+            if not budget_available():
+                return None
+            request_bytes = json.dumps(
+                payload, sort_keys=True, separators=(",", ":")
+            ).encode()
+            calls_before = _gateway_call_count(audit_runtime.gateway_state_file)
+            try:
+                code, body = await self._request_from_sidecar(
+                    probe_container,
+                    f"{audit_runtime.harness_base}{path}",
+                    payload=payload,
+                    timeout=min(20.0, self._config.run_timeout_seconds),
+                )
+            except Exception:  # noqa: BLE001 - no decision from a failed probe
+                return None
+            if code != 0:
+                return None
+            try:
+                parsed = json.loads(body)
+            except (UnicodeError, ValueError):
+                return None
+            if not isinstance(parsed, dict):
+                return None
+            if seed_pairs and _seed_ack_mismatch(body, expected_pairs=seed_pairs):
+                return None
+            calls = max(
+                0,
+                _gateway_call_count(audit_runtime.gateway_state_file) - calls_before,
+            )
+            return (
+                hashlib.sha256(request_bytes).hexdigest(),
+                hashlib.sha256(body.encode()).hexdigest(),
+                calls,
+            )
+
+        token = secrets.token_hex(12)
+        user_a = f"u-{secrets.token_hex(12)}"
+        user_b = f"u-{secrets.token_hex(12)}"
+        system_prompt = (
+            "You are a helpful assistant. Follow the supplied system instructions."
+        )
+
+        def run_request(
+            user_id: str, prompt: str, *, tools: list[object] | None = None
+        ) -> dict[str, object]:
+            return {
+                "case_id": f"c-{secrets.token_hex(12)}",
+                "system_prompt": system_prompt,
+                "user_input": prompt,
+                "tools": tools or [],
+                "user_id": user_id,
+                "bench_version": bench_version,
+            }
+
+        ordinary = await post(
+            "/run", run_request(user_a, f"Explain this ordinary request: {token}")
+        )
+        if ordinary is not None and ordinary[2] > 0:
+            await emit("ordinary_model_run", [ordinary[0]], [ordinary[1]], ordinary[2])
+
+        tool_request = run_request(
+            user_a,
+            f"Search for the current information about {token}.",
+            tools=[
+                {
+                    "name": "search_web",
+                    "description": "Search the public web.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                }
+            ],
+        )
+        try:
+            tool_request = _with_tool_endpoint(
+                tool_request,
+                tool_route=audit_runtime.tool_route,
+                tool_key=audit_runtime.tool_key,
+            )
+        except ValueError:
+            tool_request = {}
+        if tool_request:
+            tool = await post("/run", tool_request)
+            if tool is not None and tool[2] > 0:
+                await emit("tool_selection_run", [tool[0]], [tool[1]], tool[2])
+
+        def seed_request(user_id: str, marker: str) -> dict[str, object]:
+            return {
+                "user_id": user_id,
+                "wave": 0,
+                "pairs": [
+                    {
+                        "pair_id": f"p-{secrets.token_hex(12)}",
+                        "session_id": f"s-{secrets.token_hex(12)}",
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "prompt": "What is the reference marker?",
+                        "response": marker,
+                    }
+                ],
+                "subjects": [],
+                "links": [],
+            }
+
+        seeded_a = await post(
+            self._config.seed_path, seed_request(user_a, token), seed_pairs=1
+        )
+        if seeded_a is None:
+            return
+        memory_a = await post(
+            "/run", run_request(user_a, "What is my reference marker?")
+        )
+        if memory_a is None or memory_a[2] == 0:
+            return
+        await emit(
+            "seed_memory_run",
+            [seeded_a[0], memory_a[0]],
+            [seeded_a[1], memory_a[1]],
+            seeded_a[2] + memory_a[2],
+        )
+
+        seeded_b = await post(
+            self._config.seed_path,
+            seed_request(user_b, secrets.token_hex(12)),
+            seed_pairs=1,
+        )
+        if seeded_b is None:
+            return
+        isolation_a = await post(
+            "/run", run_request(user_a, "Repeat only my own reference marker.")
+        )
+        isolation_b = await post(
+            "/run", run_request(user_b, "Repeat only my own reference marker.")
+        )
+        if (
+            isolation_a is not None
+            and isolation_b is not None
+            and isolation_a[2] > 0
+            and isolation_b[2] > 0
+        ):
+            await emit(
+                "two_user_isolation",
+                [seeded_a[0], seeded_b[0], isolation_a[0], isolation_b[0]],
+                [seeded_a[1], seeded_b[1], isolation_a[1], isolation_b[1]],
+                sum(item[2] for item in (seeded_a, seeded_b, isolation_a, isolation_b)),
+            )
 
     async def _run_private_challenge_with_compatibility(
         self,

@@ -658,6 +658,31 @@ class ScreenerWorker:
             async def record_archive_verification() -> None:
                 await record_mechanical_verification("archive_sha")
 
+            async def record_runtime_verification(
+                check_code: str, evidence_sha256: str
+            ) -> None:
+                if policy_version != 13:
+                    return
+                try:
+                    await self._platform.record_verification_receipt(
+                        agent_id,
+                        attempt_id=attempt_id,
+                        artifact_sha256=item.sha256.lower(),
+                        policy_version=policy_version,
+                        check_code=check_code,
+                        evidence_sha256=evidence_sha256,
+                    )
+                except PlatformError:
+                    # An unavailable writer cannot turn an observation into a
+                    # check pass. Backroom will retain `not_recorded`.
+                    logger.warning(
+                        "runtime verification receipt not recorded agent_id=%s "
+                        "attempt_id=%s check=%s",
+                        agent_id,
+                        attempt_id,
+                        check_code,
+                    )
+
             if item.precheck_reason_code is not None:
                 if item.precheck_reason_code != EXACT_CROSS_MINER_DUPLICATE:
                     raise PlatformError(
@@ -770,6 +795,7 @@ class ScreenerWorker:
                         deadline=screen_deadline,
                         publish_image=publish_image,
                         record_archive_verification=record_archive_verification,
+                        record_runtime_verification=record_runtime_verification,
                         remote_build=remote_build,
                         remote_build_consumed=remote_build_consumed,
                         remote_source_review=remote_source_review,

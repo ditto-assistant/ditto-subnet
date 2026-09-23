@@ -127,6 +127,13 @@ class ScreenerConfig:
     seed_probe_timeout_seconds: float
     """Deadline for the single post-health ``/seed`` probe."""
 
+    v13_runtime_receipts_mode: str
+    """``off`` (default) or ``shadow`` for bounded, non-decisive v13 probes.
+
+    The shadow observations are evidence-presence receipts only. They do not
+    satisfy the policy's runtime or private-verification decision bar.
+    """
+
     smoke_env: tuple[tuple[str, str], ...]
     """Env vars injected (``docker run -e K=V``) into the serve-smoke container.
 
@@ -372,6 +379,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         ),
         seed_probe_timeout_seconds=_parse_float(
             "SCREENER_SEED_PROBE_TIMEOUT_SECONDS", "60"
+        ),
+        v13_runtime_receipts_mode=_parse_choice(
+            "SCREENER_V13_RUNTIME_RECEIPTS_MODE", "off", ("off", "shadow")
         ),
         smoke_env=_parse_env_pairs(
             # Compatibility key for older harness startup. The isolated fake

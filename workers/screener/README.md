@@ -165,6 +165,14 @@ Required values are supplied through the production host's protected
   screened image, passing ones included -- how close the fleet runs to the caps
   cannot be read from rejections alone. An image without a shell reports
   nothing and screening is unchanged.
+- `SCREENER_V13_RUNTIME_RECEIPTS_MODE`: `off` (default) or `shadow`. The shadow
+  mode sends bounded `/run` and `/seed` requests through the isolated smoke
+  network and records digest-only, exact-attempt observations for V13 runtime
+  checks 3–7. A receipt means `recorded_unverified`, never a pass: the fake
+  model cannot establish actual tool choice, memory correctness, or user
+  isolation. The mode has no influence on the screening outcome and should
+  remain off until its overhead and evidence profile have been calibrated.
+  Targon-only smoke and pre-build source holds leave these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
 - `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-5.6-terra`; legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.

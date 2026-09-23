@@ -27,6 +27,7 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_REMOTE_BUILD_MODE",
         "SCREENER_BUILD_MEMORY",
         "SCREENER_IMAGE_BUILD_MEMORY",
+        "SCREENER_V13_RUNTIME_RECEIPTS_MODE",
         "NETUID",
     ):
         monkeypatch.delenv(k, raising=False)
@@ -45,6 +46,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.image_build_memory == "8g"
     assert cfg.remote_build_timeout_seconds == 1500
     assert cfg.remote_build_mode == "off"
+    assert cfg.v13_runtime_receipts_mode == "off"
     assert cfg.gh_token_file is None
     # Must default to (at least) the platform's 20 MiB upload cap, else the gate
     # false-fails legitimately-uploaded tarballs.
@@ -82,6 +84,17 @@ def test_image_build_memory_additively_replaces_legacy_name(
 
     monkeypatch.setenv("SCREENER_IMAGE_BUILD_MEMORY", "8g")
     assert parse_screener_config_from_env().image_build_memory == "8g"
+
+
+def test_v13_runtime_receipts_require_explicit_shadow_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_V13_RUNTIME_RECEIPTS_MODE", "shadow")
+    assert parse_screener_config_from_env().v13_runtime_receipts_mode == "shadow"
+    monkeypatch.setenv("SCREENER_V13_RUNTIME_RECEIPTS_MODE", "enforce")
+    with pytest.raises(ValueError, match="SCREENER_V13_RUNTIME_RECEIPTS_MODE"):
+        parse_screener_config_from_env()
 
 
 def test_remote_build_timeout_is_independent_and_configurable(
