@@ -818,6 +818,26 @@ def _preload_ledger_evidence(
     return "\n".join(outputs), read_locations
 
 
+def _has_unreviewed_concern(
+    notes: Sequence[Mapping[str, object]], read_locations: set[tuple[str, int]]
+) -> bool:
+    """A decision-only court cannot clear a concern it was never shown."""
+    for note in notes:
+        if note.get("kind") != "concern":
+            continue
+        path = note.get("path")
+        line = note.get("line")
+        if (
+            not isinstance(path, str)
+            or not path
+            or not isinstance(line, int)
+            or isinstance(line, bool)
+            or (path.removeprefix("./"), line) not in read_locations
+        ):
+            return True
+    return False
+
+
 def _compacted_adjudicator_messages(
     messages: list[dict[str, object]],
 ) -> list[dict[str, object]]:
@@ -928,15 +948,7 @@ class SourceReviewAdjudicator:
             # The ledger can retain 48 notes but the one-turn court preloads
             # only 16 distinct locations. A later concern must not disappear
             # behind that bound while an earlier excerpt supports a CLEAR.
-            unreviewed_concerns = any(
-                note.get("kind") == "concern"
-                and isinstance(note.get("path"), str)
-                and isinstance(note.get("line"), int)
-                and not isinstance(note.get("line"), bool)
-                and (str(note["path"]).removeprefix("./"), int(note["line"]))
-                not in preloaded_reads
-                for note in notes
-            )
+            unreviewed_concerns = _has_unreviewed_concern(notes, preloaded_reads)
             if not preloaded_evidence:
                 # The upstream layers retained a ledger but no usable source
                 # evidence. There is nothing for a court to decide; do not

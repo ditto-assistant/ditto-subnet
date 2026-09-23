@@ -958,6 +958,22 @@ async def test_later_unread_concern_cannot_be_silently_cleared(
         assert result.decision == "reject"
 
 
+@pytest.mark.parametrize(
+    "concern",
+    [
+        {"kind": "concern", "summary": "path omitted"},
+        {"kind": "concern", "path": "src/main.rs", "line": "6"},
+        {"kind": "concern", "path": "src/main.rs", "line": True},
+    ],
+)
+def test_malformed_concern_is_not_mistaken_for_preloaded_source(
+    concern: dict[str, object],
+) -> None:
+    assert adjudicator_module._has_unreviewed_concern(
+        [concern], {("src/main.rs", 6)}
+    )
+
+
 async def test_budget_terminated_review_without_evidence_settles_immediately(
     tmp_path: Path,
 ) -> None:
