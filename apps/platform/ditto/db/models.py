@@ -838,6 +838,11 @@ class ScreeningVerificationReplay(Base):
             "AND image_id IS NOT NULL)",
             name="svrp_image_metadata_check",
         ),
+        CheckConstraint(
+            "image_upload_id IS NOT NULL OR image_verified_at IS NULL OR "
+            "image_verified_storage_key IS NOT NULL",
+            name="svrp_verified_storage_key_check",
+        ),
         CheckConstraint("policy_version = 13", name="svrp_policy_check"),
         CheckConstraint(
             "status IN ('queued', 'running', 'reported', 'failed')",
