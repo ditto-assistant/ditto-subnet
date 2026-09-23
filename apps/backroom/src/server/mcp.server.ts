@@ -658,7 +658,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screening_verification_readiness:
     'Read V13 receipt presence; no pass or CLEAR. Artifact scope.',
   get_v13_private_generation_group:
-    'Read exact V13 target/control generation-start identities and digests; no verdict.',
+    'Read V13 group or optional role package digests; unverified, no verdict.',
   get_screening_review_deadline:
     'Read exact V13 artifact deadline binding; null/not_configured means no authoritative window. Attempt leases are not finalizer dates.',
   reject_screening_submission:
@@ -1257,12 +1257,13 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get V13 private generation group',
       description:
-        'Read one immutable V13 generation-start group: DB time, target/control identities and role digests. No private case bytes or verdict.',
+        'Read V13 generation group or role package metadata with optional role. Digest-only, recorded_unverified; no private cases or verdict.',
       inputSchema: v13GenerationGroupInputSchema,
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchV13GenerationGroup(input)),
   )
+
 
   registerTool(
     'get_owner_attestations',

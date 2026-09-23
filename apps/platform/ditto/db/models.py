@@ -872,6 +872,46 @@ class ScreeningPrivatePackageRegistration(Base):
     )
 
 
+class V13GroupPackageRegistration(Base):
+    """Append-only digest registration for one private generation group role.
+
+    Unlike legacy attempt-keyed rows, a reusable clean attempt may have one
+    separate sealed package for each target-specific generation group.
+    """
+
+    __tablename__ = "v13_group_package_registrations"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    role: Mapped[str] = mapped_column(Text, primary_key=True)
+    generation_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    pair_inventory_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    registrar_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["group_id"],
+            ["v13_private_generation_groups.group_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("role IN ('target', 'known_benign')", name="v13gpr_role_check"),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13gpr_{name}_check")
+            for name in (
+                "generation_receipt_sha256",
+                "manifest_sha256",
+                "pair_inventory_sha256",
+            )
+        ),
+        CheckConstraint(
+            "length(registrar_actor) BETWEEN 1 AND 120", name="v13gpr_actor_check"
+        ),
+    )
+
+
 class ScreeningVerificationReplay(Base):
     """Independent, report-only replay of one pinned source-review artifact.
 

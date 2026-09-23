@@ -23,6 +23,7 @@ from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
     ScreeningAttempt,
+    ScreeningPrivatePackageRegistration,
     V13PrivateGenerationGroup,
 )
 from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE_SHA256
@@ -214,6 +215,80 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
     )
     assert repeat_start.json()["group_id"] == body["group_id"]
 
+    # Old attempt-keyed rows are not promoted into target/control group proof.
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningPrivatePackageRegistration(
+                agent_id=target_agent,
+                attempt_id=target_attempt,
+                artifact_sha256="a" * 64,
+                image_sha256="b" * 64,
+                profile_sha256=V13_PRIVATE_PROFILE_SHA256,
+                manifest_sha256="9" * 64,
+                pair_inventory_sha256="3" * 64,
+                clean_agent_id=clean_agent,
+                clean_attempt_id=clean_attempt,
+                clean_artifact_sha256="c" * 64,
+                clean_image_sha256="d" * 64,
+                runner_hotkey="legacy-unverified",
+                registrar_actor="test:legacy",
+            )
+        )
+
+    target_package = {
+        "generation_receipt_sha256": body["target_receipt_sha256"],
+        "manifest_sha256": "1" * 64,
+        "pair_inventory_sha256": "3" * 64,
+    }
+    target_path = f"{_BASE}/groups/{body['group_id']}/packages/target"
+    control_path = f"{_BASE}/groups/{body['group_id']}/packages/known_benign"
+    assert (await client.get(target_path, headers=_HEADERS)).status_code == 404
+    assert (await client.post(target_path, json=target_package)).status_code == 401
+    mismatch = await client.post(
+        target_path,
+        json={**target_package, "generation_receipt_sha256": "f" * 64},
+        headers=_HEADERS,
+    )
+    assert mismatch.status_code == 409
+    target_registered = await client.post(
+        target_path, json=target_package, headers=_HEADERS
+    )
+    assert target_registered.status_code == 200, target_registered.text
+    assert target_registered.json()["status"] == "recorded_unverified"
+    assert target_registered.json()["attempt_id"] == str(target_attempt)
+    assert (
+        await client.post(target_path, json=target_package, headers=_HEADERS)
+    ).json() == target_registered.json()
+    control_package = {
+        "generation_receipt_sha256": body["control_receipt_sha256"],
+        "manifest_sha256": "2" * 64,
+        "pair_inventory_sha256": "3" * 64,
+    }
+    mismatched_inventory = await client.post(
+        control_path,
+        json={**control_package, "pair_inventory_sha256": "4" * 64},
+        headers=_HEADERS,
+    )
+    assert mismatched_inventory.status_code == 409
+    control_registered = await client.post(
+        control_path, json=control_package, headers=_HEADERS
+    )
+    assert control_registered.status_code == 200, control_registered.text
+    assert control_registered.json()["attempt_id"] == str(clean_attempt)
+    assert control_registered.json()["role"] == "known_benign"
+    assert (
+        await client.get(control_path, headers=_HEADERS)
+    ).json() == control_registered.json()
+    with pytest.raises(DBAPIError):
+        async with session_maker() as session, session.begin():
+            await session.execute(
+                text(
+                    "UPDATE v13_group_package_registrations "
+                    "SET manifest_sha256 = :sha WHERE group_id = :group_id"
+                ),
+                {"sha": "5" * 64, "group_id": UUID(body["group_id"])},
+            )
+
 
 async def test_generation_group_rows_are_immutable_in_postgres(
     app: FastAPI,
@@ -233,6 +308,7 @@ async def test_generation_group_rows_are_immutable_in_postgres(
         )
     assert "v13_private_generation_groups_immutable" in triggers
     assert "v13_known_benign_control_approvals_immutable" in triggers
+    assert "v13_group_package_registrations_immutable" in triggers
 
 
 async def test_generation_role_digest_matches_protocol_fixed_vector() -> None:

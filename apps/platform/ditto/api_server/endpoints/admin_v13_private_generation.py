@@ -22,6 +22,8 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.v13_private_generation import (
     V13GenerationGroupView,
     V13GenerationStartRequest,
+    V13GroupPackageRegisterRequest,
+    V13GroupPackageView,
     V13KnownBenignApprovalRequest,
     V13KnownBenignApprovalView,
 )
@@ -32,6 +34,7 @@ from ditto.db.models import (
     ScreenedImageUpload,
     ScreeningAttempt,
     ScreeningPrivatePackageRegistration,
+    V13GroupPackageRegistration,
     V13KnownBenignControlApproval,
     V13PrivateGenerationGroup,
 )
@@ -348,3 +351,159 @@ async def get_generation_group(
     if row is None:
         raise HTTPException(status_code=404, detail="generation group not found")
     return _group_view(row)
+
+
+def _package_view(
+    group: V13PrivateGenerationGroup, row: V13GroupPackageRegistration
+) -> V13GroupPackageView:
+    target = row.role == "target"
+    return V13GroupPackageView(
+        group_id=group.group_id,
+        role=row.role,
+        agent_id=group.target_agent_id if target else group.control_agent_id,
+        attempt_id=group.target_attempt_id if target else group.control_attempt_id,
+        artifact_sha256=(
+            group.target_artifact_sha256 if target else group.control_artifact_sha256
+        ),
+        image_sha256=group.target_image_sha256
+        if target
+        else group.control_image_sha256,
+        profile_sha256=group.profile_sha256,
+        generation_receipt_sha256=row.generation_receipt_sha256,
+        manifest_sha256=row.manifest_sha256,
+        pair_inventory_sha256=row.pair_inventory_sha256,
+        registrar_actor=row.registrar_actor,
+        registered_at=row.registered_at,
+    )
+
+
+@router.post("/groups/{group_id}/packages/{role}", response_model=V13GroupPackageView)
+async def register_group_package(
+    group_id: UUID,
+    role: Literal["target", "known_benign"],
+    payload: V13GroupPackageRegisterRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> V13GroupPackageView:
+    """Record a digest-only package after a committed generation start.
+
+    This does not authenticate the protected package or make an admin-supplied
+    manifest a trusted matched control. A separate provisioner and verifier
+    must validate sealed bytes and independent benign-control provenance.
+    """
+    actor = _actor(x_admin_actor)
+    try:
+        async with session.begin():
+            # Serialize the two role inserts so pair-inventory equality cannot
+            # be bypassed by concurrent first registrations.
+            group = await session.get(
+                V13PrivateGenerationGroup, group_id, with_for_update=True
+            )
+            if group is None:
+                raise HTTPException(
+                    status_code=404, detail="generation group not found"
+                )
+            expected_receipt = (
+                group.target_receipt_sha256
+                if role == "target"
+                else group.control_receipt_sha256
+            )
+            if (
+                payload.generation_receipt_sha256 != expected_receipt
+                or expected_receipt != generation_role_digest(group, role)
+            ):
+                raise HTTPException(
+                    status_code=409, detail="generation receipt mismatch"
+                )
+            target = await session.get(Agent, group.target_agent_id)
+            control = await session.get(Agent, group.control_agent_id)
+            target_attempt = await session.get(
+                ScreeningAttempt, group.target_attempt_id
+            )
+            control_attempt = await session.get(
+                ScreeningAttempt, group.control_attempt_id
+            )
+            if (
+                target is None
+                or control is None
+                or target_attempt is None
+                or control_attempt is None
+                or target.status
+                not in {AgentStatus.QUARANTINED, AgentStatus.ATH_PENDING_REVIEW}
+                or control.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+                or target.sha256.lower() != group.target_artifact_sha256
+                or control.sha256.lower() != group.control_artifact_sha256
+                or target_attempt.agent_id != group.target_agent_id
+                or control_attempt.agent_id != group.control_agent_id
+                or target_attempt.policy_version != 13
+                or control_attempt.policy_version != 13
+                or target_attempt.artifact_sha256 != group.target_artifact_sha256
+                or control_attempt.artifact_sha256 != group.control_artifact_sha256
+                or not await _bound_image(
+                    session,
+                    agent=target,
+                    attempt=target_attempt,
+                    image=group.target_image_sha256,
+                )
+                or not await _bound_image(
+                    session,
+                    agent=control,
+                    attempt=control_attempt,
+                    image=group.control_image_sha256,
+                )
+            ):
+                raise HTTPException(status_code=409, detail="package identity changed")
+            existing = await session.get(V13GroupPackageRegistration, (group_id, role))
+            if existing is not None:
+                if (
+                    existing.generation_receipt_sha256
+                    != payload.generation_receipt_sha256
+                    or existing.manifest_sha256 != payload.manifest_sha256
+                    or existing.pair_inventory_sha256 != payload.pair_inventory_sha256
+                ):
+                    raise HTTPException(status_code=409, detail="package conflicts")
+                return _package_view(group, existing)
+            other_role = "known_benign" if role == "target" else "target"
+            other = await session.get(
+                V13GroupPackageRegistration, (group_id, other_role)
+            )
+            if (
+                other is not None
+                and other.pair_inventory_sha256 != payload.pair_inventory_sha256
+            ):
+                raise HTTPException(status_code=409, detail="pair inventory differs")
+            registered_at = await _database_now(session)
+            if registered_at <= group.started_at:
+                raise HTTPException(status_code=409, detail="package predates group")
+            row = V13GroupPackageRegistration(
+                group_id=group_id,
+                role=role,
+                generation_receipt_sha256=payload.generation_receipt_sha256,
+                manifest_sha256=payload.manifest_sha256,
+                pair_inventory_sha256=payload.pair_inventory_sha256,
+                registrar_actor=actor,
+                registered_at=registered_at,
+            )
+            session.add(row)
+            await session.flush()
+            return _package_view(group, row)
+    except IntegrityError as error:
+        raise HTTPException(
+            status_code=409, detail="package changed concurrently"
+        ) from error
+
+
+@router.get("/groups/{group_id}/packages/{role}", response_model=V13GroupPackageView)
+async def get_group_package(
+    group_id: UUID,
+    role: Literal["target", "known_benign"],
+    _admin: AdminDep,
+    session: SessionDep,
+) -> V13GroupPackageView:
+    """Read a group role's exact metadata; legacy attempt rows never qualify."""
+    group = await session.get(V13PrivateGenerationGroup, group_id)
+    row = await session.get(V13GroupPackageRegistration, (group_id, role))
+    if group is None or row is None:
+        raise HTTPException(status_code=404, detail="group package not found")
+    return _package_view(group, row)

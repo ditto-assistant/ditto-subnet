@@ -2881,6 +2881,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/v13-private-generation/groups/{group_id}/packages/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Group Package
+         * @description Read a group role's exact metadata; legacy attempt rows never qualify.
+         */
+        get: operations["get_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__get"];
+        put?: never;
+        /**
+         * Register Group Package
+         * @description Record a digest-only package after a committed generation start.
+         *
+         *     This does not authenticate the protected package or make an admin-supplied
+         *     manifest a trusted matched control. A separate provisioner and verifier
+         *     must validate sealed bytes and independent benign-control provenance.
+         */
+        post: operations["register_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v13-private-generation/known-benign-approvals": {
         parameters: {
             query?: never;
@@ -30121,6 +30149,63 @@ export interface components {
             /** Target Image Sha256 */
             target_image_sha256: string;
         };
+        /** V13GroupPackageRegisterRequest */
+        V13GroupPackageRegisterRequest: {
+            /** Generation Receipt Sha256 */
+            generation_receipt_sha256: string;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Pair Inventory Sha256 */
+            pair_inventory_sha256: string;
+        };
+        /** V13GroupPackageView */
+        V13GroupPackageView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Generation Receipt Sha256 */
+            generation_receipt_sha256: string;
+            /**
+             * Group Id
+             * Format: uuid
+             */
+            group_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Pair Inventory Sha256 */
+            pair_inventory_sha256: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /**
+             * Registered At
+             * Format: date-time
+             */
+            registered_at: string;
+            /** Registrar Actor */
+            registrar_actor: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "target" | "known_benign";
+            /**
+             * Status
+             * @default recorded_unverified
+             * @constant
+             */
+            status: "recorded_unverified";
+        };
         /** V13KnownBenignApprovalRequest */
         V13KnownBenignApprovalRequest: {
             /**
@@ -37139,6 +37224,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["V13GenerationGroupView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                group_id: string;
+                role: "target" | "known_benign";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13GroupPackageView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_group_package_api_v1_admin_v13_private_generation_groups__group_id__packages__role__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                group_id: string;
+                role: "target" | "known_benign";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V13GroupPackageRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13GroupPackageView"];
                 };
             };
             /** @description Validation Error */

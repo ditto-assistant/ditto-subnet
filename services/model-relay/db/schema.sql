@@ -4839,6 +4839,26 @@ CREATE TABLE public.upload_admission_reservations (
 
 
 --
+-- Name: v13_group_package_registrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_group_package_registrations (
+    group_id uuid NOT NULL,
+    role text NOT NULL,
+    generation_receipt_sha256 text NOT NULL,
+    manifest_sha256 text NOT NULL,
+    pair_inventory_sha256 text NOT NULL,
+    registrar_actor text NOT NULL,
+    registered_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_group_package_registrations_v13gpr_actor_check CHECK (((length(registrar_actor) >= 1) AND (length(registrar_actor) <= 120))),
+    CONSTRAINT ck_v13_group_package_registrations_v13gpr_generation_re_bf8e CHECK ((length(generation_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_group_package_registrations_v13gpr_manifest_sha256_check CHECK ((length(manifest_sha256) = 64)),
+    CONSTRAINT ck_v13_group_package_registrations_v13gpr_pair_inventor_fc77 CHECK ((length(pair_inventory_sha256) = 64)),
+    CONSTRAINT ck_v13_group_package_registrations_v13gpr_role_check CHECK ((role = ANY (ARRAY['target'::text, 'known_benign'::text])))
+);
+
+
+--
 -- Name: v13_known_benign_control_approvals; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7086,6 +7106,14 @@ ALTER TABLE ONLY public.upload_admission_reservations
 
 
 --
+-- Name: v13_group_package_registrations pk_v13_group_package_registrations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_group_package_registrations
+    ADD CONSTRAINT pk_v13_group_package_registrations PRIMARY KEY (group_id, role);
+
+
+--
 -- Name: v13_known_benign_control_approvals pk_v13_known_benign_control_approvals; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9035,6 +9063,13 @@ CREATE TRIGGER screening_attempt_artifact_immutable BEFORE UPDATE OF artifact_sh
 
 
 --
+-- Name: v13_group_package_registrations v13_group_package_registrations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_group_package_registrations_immutable BEFORE DELETE OR UPDATE ON public.v13_group_package_registrations FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
 -- Name: v13_known_benign_control_approvals v13_known_benign_control_approvals_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -9890,6 +9925,14 @@ ALTER TABLE ONLY public.screening_verification_replays
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT fk_screening_verification_replays_source_attempt_id_scr_729c FOREIGN KEY (source_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: v13_group_package_registrations fk_v13_group_package_registrations_group_id_v13_private_cf73; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_group_package_registrations
+    ADD CONSTRAINT fk_v13_group_package_registrations_group_id_v13_private_cf73 FOREIGN KEY (group_id) REFERENCES public.v13_private_generation_groups(group_id) ON DELETE RESTRICT;
 
 
 --
