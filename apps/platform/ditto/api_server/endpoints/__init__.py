@@ -104,9 +104,6 @@ from ditto.api_server.endpoints.admin_screener_fanout_shadow import (
 from ditto.api_server.endpoints.admin_screener_policy_activation import (
     router as admin_screener_policy_activation_router,
 )
-from ditto.api_server.endpoints.admin_v13_private_generation import (
-    router as admin_v13_private_generation_router,
-)
 from ditto.api_server.endpoints.admin_screener_review_settings import (
     router as admin_screener_review_settings_router,
 )
@@ -118,6 +115,9 @@ from ditto.api_server.endpoints.admin_submission_settings import (
 )
 from ditto.api_server.endpoints.admin_traces import (
     router as admin_traces_router,
+)
+from ditto.api_server.endpoints.admin_v13_private_generation import (
+    router as admin_v13_private_generation_router,
 )
 from ditto.api_server.endpoints.admin_validation_retry import (
     router as admin_validation_retry_router,

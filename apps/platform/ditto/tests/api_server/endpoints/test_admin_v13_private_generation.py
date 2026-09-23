@@ -192,7 +192,7 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
         row = await session.get(V13PrivateGenerationGroup, UUID(body["group_id"]))
         assert row is not None
         assert row.target_receipt_sha256 == generation_role_digest(row, "target")
-        assert row.control_receipt_sha256 == generation_role_digest(row, "control")
+        assert row.control_receipt_sha256 == generation_role_digest(row, "known_benign")
     with pytest.raises(DBAPIError):
         async with session_maker() as session, session.begin():
             await session.execute(
@@ -249,4 +249,7 @@ async def test_generation_role_digest_matches_protocol_fixed_vector() -> None:
     )
     assert generation_role_digest(group, "target") == (
         "96fd7f66ddc49df69bce3c57af4a4f75c97fb4a3ed45f98a75d8cb649ac31973"
+    )
+    assert generation_role_digest(group, "known_benign") == (
+        "1575e4205e10e50c2f2b3d3c33e6c1a920aa1897fcdd3c0d3f398c809f304d87"
     )

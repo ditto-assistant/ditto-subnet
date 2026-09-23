@@ -73,7 +73,7 @@ def _utc_stamp(value: datetime) -> str:
 
 
 def generation_role_digest(
-    group: V13PrivateGenerationGroup, role: Literal["target", "control"]
+    group: V13PrivateGenerationGroup, role: Literal["target", "known_benign"]
 ) -> str:
     """Canonical #2177-compatible digest, including both exact role identities."""
     return _canonical_digest(
@@ -327,7 +327,7 @@ async def record_generation_start(
                 started_at=started_at,
             )
             row.target_receipt_sha256 = generation_role_digest(row, "target")
-            row.control_receipt_sha256 = generation_role_digest(row, "control")
+            row.control_receipt_sha256 = generation_role_digest(row, "known_benign")
             session.add(row)
             await session.flush()
             return _group_view(row)
