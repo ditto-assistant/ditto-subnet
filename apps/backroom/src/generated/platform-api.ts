@@ -2706,6 +2706,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-verification-replays/process-keys/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register Replay Process Key
+         * @description Pin one host-generated worker public key; never accept a node bearer.
+         */
+        post: operations["register_replay_process_key_api_v1_admin_screening_verification_replays_process_keys__node_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screening-verification-replays/process-keys/{node_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Replay Process Key
+         * @description Revoke one exact key while keeping its nonce and audit history.
+         */
+        post: operations["revoke_replay_process_key_api_v1_admin_screening_verification_replays_process_keys__node_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-verification-replays/{agent_id}": {
         parameters: {
             query?: never;
@@ -26319,6 +26359,30 @@ export interface components {
              */
             target: "platform-relay-1" | "platform-relay-2";
         };
+        /** ReplayProcessKeyRevoke */
+        ReplayProcessKeyRevoke: {
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Hotkey */
+            expected_hotkey: string;
+            /** Expected Key Sha256 */
+            expected_key_sha256: string;
+            /** Reason */
+            reason: string;
+        };
+        /** ReplayProcessKeyWrite */
+        ReplayProcessKeyWrite: {
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Hotkey */
+            expected_hotkey: string;
+            /** Instance Id */
+            instance_id: string;
+            /** Public Key Hex */
+            public_key_hex: string;
+            /** Reason */
+            reason: string;
+        };
         /**
          * RestoreScoredScreeningSnapshotRequest
          * @description Restore the last pre-activation pass for an exact scored cohort.
@@ -37575,6 +37639,78 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AdminSourceSearchResult"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_replay_process_key_api_v1_admin_screening_verification_replays_process_keys__node_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplayProcessKeyWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_replay_process_key_api_v1_admin_screening_verification_replays_process_keys__node_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplayProcessKeyRevoke"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

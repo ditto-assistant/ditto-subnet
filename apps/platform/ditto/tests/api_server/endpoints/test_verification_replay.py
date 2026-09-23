@@ -1,11 +1,14 @@
 """Exact-guarded, report-only replay leases over the migrated Postgres schema."""
 
+import hashlib
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import DBAPIError
@@ -17,6 +20,7 @@ from ditto.api_models.verification_replay import (
     VerificationReplayFinish,
     VerificationReplayReceiptRequest,
 )
+from ditto.api_server.endpoints import verification_replay
 from ditto.api_server.endpoints.verification_replay import (
     _replay_verified_image_key,
     append_replay_receipt,
@@ -34,12 +38,15 @@ from ditto.db.models import (
     ScreenedImageUpload,
     ScreenerHeartbeat,
     ScreenerNode,
+    ScreenerReplayProcessKey,
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningVerificationReceipt,
     ScreeningVerificationReplay,
     ScreeningVerificationReplayReceipt,
 )
+
+from ditto_screening_protocol.v13_replay_process_identity import V13ReplayProcessProof
 
 ARTIFACT = "a" * 64
 IMAGE = "b" * 64
@@ -253,6 +260,134 @@ async def test_replay_claim_rechecks_worker_readiness_after_capacity_enabled(
     await session.commit()
     claimed = await claim_replay(_request(), SECOND_WORKER, session)
     assert claimed is not None and claimed.replay_id == created.replay_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "purpose", ["renew", "inputs", "build-upload", "build-verify", "receipts", "finish"]
+)
+async def test_rotated_sibling_process_key_cannot_use_existing_lease(
+    session, monkeypatch, purpose
+):
+    """A process with the shared node hotkey cannot reuse another key's lease."""
+    node_id = "subnet-screener-2"
+    instance_id = f"{node_id}-worker-1"
+    agent_id, attempt_id, quarantine_id, image_id = await _seed(session)
+    created = await create_replay(
+        agent_id, _payload(attempt_id, quarantine_id, image_id), None, session
+    )
+    await _enroll(session, node_id=node_id, replay_capacity=1)
+    old_key = Ed25519PrivateKey.generate()
+    new_key = Ed25519PrivateKey.generate()
+    now = datetime.now(UTC)
+
+    def process_key(private, status):
+        public_hex = (
+            private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+        )
+        return ScreenerReplayProcessKey(
+            node_id=node_id,
+            instance_id=instance_id,
+            public_key_hex=public_hex,
+            key_sha256=hashlib.sha256(bytes.fromhex(public_hex)).hexdigest(),
+            revision=1 if status == "revoked" else 2,
+            status=status,
+            registered_at=now - timedelta(minutes=1),
+            revoked_at=now if status == "revoked" else None,
+        )
+
+    original = process_key(old_key, "revoked")
+    replacement = process_key(new_key, "active")
+    session.add_all([original, replacement])
+    await session.flush()
+    row = await session.get(ScreeningVerificationReplay, created.replay_id)
+    assert row is not None
+    row.status = "running"
+    row.worker_hotkey = SECOND_WORKER
+    row.process_key_sha256 = original.key_sha256
+    row.lease_started_at = now
+    row.lease_deadline = now + timedelta(minutes=5)
+    await session.commit()
+    monkeypatch.setattr(
+        verification_replay, "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE", (0, 301, 0)
+    )
+    path = f"/screener/verification-replays/{created.replay_id}/{purpose}"
+    method = "GET" if purpose == "inputs" else "POST"
+    proof = V13ReplayProcessProof(
+        purpose=purpose,
+        node_id=node_id,
+        instance_id=instance_id,
+        method=method,
+        path=path,
+        body_sha256=hashlib.sha256(b"").hexdigest(),
+        issued_at=int(now.timestamp()),
+        nonce="b" * 32,
+    )
+
+    class SignedRequest:
+        state = SimpleNamespace(screener_node_status="active", screener_node_id=node_id)
+        headers = {
+            "x-replay-process-instance": instance_id,
+            "x-replay-process-proof": proof.model_dump_json(),
+            "x-replay-process-signature": new_key.sign(proof.signing_bytes()).hex(),
+        }
+
+        async def body(self):
+            return b""
+
+    request = SignedRequest()
+    request.method = method
+    build = VerificationReplayBuildUploadRequest(
+        artifact_sha256=ARTIFACT,
+        image_sha256=IMAGE,
+        size_bytes=123,
+        image_id="sha256:" + "c" * 64,
+    )
+    if purpose == "renew":
+        call = renew_replay(created.replay_id, request, SECOND_WORKER, session)
+    elif purpose == "inputs":
+        call = get_replay_inputs(created.replay_id, request, SECOND_WORKER, session)
+    elif purpose == "build-upload":
+        call = mint_replay_build_upload(
+            created.replay_id, build, request, SECOND_WORKER, session
+        )
+    elif purpose == "build-verify":
+        call = verify_replay_build(
+            created.replay_id,
+            VerificationReplayBuildVerifyRequest(**build.model_dump()),
+            request,
+            SECOND_WORKER,
+            session,
+        )
+    elif purpose == "receipts":
+        call = append_replay_receipt(
+            created.replay_id,
+            VerificationReplayReceiptRequest(
+                artifact_sha256=ARTIFACT,
+                policy_version=13,
+                check_code="archive_sha",
+                evidence_sha256="d" * 64,
+            ),
+            request,
+            SECOND_WORKER,
+            session,
+        )
+    else:
+        call = finish_replay(
+            created.replay_id,
+            VerificationReplayFinish(
+                status="failed",
+                failure_code="canary-failed",
+                artifact_sha256=ARTIFACT,
+                image_sha256=IMAGE,
+            ),
+            request,
+            SECOND_WORKER,
+            session,
+        )
+    with pytest.raises(HTTPException, match="another process key") as blocked:
+        await call
+    assert blocked.value.status_code == 403
 
 
 @pytest.mark.asyncio

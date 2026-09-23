@@ -110,8 +110,10 @@ async def verify_replay_process_proof(
         raise ReplayProcessProofError("invalid replay process signature") from exc
 
     if purpose == "claim":
-        if minimum_release is None or heartbeat is None:
+        if minimum_release is None:
             raise ReplayProcessProofError("replay process runner unavailable")
+        if heartbeat is None:
+            raise ReplayProcessProofError("exact replay process heartbeat unavailable")
         if (
             heartbeat.node_id != registration.node_id
             or heartbeat.instance_id != registration.instance_id

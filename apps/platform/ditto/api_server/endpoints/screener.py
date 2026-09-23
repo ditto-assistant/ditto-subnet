@@ -4539,6 +4539,25 @@ async def heartbeat(
     instance_id = request_body.instance_id or _LEGACY_INSTANCE_ID
     renewed_lease_deadline: datetime | None = None
     async with session.begin():
+        replay_process: dict | None = None
+        if enrolled_node_id == "subnet-screener-2" and request.headers.get(
+            "x-replay-process-proof"
+        ):
+            from ditto.api_server.endpoints.verification_replay import (
+                verify_replay_process_request,
+            )
+
+            node = await session.get(ScreenerNode, enrolled_node_id)
+            if node is None:
+                raise ScreenerAuthError("replay process node unavailable")
+            key_sha256 = await verify_replay_process_request(
+                request,
+                session,
+                node=node,
+                instance_id=instance_id,
+                purpose="heartbeat",
+            )
+            replay_process = {"key_sha256": key_sha256}
         previous_heartbeat = await session.get(
             ScreenerHeartbeat,
             (screener_hotkey, instance_id),
@@ -4642,6 +4661,7 @@ async def heartbeat(
                 if request_body.release is not None
                 else None
             ),
+            replay_process=replay_process,
             reported_at=reported_at,
             seen_at=now,
             signature=request_body.signature,

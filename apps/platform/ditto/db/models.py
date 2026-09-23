@@ -948,6 +948,7 @@ class ScreeningVerificationReplay(Base):
     image_verified_storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    process_key_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     lease_deadline: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -982,6 +983,9 @@ class ScreeningVerificationReplay(Base):
             ["image_upload_id"],
             ["screened_image_uploads.image_upload_id"],
             ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["process_key_sha256"], ["screener_replay_process_keys.key_sha256"]
         ),
         CheckConstraint(
             "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="svrp_artifact_sha_check"
@@ -5649,6 +5653,61 @@ class ScreenerNode(Base):
             "provider_resource_id",
             name="screener_nodes_provider_resource_key",
         ),
+    )
+
+
+class ScreenerReplayProcessKey(Base):
+    """Operator-pinned public key for one independent node's replay worker."""
+
+    __tablename__ = "screener_replay_process_keys"
+
+    node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    instance_id: Mapped[str] = mapped_column(Text, nullable=False)
+    public_key_hex: Mapped[str] = mapped_column(Text, nullable=False)
+    key_sha256: Mapped[str] = mapped_column(Text, primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(public_key_hex) = 64", name="srpk_public_key_hex_length_check"
+        ),
+        CheckConstraint("length(key_sha256) = 64", name="srpk_key_sha256_length_check"),
+        CheckConstraint("revision > 0", name="srpk_revision_check"),
+        CheckConstraint("status IN ('active', 'revoked')", name="srpk_status_check"),
+        ForeignKeyConstraint(["node_id"], ["screener_nodes.node_id"]),
+        Index(
+            "srpk_one_active_instance_idx",
+            "node_id",
+            "instance_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
+
+
+class ScreenerReplayProcessNonce(Base):
+    """Durable once-only process proof nonce, scoped to one registered key."""
+
+    __tablename__ = "screener_replay_process_nonces"
+
+    key_sha256: Mapped[str] = mapped_column(Text, primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text, primary_key=True)
+    consumed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint("length(nonce) = 32", name="srpn_nonce_length_check"),
+        ForeignKeyConstraint(
+            ["key_sha256"], ["screener_replay_process_keys.key_sha256"]
+        ),
+        Index("srpn_consumed_at_idx", "consumed_at"),
     )
 
 
