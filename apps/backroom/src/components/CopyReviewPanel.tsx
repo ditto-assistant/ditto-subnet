@@ -2,7 +2,8 @@ import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, Gavel, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import type { AthReviewKind, CopyReviewConsoleItem, CopyReviewGeneration, CopyReviewResolution } from '../lib/admin.schemas'
-import { decideCopyReview, listCopyReviews, openAthReview } from '../server/admin.functions'
+import { ATH_HOLD_WITHDRAWAL_CONFIRMATION } from '../lib/admin.schemas'
+import { decideCopyReview, executeAthHoldWithdrawalFn, getAthReview, listCopyReviews, openAthReview, previewAthHoldWithdrawalFn } from '../server/admin.functions'
 import { CopyReviewSourceDiff } from './CopyReviewSourceDiff'
 import { Modal } from './Modal'
 
@@ -128,6 +129,22 @@ function BudgetEvidence({
   return value ? <span>{label} {value}</span> : null
 }
 
+type HoldDecision = CopyReviewResolution | 'withdraw'
+
+type WithdrawalPreview = {
+  agentId: string
+  reviewId: string
+  expectedSha256: string
+  expectedScoreCount: number
+  expectedAgentStatus: string
+  reason: string
+  previewToken: string
+  restoredStatus: string
+  wouldChangeCrown: boolean
+  emissionRewardEligible: boolean
+  emissionReason: string
+}
+
 type BulkProgress = {
   done: number
   total: number
@@ -152,6 +169,9 @@ export function CopyReviewPanel({
   const listFn = useServerFn(listCopyReviews)
   const decideFn = useServerFn(decideCopyReview)
   const openFn = useServerFn(openAthReview)
+  const auditFn = useServerFn(getAthReview)
+  const previewWithdrawalFn = useServerFn(previewAthHoldWithdrawalFn)
+  const executeWithdrawalFn = useServerFn(executeAthHoldWithdrawalFn)
   const [items, setItems] = useState(initialItems)
   const [bulkEligibleCount, setBulkEligibleCount] = useState(initialBulkEligibleCount)
   const [generation, setGeneration] = useState<CopyReviewGeneration>(
@@ -163,7 +183,8 @@ export function CopyReviewPanel({
   const [rolloutBenchVersion, setRolloutBenchVersion] = useState(initialRolloutBenchVersion)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [reason, setReason] = useState('')
-  const [resolution, setResolution] = useState<CopyReviewResolution>('clear')
+  const [resolution, setResolution] = useState<HoldDecision>('clear')
+  const [withdrawalPreview, setWithdrawalPreview] = useState<WithdrawalPreview | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -172,7 +193,7 @@ export function CopyReviewPanel({
   const [holdSha256, setHoldSha256] = useState('')
   const [holdScoreCount, setHoldScoreCount] = useState('')
   const [holdReason, setHoldReason] = useState('')
-  const [confirmation, setConfirmation] = useState<'hold' | 'decision' | 'bulk' | null>(null)
+  const [confirmation, setConfirmation] = useState<'hold' | 'decision' | 'bulk' | 'withdraw' | null>(null)
 
   const selected = useMemo(
     () => items.find((item) => item.agent_id === selectedId) ?? null,
@@ -195,8 +216,81 @@ export function CopyReviewPanel({
     )
   }
 
+  async function beginWithdrawalPreview() {
+    if (!selected || resolution !== 'withdraw') return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const audit = await auditFn({ data: { agentId: selected.agent_id } })
+      if (!audit.held_artifact_sha256 || audit.held_score_count == null) {
+        throw new Error('This hold has no artifact guard to withdraw against.')
+      }
+      const preview = await previewWithdrawalFn({
+        data: {
+          agentId: selected.agent_id,
+          reviewId: audit.review.review_id,
+          expectedSha256: audit.held_artifact_sha256,
+          expectedScoreCount: audit.held_score_count,
+          expectedAgentStatus: audit.agent_status ?? '',
+          reason,
+        },
+      })
+      setWithdrawalPreview({
+        agentId: selected.agent_id,
+        reviewId: preview.review_id,
+        expectedSha256: preview.artifact_sha256,
+        expectedScoreCount: preview.score_count,
+        expectedAgentStatus: preview.agent_status,
+        reason,
+        previewToken: preview.preview_token,
+        restoredStatus: preview.restored_status,
+        wouldChangeCrown: preview.would_change_crown,
+        emissionRewardEligible: preview.emission_reward_eligible,
+        emissionReason: preview.emission_reason,
+      })
+      setConfirmation('withdraw')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function submitWithdrawal() {
+    if (!withdrawalPreview) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const result = await executeWithdrawalFn({
+        data: {
+          agentId: withdrawalPreview.agentId,
+          reviewId: withdrawalPreview.reviewId,
+          expectedSha256: withdrawalPreview.expectedSha256,
+          expectedScoreCount: withdrawalPreview.expectedScoreCount,
+          expectedAgentStatus: withdrawalPreview.expectedAgentStatus,
+          reason: withdrawalPreview.reason,
+          previewToken: withdrawalPreview.previewToken,
+          confirmation: ATH_HOLD_WITHDRAWAL_CONFIRMATION,
+        },
+      })
+      setNotice(
+        `${result.review.agent_name} hold was withdrawn without a clearance or rejection. Emissions stay closed.`,
+      )
+      setReason('')
+      setWithdrawalPreview(null)
+      setResolution('clear')
+      await refresh()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function submitDecision() {
-    if (!selected) return
+    if (!selected || resolution === 'withdraw') return
     setBusy(true)
     setError(null)
     setNotice(null)
@@ -719,10 +813,14 @@ export function CopyReviewPanel({
               <div className="flex gap-4 text-sm">
                 <label className="flex items-center gap-2"><input type="radio" name="copy-review-resolution" checked={resolution === 'clear'} onChange={() => setResolution('clear')} />Clear hold</label>
                 <label className="flex items-center gap-2"><input type="radio" name="copy-review-resolution" checked={resolution === 'reject'} onChange={() => setResolution('reject')} />Reject submission</label>
+                <label className="flex items-center gap-2"><input type="radio" name="copy-review-resolution" checked={resolution === 'withdraw'} onChange={() => setResolution('withdraw')} />Withdraw hold</label>
               </div>
+              {resolution === 'withdraw' ? (
+                <p className="text-xs text-[var(--muted)]">Withdraws an unsupported manual precautionary hold. This is not a clearance and does not grant emissions.</p>
+              ) : null}
               <textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Miner-visible reason recorded with your operator identity (min 3 characters)" rows={2} className="w-full rounded-lg border border-white/10 bg-transparent px-3 py-2 text-sm" />
-              <button type="button" onClick={() => setConfirmation('decision')} disabled={reason.trim().length < 3} className={`rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 ${resolution === 'clear' ? 'bg-[var(--acid-dim)] text-[var(--acid)]' : 'bg-[var(--red-dim)] text-[var(--red)]'}`}>
-                Preview {resolution}
+              <button type="button" onClick={() => { if (resolution === 'withdraw') void beginWithdrawalPreview(); else setConfirmation('decision') }} disabled={reason.trim().length < 3} className={`rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 ${resolution === 'reject' ? 'bg-[var(--red-dim)] text-[var(--red)]' : 'bg-[var(--acid-dim)] text-[var(--acid)]'}`}>
+                Preview {resolution === 'withdraw' ? 'withdrawal' : resolution}
               </button>
             </fieldset>
           )}
@@ -755,7 +853,9 @@ export function CopyReviewPanel({
                   ? `Hold or reopen ${short(holdAgentId, 12)} and block emissions`
                   : confirmation === 'bulk'
                     ? `Clear ${bulkEligible.length} calibrated eligible holds`
-                    : `${resolution === 'clear' ? 'Clear hold for' : 'Reject'} ${selected?.agent_name ?? 'selected submission'}`}
+                    : confirmation === 'withdraw'
+                      ? `Withdraw hold for ${selected?.agent_name ?? 'selected submission'} without a clearance`
+                      : `${resolution === 'clear' ? 'Clear hold for' : 'Reject'} ${selected?.agent_name ?? 'selected submission'}`}
               </dd>
             </div>
             <div>
@@ -772,6 +872,14 @@ export function CopyReviewPanel({
                 </dd>
               </div>
             ) : null}
+            {confirmation === 'withdraw' && withdrawalPreview ? (
+              <div>
+                <dt className="text-[var(--muted)]">Board and emissions</dt>
+                <dd className="mt-1 text-[var(--muted-strong)]">
+                  Restores {withdrawalPreview.restoredStatus}. Public crown {withdrawalPreview.wouldChangeCrown ? 'would change' : 'would not change'}. {withdrawalPreview.emissionRewardEligible ? 'Emissions would resume.' : withdrawalPreview.emissionReason}
+                </dd>
+              </div>
+            ) : null}
           </dl>
           <div className="mt-5 flex justify-end gap-2">
             <button type="button" onClick={() => setConfirmation(null)} disabled={busy} className="rounded-lg border border-white/10 px-4 py-2 text-sm disabled:opacity-50">
@@ -784,6 +892,7 @@ export function CopyReviewPanel({
                 setConfirmation(null)
                 if (action === 'hold') void submitHold()
                 else if (action === 'bulk') void clearAllEligible()
+                else if (action === 'withdraw') void submitWithdrawal()
                 else void submitDecision()
               }}
               disabled={busy}

@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { CopyReviewConsoleItem } from '../lib/admin.schemas'
+import { ATH_HOLD_WITHDRAWAL_CONFIRMATION, type CopyReviewConsoleItem } from '../lib/admin.schemas'
 import { CopyReviewPanel } from './CopyReviewPanel'
 
 vi.mock('@tanstack/react-start', () => ({ useServerFn: (serverFn: unknown) => serverFn }))
@@ -10,11 +10,14 @@ vi.mock('../server/admin.functions', () => ({
   decideCopyReview: vi.fn(),
   listCopyReviews: vi.fn(),
   openAthReview: vi.fn(),
+  getAthReview: vi.fn(),
+  previewAthHoldWithdrawalFn: vi.fn(),
+  executeAthHoldWithdrawalFn: vi.fn(),
   getCopyReviewSourceDiff: vi.fn(),
   getCopyReviewSourceDiffFile: vi.fn(),
 }))
 
-import { decideCopyReview, listCopyReviews, openAthReview } from '../server/admin.functions'
+import { decideCopyReview, executeAthHoldWithdrawalFn, getAthReview, listCopyReviews, openAthReview, previewAthHoldWithdrawalFn } from '../server/admin.functions'
 
 afterEach(() => {
   cleanup()
@@ -462,5 +465,86 @@ describe('CopyReviewPanel', () => {
     }))
     expect(await screen.findByText(/held-agent/)).toBeDefined()
     expect(screen.getByText(/require review before activation can converge/)).toBeDefined()
+  })
+
+  it('previews a withdrawal before recording it, and does not clear the hold', async () => {
+    const correction = 'Precautionary hold withdrawn. No misconduct finding and no completed certification.'
+    vi.mocked(getAthReview).mockResolvedValue({
+      review: eligible,
+      agent_status: 'ath_pending_review',
+      held_artifact_sha256: 'ab'.repeat(32),
+      held_score_count: 3,
+      previous_status: 'scored',
+      opened_by: 'operator',
+      action_history: [],
+    })
+    vi.mocked(previewAthHoldWithdrawalFn).mockResolvedValue({
+      agent_id: eligible.agent_id,
+      review_id: eligible.review_id,
+      artifact_sha256: 'ab'.repeat(32),
+      score_count: 3,
+      agent_status: 'ath_pending_review',
+      restored_status: 'scored',
+      board_before: {
+        bench_version: 7,
+        read_at: '2026-09-23T00:00:00Z',
+        ranked_count: 0,
+        champion_agent_id: null,
+        champion_hotkey: null,
+        champion_score: null,
+        raw_leader_agent_id: null,
+        raw_leader_score: null,
+        fingerprint: 'before',
+      },
+      board_after: {
+        bench_version: 7,
+        read_at: '2026-09-23T00:00:00Z',
+        ranked_count: 1,
+        champion_agent_id: eligible.agent_id,
+        champion_hotkey: eligible.miner_hotkey,
+        champion_score: 0.97,
+        raw_leader_agent_id: eligible.agent_id,
+        raw_leader_score: 0.97,
+        fingerprint: 'after',
+      },
+      would_change_crown: true,
+      emission_reward_eligible: false,
+      emission_gate: 'unavailable',
+      would_change_emission_crown: false,
+      emission_reason: 'Emission eligibility stays closed.',
+      preview_token: 'preview-token-value',
+      expires_at: '2026-09-23T00:10:00Z',
+    })
+    vi.mocked(executeAthHoldWithdrawalFn).mockResolvedValue({
+      review: { ...eligible, status: 'resolved', resolution: 'withdraw', resolution_reason: correction },
+      agent_status: 'scored',
+      restored_status: 'scored',
+      emission_reward_eligible: false,
+      emission_gate: 'unavailable',
+      emission_reason: 'Emission eligibility stays closed.',
+    })
+    vi.mocked(listCopyReviews).mockResolvedValue(listResult([], 0))
+    render(<CopyReviewPanel {...panelProps} initialItems={[eligible]} initialBulkEligibleCount={1} readOnly={false} />)
+    fireEvent.click(screen.getByText(/held-agent/))
+    fireEvent.click(screen.getByText('Withdraw hold'))
+    fireEvent.change(screen.getByPlaceholderText(/Miner-visible reason/), { target: { value: correction } })
+    fireEvent.click(screen.getByText('Preview withdrawal'))
+    expect(executeAthHoldWithdrawalFn).not.toHaveBeenCalled()
+    expect(await screen.findByText(/Public crown would change/)).toBeDefined()
+    expect(screen.getByText(/Emission eligibility stays closed/)).toBeDefined()
+    fireEvent.click(screen.getByText('Confirm and execute'))
+    await waitFor(() => expect(executeAthHoldWithdrawalFn).toHaveBeenCalledWith({
+      data: {
+        agentId: eligible.agent_id,
+        reviewId: eligible.review_id,
+        expectedSha256: 'ab'.repeat(32),
+        expectedScoreCount: 3,
+        expectedAgentStatus: 'ath_pending_review',
+        reason: correction,
+        previewToken: 'preview-token-value',
+        confirmation: ATH_HOLD_WITHDRAWAL_CONFIRMATION,
+      },
+    }))
+    expect(decideCopyReview).not.toHaveBeenCalled()
   })
 })

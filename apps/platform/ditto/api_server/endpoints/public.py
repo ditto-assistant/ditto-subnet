@@ -6340,7 +6340,7 @@ async def _duplicate_submission_metadata(
 class _PublicAthReviewSnapshot:
     """Public-safe projection of the latest durable ATH lifecycle event."""
 
-    event: Literal["opened", "reopened", "cleared", "rejected"]
+    event: Literal["opened", "reopened", "cleared", "rejected", "withdrawn"]
     reason: str
     event_at: datetime
     opened_at: datetime

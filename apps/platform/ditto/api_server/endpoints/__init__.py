@@ -5,6 +5,9 @@ from __future__ import annotations
 from ditto.api_server.endpoints.admin_artifact_release_settings import (
     router as admin_artifact_release_settings_router,
 )
+from ditto.api_server.endpoints.admin_ath_hold_withdrawal import (
+    router as admin_ath_hold_withdrawal_router,
+)
 from ditto.api_server.endpoints.admin_ath_rulings import (
     router as admin_ath_rulings_router,
 )
@@ -225,6 +228,7 @@ __all__ = [
     "inference_router",
     "admin_artifact_release_settings_router",
     "admin_transcript_mirror_settings_router",
+    "admin_ath_hold_withdrawal_router",
     "admin_ath_rulings_router",
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
