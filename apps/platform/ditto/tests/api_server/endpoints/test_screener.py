@@ -103,6 +103,8 @@ from ditto.db.models import (
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
+    ScreeningReviewDeadlineActivation,
+    ScreeningReviewWindow,
     ScreeningVerificationReceipt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -7934,6 +7936,173 @@ class TestQuarantineAdmin:
             legacy_path + "/private-package-registration", headers=headers, json=body
         )
         assert legacy_registration.status_code == 409
+
+    async def test_review_deadline_requires_exact_bound_window(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        agent_id = await _seed_agent(
+            session_maker, status=AgentStatus.QUARANTINED, name="deadline-held"
+        )
+        attempt_id, quarantine_id = uuid4(), uuid4()
+        now = datetime.now(UTC)
+        started = now + timedelta(hours=2)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=_SHA256,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=13,
+                    status="quarantined",
+                    started_at=started,
+                    deadline=started + timedelta(hours=1),
+                    finished_at=started + timedelta(hours=1),
+                    reason_code="source-review-inconclusive",
+                )
+            )
+            await session.flush()
+            session.add(
+                ScreeningQuarantine(
+                    quarantine_id=quarantine_id,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=13,
+                    manifest_digest="b" * 64,
+                    reason_code="source-review-inconclusive",
+                    status="active",
+                    created_at=now,
+                )
+            )
+        _install_db(app, session_maker)
+        headers = {"Authorization": "Bearer test-admin-token-at-least-32-characters"}
+        path = f"/api/v1/admin/screening-submissions/{agent_id}/review-deadline"
+        unknown = await client.get(
+            f"/api/v1/admin/screening-submissions/{uuid4()}/review-deadline",
+            headers=headers,
+        )
+        assert unknown.status_code == 404
+        unbound = await client.get(path, headers=headers)
+        assert unbound.status_code == 200, unbound.text
+        body = unbound.json()
+        assert body["artifact_sha256"] == _SHA256
+        assert body["manifest_digest"] == "b" * 64
+        assert body["deadline_state"] == "not_configured"
+        assert body["finalizer_state"] == "not_configured"
+        assert body["deadline_at"] is None
+        assert body["activation_revision"] is None
+        assert body["required_retries"] is None
+        assert body["independent_worker_count"] is None
+        assert body["failure_domain"] is None
+        assert body["outstanding_mandatory_checks"] is None
+        assert [row["attempt_id"] for row in body["recorded_attempts"]] == [
+            str(attempt_id)
+        ]
+        assert body["observed_worker_hotkeys"] == [_SCREENER_HOTKEY]
+
+        async with session_maker() as session, session.begin():
+            activation = ScreeningReviewDeadlineActivation(
+                policy_version=13,
+                policy_digest="b" * 64,
+                activate_at=now + timedelta(hours=1),
+                window_seconds=3600,
+                reason="explicit post-activation review window",
+                actor="test-operator",
+            )
+            session.add(activation)
+            await session.flush()
+            session.add(
+                ScreeningReviewWindow(
+                    window_id=uuid4(),
+                    agent_id=agent_id,
+                    first_attempt_id=attempt_id,
+                    activation_revision=activation.revision,
+                    artifact_sha256=_SHA256,
+                    policy_version=13,
+                    manifest_digest="b" * 64,
+                    start_event="first-policy-claim",
+                    started_at=started,
+                    deadline_at=started + timedelta(hours=1),
+                )
+            )
+        bound = await client.get(path, headers=headers)
+        assert bound.status_code == 200, bound.text
+        assert bound.json()["deadline_state"] == "bound"
+        assert datetime.fromisoformat(
+            bound.json()["deadline_at"].replace("Z", "+00:00")
+        ) == started + timedelta(hours=1)
+        assert bound.json()["activation_actor"] == "test-operator"
+        assert bound.json()["finalizer_state"] == "not_configured"
+
+        async with session_maker() as session, session.begin():
+            quarantine = await session.get(ScreeningQuarantine, quarantine_id)
+            assert quarantine is not None
+            quarantine.status = "resolved"
+            quarantine.resolution = "rescreen"
+        resolved = await client.get(path, headers=headers)
+        assert resolved.status_code == 200
+        assert resolved.json()["quarantine_status"] == "resolved"
+        assert resolved.json()["finalizer_state"] == "not_configured"
+
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            agent.sha256 = "c" * 64
+        changed = await client.get(path, headers=headers)
+        assert changed.status_code == 200
+        assert changed.json()["quarantine_artifact_matches"] is False
+        assert changed.json()["manifest_digest"] is None
+        assert changed.json()["deadline_state"] == "not_configured"
+        assert changed.json()["deadline_at"] is None
+
+        legacy_id = await _seed_agent(
+            session_maker, status=AgentStatus.QUARANTINED, name="deadline-legacy"
+        )
+        legacy_attempt_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=legacy_attempt_id,
+                    agent_id=legacy_id,
+                    artifact_sha256=_SHA256,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=12,
+                    status="quarantined",
+                    started_at=now,
+                    deadline=now + timedelta(minutes=10),
+                    finished_at=now + timedelta(minutes=1),
+                )
+            )
+            await session.flush()
+            session.add(
+                ScreeningQuarantine(
+                    quarantine_id=uuid4(),
+                    agent_id=legacy_id,
+                    attempt_id=legacy_attempt_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=12,
+                    manifest_digest="d" * 64,
+                    reason_code="source-review-inconclusive",
+                    status="active",
+                    created_at=now,
+                )
+            )
+        legacy = await client.get(
+            f"/api/v1/admin/screening-submissions/{legacy_id}/review-deadline",
+            headers=headers,
+        )
+        assert legacy.status_code == 200, legacy.text
+        assert legacy.json()["policy_version"] == 12
+        assert legacy.json()["deadline_state"] == "not_configured"
+        assert legacy.json()["deadline_at"] is None
 
     async def test_screening_failure_summary_groups_live_pipeline_by_reason_code(
         self,

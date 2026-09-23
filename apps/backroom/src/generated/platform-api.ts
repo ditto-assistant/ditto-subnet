@@ -2496,6 +2496,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-submissions/{agent_id}/review-deadline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screening Review Deadline
+         * @description Report only a persisted, exact-artifact v13 window proven by its binding.
+         *
+         *     No current Platform writer activates a deadline or finalizes source holds.
+         *     In particular, a screening-attempt lease deadline and policy's recommended
+         *     24 hours are never substituted for an absent review window.
+         */
+        get: operations["get_screening_review_deadline_api_v1_admin_screening_submissions__agent_id__review_deadline_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-submissions/{agent_id}/source-file": {
         parameters: {
             query?: never;
@@ -10610,6 +10634,100 @@ export interface components {
             override_id: string;
             /** Review Settings Revision */
             review_settings_revision?: number | null;
+        };
+        /**
+         * AdminScreeningReviewDeadlineAttempt
+         * @description One recorded attempt for the exact current artifact and policy.
+         */
+        AdminScreeningReviewDeadlineAttempt: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Finished At */
+            finished_at: string | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Screener Hotkey */
+            screener_hotkey: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+        };
+        /**
+         * AdminScreeningReviewDeadlineDiagnostic
+         * @description Read-only exact-artifact clock evidence, never a finalizer verdict.
+         *
+         *     No deployed writer/finalizer is implied by a policy recommendation or a
+         *     screening lease deadline. Distinct hotkeys are observed identities, not
+         *     proof of independent workers or a completed retry requirement.
+         */
+        AdminScreeningReviewDeadlineDiagnostic: {
+            /** Activated At */
+            activated_at: string | null;
+            /** Activation Actor */
+            activation_actor: string | null;
+            /** Activation Reason */
+            activation_reason: string | null;
+            /** Activation Revision */
+            activation_revision: number | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Deadline At */
+            deadline_at: string | null;
+            /**
+             * Deadline State
+             * @enum {string}
+             */
+            deadline_state: "bound" | "not_configured";
+            /** Failure Domain */
+            failure_domain?: null;
+            /**
+             * Finalizer State
+             * @default not_configured
+             * @constant
+             */
+            finalizer_state: "not_configured";
+            /** Independent Worker Count */
+            independent_worker_count?: null;
+            /** Manifest Digest */
+            manifest_digest: string | null;
+            /** Observed Worker Hotkeys */
+            observed_worker_hotkeys: string[];
+            /** Outstanding Mandatory Checks */
+            outstanding_mandatory_checks?: null;
+            /** Policy Version */
+            policy_version: number;
+            /** Quarantine Artifact Matches */
+            quarantine_artifact_matches: boolean | null;
+            /** Quarantine Attempt Id */
+            quarantine_attempt_id: string | null;
+            /** Quarantine Id */
+            quarantine_id: string | null;
+            /** Quarantine Resolution */
+            quarantine_resolution: string | null;
+            /** Quarantine Status */
+            quarantine_status: string | null;
+            /** Recorded Attempts */
+            recorded_attempts: components["schemas"]["AdminScreeningReviewDeadlineAttempt"][];
+            /** Required Retries */
+            required_retries?: null;
+            /** Start Event */
+            start_event: string | null;
+            /** Window Started At */
+            window_started_at: string | null;
         };
         /** AdminScreeningSubmission */
         AdminScreeningSubmission: {
@@ -35385,6 +35503,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminScreeningRetryNowResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screening_review_deadline_api_v1_admin_screening_submissions__agent_id__review_deadline_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScreeningReviewDeadlineDiagnostic"];
                 };
             };
             /** @description Validation Error */

@@ -146,6 +146,7 @@ import {
   fetchScreeningFailureDiagnostic,
   fetchAdjudicationAttempts,
   fetchScreeningVerificationReadiness,
+  fetchScreeningReviewDeadline,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
@@ -645,6 +646,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Private exact-attempt failure diagnostic; artifact scope.',
   get_screening_verification_readiness:
     'Read exact v13 receipt presence; no completion claim. Artifact scope.',
+  get_screening_review_deadline:
+    'Read exact V13 artifact deadline binding; null/not_configured means no authoritative window. Attempt leases are not finalizer dates.',
   reject_screening_submission:
     'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
   get_queue_policy_settings:
@@ -1171,6 +1174,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           image_builds: { pin: ['build_id'] },
         }),
       ),
+  )
+
+  registerTool(
+    'get_screening_review_deadline',
+    {
+      title: 'Get screening review deadline',
+      description:
+        'Read exact V13 artifact deadline evidence. Null/not_configured means no bound window; attempt lease dates are not finalizer dates. Attempts and distinct hotkeys do not prove retry or independence. Read-only metadata.',
+      inputSchema: screeningSubmissionLookupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchScreeningReviewDeadline(input)),
   )
 
   registerTool(

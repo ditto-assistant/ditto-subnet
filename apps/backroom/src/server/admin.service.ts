@@ -111,6 +111,7 @@ import {
   adjudicationAttemptsInputSchema,
   adjudicationAttemptsSchema,
   screeningVerificationReadinessSchema,
+  screeningReviewDeadlineDiagnosticSchema,
   screeningSubmissionLookupInputSchema,
   screeningSubmissionSchema,
   screeningSubmissionListSchema,
@@ -1927,6 +1928,14 @@ export async function fetchScreeningVerificationReadiness(rawInput: unknown, act
     { actor },
   )
   return screeningVerificationReadinessSchema.parse(payload)
+}
+
+export async function fetchScreeningReviewDeadline(rawInput: unknown) {
+  const input = screeningSubmissionLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-submissions/${encodeURIComponent(input.agentId)}/review-deadline`,
+  )
+  return screeningReviewDeadlineDiagnosticSchema.parse(payload)
 }
 
 export async function fetchScreeningFailureSummary(rawInput: unknown = {}) {

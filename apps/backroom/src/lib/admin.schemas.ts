@@ -4496,6 +4496,41 @@ export const screeningVerificationReadinessSchema = z.object({
   receipts_truncated: z.boolean(),
 })
 
+export const screeningReviewDeadlineDiagnosticSchema = z.object({
+  agent_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  agent_status: z.string(),
+  policy_version: z.number().int().positive(),
+  quarantine_id: z.string().uuid().nullable(),
+  quarantine_status: z.string().nullable(),
+  quarantine_resolution: z.string().nullable(),
+  quarantine_attempt_id: z.string().uuid().nullable(),
+  quarantine_artifact_matches: z.boolean().nullable(),
+  manifest_digest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  deadline_state: z.enum(['bound', 'not_configured']),
+  finalizer_state: z.literal('not_configured'),
+  activation_revision: z.number().int().positive().nullable(),
+  activation_actor: z.string().nullable(),
+  activation_reason: z.string().nullable(),
+  activated_at: z.string().nullable(),
+  start_event: z.string().nullable(),
+  window_started_at: z.string().nullable(),
+  deadline_at: z.string().nullable(),
+  recorded_attempts: z.array(z.object({
+    attempt_id: z.string().uuid(),
+    status: z.string(),
+    screener_hotkey: z.string(),
+    started_at: z.string(),
+    finished_at: z.string().nullable(),
+    reason_code: z.string().nullable(),
+  })),
+  observed_worker_hotkeys: z.array(z.string()),
+  required_retries: z.null(),
+  independent_worker_count: z.null(),
+  failure_domain: z.null(),
+  outstanding_mandatory_checks: z.null(),
+})
+
 export const screeningImageBuildSchema = z.object({
   build_id: z.string().uuid(),
   attempt_id: z.string().uuid(),
@@ -7372,6 +7407,9 @@ export type ScreeningFailureDiagnostic = z.infer<
 >
 export type ScreeningVerificationReadiness = z.infer<
   typeof screeningVerificationReadinessSchema
+>
+export type ScreeningReviewDeadlineDiagnostic = z.infer<
+  typeof screeningReviewDeadlineDiagnosticSchema
 >
 export type ScreeningEvidenceItem = z.infer<typeof screeningEvidenceItemSchema>
 export type SourceReviewFinding = z.infer<typeof sourceReviewFindingSchema>

@@ -205,6 +205,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_quarantine_context',
         'get_screening_quarantine_contexts',
         'get_screening_review_queue',
+        'get_screening_review_deadline',
         'get_screening_failure_diagnostic',
         'list_screening_adjudication_attempts',
         'get_screening_verification_readiness',
@@ -5096,6 +5097,53 @@ describe('Backroom MCP tools', () => {
       expect.any(Object),
     )
 
+    await client.close()
+    await server.close()
+  })
+
+  it('reads an unconfigured exact review deadline with read scope only', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const diagnostic = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'quarantined',
+      policy_version: 13,
+      quarantine_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      quarantine_status: 'active',
+      quarantine_resolution: null,
+      quarantine_attempt_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      quarantine_artifact_matches: true,
+      manifest_digest: 'cd'.repeat(32),
+      deadline_state: 'not_configured',
+      finalizer_state: 'not_configured',
+      activation_revision: null,
+      activation_actor: null,
+      activation_reason: null,
+      activated_at: null,
+      start_event: null,
+      window_started_at: null,
+      deadline_at: null,
+      recorded_attempts: [],
+      observed_worker_hotkeys: [],
+      required_retries: null,
+      independent_worker_count: null,
+      failure_domain: null,
+      outstanding_mandatory_checks: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(diagnostic))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_review_deadline',
+      arguments: { agentId },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual(diagnostic)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/review-deadline`,
+      expect.any(Object),
+    )
     await client.close()
     await server.close()
   })

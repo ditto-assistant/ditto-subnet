@@ -320,6 +320,52 @@ class AdminScreeningVerificationReadiness(BaseModel):
     receipts_truncated: bool
 
 
+class AdminScreeningReviewDeadlineAttempt(BaseModel):
+    """One recorded attempt for the exact current artifact and policy."""
+
+    attempt_id: UUID
+    status: str
+    screener_hotkey: str
+    started_at: datetime
+    finished_at: datetime | None
+    reason_code: str | None
+
+
+class AdminScreeningReviewDeadlineDiagnostic(BaseModel):
+    """Read-only exact-artifact clock evidence, never a finalizer verdict.
+
+    No deployed writer/finalizer is implied by a policy recommendation or a
+    screening lease deadline. Distinct hotkeys are observed identities, not
+    proof of independent workers or a completed retry requirement.
+    """
+
+    agent_id: UUID
+    artifact_sha256: str
+    agent_status: str
+    policy_version: int
+    quarantine_id: UUID | None
+    quarantine_status: str | None
+    quarantine_resolution: str | None
+    quarantine_attempt_id: UUID | None
+    quarantine_artifact_matches: bool | None
+    manifest_digest: str | None
+    deadline_state: Literal["bound", "not_configured"]
+    finalizer_state: Literal["not_configured"] = "not_configured"
+    activation_revision: int | None
+    activation_actor: str | None
+    activation_reason: str | None
+    activated_at: datetime | None
+    start_event: str | None
+    window_started_at: datetime | None
+    deadline_at: datetime | None
+    recorded_attempts: list[AdminScreeningReviewDeadlineAttempt]
+    observed_worker_hotkeys: list[str]
+    required_retries: None = None
+    independent_worker_count: None = None
+    failure_domain: None = None
+    outstanding_mandatory_checks: None = None
+
+
 class AdminScreeningImageBuild(BaseModel):
     """Kaniko/runtime telemetry for one screening image build."""
 
@@ -1076,6 +1122,8 @@ __all__ = [
     "AdminScreeningFailureSummary",
     "AdminScreeningVerificationCheck",
     "AdminScreeningVerificationReadiness",
+    "AdminScreeningReviewDeadlineAttempt",
+    "AdminScreeningReviewDeadlineDiagnostic",
     "AdminScreeningVerificationReceipt",
     "AdminScreeningSubmission",
     "AdminScreeningSubmissionList",

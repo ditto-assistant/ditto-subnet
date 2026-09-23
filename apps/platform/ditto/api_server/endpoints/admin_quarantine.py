@@ -77,6 +77,8 @@ from ditto.api_models.admin_quarantine import (
     AdminScreeningRescreenResponse,
     AdminScreeningRetryNowRequest,
     AdminScreeningRetryNowResponse,
+    AdminScreeningReviewDeadlineAttempt,
+    AdminScreeningReviewDeadlineDiagnostic,
     AdminScreeningSubmission,
     AdminScreeningSubmissionList,
     AdminScreeningVerificationCheck,
@@ -155,6 +157,7 @@ from ditto.db.models import (
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
+    ScreeningReviewDeadlineActivation,
     ScreeningVerificationReceipt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -191,6 +194,7 @@ from ditto.db.queries.payments import (
     get_miner_coldkey_for_agent,
     get_miner_coldkeys_for_agents,
 )
+from ditto.db.queries.screening_review_deadlines import review_deadline_binding
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol import (
@@ -1905,6 +1909,135 @@ async def get_screening_submission(
     ]
     return _screening_submission(
         agent, attempts_by_agent[agent_id], coldkey, image_builds
+    )
+
+
+@router.get(
+    "/screening-submissions/{agent_id}/review-deadline",
+    response_model=AdminScreeningReviewDeadlineDiagnostic,
+)
+async def get_screening_review_deadline(
+    agent_id: UUID, _admin: AdminDep, session: SessionDep
+) -> AdminScreeningReviewDeadlineDiagnostic:
+    """Report only a persisted, exact-artifact v13 window proven by its binding.
+
+    No current Platform writer activates a deadline or finalizes source holds.
+    In particular, a screening-attempt lease deadline and policy's recommended
+    24 hours are never substituted for an absent review window.
+    """
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="screening submission not found")
+    quarantine = await session.scalar(
+        select(ScreeningQuarantine)
+        .where(
+            ScreeningQuarantine.agent_id == agent_id,
+            ScreeningQuarantine.status == "active",
+        )
+        .order_by(
+            ScreeningQuarantine.created_at.desc(),
+            ScreeningQuarantine.quarantine_id.desc(),
+        )
+        .limit(1)
+    )
+    if quarantine is None:
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine)
+            .where(ScreeningQuarantine.agent_id == agent_id)
+            .order_by(
+                ScreeningQuarantine.created_at.desc(),
+                ScreeningQuarantine.quarantine_id.desc(),
+            )
+            .limit(1)
+        )
+    quarantine_attempt = (
+        await session.get(ScreeningAttempt, quarantine.attempt_id)
+        if quarantine is not None
+        else None
+    )
+    quarantine_artifact_matches = (
+        (
+            quarantine_attempt is not None
+            and quarantine_attempt.agent_id == agent_id
+            and quarantine_attempt.policy_version == quarantine.policy_version
+            and quarantine_attempt.artifact_sha256 is not None
+            and quarantine_attempt.artifact_sha256.lower() == agent.sha256.lower()
+        )
+        if quarantine is not None
+        else None
+    )
+    policy_version = (
+        quarantine.policy_version
+        if quarantine_artifact_matches and quarantine is not None
+        else agent.screening_policy_version
+    )
+    attempts = list(
+        await session.scalars(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.agent_id == agent_id,
+                ScreeningAttempt.policy_version == policy_version,
+                func.lower(ScreeningAttempt.artifact_sha256) == agent.sha256.lower(),
+            )
+            .order_by(
+                ScreeningAttempt.started_at.asc(),
+                ScreeningAttempt.attempt_id.asc(),
+            )
+        )
+    )
+    binding = (
+        await review_deadline_binding(session, quarantine_id=quarantine.quarantine_id)
+        if quarantine_artifact_matches
+        and quarantine is not None
+        and quarantine.policy_version == 13
+        else None
+    )
+    activation = (
+        await session.get(
+            ScreeningReviewDeadlineActivation, binding.activation_revision
+        )
+        if binding is not None
+        else None
+    )
+    return AdminScreeningReviewDeadlineDiagnostic(
+        agent_id=agent_id,
+        artifact_sha256=agent.sha256,
+        agent_status=agent.status,
+        policy_version=policy_version,
+        quarantine_id=quarantine.quarantine_id if quarantine is not None else None,
+        quarantine_status=quarantine.status if quarantine is not None else None,
+        quarantine_resolution=quarantine.resolution if quarantine is not None else None,
+        quarantine_attempt_id=quarantine.attempt_id if quarantine is not None else None,
+        quarantine_artifact_matches=quarantine_artifact_matches,
+        manifest_digest=(
+            quarantine.manifest_digest
+            if quarantine_artifact_matches and quarantine is not None
+            else None
+        ),
+        deadline_state="bound" if binding is not None else "not_configured",
+        activation_revision=binding.activation_revision
+        if binding is not None
+        else None,
+        activation_actor=activation.actor if activation is not None else None,
+        activation_reason=activation.reason if activation is not None else None,
+        activated_at=binding.activated_at if binding is not None else None,
+        start_event=binding.start_event if binding is not None else None,
+        window_started_at=binding.window_started_at if binding is not None else None,
+        deadline_at=binding.deadline_at if binding is not None else None,
+        recorded_attempts=[
+            AdminScreeningReviewDeadlineAttempt(
+                attempt_id=attempt.attempt_id,
+                status=attempt.status,
+                screener_hotkey=attempt.screener_hotkey,
+                started_at=attempt.started_at,
+                finished_at=attempt.finished_at,
+                reason_code=attempt.reason_code,
+            )
+            for attempt in attempts
+        ],
+        observed_worker_hotkeys=sorted(
+            {attempt.screener_hotkey for attempt in attempts}
+        ),
     )
 
 
