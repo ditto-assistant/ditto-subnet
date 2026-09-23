@@ -6994,6 +6994,7 @@ class TestQuarantineAdmin:
             "prompt_tokens": 1200,
             "completion_tokens": 40,
             "final_tool_call_returned": False,
+            "completion_ceiling_reached": None,
             "model": "z-ai/glm-5.3-flash",
             "provider": "openrouter",
             # Reaches the operator surface, which is the only reason to record

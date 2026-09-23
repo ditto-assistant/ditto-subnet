@@ -1275,6 +1275,10 @@ class AdjudicationRunDiagnostic(BaseModel):
     prompt_tokens: Annotated[int, Field(ge=0, le=10_000_000)] | None = None
     completion_tokens: Annotated[int, Field(ge=0, le=10_000_000)] | None = None
     final_tool_call_returned: bool | None = None
+    completion_ceiling_reached: bool | None = None
+    """True only when a complete no-tool stream reports a length finish and
+    usage at the requested completion cap. Null when that cannot be proved.
+    """
     model: (
         Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")] | None
     ) = None

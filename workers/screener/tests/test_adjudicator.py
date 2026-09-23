@@ -1050,8 +1050,40 @@ async def test_stream_without_tool_records_safe_contract_diagnostic(
     assert result.run_diagnostic is not None
     assert result.run_diagnostic.failure_code == "stream-no-tool-call"
     assert result.run_diagnostic.final_tool_call_returned is False
+    assert result.run_diagnostic.completion_ceiling_reached is None
     assert result.run_diagnostic.prompt_tokens == 17
     assert result.run_diagnostic.completion_tokens == 2
+    assert secret not in result.model_dump_json()
+
+
+async def test_completed_stream_at_token_cap_distinguishes_budget_exhaustion(
+    tmp_path: Path,
+) -> None:
+    secret = "private model text"
+    event = {
+        "provider": "Together",
+        "usage": {"prompt_tokens": 14_205, "completion_tokens": 6_000},
+        "choices": [{"delta": {"content": secret}, "finish_reason": "length"}],
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "stream-no-tool-call"
+    assert result.run_diagnostic.completion_ceiling_reached is True
+    assert result.run_diagnostic.final_tool_call_returned is False
+    assert result.run_diagnostic.completion_tokens == 6_000
     assert secret not in result.model_dump_json()
 
 

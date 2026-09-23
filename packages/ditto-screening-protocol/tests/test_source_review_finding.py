@@ -833,6 +833,24 @@ def test_response_bound_detail_is_safe_for_an_older_platform_consumer() -> None:
     assert "response_bound_kind" not in older.model_dump()
 
 
+def test_completion_ceiling_detail_is_safe_for_an_older_platform_consumer() -> None:
+    class OldDiagnostic(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+
+        failure_code: Literal["stream-no-tool-call"]
+
+    current = AdjudicationRunDiagnostic(
+        elapsed_ms=100_000,
+        failure_code="stream-no-tool-call",
+        completion_tokens=16_000,
+        final_tool_call_returned=False,
+        completion_ceiling_reached=True,
+    )
+    older = OldDiagnostic.model_validate(current.model_dump(mode="json"))
+    assert older.failure_code == "stream-no-tool-call"
+    assert "completion_ceiling_reached" not in older.model_dump()
+
+
 def test_observation_decision_fields_are_bound_to_the_finding() -> None:
     finding = _v2_finding()
     values = {

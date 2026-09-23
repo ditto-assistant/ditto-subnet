@@ -83,6 +83,7 @@ def _clear_request_trace() -> None:
         trace.prompt_tokens = None
         trace.completion_tokens = None
         trace.final_tool_call_returned = None
+        trace.completion_ceiling_reached = None
         trace.http_status = None
         trace.upstream = None
 
@@ -219,6 +220,7 @@ class _RunTrace:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     final_tool_call_returned: bool | None = None
+    completion_ceiling_reached: bool | None = None
     http_status: int | None = None
     upstream: str | None = None
     request_count: int = 0
@@ -1312,6 +1314,7 @@ class SourceReviewAdjudicator:
                 prompt_tokens=trace.prompt_tokens,
                 completion_tokens=trace.completion_tokens,
                 final_tool_call_returned=trace.final_tool_call_returned,
+                completion_ceiling_reached=trace.completion_ceiling_reached,
                 model=model,
                 provider=provider,
                 upstream=trace.upstream,
@@ -1717,7 +1720,10 @@ class SourceReviewAdjudicator:
                                 cast(httpx.AsyncByteStream, response.stream),
                                 request_trace,
                             )
-                        payload = await _completion_stream_payload(response)
+                        payload = await _completion_stream_payload(
+                            response,
+                            requested_max_tokens=self._max_completion_tokens,
+                        )
                         if request_trace is not None:
                             request_trace.stage = "complete"
                         _observe_upstream(payload)
@@ -1746,7 +1752,9 @@ class SourceReviewAdjudicator:
         return _assistant_message(payload)
 
 
-async def _completion_stream_payload(response: httpx.Response) -> object:
+async def _completion_stream_payload(
+    response: httpx.Response, *, requested_max_tokens: int | None = None
+) -> object:
     """Assemble one bounded OpenAI-compatible streamed tool-call response.
 
     A few compatible gateways return a regular JSON response despite
@@ -1885,6 +1893,20 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
         _observe_completion(
             {"usage": usage, "choices": [{"message": {"tool_calls": []}}]}
         )
+        trace = _run_trace.get()
+        if trace is not None:
+            completion_tokens = (
+                _token_count(usage.get("completion_tokens"))
+                if isinstance(usage, dict)
+                else None
+            )
+            if (
+                finish_reason == "length"
+                and completion_tokens is not None
+                and requested_max_tokens is not None
+                and completion_tokens >= requested_max_tokens
+            ):
+                trace.completion_ceiling_reached = True
         raise ValueError("adjudicator stream ended without a tool call")
     return {
         "model": model,

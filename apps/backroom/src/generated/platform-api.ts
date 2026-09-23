@@ -6823,6 +6823,8 @@ export interface components {
          *     text, or model text.
          */
         AdjudicationRunDiagnostic: {
+            /** Completion Ceiling Reached */
+            completion_ceiling_reached?: boolean | null;
             /** Completion Tokens */
             completion_tokens?: number | null;
             /** Elapsed Ms */
