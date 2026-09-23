@@ -4859,7 +4859,7 @@ CREATE TABLE public.v13_known_benign_control_approvals (
     CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_artifact_sh_3c38 CHECK ((length(artifact_sha256) = 64)),
     CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_image_sha256_check CHECK ((length(image_sha256) = 64)),
     CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_profile_sha_af5d CHECK ((length(profile_sha256) = 64)),
-    CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_reason CHECK (((length(reason) >= 8) AND (length(reason) <= 500))),
+    CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_reason CHECK ((length(reason) >= 8)),
     CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_review_evid_d26b CHECK ((length(review_evidence_sha256) = 64))
 );
 

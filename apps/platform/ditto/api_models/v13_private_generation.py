@@ -20,7 +20,7 @@ class V13KnownBenignApprovalRequest(BaseModel):
     image_sha256: str = Field(pattern=_SHA)
     profile_sha256: str = Field(pattern=_SHA)
     review_evidence_sha256: str = Field(pattern=_SHA)
-    reason: str = Field(min_length=8, max_length=500)
+    reason: str = Field(min_length=8)
 
 
 class V13KnownBenignApprovalView(V13KnownBenignApprovalRequest):

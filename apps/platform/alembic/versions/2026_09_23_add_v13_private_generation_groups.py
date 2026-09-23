@@ -49,7 +49,7 @@ def upgrade() -> None:
             )
         ),
         sa.CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13kb_actor"),
-        sa.CheckConstraint("length(reason) BETWEEN 8 AND 500", name="v13kb_reason"),
+        sa.CheckConstraint("length(reason) >= 8", name="v13kb_reason"),
     )
     op.create_table(
         "v13_private_generation_groups",
