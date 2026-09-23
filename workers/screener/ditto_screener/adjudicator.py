@@ -156,7 +156,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v6-policy-v13"
+        return "adjudicator-v7-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 
@@ -449,10 +449,50 @@ boundaries, inputs, outputs, and downstream authority. A null compact score
 field does not prove artifact-bound screening evidence is absent. A missing
 predefined verification artifact or failed platform review
 is not a proven integrity breach. If mandatory verification is incomplete, do
-not manufacture a clear or a violation; withhold submit_adjudication so the host
-retains an escalate processing state for the operator's eventual CLEAR/REJECT
-decision.
+not manufacture a clear or a violation; call request_operator_review so the
+host retains an escalate processing state for the operator's eventual
+CLEAR/REJECT decision.
 """.strip()
+
+
+def _policy_v13_base_prompt() -> str:
+    """Remove legacy directives that contradict v13's incomplete-review hold."""
+    replacements = (
+        (
+            "Your output is FINAL: a clear admits this\n"
+            "submission to scoring, a reject is terminal for it.",
+            "A clear admits this submission to scoring, a reject is terminal for it, "
+            "and request_operator_review keeps the submission held.",
+        ),
+        (
+            "When the evidence is genuinely mixed you must still choose, and the safe\n"
+            "choice is clear: a wrong reject bans an honest miner, while a "
+            "wrong clear\n"
+            "leaves a submission that the next review, the behavioural "
+            "oracle, and the\n"
+            "scored path all still get to catch. Reject only what you can prove "
+            "from lines\n"
+            "you read.",
+            "When the evidence is genuinely mixed or mandatory verification is "
+            "incomplete, call request_operator_review. Reject only what you can prove "
+            "from lines you read; clear only after the required verification "
+            "is complete.",
+        ),
+        (
+            "4. Call submit_adjudication exactly once.",
+            "4. Call submit_adjudication for a complete decision, or "
+            "request_operator_review when verification is incomplete.",
+        ),
+    )
+    prompt = _SYSTEM_PROMPT
+    for old, new in replacements:
+        if old not in prompt:
+            raise AssertionError("v13 adjudicator base prompt drifted")
+        prompt = prompt.replace(old, new, 1)
+    return prompt
+
+
+_POLICY_V13_BASE_PROMPT = _policy_v13_base_prompt()
 
 
 def _system_prompt(policy_version: int) -> str:
@@ -471,7 +511,7 @@ def _system_prompt(policy_version: int) -> str:
         )
     if policy_version == 13:
         return (
-            f"{_SYSTEM_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
+            f"{_POLICY_V13_BASE_PROMPT}\n\n{_POLICY_V11_PROMPT_TAIL}\n\n"
             f"{_POLICY_V12_PROMPT_TAIL}\n\n{_POLICY_V13_PROMPT_TAIL}\n\n"
             f"{DECISION_PATH_GUIDANCE}"
         )
@@ -560,9 +600,24 @@ _TOOLS: list[dict[str, object]] = [
     },
 ]
 
-# ``submit_adjudication`` is the final (and only decision-only) tool above.
-# Keep the selected schema object rather than retyping a second contract.
+# Keep the selected verdict schema rather than retyping a second contract.
 _DECISION_ONLY_TOOLS = [_TOOLS[-1]]
+
+_OPERATOR_REVIEW_TOOL: dict[str, object] = {
+    "type": "function",
+    "function": {
+        "name": "request_operator_review",
+        "description": (
+            "Keep an incomplete or mixed policy-v13 review held for an operator."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {"reason": {"type": "string", "maxLength": 8000}},
+            "required": ["reason"],
+            "additionalProperties": False,
+        },
+    },
+}
 
 
 def _adjudicator_tools_for_policy(
@@ -571,7 +626,14 @@ def _adjudicator_tools_for_policy(
     """Return a court schema restricted to the exact policy generation."""
 
     tools = copy.deepcopy(_DECISION_ONLY_TOOLS if decision_only else _TOOLS)
-    submit = tools[-1]["function"]
+    if policy_version >= 13:
+        tools.append(copy.deepcopy(_OPERATOR_REVIEW_TOOL))
+    submit = None
+    for tool in tools:
+        function = tool.get("function")
+        if isinstance(function, dict) and function.get("name") == "submit_adjudication":
+            submit = function
+            break
     assert isinstance(submit, dict)
     parameters = submit["parameters"]
     assert isinstance(parameters, dict)
@@ -1122,6 +1184,15 @@ class SourceReviewAdjudicator:
         decision itself is cheap to check: the citations have to exist, have to
         be code, and have to be locations this adjudicator actually opened.
         """
+        if verdict.decision == "escalate":
+            return _escalate(
+                "adjudicator-evidence-incomplete",
+                "Automated adjudication could not complete mandatory verification; "
+                "held for operator review",
+                model=self._model,
+                notes=notes,
+                policy_version=policy_version,
+            )
         if not verdict.citations:
             return _escalate(
                 "uncited-decision",
@@ -1252,7 +1323,8 @@ class SourceReviewAdjudicator:
         decision_only_instruction = (
             "\nThe host preloaded the exact source excerpts for the retained "
             "ledger. Decide from those excerpts now. Discovery tools are disabled; "
-            "call submit_adjudication exactly once."
+            "call submit_adjudication for a complete decision, or "
+            "request_operator_review if evidence remains incomplete."
             if decision_only
             else ""
         )
@@ -1330,17 +1402,29 @@ class SourceReviewAdjudicator:
                     or any(
                         isinstance(call, dict)
                         and isinstance(call.get("function"), dict)
-                        and call["function"].get("name") == "submit_adjudication"
+                        and call["function"].get("name")
+                        in {"submit_adjudication", "request_operator_review"}
                         for call in tool_calls
                     )
                 ):
                     raise ValueError(
-                        "adjudicator verdict must be the sole call in its turn"
+                        "adjudicator terminal decision must be the sole call "
+                        "in its turn"
                     )
                 for call in tool_calls:
                     call_id, name, arguments = _tool_call(call)
                     if name == "submit_adjudication":
                         return _verdict_from(arguments), read_locations
+                    if name == "request_operator_review" and policy_version >= 13:
+                        reason = arguments.get("reason")
+                        if not isinstance(reason, str) or not reason.strip():
+                            raise ValueError(
+                                "adjudicator operator review has no reason"
+                            )
+                        return (
+                            _Verdict("escalate", reason.strip(), None, None, ()),
+                            read_locations,
+                        )
                     if decision_only:
                         raise ValueError(
                             "decision-only adjudicator requested source discovery"

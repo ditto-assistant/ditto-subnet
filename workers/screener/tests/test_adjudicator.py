@@ -1060,7 +1060,8 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
     assert result.citations[0].path == "src/main.rs"
     assert len(requests) == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
-        "submit_adjudication"
+        "submit_adjudication",
+        "request_operator_review",
     ]
     assert "Preloaded source evidence" in str(requests[0]["messages"])
 
@@ -1186,8 +1187,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v6-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v6-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v7-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v7-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -1207,12 +1208,16 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     policy_v12 = _system_prompt(12)
     policy_v13 = _system_prompt(13)
 
-    assert policy_v13.startswith(policy_v12)
+    assert "When the evidence is genuinely mixed you must still choose" in policy_v12
+    assert (
+        "When the evidence is genuinely mixed you must still choose" not in policy_v13
+    )
+    assert "call request_operator_review" in policy_v13
     assert "I8 is evaluation independence" in policy_v13
     assert "always-on benchmark-specific recipe is activated on every request" in (
         policy_v13
     )
-    assert "withhold submit_adjudication" in policy_v13
+    assert "do\nnot manufacture a clear or a violation" in policy_v13
     assert "`bench_version` alter substantive retrieval" in policy_v13
     assert "path-and-digest provenance" in policy_v13
     assert "omission of its duplicate README" in policy_v13
@@ -1228,6 +1233,58 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     ]["enum"]
     assert "i8_evaluation_independence" not in legacy_invariants
     assert "i8_evaluation_independence" in current_invariants
+    assert [
+        tool["function"]["name"]
+        for tool in _adjudicator_tools_for_policy(13, decision_only=True)
+    ] == ["submit_adjudication", "request_operator_review"]
+    assert [
+        tool["function"]["name"]
+        for tool in _adjudicator_tools_for_policy(12, decision_only=True)
+    ] == ["submit_adjudication"]
+
+
+async def test_policy_v13_can_keep_incomplete_mandatory_review_held(
+    tmp_path: Path,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                _call(
+                                    "request_operator_review",
+                                    {
+                                        "reason": (
+                                            "Mandatory private verification "
+                                            "is incomplete"
+                                        )
+                                    },
+                                )
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-evidence-incomplete"
+    assert result.clear_clause is None
+    assert result.reject_invariant is None
+    assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
+        "submit_adjudication",
+        "request_operator_review",
+    ]
 
 
 async def test_legacy_policy_refuses_a_v13_only_adjudication_basis(

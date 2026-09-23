@@ -11,7 +11,8 @@ The adjudicator receives the notes ledger the earlier layers accumulated, the
 upstream finding if there is one, re-reads the source those notes point at with
 the same read-only tools, applies the published adjudication doctrine, and
 returns `clear` or `reject` with a miner-visible reason and the `path:line` set
-it relied on.
+it relied on. Under policy v13, it can instead request operator review when
+mandatory verification is incomplete; the host keeps that submission held.
 
 It runs `z-ai/glm-5.3-flash`. The expensive discovery already happened
 upstream; what remains is applying a written standard to named locations.
@@ -48,9 +49,10 @@ line you have read" is therefore enforced rather than requested, and it
 subsumes a bounds check: a citation past the end of a file was necessarily
 never served either.
 
-Any refusal produces `decision: "escalate"`. The hold stands and an operator
-sees it, so a malformed adjudication costs latency and can never produce a
-wrong release or a wrong ban.
+Any refusal produces `decision: "escalate"`. The v13 `request_operator_review`
+tool also maps to that host-controlled hold. This path is available even when
+the model request requires a tool call, so incomplete verification cannot be
+forced into CLEAR or REJECT by the transport contract.
 
 ## Closed decision vocabulary
 
