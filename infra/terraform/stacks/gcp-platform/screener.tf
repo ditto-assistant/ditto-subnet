@@ -125,6 +125,9 @@ module "screener_vm" {
 
   service_account_email = google_service_account.screener_worker.email
   labels                = { env = "dev", role = "screener", managed = "terraform" }
+  # Stage 1 of retiring the stopped pet. The module's prevent_destroy guard
+  # remains active until a separate, reviewed removal change deletes this call.
+  deletion_protection = false
 }
 
 output "screener_vm_name" {

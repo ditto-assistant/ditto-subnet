@@ -131,3 +131,9 @@ variable "enable_integrity_monitoring" {
   type        = bool
   default     = true
 }
+
+variable "deletion_protection" {
+  description = "Keep GCE API deletion protection enabled. Disable only in a reviewed retirement stage; Terraform prevent_destroy remains active while the module is configured."
+  type        = bool
+  default     = true
+}
