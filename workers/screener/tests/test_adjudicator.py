@@ -536,6 +536,38 @@ async def test_an_earlier_step_does_not_own_a_later_timeout(
     # The first step was served by Together; the failing one was served by
     # nobody that answered, so the field stays unknown rather than inheriting.
     assert diagnostic.upstream is None
+    assert diagnostic.prompt_tokens is None
+    assert diagnostic.completion_tokens is None
+    assert diagnostic.final_tool_call_returned is None
+
+
+async def test_stream_without_tool_records_safe_contract_diagnostic(
+    tmp_path: Path,
+) -> None:
+    secret = "private model text"
+    event = {
+        "provider": "Together",
+        "usage": {"prompt_tokens": 17, "completion_tokens": 2},
+        "choices": [{"delta": {"content": secret}, "finish_reason": "stop"}],
+    }
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "stream-no-tool-call"
+    assert result.run_diagnostic.final_tool_call_returned is False
+    assert result.run_diagnostic.prompt_tokens == 17
+    assert result.run_diagnostic.completion_tokens == 2
+    assert secret not in result.model_dump_json()
 
 
 async def test_a_provider_fault_inside_a_200_still_names_its_upstream(
@@ -565,7 +597,91 @@ async def test_a_provider_fault_inside_a_200_still_names_its_upstream(
     diagnostic = result.run_diagnostic
     assert diagnostic is not None
     assert diagnostic.upstream == "io-net"
+    assert diagnostic.failure_code == "provider-body-error"
     assert "upstream failed" not in diagnostic.model_dump_json()
+
+
+async def test_stream_provider_error_retries_and_accepts_only_complete_tool_call(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+    arguments = {"decision": "clear", "reason": "Model authority is retained."}
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            event = {
+                "provider": "Together",
+                "error": {"message": "private provider detail"},
+            }
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+            )
+        event = {
+            "provider": "Friendli",
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "verdict-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_adjudication",
+                                    "arguments": json.dumps(arguments),
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        message = await _adjudicator(
+            _key(tmp_path), httpx.MockTransport(handler)
+        )._completion_message(client, "sk-test", [], timeout=10)
+    assert attempts == 2
+    assert message["tool_calls"] == [
+        _call("submit_adjudication", arguments) | {"id": "verdict-1"}
+    ]
+
+
+async def test_two_stream_provider_errors_hold_with_safe_subtype(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+    secret = "private provider detail"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        event = {"provider": "Together", "error": {"message": secret}}
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+    assert attempts == 2
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "provider-stream-error"
+    assert result.run_diagnostic.upstream == "together"
+    assert secret not in result.model_dump_json()
 
 
 async def test_an_unusable_upstream_name_is_dropped_rather_than_stored(

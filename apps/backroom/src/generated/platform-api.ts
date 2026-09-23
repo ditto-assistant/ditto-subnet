@@ -6749,8 +6749,9 @@ export interface components {
          * AdjudicationRunDiagnostic
          * @description Sanitized trace of one automated-court run that did not finish.
          *
-         *     Operators need the failure class, stage, and provider status. The trace
-         *     never carries source, prompts, credentials, exception text, or model text.
+         *     Operators need the failure class, fixed subtype, stage, and provider
+         *     status. The trace never carries source, prompts, credentials, exception
+         *     text, or model text.
          */
         AdjudicationRunDiagnostic: {
             /** Completion Tokens */
@@ -6761,6 +6762,8 @@ export interface components {
             error_class?: string | null;
             /** Escalation Code */
             escalation_code?: string | null;
+            /** Failure Code */
+            failure_code?: ("completion-timeout" | "provider-http-error" | "provider-stream-error" | "provider-body-error" | "transport-error" | "stream-incomplete" | "stream-no-tool-call" | "stream-invalid" | "response-too-large" | "response-json-invalid" | "tool-call-invalid" | "verdict-invalid" | "lease-budget" | "step-budget" | "response-invalid") | null;
             /** Final Tool Call Returned */
             final_tool_call_returned?: boolean | null;
             /** Http Status */

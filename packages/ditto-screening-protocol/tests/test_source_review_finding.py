@@ -753,6 +753,7 @@ def test_run_diagnostic_stays_out_of_the_signed_adjudication() -> None:
     }
     diagnostic = AdjudicationRunDiagnostic(
         error_class="HTTPStatusError",
+        failure_code="provider-http-error",
         escalation_code="adjudicator-failed",
         timeout_stage="response",
         http_status=503,
@@ -779,6 +780,8 @@ def test_run_diagnostic_stays_out_of_the_signed_adjudication() -> None:
             elapsed_ms=1,
             model="the model replied with screening instructions",
         )
+    with pytest.raises(ValidationError):
+        AdjudicationRunDiagnostic(elapsed_ms=1, failure_code="private provider text")
     with pytest.raises(ValidationError, match="run diagnostic requires an escalation"):
         SourceReviewAdjudication(
             decision="clear",

@@ -1207,8 +1207,9 @@ class SourceReviewCitation(BaseModel):
 class AdjudicationRunDiagnostic(BaseModel):
     """Sanitized trace of one automated-court run that did not finish.
 
-    Operators need the failure class, stage, and provider status. The trace
-    never carries source, prompts, credentials, exception text, or model text.
+    Operators need the failure class, fixed subtype, stage, and provider
+    status. The trace never carries source, prompts, credentials, exception
+    text, or model text.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -1216,6 +1217,27 @@ class AdjudicationRunDiagnostic(BaseModel):
     error_class: (
         Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9]{0,63}$")] | None
     ) = None
+    failure_code: (
+        Literal[
+            "completion-timeout",
+            "provider-http-error",
+            "provider-stream-error",
+            "provider-body-error",
+            "transport-error",
+            "stream-incomplete",
+            "stream-no-tool-call",
+            "stream-invalid",
+            "response-too-large",
+            "response-json-invalid",
+            "tool-call-invalid",
+            "verdict-invalid",
+            "lease-budget",
+            "step-budget",
+            "response-invalid",
+        ]
+        | None
+    ) = None
+    """Fixed, text-free subtype of a court failure; null on older attempts."""
     escalation_code: (
         Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")] | None
     ) = None

@@ -4314,6 +4314,15 @@ export const adjudicationRunDiagnosticSchema = z.object({
     .string()
     .regex(/^[A-Za-z][A-Za-z0-9]{0,63}$/)
     .nullish(),
+  failure_code: z
+    .enum([
+      'completion-timeout', 'provider-http-error', 'provider-stream-error',
+      'provider-body-error', 'transport-error', 'stream-incomplete',
+      'stream-no-tool-call', 'stream-invalid', 'response-too-large',
+      'response-json-invalid', 'tool-call-invalid', 'verdict-invalid',
+      'lease-budget', 'step-budget', 'response-invalid',
+    ])
+    .nullish(),
   escalation_code: z
     .string()
     .regex(/^[a-z0-9][a-z0-9-]{0,63}$/)

@@ -834,6 +834,7 @@ describe('screening submission admin service', () => {
     const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
     const court = {
       error_class: 'ValueError',
+      failure_code: 'stream-no-tool-call',
       escalation_code: 'adjudicator-failed',
       timeout_stage: 'response',
       http_status: null,

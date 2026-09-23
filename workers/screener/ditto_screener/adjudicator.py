@@ -71,14 +71,18 @@ _ERROR_CLASS_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{0,63}$")
 _PROVIDER_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 
 
-def _clear_upstream() -> None:
-    """Forget the previous request's upstream before issuing the next one.
+def _clear_request_trace() -> None:
+    """Forget the previous request's metadata before issuing the next one.
 
     A failure with no readable response must leave the upstream unknown rather
     than inherit the last one that answered.
     """
     trace = _run_trace.get()
     if trace is not None:
+        trace.prompt_tokens = None
+        trace.completion_tokens = None
+        trace.final_tool_call_returned = None
+        trace.http_status = None
         trace.upstream = None
 
 
@@ -89,7 +93,7 @@ def _observe_upstream(payload: object) -> None:
     relayed inside an HTTP 200 is exactly the failure worth attributing to an
     upstream.
 
-    The trace spans a whole court run, so :func:`_clear_upstream` empties this
+    The trace spans a whole court run, so :func:`_clear_request_trace` empties this
     at the start of every request and retry. Without that, a step that answered
     from one upstream would still be named when a later step times out with no
     response at all, which blames an upstream for a call it never served.
@@ -181,6 +185,14 @@ _MAX_COMPLETION_RESPONSE_BYTES = 512_000
 
 class IncompleteStreamError(ValueError):
     """A transport ended before the gateway committed a complete response."""
+
+
+class ProviderStreamError(ValueError):
+    """A completed SSE frame explicitly reported a provider failure."""
+
+
+class ProviderBodyError(ValueError):
+    """A complete JSON body reported a retryable upstream failure."""
 
 
 # Bounded by the repository tools themselves; this only caps how many of
@@ -608,6 +620,47 @@ def _failure_stage(error: BaseException) -> _RunStage:
     return "response"
 
 
+def _failure_code(error: BaseException) -> str:
+    """Classify only known local failure shapes; never persist exception text."""
+    if isinstance(error, ProviderStreamError):
+        return "provider-stream-error"
+    if isinstance(error, ProviderBodyError):
+        return "provider-body-error"
+    if isinstance(error, IncompleteStreamError):
+        return "stream-incomplete"
+    if isinstance(error, (TimeoutError, httpx.TimeoutException)):
+        return "completion-timeout"
+    if isinstance(error, httpx.HTTPStatusError):
+        return "provider-http-error"
+    if isinstance(error, (httpx.HTTPError, OSError)):
+        return "transport-error"
+    if isinstance(error, json.JSONDecodeError):
+        return "response-json-invalid"
+    if isinstance(error, ValueError):
+        message = str(error)
+        if message == "adjudicator model body was unusable":
+            return "provider-body-error"
+        if message == "adjudicator stream ended without a tool call":
+            return "stream-no-tool-call"
+        if message == "adjudicator completion exceeded response bound":
+            return "response-too-large"
+        if message.startswith("adjudicator stream "):
+            return "stream-invalid"
+        if message.startswith("adjudicator exceeded lease budget"):
+            return "lease-budget"
+        if message.startswith("adjudicator exceeded step budget"):
+            return "step-budget"
+        if message.startswith("adjudicator decision ") or message.startswith(
+            "adjudicator reason "
+        ):
+            return "verdict-invalid"
+        if message.startswith("adjudicator arguments ") or message.startswith(
+            ("adjudicator tool call ", "adjudicator function call ")
+        ):
+            return "tool-call-invalid"
+    return "response-invalid"
+
+
 def _observe_completion(payload: object) -> None:
     """Record token counts and whether a final tool call was present.
 
@@ -903,14 +956,16 @@ class SourceReviewAdjudicator:
                 httpx.HTTPError,
                 json.JSONDecodeError,
             ) as error:
-                # Class and stage only. Exception text can echo a prompt or
-                # provider body, so it stays out of the persisted diagnostic.
+                # Fixed class, stage, and subtype only. Exception text can
+                # echo a prompt or provider body, so never persist it.
                 logger.warning(
-                    "adjudication failed model=%s upstream=%s cause=%s stage=%s",
+                    "adjudication failed model=%s upstream=%s cause=%s "
+                    "stage=%s code=%s",
                     self._model,
                     trace.upstream,
                     type(error).__name__,
                     _failure_stage(error),
+                    _failure_code(error),
                 )
                 result = _escalate(
                     "adjudicator-failed",
@@ -976,6 +1031,7 @@ class SourceReviewAdjudicator:
         try:
             return AdjudicationRunDiagnostic(
                 error_class=error_class,
+                failure_code=_failure_code(error),
                 escalation_code=escalation_code,
                 timeout_stage=_failure_stage(error),
                 http_status=http_status,
@@ -1263,7 +1319,7 @@ class SourceReviewAdjudicator:
             _MAX_COMPLETION_REQUEST_SECONDS,
         )
         for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
-            _clear_upstream()
+            _clear_request_trace()
             try:
                 async with asyncio.timeout(effective_timeout):
                     async with client.stream(
@@ -1296,7 +1352,18 @@ class SourceReviewAdjudicator:
                                 trace.http_status = response.status_code
                             response.raise_for_status()
                         payload = await _completion_stream_payload(response)
-            except (TimeoutError, httpx.TransportError, IncompleteStreamError):
+                        _observe_upstream(payload)
+                        if _retryable_model_error_type(payload) is not None:
+                            raise ProviderBodyError(
+                                "adjudicator model body was unusable"
+                            )
+            except (
+                TimeoutError,
+                httpx.TransportError,
+                IncompleteStreamError,
+                ProviderStreamError,
+                ProviderBodyError,
+            ):
                 if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
                     raise
                 logger.warning(
@@ -1305,9 +1372,6 @@ class SourceReviewAdjudicator:
                 )
                 continue
             break
-        _observe_upstream(payload)
-        if _retryable_model_error_type(payload) is not None:
-            raise ValueError("adjudicator model body was unusable")
         return _assistant_message(payload)
 
 
@@ -1347,7 +1411,7 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
             raise ValueError("adjudicator stream event is not an object")
         _observe_upstream(event)
         if event.get("error"):
-            raise ValueError("adjudicator stream returned a provider error")
+            raise ProviderStreamError("adjudicator stream returned a provider error")
         model = event.get("model") or model
         usage = event.get("usage") or usage
         choices = event.get("choices")
@@ -1399,6 +1463,9 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
     if not done:
         raise IncompleteStreamError("adjudicator stream ended before [DONE]")
     if not calls:
+        _observe_completion(
+            {"usage": usage, "choices": [{"message": {"tool_calls": []}}]}
+        )
         raise ValueError("adjudicator stream ended without a tool call")
     return {
         "model": model,

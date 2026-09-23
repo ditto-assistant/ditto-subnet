@@ -440,7 +440,9 @@ async def test_adjudicator_failure_diagnostic_is_retained_on_the_hold(
             )
         )
         assert quarantine is not None
-        assert quarantine.court_diagnostic == diagnostic
+        # Older traces have no subtype; the forward-compatible wire model
+        # records it as null without changing the adjudication outcome.
+        assert quarantine.court_diagnostic == {**diagnostic, "failure_code": None}
         assert quarantine.resolution is None
 
 

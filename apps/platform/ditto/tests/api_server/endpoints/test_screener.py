@@ -6880,6 +6880,7 @@ class TestQuarantineAdmin:
         now = datetime.now(UTC)
         court = {
             "error_class": "HTTPStatusError",
+            "failure_code": "provider-http-error",
             "escalation_code": "adjudicator-failed",
             "timeout_stage": "response",
             "http_status": 503,
@@ -6953,6 +6954,7 @@ class TestQuarantineAdmin:
         assert body["reason_code"] == "source-review-adjudication-refused"
         assert body["court_diagnostic"] == {
             "error_class": "HTTPStatusError",
+            "failure_code": "provider-http-error",
             "escalation_code": "adjudicator-failed",
             "timeout_stage": "response",
             "http_status": 503,
