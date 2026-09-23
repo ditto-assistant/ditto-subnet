@@ -65,14 +65,17 @@ def test_stage_source_review_secret_keeps_private_file(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("predecessor_state", ["none", "available", "invalid"])
 async def test_job_binds_source_and_posts_only_bounded_observation(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, predecessor_state: str
 ) -> None:
     review_id = "550e8400-e29b-41d4-a716-446655440000"
     attempt_id = "650e8400-e29b-41d4-a716-446655440000"
     artifact_sha256 = "a" * 64
+    predecessor_sha256 = "b" * 64
     key_path = tmp_path / "source-review-key"
     archive_path = tmp_path / "source.tgz"
+    predecessor_archive_path = tmp_path / "predecessor.tgz"
     posted: list[dict[str, Any]] = []
     provider_events: list[dict[str, Any]] = []
     monkeypatch.setenv("DITTO_PLATFORM_URL", "https://platform.example")
@@ -87,10 +90,14 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
         monkeypatch.setenv("SCREENER_SOURCE_REVIEW_API_KEY_FILE", str(key_path))
 
     async def download_verified(_client: object, url: str, expected_sha256: str) -> str:
-        assert url == "https://storage.example/source.tgz"
-        assert expected_sha256 == artifact_sha256
-        archive_path.write_bytes(b"bound source archive")
-        return str(archive_path)
+        if url == "https://storage.example/source.tgz":
+            assert expected_sha256 == artifact_sha256
+            archive_path.write_bytes(b"bound source archive")
+            return str(archive_path)
+        assert url == "https://storage.example/predecessor.tgz"
+        assert expected_sha256 == predecessor_sha256
+        predecessor_archive_path.write_bytes(b"bound predecessor archive")
+        return str(predecessor_archive_path)
 
     class Response:
         def __init__(self, body: dict[str, Any]) -> None:
@@ -111,15 +118,26 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
 
         async def get(self, url: str, **_kwargs: object) -> Response:
             assert url.endswith(f"/{review_id}/source")
-            return Response(
-                {
-                    "artifact_sha256": artifact_sha256,
-                    "policy_version": 12,
-                    "source_url_b64": base64.b64encode(
-                        b"https://storage.example/source.tgz"
-                    ).decode(),
-                }
-            )
+            body = {
+                "artifact_sha256": artifact_sha256,
+                "policy_version": 12,
+                "source_url_b64": base64.b64encode(
+                    b"https://storage.example/source.tgz"
+                ).decode(),
+            }
+            if predecessor_state == "available":
+                body.update(
+                    {
+                        "predecessor_artifact_sha256": predecessor_sha256,
+                        "predecessor_source_url_b64": base64.b64encode(
+                            b"https://storage.example/predecessor.tgz"
+                        ).decode(),
+                    }
+                )
+            elif predecessor_state == "invalid":
+                body["predecessor_artifact_sha256"] = "invalid"
+                body["predecessor_source_url_b64"] = "not-base64"
+            return Response(body)
 
         async def post(
             self, url: str, *, json: dict[str, Any], **_kwargs: object
@@ -140,6 +158,14 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
             assert values["artifact_sha256"] == artifact_sha256
             assert values["attempt_id"] == UUID(attempt_id)
             assert values["policy_version"] == 12
+            assert values["predecessor_archive_path"] == (
+                str(predecessor_archive_path)
+                if predecessor_state == "available"
+                else None
+            )
+            assert values["predecessor_artifact_sha256"] == (
+                predecessor_sha256 if predecessor_state == "available" else None
+            )
             return SourceReviewObservation(
                 ok=True,
                 risk_level="low",

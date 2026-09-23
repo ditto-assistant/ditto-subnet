@@ -394,6 +394,54 @@ def test_opaque_binary_blob_is_surfaced_in_inventory(tmp_path: Path) -> None:
     assert "src/main.rs" not in opaque
 
 
+def test_inventory_flags_multi_language_runtime_with_large_source_unit(
+    tmp_path: Path,
+) -> None:
+    large_rust = ("fn helper() {}\n" * 20_000).encode()
+    repo = TarSourceRepository(
+        str(
+            _archive_with(
+                tmp_path,
+                {
+                    "src/main.rs": large_rust,
+                    "agent/router.py": b"def route(request):\n    return request\n",
+                },
+            )
+        )
+    )
+
+    reviewability = json.loads(repo.inventory())["reviewability"]
+
+    assert reviewability["risk"] == "high"
+    assert reviewability["signals"] == ["multi-language-runtime-with-large-source-unit"]
+    assert reviewability["runtime_languages"] == ["py", "rs"]
+    assert reviewability["largest_runtime_source"]["path"] == "src/main.rs"
+
+
+async def test_high_review_complexity_cannot_clear_without_complete_area_notes(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    archive = _archive_with(
+        tmp_path,
+        {
+            "src/main.rs": ("fn call_model() {}\n" * 16_000).encode(),
+            "agent/router.py": b"def route(request):\n    return request\n",
+        },
+    )
+
+    observation = await _agent(key, _transport(_BENIGN_REVIEW, seen)).review(
+        str(archive), artifact_sha256=_SHA, policy_version=13
+    )
+
+    assert observation.ok
+    assert observation.risk_level == "low"
+    assert not observation.clearance_certified
+
+
 def test_valid_onnx_is_structurally_analyzed_without_extension_trust(
     tmp_path: Path,
 ) -> None:
@@ -4075,6 +4123,43 @@ def test_inventory_degrades_partially_with_truncation_metadata(
     assert inventory["opaque_blobs"][0]["path"] == "assets/table.bin"
     encoded = json.dumps(inventory, sort_keys=True, separators=(",", ":"))
     assert len(encoded) <= 48_000
+
+
+def test_inventory_surfaces_exact_same_submission_predecessor_diff(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "previous").mkdir()
+    (tmp_path / "current").mkdir()
+    predecessor = _archive_files(
+        tmp_path / "previous",
+        {
+            "Dockerfile": b"FROM python:3.12\n",
+            "src/main.py": b"def run():\n    return 'old'\n",
+            "src/removed.py": b"OLD = True\n",
+        },
+    )
+    current = _archive_files(
+        tmp_path / "current",
+        {
+            "Dockerfile": b"FROM python:3.12\n",
+            "src/main.py": b"def run():\n    return 'new'\n",
+            "src/added.py": b"ADDED = True\n",
+        },
+    )
+    repo = TarSourceRepository(
+        str(current),
+        predecessor_archive_path=str(predecessor),
+        predecessor_artifact_sha256="cd" * 32,
+    )
+
+    diff = json.loads(repo.inventory())["submission_diff"]
+
+    assert diff["predecessor_artifact_sha256"] == "cd" * 32
+    assert diff["added"] == ["src/added.py"]
+    assert diff["changed"] == ["src/main.py"]
+    assert diff["removed"] == ["src/removed.py"]
+    assert diff["unchanged_count"] == 1
+    assert "Do not inherit" in diff["review_contract"]
 
 
 # ---------------------------------------------------------------------------

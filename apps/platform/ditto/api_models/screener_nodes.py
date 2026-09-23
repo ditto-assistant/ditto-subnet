@@ -576,6 +576,12 @@ class SubmissionSourceReviewSourceResponse(BaseModel):
     source_url_b64: str
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     policy_version: Annotated[int, Field(ge=1, le=1_000)]
+    predecessor_source_url_b64: str | None = None
+    predecessor_artifact_sha256: Annotated[
+        str | None, Field(pattern=r"^[0-9a-f]{64}$")
+    ] = None
+    predecessor_agent_id: UUID | None = None
+    predecessor_version: Annotated[int | None, Field(gt=0)] = None
 
 
 class SubmissionSourceReviewCompleteRequest(BaseModel):

@@ -3377,14 +3377,46 @@ async def get_submission_source_review_source(
         agent_id = row.agent_id
         artifact_sha256 = row.artifact_sha256
         policy_version = attempt.policy_version
+        agent = await session.get(Agent, agent_id)
+        predecessor = None
+        if agent is not None and agent.version is not None:
+            predecessor = await session.scalar(
+                select(Agent)
+                .where(
+                    Agent.miner_hotkey == agent.miner_hotkey,
+                    Agent.name == agent.name,
+                    Agent.version.is_not(None),
+                    Agent.version < agent.version,
+                )
+                .order_by(Agent.version.desc(), Agent.created_at.desc())
+                .limit(1)
+            )
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
     )
+    predecessor_url = None
+    if predecessor is not None:
+        predecessor_url = await storage.presigned_get_url(
+            key=_artifact_key(predecessor.agent_id),
+            expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
+        )
     return SubmissionSourceReviewSourceResponse(
         source_url_b64=base64.b64encode(url.encode()).decode(),
         artifact_sha256=artifact_sha256,
         policy_version=policy_version,
+        predecessor_source_url_b64=(
+            base64.b64encode(predecessor_url.encode()).decode()
+            if predecessor_url is not None
+            else None
+        ),
+        predecessor_artifact_sha256=(
+            predecessor.sha256 if predecessor is not None else None
+        ),
+        predecessor_agent_id=(
+            predecessor.agent_id if predecessor is not None else None
+        ),
+        predecessor_version=(predecessor.version if predecessor is not None else None),
     )
 
 

@@ -4279,6 +4279,8 @@ class LayeredSourceReviewAgent:
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        predecessor_archive_path: str | None = None,
+        predecessor_artifact_sha256: str | None = None,
     ) -> SourceReviewObservation:
         def report_l1(completed: int, total: int) -> None:
             if progress is not None:
@@ -4296,6 +4298,8 @@ class LayeredSourceReviewAgent:
             progress=report_l1 if progress is not None else None,
             deadline=review_deadline,
             policy_version=policy_version,
+            predecessor_archive_path=predecessor_archive_path,
+            predecessor_artifact_sha256=predecessor_artifact_sha256,
         )
         return await self.resolve_lead(
             archive_path,

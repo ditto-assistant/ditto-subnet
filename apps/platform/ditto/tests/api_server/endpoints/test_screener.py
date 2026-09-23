@@ -947,7 +947,15 @@ class TestFederatedScreenerNodes:
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        predecessor_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.REJECTED,
+            version=1,
+            sha256="cd" * 32,
+        )
+        agent_id = await _seed_agent(
+            session_maker, status=AgentStatus.UPLOADED, version=2
+        )
         await _seed_targon_first(session_maker)
         _install_db(app, session_maker)
         _install_chain(app)
@@ -1089,6 +1097,12 @@ class TestFederatedScreenerNodes:
         )
         assert source.status_code == 200, source.text
         assert source.json()["artifact_sha256"] == _SHA256
+        assert source.json()["predecessor_artifact_sha256"] == "cd" * 32
+        assert source.json()["predecessor_agent_id"] == str(predecessor_id)
+        assert source.json()["predecessor_version"] == 1
+        assert base64.b64decode(source.json()["predecessor_source_url_b64"]).startswith(
+            b"https://"
+        )
         async with session_maker() as session:
             source_attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
             assert source_attempt is not None

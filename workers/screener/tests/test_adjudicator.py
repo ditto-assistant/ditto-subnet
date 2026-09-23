@@ -39,6 +39,16 @@ def test_oversized_reason_is_refused_instead_of_silently_truncated() -> None:
         adjudicator_module._verdict_from({"decision": "reject", "reason": "x" * 8001})
 
 
+def test_policy_v13_court_can_hold_when_reviewability_is_unproven() -> None:
+    v13 = _adjudicator_tools_for_policy(13)[-1]["function"]["parameters"]
+    v12 = _adjudicator_tools_for_policy(12)[-1]["function"]["parameters"]
+
+    assert "escalate" in v13["properties"]["decision"]["enum"]
+    assert "escalate" not in v12["properties"]["decision"]["enum"]
+    assert "reviewability-unproven" in v13["properties"]["escalation_code"]["enum"]
+    assert "``escalate`` is a first-class final outcome" in _system_prompt(13)
+
+
 _SOURCE = "\n".join(
     [
         "// leading comment",
@@ -928,6 +938,38 @@ async def test_budget_terminated_review_without_evidence_settles_immediately(
     assert requests == 0
 
 
+async def test_policy_v13_explicit_reviewability_escalation_stays_held(
+    tmp_path: Path,
+) -> None:
+    transport = _transport(
+        [
+            [
+                _call(
+                    "submit_adjudication",
+                    {
+                        "decision": "escalate",
+                        "escalation_code": "reviewability-unproven",
+                        "reason": "The bounded review could not close every path.",
+                        "citations": [],
+                    },
+                )
+            ]
+        ]
+    )
+
+    result = await _adjudicator(_key(tmp_path), transport).adjudicate(
+        _archive(tmp_path),
+        notes=[_CONCERN],
+        ledger_final=True,
+        policy_version=13,
+    )
+
+    assert result.decision == "escalate"
+    assert result.escalation_code == "reviewability-unproven"
+    assert result.clear_clause is None
+    assert "could not certify every effective served path" in result.reason
+
+
 _CONCERN = {
     "kind": "concern",
     "category": "benchmark_emulation",
@@ -945,8 +987,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v6-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v6-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v7-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v7-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -971,7 +1013,7 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     assert "always-on benchmark-specific recipe is activated on every request" in (
         policy_v13
     )
-    assert "withhold submit_adjudication" in policy_v13
+    assert "Submit ``escalate``" in policy_v13
     assert "`bench_version` alter substantive retrieval" in policy_v13
     assert "path-and-digest provenance" in policy_v13
     assert "omission of its duplicate README" in policy_v13

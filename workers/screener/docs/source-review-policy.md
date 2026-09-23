@@ -677,3 +677,26 @@ Do not bulk-release candidates from metadata alone. After the new policy is
 deployed, use the normal guarded rescreen workflow with a fresh identity/status
 check so each artifact receives the current complete review. This PR performs
 no production query, rescreen, release, rejection, or verdict mutation.
+## Reviewability and inconclusive holds
+
+Source size, complexity, multiple runtime languages, generated-looking code,
+dynamic dispatch, or misleading comments are not evidence of cheating. They
+are reviewability signals. When they prevent the bounded reviewer from tracing
+every effective served engine from entrypoint through model authority, tool
+dispatch, and response construction, the result is inconclusive and the
+submission remains held. An adjudicator may not convert incomplete or mixed
+coverage into a clear merely because no breach was proven.
+
+The worker surfaces a deterministic reviewability profile in the source
+inventory. A multi-language runtime containing an executable source unit of at
+least 256 KiB requires complete served-area notes before L1 can certify a clear.
+For a versioned submission, Platform also supplies the latest lower version
+with the same miner hotkey and agent name. The worker verifies both archive
+digests and gives the reviewer an exact added, changed, removed, and unchanged
+file manifest. Changed served files are inspection priorities, but a prior
+verdict is never inherited: the reviewer must still trace the current
+entrypoint, callers, callees, model authority, tool dispatch, and response path.
+The final policy-v13 court can explicitly return an inconclusive escalation for
+unproven reviewability, incomplete mandatory verification, mixed evidence, or
+source complexity beyond its bounded budget. These states never establish a
+violation and require operator review before scoring or emissions.

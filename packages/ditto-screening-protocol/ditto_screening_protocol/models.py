@@ -1272,8 +1272,9 @@ class AdjudicationRunDiagnostic(BaseModel):
 class SourceReviewAdjudication(BaseModel):
     """Terminal clear/reject decision on a review that would otherwise hold.
 
-    ``escalate`` is never a model choice. The adjudicator is asked for clear
-    or reject; the host uses ``escalate`` when the court could not start, ran
+    Under policy v13, ``escalate`` may be a model choice when the bounded court
+    cannot certify complete reviewability; older policies ask only for clear or
+    reject. The host also uses ``escalate`` when the court could not start, ran
     out of budget, timed out, or returned a decision that fails its contract.
     An escalation is carried as an operator hold (quarantine): malformed or
     exhausted automation can neither reject a miner without proof nor admit

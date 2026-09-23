@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import logging
 import os
 import stat
 import tempfile
@@ -43,6 +44,7 @@ from ditto_screening_protocol import (
 
 _MAX_SOURCE_BYTES = 20 * 1024 * 1024
 _MAX_PROVIDER_KEY_BYTES = 16 * 1024
+logger = logging.getLogger(__name__)
 
 
 def _stage_source_review_secret(key_file: str) -> str:
@@ -288,6 +290,7 @@ async def _amain() -> int:
     headers = {"Authorization": f"Bearer {token}"}
     base = f"{platform}/api/v1/screener/submission-source-reviews/{review_id}"
     archive_path: str | None = None
+    predecessor_archive_path: str | None = None
     timeout_seconds = float(
         os.environ.get("SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "3600")
     )
@@ -313,6 +316,30 @@ async def _amain() -> int:
                 str(source["source_url_b64"]), validate=True
             ).decode()
             archive_path = await _download_verified(client, source_url, expected_sha256)
+            predecessor_sha256 = source.get("predecessor_artifact_sha256")
+            predecessor_source_url_b64 = source.get("predecessor_source_url_b64")
+            if predecessor_sha256 is not None or predecessor_source_url_b64 is not None:
+                try:
+                    if (
+                        not isinstance(predecessor_sha256, str)
+                        or len(predecessor_sha256) != 64
+                        or not isinstance(predecessor_source_url_b64, str)
+                    ):
+                        raise ValueError(
+                            "Platform predecessor source binding is invalid"
+                        )
+                    predecessor_url = base64.b64decode(
+                        predecessor_source_url_b64, validate=True
+                    ).decode()
+                    predecessor_archive_path = await _download_verified(
+                        client, predecessor_url, predecessor_sha256
+                    )
+                except (UnicodeError, ValueError, httpx.HTTPError) as error:
+                    logger.warning(
+                        "predecessor source unavailable; continuing full review: %s",
+                        error,
+                    )
+                    predecessor_sha256 = None
             reviewer = _build_reviewer(
                 key_file=key_file, timeout_seconds=timeout_seconds
             )
@@ -323,6 +350,8 @@ async def _amain() -> int:
                 attempt_id=attempt_id,
                 deadline=asyncio.get_running_loop().time() + timeout_seconds,
                 policy_version=policy_version,
+                predecessor_archive_path=predecessor_archive_path,
+                predecessor_artifact_sha256=predecessor_sha256,
             )
             payload = SourceReviewObservationPayload(
                 ok=observation.ok,
@@ -376,6 +405,8 @@ async def _amain() -> int:
     finally:
         if archive_path is not None:
             Path(archive_path).unlink(missing_ok=True)
+        if predecessor_archive_path is not None:
+            Path(predecessor_archive_path).unlink(missing_ok=True)
         Path(key_file).unlink(missing_ok=True)
 
 

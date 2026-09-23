@@ -27358,8 +27358,9 @@ export interface components {
          * SourceReviewAdjudication
          * @description Terminal clear/reject decision on a review that would otherwise hold.
          *
-         *     ``escalate`` is never a model choice. The adjudicator is asked for clear
-         *     or reject; the host uses ``escalate`` when the court could not start, ran
+         *     Under policy v13, ``escalate`` may be a model choice when the bounded court
+         *     cannot certify complete reviewability; older policies ask only for clear or
+         *     reject. The host also uses ``escalate`` when the court could not start, ran
          *     out of budget, timed out, or returned a decision that fails its contract.
          *     An escalation is carried as an operator hold (quarantine): malformed or
          *     exhausted automation can neither reject a miner without proof nor admit
@@ -28016,6 +28017,14 @@ export interface components {
             artifact_sha256: string;
             /** Policy Version */
             policy_version: number;
+            /** Predecessor Agent Id */
+            predecessor_agent_id?: string | null;
+            /** Predecessor Artifact Sha256 */
+            predecessor_artifact_sha256?: string | null;
+            /** Predecessor Source Url B64 */
+            predecessor_source_url_b64?: string | null;
+            /** Predecessor Version */
+            predecessor_version?: number | null;
             /** Source Url B64 */
             source_url_b64: string;
         };

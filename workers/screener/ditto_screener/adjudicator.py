@@ -156,7 +156,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v6-policy-v13"
+        return "adjudicator-v7-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 
@@ -332,11 +332,8 @@ Infrastructure failures are never miner violations.
 Cite executable source. A comment, an import, a derive, a closing brace or a
 test file cannot carry a behaviour and will be refused.
 
-When the evidence is genuinely mixed you must still choose, and the safe
-choice is clear: a wrong reject bans an honest miner, while a wrong clear
-leaves a submission that the next review, the behavioural oracle, and the
-scored path all still get to catch. Reject only what you can prove from lines
-you read.
+When the evidence is genuinely mixed, follow the applied policy generation's
+settlement rule below. Reject only what you can prove from lines you read.
 
 The reason field is shown to the miner. Make it specific and factual: what
 the served path does, at which file and line, and why that does or does not
@@ -440,10 +437,37 @@ boundaries, inputs, outputs, and downstream authority. A null compact score
 field does not prove artifact-bound screening evidence is absent. A missing
 predefined verification artifact or failed platform review
 is not a proven integrity breach. If mandatory verification is incomplete, do
-not manufacture a clear or a violation; withhold submit_adjudication so the host
-retains an escalate processing state for the operator's eventual CLEAR/REJECT
-decision.
+not manufacture a clear or a violation. Submit ``escalate`` with the narrowest
+applicable escalation code so the host retains an inconclusive hold for the
+operator's eventual CLEAR/REJECT decision.
+
+For policy v13, ``escalate`` is a first-class final outcome. Use it when the
+bounded review cannot certify every effective served engine and decision path,
+including because the runtime is unusually large, cross-language, dynamically
+dispatched, generated-looking, opaque, or internally contradictory. Complexity
+is not evidence of cheating and never supports reject by itself. It does block
+clear when it prevents a complete review. This rule supersedes any older
+instruction to resolve mixed evidence as clear.
 """.strip()
+
+
+_MODEL_ESCALATION_REASONS = {
+    "reviewability-unproven": (
+        "Automated review could not certify every effective served path within "
+        "its bounded inspection; held for operator review"
+    ),
+    "mandatory-verification-incomplete": (
+        "Mandatory source verification remained incomplete; held for operator review"
+    ),
+    "mixed-evidence": (
+        "Automated review found mixed source evidence that could not support "
+        "either clear or reject; held for operator review"
+    ),
+    "source-complexity-budget-exceeded": (
+        "Source complexity exceeded the bounded automated review's ability to "
+        "certify the served path; held for operator review"
+    ),
+}
 
 
 def _system_prompt(policy_version: int) -> str:
@@ -516,11 +540,17 @@ _TOOLS: list[dict[str, object]] = [
         "type": "function",
         "function": {
             "name": "submit_adjudication",
-            "description": "Record the final clear or reject decision. Call once.",
+            "description": (
+                "Record the final clear, reject, or policy-v13 inconclusive "
+                "escalation. Call once."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "decision": {"type": "string", "enum": ["clear", "reject"]},
+                    "decision": {
+                        "type": "string",
+                        "enum": ["clear", "reject", "escalate"],
+                    },
                     "reason": {"type": "string", "maxLength": 8000},
                     "reject_invariant": {
                         "type": "string",
@@ -529,6 +559,10 @@ _TOOLS: list[dict[str, object]] = [
                     "clear_clause": {
                         "type": "string",
                         "enum": [item.value for item in AdjudicationClearClause],
+                    },
+                    "escalation_code": {
+                        "type": "string",
+                        "enum": sorted(_MODEL_ESCALATION_REASONS),
                     },
                     "citations": {
                         "type": "array",
@@ -573,6 +607,10 @@ def _adjudicator_tools_for_policy(
     reject_invariant["enum"] = [
         item.value for item in source_review_invariants_for_policy(policy_version)
     ]
+    if policy_version < 13:
+        decision = properties["decision"]
+        assert isinstance(decision, dict)
+        decision["enum"] = ["clear", "reject"]
     return tools
 
 
@@ -584,6 +622,7 @@ class _Verdict:
     reason: str
     reject_invariant: str | None
     clear_clause: str | None
+    escalation_code: str | None
     citations: tuple[tuple[str, int], ...]
 
 
@@ -1070,6 +1109,24 @@ class SourceReviewAdjudicator:
         decision itself is cheap to check: the citations have to exist, have to
         be code, and have to be locations this adjudicator actually opened.
         """
+        if verdict.decision == "escalate":
+            code = verdict.escalation_code
+            if code not in _MODEL_ESCALATION_REASONS:
+                return _escalate(
+                    "verdict-contract-failed",
+                    "Automated adjudication did not name a supported hold basis; "
+                    "held for operator review",
+                    model=self._model,
+                    notes=notes,
+                    policy_version=policy_version,
+                )
+            return _escalate(
+                code,
+                _MODEL_ESCALATION_REASONS[code],
+                model=self._model,
+                notes=notes,
+                policy_version=policy_version,
+            )
         if not verdict.citations:
             return _escalate(
                 "uncited-decision",
@@ -1601,7 +1658,7 @@ def _record_reads(output: str, seen: set[tuple[str, int]]) -> None:
 
 def _verdict_from(arguments: Mapping[str, object]) -> _Verdict:
     decision = arguments.get("decision")
-    if decision not in {"clear", "reject"}:
+    if decision not in {"clear", "reject", "escalate"}:
         raise ValueError("adjudicator decision is invalid")
     reason = arguments.get("reason")
     if not isinstance(reason, str) or not reason.strip():
@@ -1624,11 +1681,13 @@ def _verdict_from(arguments: Mapping[str, object]) -> _Verdict:
             citations.append((path, line))
     invariant = arguments.get("reject_invariant")
     clause = arguments.get("clear_clause")
+    escalation_code = arguments.get("escalation_code")
     return _Verdict(
         decision=decision,
         reason=reason.strip(),
         reject_invariant=invariant if isinstance(invariant, str) else None,
         clear_clause=clause if isinstance(clause, str) else None,
+        escalation_code=(escalation_code if isinstance(escalation_code, str) else None),
         citations=tuple(citations),
     )
 

@@ -2385,11 +2385,20 @@ class TarSourceRepository:
     """A read-only, size-bounded view over regular files in a verified tarball."""
 
     def __init__(
-        self, archive_path: str, *, static_preflight_v2_mode: str = "off"
+        self,
+        archive_path: str,
+        *,
+        static_preflight_v2_mode: str = "off",
+        predecessor_archive_path: str | None = None,
+        predecessor_artifact_sha256: str | None = None,
     ) -> None:
         if static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
             raise ValueError("static preflight mode must be off, shadow, or enforce")
         self._archive_path = archive_path
+        self._predecessor_archive_path = predecessor_archive_path
+        self._predecessor_artifact_sha256 = predecessor_artifact_sha256
+        self._submission_diff_computed = False
+        self._submission_diff_cache: dict[str, object] | None = None
         self._static_preflight_v2_mode = static_preflight_v2_mode
         self._binary_analysis_cache: dict[str, dict[str, object]] = {}
         members: list[_Member] = []
@@ -2572,6 +2581,7 @@ class TarSourceRepository:
             for item in opaque
         ]
         review_leads = self.review_leads()
+        reviewability = self.reviewability_profile()
         limit = _MAX_INVENTORY_FILES
         while True:
             rows = [{"path": item.name, "bytes": item.size} for item in ordered[:limit]]
@@ -2584,6 +2594,8 @@ class TarSourceRepository:
                 "opaque_truncated": opaque_total > len(opaque) or opaque_scan_bounded,
                 "binary_analysis": binary_analysis,
                 "review_leads": review_leads,
+                "reviewability": reviewability,
+                "submission_diff": self.submission_diff(),
                 "truncated": len(ordered) > len(rows),
             }
             encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
@@ -2597,6 +2609,135 @@ class TarSourceRepository:
             else:
                 opaque = opaque[: max(0, len(opaque) // 2)]
                 binary_analysis = binary_analysis[: len(opaque)]
+
+    def submission_diff(self) -> dict[str, object] | None:
+        """Compare this exact archive with its same-owner named predecessor.
+
+        The diff is a review navigation aid, never inherited clearance. The
+        current archive remains authoritative and every served deciding path
+        still requires current-version coverage.
+        """
+        if self._submission_diff_computed:
+            return self._submission_diff_cache
+        self._submission_diff_computed = True
+        if self._predecessor_archive_path is None:
+            return None
+        current = self._member_digests(self._archive_path, self._members)
+        predecessor = TarSourceRepository(self._predecessor_archive_path)
+        previous = predecessor._member_digests(
+            self._predecessor_archive_path, predecessor._members
+        )
+        current_paths = set(current)
+        previous_paths = set(previous)
+        added = current_paths - previous_paths
+        removed = previous_paths - current_paths
+        changed = {
+            path
+            for path in current_paths & previous_paths
+            if current[path] != previous[path]
+        }
+
+        def prioritize(paths: set[str]) -> list[str]:
+            return sorted(paths, key=lambda path: (source_path_priority(path), path))[
+                :_MAX_INVENTORY_FILES
+            ]
+
+        self._submission_diff_cache = {
+            "predecessor_artifact_sha256": self._predecessor_artifact_sha256,
+            "added": prioritize(added),
+            "changed": prioritize(changed),
+            "removed": prioritize(removed),
+            "added_count": len(added),
+            "changed_count": len(changed),
+            "removed_count": len(removed),
+            "unchanged_count": len(current_paths & previous_paths - changed),
+            "truncated": any(
+                len(paths) > _MAX_INVENTORY_FILES for paths in (added, changed, removed)
+            ),
+            "review_contract": (
+                "Prioritize changed served paths, then verify their callers and "
+                "callees. Do not inherit the predecessor's verdict or skip current "
+                "served-path coverage."
+            ),
+        }
+        return self._submission_diff_cache
+
+    @staticmethod
+    def _member_digests(
+        archive_path: str, members: Mapping[str, _Member]
+    ) -> dict[str, str]:
+        digests: dict[str, str] = {}
+        with tarfile.open(archive_path, mode="r:gz") as archive:
+            for path, member_info in members.items():
+                member = archive.getmember(member_info.archive_name)
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    continue
+                digest = hashlib.sha256()
+                while chunk := extracted.read(1024 * 1024):
+                    digest.update(chunk)
+                digests[path] = digest.hexdigest()
+        return digests
+
+    def reviewability_profile(self) -> dict[str, object]:
+        """Return deterministic complexity signals, never an intent verdict.
+
+        A dual-language runtime with a very large executable source unit is a
+        materially harder bounded review than the same amount of modular code.
+        The signal only requires stronger coverage or an inconclusive hold; it
+        can never establish a policy violation by itself.
+        """
+        runtime = [
+            self._members[path]
+            for path in self._explicit_runtime_paths()
+            if path in self._members
+        ]
+        source_suffixes = {
+            ".c",
+            ".cc",
+            ".cpp",
+            ".go",
+            ".java",
+            ".js",
+            ".kt",
+            ".php",
+            ".py",
+            ".rb",
+            ".rs",
+            ".sh",
+            ".ts",
+        }
+        source_members = [
+            member
+            for member in runtime
+            if PurePosixPath(member.name).suffix.casefold() in source_suffixes
+        ]
+        languages = sorted(
+            {
+                PurePosixPath(member.name).suffix.casefold().removeprefix(".")
+                for member in source_members
+            }
+        )
+        largest = max(source_members, key=lambda item: item.size, default=None)
+        multi_runtime_monolith = bool(
+            largest is not None and largest.size >= 256_000 and len(languages) >= 2
+        )
+        return {
+            "risk": "high" if multi_runtime_monolith else "ordinary",
+            "signals": (
+                ["multi-language-runtime-with-large-source-unit"]
+                if multi_runtime_monolith
+                else []
+            ),
+            "runtime_source_files": len(source_members),
+            "runtime_source_bytes": sum(member.size for member in source_members),
+            "runtime_languages": languages,
+            "largest_runtime_source": (
+                {"path": largest.name, "bytes": largest.size}
+                if largest is not None
+                else None
+            ),
+        }
 
     def review_leads(self) -> dict[str, object]:
         """Precompute bounded location-only leads without exposing source text."""
@@ -3427,6 +3568,8 @@ class OpenRouterSourceReviewAgent:
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        predecessor_archive_path: str | None = None,
+        predecessor_artifact_sha256: str | None = None,
     ) -> SourceReviewObservation:
         notes: list[dict[str, object]] = []
         try:
@@ -3434,6 +3577,8 @@ class OpenRouterSourceReviewAgent:
             repository = TarSourceRepository(
                 archive_path,
                 static_preflight_v2_mode=self._static_preflight_v2_mode,
+                predecessor_archive_path=predecessor_archive_path,
+                predecessor_artifact_sha256=predecessor_artifact_sha256,
             )
             result, clearance_certified = await self._run(
                 repository,
@@ -3660,8 +3805,17 @@ class OpenRouterSourceReviewAgent:
                     if name == "submit_review":
                         if progress is not None:
                             progress(_step + 1, self._max_steps)
+                        reviewability = repository.reviewability_profile()
+                        enhanced_coverage_required = (
+                            policy_version >= 13 and reviewability.get("risk") == "high"
+                        )
                         return arguments, (
-                            inspection_calls >= 2 and runtime_source_read
+                            inspection_calls >= 2
+                            and runtime_source_read
+                            and (
+                                not enhanced_coverage_required
+                                or _coverage_complete(notes)
+                            )
                         )
                     if name == "record_note":
                         note = _note_from_arguments(arguments)
