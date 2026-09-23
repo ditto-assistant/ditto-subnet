@@ -83,6 +83,7 @@ class ScreeningVerificationReceiptRequest(BaseModel):
             raise ValueError("archive receipt cannot bind an image")
         return self
 
+
 ScreenerRuntimeState = Literal["polling", "screening", "error", "paused"]
 ScreenerProgressStage = Literal[
     "preparing",

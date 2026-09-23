@@ -1036,6 +1036,40 @@ async def test_v13_receipt_refuses_completed_attempt(
     assert response.status_code == 409
 
 
+async def test_v13_receipt_refuses_expired_running_attempt(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=13,
+                status="running",
+                started_at=now - timedelta(minutes=2),
+                deadline=now - timedelta(seconds=1),
+            )
+        )
+    _install_db(app, session_maker)
+    response = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/verification-receipts",
+        json={
+            "attempt_id": str(attempt_id),
+            "artifact_sha256": _SHA256,
+            "policy_version": 13,
+            "check_code": "archive_sha",
+            "evidence_sha256": "ab" * 32,
+        },
+    )
+    assert response.status_code == 409
+
+
 def _capacity_payload(epoch: str) -> dict[str, object]:
     return {
         "environment": "prod",

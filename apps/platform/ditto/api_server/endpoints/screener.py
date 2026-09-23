@@ -576,7 +576,6 @@ async def record_screening_verification_receipt(
     The row is intentionally evidence presence, not a check-pass or CLEAR.
     A deterministic receipt ID makes an uncertain HTTP retry idempotent.
     """
-    now = datetime.now(UTC)
     async with session.begin():
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
         attempt = await get_screening_attempt(
@@ -584,6 +583,10 @@ async def record_screening_verification_receipt(
         )
         if agent is None or attempt is None or attempt.agent_id != agent_id:
             raise HTTPException(status_code=404, detail="screening attempt not found")
+        # Re-read time after acquiring both row locks. An in-flight request
+        # waiting on a competing settlement must not backdate a receipt past
+        # the lease deadline.
+        now = datetime.now(UTC)
         deadline = attempt.deadline
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=UTC)
@@ -607,7 +610,8 @@ async def record_screening_verification_receipt(
             or existing.image_sha256 != payload.image_sha256
         ):
             raise HTTPException(
-                status_code=409, detail="verification receipt conflicts with prior evidence"
+                status_code=409,
+                detail="verification receipt conflicts with prior evidence",
             )
         if existing is None:
             session.add(

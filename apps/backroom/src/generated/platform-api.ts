@@ -4795,6 +4795,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/agent/{agent_id}/verification-receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Screening Verification Receipt
+         * @description Append one mechanical-check digest under the active v13 lease.
+         *
+         *     Only the authenticated owner of a running, unexpired attempt may write.
+         *     The row is intentionally evidence presence, not a check-pass or CLEAR.
+         *     A deterministic receipt ID makes an uncertain HTTP retry idempotent.
+         */
+        post: operations["record_screening_verification_receipt_api_v1_screener_agent__agent_id__verification_receipts_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/claim": {
         parameters: {
             query?: never;
@@ -10482,10 +10506,10 @@ export interface components {
          * @description Exact-attempt Platform receipt inventory, never a CLEAR authorization.
          *
          *     `not_recorded` means there is no matching receipt in this Platform ledger;
-         *     it does not prove the check never ran in an external system. Current
-         *     screening has no writer for this ledger, so neither this view nor the
-         *     small behavioral oracle can certify v13's mandatory 19 checks or private
-         *     60-pair package. Future trusted runners may append digest-only receipts.
+         *     it does not prove the check never ran in an external system. The trusted
+         *     screener records only archive and built-image mechanical observations;
+         *     neither those receipts nor the small behavioral oracle can certify v13's
+         *     mandatory 19 checks or private 60-pair package.
          */
         AdminScreeningVerificationReadiness: {
             /**
@@ -27306,6 +27330,36 @@ export interface components {
             source: "platform" | "cache" | "bootstrap";
         };
         /**
+         * ScreeningVerificationReceiptRequest
+         * @description Digest-only evidence emitted by the active trusted screener lease.
+         *
+         *     This records execution of two mechanical checks. It is not a policy pass
+         *     or an authorization to release a source-integrity hold.
+         */
+        ScreeningVerificationReceiptRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Check Code
+             * @enum {string}
+             */
+            check_code: "archive_sha" | "build_image_digest";
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /** Image Sha256 */
+            image_sha256?: string | null;
+            /**
+             * Policy Version
+             * @constant
+             */
+            policy_version: 13;
+        };
+        /**
          * ShadowReviewObservationRequest
          * @description Bounded, non-authoritative observation for an active attempt.
          */
@@ -38747,6 +38801,42 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_screening_verification_receipt_api_v1_screener_agent__agent_id__verification_receipts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningVerificationReceiptRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             204: {

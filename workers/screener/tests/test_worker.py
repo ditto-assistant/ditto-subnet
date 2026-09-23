@@ -179,9 +179,7 @@ class _FakePlatform:
         self.image_uploads.append({"agent_id": agent_id, **metadata})
         return UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
 
-    async def record_verification_receipt(
-        self, agent_id: UUID, **receipt: Any
-    ) -> None:
+    async def record_verification_receipt(self, agent_id: UUID, **receipt: Any) -> None:
         self.verification_receipts.append({"agent_id": agent_id, **receipt})
 
     async def submit_heartbeat(self, request: Any) -> Any:

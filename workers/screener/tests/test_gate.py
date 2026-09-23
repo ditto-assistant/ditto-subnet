@@ -708,9 +708,7 @@ async def test_archive_receipt_follows_verified_contract_only(
             hashlib.sha256(tarball).hexdigest(),
             record_archive_verification=record,
         )
-        await _screen(
-            gate, "00" * 32, record_archive_verification=record
-        )
+        await _screen(gate, "00" * 32, record_archive_verification=record)
     assert recorded == ["archive_sha"]
 
 
