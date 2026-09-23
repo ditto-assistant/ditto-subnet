@@ -47,6 +47,11 @@ incurring charges. Do not use the production worker key or the GLM fanout key.
 The runner stops after a missing cost/token/model field or model mismatch and
 marks that case incomplete. It writes a mode-0600 private report after every
 arm; no raw source, prompt, model text, or miner-visible reason is written.
+An ordinary timeout/provider failure is also persisted as an incomplete arm
+with a sanitized error class/code and elapsed time; the paired arm continues
+only while the configured external hard cap remains the spend backstop and no
+metering or served-model mismatch has occurred. Reported cost on an incomplete
+arm is a lower bound, not a verified bill.
 
 ```bash
 uv run --project workers/screener python \

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from scripts import run_l4_verdict_calibration as replay
 from scripts.run_l4_verdict_calibration import (
+    _execute,
     _load_manifest,
     _Meter,
     _summary,
@@ -115,6 +119,7 @@ def test_summary_excludes_incomplete_cases_from_accuracy() -> None:
             "decision": "reject",
             "reject_invariant_match": True,
             "reported_cost_usd": 0.1,
+            "reported_cost_lower_bound": False,
         },
         {
             "agent_id": "a",
@@ -126,6 +131,7 @@ def test_summary_excludes_incomplete_cases_from_accuracy() -> None:
             "decision": "escalate",
             "reject_invariant_match": None,
             "reported_cost_usd": 0.2,
+            "reported_cost_lower_bound": True,
         },
     ]
     summary = _summary(rows)
@@ -143,3 +149,110 @@ def test_private_result_writer_does_not_chmod_an_existing_directory(
     with pytest.raises(ValueError, match="results directory must be private"):
         _write_private_json(directory / "results.json", {"items": []})
     assert directory.stat().st_mode & 0o777 == 0o755
+
+
+async def test_timeout_arm_is_recorded_before_paired_arm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path, root = _manifest(tmp_path)
+    manifest, cases = _load_manifest(manifest_path, root)
+    key = tmp_path / "dedicated-key"
+    key.write_text("test-only")
+    results_dir = tmp_path / "private-results"
+    results_dir.mkdir(mode=0o700)
+    results_dir.chmod(0o700)
+    results_file = results_dir / "results.json"
+    invoked: list[str] = []
+
+    class FakeCourt:
+        def __init__(self, **kwargs: object) -> None:
+            self.model = str(kwargs["model"])
+            self.observe = kwargs["completion_observer"]
+
+        async def adjudicate(self, *_args: object, **_kwargs: object) -> object:
+            invoked.append(self.model)
+            if self.model == replay.MODELS[0]:
+                raise TimeoutError("private provider text must not be persisted")
+            self.observe(
+                {
+                    "model": self.model,
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "cost_usd": 0.01,
+                    "upstream": "test-upstream",
+                }
+            )
+            return SimpleNamespace(
+                decision="clear",
+                reject_invariant=None,
+                clear_clause=SimpleNamespace(value="genuine_model_result"),
+                citations=[],
+                reason="independent safe conclusion",
+                escalation_code=None,
+                run_diagnostic=None,
+            )
+
+    monkeypatch.setattr(replay, "SourceReviewAdjudicator", FakeCourt)
+    args = argparse.Namespace(
+        api_key_file=key,
+        base_url="https://openrouter.ai/api/v1",
+        max_reported_cost_usd=1.0,
+        external_route_cap_usd=2.0,
+        results_file=results_file,
+    )
+    report = await _execute(args, manifest, cases)
+    assert invoked == list(replay.MODELS)
+    first, second = report["items"]
+    assert first["complete"] is False
+    assert first["error_class"] == "TimeoutError"
+    assert first["error_code"] == "call-timeout"
+    assert first["reported_cost_lower_bound"] is True
+    assert second["complete"] is True
+    assert report["summary"]["fully_paired_cases"] == 0
+    assert "private provider text" not in results_file.read_text()
+
+
+async def test_route_mismatch_persists_then_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path, root = _manifest(tmp_path)
+    manifest, cases = _load_manifest(manifest_path, root)
+    key = tmp_path / "dedicated-key"
+    key.write_text("test-only")
+    results_dir = tmp_path / "private-results"
+    results_dir.mkdir(mode=0o700)
+    results_dir.chmod(0o700)
+    results_file = results_dir / "results.json"
+    invoked: list[str] = []
+
+    class WrongRouteCourt:
+        def __init__(self, **kwargs: object) -> None:
+            self.model = str(kwargs["model"])
+            self.observe = kwargs["completion_observer"]
+
+        async def adjudicate(self, *_args: object, **_kwargs: object) -> object:
+            invoked.append(self.model)
+            self.observe(
+                {
+                    "model": "other-model",
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "cost_usd": 0.01,
+                }
+            )
+            raise AssertionError("unreachable")
+
+    monkeypatch.setattr(replay, "SourceReviewAdjudicator", WrongRouteCourt)
+    args = argparse.Namespace(
+        api_key_file=key,
+        base_url="https://openrouter.ai/api/v1",
+        max_reported_cost_usd=1.0,
+        external_route_cap_usd=2.0,
+        results_file=results_file,
+    )
+    with pytest.raises(ValueError, match="unmetered-or-route-mismatch"):
+        await _execute(args, manifest, cases)
+    assert invoked == [replay.MODELS[0]]
+    report = json.loads(results_file.read_text())
+    assert report["items"][0]["complete"] is False
+    assert report["items"][0]["meter_error"] == "unmetered-or-route-mismatch"

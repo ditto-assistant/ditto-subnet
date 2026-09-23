@@ -20,6 +20,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from uuid import UUID
 
+import httpx
+
 from ditto_screener.adjudicator import (
     ADJUDICATOR_PROMPT_REVISION,
     SourceReviewAdjudicator,
@@ -56,9 +58,7 @@ def _sha256(path: Path) -> str:
 
 
 def _write_private_json(path: Path, value: object) -> None:
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if path.parent.stat().st_mode & 0o077:
-        raise ValueError("results directory must be private (mode 0700)")
+    _ensure_private_result_directory(path)
     fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
     tmp = Path(raw_tmp)
     try:
@@ -70,6 +70,12 @@ def _write_private_json(path: Path, value: object) -> None:
         os.replace(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def _ensure_private_result_directory(path: Path) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if path.parent.stat().st_mode & 0o077:
+        raise ValueError("results directory must be private (mode 0700)")
 
 
 def _uuid(value: object, field: str) -> str:
@@ -202,6 +208,9 @@ def _summary(rows: list[dict[str, object]]) -> dict[str, object]:
         by_model[model] = {
             "completed": len(complete),
             "incomplete": len(subset) - len(complete),
+            "cost_coverage_incomplete": sum(
+                row["reported_cost_lower_bound"] is True for row in subset
+            ),
             "matches": sum(row["label_match"] is True for row in complete),
             "false_clears": sum(
                 row["label_decision"] == "reject" and row["decision"] == "clear"
@@ -228,6 +237,19 @@ def _summary(rows: list[dict[str, object]]) -> dict[str, object]:
             continue
         paired.append(pair[MODELS[1]])
     return {"models": by_model, "fully_paired_cases": len(paired)}
+
+
+def _exception_code(error: Exception) -> str:
+    """Return a bounded failure class without persisting exception text."""
+    if isinstance(error, TimeoutError):
+        return "call-timeout"
+    if isinstance(error, httpx.HTTPError):
+        return "provider-http-error"
+    if isinstance(error, OSError):
+        return "transport-error"
+    if isinstance(error, ValueError):
+        return "call-invalid"
+    return "call-exception"
 
 
 class _Meter:
@@ -290,6 +312,7 @@ async def _execute(
         raise ValueError("--execute needs an independently configured route cap")
     if args.max_reported_cost_usd > args.external_route_cap_usd:
         raise ValueError("reported cap cannot exceed external route cap")
+    _ensure_private_result_directory(args.results_file)
     rows: list[dict[str, object]] = []
     spent = [0.0]
     metadata = {
@@ -320,23 +343,51 @@ async def _execute(
                 completion_observer=meter.observe,
             )
             started = time.monotonic()
-            verdict = await court.adjudicate(
-                str(case["archive"]),
-                notes=case["notes"],
-                finding=case["finding"],
-                error_code=case["error_code"],
-                deadline=asyncio.get_running_loop().time() + TIMEOUT_SECONDS,
-                policy_version=SCREENING_POLICY_VERSION,
-                ledger_final=True,
-            )
-            decision = verdict.decision
+            verdict = None
+            call_error: Exception | None = None
+            try:
+                verdict = await court.adjudicate(
+                    str(case["archive"]),
+                    notes=case["notes"],
+                    finding=case["finding"],
+                    error_code=case["error_code"],
+                    deadline=asyncio.get_running_loop().time() + TIMEOUT_SECONDS,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    ledger_final=True,
+                )
+            except Exception as error:
+                # A failed model arm is a coverage result, not a reason to
+                # silently omit it. Cancellation/SystemExit still propagate.
+                call_error = error
+            decision = verdict.decision if verdict is not None else None
             complete = decision in {"clear", "reject"} and meter.error is None
             label = case["label"]
             accepted_invariants = label.get("accepted_reject_invariants") or []
             reject_invariant = (
-                verdict.reject_invariant.value if verdict.reject_invariant else None
+                verdict.reject_invariant.value
+                if verdict is not None and verdict.reject_invariant
+                else None
             )
-            cited_locations = {f"{cite.path}:{cite.line}" for cite in verdict.citations}
+            citations = verdict.citations if verdict is not None else []
+            cited_locations = {f"{cite.path}:{cite.line}" for cite in citations}
+            diagnostic = verdict.run_diagnostic if verdict is not None else None
+            error_class = (
+                type(call_error).__name__
+                if call_error is not None
+                and re.fullmatch(
+                    r"[A-Za-z][A-Za-z0-9]{0,63}", type(call_error).__name__
+                )
+                else diagnostic.error_class
+                if diagnostic is not None
+                else None
+            )
+            error_code = (
+                _exception_code(call_error)
+                if call_error is not None
+                else diagnostic.failure_code
+                if diagnostic is not None
+                else None
+            )
             row: dict[str, object] = {
                 "agent_id": case["agent_id"],
                 "attempt_id": case["attempt_id"],
@@ -351,7 +402,13 @@ async def _execute(
                 "label_decision": label["decision"],
                 "label_match": decision == label["decision"] if complete else None,
                 "complete": complete,
-                "escalation_code": verdict.escalation_code,
+                "escalation_code": (
+                    verdict.escalation_code
+                    if verdict is not None
+                    else "calibration-call-failed"
+                ),
+                "error_class": error_class,
+                "error_code": error_code,
                 "reject_invariant": reject_invariant,
                 "reject_invariant_match": (
                     reject_invariant in accepted_invariants
@@ -368,12 +425,16 @@ async def _execute(
                     else None
                 ),
                 "clear_clause": verdict.clear_clause.value
-                if verdict.clear_clause
+                if verdict is not None and verdict.clear_clause
                 else None,
                 "citations": [
-                    {"path": cite.path, "line": cite.line} for cite in verdict.citations
+                    {"path": cite.path, "line": cite.line} for cite in citations
                 ],
-                "reason_sha256": hashlib.sha256(verdict.reason.encode()).hexdigest(),
+                "reason_sha256": (
+                    hashlib.sha256(verdict.reason.encode()).hexdigest()
+                    if verdict is not None
+                    else None
+                ),
                 "latency_ms": round((time.monotonic() - started) * 1_000),
                 "responses": meter.responses,
                 "reported_cost_usd": round(meter.cost, 6),
@@ -381,6 +442,7 @@ async def _execute(
                 "completion_tokens": meter.tokens_out,
                 "upstreams": sorted(meter.upstreams),
                 "meter_error": meter.error,
+                "reported_cost_lower_bound": not complete,
             }
             rows.append(row)
             _write_private_json(
