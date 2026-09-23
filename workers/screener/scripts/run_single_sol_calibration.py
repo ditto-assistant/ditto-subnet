@@ -17,7 +17,11 @@ from typing import Any
 
 import httpx
 
-from ditto_screener.calibration import classification_metrics
+from ditto_screener.calibration import (
+    classification_metrics,
+    disposition_metrics,
+    review_disposition,
+)
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
@@ -81,6 +85,9 @@ class MeteredSingleSolReviewer(OpenRouterSourceReviewAgent):
             "reasoning_tokens": 0,
             "reported_cost_usd": 0.0,
             "requests": 0,
+            "responses": 0,
+            "request_failures": 0,
+            "unmetered_responses": 0,
         }
         self.response_models: set[str] = set()
         self.response_providers: set[str] = set()
@@ -96,16 +103,27 @@ class MeteredSingleSolReviewer(OpenRouterSourceReviewAgent):
         tools: Sequence[Mapping[str, object]] | None = None,
         tool_choice: str = "auto",
     ) -> httpx.Response:
-        response = await super()._post_completion(
-            client,
-            api_key,
-            messages,
-            timeout=timeout,
-            reasoning_effort=reasoning_effort,
-            tools=tools,
-            tool_choice=tool_choice,
-        )
-        payload = response.json()
+        self.usage["requests"] += 1
+        try:
+            response = await super()._post_completion(
+                client,
+                api_key,
+                messages,
+                timeout=timeout,
+                reasoning_effort=reasoning_effort,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
+        except Exception:
+            self.usage["request_failures"] += 1
+            raise
+        self.usage["responses"] += 1
+        try:
+            payload = response.json()
+        except ValueError:
+            self.usage["unmetered_responses"] += 1
+            raise
+        cost_reported = False
         if isinstance(payload, dict):
             model = payload.get("model")
             provider = payload.get("provider")
@@ -134,7 +152,9 @@ class MeteredSingleSolReviewer(OpenRouterSourceReviewAgent):
                 cost = usage.get("cost")
                 if isinstance(cost, (int, float)) and not isinstance(cost, bool):
                     self.usage["reported_cost_usd"] += max(0.0, float(cost))
-            self.usage["requests"] += 1
+                    cost_reported = True
+        if not cost_reported:
+            self.usage["unmetered_responses"] += 1
         return response
 
 
@@ -144,16 +164,6 @@ def _nonnegative_int(value: object) -> int:
         if isinstance(value, int) and not isinstance(value, bool) and value > 0
         else 0
     )
-
-
-def _disposition(observation: object) -> str:
-    ok = bool(getattr(observation, "ok", False))
-    risk = getattr(observation, "risk_level", None)
-    if ok and risk == "low":
-        return "safe"
-    if ok and risk in {"medium", "high"}:
-        return "violation"
-    return str(getattr(observation, "failure_disposition", "inconclusive"))
 
 
 async def _main() -> None:
@@ -225,7 +235,7 @@ async def _main() -> None:
                 deadline=asyncio.get_running_loop().time() + TIMEOUT_SECONDS,
                 policy_version=args.policy_version,
             )
-            actual = _disposition(observation)
+            actual = review_disposition(observation)
             record = {
                 "agent_id": item.get("agent_id"),
                 "artifact_sha256": artifact_sha,
@@ -254,6 +264,7 @@ async def _main() -> None:
                         "completed": len(results),
                         "total": len(items),
                         "classification": classification_metrics(results),
+                        "dispositions": disposition_metrics(results),
                         "items": sorted(
                             results, key=lambda row: str(row.get("agent_id"))
                         ),
@@ -273,6 +284,7 @@ async def _main() -> None:
             {
                 "completed": len(results),
                 "classification": classification_metrics(results),
+                "dispositions": disposition_metrics(results),
                 "reported_cost_usd": round(reported_cost, 6),
                 "review": metadata,
             },

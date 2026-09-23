@@ -2,10 +2,73 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from ditto_screener.calibration import classification_metrics
+from ditto_screener.calibration import (
+    classification_metrics,
+    disposition_metrics,
+    review_disposition,
+)
+
+
+@pytest.mark.parametrize(
+    ("observation", "expected"),
+    [
+        (SimpleNamespace(ok=True, risk_level="low", clearance_certified=True), "safe"),
+        (
+            SimpleNamespace(ok=True, risk_level="low", clearance_certified=False),
+            "inconclusive",
+        ),
+        (SimpleNamespace(ok=True, risk_level="medium"), "violation"),
+        (
+            SimpleNamespace(ok=False, failure_disposition="safe"),
+            "inconclusive",
+        ),
+        (
+            SimpleNamespace(ok=False, failure_disposition="violation"),
+            "inconclusive",
+        ),
+        (
+            SimpleNamespace(ok=False, failure_disposition="retryable_infra"),
+            "retryable_infra",
+        ),
+    ],
+)
+def test_review_disposition_requires_completed_certified_clearance(
+    observation: object, expected: str
+) -> None:
+    assert review_disposition(observation) == expected
+
+
+def test_disposition_metrics_separates_errors_from_clearances() -> None:
+    metrics = disposition_metrics(
+        [
+            {"expected_disposition": "violation", "actual_disposition": "safe"},
+            {"expected_disposition": "safe", "actual_disposition": "violation"},
+            {
+                "expected_disposition": "safe",
+                "actual_disposition": "inconclusive",
+                "error_code": "stream-no-tool-call",
+            },
+            {
+                "expected_disposition": "violation",
+                "actual_disposition": "retryable_infra",
+                "error_code": "completion-timeout",
+            },
+        ]
+    )
+
+    assert metrics["false_clears"] == 1
+    assert metrics["false_holds"] == 1
+    assert metrics["inconclusive"] == 1
+    assert metrics["retryable_infra"] == 1
+    assert metrics["matrix"]["safe"]["safe"] == 0
+    assert metrics["failure_codes"] == {
+        "completion-timeout": 1,
+        "stream-no-tool-call": 1,
+    }
 
 
 def test_august_court_fixture_captures_precision_recall_baseline() -> None:
