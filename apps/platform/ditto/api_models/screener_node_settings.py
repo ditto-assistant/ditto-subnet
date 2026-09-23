@@ -123,7 +123,7 @@ class ScreenerNodeReplayCapacityWriteRequest(BaseModel):
     expected_status: Literal["active", "draining", "quarantined", "revoked"]
     expected_capacity: Annotated[int, Field(ge=0, le=4)]
     capacity: Literal[0, 1]
-    reason: Annotated[str, Field(min_length=8, max_length=300)]
+    reason: Annotated[str, Field(min_length=8)]
     confirmation: str
 
 

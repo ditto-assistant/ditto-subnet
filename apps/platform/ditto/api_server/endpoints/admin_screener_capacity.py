@@ -618,7 +618,7 @@ async def set_screener_node_replay_capacity(
                     f"hotkey={node.screener_hotkey} "
                     f"capacity={payload.expected_capacity}->{payload.capacity} "
                     f"actor={actor} reason={payload.reason.strip()}"
-                )[:500],
+                ),
                 controller_epoch="backroom-replay-control",
                 created_at=now,
             )
