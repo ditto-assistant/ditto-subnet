@@ -159,6 +159,11 @@ class PrivatePackageRegistration(BaseModel):
     image_sha256: str = Field(pattern=_SHA_PATTERN)
     profile_sha256: str = Field(pattern=_SHA_PATTERN)
     manifest_sha256: str = Field(pattern=_SHA_PATTERN)
+    # Optional for older report-only packages. Matched clean-control use
+    # requires this trusted group/role link to a pre-randomness start receipt.
+    generation_group_id: UUID | None = None
+    generation_role: Literal["target", "known_benign"] | None = None
+    generation_receipt_sha256: str | None = Field(default=None, pattern=_SHA_PATTERN)
     registered_at: datetime
     registrar_id: str = Field(min_length=1, max_length=120)
 
