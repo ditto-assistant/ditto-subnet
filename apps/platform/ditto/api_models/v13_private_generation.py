@@ -60,3 +60,27 @@ class V13GenerationGroupView(BaseModel):
     actor: str
     started_at: datetime
     status: Literal["recorded_unverified"] = "recorded_unverified"
+
+
+class V13GroupPackageRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    generation_receipt_sha256: str = Field(pattern=_SHA)
+    manifest_sha256: str = Field(pattern=_SHA)
+    pair_inventory_sha256: str = Field(pattern=_SHA)
+
+
+class V13GroupPackageView(BaseModel):
+    group_id: UUID
+    role: Literal["target", "known_benign"]
+    agent_id: UUID
+    attempt_id: UUID
+    artifact_sha256: str = Field(pattern=_SHA)
+    image_sha256: str = Field(pattern=_SHA)
+    profile_sha256: str = Field(pattern=_SHA)
+    generation_receipt_sha256: str = Field(pattern=_SHA)
+    manifest_sha256: str = Field(pattern=_SHA)
+    pair_inventory_sha256: str = Field(pattern=_SHA)
+    registrar_actor: str
+    registered_at: datetime
+    status: Literal["recorded_unverified"] = "recorded_unverified"

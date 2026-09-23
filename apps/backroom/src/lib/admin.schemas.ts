@@ -4999,7 +4999,10 @@ export const screeningFailureDiagnosticInputSchema = z.object({
   attemptId: z.string().uuid(),
 })
 
-export const v13GenerationGroupInputSchema = z.object({ groupId: z.string().uuid() })
+export const v13GenerationGroupInputSchema = z.object({
+  groupId: z.string().uuid(),
+  role: z.enum(['target', 'known_benign']).optional(),
+})
 
 export const v13GenerationGroupSchema = z.object({
   group_id: z.string().uuid(),
@@ -5018,6 +5021,22 @@ export const v13GenerationGroupSchema = z.object({
   control_receipt_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   actor: z.string().min(1).max(120),
   started_at: z.string(),
+  status: z.literal('recorded_unverified'),
+})
+
+export const v13GroupPackageSchema = z.object({
+  group_id: z.string().uuid(),
+  role: z.enum(['target', 'known_benign']),
+  agent_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  image_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  profile_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  generation_receipt_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  pair_inventory_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  registrar_actor: z.string().min(1).max(120),
+  registered_at: z.string(),
   status: z.literal('recorded_unverified'),
 })
 
