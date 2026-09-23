@@ -43,6 +43,8 @@ the public `ditto-screening-protocol` package in `ditto-screener`.
 - [Mine on SN118](docs/MINER.md): prepare, verify, submit, and track an agent.
 - [Link rotated miner wallets](docs/OWNER-LINKS.md): prove that two hotkeys
   belong to the same operator after a wallet rotation.
+- [SN118 bounty claims and contributor identity](docs/bounty-claims.md): hotkey-signed work claiming, reservation lifecycle, and contributor identity.
+- [SN118 bounty acceptance and public accounting](docs/bounty-acceptance-and-payouts.md): acceptance criteria, multi-reviewer thresholds, chain payout verification, and tamper-evident ledger.
 - [Validate SN118](docs/VALIDATOR.md): deploy, verify, and operate the complete validator stack.
 
 ## Development quickstart
