@@ -7,6 +7,7 @@ import argparse
 import asyncio
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
@@ -14,6 +15,7 @@ import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import httpx
 
@@ -22,7 +24,8 @@ from ditto_screener.calibration import (
     disposition_metrics,
     review_disposition,
 )
-from ditto_screener.source_review import OpenRouterSourceReviewAgent
+from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.source_review import OpenRouterSourceReviewAgent, _prompt_revision
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
 from ditto_screening_protocol.models import SourceReviewFinding
 
@@ -31,6 +34,7 @@ MAX_STEPS = 240
 MAX_READ_BYTES = 16_000_000
 MAX_COMPLETION_TOKENS = 32_000
 TIMEOUT_SECONDS = 3_600.0
+SHA_RE = re.compile(r"[0-9a-f]{64}")
 
 
 def _arguments() -> argparse.Namespace:
@@ -39,6 +43,11 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--artifact-root", type=Path, required=True)
     parser.add_argument("--api-key-file", type=Path, required=True)
     parser.add_argument("--results-file", type=Path, required=True)
+    parser.add_argument(
+        "--handoff-file",
+        type=Path,
+        help="write a private exact-attempt Sol handoff for paired L4 replay",
+    )
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--policy-version", type=int, default=SCREENING_POLICY_VERSION)
     parser.add_argument(
@@ -60,7 +69,10 @@ def _sha256(path: Path) -> str:
 
 def _write_private_json(path: Path, value: object) -> None:
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
+    if path.parent.is_symlink() or path.parent.stat().st_mode & 0o077:
+        raise ValueError("private output directory must be mode 0700")
+    if path.is_symlink():
+        raise ValueError("private output file must not be a symlink")
     fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
     tmp = Path(raw_tmp)
     try:
@@ -167,6 +179,96 @@ def _nonnegative_int(value: object) -> int:
     )
 
 
+def _canonical_json_sha256(value: object) -> str:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _handoff_identity(item: object, policy_version: int) -> dict[str, object]:
+    """Require the exact identifiers consumed by the paired L4 manifest.
+
+    This preflight runs over every selected case before any paid model call.
+    An artifact SHA alone is not enough to identify a screening attempt.
+    """
+    if not isinstance(item, dict):
+        raise ValueError("handoff case must be an object")
+    identity: dict[str, object] = {"policy_version": policy_version}
+    for field in ("agent_id", "attempt_id"):
+        value = item.get(field)
+        try:
+            parsed = UUID(str(value))
+        except ValueError as error:
+            raise ValueError(f"handoff {field} must be a UUID") from error
+        if value != str(parsed):
+            raise ValueError(f"handoff {field} must be canonical lowercase UUID")
+        identity[field] = value
+    for field in ("artifact_sha256", "manifest_digest"):
+        value = item.get(field)
+        if not isinstance(value, str) or SHA_RE.fullmatch(value) is None:
+            raise ValueError(f"handoff {field} must be a full lowercase SHA-256")
+        identity[field] = value
+    revision = item.get("review_settings_revision")
+    if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+        raise ValueError("handoff review_settings_revision must be positive")
+    identity["review_settings_revision"] = revision
+    return identity
+
+
+def _sol_handoff(
+    identity: Mapping[str, object],
+    observation: SourceReviewObservation,
+    reviewer: MeteredSingleSolReviewer,
+    latency_ms: int,
+) -> dict[str, object]:
+    """Export only the bounded ledger and canonical finding, never source files.
+
+    The output is private and report-only. Missing/ambiguous metering remains
+    null, which makes the downstream two-layer replay incomplete, not free.
+    """
+    notes = [dict(note) for note in observation.notes]
+    if len(notes) > 48:
+        raise ValueError("handoff notes exceed the bounded reviewer ledger")
+    finding = None
+    if observation.finding is not None:
+        parsed = SourceReviewFinding.model_validate(observation.finding)
+        if parsed.artifact_sha256 != identity["artifact_sha256"]:
+            raise ValueError("handoff finding artifact differs from exact case")
+        if parsed.prompt_revision != _prompt_revision(int(identity["policy_version"])):
+            raise ValueError("handoff finding prompt revision differs from reviewer")
+        if parsed.canonical_digest() != observation.finding_digest:
+            raise ValueError("handoff finding digest mismatch")
+        finding = parsed.model_dump(mode="json", exclude_none=True)
+    elif observation.finding_digest is not None:
+        raise ValueError("handoff finding digest without canonical finding")
+
+    usage = reviewer.usage
+    reported_cost = usage.get("reported_cost_usd")
+    metered = (
+        reviewer.response_models == {MODEL}
+        and usage.get("responses", 0) > 0
+        and usage.get("requests") == usage.get("responses")
+        and usage.get("request_failures") == 0
+        and usage.get("unmetered_responses") == 0
+        and isinstance(reported_cost, (int, float))
+        and not isinstance(reported_cost, bool)
+        and math.isfinite(reported_cost)
+        and reported_cost >= 0
+    )
+    return {
+        **identity,
+        "model": MODEL,
+        "prompt_revision": _prompt_revision(int(identity["policy_version"])),
+        "notes": notes,
+        "notes_payload_sha256": _canonical_json_sha256(notes),
+        "finding": finding,
+        "finding_digest": observation.finding_digest,
+        "error_code": observation.error_code,
+        "latency_ms": latency_ms,
+        "reported_cost_usd": reported_cost if metered else None,
+        "compactions": reviewer.compaction_count,
+    }
+
+
 def _sanitized_invariant_assessment(finding: object) -> dict[str, object] | None:
     """Retain only bounded policy decisions and source locations, never source text."""
 
@@ -205,6 +307,8 @@ async def _main() -> None:
     if not 1 <= args.concurrency <= 4:
         raise SystemExit("--concurrency must be between 1 and 4")
     manifest = json.loads(args.manifest.read_text())
+    if not isinstance(manifest, dict):
+        raise SystemExit("calibration manifest must be an object")
     items = manifest.get("items")
     if not isinstance(items, list) or not items:
         raise SystemExit("calibration manifest has no items")
@@ -217,9 +321,52 @@ async def _main() -> None:
             raise SystemExit("no manifest item matched --artifact-sha256")
 
     root = args.artifact_root.resolve()
+    if args.handoff_file is not None and args.handoff_file.resolve().is_relative_to(
+        root
+    ):
+        raise SystemExit("handoff file must be outside artifact-root")
+    handoff_identities: dict[tuple[str, str], dict[str, object]] = {}
+    if args.handoff_file is not None:
+        if args.policy_version != 13:
+            raise SystemExit("paired L4 handoff requires policy version 13")
+        if not isinstance(manifest.get("revision"), str) or not manifest["revision"]:
+            raise SystemExit("paired L4 handoff needs a manifest revision")
+        destinations = {args.results_file.resolve(), args.manifest.resolve()}
+        if args.handoff_file.resolve() in destinations:
+            raise SystemExit("handoff file must differ from input and results files")
+        if args.handoff_file.exists() or args.handoff_file.is_symlink():
+            raise SystemExit("handoff output already exists; choose a fresh path")
+
+    prepared: list[tuple[dict[str, object], Path, str, str]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("calibration case must be an object")
+        if args.handoff_file is not None:
+            identity = _handoff_identity(item, args.policy_version)
+            key = (str(identity["agent_id"]), str(identity["attempt_id"]))
+            if key in handoff_identities:
+                raise SystemExit("duplicate exact agent/attempt in handoff manifest")
+            handoff_identities[key] = identity
+        expected = item.get("expected_disposition")
+        if not isinstance(expected, str) or expected not in {"safe", "violation"}:
+            raise ValueError("expected_disposition must be safe or violation")
+        artifact_sha = item.get("artifact_sha256")
+        if not isinstance(artifact_sha, str) or SHA_RE.fullmatch(artifact_sha) is None:
+            raise ValueError("artifact_sha256 must be 64 lowercase hex characters")
+        raw_archive = item.get("archive")
+        if not isinstance(raw_archive, str) or not raw_archive:
+            raise ValueError("archive must be a non-empty relative path")
+        archive = (root / raw_archive).resolve()
+        if not archive.is_relative_to(root):
+            raise ValueError("archive must stay inside artifact-root")
+        if _sha256(archive) != artifact_sha:
+            raise ValueError("calibration artifact digest mismatch")
+        prepared.append((item, archive, artifact_sha, expected))
+
     semaphore = asyncio.Semaphore(args.concurrency)
     output_lock = asyncio.Lock()
     results: list[dict[str, object]] = []
+    handoffs: list[dict[str, object]] = []
     metadata = {
         "model": MODEL,
         "policy_version": args.policy_version,
@@ -233,23 +380,10 @@ async def _main() -> None:
         },
     }
 
-    async def run(item: dict[str, object]) -> None:
+    async def run(
+        item: dict[str, object], archive: Path, artifact_sha: str, expected: str
+    ) -> None:
         async with semaphore:
-            expected = item.get("expected_disposition")
-            if expected not in {"safe", "violation"}:
-                raise ValueError("expected_disposition must be safe or violation")
-            artifact_sha = str(item.get("artifact_sha256"))
-            if re.fullmatch(r"[0-9a-f]{64}", artifact_sha) is None:
-                raise ValueError("artifact_sha256 must be 64 lowercase hex characters")
-            raw_archive = item.get("archive")
-            if not isinstance(raw_archive, str) or not raw_archive:
-                raise ValueError("archive must be a non-empty relative path")
-            archive = (root / raw_archive).resolve()
-            if not archive.is_relative_to(root):
-                raise ValueError("archive must stay inside artifact-root")
-            if _sha256(archive) != artifact_sha:
-                raise ValueError("calibration artifact digest mismatch")
-
             reviewer = MeteredSingleSolReviewer(
                 api_key_file=str(args.api_key_file),
                 model=MODEL,
@@ -270,6 +404,17 @@ async def _main() -> None:
                 policy_version=args.policy_version,
             )
             actual = review_disposition(observation)
+            latency_ms = round((time.monotonic() - started) * 1_000)
+            handoff = None
+            if args.handoff_file is not None:
+                key = (str(item["agent_id"]), str(item["attempt_id"]))
+                identity = handoff_identities[key]
+                handoff = {
+                    **identity,
+                    "sol_investigator": _sol_handoff(
+                        identity, observation, reviewer, latency_ms
+                    ),
+                }
             record = {
                 "agent_id": item.get("agent_id"),
                 "artifact_sha256": artifact_sha,
@@ -285,7 +430,7 @@ async def _main() -> None:
                 "failure_disposition": observation.failure_disposition,
                 "clearance_certified": observation.clearance_certified,
                 "notes": list(observation.notes),
-                "latency_ms": round((time.monotonic() - started) * 1_000),
+                "latency_ms": latency_ms,
                 "compactions": reviewer.compaction_count,
                 "usage": reviewer.usage,
                 "response_models": sorted(reviewer.response_models),
@@ -307,8 +452,25 @@ async def _main() -> None:
                         ),
                     },
                 )
+                if handoff is not None:
+                    handoffs.append(handoff)
+                    _write_private_json(
+                        args.handoff_file,
+                        {
+                            "schema_version": 1,
+                            "revision": manifest["revision"],
+                            "policy_version": args.policy_version,
+                            "items": sorted(
+                                handoffs,
+                                key=lambda row: (
+                                    str(row["agent_id"]),
+                                    str(row["attempt_id"]),
+                                ),
+                            ),
+                        },
+                    )
 
-    await asyncio.gather(*(run(item) for item in items))
+    await asyncio.gather(*(run(*case) for case in prepared))
     reported_cost = 0.0
     for row in results:
         usage = row.get("usage")
