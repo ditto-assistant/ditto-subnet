@@ -44,6 +44,7 @@ the public `ditto-screening-protocol` package in `ditto-screener`.
 - [Link rotated miner wallets](docs/OWNER-LINKS.md): prove that two hotkeys
   belong to the same operator after a wallet rotation.
 - [Validate SN118](docs/VALIDATOR.md): deploy, verify, and operate the complete validator stack.
+- [Bounty operations & maintenance treasury](docs/bounty-operations-runbook.md): activation order, claims, acceptance, and accounting runbook.
 
 ## Development quickstart
 ```sh
