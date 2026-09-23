@@ -21,8 +21,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from ditto_screening_protocol.v13_private_clean_control import (
     KnownBenignControlApproval,
     MatchedCleanControlUnavailable,
-    TrustedGenerationRegistry,
     TrustedGenerationGroup,
+    TrustedGenerationRegistry,
     TrustedGroupedPrivatePackageRegistry,
     TrustedKnownBenignRegistry,
     compute_v13_generation_role_digest,
@@ -57,6 +57,9 @@ class AuthenticatedKnownBenignApproval(KnownBenignControlApproval):
     """
 
     provenance_status: Literal["two_person_authenticated"]
+    authenticated_reviewers: Literal[2]
+    review_evidence_sha256: str = Field(pattern=_SHA_PATTERN)
+    provenance_review_evidence_sha256: str = Field(pattern=_SHA_PATTERN)
     provenance_receipt_sha256: str = Field(pattern=_SHA_PATTERN)
     completed_at: datetime
 
@@ -82,6 +85,14 @@ class TrustedSeedPrerequisiteRegistry(Protocol):
     ) -> AuthenticatedKnownBenignApproval: ...
 
 
+class AuthenticatedControlRegistry(TrustedKnownBenignRegistry, Protocol):
+    """Private preflight registry with a separately verified approval status."""
+
+    async def get_authenticated_approval(
+        self, approval_id: UUID
+    ) -> AuthenticatedKnownBenignApproval: ...
+
+
 class StoredSeedBundle(BaseModel):
     """Private-store-only record. Never serialize into a public API or log."""
 
@@ -94,7 +105,7 @@ class StoredSeedBundle(BaseModel):
     control_receipt_sha256: str = Field(pattern=_SHA_PATTERN)
     approval_receipt_sha256: str = Field(pattern=_SHA_PATTERN)
     provenance_receipt_sha256: str = Field(pattern=_SHA_PATTERN)
-    seeds_hex: tuple[str, str]
+    seeds_hex: tuple[str, str] = Field(repr=False)
 
 
 class SealedSeedRecord(BaseModel):
@@ -215,7 +226,10 @@ def _validate_record(
         or bundle.provenance_receipt_sha256 != approval.provenance_receipt_sha256
         or len(seeds) != _SEED_COUNT
         or any(len(seed) != _SEED_BYTES for seed in seeds)
-        or any(seed.hex() != value for seed, value in zip(seeds, bundle.seeds_hex))
+        or any(
+            seed.hex() != value
+            for seed, value in zip(seeds, bundle.seeds_hex, strict=True)
+        )
         or seeds[0] == seeds[1]
     ):
         raise V13SeedIssuanceUnavailable("private seed commitment unavailable")
@@ -279,7 +293,11 @@ async def issue_v13_hidden_group_seeds(
                 or control.committed_at.tzinfo is None
                 or max(target.committed_at, control.committed_at) >= group.started_at
                 or approval.approval_id != group.approval_id
+                or approval.provenance_status != "two_person_authenticated"
+                or approval.authenticated_reviewers != 2
                 or approval.approval_receipt_sha256 != group.approval_receipt_sha256
+                or approval.review_evidence_sha256
+                != approval.provenance_review_evidence_sha256
                 or approval.agent_id != control.agent_id
                 or approval.attempt_id != control.attempt_id
                 or approval.artifact_sha256 != control.artifact_sha256
@@ -305,3 +323,97 @@ async def issue_v13_hidden_group_seeds(
         raise
     except Exception:
         raise V13SeedIssuanceUnavailable("private seed issuance unavailable") from None
+
+
+async def verify_v13_issued_matched_inventory(
+    *,
+    issuance: V13SeedIssueReceipt,
+    target: ArtifactCommitment,
+    control: ArtifactCommitment,
+    seed_store: AtomicSealedSeedStore,
+    package_store: SealedPackageStore,
+    packages: TrustedGroupedPrivatePackageRegistry,
+    controls: AuthenticatedControlRegistry,
+    generations: TrustedGenerationRegistry,
+) -> V13MatchedSeedInventoryReceipt:
+    """Require both generated roles to use the same issued seeds and cases.
+
+    After generation, #2177's sealed preflight validates both packages and
+    their ordered pair inventory. This additionally checks that the inventory
+    used the two commitments of the group's sealed, create-only seed record.
+    It returns only digests. Execution and semantic attribution remain separate.
+    """
+    try:
+        async with asyncio.timeout(60):
+            sealed = await seed_store.read(issuance.group_id)
+            group = await generations.get_verified_group(issuance.group_id)
+            approval = await controls.get_authenticated_approval(group.approval_id)
+            if not isinstance(group, SeedGenerationGroup) or not isinstance(
+                approval, AuthenticatedKnownBenignApproval
+            ):
+                raise V13SeedIssuanceUnavailable("private seed provenance unavailable")
+            if (
+                approval.provenance_status != "two_person_authenticated"
+                or approval.authenticated_reviewers != 2
+                or approval.review_evidence_sha256
+                != approval.provenance_review_evidence_sha256
+                or approval.completed_at.tzinfo is None
+                or approval.completed_at >= group.started_at
+            ):
+                raise V13SeedIssuanceUnavailable("private seed provenance unavailable")
+            checked = _validate_record(group, approval, sealed)
+            if checked != issuance:
+                raise V13SeedIssuanceUnavailable("private seed receipt changed")
+            matched = await prepare_v13_matched_clean_control(
+                group_id=issuance.group_id,
+                target=target,
+                control=control,
+                store=package_store,
+                packages=packages,
+                controls=controls,
+                generations=generations,
+            )
+            if (
+                matched.group_id != issuance.group_id
+                or matched.profile_sha256 != issuance.profile_sha256
+                or matched.target_generation_receipt_sha256
+                != issuance.target_receipt_sha256
+                or matched.control_generation_receipt_sha256
+                != issuance.control_receipt_sha256
+                or matched.control_approval_receipt_sha256
+                != group.approval_receipt_sha256
+            ):
+                raise V13SeedIssuanceUnavailable("matched inventory identity changed")
+            manifests: list[V13PrivateManifest] = []
+            for digest in (
+                matched.target_manifest_sha256,
+                matched.control_manifest_sha256,
+            ):
+                raw = await package_store.read_manifest(digest)
+                if hashlib.sha256(raw).hexdigest() != digest:
+                    raise V13SeedIssuanceUnavailable(
+                        "private manifest commitment changed"
+                    )
+                manifests.append(V13PrivateManifest.model_validate_json(raw))
+            if manifests[0].pairs != manifests[1].pairs or {
+                pair.seed_commitment for pair in manifests[0].pairs
+            } != set(issuance.seed_commitments):
+                raise V13SeedIssuanceUnavailable(
+                    "private issued inventory does not match"
+                )
+            return V13MatchedSeedInventoryReceipt(
+                group_id=issuance.group_id,
+                sealed_bundle_sha256=issuance.sealed_bundle_sha256,
+                target_manifest_sha256=matched.target_manifest_sha256,
+                control_manifest_sha256=matched.control_manifest_sha256,
+                pair_inventory_sha256=matched.pair_inventory_sha256,
+                pair_count=matched.pair_count,
+            )
+    except (V13SeedIssuanceUnavailable, MatchedCleanControlUnavailable):
+        raise V13SeedIssuanceUnavailable(
+            "private matched inventory unavailable"
+        ) from None
+    except Exception:
+        raise V13SeedIssuanceUnavailable(
+            "private matched inventory unavailable"
+        ) from None

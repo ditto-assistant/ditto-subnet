@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -12,7 +13,12 @@ import pytest
 from ditto_screening_protocol.v13_private_clean_control import (
     compute_v13_generation_role_digest,
 )
-from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE_SHA256
+from ditto_screening_protocol.v13_private_package import (
+    V13_PRIVATE_PROFILE_SHA256,
+    PrivatePackageRegistration,
+    V13PrivateManifest,
+    V13PrivatePair,
+)
 from ditto_screening_protocol.v13_private_seed import (
     AuthenticatedKnownBenignApproval,
     SealedSeedRecord,
@@ -20,6 +26,7 @@ from ditto_screening_protocol.v13_private_seed import (
     V13SeedIssuanceUnavailable,
     VerifiedRoleCommitment,
     issue_v13_hidden_group_seeds,
+    verify_v13_issued_matched_inventory,
 )
 
 
@@ -34,6 +41,7 @@ class Registry:
         self.group = group
         self.roles = {"target": target, "known_benign": control}
         self.approval = approval
+        self.packages: dict[tuple[UUID, str], PrivatePackageRegistration] = {}
 
     async def get_verified_group(self, group_id: UUID) -> SeedGenerationGroup:
         assert group_id == self.group.group_id
@@ -49,6 +57,16 @@ class Registry:
     ) -> AuthenticatedKnownBenignApproval:
         return self.approval
 
+    async def get_approval(
+        self, _agent_id: UUID, _attempt_id: UUID
+    ) -> AuthenticatedKnownBenignApproval:
+        return self.approval
+
+    async def get_group_registration(
+        self, group_id: UUID, role: Literal["target", "known_benign"]
+    ) -> PrivatePackageRegistration:
+        return self.packages[(group_id, role)]
+
 
 class Store:
     def __init__(self, committed_at: datetime) -> None:
@@ -63,6 +81,92 @@ class Store:
                 sealed_bytes=new_bundle(), committed_at=self.committed_at
             )
         return self.records[group_id]
+
+    async def read(self, group_id: UUID) -> SealedSeedRecord:
+        return self.records[group_id]
+
+
+class PackageStore:
+    def __init__(self) -> None:
+        self.manifests: dict[str, bytes] = {}
+        self.payloads: dict[str, bytes] = {}
+
+    async def read_manifest(self, sha256: str) -> bytes:
+        return self.manifests[sha256]
+
+    async def read_payload(self, sha256: str) -> bytes:
+        return self.payloads[sha256]
+
+
+def register_matched_packages(
+    registry: Registry,
+    package_store: PackageStore,
+    seed_commitments: tuple[str, str],
+) -> None:
+    pairs: list[V13PrivatePair] = []
+    for seed in seed_commitments:
+        for transformation_class in (
+            "field_entity_rename",
+            "request_paraphrase",
+            "record_reorder_decoy",
+        ):
+            for index in range(10):
+                digests: list[str] = []
+                for side in ("control", "variant"):
+                    payload = f"{seed}-{transformation_class}-{index}-{side}".encode()
+                    digest = hashlib.sha256(payload).hexdigest()
+                    package_store.payloads[digest] = payload
+                    digests.append(digest)
+                pairs.append(
+                    V13PrivatePair(
+                        pair_id=uuid4(),
+                        seed_commitment=seed,
+                        transformation_class=transformation_class,
+                        control_sha256=digests[0],
+                        variant_sha256=digests[1],
+                    )
+                )
+    for role, commitment, receipt in (
+        (
+            "target",
+            registry.roles["target"],
+            registry.group.target_receipt_sha256,
+        ),
+        (
+            "known_benign",
+            registry.roles["known_benign"],
+            registry.group.control_receipt_sha256,
+        ),
+    ):
+        generated_at = registry.group.started_at + timedelta(seconds=10)
+        manifest = V13PrivateManifest(
+            agent_id=commitment.agent_id,
+            attempt_id=commitment.attempt_id,
+            artifact_sha256=commitment.artifact_sha256,
+            image_sha256=commitment.image_sha256,
+            profile_sha256=V13_PRIVATE_PROFILE_SHA256,
+            generated_at=generated_at,
+            tool_catalog_applicable=False,
+            pairs=tuple(pairs),
+        )
+        raw = json.dumps(
+            manifest.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+        ).encode()
+        manifest_sha256 = hashlib.sha256(raw).hexdigest()
+        package_store.manifests[manifest_sha256] = raw
+        registry.packages[(registry.group.group_id, role)] = PrivatePackageRegistration(
+            agent_id=commitment.agent_id,
+            attempt_id=commitment.attempt_id,
+            artifact_sha256=commitment.artifact_sha256,
+            image_sha256=commitment.image_sha256,
+            profile_sha256=V13_PRIVATE_PROFILE_SHA256,
+            manifest_sha256=manifest_sha256,
+            generation_group_id=registry.group.group_id,
+            generation_role=role,
+            generation_receipt_sha256=receipt,
+            registered_at=generated_at + timedelta(seconds=1),
+            registrar_id="synthetic-private-store",
+        )
 
 
 def fixture() -> tuple[Registry, Store]:
@@ -96,6 +200,9 @@ def fixture() -> tuple[Registry, Store]:
         approver_id="operator",
         approval_receipt_sha256="e" * 64,
         provenance_status="two_person_authenticated",
+        authenticated_reviewers=2,
+        review_evidence_sha256="9" * 64,
+        provenance_review_evidence_sha256="9" * 64,
         provenance_receipt_sha256="f" * 64,
         completed_at=now + timedelta(minutes=2),
     )
@@ -155,6 +262,9 @@ async def test_group_issues_one_shared_two_seed_bundle_once() -> None:
     [
         "approval_receipt",
         "approval_identity",
+        "approval_evidence",
+        "approval_status",
+        "approval_reviewers",
         "late_attestation",
         "target_image",
         "group_receipt",
@@ -170,6 +280,18 @@ async def test_prerequisite_fault_never_calls_seed_store(fault: str) -> None:
         )
     elif fault == "approval_identity":
         registry.approval = registry.approval.model_copy(update={"agent_id": uuid4()})
+    elif fault == "approval_evidence":
+        registry.approval = registry.approval.model_copy(
+            update={"provenance_review_evidence_sha256": "0" * 64}
+        )
+    elif fault == "approval_status":
+        registry.approval = registry.approval.model_copy(
+            update={"provenance_status": "recorded_unverified"}
+        )
+    elif fault == "approval_reviewers":
+        registry.approval = registry.approval.model_copy(
+            update={"authenticated_reviewers": 1}
+        )
     elif fault == "late_attestation":
         registry.approval = registry.approval.model_copy(
             update={"completed_at": registry.group.started_at + timedelta(seconds=1)}
@@ -238,3 +360,43 @@ async def test_registry_failure_does_not_generate_seed(monkeypatch) -> None:
         )
     assert "secret" not in str(raised.value)
     assert store.create_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_matched_packages_require_issued_seeds_and_same_ordered_inventory() -> (
+    None
+):
+    registry, seed_store = fixture()
+    issued = await issue_v13_hidden_group_seeds(
+        group_id=registry.group.group_id, registry=registry, store=seed_store
+    )
+    package_store = PackageStore()
+    register_matched_packages(registry, package_store, issued.seed_commitments)
+    matched = await verify_v13_issued_matched_inventory(
+        issuance=issued,
+        target=registry.roles["target"],
+        control=registry.roles["known_benign"],
+        seed_store=seed_store,
+        package_store=package_store,
+        packages=registry,
+        controls=registry,
+        generations=registry,
+    )
+    assert matched.group_id == issued.group_id
+    assert matched.pair_count == 60
+
+    # An internally matched pair package generated from different randomness
+    # still cannot claim this group's previously issued seeds.
+    other = PackageStore()
+    register_matched_packages(registry, other, ("1" * 64, "2" * 64))
+    with pytest.raises(V13SeedIssuanceUnavailable):
+        await verify_v13_issued_matched_inventory(
+            issuance=issued,
+            target=registry.roles["target"],
+            control=registry.roles["known_benign"],
+            seed_store=seed_store,
+            package_store=other,
+            packages=registry,
+            controls=registry,
+            generations=registry,
+        )
