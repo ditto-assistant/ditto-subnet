@@ -2033,6 +2033,11 @@ def build_adjudicator(config: object) -> SourceReviewAdjudicator | None:
     mode = str(getattr(config, "adjudicator_mode", "off"))
     if mode == "off":
         return None
+    l4_completion_tokens = getattr(config, "adjudicator_max_completion_tokens", None)
+    if l4_completion_tokens is None:
+        l4_completion_tokens = getattr(
+            config, "l2_max_completion_tokens", _MAX_COMPLETION_TOKENS
+        )
     return SourceReviewAdjudicator(
         api_key_file=getattr(config, "source_review_api_key_file", None),
         base_url=str(getattr(config, "source_review_base_url", "")),
@@ -2044,8 +2049,5 @@ def build_adjudicator(config: object) -> SourceReviewAdjudicator | None:
         max_steps=int(getattr(config, "adjudicator_max_steps", _MAX_STEPS)),
         # Existing revisions inherit L2's cap. An explicit operator revision
         # may bound L4 separately without changing L2's reasoning budget.
-        max_completion_tokens=int(
-            getattr(config, "adjudicator_max_completion_tokens", None)
-            or getattr(config, "l2_max_completion_tokens", _MAX_COMPLETION_TOKENS)
-        ),
+        max_completion_tokens=int(cast(int | str, l4_completion_tokens)),
     )
