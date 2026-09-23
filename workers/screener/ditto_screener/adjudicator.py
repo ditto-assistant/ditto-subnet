@@ -1735,9 +1735,24 @@ class SourceReviewAdjudicator:
                 IncompleteStreamError,
                 ProviderStreamError,
                 ProviderBodyError,
-            ):
+            ) as error:
                 if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
                     raise
+                # A provider can keep an SSE connection alive for the whole
+                # request bound while generating text instead of the required
+                # verdict tool. Retrying that same endpoint consumes another
+                # full court window. If the response identified its serving
+                # upstream, give the next attempt a different eligible route;
+                # preserve the same model, privacy and parameter requirements.
+                if (
+                    isinstance(error, TimeoutError)
+                    and request_trace is not None
+                    and request_trace.event_count > 0
+                    and request_trace.upstream is not None
+                ):
+                    provider = request["provider"]
+                    assert isinstance(provider, dict)
+                    provider["ignore"] = [request_trace.upstream]
                 logger.warning(
                     "adjudicator completion transport failed; retrying once model=%s",
                     self._model,

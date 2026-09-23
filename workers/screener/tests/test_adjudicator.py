@@ -835,6 +835,49 @@ async def test_partial_sse_timeout_records_progress_without_model_text(
     assert secret not in result.run_diagnostic.model_dump_json()
 
 
+async def test_streaming_timeout_retries_away_from_serving_provider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An active no-verdict stream must not spend its retry on the same route."""
+
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_REQUEST_SECONDS", 0.03)
+    providers: list[dict[str, object]] = []
+
+    class NeverFinishedStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (
+                b'data: {"provider":"Together","choices":'
+                b'[{"delta":{"content":"thinking"}}]}\n\n'
+            )
+            await asyncio.sleep(0.1)
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        providers.append(json.loads(request.content)["provider"])
+        if len(providers) == 1:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                stream=NeverFinishedStream(),
+            )
+        return httpx.Response(503, json={"error": "no alternate route"})
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+
+    assert result.decision == "escalate"
+    assert len(providers) == 2
+    assert "ignore" not in providers[0]
+    assert providers[1]["ignore"] == ["together"]
+    for provider in providers:
+        assert provider["allow_fallbacks"] is True
+        assert provider["data_collection"] == "deny"
+        assert provider["require_parameters"] is True
+
+
 async def test_incomplete_stream_then_timeout_keeps_both_request_timelines(
     tmp_path: Path,
 ) -> None:
