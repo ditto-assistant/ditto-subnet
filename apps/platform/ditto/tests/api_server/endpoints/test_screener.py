@@ -7265,6 +7265,122 @@ class TestQuarantineAdmin:
         assert wrong_owner.status_code == 404
         assert missing_actor.status_code == 422
 
+    async def test_lists_text_free_l4_outcomes_with_honest_missing_success_trace(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        agent_ids = [
+            await _seed_agent(session_maker, status=AgentStatus.EVALUATING),
+            await _seed_agent(session_maker, status=AgentStatus.QUARANTINED),
+        ]
+        attempt_ids = [uuid4(), uuid4()]
+        now = datetime.now(UTC)
+        settings = ScreenerReviewSettings(
+            mode="enforce",
+            adjudicator_mode="enforce",
+            adjudicator_max_completion_tokens=3_000,
+        )
+        checksum = _review_settings_checksum(settings)
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=checksum,
+                reason="test adjudicator telemetry revision",
+                actor="test",
+            )
+            session.add(revision)
+            await session.flush()
+            for index, decision in enumerate(("clear", "escalate")):
+                session.add(
+                    ScreeningAttempt(
+                        attempt_id=attempt_ids[index],
+                        agent_id=agent_ids[index],
+                        artifact_sha256=_SHA256,
+                        screener_hotkey=_SCREENER_HOTKEY,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="passed" if index == 0 else "quarantined",
+                        started_at=now - timedelta(minutes=5),
+                        deadline=now + timedelta(minutes=5),
+                        finished_at=now,
+                        review_settings_revision=revision.revision,
+                        review_settings_instance_id="test-instance",
+                        review_settings_scope="*",
+                        review_settings_checksum=checksum,
+                    )
+                )
+                session.add(
+                    ScreeningQuarantine(
+                        quarantine_id=uuid4(),
+                        agent_id=agent_ids[index],
+                        attempt_id=attempt_ids[index],
+                        screener_hotkey=_SCREENER_HOTKEY,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        manifest_digest="56" * 32,
+                        reason_code=f"adjudicated-source-review-{decision}",
+                        court_diagnostic=(
+                            None
+                            if index == 0
+                            else {
+                                "failure_code": "completion-timeout",
+                                "elapsed_ms": 315_000,
+                                "model": "z-ai/glm-5.3-flash",
+                                "provider": "openrouter",
+                                "upstream": "near-ai",
+                                "request_count": 1,
+                                "request_attempts": [
+                                    {
+                                        "ordinal": 1,
+                                        "started_ms": 0,
+                                        "elapsed_ms": 315_000,
+                                        "stage": "event",
+                                        "stream_requested": True,
+                                        "prompt_bytes": 8_000,
+                                        "event_count": 2,
+                                        "wire_bytes": 500,
+                                        "prompt": "never disclose this",
+                                    }
+                                ],
+                            }
+                        ),
+                        status="resolved" if index == 0 else "active",
+                        created_at=now,
+                    )
+                )
+        _install_db(app, session_maker)
+        headers = {"Authorization": "Bearer test-admin-token-at-least-32-characters"}
+        response = await client.get(
+            "/api/v1/admin/screening-adjudication-attempts?limit=2",
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        rows = {row["adjudication_decision"]: row for row in response.json()["items"]}
+        assert set(rows) == {"clear", "escalate"}
+        assert rows["clear"]["attempt_id"] == str(attempt_ids[0])
+        assert rows["clear"]["artifact_sha256"] == _SHA256
+        assert rows["clear"]["configured_completion_ceiling"] == 3_000
+        assert rows["clear"]["observed_upstream"] is None
+        assert rows["clear"]["first_tool_call_ms"] is None
+        assert rows["clear"]["elapsed_ms"] is None
+        assert rows["escalate"]["elapsed_ms"] == 315_000
+        assert rows["escalate"]["request_prompt_bytes"] == 8_000
+        assert rows["escalate"]["request_wire_bytes"] == 500
+        assert rows["escalate"]["observed_upstream"] == "near-ai"
+        assert "never disclose this" not in response.text
+        assert (
+            await client.get(
+                "/api/v1/admin/screening-adjudication-attempts?limit=101",
+                headers=headers,
+            )
+        ).status_code == 422
+
     async def test_reads_sanitized_court_diagnostic_for_a_held_attempt(
         self,
         app: FastAPI,

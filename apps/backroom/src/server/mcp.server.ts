@@ -48,6 +48,7 @@ import {
   screeningDisputeResolutionSchema,
   screeningArtifactInputSchema,
   screeningFailureDiagnosticInputSchema,
+  adjudicationAttemptsInputSchema,
   screeningSubmissionLookupInputSchema,
   sourceSearchInputSchema,
   ownerAttestationLookupInputSchema,
@@ -143,6 +144,7 @@ import {
   fetchScreeningQuarantines,
   fetchScreeningDisputes,
   fetchScreeningFailureDiagnostic,
+  fetchAdjudicationAttempts,
   fetchScreeningVerificationReadiness,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
@@ -730,6 +732,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   // context — which is also what buys the budget the queue's own entry needs.
   list_screening_quarantines:
     'Page screener quarantines (active | resolved | all), newest first; sort=oldest for chronology, detail=full for every evidence row. Active rows are auto-resolved by the platform within milliseconds, so this is not the operator queue — use get_screening_review_queue.',
+  list_screening_adjudication_attempts:
+    'Recent L4 outcomes with attempt SHA, manifest and pinned settings; observed timing/provider only when recorded. Null success telemetry is unavailable, not zero.',
   get_screening_quarantine_context:
     'Full review context for one quarantine: the screener evidence trail, the digest-verified source-review finding with its flagged path:line locations, every screening attempt, the miner track record, identical-artifact duplicates, and the advisory `shadow_review` (often null, never authoritative — a divergence from the L1 finding is a prompt to read the source, not a decision). Read this before deciding a quarantine.',
   search_screening_source:
@@ -1174,13 +1178,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening failure diagnostic',
       description:
-        'Read one exact screening attempt. court_diagnostic is the narrow automated-court trace: error class, fixed failure code, escalation code, timeout stage, provider HTTP status, elapsed milliseconds, prompt and completion token counts, whether a final tool call was returned, and the upstream that served the call behind the gateway. New request_count and request_attempts fields expose a bounded timeline per model request: request start, headers, first/last wire byte and parsed SSE event, stage, elapsed time, prompt byte count, status, and upstream when known. They distinguish no-response timeouts from streams that stalled mid-response; old attempts may omit them. The failure code separates provider errors from malformed responses without exposing exception text; it is null for attempts before this field existed. Read `upstream` before blaming an artifact for a burst: one model is routed across many upstreams and the gateway may fail over between them per request, so several attempts failing on one upstream is a fleet fact, not a miner fact. That object contains no source, prompt, response text, credential, model text, or raw log. It is null when the attempt has no court trace, including attempts screened before the field existed. private_failure_detail and private_failure_log_tail are the separate build/runtime fields and are null on a court hold. A court failure is not a misconduct finding and not a clearance. Reading this does not clear, reject, or rescreen. Requires backroom:artifact:read because the private failure text, when present, can contain miner-influenced build or runtime diagnostics.',
+        'Read one exact attempt with private failure text and sanitized L4 failure trace, when recorded. No source or model text. Requires backroom:artifact:read; read get_backroom_tool_help for field semantics.',
       inputSchema: screeningFailureDiagnosticInputSchema,
       annotations: toolAnnotations('read'),
     },
     async (input) =>
       artifact(() =>
         fetchScreeningFailureDiagnostic(input, props.session.email),
+      ),
+  )
+
+  registerTool(
+    'list_screening_adjudication_attempts',
+    {
+      title: 'List screening adjudication attempts',
+      description:
+        'Read a bounded recent cohort of persisted L4 clear, reject, and escalation outcomes. Each row binds attempt UUID, pinned artifact SHA when available, policy version, manifest digest, and pinned review settings. Configured model, timeout, and completion ceiling are distinct from observed model/provider/upstream. Historical successful L4 runs did not persist request timing, token usage, upstream, or first-tool-call latency, so those fields remain null. Failed runs expose only sanitized, text-free trace aggregates when recorded. No source, prompts, tool arguments, or raw responses. Read-only; requires backroom:read.',
+      inputSchema: adjudicationAttemptsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      result(
+        compacted(await fetchAdjudicationAttempts(input), {
+          items: { pin: ['agent_id', 'attempt_id'] },
+        }),
       ),
   )
 

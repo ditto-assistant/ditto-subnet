@@ -1929,6 +1929,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-adjudication-attempts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Screening Adjudication Attempts
+         * @description Compare bounded, persisted L4 outcomes without source or model text.
+         *
+         *     Success timing and upstream were not historically recorded. A null value
+         *     means no receipt, not a zero-latency or provider-independent completion.
+         *     Pinned settings describe configuration, not necessarily the served model.
+         */
+        get: operations["list_screening_adjudication_attempts_api_v1_admin_screening_adjudication_attempts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-disputes": {
         parameters: {
             query?: never;
@@ -6910,6 +6934,90 @@ export interface components {
             hotkey: string;
             /** Reason */
             reason: string | null;
+        };
+        /**
+         * AdminAdjudicationAttemptTelemetry
+         * @description Text-free L4 cohort row; absent telemetry stays absent.
+         */
+        AdminAdjudicationAttemptTelemetry: {
+            /**
+             * Adjudication Decision
+             * @enum {string}
+             */
+            adjudication_decision: "clear" | "reject" | "escalate";
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string | null;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Attempt Status */
+            attempt_status: string;
+            /** Completion Tokens */
+            completion_tokens: number | null;
+            /** Configured Completion Ceiling */
+            configured_completion_ceiling: number | null;
+            /** Configured Model */
+            configured_model: string | null;
+            /** Configured Timeout Seconds */
+            configured_timeout_seconds: number | null;
+            /** Elapsed Ms */
+            elapsed_ms: number | null;
+            /** Failure Code */
+            failure_code: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** First Tool Call Ms */
+            first_tool_call_ms?: number | null;
+            /** Manifest Digest */
+            manifest_digest: string;
+            /** Observed Model */
+            observed_model: string | null;
+            /** Observed Provider */
+            observed_provider: string | null;
+            /** Observed Upstream */
+            observed_upstream: string | null;
+            /** Policy Version */
+            policy_version: number;
+            /** Prompt Tokens */
+            prompt_tokens: number | null;
+            /** Request Count */
+            request_count: number | null;
+            /** Request Event Count */
+            request_event_count: number | null;
+            /** Request Prompt Bytes */
+            request_prompt_bytes: number | null;
+            /** Request Wire Bytes */
+            request_wire_bytes: number | null;
+            /** Review Settings Checksum */
+            review_settings_checksum: string | null;
+            /** Review Settings Revision */
+            review_settings_revision: number | null;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+        };
+        /**
+         * AdminAdjudicationAttemptTelemetryList
+         * @description Most recent persisted L4 decisions, including clear and reject.
+         */
+        AdminAdjudicationAttemptTelemetryList: {
+            /** Items */
+            items: components["schemas"]["AdminAdjudicationAttemptTelemetry"][];
+            /** Limit */
+            limit: number;
+            /** Lookback Hours */
+            lookback_hours: number;
+            /** Offset */
+            offset: number;
         };
         /**
          * AdminArtifactDuplicate
@@ -34046,6 +34154,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreenerReviewSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_screening_adjudication_attempts_api_v1_admin_screening_adjudication_attempts_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                lookback_hours?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAdjudicationAttemptTelemetryList"];
                 };
             };
             /** @description Validation Error */

@@ -196,6 +196,48 @@ class AdminScreeningFailureDiagnostic(BaseModel):
     has no such trace, including rows screened before the field existed."""
 
 
+class AdminAdjudicationAttemptTelemetry(BaseModel):
+    """Text-free L4 cohort row; absent telemetry stays absent."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    attempt_id: UUID
+    artifact_sha256: str | None
+    policy_version: int
+    manifest_digest: str
+    started_at: datetime
+    finished_at: datetime | None
+    attempt_status: str
+    adjudication_decision: Literal["clear", "reject", "escalate"]
+    review_settings_revision: int | None
+    review_settings_checksum: str | None
+    configured_model: str | None
+    configured_timeout_seconds: int | None
+    configured_completion_ceiling: int | None
+    observed_model: str | None
+    observed_provider: str | None
+    observed_upstream: str | None
+    failure_code: str | None
+    elapsed_ms: int | None
+    first_tool_call_ms: int | None = None
+    request_count: int | None
+    request_prompt_bytes: int | None
+    request_wire_bytes: int | None
+    request_event_count: int | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+
+
+class AdminAdjudicationAttemptTelemetryList(BaseModel):
+    """Most recent persisted L4 decisions, including clear and reject."""
+
+    items: list[AdminAdjudicationAttemptTelemetry]
+    limit: int
+    offset: int
+    lookback_hours: int
+
+
 class AdminScreeningVerificationReceipt(BaseModel):
     """Digest-only evidence presence, not a verified policy outcome."""
 
@@ -990,6 +1032,8 @@ __all__ = [
     "AdminScreeningDisputeResolveResponse",
     "AdminScreeningFailureExample",
     "AdminScreeningFailureDiagnostic",
+    "AdminAdjudicationAttemptTelemetry",
+    "AdminAdjudicationAttemptTelemetryList",
     "AdminScreeningFailureGroup",
     "AdminScreeningFailureSummary",
     "AdminScreeningVerificationCheck",

@@ -108,6 +108,8 @@ import {
   screeningArtifactSchema,
   screeningFailureDiagnosticInputSchema,
   screeningFailureDiagnosticSchema,
+  adjudicationAttemptsInputSchema,
+  adjudicationAttemptsSchema,
   screeningVerificationReadinessSchema,
   screeningSubmissionLookupInputSchema,
   screeningSubmissionSchema,
@@ -1903,6 +1905,19 @@ export async function fetchScreeningFailureDiagnostic(rawInput: unknown, actor: 
     { actor },
   )
   return screeningFailureDiagnosticSchema.parse(payload)
+}
+
+export async function fetchAdjudicationAttempts(rawInput: unknown) {
+  const input = adjudicationAttemptsInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    limit: String(input.limit),
+    offset: String(input.offset),
+    lookback_hours: String(input.lookbackHours),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-adjudication-attempts?${query.toString()}`,
+  )
+  return adjudicationAttemptsSchema.parse(payload)
 }
 
 export async function fetchScreeningVerificationReadiness(rawInput: unknown, actor: string) {

@@ -12,6 +12,7 @@ import {
   fetchScreenedImageRebuild,
   fetchBenchmarkContractMigration,
   fetchScreeningFailureDiagnostic,
+  fetchAdjudicationAttempts,
   fetchScreeningVerificationReadiness,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
@@ -826,6 +827,47 @@ describe('screening submission admin service', () => {
           'X-Admin-Actor': 'peyton@omniaura.ai',
         }),
       }),
+    )
+  })
+
+  it('reads a bounded text-free L4 cohort without filling missing success telemetry', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const item = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      artifact_sha256: 'ab'.repeat(32),
+      policy_version: 13,
+      manifest_digest: 'cd'.repeat(32),
+      started_at: '2026-09-23T04:00:00Z',
+      finished_at: '2026-09-23T04:03:00Z',
+      attempt_status: 'passed',
+      adjudication_decision: 'clear',
+      review_settings_revision: 4,
+      review_settings_checksum: 'ef'.repeat(32),
+      configured_model: 'z-ai/glm-5.3-flash',
+      configured_timeout_seconds: 600,
+      configured_completion_ceiling: 2400,
+      observed_model: null,
+      observed_provider: null,
+      observed_upstream: null,
+      failure_code: null,
+      elapsed_ms: null,
+      first_tool_call_ms: null,
+      request_count: null,
+      request_prompt_bytes: null,
+      request_wire_bytes: null,
+      request_event_count: null,
+      prompt_tokens: null,
+      completion_tokens: null,
+    }
+    const payload = { limit: 5, offset: 0, lookback_hours: 24, items: [item] }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchAdjudicationAttempts({ limit: 5, lookbackHours: 24 })).resolves.toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-adjudication-attempts?limit=5&offset=0&lookback_hours=24',
+      expect.objectContaining({ method: 'GET' }),
     )
   })
 

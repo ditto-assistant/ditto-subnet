@@ -206,6 +206,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_quarantine_contexts',
         'get_screening_review_queue',
         'get_screening_failure_diagnostic',
+        'list_screening_adjudication_attempts',
         'get_screening_verification_readiness',
         'get_screening_submission',
         'get_source_release_policy',
@@ -342,9 +343,8 @@ describe('Backroom MCP tools', () => {
     // One bounded conversation observation tool adds ~900 bytes.
     // The audited retry adds exact report/artifact digests; measured 136,355 bytes.
     // Exact-agent continual retest diagnosis adds one bounded read schema.
-    // The optional L4 completion cap and exact-attempt v13 receipt inventory
-    // add small bounded schemas without expanding tool descriptions.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(138_300)
+    // One bounded L4 cohort read adds a compact schema and catalog line.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(140_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -361,9 +361,10 @@ describe('Backroom MCP tools', () => {
     // one-line bench v13+ confirmation seed anchor read (its notes live in the
     // detailed help) lands at 25_047, so the bound moves to 25_200;
     // the one-line bench v13 gate-evidence and dispute-kind notes on the score
-    // and dispute tools land at 25_237, so it moves to 25_400.
+    // and dispute tools land at 25_237, so it moves to 25_400. The short
+    // L4 cohort diagnostic adds one catalog line without another tutorial.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      25_700, // Includes the exact-agent continual retest read summary.
+      26_000, // Includes continual retest and L4 cohort read summaries.
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

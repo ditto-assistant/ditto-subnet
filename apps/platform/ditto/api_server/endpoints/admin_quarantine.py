@@ -22,6 +22,8 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from ditto.api_models.admin_quarantine import (
     MANDATORY_V13_VERIFICATION_CHECKS,
+    AdminAdjudicationAttemptTelemetry,
+    AdminAdjudicationAttemptTelemetryList,
     AdminArtifactDuplicate,
     AdminBaselineDiffFileDetail,
     AdminBaselineDiffManifest,
@@ -2111,6 +2113,135 @@ async def _court_diagnostic(
     except ValidationError:
         logger.warning("screening court diagnostic rejected attempt_id=%s", attempt_id)
         return None
+
+
+@router.get(
+    "/screening-adjudication-attempts",
+    response_model=AdminAdjudicationAttemptTelemetryList,
+)
+async def list_screening_adjudication_attempts(
+    _admin: AdminDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
+    lookback_hours: Annotated[int, Query(ge=1, le=720)] = 72,
+) -> AdminAdjudicationAttemptTelemetryList:
+    """Compare bounded, persisted L4 outcomes without source or model text.
+
+    Success timing and upstream were not historically recorded. A null value
+    means no receipt, not a zero-latency or provider-independent completion.
+    Pinned settings describe configuration, not necessarily the served model.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=lookback_hours)
+    rows = (
+        await session.execute(
+            select(
+                ScreeningQuarantine,
+                ScreeningAttempt,
+                ScreenerReviewSettingsRevision,
+            )
+            .join(
+                ScreeningAttempt,
+                ScreeningAttempt.attempt_id == ScreeningQuarantine.attempt_id,
+            )
+            .outerjoin(
+                ScreenerReviewSettingsRevision,
+                ScreenerReviewSettingsRevision.revision
+                == ScreeningAttempt.review_settings_revision,
+            )
+            .where(
+                ScreeningQuarantine.created_at >= cutoff,
+                ScreeningQuarantine.reason_code.like("adjudicated-source-review-%"),
+            )
+            .order_by(
+                ScreeningQuarantine.created_at.desc(),
+                ScreeningQuarantine.quarantine_id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    items: list[AdminAdjudicationAttemptTelemetry] = []
+    for quarantine, attempt, revision in rows:
+        decision = quarantine.reason_code.removeprefix("adjudicated-source-review-")
+        if decision not in {"clear", "reject", "escalate"}:
+            continue
+        settings: ScreenerReviewSettings | None = None
+        if (
+            revision is not None
+            and revision.checksum == attempt.review_settings_checksum
+            and revision.scope == attempt.review_settings_scope
+        ):
+            try:
+                settings = ScreenerReviewSettings.model_validate(revision.settings)
+            except ValueError:
+                logger.warning(
+                    "invalid pinned screener settings attempt_id=%s", attempt.attempt_id
+                )
+        diagnostic: AdjudicationRunDiagnostic | None = None
+        if quarantine.court_diagnostic is not None:
+            try:
+                diagnostic = AdjudicationRunDiagnostic.model_validate(
+                    quarantine.court_diagnostic
+                )
+            except ValidationError:
+                logger.warning(
+                    "invalid court telemetry attempt_id=%s", attempt.attempt_id
+                )
+        requests = diagnostic.request_attempts if diagnostic is not None else None
+        items.append(
+            AdminAdjudicationAttemptTelemetry(
+                agent_id=attempt.agent_id,
+                attempt_id=attempt.attempt_id,
+                artifact_sha256=attempt.artifact_sha256,
+                policy_version=attempt.policy_version,
+                manifest_digest=quarantine.manifest_digest,
+                started_at=attempt.started_at,
+                finished_at=attempt.finished_at,
+                attempt_status=attempt.status,
+                adjudication_decision=decision,
+                review_settings_revision=attempt.review_settings_revision,
+                review_settings_checksum=attempt.review_settings_checksum,
+                configured_model=settings.adjudicator_model if settings else None,
+                configured_timeout_seconds=(
+                    settings.adjudicator_timeout_seconds if settings else None
+                ),
+                configured_completion_ceiling=(
+                    settings.adjudicator_max_completion_tokens
+                    or settings.max_completion_tokens
+                    if settings
+                    else None
+                ),
+                observed_model=diagnostic.model if diagnostic else None,
+                observed_provider=diagnostic.provider if diagnostic else None,
+                observed_upstream=diagnostic.upstream if diagnostic else None,
+                failure_code=diagnostic.failure_code if diagnostic else None,
+                elapsed_ms=diagnostic.elapsed_ms if diagnostic else None,
+                request_count=diagnostic.request_count if diagnostic else None,
+                request_prompt_bytes=(
+                    sum(request.prompt_bytes for request in requests)
+                    if requests is not None
+                    else None
+                ),
+                request_wire_bytes=(
+                    sum(request.wire_bytes for request in requests)
+                    if requests is not None
+                    else None
+                ),
+                request_event_count=(
+                    sum(request.event_count for request in requests)
+                    if requests is not None
+                    else None
+                ),
+                prompt_tokens=diagnostic.prompt_tokens if diagnostic else None,
+                completion_tokens=(
+                    diagnostic.completion_tokens if diagnostic else None
+                ),
+            )
+        )
+    return AdminAdjudicationAttemptTelemetryList(
+        items=items, limit=limit, offset=offset, lookback_hours=lookback_hours
+    )
 
 
 @router.post(

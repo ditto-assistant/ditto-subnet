@@ -4407,6 +4407,46 @@ export const screeningFailureDiagnosticSchema = z.object({
   court_diagnostic: adjudicationRunDiagnosticSchema.nullish().default(null),
 })
 
+export const adjudicationAttemptsInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(50),
+  offset: z.number().int().min(0).max(10_000).default(0),
+  lookbackHours: z.number().int().min(1).max(720).default(72),
+})
+
+export const adjudicationAttemptsSchema = z.object({
+  limit: z.number().int().min(1).max(100),
+  offset: z.number().int().min(0).max(10_000),
+  lookback_hours: z.number().int().min(1).max(720),
+  items: z.array(z.object({
+    agent_id: z.string().uuid(),
+    attempt_id: z.string().uuid(),
+    artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    policy_version: z.number().int().positive(),
+    manifest_digest: z.string().regex(/^[0-9a-f]{64}$/),
+    started_at: z.string(),
+    finished_at: z.string().nullable(),
+    attempt_status: z.string(),
+    adjudication_decision: z.enum(['clear', 'reject', 'escalate']),
+    review_settings_revision: z.number().int().positive().nullable(),
+    review_settings_checksum: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    configured_model: z.string().nullable(),
+    configured_timeout_seconds: z.number().int().nullable(),
+    configured_completion_ceiling: z.number().int().nullable(),
+    observed_model: z.string().nullable(),
+    observed_provider: z.string().nullable(),
+    observed_upstream: z.string().nullable(),
+    failure_code: z.string().nullable(),
+    elapsed_ms: z.number().int().nullable(),
+    first_tool_call_ms: z.number().int().nullable(),
+    request_count: z.number().int().nullable(),
+    request_prompt_bytes: z.number().int().nullable(),
+    request_wire_bytes: z.number().int().nullable(),
+    request_event_count: z.number().int().nullable(),
+    prompt_tokens: z.number().int().nullable(),
+    completion_tokens: z.number().int().nullable(),
+  })).max(100),
+})
+
 export const screeningVerificationReadinessSchema = z.object({
   agent_id: z.string().uuid(),
   artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
