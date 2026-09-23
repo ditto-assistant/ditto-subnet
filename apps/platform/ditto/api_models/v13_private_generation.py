@@ -31,6 +31,24 @@ class V13KnownBenignApprovalView(V13KnownBenignApprovalRequest):
     status: Literal["recorded_unverified"] = "recorded_unverified"
 
 
+class V13KnownBenignAttestationRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    assertion: str = Field(min_length=16, max_length=2048)
+    reason: str = Field(min_length=8)
+
+
+class V13KnownBenignProvenanceView(BaseModel):
+    approval_id: UUID
+    review_evidence_sha256: str = Field(pattern=_SHA)
+    authenticated_reviewers: int = Field(ge=0, le=2)
+    status: Literal[
+        "recorded_unverified", "one_authenticated_reviewer", "two_person_authenticated"
+    ]
+    provenance_receipt_sha256: str | None = Field(default=None, pattern=_SHA)
+    completed_at: datetime | None = None
+
+
 class V13GenerationStartRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

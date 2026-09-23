@@ -79,6 +79,7 @@ describe('public subnet Backroom boundary', () => {
       'src/server/mcp.server.ts',
       'src/server/mcp-oauth.server.ts',
       'src/server/mcp-handler.server.ts',
+      'src/server/mcp-scope.server.ts',
     ].map((path) => readFileSync(join(appRoot, path), 'utf8'))
     const runtime = readFileSync(join(appRoot, 'wrangler.jsonc'), 'utf8')
     const source = [...sourceFiles, runtime].join('\n')
@@ -94,7 +95,8 @@ describe('public subnet Backroom boundary', () => {
     }
     expect(source).toContain('BACKROOM_ADMIN_EMAILS')
     expect(source).toContain('BACKROOM_BLOCKED_EMAILS')
-    expect(sourceFiles.at(-1)).toContain('this.env.BACKROOM_BLOCKED_EMAILS')
+    expect(sourceFiles.at(-2)).toContain('currentMcpGrant(request, this.ctx.props, this.env)')
+    expect(sourceFiles.at(-1)).toContain('env.BACKROOM_BLOCKED_EMAILS')
     expect(source).toContain('DITTO_PLATFORM_API_BASE_URL')
   })
 

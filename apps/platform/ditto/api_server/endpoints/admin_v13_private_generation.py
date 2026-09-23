@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,14 +24,18 @@ from ditto.api_models.v13_private_generation import (
     V13GenerationStartRequest,
     V13KnownBenignApprovalRequest,
     V13KnownBenignApprovalView,
+    V13KnownBenignAttestationRequest,
+    V13KnownBenignProvenanceView,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.v13_benign_identity import verify_v13_benign_assertion
 from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
     ScreeningAttempt,
     ScreeningPrivatePackageRegistration,
+    V13KnownBenignAttestation,
     V13KnownBenignControlApproval,
     V13PrivateGenerationGroup,
 )
@@ -217,6 +221,126 @@ async def record_known_benign_approval(
     except IntegrityError as error:
         raise HTTPException(
             status_code=409, detail="approval changed concurrently"
+        ) from error
+
+
+async def _provenance(
+    session: AsyncSession, approval: V13KnownBenignControlApproval
+) -> V13KnownBenignProvenanceView:
+    reviewers = list(
+        await session.scalars(
+            select(V13KnownBenignAttestation)
+            .where(
+                V13KnownBenignAttestation.approval_id == approval.approval_id,
+                V13KnownBenignAttestation.review_evidence_sha256
+                == approval.review_evidence_sha256,
+            )
+            .order_by(V13KnownBenignAttestation.principal_sub)
+        )
+    )
+    count = min(len(reviewers), 2)
+    complete = reviewers[:2] if count == 2 else []
+    return V13KnownBenignProvenanceView(
+        approval_id=approval.approval_id,
+        review_evidence_sha256=approval.review_evidence_sha256,
+        authenticated_reviewers=count,
+        status=(
+            "two_person_authenticated"
+            if count == 2
+            else "one_authenticated_reviewer"
+            if count == 1
+            else "recorded_unverified"
+        ),
+        provenance_receipt_sha256=(
+            _canonical_digest(
+                {
+                    "revision": "v13-known-benign-provenance-v1",
+                    "approval_receipt_sha256": approval.approval_receipt_sha256,
+                    "review_evidence_sha256": approval.review_evidence_sha256,
+                    "reviewers": [
+                        {
+                            "principal_sub": row.principal_sub,
+                            "assertion_sha256": row.assertion_sha256,
+                            "attested_at": _utc_stamp(row.attested_at),
+                        }
+                        for row in complete
+                    ],
+                }
+            )
+            if complete
+            else None
+        ),
+        completed_at=max((row.attested_at for row in complete), default=None),
+    )
+
+
+@router.get(
+    "/known-benign-approvals/{approval_id}/provenance",
+    response_model=V13KnownBenignProvenanceView,
+)
+async def get_known_benign_provenance(
+    approval_id: UUID, _admin: AdminDep, session: SessionDep
+) -> V13KnownBenignProvenanceView:
+    approval = await session.get(V13KnownBenignControlApproval, approval_id)
+    if approval is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    return await _provenance(session, approval)
+
+
+@router.post(
+    "/known-benign-approvals/{approval_id}/attest",
+    response_model=V13KnownBenignProvenanceView,
+)
+async def attest_known_benign_approval(
+    approval_id: UUID,
+    payload: V13KnownBenignAttestationRequest,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> V13KnownBenignProvenanceView:
+    """Record one Google-session reviewer; shared bearer/actor cannot count."""
+    try:
+        async with session.begin():
+            approval = await session.get(
+                V13KnownBenignControlApproval, approval_id, with_for_update=True
+            )
+            if approval is None:
+                raise HTTPException(status_code=404, detail="approval not found")
+            principal = verify_v13_benign_assertion(
+                payload.assertion,
+                secret=request.app.state.config.v13_benign_attestation_secret,
+                approval_id=approval_id,
+                evidence_sha256=approval.review_evidence_sha256,
+            )
+            existing = await session.scalar(
+                select(V13KnownBenignAttestation).where(
+                    V13KnownBenignAttestation.approval_id == approval_id,
+                    V13KnownBenignAttestation.principal_sub == principal.sub,
+                )
+            )
+            if existing is not None:
+                if existing.principal_email != principal.email:
+                    raise HTTPException(
+                        status_code=409, detail="reviewer identity changed"
+                    )
+                return await _provenance(session, approval)
+            session.add(
+                V13KnownBenignAttestation(
+                    attestation_id=uuid4(),
+                    approval_id=approval_id,
+                    principal_sub=principal.sub,
+                    principal_email=principal.email,
+                    review_evidence_sha256=approval.review_evidence_sha256,
+                    assertion_sha256=principal.assertion_sha256,
+                    reason=payload.reason,
+                    attested_at=await _database_now(session),
+                )
+            )
+            await session.flush()
+            return await _provenance(session, approval)
+    except IntegrityError as error:
+        raise HTTPException(
+            status_code=409, detail="attestation changed concurrently"
         ) from error
 
 

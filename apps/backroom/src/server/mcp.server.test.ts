@@ -145,6 +145,7 @@ describe('Backroom MCP tools', () => {
     expect(response.tools.map((tool) => tool.name).sort()).toEqual(
       [
         'advance_scored_policy_rescreen',
+        'attest_v13_known_benign',
         'execute_screening_quarantine_batch',
         'expand_benchmark_rollout_cohort',
         'get_backroom_access',
@@ -212,6 +213,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_failure_diagnostic',
         'list_screening_adjudication_attempts',
         'get_screening_verification_readiness',
+        'get_v13_known_benign_provenance',
         'get_v13_private_generation_group',
         'get_screening_submission',
         'get_source_release_policy',
@@ -350,8 +352,9 @@ describe('Backroom MCP tools', () => {
     // Exact-agent continual retest diagnosis adds one bounded read schema.
     // One bounded L4 cohort read adds a compact schema and catalog line.
     // The two V13 clock tools and bounded, default-off replay control bring
-    // the measured catalog just above 142 KB.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(143_000)
+    // the measured catalog just above 142 KB. The two authenticated V13
+    // provenance tools add bounded input schemas; keep the total under 145 KB.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(145_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

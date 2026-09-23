@@ -2903,6 +2903,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/v13-private-generation/known-benign-approvals/{approval_id}/attest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Attest Known Benign Approval
+         * @description Record one Google-session reviewer; shared bearer/actor cannot count.
+         */
+        post: operations["attest_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals__approval_id__attest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/v13-private-generation/known-benign-approvals/{approval_id}/provenance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Known Benign Provenance */
+        get: operations["get_known_benign_provenance_api_v1_admin_v13_private_generation_known_benign_approvals__approval_id__provenance_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v9-contract-retests": {
         parameters: {
             query?: never;
@@ -30187,6 +30224,34 @@ export interface components {
              */
             status: "recorded_unverified";
         };
+        /** V13KnownBenignAttestationRequest */
+        V13KnownBenignAttestationRequest: {
+            /** Assertion */
+            assertion: string;
+            /** Reason */
+            reason: string;
+        };
+        /** V13KnownBenignProvenanceView */
+        V13KnownBenignProvenanceView: {
+            /**
+             * Approval Id
+             * Format: uuid
+             */
+            approval_id: string;
+            /** Authenticated Reviewers */
+            authenticated_reviewers: number;
+            /** Completed At */
+            completed_at?: string | null;
+            /** Provenance Receipt Sha256 */
+            provenance_receipt_sha256?: string | null;
+            /** Review Evidence Sha256 */
+            review_evidence_sha256: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "recorded_unverified" | "one_authenticated_reviewer" | "two_person_authenticated";
+        };
         /** V13ReviewClockRevision */
         V13ReviewClockRevision: {
             /**
@@ -37175,6 +37240,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["V13KnownBenignApprovalView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attest_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals__approval_id__attest_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                approval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V13KnownBenignAttestationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13KnownBenignProvenanceView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_known_benign_provenance_api_v1_admin_v13_private_generation_known_benign_approvals__approval_id__provenance_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                approval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13KnownBenignProvenanceView"];
                 };
             };
             /** @description Validation Error */

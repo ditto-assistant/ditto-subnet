@@ -1,9 +1,13 @@
 import '@tanstack/react-start/server-only'
 
+import { accessLevelForEmail } from '../lib/auth.policy'
 import {
+  BACKROOM_ARTIFACT_SCOPE,
   BACKROOM_READ_SCOPE,
   BACKROOM_WRITE_SCOPE,
   TOOL_SCOPE_REQUIREMENTS,
+  type BackroomEnv,
+  type McpGrantProps,
 } from './mcp.server'
 
 export function insufficientScopeResponse(request: Request, scope: string) {
@@ -26,6 +30,48 @@ export function insufficientScopeResponse(request: Request, scope: string) {
 
 export async function callsWriteTool(request: Request) {
   return (await requiredScopesForRequest(request)).includes(BACKROOM_WRITE_SCOPE)
+}
+
+/** OAuth grant scopes are a ceiling; the live staff allowlist is the authority. */
+export async function currentMcpGrant(
+  request: Request,
+  props: McpGrantProps,
+  env: Pick<BackroomEnv, 'BACKROOM_ADMIN_EMAILS' | 'BACKROOM_BLOCKED_EMAILS'>,
+): Promise<McpGrantProps | Response> {
+  // An OAuth grant minted near staff-session expiry can outlive the session
+  // briefly. Never let its cached scopes extend the underlying identity.
+  if (props.session.expiresAt <= Date.now()) {
+    return Response.json(
+      { error: 'access_denied', error_description: 'This session has expired' },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } },
+    )
+  }
+  let accessLevel: McpGrantProps['session']['accessLevel']
+  try {
+    accessLevel = accessLevelForEmail(
+      props.session.email,
+      env.BACKROOM_ADMIN_EMAILS,
+      env.BACKROOM_BLOCKED_EMAILS,
+    )
+  } catch {
+    return Response.json(
+      { error: 'access_denied', error_description: 'This account is not authorized' },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } },
+    )
+  }
+  if (!props.scopes.includes(BACKROOM_READ_SCOPE)) {
+    return insufficientScopeResponse(request, BACKROOM_READ_SCOPE)
+  }
+  for (const scope of await requiredScopesForRequest(request)) {
+    if (
+      !props.scopes.includes(scope) ||
+      (accessLevel !== 'write' &&
+        (scope === BACKROOM_WRITE_SCOPE || scope === BACKROOM_ARTIFACT_SCOPE))
+    ) {
+      return insufficientScopeResponse(request, scope)
+    }
+  }
+  return { ...props, session: { ...props.session, accessLevel } }
 }
 
 export async function requiredScopesForRequest(request: Request) {

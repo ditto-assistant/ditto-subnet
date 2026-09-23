@@ -56,6 +56,8 @@ export async function cancelBenchmarkCanary(actor: string, rawInput: unknown) {
 }
 
 import type { operations as PlatformOperations } from '../generated/platform-api'
+import type { BackroomSession } from '../lib/auth.types'
+import { signV13BenignAttestation } from './v13-benign-identity.server'
 
 import {
   validatorWeightDiagnosticsInputSchema,
@@ -114,6 +116,8 @@ import {
   screeningFailureDiagnosticInputSchema,
   v13GenerationGroupInputSchema,
   v13GenerationGroupSchema,
+  v13BenignAttestationInputSchema,
+  v13BenignProvenanceSchema,
   screeningFailureDiagnosticSchema,
   adjudicationAttemptsInputSchema,
   adjudicationAttemptsSchema,
@@ -1990,6 +1994,26 @@ export async function fetchV13GenerationGroup(rawInput: unknown) {
     `/api/v1/admin/v13-private-generation/groups/${encodeURIComponent(input.groupId)}`,
   )
   return v13GenerationGroupSchema.parse(payload)
+}
+
+export async function fetchV13BenignProvenance(rawInput: unknown) {
+  const input = v13BenignAttestationInputSchema.pick({ approvalId: true }).parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals/${encodeURIComponent(input.approvalId)}/provenance`,
+  )
+  return v13BenignProvenanceSchema.parse(payload)
+}
+
+export async function attestV13KnownBenign(session: BackroomSession, rawInput: unknown) {
+  const input = v13BenignAttestationInputSchema.parse(rawInput)
+  const assertion = await signV13BenignAttestation(
+    session, input.approvalId, input.reviewEvidenceSha256,
+  )
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals/${encodeURIComponent(input.approvalId)}/attest`,
+    { method: 'POST', actor: session.email, body: { assertion, reason: input.reason } },
+  )
+  return v13BenignProvenanceSchema.parse(payload)
 }
 
 export async function fetchScreeningReviewDeadline(rawInput: unknown) {
