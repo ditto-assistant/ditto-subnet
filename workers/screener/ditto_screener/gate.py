@@ -1651,23 +1651,6 @@ class BuildGate:
             if review_factory is not None:
                 review_task = asyncio.create_task(review_factory())
 
-            if (
-                policy_version == 13
-                and not targon_runtime_ok
-                and self._config.v13_runtime_receipts_mode == "shadow"
-                and record_runtime_verification is not None
-            ):
-                await self._run_v13_runtime_observations(
-                    audit_runtime=active_audit_runtime,
-                    probe_container=gateway_container,
-                    artifact_sha256=sha256.lower(),
-                    image_id=built_image_id,
-                    bench_version=bench_version,
-                    deadline=deadline,
-                    record=record_runtime_verification,
-                    include_runs=not build_only,
-                )
-
             async def run_challenge(
                 challenge_id: str, request: Mapping[str, object], timeout: float
             ) -> ChallengeObservation:
@@ -1886,6 +1869,39 @@ class BuildGate:
                 finally:
                     with contextlib.suppress(OSError):
                         os.unlink(image.path)
+            # Shadow probes mutate the harness's memory and model-gateway state.
+            # Run them only after the policy decision and screened-image handoff
+            # are complete, so neither their responses nor their side effects
+            # can influence the authoritative challenge or outcome. Reserve 30s
+            # for Platform's lease completion and cap the entire shadow lane at
+            # 15s, including all receipt writes; an observation is expendable.
+            if (
+                policy_version == 13
+                and not targon_runtime_ok
+                and self._config.v13_runtime_receipts_mode == "shadow"
+                and record_runtime_verification is not None
+            ):
+                remaining = self._lease_remaining(deadline)
+                shadow_budget = (
+                    15.0 if remaining is None else min(15.0, remaining - 30.0)
+                )
+                if shadow_budget > 0:
+                    try:
+                        async with asyncio.timeout(shadow_budget):
+                            await self._run_v13_runtime_observations(
+                                audit_runtime=active_audit_runtime,
+                                probe_container=gateway_container,
+                                artifact_sha256=sha256.lower(),
+                                image_id=built_image_id,
+                                bench_version=bench_version,
+                                deadline=deadline,
+                                record=record_runtime_verification,
+                                include_runs=not build_only,
+                            )
+                    except TimeoutError:
+                        logger.info("v13 shadow runtime observation budget expired")
+                    except Exception:  # noqa: BLE001 - never change a settled decision
+                        logger.exception("v13 shadow runtime observations unavailable")
             return decision
         except Exception as e:  # noqa: BLE001 - the loop must never die on one agent
             logger.exception("gate error for agent_id=%s", agent_id)
@@ -3336,11 +3352,11 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         if not include_runs:
             return
 
-        # Reserve source-review/verdict time. Each request also has its own
-        # strict timeout; a slow harness cannot spend the whole lease here.
+        # The caller has already settled policy and applies one total shadow
+        # timeout. Keep only the lease-completion reserve here.
         def budget_available() -> bool:
             remaining = self._lease_remaining(deadline)
-            return remaining is None or remaining > 180.0
+            return remaining is None or remaining > 30.0
 
         async def post(
             path: str, payload: dict[str, object], *, seed_pairs: int = 0

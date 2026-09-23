@@ -180,6 +180,125 @@ async def test_v13_runtime_observation_stops_at_failed_seed(
     assert receipts == ["health", "ordinary_model_run", "tool_selection_run"]
 
 
+async def test_v13_shadow_observation_runs_only_after_policy_decision(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path,
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(
+        make_config(v13_runtime_receipts_mode="shadow"),
+        _ok_run(),
+        tarball=tarball,
+    )
+    events: list[str] = []
+    original_evaluate = gate._policy.evaluate
+
+    async def evaluate(*args: Any, **kwargs: Any) -> ScreeningDecision:
+        events.append("policy")
+        return await original_evaluate(*args, **kwargs)
+
+    async def run_and_probe(*_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
+        return gate_module._StageResult(True, ""), gate_module._AuditRuntime(
+            harness_base="http://harness:8080",
+            gateway_response_token="secret-a",
+            oracle_answer="secret-b",
+            gateway_state_file="/state/model-called",
+            tool_route="route",
+            tool_key=b"key",
+        )
+
+    async def observe(*_args: Any, **_kwargs: Any) -> None:
+        events.append("shadow")
+
+    async def export_image(
+        image_id: str, *, image_ref: str, deadline: float | None
+    ) -> BuiltImageArtifact:
+        assert deadline is None
+        events.append("export")
+        path = tmp_path / "image.tar"
+        path.write_bytes(b"image")
+        return BuiltImageArtifact(
+            path=str(path),
+            sha256=hashlib.sha256(b"image").hexdigest(),
+            size_bytes=5,
+            image_id=image_id,
+            image_ref=image_ref,
+        )
+
+    async def publish_image(_image: BuiltImageArtifact) -> None:
+        events.append("publish")
+
+    gate._policy.evaluate = evaluate  # type: ignore[method-assign]
+    gate._run_and_probe = run_and_probe  # type: ignore[method-assign]
+    gate._run_v13_runtime_observations = observe  # type: ignore[method-assign]
+    gate._export_image = export_image  # type: ignore[method-assign]
+
+    async with gate._client:
+        decision = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=13,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            build_only=True,
+            policy_version=13,
+            publish_image=publish_image,
+            record_runtime_verification=lambda _code, _digest: asyncio.sleep(0),
+        )
+
+    assert decision.outcome == ScreeningOutcome.PASS
+    assert events == ["policy", "export", "publish", "shadow"]
+
+
+async def test_v13_shadow_timeout_does_not_change_decision(
+    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(
+        make_config(v13_runtime_receipts_mode="shadow"),
+        _ok_run(),
+        tarball=tarball,
+    )
+    events: list[str] = []
+
+    async def run_and_probe(*_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
+        return gate_module._StageResult(True, ""), gate_module._AuditRuntime(
+            harness_base="http://harness:8080",
+            gateway_response_token="secret-a",
+            oracle_answer="secret-b",
+            gateway_state_file="/state/model-called",
+            tool_route="route",
+            tool_key=b"key",
+        )
+
+    async def observe(*_args: Any, **_kwargs: Any) -> None:
+        events.append("started")
+        try:
+            await asyncio.sleep(1)
+        finally:
+            events.append("cancelled")
+
+    gate._run_and_probe = run_and_probe  # type: ignore[method-assign]
+    gate._run_v13_runtime_observations = observe  # type: ignore[method-assign]
+    monkeypatch.setattr(gate, "_lease_remaining", lambda _deadline: 30.01)
+    async with gate._client:
+        decision = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=13,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            build_only=True,
+            policy_version=13,
+            deadline=asyncio.get_running_loop().time() + 120,
+            record_runtime_verification=lambda _code, _digest: asyncio.sleep(0),
+        )
+
+    assert decision.outcome == ScreeningOutcome.PASS
+    assert events == ["started", "cancelled"]
+
+
 def test_runtime_receipt_rejects_unbound_evidence() -> None:
     with pytest.raises(ValueError, match="invalid image ID"):
         runtime_evidence_sha256(
