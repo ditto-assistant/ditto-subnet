@@ -596,6 +596,10 @@ async def record_screening_verification_receipt(
             or attempt.status != "running"
             or now >= deadline
             or agent.sha256.lower() != payload.artifact_sha256
+            or (
+                attempt.artifact_sha256 is not None
+                and attempt.artifact_sha256.lower() != payload.artifact_sha256
+            )
         ):
             raise HTTPException(
                 status_code=409, detail="verification receipt lease is stale"
@@ -6764,6 +6768,7 @@ async def submit_result(
             )
         if attempt is None and not idempotent:
             now = datetime.now(UTC)
+            # Compatibility-only terminal receipt; no claim pinned this artifact.
             attempt = ScreeningAttempt(
                 attempt_id=payload.attempt_id or UUID(int=secrets.randbits(128)),
                 agent_id=agent_id,

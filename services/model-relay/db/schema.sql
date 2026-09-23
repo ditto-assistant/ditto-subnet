@@ -854,6 +854,22 @@ CREATE FUNCTION public.reject_private_benchmark_dataset_mutation() RETURNS trigg
         $$;
 
 
+--
+-- Name: reject_screening_attempt_artifact_change(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_screening_attempt_artifact_change() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            IF NEW.artifact_sha256 IS DISTINCT FROM OLD.artifact_sha256 THEN
+                RAISE EXCEPTION 'screening attempt artifact SHA is immutable';
+            END IF;
+            RETURN NEW;
+        END;
+        $$;
+
+
 SET default_tablespace = '';
 
 SET default_table_access_method = heap;
@@ -4096,6 +4112,8 @@ CREATE TABLE public.screening_attempts (
     private_failure_detail text,
     private_failure_log_tail text,
     failure_captured_at timestamp with time zone,
+    artifact_sha256 text,
+    CONSTRAINT ck_screening_attempts_screening_attempts_artifact_sha_check CHECK (((artifact_sha256 IS NULL) OR (length(artifact_sha256) = 64))),
     CONSTRAINT ck_screening_attempts_screening_attempts_review_setting_b74a CHECK ((((review_settings_revision IS NULL) AND (review_settings_instance_id IS NULL) AND (review_settings_scope IS NULL) AND (review_settings_checksum IS NULL)) OR ((review_settings_revision > 0) AND (review_settings_instance_id IS NOT NULL) AND (review_settings_scope IS NOT NULL) AND (length(review_settings_checksum) = 64)))),
     CONSTRAINT screening_attempts_deadline_check CHECK ((deadline >= started_at)),
     CONSTRAINT screening_attempts_finished_check CHECK (((finished_at IS NULL) OR (finished_at >= started_at))),
@@ -8549,6 +8567,13 @@ CREATE TRIGGER private_benchmark_preparation_identity BEFORE DELETE OR UPDATE ON
 --
 
 CREATE TRIGGER scores_reject_benchmark_canary BEFORE INSERT OR UPDATE ON public.scores FOR EACH ROW EXECUTE FUNCTION public.reject_benchmark_canary_score();
+
+
+--
+-- Name: screening_attempts screening_attempt_artifact_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screening_attempt_artifact_immutable BEFORE UPDATE OF artifact_sha256 ON public.screening_attempts FOR EACH ROW EXECUTE FUNCTION public.reject_screening_attempt_artifact_change();
 
 
 --

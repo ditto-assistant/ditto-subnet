@@ -1056,6 +1056,41 @@ async def test_v13_receipt_refuses_completed_attempt(
     assert response.status_code == 409
 
 
+async def test_v13_receipt_refuses_mismatched_pinned_attempt_artifact(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    now = datetime.now(UTC)
+    attempt_id = uuid4()
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                artifact_sha256="cd" * 32,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=13,
+                status="running",
+                started_at=now - timedelta(minutes=1),
+                deadline=now + timedelta(minutes=9),
+            )
+        )
+    _install_db(app, session_maker)
+    response = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/verification-receipts",
+        json={
+            "attempt_id": str(attempt_id),
+            "artifact_sha256": _SHA256,
+            "policy_version": 13,
+            "check_code": "archive_sha",
+            "evidence_sha256": "ab" * 32,
+        },
+    )
+    assert response.status_code == 409
+
+
 async def test_v13_receipt_refuses_expired_running_attempt(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -9203,6 +9238,10 @@ class TestSubmitResult:
             assert agent.screening_reason == "Docker image build failed"
             assert agent.screening_policy_version == 0
             assert "SECRET_FROM_BUILD" not in agent.screening_reason
+            synthetic = await s.scalar(
+                select(ScreeningAttempt).where(ScreeningAttempt.agent_id == agent_id)
+            )
+            assert synthetic is not None and synthetic.artifact_sha256 is None
 
     async def test_rust_contract_rejection_persists_actionable_reason(
         self,

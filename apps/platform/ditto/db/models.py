@@ -530,6 +530,9 @@ class ScreeningAttempt(Base):
 
     attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
     agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    # Pinned when a new lease is created. Legacy attempts remain NULL and
+    # cannot establish the unchanged-artifact prerequisite for v13 finality.
+    artifact_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
@@ -571,6 +574,10 @@ class ScreeningAttempt(Base):
             ["agents.agent_id"],
             ondelete="CASCADE",
             name="screening_attempts_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "artifact_sha256 IS NULL OR length(artifact_sha256) = 64",
+            name="screening_attempts_artifact_sha_check",
         ),
         ForeignKeyConstraint(
             ["duplicate_of"],
