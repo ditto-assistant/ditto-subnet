@@ -21,6 +21,9 @@ sample size; that is an inconclusive statistical result, never CLEAR.
 At the minimum 20 pairs per class, the first three-class Holm-adjusted bound
 has a 63.99-point margin. An observed 15-point effect would require at least
 819 pairs per class to clear the 5-point lower-bound threshold with this method.
+That is at least 2,457 pairs across the three required classes, while the
+current sealed manifest allows at most 512 pairs total. The current profile
+and this conservative bound therefore cannot certify a 15-point effect.
 Before activation, the operator must predeclare and validate a higher-power
 exact paired-difference interval or a feasible larger sample. The published
 60 pairs are a minimum, not evidence that this conservative analysis has
