@@ -855,6 +855,32 @@ CREATE FUNCTION public.reject_private_benchmark_dataset_mutation() RETURNS trigg
 
 
 --
+-- Name: reject_review_deadline_activation_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_review_deadline_activation_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            RAISE EXCEPTION 'review deadline activations are append-only';
+        END;
+        $$;
+
+
+--
+-- Name: reject_review_window_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_review_window_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            RAISE EXCEPTION 'review windows are append-only';
+        END;
+        $$;
+
+
+--
 -- Name: reject_screening_attempt_artifact_change(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -865,6 +891,20 @@ CREATE FUNCTION public.reject_screening_attempt_artifact_change() RETURNS trigge
             IF NEW.artifact_sha256 IS DISTINCT FROM OLD.artifact_sha256 THEN
                 RAISE EXCEPTION 'screening attempt artifact SHA is immutable';
             END IF;
+            RETURN NEW;
+        END;
+        $$;
+
+
+--
+-- Name: stamp_review_deadline_activation_created_at(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.stamp_review_deadline_activation_created_at() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            NEW.created_at := clock_timestamp();
             RETURN NEW;
         END;
         $$;
@@ -4229,6 +4269,72 @@ CREATE TABLE public.screening_retry_overrides (
 
 
 --
+-- Name: screening_review_deadline_activations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_review_deadline_activations (
+    revision integer NOT NULL,
+    policy_version integer NOT NULL,
+    policy_digest text NOT NULL,
+    activate_at timestamp with time zone NOT NULL,
+    window_seconds integer NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_review_deadline_activations_srda_actor_check CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_screening_review_deadline_activations_srda_digest_check CHECK ((length(policy_digest) = 64)),
+    CONSTRAINT ck_screening_review_deadline_activations_srda_no_backdate_check CHECK ((activate_at >= created_at)),
+    CONSTRAINT ck_screening_review_deadline_activations_srda_policy_check CHECK ((policy_version >= 13)),
+    CONSTRAINT ck_screening_review_deadline_activations_srda_reason_check CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_screening_review_deadline_activations_srda_window_check CHECK (((window_seconds >= 3600) AND (window_seconds <= 604800)))
+);
+
+
+--
+-- Name: screening_review_deadline_activations_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.screening_review_deadline_activations_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: screening_review_deadline_activations_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.screening_review_deadline_activations_revision_seq OWNED BY public.screening_review_deadline_activations.revision;
+
+
+--
+-- Name: screening_review_windows; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_review_windows (
+    window_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    first_attempt_id uuid NOT NULL,
+    activation_revision integer NOT NULL,
+    artifact_sha256 text NOT NULL,
+    policy_version integer NOT NULL,
+    manifest_digest text NOT NULL,
+    start_event text NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    deadline_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_review_windows_srw_artifact_check CHECK ((length(artifact_sha256) = 64)),
+    CONSTRAINT ck_screening_review_windows_srw_deadline_check CHECK ((deadline_at > started_at)),
+    CONSTRAINT ck_screening_review_windows_srw_event_check CHECK ((length(TRIM(BOTH FROM start_event)) >= 3)),
+    CONSTRAINT ck_screening_review_windows_srw_manifest_check CHECK ((length(manifest_digest) = 64)),
+    CONSTRAINT ck_screening_review_windows_srw_policy_check CHECK ((policy_version >= 13))
+);
+
+
+--
 -- Name: screening_verification_receipts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5006,6 +5112,13 @@ ALTER TABLE ONLY public.screener_provider_settings_revisions ALTER COLUMN revisi
 --
 
 ALTER TABLE ONLY public.screener_review_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.screener_review_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: screening_review_deadline_activations revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_deadline_activations ALTER COLUMN revision SET DEFAULT nextval('public.screening_review_deadline_activations_revision_seq'::regclass);
 
 
 --
@@ -6629,6 +6742,22 @@ ALTER TABLE ONLY public.screener_shadow_reviews
 
 
 --
+-- Name: screening_review_deadline_activations pk_screening_review_deadline_activations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_deadline_activations
+    ADD CONSTRAINT pk_screening_review_deadline_activations PRIMARY KEY (revision);
+
+
+--
+-- Name: screening_review_windows pk_screening_review_windows; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_windows
+    ADD CONSTRAINT pk_screening_review_windows PRIMARY KEY (window_id);
+
+
+--
 -- Name: screening_verification_receipts pk_screening_verification_receipts; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6994,6 +7123,14 @@ ALTER TABLE ONLY public.screening_retry_overrides
 
 ALTER TABLE ONLY public.screening_retry_overrides
     ADD CONSTRAINT screening_retry_overrides_pkey PRIMARY KEY (override_id);
+
+
+--
+-- Name: screening_review_windows srw_agent_policy_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_windows
+    ADD CONSTRAINT srw_agent_policy_key UNIQUE (agent_id, policy_version);
 
 
 --
@@ -8108,6 +8245,13 @@ CREATE INDEX screening_retry_overrides_agent_created_idx ON public.screening_ret
 
 
 --
+-- Name: srda_policy_activate_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX srda_policy_activate_idx ON public.screening_review_deadline_activations USING btree (policy_version, activate_at, revision);
+
+
+--
 -- Name: submission_image_builds_node_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8560,6 +8704,27 @@ CREATE TRIGGER private_benchmark_dataset_immutable BEFORE DELETE OR UPDATE ON pu
 --
 
 CREATE TRIGGER private_benchmark_preparation_identity BEFORE DELETE OR UPDATE ON public.private_benchmark_preparations FOR EACH ROW EXECUTE FUNCTION public.protect_private_benchmark_preparation_identity();
+
+
+--
+-- Name: screening_review_deadline_activations review_deadline_activation_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER review_deadline_activation_immutable BEFORE DELETE OR UPDATE ON public.screening_review_deadline_activations FOR EACH ROW EXECUTE FUNCTION public.reject_review_deadline_activation_mutation();
+
+
+--
+-- Name: screening_review_deadline_activations review_deadline_activation_server_time; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER review_deadline_activation_server_time BEFORE INSERT ON public.screening_review_deadline_activations FOR EACH ROW EXECUTE FUNCTION public.stamp_review_deadline_activation_created_at();
+
+
+--
+-- Name: screening_review_windows review_window_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER review_window_immutable BEFORE DELETE OR UPDATE ON public.screening_review_windows FOR EACH ROW EXECUTE FUNCTION public.reject_review_window_mutation();
 
 
 --
@@ -9292,6 +9457,30 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 ALTER TABLE ONLY public.screener_fanout_shadow_reviews
     ADD CONSTRAINT fk_screener_fanout_shadow_reviews_settings_revision_scr_a1a2 FOREIGN KEY (settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: screening_review_windows fk_screening_review_windows_activation_revision_screeni_d781; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_windows
+    ADD CONSTRAINT fk_screening_review_windows_activation_revision_screeni_d781 FOREIGN KEY (activation_revision) REFERENCES public.screening_review_deadline_activations(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: screening_review_windows fk_screening_review_windows_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_windows
+    ADD CONSTRAINT fk_screening_review_windows_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_review_windows fk_screening_review_windows_first_attempt_id_screening_attempts; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_windows
+    ADD CONSTRAINT fk_screening_review_windows_first_attempt_id_screening_attempts FOREIGN KEY (first_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
 
 
 --

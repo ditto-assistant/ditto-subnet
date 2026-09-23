@@ -7957,6 +7957,91 @@ class QueuePolicySettingsRevision(Base):
     )
 
 
+class ScreeningReviewDeadlineActivation(Base):
+    """Immutable schedule for a v13 verification window, separate from policy text.
+
+    An exact submission window may cite only an activation recorded and active
+    before its published start event. No writer or terminal decision consumes
+    this table yet; activation is a separate reviewed step.
+    """
+
+    __tablename__ = "screening_review_deadline_activations"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    policy_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    activate_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("policy_version >= 13", name="srda_policy_check"),
+        CheckConstraint("length(policy_digest) = 64", name="srda_digest_check"),
+        CheckConstraint(
+            "window_seconds BETWEEN 3600 AND 604800", name="srda_window_check"
+        ),
+        CheckConstraint("activate_at >= created_at", name="srda_no_backdate_check"),
+        CheckConstraint("length(trim(reason)) >= 8", name="srda_reason_check"),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120", name="srda_actor_check"
+        ),
+        Index("srda_policy_activate_idx", "policy_version", "activate_at", "revision"),
+    )
+
+
+class ScreeningReviewWindow(Base):
+    """Explicit immutable start/deadline for one exact submission and policy.
+
+    This table has no writer yet. A later reviewed writer must bind the start
+    event named by the published policy and a prior activation in the same
+    first-claim transaction. A finalizer may not infer a window from age.
+    """
+
+    __tablename__ = "screening_review_windows"
+
+    window_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    first_attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    activation_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    start_event: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    deadline_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["first_attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["activation_revision"],
+            ["screening_review_deadline_activations.revision"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("agent_id", "policy_version", name="srw_agent_policy_key"),
+        CheckConstraint("length(artifact_sha256) = 64", name="srw_artifact_check"),
+        CheckConstraint("length(manifest_digest) = 64", name="srw_manifest_check"),
+        CheckConstraint("policy_version >= 13", name="srw_policy_check"),
+        CheckConstraint("length(trim(start_event)) >= 3", name="srw_event_check"),
+        CheckConstraint("deadline_at > started_at", name="srw_deadline_check"),
+    )
+
+
 class ScreenerPolicyActivation(Base):
     """Append-only schedule for raising the required screening-policy version.
 
