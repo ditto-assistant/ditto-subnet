@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
@@ -236,14 +237,17 @@ def fixture() -> tuple[Registry, Store]:
     return Registry(group, target, control, approval), Store(now + timedelta(minutes=4))
 
 
-@pytest.mark.asyncio
-async def test_group_issues_one_shared_two_seed_bundle_once() -> None:
+def test_group_issues_one_shared_two_seed_bundle_once() -> None:
     registry, store = fixture()
-    first = await issue_v13_hidden_group_seeds(
-        group_id=registry.group.group_id, registry=registry, store=store
+    first = asyncio.run(
+        issue_v13_hidden_group_seeds(
+            group_id=registry.group.group_id, registry=registry, store=store
+        )
     )
-    second = await issue_v13_hidden_group_seeds(
-        group_id=registry.group.group_id, registry=registry, store=store
+    second = asyncio.run(
+        issue_v13_hidden_group_seeds(
+            group_id=registry.group.group_id, registry=registry, store=store
+        )
     )
     assert first == second
     assert store.create_calls == 1
@@ -256,7 +260,6 @@ async def test_group_issues_one_shared_two_seed_bundle_once() -> None:
     assert len(sealed["seeds_hex"]) == 2
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "fault",
     [
@@ -272,7 +275,7 @@ async def test_group_issues_one_shared_two_seed_bundle_once() -> None:
         "profile",
     ],
 )
-async def test_prerequisite_fault_never_calls_seed_store(fault: str) -> None:
+def test_prerequisite_fault_never_calls_seed_store(fault: str) -> None:
     registry, store = fixture()
     if fault == "approval_receipt":
         registry.approval = registry.approval.model_copy(
@@ -311,43 +314,48 @@ async def test_prerequisite_fault_never_calls_seed_store(fault: str) -> None:
     elif fault == "profile":
         registry.group = registry.group.model_copy(update={"profile_sha256": "0" * 64})
     with pytest.raises(V13SeedIssuanceUnavailable):
-        await issue_v13_hidden_group_seeds(
-            group_id=registry.group.group_id, registry=registry, store=store
+        asyncio.run(
+            issue_v13_hidden_group_seeds(
+                group_id=registry.group.group_id, registry=registry, store=store
+            )
         )
     assert store.create_calls == 0
 
 
-@pytest.mark.asyncio
-async def test_existing_seed_bundle_cannot_be_spliced_into_another_group() -> None:
+def test_existing_seed_bundle_cannot_be_spliced_into_another_group() -> None:
     first_registry, store = fixture()
-    await issue_v13_hidden_group_seeds(
-        group_id=first_registry.group.group_id, registry=first_registry, store=store
+    asyncio.run(
+        issue_v13_hidden_group_seeds(
+            group_id=first_registry.group.group_id, registry=first_registry, store=store
+        )
     )
     second_registry, _ = fixture()
     store.records[second_registry.group.group_id] = store.records[
         first_registry.group.group_id
     ]
     with pytest.raises(V13SeedIssuanceUnavailable):
-        await issue_v13_hidden_group_seeds(
-            group_id=second_registry.group.group_id,
-            registry=second_registry,
-            store=store,
+        asyncio.run(
+            issue_v13_hidden_group_seeds(
+                group_id=second_registry.group.group_id,
+                registry=second_registry,
+                store=store,
+            )
         )
     assert store.create_calls == 1
 
 
-@pytest.mark.asyncio
-async def test_sealed_store_must_commit_after_group_start() -> None:
+def test_sealed_store_must_commit_after_group_start() -> None:
     registry, store = fixture()
     store.committed_at = registry.group.started_at
     with pytest.raises(V13SeedIssuanceUnavailable):
-        await issue_v13_hidden_group_seeds(
-            group_id=registry.group.group_id, registry=registry, store=store
+        asyncio.run(
+            issue_v13_hidden_group_seeds(
+                group_id=registry.group.group_id, registry=registry, store=store
+            )
         )
 
 
-@pytest.mark.asyncio
-async def test_registry_failure_does_not_generate_seed(monkeypatch) -> None:
+def test_registry_failure_does_not_generate_seed(monkeypatch) -> None:
     registry, store = fixture()
 
     async def fail(_group_id: UUID) -> SeedGenerationGroup:
@@ -355,32 +363,35 @@ async def test_registry_failure_does_not_generate_seed(monkeypatch) -> None:
 
     monkeypatch.setattr(registry, "get_verified_group", fail)
     with pytest.raises(V13SeedIssuanceUnavailable) as raised:
-        await issue_v13_hidden_group_seeds(
-            group_id=registry.group.group_id, registry=registry, store=store
+        asyncio.run(
+            issue_v13_hidden_group_seeds(
+                group_id=registry.group.group_id, registry=registry, store=store
+            )
         )
     assert "secret" not in str(raised.value)
     assert store.create_calls == 0
 
 
-@pytest.mark.asyncio
-async def test_matched_packages_require_issued_seeds_and_same_ordered_inventory() -> (
-    None
-):
+def test_matched_packages_require_issued_seeds_and_same_ordered_inventory() -> None:
     registry, seed_store = fixture()
-    issued = await issue_v13_hidden_group_seeds(
-        group_id=registry.group.group_id, registry=registry, store=seed_store
+    issued = asyncio.run(
+        issue_v13_hidden_group_seeds(
+            group_id=registry.group.group_id, registry=registry, store=seed_store
+        )
     )
     package_store = PackageStore()
     register_matched_packages(registry, package_store, issued.seed_commitments)
-    matched = await verify_v13_issued_matched_inventory(
-        issuance=issued,
-        target=registry.roles["target"],
-        control=registry.roles["known_benign"],
-        seed_store=seed_store,
-        package_store=package_store,
-        packages=registry,
-        controls=registry,
-        generations=registry,
+    matched = asyncio.run(
+        verify_v13_issued_matched_inventory(
+            issuance=issued,
+            target=registry.roles["target"],
+            control=registry.roles["known_benign"],
+            seed_store=seed_store,
+            package_store=package_store,
+            packages=registry,
+            controls=registry,
+            generations=registry,
+        )
     )
     assert matched.group_id == issued.group_id
     assert matched.pair_count == 60
@@ -390,13 +401,15 @@ async def test_matched_packages_require_issued_seeds_and_same_ordered_inventory(
     other = PackageStore()
     register_matched_packages(registry, other, ("1" * 64, "2" * 64))
     with pytest.raises(V13SeedIssuanceUnavailable):
-        await verify_v13_issued_matched_inventory(
-            issuance=issued,
-            target=registry.roles["target"],
-            control=registry.roles["known_benign"],
-            seed_store=seed_store,
-            package_store=other,
-            packages=registry,
-            controls=registry,
-            generations=registry,
+        asyncio.run(
+            verify_v13_issued_matched_inventory(
+                issuance=issued,
+                target=registry.roles["target"],
+                control=registry.roles["known_benign"],
+                seed_store=seed_store,
+                package_store=other,
+                packages=registry,
+                controls=registry,
+                generations=registry,
+            )
         )
