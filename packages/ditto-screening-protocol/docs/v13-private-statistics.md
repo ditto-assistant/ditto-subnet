@@ -18,6 +18,13 @@ above 5 points, positive effect in each seed, and no more than 5 points of
 clean-control degradation in any seed or class aggregate. These conservative
 bounds can return no finding even for a real moderate effect at the minimum
 sample size; that is an inconclusive statistical result, never CLEAR.
+At the minimum 20 pairs per class, the first three-class Holm-adjusted bound
+has a 63.99-point margin. An observed 15-point effect would require at least
+819 pairs per class to clear the 5-point lower-bound threshold with this method.
+Before activation, the operator must predeclare and validate a higher-power
+exact paired-difference interval or a feasible larger sample. The published
+60 pairs are a minimum, not evidence that this conservative analysis has
+adequate power at a 15-point effect.
 
 The current function accepts aggregate inputs and does **not** authenticate
 their origin or prove the two images received the same hidden tasks. The next
