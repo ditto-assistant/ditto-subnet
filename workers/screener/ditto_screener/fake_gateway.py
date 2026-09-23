@@ -485,6 +485,7 @@ class FakeModelGateway:
                 and method == "POST"
                 and path in _EMBED_ROUTES
             ):
+                self._observe_semantic_context(body)
                 vector = [0.0] * _EMBED_DIMENSIONS
                 vector[0] = 1.0
                 payload = {

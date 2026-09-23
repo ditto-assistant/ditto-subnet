@@ -275,6 +275,10 @@ async def test_semantic_memory_gateway_reveals_only_values_supplied_by_harness(
                     ],
                 },
             )
+            leaked_embedding = await client.post(
+                f"{url}/api/embed",
+                json={"model": "acme/embed", "input": "cobalt-34"},
+            )
             leaked_tool = await client.post(
                 f"{tool_url}/v1/tools/{route}/tool",
                 params={
@@ -292,11 +296,12 @@ async def test_semantic_memory_gateway_reveals_only_values_supplied_by_harness(
     assert absent.json()["choices"][0]["message"]["content"] == gateway.response_text
     assert present.json()["choices"][0]["message"]["content"] == "cobalt-34"
     assert leaked_context.status_code == 200
+    assert leaked_embedding.status_code == 200
     assert leaked_tool.status_code == 200
     observed_events = [
         json.loads(line)["event"] for line in events.read_text().splitlines()
     ]
-    assert observed_events == ["cross_user_context"] * 3
+    assert observed_events == ["cross_user_context"] * 4
     assert (
         judge_memory_run(
             {"answer": "amber-12"},
