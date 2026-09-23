@@ -5392,6 +5392,91 @@ class TestClaim:
             assert retained.court_completion_receipt["observed_upstream"] == "together"
             assert retained.court_completion_receipt["first_tool_call_ms"] == 2000
 
+    async def test_completed_court_refusal_retains_signed_telemetry_without_release(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        settings = ScreenerReviewSettings(mode="enforce", adjudicator_mode="enforce")
+        checksum = _review_settings_checksum(settings)
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=checksum,
+                reason="record completed court refusal",
+                actor="test",
+            )
+            session.add(revision)
+            await session.flush()
+            revision_id = revision.revision
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claimed = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+        adjudication = SourceReviewAdjudication(
+            decision="escalate",
+            reason="Mandatory evidence was incomplete; held for operator review",
+            escalation_code="adjudicator-evidence-incomplete",
+            model="z-ai/glm-5.3-flash",
+            prompt_revision="adjudicator-v2-policy-v10",
+            completion_receipt=AdjudicationCompletionReceipt(
+                elapsed_ms=4200,
+                first_tool_call_ms=1900,
+                first_tool_observation="stream_delta",
+                observed_model="z-ai/glm-5.3-flash",
+                gateway_provider="ditto",
+                observed_upstream="together",
+                request_count=1,
+                final_request_prompt_bytes=8000,
+                final_request_wire_bytes=700,
+                final_request_event_count=4,
+            ),
+        )
+        assert adjudication.completion_receipt is not None
+        signature = _sign(
+            completion_receipt_signing_message(
+                screener_hotkey=_SCREENER_HOTKEY,
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                artifact_sha256=_SHA256,
+                adjudication_digest=adjudication.canonical_digest(),
+                receipt=adjudication.completion_receipt,
+            )
+        )
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            attempt_id=attempt_id,
+            outcome="quarantine",
+            manifest_digest="12" * 32,
+            reason_code="source-review-adjudicated",
+            review_settings_revision=revision_id,
+            review_settings_instance_id="ditto-screener-prod",
+            review_settings_scope="*",
+            review_settings_checksum=checksum,
+            adjudication_digest=adjudication.canonical_digest(),
+            adjudication=adjudication.model_dump(mode="json"),
+            completion_receipt_signature=signature,
+        )
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == AgentStatus.QUARANTINED
+        async with session_maker() as session:
+            retained = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt_id
+                )
+            )
+            assert retained is not None and retained.status == "active"
+            assert retained.court_completion_receipt is not None
+            assert retained.court_completion_receipt["observed_upstream"] == "together"
+
     async def test_claim_time_review_settings_survive_global_revision_change(
         self,
         app: FastAPI,

@@ -1382,8 +1382,9 @@ class SourceReviewAdjudication(BaseModel):
     so a platform that has not yet learned the field still verifies the signed
     verdict."""
     completion_receipt: AdjudicationCompletionReceipt | None = None
-    """Optional successful-run telemetry. Excluded from the canonical verdict
-    digest so older workers and Platform releases retain identical decisions."""
+    """Optional telemetry for a completed model call, including a host-refused
+    verdict. It does not establish completed policy verification. Excluded from
+    the canonical verdict digest for rolling-upgrade compatibility."""
 
     @model_validator(mode="after")
     def validate_decision_basis(self) -> SourceReviewAdjudication:
@@ -1414,8 +1415,24 @@ class SourceReviewAdjudication(BaseModel):
             raise ValueError("an escalation must name why the decision was refused")
         if self.run_diagnostic is not None and self.decision != "escalate":
             raise ValueError("adjudication run diagnostic requires an escalation")
+        if self.run_diagnostic is not None and self.completion_receipt is not None:
+            raise ValueError("adjudication failure and completion telemetry conflict")
         if self.completion_receipt is not None and self.decision == "escalate":
-            raise ValueError("adjudication completion receipt requires clear or reject")
+            # These refusals occur only after a complete L4 tool-call result
+            # reaches the host verifier. A provider/transport failure or an
+            # early host refusal must not be described as a completed call.
+            model_completed_refusals = {
+                "adjudicator-evidence-incomplete",
+                "uncited-decision",
+                "cited-unknown-member",
+                "cited-unread-source",
+                "inadmissible-citations",
+                "verdict-contract-failed",
+            }
+            if self.escalation_code not in model_completed_refusals:
+                raise ValueError(
+                    "adjudication completion receipt requires a completed model call"
+                )
         return self
 
     def canonical_digest(self) -> str:

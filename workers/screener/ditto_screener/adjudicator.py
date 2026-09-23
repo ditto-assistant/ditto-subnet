@@ -1296,8 +1296,6 @@ class SourceReviewAdjudicator:
                 policy_version=policy_version,
                 unreviewed_concerns=unreviewed_concerns,
             )
-            if result.decision == "escalate":
-                return result
             receipt = self._completion_receipt(trace)
             return (
                 result.model_copy(update={"completion_receipt": receipt})

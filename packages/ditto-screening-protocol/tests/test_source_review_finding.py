@@ -884,9 +884,19 @@ def test_completion_receipt_is_text_free_and_does_not_change_signed_verdict() ->
         adjudication_digest=measured.canonical_digest(),
         receipt=receipt.model_copy(update={"elapsed_ms": 4301}),
     )
-    with pytest.raises(
-        ValidationError, match="completion receipt requires clear or reject"
-    ):
+    refused = SourceReviewAdjudication(
+        decision="escalate",
+        reason="Host could not verify every retained source lead",
+        escalation_code="adjudicator-evidence-incomplete",
+        model="z-ai/glm-5.3-flash",
+        prompt_revision="adjudicator-v7-policy-v13",
+        completion_receipt=receipt,
+    )
+    assert refused.completion_receipt == receipt
+    assert refused.canonical_digest() == refused.model_copy(
+        update={"completion_receipt": None}
+    ).canonical_digest()
+    with pytest.raises(ValidationError, match="requires a completed model call"):
         SourceReviewAdjudication(
             decision="escalate",
             reason="Court failed",
