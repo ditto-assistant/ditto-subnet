@@ -352,8 +352,9 @@ describe('Backroom MCP tools', () => {
     // One bounded L4 cohort read adds a compact schema and catalog line.
     // The two V13 clock tools and bounded, default-off replay control bring
     // the measured catalog just above 142 KB. The no-input infra-retry read
-    // adds one more bounded catalog entry; measured 142,714 bytes together.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(142_900)
+    // adds one more bounded catalog entry; measured 143,145 bytes together
+    // after #2180, bounded with ~1 KB headroom like the entries above.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(144_200)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
