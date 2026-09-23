@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -356,10 +356,12 @@ async def get_generation_group(
 def _package_view(
     group: V13PrivateGenerationGroup, row: V13GroupPackageRegistration
 ) -> V13GroupPackageView:
+    if row.role not in {"target", "known_benign"}:
+        raise HTTPException(status_code=503, detail="package role invalid")
     target = row.role == "target"
     return V13GroupPackageView(
         group_id=group.group_id,
-        role=row.role,
+        role=cast(Literal["target", "known_benign"], row.role),
         agent_id=group.target_agent_id if target else group.control_agent_id,
         attempt_id=group.target_attempt_id if target else group.control_attempt_id,
         artifact_sha256=(
