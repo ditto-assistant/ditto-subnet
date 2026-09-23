@@ -1940,8 +1940,10 @@ export interface paths {
          * List Screening Adjudication Attempts
          * @description Compare bounded, persisted L4 outcomes without source or model text.
          *
-         *     Success timing and upstream were not historically recorded. A null value
-         *     means no receipt, not a zero-latency or provider-independent completion.
+         *     Success timing and upstream were not historically recorded. New success
+         *     receipts expose final-request bytes/events and first tool-call signal;
+         *     failures retain aggregate request trace counts. A null means no receipt,
+         *     not a zero-latency or provider-independent completion.
          *     Pinned settings describe configuration, not necessarily the served model.
          */
         get: operations["list_screening_adjudication_attempts_api_v1_admin_screening_adjudication_attempts_get"];
@@ -6840,6 +6842,43 @@ export interface components {
          */
         AdjudicationClearClause: "retrieval_ranking_not_family_engine" | "content_complete_memoization_cache" | "standard_broker_inference_client" | "unreported_tool_calls_executed" | "local_practice_harness_stub" | "intent_routing_or_precursor_pass" | "bench_version_branching_alone" | "single_success_duplicate_suppression" | "plain_answer_normalization" | "prior_pattern_removed" | "model_authors_graded_slot" | "no_proven_breach_before_deadline";
         /**
+         * AdjudicationCompletionReceipt
+         * @description Text-free measurements from a completed L4 tool-call run.
+         *
+         *     This is telemetry, not evidence for the clear/reject decision. The model
+         *     and upstream are observed response fields, so they stay null when a gateway
+         *     omits them; gateway_provider names the configured route actually called.
+         *     first_tool_call_ms is elapsed from the court run start to the first
+         *     substantive tool-call signal in the final model request. For buffered
+         *     responses this signal is only observable at complete-body receipt.
+         */
+        AdjudicationCompletionReceipt: {
+            /** Completion Tokens */
+            completion_tokens?: number | null;
+            /** Elapsed Ms */
+            elapsed_ms: number;
+            /** Final Request Event Count */
+            final_request_event_count?: number | null;
+            /** Final Request Prompt Bytes */
+            final_request_prompt_bytes?: number | null;
+            /** Final Request Wire Bytes */
+            final_request_wire_bytes?: number | null;
+            /** First Tool Call Ms */
+            first_tool_call_ms?: number | null;
+            /** First Tool Observation */
+            first_tool_observation?: ("stream_delta" | "complete_body") | null;
+            /** Gateway Provider */
+            gateway_provider?: string | null;
+            /** Observed Model */
+            observed_model?: string | null;
+            /** Observed Upstream */
+            observed_upstream?: string | null;
+            /** Prompt Tokens */
+            prompt_tokens?: number | null;
+            /** Request Count */
+            request_count: number;
+        };
+        /**
          * AdjudicationRequestAttemptDiagnostic
          * @description Bounded, text-free timing for one automated-court model request.
          */
@@ -6995,6 +7034,8 @@ export interface components {
             finished_at: string | null;
             /** First Tool Call Ms */
             first_tool_call_ms?: number | null;
+            /** First Tool Observation */
+            first_tool_observation?: ("stream_delta" | "complete_body") | null;
             /** Manifest Digest */
             manifest_digest: string;
             /** Observed Model */
@@ -10351,6 +10392,7 @@ export interface components {
              * @enum {string}
              */
             attempt_status: "running" | "passed" | "rejected" | "failed" | "expired" | "quarantined";
+            court_completion_receipt?: components["schemas"]["AdjudicationCompletionReceipt"] | null;
             court_diagnostic?: components["schemas"]["AdjudicationRunDiagnostic"] | null;
             /**
              * Deadline
@@ -27782,6 +27824,7 @@ export interface components {
             /** Citations */
             citations?: components["schemas"]["SourceReviewCitation"][];
             clear_clause?: components["schemas"]["AdjudicationClearClause"] | null;
+            completion_receipt?: components["schemas"]["AdjudicationCompletionReceipt"] | null;
             /**
              * Decision
              * @enum {string}

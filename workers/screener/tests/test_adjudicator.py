@@ -790,6 +790,11 @@ async def test_stream_function_name_repeats_and_fragments_preserve_verdict(
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
     assert result.decision == "clear"
     assert result.escalation_code is None
+    assert result.completion_receipt is not None
+    assert result.completion_receipt.first_tool_observation == "stream_delta"
+    assert result.completion_receipt.first_tool_call_ms is not None
+    assert result.completion_receipt.final_request_event_count == 2
+    assert result.completion_receipt.observed_upstream is None
 
 
 @pytest.mark.parametrize("streamed", [False, True])
@@ -1455,6 +1460,9 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
         return httpx.Response(
             200,
             json={
+                "model": "served/model-v1",
+                "provider": "Together",
+                "usage": {"prompt_tokens": 200, "completion_tokens": 40},
                 "choices": [
                     {
                         "message": {
@@ -1475,7 +1483,7 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
                             ],
                         }
                     }
-                ]
+                ],
             },
         )
 
@@ -1498,6 +1506,14 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
 
     assert result.decision == "clear"
     assert result.citations[0].path == "src/main.rs"
+    assert result.completion_receipt is not None
+    assert result.completion_receipt.first_tool_observation == "complete_body"
+    assert result.completion_receipt.first_tool_call_ms is not None
+    assert result.completion_receipt.observed_model == "served/model-v1"
+    assert result.completion_receipt.observed_upstream == "together"
+    assert result.completion_receipt.gateway_provider == "openrouter"
+    assert result.completion_receipt.prompt_tokens == 200
+    assert result.completion_receipt.completion_tokens == 40
     assert len(requests) == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
         "submit_adjudication",

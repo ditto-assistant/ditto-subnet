@@ -5801,6 +5801,16 @@ def _court_diagnostic_json(payload: ScreenResultRequest) -> dict[str, object] | 
     return adjudication.run_diagnostic.model_dump(mode="json")
 
 
+def _court_completion_receipt_json(
+    payload: ScreenResultRequest,
+) -> dict[str, object] | None:
+    """Copy only the typed, text-free completed-court measurements."""
+    adjudication = payload.adjudication
+    if adjudication is None or adjudication.completion_receipt is None:
+        return None
+    return adjudication.completion_receipt.model_dump(mode="json")
+
+
 async def _queue_fanout_shadow_review(
     session: AsyncSession,
     *,
@@ -5912,12 +5922,14 @@ async def _backfill_quarantine_payloads(
         else None
     )
     court_json = _court_diagnostic_json(payload)
+    completion_json = _court_completion_receipt_json(payload)
     if (
         evidence_json is None
         and finding_json is None
         and audit_json is None
         and notes_json is None
         and court_json is None
+        and completion_json is None
     ):
         return
     quarantine = await session.scalar(
@@ -5957,6 +5969,13 @@ async def _backfill_quarantine_payloads(
         quarantine.finding = finding_json
     if quarantine.court_diagnostic is None and court_json is not None:
         quarantine.court_diagnostic = court_json
+    if completion_json is not None:
+        if quarantine.court_completion_receipt is None:
+            quarantine.court_completion_receipt = completion_json
+        elif quarantine.court_completion_receipt != completion_json:
+            raise AgentNotScreenableError(
+                "re-reported court completion telemetry conflicts with retained receipt"
+            )
 
 
 def _backfill_private_failure_feedback(
@@ -6890,6 +6909,9 @@ async def submit_result(
                         evidence=evidence_json,
                         finding=finding_json,
                         court_diagnostic=_court_diagnostic_json(payload),
+                        court_completion_receipt=_court_completion_receipt_json(
+                            payload
+                        ),
                         status="resolved" if evidence_deferred else "active",
                         resolved_at=resolved_at,
                         resolved_by=(

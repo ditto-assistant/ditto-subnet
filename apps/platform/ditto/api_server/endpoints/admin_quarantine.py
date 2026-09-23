@@ -194,6 +194,7 @@ from ditto.db.queries.payments import (
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol import (
+    AdjudicationCompletionReceipt,
     AdjudicationRunDiagnostic,
     SourceReviewNote,
     source_review_notes_digest,
@@ -2275,6 +2276,7 @@ async def get_screening_failure_diagnostic(
         private_failure_detail=attempt.private_failure_detail,
         private_failure_log_tail=attempt.private_failure_log_tail,
         court_diagnostic=await _court_diagnostic(session, attempt_id),
+        court_completion_receipt=await _court_completion_receipt(session, attempt_id),
     )
 
 
@@ -2307,8 +2309,10 @@ async def list_screening_adjudication_attempts(
 ) -> AdminAdjudicationAttemptTelemetryList:
     """Compare bounded, persisted L4 outcomes without source or model text.
 
-    Success timing and upstream were not historically recorded. A null value
-    means no receipt, not a zero-latency or provider-independent completion.
+    Success timing and upstream were not historically recorded. New success
+    receipts expose final-request bytes/events and first tool-call signal;
+    failures retain aggregate request trace counts. A null means no receipt,
+    not a zero-latency or provider-independent completion.
     Pinned settings describe configuration, not necessarily the served model.
     """
     cutoff = datetime.now(UTC) - timedelta(hours=lookback_hours)
@@ -2367,6 +2371,16 @@ async def list_screening_adjudication_attempts(
                 logger.warning(
                     "invalid court telemetry attempt_id=%s", attempt.attempt_id
                 )
+        completion: AdjudicationCompletionReceipt | None = None
+        if quarantine.court_completion_receipt is not None:
+            try:
+                completion = AdjudicationCompletionReceipt.model_validate(
+                    quarantine.court_completion_receipt
+                )
+            except ValidationError:
+                logger.warning(
+                    "invalid completion telemetry attempt_id=%s", attempt.attempt_id
+                )
         requests = diagnostic.request_attempts if diagnostic is not None else None
         items.append(
             AdminAdjudicationAttemptTelemetry(
@@ -2391,36 +2405,102 @@ async def list_screening_adjudication_attempts(
                     if settings
                     else None
                 ),
-                observed_model=diagnostic.model if diagnostic else None,
-                observed_provider=diagnostic.provider if diagnostic else None,
-                observed_upstream=diagnostic.upstream if diagnostic else None,
+                observed_model=(
+                    completion.observed_model
+                    if completion
+                    else diagnostic.model
+                    if diagnostic
+                    else None
+                ),
+                observed_provider=(
+                    completion.gateway_provider
+                    if completion
+                    else diagnostic.provider
+                    if diagnostic
+                    else None
+                ),
+                observed_upstream=(
+                    completion.observed_upstream
+                    if completion
+                    else diagnostic.upstream
+                    if diagnostic
+                    else None
+                ),
                 failure_code=diagnostic.failure_code if diagnostic else None,
-                elapsed_ms=diagnostic.elapsed_ms if diagnostic else None,
-                request_count=diagnostic.request_count if diagnostic else None,
+                elapsed_ms=completion.elapsed_ms
+                if completion
+                else diagnostic.elapsed_ms
+                if diagnostic
+                else None,
+                first_tool_call_ms=completion.first_tool_call_ms
+                if completion
+                else None,
+                first_tool_observation=completion.first_tool_observation
+                if completion
+                else None,
+                request_count=completion.request_count
+                if completion
+                else diagnostic.request_count
+                if diagnostic
+                else None,
                 request_prompt_bytes=(
-                    sum(request.prompt_bytes for request in requests)
+                    completion.final_request_prompt_bytes
+                    if completion
+                    else sum(request.prompt_bytes for request in requests)
                     if requests is not None
                     else None
                 ),
                 request_wire_bytes=(
-                    sum(request.wire_bytes for request in requests)
+                    completion.final_request_wire_bytes
+                    if completion
+                    else sum(request.wire_bytes for request in requests)
                     if requests is not None
                     else None
                 ),
                 request_event_count=(
-                    sum(request.event_count for request in requests)
+                    completion.final_request_event_count
+                    if completion
+                    else sum(request.event_count for request in requests)
                     if requests is not None
                     else None
                 ),
-                prompt_tokens=diagnostic.prompt_tokens if diagnostic else None,
+                prompt_tokens=completion.prompt_tokens
+                if completion
+                else diagnostic.prompt_tokens
+                if diagnostic
+                else None,
                 completion_tokens=(
-                    diagnostic.completion_tokens if diagnostic else None
+                    completion.completion_tokens
+                    if completion
+                    else diagnostic.completion_tokens
+                    if diagnostic
+                    else None
                 ),
             )
         )
     return AdminAdjudicationAttemptTelemetryList(
         items=items, limit=limit, offset=offset, lookback_hours=lookback_hours
     )
+
+
+async def _court_completion_receipt(
+    session: AsyncSession, attempt_id: UUID
+) -> AdjudicationCompletionReceipt | None:
+    """Load typed completion telemetry without promoting it into a verdict."""
+    quarantine = await session.scalar(
+        select(ScreeningQuarantine).where(ScreeningQuarantine.attempt_id == attempt_id)
+    )
+    if quarantine is None or quarantine.court_completion_receipt is None:
+        return None
+    try:
+        return AdjudicationCompletionReceipt.model_validate(
+            quarantine.court_completion_receipt
+        )
+    except ValidationError:
+        logger.warning(
+            "screening completion receipt rejected attempt_id=%s", attempt_id
+        )
+        return None
 
 
 @router.post(

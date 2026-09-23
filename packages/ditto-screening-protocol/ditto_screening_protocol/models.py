@@ -1305,6 +1305,45 @@ class AdjudicationRunDiagnostic(BaseModel):
     """Last 32 requests, oldest first; count includes any earlier requests."""
 
 
+class AdjudicationCompletionReceipt(BaseModel):
+    """Text-free measurements from a completed L4 tool-call run.
+
+    This is telemetry, not evidence for the clear/reject decision. The model
+    and upstream are observed response fields, so they stay null when a gateway
+    omits them; gateway_provider names the configured route actually called.
+    first_tool_call_ms is elapsed from the court run start to the first
+    substantive tool-call signal in the final model request. For buffered
+    responses this signal is only observable at complete-body receipt.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    elapsed_ms: Annotated[int, Field(ge=0, le=3_600_000)]
+    first_tool_call_ms: Annotated[int, Field(ge=0, le=3_600_000)] | None = None
+    first_tool_observation: Literal["stream_delta", "complete_body"] | None = None
+    observed_model: (
+        Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")] | None
+    ) = None
+    gateway_provider: (
+        Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")] | None
+    ) = None
+    observed_upstream: (
+        Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")] | None
+    ) = None
+    request_count: Annotated[int, Field(ge=0, le=1_024)]
+    final_request_prompt_bytes: Annotated[int, Field(ge=0, le=20_000_000)] | None = None
+    final_request_wire_bytes: Annotated[int, Field(ge=0, le=20_000_000)] | None = None
+    final_request_event_count: Annotated[int, Field(ge=0, le=100_000)] | None = None
+    prompt_tokens: Annotated[int, Field(ge=0, le=10_000_000)] | None = None
+    completion_tokens: Annotated[int, Field(ge=0, le=10_000_000)] | None = None
+
+    @model_validator(mode="after")
+    def validate_first_tool_observation(self) -> AdjudicationCompletionReceipt:
+        if (self.first_tool_call_ms is None) != (self.first_tool_observation is None):
+            raise ValueError("first tool timing and observation must be paired")
+        return self
+
+
 class SourceReviewAdjudication(BaseModel):
     """Terminal clear/reject decision on a review that would otherwise hold.
 
@@ -1342,6 +1381,9 @@ class SourceReviewAdjudication(BaseModel):
     """Operator metadata for an escalation. Excluded from ``canonical_digest``
     so a platform that has not yet learned the field still verifies the signed
     verdict."""
+    completion_receipt: AdjudicationCompletionReceipt | None = None
+    """Optional successful-run telemetry. Excluded from the canonical verdict
+    digest so older workers and Platform releases retain identical decisions."""
 
     @model_validator(mode="after")
     def validate_decision_basis(self) -> SourceReviewAdjudication:
@@ -1372,17 +1414,22 @@ class SourceReviewAdjudication(BaseModel):
             raise ValueError("an escalation must name why the decision was refused")
         if self.run_diagnostic is not None and self.decision != "escalate":
             raise ValueError("adjudication run diagnostic requires an escalation")
+        if self.completion_receipt is not None and self.decision == "escalate":
+            raise ValueError("adjudication completion receipt requires clear or reject")
         return self
 
     def canonical_digest(self) -> str:
         """Bind the court decision into the signed worker verdict.
 
-        ``run_diagnostic`` is operator metadata. Leaving it out keeps the
+        ``run_diagnostic`` and ``completion_receipt`` are operator metadata.
+        Leaving them out keeps the
         digest stable for verdicts signed before the field existed and for
         platforms that ignore unknown adjudication fields during a rollout.
         """
         payload = json.dumps(
-            self.model_dump(mode="json", exclude={"run_diagnostic"}),
+            self.model_dump(
+                mode="json", exclude={"run_diagnostic", "completion_receipt"}
+            ),
             sort_keys=True,
             separators=(",", ":"),
         ).encode()

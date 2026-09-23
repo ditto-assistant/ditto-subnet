@@ -9,6 +9,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ditto_screening_protocol import (
+    AdjudicationCompletionReceipt,
     AdjudicationRunDiagnostic,
     SourceReviewAdjudication,
     SourceReviewAuthorityTransition,
@@ -814,6 +815,53 @@ def test_run_diagnostic_stays_out_of_the_signed_adjudication() -> None:
             model="test-court",
             prompt_revision="adjudicator-v3-policy-v13",
             run_diagnostic=AdjudicationRunDiagnostic(elapsed_ms=1),
+        )
+
+
+def test_completion_receipt_is_text_free_and_does_not_change_signed_verdict() -> None:
+    base = {
+        "decision": "clear",
+        "reason": "The served model authors the graded response",
+        "clear_clause": "model_authors_graded_slot",
+        "citations": [SourceReviewCitation(path="src/main.rs", line=6)],
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v7-policy-v13",
+    }
+    receipt = AdjudicationCompletionReceipt.model_validate(
+        {
+            "elapsed_ms": 4300,
+            "first_tool_call_ms": 2000,
+            "first_tool_observation": "stream_delta",
+            "observed_model": "z-ai/glm-5.3-flash",
+            "gateway_provider": "openrouter",
+            "observed_upstream": "together",
+            "request_count": 1,
+            "final_request_prompt_bytes": 8000,
+            "final_request_wire_bytes": 700,
+            "final_request_event_count": 4,
+            "prompt_tokens": 200,
+            "completion_tokens": 80,
+            "tool_arguments": "private source and response text",
+        }
+    )
+    assert "tool_arguments" not in receipt.model_dump(mode="json")
+    plain = SourceReviewAdjudication(**base)
+    measured = SourceReviewAdjudication(**base, completion_receipt=receipt)
+    assert measured.canonical_digest() == plain.canonical_digest()
+    with pytest.raises(
+        ValidationError, match="completion receipt requires clear or reject"
+    ):
+        SourceReviewAdjudication(
+            decision="escalate",
+            reason="Court failed",
+            escalation_code="adjudicator-failed",
+            model="z-ai/glm-5.3-flash",
+            prompt_revision="adjudicator-v7-policy-v13",
+            completion_receipt=receipt,
+        )
+    with pytest.raises(ValidationError, match="must be paired"):
+        AdjudicationCompletionReceipt(
+            elapsed_ms=1, first_tool_call_ms=1, request_count=1
         )
 
 

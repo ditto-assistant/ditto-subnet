@@ -58,6 +58,7 @@ from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     AdjudicationClearClause,
+    AdjudicationCompletionReceipt,
     AdjudicationRequestAttemptDiagnostic,
     AdjudicationRunDiagnostic,
     SourceReviewAdjudication,
@@ -86,6 +87,7 @@ def _clear_request_trace() -> None:
         trace.completion_ceiling_reached = None
         trace.http_status = None
         trace.upstream = None
+        trace.observed_model = None
 
 
 def _observe_upstream(payload: object) -> None:
@@ -103,6 +105,9 @@ def _observe_upstream(payload: object) -> None:
     trace = _run_trace.get()
     if trace is None or not isinstance(payload, dict):
         return
+    response_model = payload.get("model")
+    if isinstance(response_model, str) and _MODEL_RE.fullmatch(response_model):
+        trace.observed_model = response_model
     upstream = _upstream_slug(payload.get("provider"))
     if upstream is not None:
         trace.upstream = upstream
@@ -156,6 +161,8 @@ class _RequestTrace:
     event_count: int = 0
     wire_bytes: int = 0
     upstream: str | None = None
+    first_tool_delta_ms: int | None = None
+    first_tool_observation: Literal["stream_delta", "complete_body"] | None = None
 
     def observe_bytes(self, chunk: bytes) -> None:
         if not chunk:
@@ -223,6 +230,7 @@ class _RunTrace:
     completion_ceiling_reached: bool | None = None
     http_status: int | None = None
     upstream: str | None = None
+    observed_model: str | None = None
     request_count: int = 0
     request_attempts: list[_RequestTrace] = field(default_factory=list)
 
@@ -236,6 +244,16 @@ _run_trace: contextvars.ContextVar[_RunTrace | None] = contextvars.ContextVar(
 def _current_request_trace() -> _RequestTrace | None:
     trace = _run_trace.get()
     return trace.request_attempts[-1] if trace and trace.request_attempts else None
+
+
+def _observe_first_tool_call(
+    source: Literal["stream_delta", "complete_body"],
+) -> None:
+    """Mark the first tool-call signal on this request without retaining data."""
+    request = _current_request_trace()
+    if request is not None and request.first_tool_delta_ms is None:
+        request.first_tool_delta_ms = _elapsed_ms(request.started)
+        request.first_tool_observation = source
 
 
 _SUPPORTED_POLICY_VERSIONS = tuple(
@@ -876,6 +894,7 @@ def _observe_completion(payload: object) -> None:
     if not isinstance(calls, list) or not calls:
         trace.final_tool_call_returned = False
         return
+    _observe_first_tool_call("complete_body")
     trace.final_tool_call_returned = any(
         isinstance(call, dict)
         and isinstance(call.get("function"), dict)
@@ -1269,7 +1288,7 @@ class SourceReviewAdjudicator:
                         escalation_code="adjudicator-failed",
                     ),
                 )
-            return self._certify(
+            result = self._certify(
                 verdict,
                 repository=repository,
                 read_locations=read_locations,
@@ -1277,8 +1296,51 @@ class SourceReviewAdjudicator:
                 policy_version=policy_version,
                 unreviewed_concerns=unreviewed_concerns,
             )
+            if result.decision == "escalate":
+                return result
+            receipt = self._completion_receipt(trace)
+            return (
+                result.model_copy(update={"completion_receipt": receipt})
+                if receipt is not None
+                else result
+            )
         finally:
             _run_trace.reset(token)
+
+    def _completion_receipt(
+        self, trace: _RunTrace
+    ) -> AdjudicationCompletionReceipt | None:
+        """Build bounded, text-free telemetry for a completed court decision."""
+        request = trace.request_attempts[-1] if trace.request_attempts else None
+        first_tool_ms = (
+            min(request.started_ms + request.first_tool_delta_ms, 3_600_000)
+            if request is not None and request.first_tool_delta_ms is not None
+            else None
+        )
+        try:
+            return AdjudicationCompletionReceipt(
+                elapsed_ms=min(_elapsed_ms(trace.started), 3_600_000),
+                first_tool_call_ms=first_tool_ms,
+                first_tool_observation=(
+                    request.first_tool_observation if request else None
+                ),
+                observed_model=trace.observed_model,
+                gateway_provider=(
+                    self._inference_provider
+                    if _PROVIDER_RE.fullmatch(self._inference_provider)
+                    else None
+                ),
+                observed_upstream=trace.upstream,
+                request_count=min(trace.request_count, 1_024),
+                final_request_prompt_bytes=request.prompt_bytes if request else None,
+                final_request_wire_bytes=request.wire_bytes if request else None,
+                final_request_event_count=request.event_count if request else None,
+                prompt_tokens=trace.prompt_tokens,
+                completion_tokens=trace.completion_tokens,
+            )
+        except ValidationError:
+            logger.warning("adjudication completion telemetry was not attachable")
+            return None
 
     def _with_diagnostic(
         self,
@@ -1872,6 +1934,7 @@ async def _completion_stream_payload(
                 # An index or ID-only shell is not evidence that the model
                 # started a function call; keep the budget active for it.
                 saw_tool_piece = True
+                _observe_first_tool_call("stream_delta")
             call = calls.setdefault(index, {"type": "function", "function": {}})
             for key in ("id", "type"):
                 if key in piece:

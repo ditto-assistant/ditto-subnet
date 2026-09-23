@@ -4405,6 +4405,20 @@ export const screeningFailureDiagnosticSchema = z.object({
   // failures that were not an automated-court run. Older Platform responses
   // omit the key; treat that the same as an absent trace.
   court_diagnostic: adjudicationRunDiagnosticSchema.nullish().default(null),
+  court_completion_receipt: z.object({
+    elapsed_ms: z.number().int().min(0).max(3_600_000),
+    first_tool_call_ms: z.number().int().min(0).max(3_600_000).nullable(),
+    first_tool_observation: z.enum(['stream_delta', 'complete_body']).nullable(),
+    observed_model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/).nullable(),
+    gateway_provider: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/).nullable(),
+    observed_upstream: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/).nullable(),
+    request_count: z.number().int().min(0).max(1_024),
+    final_request_prompt_bytes: z.number().int().min(0).max(20_000_000).nullable(),
+    final_request_wire_bytes: z.number().int().min(0).max(20_000_000).nullable(),
+    final_request_event_count: z.number().int().min(0).max(100_000).nullable(),
+    prompt_tokens: z.number().int().min(0).max(10_000_000).nullable(),
+    completion_tokens: z.number().int().min(0).max(10_000_000).nullable(),
+  }).nullish().default(null),
 })
 
 export const adjudicationAttemptsInputSchema = z.object({
@@ -4438,6 +4452,7 @@ export const adjudicationAttemptsSchema = z.object({
     failure_code: z.string().nullable(),
     elapsed_ms: z.number().int().nullable(),
     first_tool_call_ms: z.number().int().nullable(),
+    first_tool_observation: z.enum(['stream_delta', 'complete_body']).nullish().default(null),
     request_count: z.number().int().nullable(),
     request_prompt_bytes: z.number().int().nullable(),
     request_wire_bytes: z.number().int().nullable(),

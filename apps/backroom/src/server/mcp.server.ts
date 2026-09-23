@@ -1193,7 +1193,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List screening adjudication attempts',
       description:
-        'Read a bounded recent cohort of persisted L4 clear, reject, and escalation outcomes. Each row binds attempt UUID, pinned artifact SHA when available, policy version, manifest digest, and pinned review settings. Configured model, timeout, and completion ceiling are distinct from observed model/provider/upstream. Historical successful L4 runs did not persist request timing, token usage, upstream, or first-tool-call latency, so those fields remain null. Failed runs expose only sanitized, text-free trace aggregates when recorded. No source, prompts, tool arguments, or raw responses. Read-only; requires backroom:read.',
+        'Read a bounded recent cohort of persisted L4 clear, reject, and escalation outcomes. Each row binds attempt UUID, pinned artifact SHA when available, policy version, manifest digest, and pinned review settings. Configured model, timeout, and completion ceiling are distinct from observed model/provider/upstream. New successful L4 runs may include a text-free completion receipt: run elapsed time, first substantive tool-call signal in the final request, and final-request byte/event counts. Historical successes remain null. Failed runs expose only sanitized trace aggregates when recorded. No source, prompts, tool arguments, or raw responses. Read-only; requires backroom:read.',
       inputSchema: adjudicationAttemptsInputSchema,
       annotations: toolAnnotations('read'),
     },

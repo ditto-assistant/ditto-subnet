@@ -1074,6 +1074,11 @@ class ScreeningQuarantine(Base):
     status, elapsed time, and token counts. No source, prompt, credentials, or
     model text. Null when the court did not fail this way and on rows written
     before the trace existed."""
+    court_completion_receipt: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Append-only text-free timing and attribution from a completed L4 run.
+    Null for historical rows and for runs that did not complete."""
 
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(

@@ -818,6 +818,7 @@ describe('screening submission admin service', () => {
     ).resolves.toEqual({
       ...diagnostic,
       court_diagnostic: null,
+      court_completion_receipt: null,
     })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/attempts/${attemptId}/failure-diagnostic`,
@@ -853,6 +854,7 @@ describe('screening submission admin service', () => {
       failure_code: null,
       elapsed_ms: null,
       first_tool_call_ms: null,
+      first_tool_observation: null,
       request_count: null,
       request_prompt_bytes: null,
       request_wire_bytes: null,
@@ -939,6 +941,54 @@ describe('screening submission admin service', () => {
     ).resolves.toEqual({
       ...diagnostic,
       court_diagnostic: court,
+      court_completion_receipt: null,
+    })
+  })
+
+  it('returns only typed successful L4 completion measurements', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const receipt = {
+      elapsed_ms: 4300,
+      first_tool_call_ms: 2000,
+      first_tool_observation: 'stream_delta',
+      observed_model: 'z-ai/glm-5.3-flash',
+      gateway_provider: 'openrouter',
+      observed_upstream: 'together',
+      request_count: 1,
+      final_request_prompt_bytes: 8000,
+      final_request_wire_bytes: 700,
+      final_request_event_count: 4,
+      prompt_tokens: 200,
+      completion_tokens: 80,
+    }
+    const response = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'evaluating',
+      attempt_id: attemptId,
+      policy_version: 13,
+      attempt_status: 'passed',
+      started_at: '2026-09-23T04:00:00Z',
+      deadline: '2026-09-23T04:10:00Z',
+      finished_at: '2026-09-23T04:00:04Z',
+      reason: null,
+      reason_code: 'adjudicated-source-review-clear',
+      private_failure_detail: null,
+      private_failure_log_tail: null,
+      court_diagnostic: null,
+      court_completion_receipt: {
+        ...receipt,
+        tool_arguments: 'source text that must not leave Platform',
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(response)))
+    await expect(
+      fetchScreeningFailureDiagnostic({ agentId, attemptId }, 'reviewer@example.com'),
+    ).resolves.toEqual({
+      ...response,
+      court_completion_receipt: receipt,
     })
   })
 

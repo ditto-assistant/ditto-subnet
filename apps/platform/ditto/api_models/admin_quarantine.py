@@ -14,7 +14,11 @@ from ditto.api_models.screener import (
     SourceReviewFinding,
 )
 from ditto.api_models.screener_review_settings import AdminShadowReviewObservation
-from ditto_screening_protocol import AdjudicationRunDiagnostic, SourceReviewNote
+from ditto_screening_protocol import (
+    AdjudicationCompletionReceipt,
+    AdjudicationRunDiagnostic,
+    SourceReviewNote,
+)
 
 QuarantineResolution = Literal["release", "rescreen", "reject"]
 DisputeResolution = Literal["release", "uphold"]
@@ -194,6 +198,8 @@ class AdminScreeningFailureDiagnostic(BaseModel):
     court_diagnostic: AdjudicationRunDiagnostic | None = None
     """Sanitized automated-court trace for this attempt. Null when the attempt
     has no such trace, including rows screened before the field existed."""
+    court_completion_receipt: AdjudicationCompletionReceipt | None = None
+    """Successful L4 timing/attribution only; null for historical completions."""
 
 
 class AdminAdjudicationAttemptTelemetry(BaseModel):
@@ -221,6 +227,7 @@ class AdminAdjudicationAttemptTelemetry(BaseModel):
     failure_code: str | None
     elapsed_ms: int | None
     first_tool_call_ms: int | None = None
+    first_tool_observation: Literal["stream_delta", "complete_body"] | None = None
     request_count: int | None
     request_prompt_bytes: int | None
     request_wire_bytes: int | None
