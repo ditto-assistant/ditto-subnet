@@ -1070,6 +1070,59 @@ async def test_v13_receipt_refuses_expired_running_attempt(
     assert response.status_code == 409
 
 
+async def test_v13_build_receipt_requires_verified_image_upload(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=13,
+                status="running",
+                started_at=now - timedelta(minutes=1),
+                deadline=now + timedelta(minutes=9),
+            )
+        )
+    _install_db(app, session_maker)
+    path = f"/api/v1/screener/agent/{agent_id}/verification-receipts"
+    payload = {
+        "attempt_id": str(attempt_id),
+        "artifact_sha256": _SHA256,
+        "policy_version": 13,
+        "check_code": "build_image_digest",
+        "evidence_sha256": "ab" * 32,
+        "image_sha256": "cd" * 32,
+    }
+    absent = await client.post(path, json=payload)
+    assert absent.status_code == 409
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenedImageUpload(
+                image_upload_id=uuid4(),
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                storage_upload_id="test-upload",
+                sha256="cd" * 32,
+                size_bytes=123,
+                image_id="sha256:" + "ef" * 32,
+                image_ref="ditto-screen/test:latest",
+                status="verified",
+                expires_at=now + timedelta(minutes=9),
+                verified_at=now,
+            )
+        )
+    accepted = await client.post(path, json=payload)
+    assert accepted.status_code == 204, accepted.text
+
+
 def _capacity_payload(epoch: str) -> dict[str, object]:
     return {
         "environment": "prod",

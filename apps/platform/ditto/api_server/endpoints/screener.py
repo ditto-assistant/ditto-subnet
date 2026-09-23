@@ -600,6 +600,21 @@ async def record_screening_verification_receipt(
             raise HTTPException(
                 status_code=409, detail="verification receipt lease is stale"
             )
+        if payload.check_code == "build_image_digest":
+            verified_image = await session.scalar(
+                select(ScreenedImageUpload.image_upload_id).where(
+                    ScreenedImageUpload.agent_id == agent_id,
+                    ScreenedImageUpload.attempt_id == payload.attempt_id,
+                    ScreenedImageUpload.screener_hotkey == screener_hotkey,
+                    ScreenedImageUpload.sha256 == payload.image_sha256,
+                    ScreenedImageUpload.status == "verified",
+                )
+            )
+            if verified_image is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="build image receipt lacks verified image upload",
+                )
         receipt_id = uuid5(
             NAMESPACE_URL,
             f"v13:{agent_id}:{payload.attempt_id}:{payload.check_code}",
