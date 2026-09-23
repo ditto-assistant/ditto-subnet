@@ -1900,6 +1900,11 @@ Private behavioral testing is mandatory only when that role requires it or
 source causality remains unresolved. Tests, diagnostics, and helpers require
 effective build/startup/runtime reachability; refuting one dormant lead does
 not clear the rest of the artifact.
+Before labeling an optional environment-gated branch reachable, inspect its
+configuration default, Dockerfile environment, and any proven runtime override.
+A disabled default refutes default-image reachability, but does not prove an
+external deployment override absent. Record uncertainty instead of asserting
+that the branch runs.
 
 Merge submission evidence with exact path-and-digest starter-kit provenance
 supplied by the platform. A matched official component satisfies only the

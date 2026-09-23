@@ -313,6 +313,8 @@ _MAX_CITATIONS = 8
 # any note was recorded: L4 may inspect the archive then, because there is no
 # ledger for it to decide.
 _MAX_PRELOADED_LEDGER_LOCATIONS = 16
+_MAX_PRELOADED_CONFIG_GATES = 4
+_CONFIG_GATE_RE = re.compile(r"\bconfig\.([A-Z][A-Z0-9_]*)\b")
 _BUDGET_TERMINATED_REVIEW_CODES = frozenset(
     {
         "source-review-lease-budget-exhausted",
@@ -950,6 +952,7 @@ def _preload_ledger_evidence(
     outputs: list[str] = []
     read_locations: set[tuple[str, int]] = set()
     requested: set[tuple[str, int]] = set()
+    config_gates: set[tuple[str, str]] = set()
     for note in notes:
         path = note.get("path")
         line = note.get("line")
@@ -981,6 +984,54 @@ def _preload_ledger_evidence(
             continue
         _record_reads(output, read_locations)
         if read_locations:
+            outputs.append(output)
+            # A cited branch is not evidence that it runs. Include nearby
+            # defaults for simple config.FLAG gates in the one-turn court;
+            # otherwise the court sees the branch but cannot refute its
+            # reachability without discovery tools.
+            if note.get("kind") == "concern":
+                for symbol in _CONFIG_GATE_RE.findall(output):
+                    if len(config_gates) < _MAX_PRELOADED_CONFIG_GATES:
+                        config_gates.add((location[0], symbol))
+    if config_gates:
+        for cited_path, symbol in sorted(config_gates):
+            parent = cited_path.rpartition("/")[0]
+            candidates = [f"{parent}/config.py" if parent else "config.py"]
+            if "config.py" not in candidates:
+                candidates.append("config.py")
+            for config_path in candidates:
+                source = repository.member_text(config_path)
+                if source is None:
+                    continue
+                definition = next(
+                    (
+                        index
+                        for index, source_line in enumerate(source.splitlines(), 1)
+                        if re.match(rf"^\s*{re.escape(symbol)}\s*=", source_line)
+                    ),
+                    None,
+                )
+                if definition is None:
+                    continue
+                output = _execute_tool(
+                    repository,
+                    "read_file",
+                    {
+                        "path": config_path,
+                        "start_line": max(1, definition - 2),
+                        "end_line": definition + 2,
+                    },
+                )
+                _record_reads(output, read_locations)
+                outputs.append(output)
+                break
+        if repository.has_member("Dockerfile"):
+            output = _execute_tool(
+                repository,
+                "read_file",
+                {"path": "Dockerfile", "start_line": 1, "end_line": 40},
+            )
+            _record_reads(output, read_locations)
             outputs.append(output)
     return "\n".join(outputs), read_locations
 
@@ -1420,7 +1471,10 @@ class SourceReviewAdjudicator:
     ) -> tuple[_Verdict, set[tuple[str, int]]]:
         decision_only_instruction = (
             "\nThe host preloaded the exact source excerpts for the retained "
-            "ledger. Decide from those excerpts now. Discovery tools are disabled; "
+            "ledger, plus bounded configuration evidence for simple feature "
+            "gates. A disabled default does not establish whether an external "
+            "runtime override exists. Decide from those excerpts now. "
+            "Discovery tools are disabled; "
             "call submit_adjudication for a complete decision, or "
             "request_operator_review if evidence remains incomplete."
             if decision_only
