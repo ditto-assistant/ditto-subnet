@@ -20,7 +20,6 @@ enable_coding_hosted_postgres = true
 # protected plan workflow overrides this only for a supervised bootstrap/armed
 # window, then seals a teardown plan returning it to absent.
 validator_hotkey_admin_phase = "absent"
-enable_screener              = true
 # The static ditto-screener-prod pet is retired. Hetzner is primary and the
 # independently managed GCE MIG remains the bounded overflow path.
 enable_screener_prod = false
