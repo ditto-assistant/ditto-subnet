@@ -2841,6 +2841,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/v13-private-generation/groups": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Generation Start
+         * @description Commit one target-specific, two-role event before any seed issuance.
+         */
+        post: operations["record_generation_start_api_v1_admin_v13_private_generation_groups_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/v13-private-generation/groups/{group_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Generation Group
+         * @description Read one digest-only generation start; never expose protected cases.
+         */
+        get: operations["get_generation_group_api_v1_admin_v13_private_generation_groups__group_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/v13-private-generation/known-benign-approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Known Benign Approval
+         * @description Audit a separately reviewed clean candidate; no semantic pass inferred.
+         */
+        post: operations["record_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v9-contract-retests": {
         parameters: {
             query?: never;
@@ -29973,6 +30033,158 @@ export interface components {
             /** Zeroed Cases */
             zeroed_cases: number;
         };
+        /** V13GenerationGroupView */
+        V13GenerationGroupView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Approval Id
+             * Format: uuid
+             */
+            approval_id: string;
+            /** Approval Receipt Sha256 */
+            approval_receipt_sha256: string;
+            /**
+             * Control Agent Id
+             * Format: uuid
+             */
+            control_agent_id: string;
+            /** Control Artifact Sha256 */
+            control_artifact_sha256: string;
+            /**
+             * Control Attempt Id
+             * Format: uuid
+             */
+            control_attempt_id: string;
+            /** Control Image Sha256 */
+            control_image_sha256: string;
+            /** Control Receipt Sha256 */
+            control_receipt_sha256: string;
+            /**
+             * Group Id
+             * Format: uuid
+             */
+            group_id: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Status
+             * @default recorded_unverified
+             * @constant
+             */
+            status: "recorded_unverified";
+            /**
+             * Target Agent Id
+             * Format: uuid
+             */
+            target_agent_id: string;
+            /** Target Artifact Sha256 */
+            target_artifact_sha256: string;
+            /**
+             * Target Attempt Id
+             * Format: uuid
+             */
+            target_attempt_id: string;
+            /** Target Image Sha256 */
+            target_image_sha256: string;
+            /** Target Receipt Sha256 */
+            target_receipt_sha256: string;
+        };
+        /** V13GenerationStartRequest */
+        V13GenerationStartRequest: {
+            /**
+             * Approval Id
+             * Format: uuid
+             */
+            approval_id: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /**
+             * Target Agent Id
+             * Format: uuid
+             */
+            target_agent_id: string;
+            /** Target Artifact Sha256 */
+            target_artifact_sha256: string;
+            /**
+             * Target Attempt Id
+             * Format: uuid
+             */
+            target_attempt_id: string;
+            /** Target Image Sha256 */
+            target_image_sha256: string;
+        };
+        /** V13KnownBenignApprovalRequest */
+        V13KnownBenignApprovalRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /** Reason */
+            reason: string;
+            /** Review Evidence Sha256 */
+            review_evidence_sha256: string;
+        };
+        /** V13KnownBenignApprovalView */
+        V13KnownBenignApprovalView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Approval Id
+             * Format: uuid
+             */
+            approval_id: string;
+            /** Approval Receipt Sha256 */
+            approval_receipt_sha256: string;
+            /**
+             * Approved At
+             * Format: date-time
+             */
+            approved_at: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /** Reason */
+            reason: string;
+            /** Review Evidence Sha256 */
+            review_evidence_sha256: string;
+            /**
+             * Status
+             * @default recorded_unverified
+             * @constant
+             */
+            status: "recorded_unverified";
+        };
         /** V13ReviewClockRevision */
         V13ReviewClockRevision: {
             /**
@@ -36856,6 +37068,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_generation_start_api_v1_admin_v13_private_generation_groups_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V13GenerationStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13GenerationGroupView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_generation_group_api_v1_admin_v13_private_generation_groups__group_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                group_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13GenerationGroupView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V13KnownBenignApprovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13KnownBenignApprovalView"];
                 };
             };
             /** @description Validation Error */
