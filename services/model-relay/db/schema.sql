@@ -4191,6 +4191,37 @@ CREATE TABLE public.screening_disputes (
 
 
 --
+-- Name: screening_private_package_registrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_private_package_registrations (
+    attempt_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    image_sha256 text NOT NULL,
+    profile_sha256 text NOT NULL,
+    manifest_sha256 text NOT NULL,
+    pair_inventory_sha256 text NOT NULL,
+    clean_agent_id uuid NOT NULL,
+    clean_attempt_id uuid NOT NULL,
+    clean_artifact_sha256 text NOT NULL,
+    clean_image_sha256 text NOT NULL,
+    runner_hotkey text NOT NULL,
+    registrar_actor text NOT NULL,
+    registered_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_private_package_registrations_sppr_actor_check CHECK (((length(registrar_actor) >= 1) AND (length(registrar_actor) <= 120))),
+    CONSTRAINT ck_screening_private_package_registrations_sppr_artifac_1710 CHECK ((length(artifact_sha256) = 64)),
+    CONSTRAINT ck_screening_private_package_registrations_sppr_clean_a_de19 CHECK ((length(clean_artifact_sha256) = 64)),
+    CONSTRAINT ck_screening_private_package_registrations_sppr_clean_i_6589 CHECK ((length(clean_image_sha256) = 64)),
+    CONSTRAINT ck_screening_private_package_registrations_sppr_image_s_86d5 CHECK ((length(image_sha256) = 64)),
+    CONSTRAINT ck_screening_private_package_registrations_sppr_manifes_13eb CHECK ((length(manifest_sha256) = 64)),
+    CONSTRAINT ck_screening_private_package_registrations_sppr_pair_in_62ac CHECK ((length(pair_inventory_sha256) = 64)),
+    CONSTRAINT ck_screening_private_package_registrations_sppr_profile_e910 CHECK ((length(profile_sha256) = 64)),
+    CONSTRAINT ck_screening_private_package_registrations_sppr_runner_check CHECK (((length(runner_hotkey) >= 1) AND (length(runner_hotkey) <= 120)))
+);
+
+
+--
 -- Name: screening_quarantine_resolutions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6739,6 +6770,14 @@ ALTER TABLE ONLY public.screener_review_settings_revisions
 
 ALTER TABLE ONLY public.screener_shadow_reviews
     ADD CONSTRAINT pk_screener_shadow_reviews PRIMARY KEY (attempt_id);
+
+
+--
+-- Name: screening_private_package_registrations pk_screening_private_package_registrations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_private_package_registrations
+    ADD CONSTRAINT pk_screening_private_package_registrations PRIMARY KEY (attempt_id);
 
 
 --
@@ -9457,6 +9496,38 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 ALTER TABLE ONLY public.screener_fanout_shadow_reviews
     ADD CONSTRAINT fk_screener_fanout_shadow_reviews_settings_revision_scr_a1a2 FOREIGN KEY (settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: screening_private_package_registrations fk_screening_private_package_registrations_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_private_package_registrations
+    ADD CONSTRAINT fk_screening_private_package_registrations_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_private_package_registrations fk_screening_private_package_registrations_attempt_id_s_8bf7; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_private_package_registrations
+    ADD CONSTRAINT fk_screening_private_package_registrations_attempt_id_s_8bf7 FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_private_package_registrations fk_screening_private_package_registrations_clean_agent__9732; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_private_package_registrations
+    ADD CONSTRAINT fk_screening_private_package_registrations_clean_agent__9732 FOREIGN KEY (clean_agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_private_package_registrations fk_screening_private_package_registrations_clean_attemp_9359; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_private_package_registrations
+    ADD CONSTRAINT fk_screening_private_package_registrations_clean_attemp_9359 FOREIGN KEY (clean_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
 
 
 --
