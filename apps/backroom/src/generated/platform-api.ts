@@ -6860,7 +6860,7 @@ export interface components {
             /** Escalation Code */
             escalation_code?: string | null;
             /** Failure Code */
-            failure_code?: ("completion-timeout" | "provider-http-error" | "provider-stream-error" | "provider-body-error" | "transport-error" | "stream-incomplete" | "stream-no-tool-call" | "stream-invalid" | "response-too-large" | "response-json-invalid" | "tool-call-invalid" | "verdict-invalid" | "lease-budget" | "step-budget" | "response-invalid") | null;
+            failure_code?: ("completion-timeout" | "provider-http-error" | "provider-stream-error" | "provider-body-error" | "transport-error" | "stream-incomplete" | "stream-no-tool-call" | "stream-no-tool-progress" | "stream-invalid" | "response-too-large" | "response-json-invalid" | "tool-call-invalid" | "verdict-invalid" | "lease-budget" | "step-budget" | "response-invalid") | null;
             /** Final Tool Call Returned */
             final_tool_call_returned?: boolean | null;
             /** Http Status */
