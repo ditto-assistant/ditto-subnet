@@ -67,6 +67,7 @@ from ditto.db.models import (
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
     ScreenerProviderSettingsRevision,
+    ScreenerReplayProcessKey,
     ScreeningAttempt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -169,7 +170,25 @@ async def _replay_workers_ready(
     ]
     if not workers:
         return False
+    key = await session.scalar(
+        select(ScreenerReplayProcessKey).where(
+            ScreenerReplayProcessKey.node_id == node.node_id,
+            ScreenerReplayProcessKey.instance_id == f"{node.node_id}-worker-1",
+            ScreenerReplayProcessKey.status == "active",
+        )
+    )
+    if key is None or len(workers) != 1 or workers[0].instance_id != key.instance_id:
+        return False
     for row in workers:
+        envelope = row.system_metrics
+        verified = (
+            envelope.get("replay_process") if isinstance(envelope, dict) else None
+        )
+        if (
+            not isinstance(verified, dict)
+            or verified.get("key_sha256") != key.key_sha256
+        ):
+            return False
         release = fleet_release_from_heartbeat_envelope(row.system_metrics)
         version = (
             _STABLE_RELEASE_VERSION.fullmatch(release.version)

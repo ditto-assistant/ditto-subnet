@@ -4124,6 +4124,38 @@ ALTER SEQUENCE public.screener_provider_settings_revisions_revision_seq OWNED BY
 
 
 --
+-- Name: screener_replay_process_keys; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_replay_process_keys (
+    key_sha256 text NOT NULL,
+    node_id text NOT NULL,
+    instance_id text NOT NULL,
+    public_key_hex text NOT NULL,
+    revision integer NOT NULL,
+    status text NOT NULL,
+    registered_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    CONSTRAINT ck_screener_replay_process_keys_srpk_key_sha256_length_check CHECK ((length(key_sha256) = 64)),
+    CONSTRAINT ck_screener_replay_process_keys_srpk_public_key_hex_len_1fc0 CHECK ((length(public_key_hex) = 64)),
+    CONSTRAINT ck_screener_replay_process_keys_srpk_revision_check CHECK ((revision > 0)),
+    CONSTRAINT ck_screener_replay_process_keys_srpk_status_check CHECK ((status = ANY (ARRAY['active'::text, 'revoked'::text])))
+);
+
+
+--
+-- Name: screener_replay_process_nonces; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_replay_process_nonces (
+    key_sha256 text NOT NULL,
+    nonce text NOT NULL,
+    consumed_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_screener_replay_process_nonces_srpn_nonce_length_check CHECK ((length(nonce) = 32))
+);
+
+
+--
 -- Name: screener_review_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4582,6 +4614,7 @@ CREATE TABLE public.screening_verification_replays (
     failure_code text,
     lease_started_at timestamp with time zone,
     lease_renewals integer DEFAULT 0 NOT NULL,
+    process_key_sha256 text,
     CONSTRAINT ck_screening_verification_replays_svrp_artifact_sha_check CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT ck_screening_verification_replays_svrp_image_metadata_check CHECK ((((image_sha256 IS NULL) AND (image_size_bytes IS NULL) AND (image_id IS NULL) AND (image_verified_at IS NULL)) OR ((image_sha256 IS NOT NULL) AND (image_size_bytes > 0) AND (image_id IS NOT NULL)))),
     CONSTRAINT ck_screening_verification_replays_svrp_image_sha_check CHECK (((image_sha256 IS NULL) OR (image_sha256 ~ '^[0-9a-f]{64}$'::text))),
@@ -7091,6 +7124,22 @@ ALTER TABLE ONLY public.screener_provider_settings_revisions
 
 
 --
+-- Name: screener_replay_process_keys pk_screener_replay_process_keys; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_replay_process_keys
+    ADD CONSTRAINT pk_screener_replay_process_keys PRIMARY KEY (key_sha256);
+
+
+--
+-- Name: screener_replay_process_nonces pk_screener_replay_process_nonces; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_replay_process_nonces
+    ADD CONSTRAINT pk_screener_replay_process_nonces PRIMARY KEY (key_sha256, nonce);
+
+
+--
 -- Name: screener_review_settings_revisions pk_screener_review_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8766,6 +8815,20 @@ CREATE INDEX sre_created_idx ON public.screening_review_events USING btree (crea
 
 
 --
+-- Name: srpk_one_active_instance_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX srpk_one_active_instance_idx ON public.screener_replay_process_keys USING btree (node_id, instance_id) WHERE (status = 'active'::text);
+
+
+--
+-- Name: srpn_consumed_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX srpn_consumed_at_idx ON public.screener_replay_process_nonces USING btree (consumed_at);
+
+
+--
 -- Name: submission_image_builds_node_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -10065,6 +10128,22 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 
 --
+-- Name: screener_replay_process_keys fk_screener_replay_process_keys_node_id_screener_nodes; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_replay_process_keys
+    ADD CONSTRAINT fk_screener_replay_process_keys_node_id_screener_nodes FOREIGN KEY (node_id) REFERENCES public.screener_nodes(node_id);
+
+
+--
+-- Name: screener_replay_process_nonces fk_screener_replay_process_nonces_key_sha256_screener_r_4e03; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_replay_process_nonces
+    ADD CONSTRAINT fk_screener_replay_process_nonces_key_sha256_screener_r_4e03 FOREIGN KEY (key_sha256) REFERENCES public.screener_replay_process_keys(key_sha256);
+
+
+--
 -- Name: screening_private_package_registrations fk_screening_private_package_registrations_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10654,6 +10733,14 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 ALTER TABLE ONLY public.submission_source_reviews
     ADD CONSTRAINT submission_source_reviews_node_id_fkey FOREIGN KEY (node_id) REFERENCES public.screener_nodes(node_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screening_verification_replays svrp_process_key_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replays
+    ADD CONSTRAINT svrp_process_key_fk FOREIGN KEY (process_key_sha256) REFERENCES public.screener_replay_process_keys(key_sha256);
 
 
 --

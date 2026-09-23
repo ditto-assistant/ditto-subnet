@@ -19,6 +19,7 @@ from ditto.db.models import (
     ScreenerHeartbeat,
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
+    ScreenerReplayProcessKey,
     TrustedImageBuild,
 )
 
@@ -521,6 +522,36 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
                 "activated_at": int(now.timestamp()),
             }
         }
+    # A second ordinary worker is not the single signed replay process, even
+    # when both workers advertise a new enough release.
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    key_hex = "a1" * 32
+    key_sha = hashlib.sha256(bytes.fromhex(key_hex)).hexdigest()
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerReplayProcessKey(
+                node_id="subnet-screener-2",
+                instance_id="subnet-screener-2-worker-1",
+                public_key_hex=key_hex,
+                key_sha256=key_sha,
+                revision=1,
+                status="active",
+                registered_at=now,
+            )
+        )
+        primary = await session.get(
+            ScreenerHeartbeat, (replay_hotkey, "subnet-screener-2-worker-1")
+        )
+        sibling = await session.get(
+            ScreenerHeartbeat, (replay_hotkey, "subnet-screener-2-worker-2")
+        )
+        assert primary is not None and sibling is not None
+        assert isinstance(primary.system_metrics, dict)
+        primary.system_metrics = {
+            **primary.system_metrics,
+            "replay_process": {"key_sha256": key_sha},
+        }
+        sibling.seen_at = now - timedelta(minutes=10)
     applied = await client.post(path, headers=headers, json=payload)
     assert applied.status_code == 204, applied.text
     assert (await client.post(path, headers=headers, json=payload)).status_code == 409
