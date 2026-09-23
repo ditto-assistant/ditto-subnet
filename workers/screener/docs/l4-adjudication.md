@@ -17,6 +17,31 @@ mandatory verification is incomplete; the host keeps that submission held.
 It runs `z-ai/glm-5.3-flash`. The expensive discovery already happened
 upstream; what remains is applying a written standard to named locations.
 
+## Bounded decision packet
+
+When the upstream ledger has retained source leads, the host preloads exact
+`path:line` excerpts and sends one decision-only packet. That packet carries
+the archive SHA-256, the complete bounded notes ledger, the upstream finding,
+the applicable policy prompt, and every preloaded source line. The archive
+inventory is omitted on this path because the court has no discovery tools and
+cannot cite an inventory entry as source evidence. The inspectable path for a
+review with no ledger still receives the inventory and read-only tools.
+
+A decision-only packet above 64,000 bytes is held as
+`adjudicator-packet-too-large` before any model request. The host does not trim
+source, notes, or policy text to fit. Existing unread-lead and citation checks
+still apply. An active response that times out or ends without a complete tool
+call is held without replaying the same packet; only a connection failure
+before response data or an explicit provider fault gets one transport retry.
+
+The packet size and retry change do not establish verdict accuracy. Before
+enforcing a release, replay exact SHA-bound held artifacts in report-only mode
+and compare decisions with independent source review, citation coverage,
+completion latency, request count, token and cost use, and escalation subtype.
+In particular, count `adjudicator-packet-too-large` and
+`adjudicator-evidence-incomplete` separately. Keep the change in shadow if
+those checks are unavailable or reveal a new false clear or reject.
+
 ## What it adjudicates
 
 Only an outcome that would otherwise WAIT:

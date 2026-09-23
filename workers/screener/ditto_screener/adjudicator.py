@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import copy
+import hashlib
 import json
 import logging
 import re
@@ -270,7 +271,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v7-policy-v13"
+        return "adjudicator-v8-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 
@@ -307,6 +308,9 @@ _MAX_COMPLETION_RESPONSE_BYTES = 512_000
 # streaming transport ceiling, not a license to retain more model arguments:
 # the separate 512 KB tool-data bound still applies.
 _MAX_COMPLETION_STREAM_BYTES = 8_000_000
+# Bound the evidence-bearing, decision-only request before asking a model to
+# reason over it. Never silently truncate source or a retained ledger to fit.
+_MAX_DECISION_PACKET_BYTES = 64_000
 
 
 class CompletionWireTooLarge(ValueError):
@@ -1145,6 +1149,52 @@ def _compacted_adjudicator_messages(
     ]
 
 
+def _decision_packet(
+    archive_path: str,
+    *,
+    notes: Sequence[Mapping[str, object]],
+    finding: Mapping[str, object] | None,
+    error_code: str | None,
+    policy_version: int,
+    preloaded_evidence: str,
+) -> list[dict[str, object]]:
+    """Build one complete packet from the verified archive and retained leads.
+
+    The full inventory is useful for discovery, but the decision-only court has
+    no discovery tools. Repeating thousands of unrelated filenames consumes
+    context without giving it any source it can cite. Every retained note and
+    exact preloaded source line stays in the packet. Its digest binds the case
+    to the artifact bytes rather than a reusable miner name or path.
+    """
+    with open(archive_path, "rb") as archive:
+        artifact_sha256 = hashlib.file_digest(archive, "sha256").hexdigest()
+    return [
+        {"role": "system", "content": _system_prompt(policy_version)},
+        {
+            "role": "user",
+            "content": (
+                "Adjudicate this held submission.\n"
+                f"Artifact SHA-256: {artifact_sha256}\n"
+                f"Why the review stopped: {error_code or 'bounded review'}\n"
+                f"Upstream finding (a lead): {_finding_brief(finding)}\n"
+                f"Notes ledger (leads): {_ledger_brief(notes)}\n"
+                "Preloaded source evidence:\n"
+                f"{preloaded_evidence}\n"
+                "The host preloaded exact source excerpts for retained leads and "
+                "bounded configuration evidence for simple feature gates. "
+                "A disabled default does not establish whether an external "
+                "runtime override exists. Discovery tools are disabled. "
+                "Call submit_adjudication with a complete decision, or "
+                "request_operator_review if evidence remains incomplete."
+            ),
+        },
+    ]
+
+
+def _packet_bytes(messages: Sequence[Mapping[str, object]]) -> int:
+    return len(json.dumps(messages, ensure_ascii=False).encode("utf-8"))
+
+
 class SourceReviewAdjudicator:
     """Small tool-using court with no shell, edit, execution, or web tools."""
 
@@ -1205,6 +1255,7 @@ class SourceReviewAdjudicator:
         preloaded_evidence = ""
         preloaded_reads: set[tuple[str, int]] = set()
         unreviewed_concerns = False
+        decision_packet: list[dict[str, object]] | None = None
         if not notes and error_code in _BUDGET_TERMINATED_REVIEW_CODES:
             # An upstream review consumed its discovery budget without
             # recording evidence. There is nothing for the court to decide;
@@ -1250,6 +1301,33 @@ class SourceReviewAdjudicator:
                     notes=note_count,
                     policy_version=policy_version,
                 )
+            try:
+                decision_packet = _decision_packet(
+                    archive_path,
+                    notes=notes,
+                    finding=finding,
+                    error_code=error_code,
+                    policy_version=policy_version,
+                    preloaded_evidence=preloaded_evidence,
+                )
+            except OSError:
+                return _escalate(
+                    "adjudicator-unavailable",
+                    "Automated adjudication could not read the source artifact; "
+                    "held for operator review",
+                    model=self._model,
+                    notes=note_count,
+                    policy_version=policy_version,
+                )
+            if _packet_bytes(decision_packet) > _MAX_DECISION_PACKET_BYTES:
+                return _escalate(
+                    "adjudicator-packet-too-large",
+                    "Automated adjudication could not fit all retained source "
+                    "evidence in one bounded review; held for operator review",
+                    model=self._model,
+                    notes=note_count,
+                    policy_version=policy_version,
+                )
         trace = _RunTrace(started=asyncio.get_running_loop().time())
         token = _run_trace.set(trace)
         try:
@@ -1265,6 +1343,7 @@ class SourceReviewAdjudicator:
                     decision_only=decision_only,
                     preloaded_evidence=preloaded_evidence,
                     preloaded_reads=preloaded_reads,
+                    decision_packet=decision_packet,
                 )
             except (
                 OSError,
@@ -1573,6 +1652,7 @@ class SourceReviewAdjudicator:
         decision_only: bool = False,
         preloaded_evidence: str = "",
         preloaded_reads: set[tuple[str, int]] | None = None,
+        decision_packet: list[dict[str, object]] | None = None,
     ) -> tuple[_Verdict, set[tuple[str, int]]]:
         decision_only_instruction = (
             "\nThe host preloaded the exact source excerpts for the retained "
@@ -1585,7 +1665,7 @@ class SourceReviewAdjudicator:
             if decision_only
             else ""
         )
-        messages: list[dict[str, object]] = [
+        messages: list[dict[str, object]] = decision_packet or [
             {"role": "system", "content": _system_prompt(policy_version)},
             {
                 "role": "user",
@@ -1822,8 +1902,26 @@ class SourceReviewAdjudicator:
                 IncompleteStreamError,
                 ProviderStreamError,
                 ProviderBodyError,
-            ):
-                if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
+            ) as error:
+                # A streamed response may have spent its entire wall budget
+                # reasoning without producing a tool call. Replaying that same
+                # packet cannot resume its state and doubles miner wait/cost.
+                # Retry only a connection that failed before any response data,
+                # or an explicit provider fault rather than a model turn.
+                saw_response = bool(
+                    request_trace is not None
+                    and (request_trace.wire_bytes or request_trace.event_count)
+                )
+                early_provider_fault = isinstance(error, ProviderBodyError) or (
+                    isinstance(error, ProviderStreamError)
+                    and request_trace is not None
+                    and request_trace.event_count <= 1
+                )
+                if (
+                    attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS
+                    or isinstance(error, NoToolProgressError)
+                    or (saw_response and not early_provider_fault)
+                ):
                     raise
                 logger.warning(
                     "adjudicator completion transport failed; retrying once model=%s",

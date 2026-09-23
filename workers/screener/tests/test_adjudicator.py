@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import os
@@ -242,6 +243,72 @@ def test_adjudicator_compacts_old_tool_turns_but_keeps_the_case_brief() -> None:
     assert sum(row.get("role") == "assistant" for row in compacted) == 3
 
 
+async def test_decision_packet_binds_artifact_and_keeps_exact_evidence(
+    tmp_path: Path,
+) -> None:
+    archive_path = _archive(tmp_path)
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                _call(
+                                    "submit_adjudication",
+                                    {
+                                        "decision": "clear",
+                                        "reason": "The model writes the served answer.",
+                                        "clear_clause": "model_authors_graded_slot",
+                                        "citations": [
+                                            {"path": "src/main.rs", "line": 6}
+                                        ],
+                                    },
+                                )
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(archive_path, notes=[_CONCERN], ledger_final=True)
+
+    assert result.decision == "clear"
+    packet = str(requests[0]["messages"][1]["content"])
+    digest = hashlib.sha256(Path(archive_path).read_bytes()).hexdigest()
+    assert f"Artifact SHA-256: {digest}" in packet
+    assert '"path":"src/main.rs"' in packet
+    assert '"line":6' in packet
+    assert "call_model(request, &records)" in packet
+    assert "Archive inventory:" not in packet
+    assert requests[0]["tool_choice"] == "required"
+
+
+async def test_oversized_decision_packet_holds_without_model_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_DECISION_PACKET_BYTES", 1_024)
+
+    def unexpected_request(_request: httpx.Request) -> httpx.Response:
+        pytest.fail("incomplete evidence packet must not reach the model")
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(unexpected_request)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-packet-too-large"
+
+
 async def test_request_uses_provider_supported_completion_parameter(
     tmp_path: Path,
 ) -> None:
@@ -360,7 +427,7 @@ async def test_streamed_tool_call_is_assembled_before_verdict(tmp_path: Path) ->
     ]
 
 
-async def test_active_stream_without_tool_progress_retries_then_holds(
+async def test_active_stream_without_tool_progress_holds_without_replay(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_FIRST_TOOL_SECONDS", 0.08)
@@ -399,12 +466,12 @@ async def test_active_stream_without_tool_progress_retries_then_holds(
     result = await _adjudicator(
         _key(tmp_path), httpx.MockTransport(handler)
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
-    assert requests == 2
+    assert requests == 1
     assert result.decision == "escalate"
     assert result.run_diagnostic is not None
     assert result.run_diagnostic.failure_code == "stream-no-tool-progress"
     assert result.run_diagnostic.upstream == "together"
-    assert result.run_diagnostic.request_count == 2
+    assert result.run_diagnostic.request_count == 1
     assert all(
         attempt.event_count > 1 for attempt in result.run_diagnostic.request_attempts
     )
@@ -438,7 +505,7 @@ async def test_heartbeat_only_stream_cannot_evade_tool_progress_deadline(
     result = await _adjudicator(
         _key(tmp_path), httpx.MockTransport(handler)
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
-    assert requests == 2
+    assert requests == 1
     assert result.decision == "escalate"
     assert result.run_diagnostic is not None
     assert result.run_diagnostic.failure_code == "stream-no-tool-progress"
@@ -609,7 +676,7 @@ async def test_truncated_stream_cannot_clear(tmp_path: Path) -> None:
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
     assert result.decision == "escalate"
     assert result.escalation_code == "adjudicator-failed"
-    assert attempts == 2
+    assert attempts == 1
 
 
 @pytest.mark.parametrize("streamed", [False, True])
@@ -1005,7 +1072,7 @@ async def test_partial_sse_timeout_records_progress_without_model_text(
     assert secret not in result.run_diagnostic.model_dump_json()
 
 
-async def test_incomplete_stream_then_timeout_keeps_both_request_timelines(
+async def test_incomplete_stream_with_events_is_not_replayed(
     tmp_path: Path,
 ) -> None:
     requests = 0
@@ -1028,15 +1095,13 @@ async def test_incomplete_stream_then_timeout_keeps_both_request_timelines(
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN], deadline=deadline)
     assert result.decision == "escalate"
     assert result.run_diagnostic is not None
-    assert result.run_diagnostic.request_count == 2
-    first, second = result.run_diagnostic.request_attempts
+    assert result.run_diagnostic.request_count == 1
+    assert requests == 1
+    first = result.run_diagnostic.request_attempts[0]
     assert first.ordinal == 1
     assert first.stage == "event"
     assert first.upstream == "together"
-    assert second.ordinal == 2
-    assert second.stage == "request"
-    assert second.upstream is None
-    assert result.run_diagnostic.upstream is None
+    assert result.run_diagnostic.upstream == "together"
 
 
 def test_tool_call_rejects_parsed_object_arguments() -> None:
@@ -1173,10 +1238,10 @@ async def test_an_earlier_step_does_not_own_a_later_timeout(
                     ],
                 },
             )
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(1.0)
         return httpx.Response(200, json={})
 
-    deadline = asyncio.get_running_loop().time() + 0.15
+    deadline = asyncio.get_running_loop().time() + 0.5
     result = await _adjudicator(
         _key(tmp_path), httpx.MockTransport(handler)
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN], deadline=deadline)
@@ -1368,6 +1433,33 @@ async def test_two_stream_provider_errors_hold_with_safe_subtype(
     assert result.run_diagnostic.failure_code == "provider-stream-error"
     assert result.run_diagnostic.upstream == "together"
     assert secret not in result.model_dump_json()
+
+
+async def test_provider_fault_after_streamed_work_does_not_replay(
+    tmp_path: Path,
+) -> None:
+    attempts = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        events = [
+            {"choices": [{"delta": {"content": "reasoning"}}]},
+            {"provider": "Together", "error": {"message": "upstream failed"}},
+        ]
+        body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=body
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+
+    assert attempts == 1
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "provider-stream-error"
 
 
 async def test_an_unusable_upstream_name_is_dropped_rather_than_stored(
@@ -1707,8 +1799,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v7-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v7-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v8-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v8-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
