@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -60,6 +62,14 @@ func TestPrivateVerifierLedgerZeroCallAndIdentity(t *testing.T) {
 	}
 	if strings.Contains(string(encoded), identity.CaseID) || strings.Contains(string(encoded), identity.SessionID) {
 		t.Fatal("hidden case or session identity leaked")
+	}
+	plain := sha256.Sum256([]byte(identity.CaseID))
+	if ledger.CaseSHA256 == hex.EncodeToString(plain[:]) {
+		t.Fatal("case digest is dictionary-matchable plain SHA-256")
+	}
+	otherSession := uuid.NewString()
+	if ledger.CaseSHA256 == privateVerifierCaseDigest(otherSession, identity.CaseID) {
+		t.Fatal("case digest is not session-bound")
 	}
 	wrong := identity
 	wrong.ImageSHA256 = strings.Repeat("c", 64)

@@ -6,6 +6,7 @@ package main
 // attempt, artifact and Docker image identities before installing a binding.
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -37,7 +38,8 @@ type privateVerifierCaseIdentity struct {
 
 // privateVerifierCaseLedger deliberately contains only identities, counts and
 // a conservative status. It is not signed, a policy verdict, or CLEAR evidence.
-// Case and session IDs are hashed so an export cannot reveal hidden case names.
+// The session ID is hashed and the case ID is HMAC-bound to the random session
+// ID so an export cannot reveal or dictionary-match hidden case names.
 type privateVerifierCaseLedger struct {
 	SessionSHA256       string `json:"session_sha256"`
 	CaseSHA256          string `json:"case_sha256"`
@@ -59,6 +61,15 @@ type privateVerifierCaseLedger struct {
 func privateVerifierDigest(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+// The protected case inventory may use guessable identifiers. Key its export
+// digest with the broker's random, unexported session ID so a reader cannot
+// compare candidate IDs against a plain SHA-256 dictionary.
+func privateVerifierCaseDigest(sessionID, caseID string) string {
+	mac := hmac.New(sha256.New, []byte(sessionID))
+	_, _ = mac.Write([]byte(caseID))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // bindPrivateVerifierCase is callable only inside the trusted scorer process.
@@ -132,7 +143,7 @@ func (b *inferenceBroker) settledPrivateVerifierCaseLedger(identity privateVerif
 	}
 	result := privateVerifierCaseLedger{
 		SessionSHA256: privateVerifierDigest(session.id),
-		CaseSHA256:    privateVerifierDigest(binding.caseID),
+		CaseSHA256:    privateVerifierCaseDigest(session.id, binding.caseID),
 		AgentID:       identity.AgentID, AttemptID: binding.attemptID,
 		ArtifactSHA256: binding.artifactSHA256, ImageSHA256: binding.imageSHA256,
 		ChatDispatches:      session.chatDispatches,
