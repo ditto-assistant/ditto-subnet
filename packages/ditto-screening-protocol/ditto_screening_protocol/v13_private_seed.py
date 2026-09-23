@@ -182,6 +182,9 @@ class AuthenticatedGeneratorDerivationReceipt(BaseModel):
     manifest_sha256: str = Field(pattern=_SHA_PATTERN)
     ordered_payload_digests_sha256: str = Field(pattern=_SHA_PATTERN)
     generated_at: datetime
+    # Private append-only ledger commit time, issued by the trusted generator
+    # service. The manifest's generated_at is not authoritative by itself.
+    attested_at: datetime
     derivation_attestation_sha256: str = Field(pattern=_SHA_PATTERN)
 
 
@@ -483,12 +486,14 @@ async def verify_v13_issued_matched_inventory(
                     or receipt.ordered_payload_digests_sha256
                     != _ordered_payload_digests_sha256(manifest)
                     or receipt.generated_at.tzinfo is None
+                    or receipt.attested_at.tzinfo is None
                     or manifest.generated_at.tzinfo is None
                     or registration.registered_at.tzinfo is None
                     or not (
                         issuance.committed_at
                         < receipt.generated_at
                         == manifest.generated_at
+                        <= receipt.attested_at
                         < registration.registered_at
                     )
                     or registration.manifest_sha256 != manifest_sha256

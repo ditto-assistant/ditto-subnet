@@ -122,6 +122,7 @@ class GeneratorProvenance:
                     manifest
                 ),
                 generated_at=manifest.generated_at,
+                attested_at=manifest.generated_at + timedelta(milliseconds=500),
                 derivation_attestation_sha256=hashlib.sha256(
                     (role + registration.manifest_sha256).encode()
                 ).hexdigest(),
@@ -490,6 +491,9 @@ def test_matched_packages_require_issued_seeds_and_same_ordered_inventory() -> N
         "wrong_payloads",
         "wrong_role",
         "wrong_revision",
+        "late_attestation",
+        "attestation_before_generation",
+        "missing_attestation_time",
     ],
 )
 def test_generator_provenance_fails_closed(fault: str) -> None:
@@ -555,6 +559,17 @@ def test_generator_provenance_fails_closed(fault: str) -> None:
         generator.receipts["target"] = target.model_copy(
             update={"generator_revision": ""}
         )
+    elif fault == "late_attestation":
+        registration = registry.packages[(issued.group_id, "target")]
+        generator.receipts["target"] = target.model_copy(
+            update={"attested_at": registration.registered_at + timedelta(seconds=1)}
+        )
+    elif fault == "attestation_before_generation":
+        generator.receipts["target"] = target.model_copy(
+            update={"attested_at": target.generated_at - timedelta(seconds=1)}
+        )
+    elif fault == "missing_attestation_time":
+        generator.receipts["target"] = target.model_copy(update={"attested_at": None})
     with pytest.raises(V13SeedIssuanceUnavailable):
         asyncio.run(
             verify_v13_issued_matched_inventory(
