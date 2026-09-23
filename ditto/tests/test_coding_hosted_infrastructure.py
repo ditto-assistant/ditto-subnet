@@ -88,7 +88,9 @@ def test_vm_uses_existing_protected_compute_module() -> None:
     )
     compute = (ROOT / "infra/terraform/modules/compute/gcp/main.tf").read_text()
     assert "deletion_protection = var.deletion_protection" in compute
-    compute_vars = (ROOT / "infra/terraform/modules/compute/gcp/variables.tf").read_text()
+    compute_vars = (
+        ROOT / "infra/terraform/modules/compute/gcp/variables.tf"
+    ).read_text()
     assert re.search(
         r'variable "deletion_protection"\s*\{[^}]*default\s*= true',
         compute_vars,
