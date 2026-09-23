@@ -100,7 +100,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint("policy_version = 13", name="svrp_policy_check"),
         sa.CheckConstraint(
-            "status IN ('queued', 'running', 'completed', 'failed')",
+            "status IN ('queued', 'running', 'reported', 'failed')",
             name="svrp_status_check",
         ),
     )

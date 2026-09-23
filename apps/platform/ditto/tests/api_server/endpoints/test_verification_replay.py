@@ -271,7 +271,7 @@ async def test_replay_exact_guards_independent_claim_and_report_only(session):
     assert changed_binding.value.status_code == 409
 
     result = VerificationReplayFinish(
-        status="completed", artifact_sha256=ARTIFACT, image_sha256=IMAGE
+        status="reported", artifact_sha256=ARTIFACT, image_sha256=IMAGE
     )
     finished = await finish_replay(
         first.replay_id, result, _request(), SECOND_WORKER, session
@@ -279,7 +279,8 @@ async def test_replay_exact_guards_independent_claim_and_report_only(session):
     duplicate_finish = await finish_replay(
         first.replay_id, result, _request(), SECOND_WORKER, session
     )
-    assert finished.status == duplicate_finish.status == "completed"
+    assert finished.status == duplicate_finish.status == "reported"
+    assert finished.policy_verification_complete is False
     after_finish_retry = await create_replay(agent_id, payload, None, session)
     assert after_finish_retry.replay_id == first.replay_id
     assert (await session.get(Agent, agent_id)).status == "quarantined"

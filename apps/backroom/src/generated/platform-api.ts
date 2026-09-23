@@ -30767,7 +30767,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "completed" | "failed";
+            status: "reported" | "failed";
         };
         /** VerificationReplayInputs */
         VerificationReplayInputs: {
@@ -30867,6 +30867,12 @@ export interface components {
             image_verified_storage_key: string | null;
             /** Lease Deadline */
             lease_deadline: string | null;
+            /**
+             * Policy Verification Complete
+             * @default false
+             * @constant
+             */
+            policy_verification_complete: false;
             /** Policy Version */
             policy_version: number;
             /**
@@ -30898,7 +30904,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "queued" | "running" | "completed" | "failed";
+            status: "queued" | "running" | "reported" | "failed";
             /** Worker Hotkey */
             worker_hotkey: string | null;
         };

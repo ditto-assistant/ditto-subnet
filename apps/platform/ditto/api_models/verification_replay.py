@@ -63,7 +63,8 @@ class VerificationReplayState(BaseModel):
     image_staging_id: UUID | None
     image_verified_at: datetime | None
     image_verified_storage_key: str | None
-    status: Literal["queued", "running", "completed", "failed"]
+    status: Literal["queued", "running", "reported", "failed"]
+    policy_verification_complete: Literal[False] = False
     worker_hotkey: str | None
     lease_deadline: datetime | None
     created_at: datetime
@@ -117,7 +118,7 @@ class VerificationReplayReceiptState(BaseModel):
 class VerificationReplayFinish(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    status: Literal["completed", "failed"]
+    status: Literal["reported", "failed"]
     failure_code: Annotated[str | None, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")] = (
         None
     )

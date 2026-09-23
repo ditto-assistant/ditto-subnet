@@ -700,7 +700,7 @@ async def finish_replay(
         or payload.image_sha256 != row.image_sha256
     ):
         raise HTTPException(409, "replay evidence binding changed")
-    if payload.status == "completed" and row.image_verified_at is None:
+    if payload.status == "reported" and row.image_verified_at is None:
         raise HTTPException(409, "replay image is not verified")
     if (payload.status == "failed") != (payload.failure_code is not None):
         raise HTTPException(422, "failure code is required only for a failed replay")
