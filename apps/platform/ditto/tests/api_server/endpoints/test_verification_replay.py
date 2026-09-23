@@ -18,6 +18,7 @@ from ditto.api_models.verification_replay import (
     VerificationReplayReceiptRequest,
 )
 from ditto.api_server.endpoints.verification_replay import (
+    _replay_verified_image_key,
     append_replay_receipt,
     claim_replay,
     create_replay,
@@ -398,14 +399,25 @@ async def test_prebuild_hold_gets_separate_verified_replay_image(session):
     )
     assert built.image_verified_at is not None
     assert built.image_upload_id is None
-    assert storage.copy_object.call_args.kwargs["dest_key"] == (
-        f"verification-replays/{created.replay_id}/verified-image.tar"
+    pinned_key = built.image_verified_storage_key
+    assert pinned_key is not None
+    assert pinned_key.startswith(f"verification-replays/{created.replay_id}/verified/")
+    assert storage.copy_object.call_args.kwargs["dest_key"] == pinned_key
+    again = await verify_replay_build(
+        created.replay_id, verify, _request(storage), SECOND_WORKER, session
     )
+    assert again.image_verified_storage_key == pinned_key
+    assert storage.copy_object.call_count == 1
     await get_replay_inputs(
         created.replay_id, _request(storage), SECOND_WORKER, session
     )
-    assert storage.presigned_get_url.call_args.kwargs["key"] == (
-        f"verification-replays/{created.replay_id}/verified-image.tar"
-    )
+    assert storage.presigned_get_url.call_args.kwargs["key"] == pinned_key
     assert (await session.get(Agent, agent_id)).screened_image_upload_id is None
     assert (await session.get(Agent, agent_id)).status == "quarantined"
+
+
+def test_verified_replay_candidates_never_share_a_final_object_key():
+    replay_id = uuid4()
+    assert _replay_verified_image_key(replay_id, uuid4()) != (
+        _replay_verified_image_key(replay_id, uuid4())
+    )

@@ -62,6 +62,7 @@ class VerificationReplayState(BaseModel):
     )
     image_staging_id: UUID | None
     image_verified_at: datetime | None
+    image_verified_storage_key: str | None
     status: Literal["queued", "running", "completed", "failed"]
     worker_hotkey: str | None
     lease_deadline: datetime | None

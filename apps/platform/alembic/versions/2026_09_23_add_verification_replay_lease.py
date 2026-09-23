@@ -34,6 +34,7 @@ def upgrade() -> None:
         sa.Column("image_id", sa.Text(), nullable=True),
         sa.Column("image_staging_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("image_verified_at", sa.TIMESTAMP(timezone=True), nullable=True),
+        sa.Column("image_verified_storage_key", sa.Text(), nullable=True),
         sa.Column("status", sa.Text(), nullable=False, server_default="queued"),
         sa.Column("worker_hotkey", sa.Text(), nullable=True),
         sa.Column("lease_deadline", sa.TIMESTAMP(timezone=True), nullable=True),
@@ -76,6 +77,11 @@ def upgrade() -> None:
             "AND image_id IS NOT NULL)",
             name="svrp_image_metadata_check",
         ),
+        sa.CheckConstraint(
+            "image_upload_id IS NOT NULL OR image_verified_at IS NULL OR "
+            "image_verified_storage_key IS NOT NULL",
+            name="svrp_verified_storage_key_check",
+        ),
         sa.CheckConstraint("policy_version = 13", name="svrp_policy_check"),
         sa.CheckConstraint(
             "status IN ('queued', 'running', 'completed', 'failed')",
@@ -104,6 +110,15 @@ def upgrade() -> None:
                 OLD.source_attempt_id, OLD.artifact_sha256,
                 OLD.policy_version, OLD.image_upload_id) THEN
                 RAISE EXCEPTION 'verification replay source binding is immutable';
+            END IF;
+            IF OLD.image_verified_storage_key IS NOT NULL AND
+               NEW.image_verified_storage_key IS DISTINCT FROM
+               OLD.image_verified_storage_key THEN
+                RAISE EXCEPTION 'verification replay verified image key is immutable';
+            END IF;
+            IF OLD.image_verified_at IS NOT NULL AND
+               NEW.image_verified_at IS DISTINCT FROM OLD.image_verified_at THEN
+                RAISE EXCEPTION 'verification replay image verification is immutable';
             END IF;
             RETURN NEW;
         END;

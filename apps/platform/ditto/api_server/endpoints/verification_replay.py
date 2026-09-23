@@ -56,8 +56,8 @@ def _replay_staging_image_key(replay_id: UUID, staging_id: UUID) -> str:
     return f"verification-replays/{replay_id}/staging/{staging_id}.tar"
 
 
-def _replay_verified_image_key(replay_id: UUID) -> str:
-    return f"verification-replays/{replay_id}/verified-image.tar"
+def _replay_verified_image_key(replay_id: UUID, candidate_id: UUID) -> str:
+    return f"verification-replays/{replay_id}/verified/{candidate_id}.tar"
 
 
 async def _require_enrolled_replay_worker(
@@ -67,7 +67,9 @@ async def _require_enrolled_replay_worker(
     node_id = getattr(request.state, "screener_node_id", None)
     if node_id is None or request.state.screener_node_status != "active":
         raise HTTPException(403, "independent enrolled screener node required")
-    node = await session.get(ScreenerNode, node_id, populate_existing=True)
+    node = await session.get(
+        ScreenerNode, node_id, populate_existing=True, with_for_update=True
+    )
     if (
         node is None
         or node.status != "active"
@@ -95,6 +97,7 @@ def _state(
         image_id=row.image_id,
         image_staging_id=row.image_staging_id,
         image_verified_at=row.image_verified_at,
+        image_verified_storage_key=row.image_verified_storage_key,
         status=row.status,
         worker_hotkey=row.worker_hotkey,
         lease_deadline=row.lease_deadline,
@@ -227,6 +230,7 @@ async def create_replay(
         image_verified_at=(
             agent.screened_image_verified_at if payload.image_upload_id else None
         ),
+        image_verified_storage_key=None,
         status="queued",
         actor=payload.actor,
         reason=payload.reason,
@@ -451,8 +455,10 @@ async def get_replay_inputs(
         image_key = (
             _screened_image_key(row.agent_id, row.image_upload_id)
             if row.image_upload_id is not None
-            else _replay_verified_image_key(row.replay_id)
+            else row.image_verified_storage_key
         )
+        if image_key is None:
+            raise HTTPException(409, "verified replay image key is unavailable")
         image_url = await storage.presigned_get_url(
             key=image_key, expires_in=URL_TTL_SECONDS
         )
@@ -557,7 +563,9 @@ async def verify_replay_build(
         "replay-id": str(row.replay_id),
     }
     staging_key = _replay_staging_image_key(row.replay_id, row.image_staging_id)
-    final_key = _replay_verified_image_key(row.replay_id)
+    # Every verification gets a distinct final key. A concurrent verification
+    # may complete after this one, but cannot overwrite the image we pin in DB.
+    final_key = _replay_verified_image_key(row.replay_id, uuid4())
     # Hashing a multi-GB tar can take time. Do not hold the submission's
     # lifecycle locks through object storage I/O; reacquire all source locks
     # and recheck the exact binding before recording a verified image.
@@ -604,6 +612,7 @@ async def verify_replay_build(
     if row.image_verified_at is not None:
         return _state(row)
     row.image_verified_at = datetime.now(UTC)
+    row.image_verified_storage_key = final_key
     await session.commit()
     return _state(row)
 

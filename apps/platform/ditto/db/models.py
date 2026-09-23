@@ -792,6 +792,7 @@ class ScreeningVerificationReplay(Base):
     image_verified_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    image_verified_storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
     worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
     lease_deadline: Mapped[datetime | None] = mapped_column(

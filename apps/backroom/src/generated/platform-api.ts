@@ -30863,6 +30863,8 @@ export interface components {
             image_upload_id: string | null;
             /** Image Verified At */
             image_verified_at: string | null;
+            /** Image Verified Storage Key */
+            image_verified_storage_key: string | null;
             /** Lease Deadline */
             lease_deadline: string | null;
             /** Policy Version */

@@ -913,6 +913,15 @@ CREATE FUNCTION public.reject_verification_replay_binding_change() RETURNS trigg
                 OLD.policy_version, OLD.image_upload_id) THEN
                 RAISE EXCEPTION 'verification replay source binding is immutable';
             END IF;
+            IF OLD.image_verified_storage_key IS NOT NULL AND
+               NEW.image_verified_storage_key IS DISTINCT FROM
+               OLD.image_verified_storage_key THEN
+                RAISE EXCEPTION 'verification replay verified image key is immutable';
+            END IF;
+            IF OLD.image_verified_at IS NOT NULL AND
+               NEW.image_verified_at IS DISTINCT FROM OLD.image_verified_at THEN
+                RAISE EXCEPTION 'verification replay image verification is immutable';
+            END IF;
             RETURN NEW;
         END;
         $$;
@@ -4463,6 +4472,7 @@ CREATE TABLE public.screening_verification_replays (
     image_id text,
     image_staging_id uuid,
     image_verified_at timestamp with time zone,
+    image_verified_storage_key text,
     status text DEFAULT 'queued'::text NOT NULL,
     worker_hotkey text,
     lease_deadline timestamp with time zone,
@@ -4475,7 +4485,8 @@ CREATE TABLE public.screening_verification_replays (
     CONSTRAINT ck_screening_verification_replays_svrp_image_metadata_check CHECK ((((image_sha256 IS NULL) AND (image_size_bytes IS NULL) AND (image_id IS NULL) AND (image_verified_at IS NULL)) OR ((image_sha256 IS NOT NULL) AND (image_size_bytes > 0) AND (image_id IS NOT NULL)))),
     CONSTRAINT ck_screening_verification_replays_svrp_image_sha_check CHECK (((image_sha256 IS NULL) OR (image_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_screening_verification_replays_svrp_policy_check CHECK ((policy_version = 13)),
-    CONSTRAINT ck_screening_verification_replays_svrp_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'completed'::text, 'failed'::text])))
+    CONSTRAINT ck_screening_verification_replays_svrp_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'completed'::text, 'failed'::text]))),
+    CONSTRAINT ck_screening_verification_replays_svrp_verified_storage_e6b8 CHECK (((image_upload_id IS NOT NULL) OR (image_verified_at IS NULL) OR (image_verified_storage_key IS NOT NULL)))
 );
 
 
