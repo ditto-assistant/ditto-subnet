@@ -14,7 +14,9 @@ The private manifest has `revision`, `policy_version: 13`, and a nonempty
 
 - exact Backroom `agent_id`, `attempt_id`, `artifact_sha256`,
   `manifest_digest`, `review_notes_digest`, `review_settings_revision`, and
-  `policy_version`;
+  `policy_version`; also `baseline_worker_release` and the exact
+  `baseline_prompt_revisions` for L1, L2, L3, and L4 (`not-run` for a layer
+  that did not execute);
 - a relative `archive` path under `--artifact-root`, whose bytes match the
   artifact SHA; frozen `notes` (1-48), their canonical JSON
   `notes_payload_sha256`, and the frozen `finding` and `error_code` (nullable);
@@ -33,12 +35,18 @@ same-hotkey relative, or a new archive for the pinned row.
 
 Before any paid run, assemble independently reviewed v13 cases covering
 confirmed violations across I1-I8, legitimate safe harbors, difficult
-false-positive patterns, easy controls, and recent failures. Record selection
+false-positive patterns (including the V13 I6 endpoint-absent stub versus
+endpoint-present scored-execution distinction corrected by #2167), easy
+controls, and recent failures. Record selection
 criteria before seeing either candidate result. Active escalations and
 automated rescreens are **unlabeled stress cases**, not clear/reject gold.
 Deduplicate by artifact family for accuracy reporting and retain exact rows for
 operational replay. A single pilot or a failure-enriched sample is not a
 representative parity test.
+Keep pre-#2167 and post-#2167 worker/prompt baselines in separate comparison
+strata. The report flags mixed baseline releases or prompt sets; an aggregate
+across them is not a valid noninferiority comparison. Do not mark #2167 live
+until Backroom confirms the release on the workers that screened those cases.
 
 Execution requires a dedicated metered OpenRouter key with an independently
 configured upstream hard spend cap. The command's reported-cost cap is only a

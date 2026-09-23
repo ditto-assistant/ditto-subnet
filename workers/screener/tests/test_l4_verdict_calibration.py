@@ -40,6 +40,13 @@ def _manifest(tmp_path: Path) -> tuple[Path, Path]:
                 "artifact_sha256": digest,
                 "manifest_digest": "a" * 64,
                 "review_settings_revision": 119,
+                "baseline_worker_release": "v0.295.0",
+                "baseline_prompt_revisions": {
+                    "l1": "source-review-v21-policy-v13",
+                    "l2": "l2-review-v1-policy-v13",
+                    "l3": "l3-review-v1-policy-v13",
+                    "l4": "adjudicator-v7-policy-v13",
+                },
                 "review_notes_digest": "b" * 64,
                 "notes_payload_sha256": notes_digest,
                 "policy_version": 13,
@@ -77,6 +84,14 @@ def test_manifest_requires_exact_archive_and_independent_label(tmp_path: Path) -
     manifest["cases"][0]["artifact_sha256"] = "0" * 64
     path.write_text(json.dumps(manifest))
     with pytest.raises(ValueError, match="artifact digest mismatch"):
+        _load_manifest(path, root)
+
+    manifest["cases"][0]["artifact_sha256"] = hashlib.sha256(
+        (root / "agent.tar.gz").read_bytes()
+    ).hexdigest()
+    manifest["cases"][0]["baseline_prompt_revisions"].pop("l2")
+    path.write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="exact L1-L4 baseline prompt"):
         _load_manifest(path, root)
 
 
@@ -120,6 +135,8 @@ def test_summary_excludes_incomplete_cases_from_accuracy() -> None:
             "reject_invariant_match": True,
             "reported_cost_usd": 0.1,
             "reported_cost_lower_bound": False,
+            "baseline_worker_release": "v0.295.0",
+            "baseline_prompt_revisions": {"l1": "a", "l2": "b", "l3": "c", "l4": "d"},
         },
         {
             "agent_id": "a",
@@ -132,12 +149,17 @@ def test_summary_excludes_incomplete_cases_from_accuracy() -> None:
             "reject_invariant_match": None,
             "reported_cost_usd": 0.2,
             "reported_cost_lower_bound": True,
+            "baseline_worker_release": "v0.295.0",
+            "baseline_prompt_revisions": {"l1": "a", "l2": "b", "l3": "c", "l4": "d"},
         },
     ]
     summary = _summary(rows)
     assert summary["fully_paired_cases"] == 0
     assert summary["models"]["openai/gpt-5.6-sol"]["completed"] == 0
     assert summary["models"]["openai/gpt-5.6-sol"]["incomplete"] == 1
+    assert summary["mixed_baseline_releases"] is False
+    rows[1]["baseline_worker_release"] = "v0.294.0"
+    assert _summary(rows)["mixed_baseline_releases"] is True
 
 
 def test_private_result_writer_does_not_chmod_an_existing_directory(

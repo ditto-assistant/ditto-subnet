@@ -31,6 +31,8 @@ from ditto_screening_protocol.models import SourceReviewInvariant
 
 MODELS = ("z-ai/glm-5.3-flash", "openai/gpt-5.6-sol")
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
+RELEASE_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
+BASELINE_LAYERS = ("l1", "l2", "l3", "l4")
 MAX_STEPS = 128
 MAX_COMPLETION_TOKENS = 16_000
 TIMEOUT_SECONDS = 600.0
@@ -114,6 +116,22 @@ def _case(raw: object, root: Path, policy_version: int) -> dict[str, object]:
         or settings_revision < 1
     ):
         raise ValueError("case needs an exact review settings revision")
+    baseline_release = raw.get("baseline_worker_release")
+    if (
+        not isinstance(baseline_release, str)
+        or RELEASE_RE.fullmatch(baseline_release) is None
+    ):
+        raise ValueError("case needs an exact baseline worker release")
+    baseline_prompts = raw.get("baseline_prompt_revisions")
+    if (
+        not isinstance(baseline_prompts, dict)
+        or set(baseline_prompts) != set(BASELINE_LAYERS)
+        or any(
+            not isinstance(baseline_prompts[layer], str) or not baseline_prompts[layer]
+            for layer in BASELINE_LAYERS
+        )
+    ):
+        raise ValueError("case needs exact L1-L4 baseline prompt revisions")
     archive_name = raw.get("archive")
     if not isinstance(archive_name, str) or not archive_name:
         raise ValueError("archive must be a relative path")
@@ -168,6 +186,8 @@ def _case(raw: object, root: Path, policy_version: int) -> dict[str, object]:
         "artifact_sha256": artifact_sha,
         "manifest_digest": manifest_digest,
         "review_settings_revision": settings_revision,
+        "baseline_worker_release": baseline_release,
+        "baseline_prompt_revisions": dict(baseline_prompts),
         "review_notes_digest": notes_digest,
         "notes_payload_sha256": notes_payload_sha,
         "archive": archive,
@@ -236,7 +256,17 @@ def _summary(rows: list[dict[str, object]]) -> dict[str, object]:
         if len(pair) != len(MODELS) or not all(pair[m]["complete"] for m in MODELS):
             continue
         paired.append(pair[MODELS[1]])
-    return {"models": by_model, "fully_paired_cases": len(paired)}
+    baseline_releases = sorted({str(row["baseline_worker_release"]) for row in rows})
+    baseline_prompt_sets = {
+        json.dumps(row["baseline_prompt_revisions"], sort_keys=True) for row in rows
+    }
+    return {
+        "models": by_model,
+        "fully_paired_cases": len(paired),
+        "baseline_releases": baseline_releases,
+        "mixed_baseline_releases": len(baseline_releases) > 1,
+        "mixed_baseline_prompt_sets": len(baseline_prompt_sets) > 1,
+    }
 
 
 def _exception_code(error: Exception) -> str:
@@ -394,6 +424,8 @@ async def _execute(
                 "artifact_sha256": case["artifact_sha256"],
                 "manifest_digest": case["manifest_digest"],
                 "review_settings_revision": case["review_settings_revision"],
+                "baseline_worker_release": case["baseline_worker_release"],
+                "baseline_prompt_revisions": case["baseline_prompt_revisions"],
                 "review_notes_digest": case["review_notes_digest"],
                 "notes_payload_sha256": case["notes_payload_sha256"],
                 "cohort": case["cohort"],
