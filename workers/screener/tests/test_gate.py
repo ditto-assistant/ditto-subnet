@@ -100,6 +100,7 @@ async def test_v13_shadow_runtime_observations_record_only_attempt_bound_digests
             tool_key=b"key",
         ),
         probe_container="gateway",
+        attempt_id=_ATTEMPT,
         artifact_sha256="b" * 64,
         image_id="sha256:" + "a" * 64,
         bench_version=13,
@@ -170,6 +171,7 @@ async def test_v13_runtime_observation_stops_at_failed_seed(
             tool_key=b"key",
         ),
         probe_container="gateway",
+        attempt_id=_ATTEMPT,
         artifact_sha256="b" * 64,
         image_id="sha256:" + "a" * 64,
         bench_version=13,
@@ -178,6 +180,85 @@ async def test_v13_runtime_observation_stops_at_failed_seed(
         include_runs=True,
     )
     assert receipts == ["health", "ordinary_model_run", "tool_selection_run"]
+
+
+async def test_v13_shadow_semantics_require_tool_and_user_specific_memory(
+    make_config: Callable[..., ScreenerConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    gate = _gate_with(make_config(), _ok_run([]), tarball=_valid_tar())
+    state_file = tmp_path / "model-called"
+    (tmp_path / "semantic-events").write_text("")
+    calls = 0
+    memories: dict[str, str] = {}
+
+    async def request(
+        _container: str, url: str, *, payload: dict[str, object], timeout: float
+    ) -> tuple[int, str]:
+        nonlocal calls
+        assert timeout > 0
+        if url.endswith("/seed"):
+            pairs = payload["pairs"]
+            assert isinstance(pairs, list) and isinstance(pairs[0], dict)
+            memories[str(payload["user_id"])] = str(pairs[0]["response"])
+            return 0, '{"pairs":1,"subjects":0,"links":0}'
+        calls += 1
+        if payload.get("tools"):
+            config = json.loads((tmp_path / "semantic-probe.json").read_text())
+            events_file = tmp_path / "semantic-events"
+            with events_file.open("a") as stream:
+                stream.write(
+                    json.dumps({"event": "emitted", "probe_id": config["probe_id"]})
+                    + "\n"
+                )
+                stream.write(
+                    json.dumps({"event": "executed", "probe_id": config["probe_id"]})
+                    + "\n"
+                )
+            return 0, json.dumps({"answer": config["result"]})
+        if "reference marker" in str(payload.get("user_input")):
+            return 0, json.dumps({"answer": memories[str(payload["user_id"])]})
+        return 0, '{"answer":"secret-a"}'
+
+    gate._request_from_sidecar = request  # type: ignore[method-assign]
+    monkeypatch.setattr(gate_module, "_gateway_call_count", lambda _path: calls)
+    receipts: dict[str, str] = {}
+
+    async def record(code: str, digest: str) -> None:
+        receipts[code] = digest
+
+    with caplog.at_level(logging.INFO):
+        await gate._run_v13_runtime_observations(
+            audit_runtime=gate_module._AuditRuntime(
+                harness_base="http://harness:8080",
+                gateway_response_token="secret-a",
+                oracle_answer="secret-b",
+                gateway_state_file=str(state_file),
+                tool_route="route",
+                tool_key=b"key",
+            ),
+            probe_container="gateway",
+            attempt_id=_ATTEMPT,
+            artifact_sha256="b" * 64,
+            image_id="sha256:" + "a" * 64,
+            bench_version=13,
+            deadline=None,
+            record=record,
+            include_runs=True,
+        )
+
+    decisions = [
+        record.message
+        for record in caplog.records
+        if record.message.startswith("v13 shadow semantic")
+    ]
+    assert len(decisions) == 4
+    assert all("status=pass" in message for message in decisions)
+    assert len(receipts) == 5
+    assert all(len(digest) == 64 for digest in receipts.values())
+    assert all(marker not in repr(decisions) for marker in memories.values())
 
 
 async def test_v13_shadow_observation_runs_only_after_policy_decision(
@@ -324,6 +405,7 @@ def test_gateway_state_is_owned_by_worker_and_appendable_by_rootless_uid() -> No
         )
         assert staged_script.stat().st_mode & 0o777 == 0o444
         assert _gateway_call_count(state_file) == 0
+        assert (Path(state_dir) / "semantic-events").stat().st_mode & 0o777 == 0o622
     finally:
         shutil.rmtree(state_dir)
 
