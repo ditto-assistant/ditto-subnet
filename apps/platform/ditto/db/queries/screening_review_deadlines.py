@@ -29,9 +29,11 @@ from ditto.db.models import (
 
 # SHA-256 of the published policy-v13.md carried by this build. A regression
 # pins it to the source document; an operator cannot schedule an arbitrary
-# normative document under the current worker binary.
+# normative document under the current worker binary. Recomputed after
+# rebasing in the no-fault review_timed_out finalizer description (#2100/
+# #1871), which changed the document's bytes.
 POLICY_V13_DOCUMENT_DIGEST = (
-    "81380e315309fd685dc0c58b51962c2d4fee5d5479db0f1a548b6a1a30d4f8bd"
+    "0f9c46deac5b3243ad079d7aabbc792c06fb143bd6d37205818f4998f6bb5082"
 )
 FIRST_V13_CLAIM_EVENT: Literal["first-v13-screening-claim"] = (
     "first-v13-screening-claim"
