@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -100,6 +105,35 @@ async def _seed_image(
                 verified_at=now,
             )
         )
+
+
+def _attestation_assertion(
+    approval_id: str,
+    evidence_sha256: str,
+    *,
+    sub: str,
+    email: str,
+    issued_at: int | None = None,
+    secret: str = "x" * 48,
+) -> str:
+    claims = {
+        "aud": "ditto-platform-v13-benign-approval",
+        "action": "attest-known-benign",
+        "approval_id": approval_id,
+        "evidence_sha256": evidence_sha256,
+        "sub": sub,
+        "email": email,
+        "iat": issued_at if issued_at is not None else int(time.time()),
+        "nonce": "a" * 32,
+    }
+    encoded = (
+        base64.urlsafe_b64encode(json.dumps(claims, separators=(",", ":")).encode())
+        .decode()
+        .rstrip("=")
+    )
+    signed = f"v1.{encoded}"
+    digest = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
+    return f"{signed}.{digest}"
 
 
 async def test_generation_start_requires_preapproved_exact_clean_image(
@@ -256,3 +290,125 @@ async def test_generation_role_digest_matches_protocol_fixed_vector() -> None:
     assert generation_role_digest(group, "known_benign") == (
         "1575e4205e10e50c2f2b3d3c33e6c1a920aa1897fcdd3c0d3f398c809f304d87"
     )
+
+
+async def test_known_benign_needs_two_authenticated_distinct_reviewers(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    agent_id, attempt_id = uuid4(), uuid4()
+    await _seed_image(
+        session_maker,
+        agent_id=agent_id,
+        attempt_id=attempt_id,
+        artifact_sha256="a" * 64,
+        image_sha256="b" * 64,
+        status=AgentStatus.SCORED,
+    )
+    created = await client.post(
+        f"{_BASE}/known-benign-approvals",
+        json={
+            "agent_id": str(agent_id),
+            "attempt_id": str(attempt_id),
+            "artifact_sha256": "a" * 64,
+            "image_sha256": "b" * 64,
+            "profile_sha256": V13_PRIVATE_PROFILE_SHA256,
+            "review_evidence_sha256": "e" * 64,
+            "reason": "independent source and runtime review",
+        },
+        headers=_HEADERS,
+    )
+    assert created.status_code == 200, created.text
+    approval_id = created.json()["approval_id"]
+    path = f"{_BASE}/known-benign-approvals/{approval_id}"
+    assert (await client.get(f"{path}/provenance", headers=_HEADERS)).json()[
+        "status"
+    ] == "recorded_unverified"
+
+    first = _attestation_assertion(
+        approval_id, "e" * 64, sub="google-sub-one", email="one@omniaura.ai"
+    )
+    disabled = await client.post(
+        f"{path}/attest",
+        json={"assertion": first, "reason": "checked source and runtime"},
+        headers=_HEADERS,
+    )
+    assert disabled.status_code == 503
+    app.state.config = replace(
+        app.state.config,
+        v13_benign_attestation_secret="x" * 48,
+    )
+    wrong_evidence = await client.post(
+        f"{path}/attest",
+        json={
+            "assertion": _attestation_assertion(
+                approval_id, "f" * 64, sub="google-sub-one", email="one@omniaura.ai"
+            ),
+            "reason": "checked source and runtime",
+        },
+        headers=_HEADERS,
+    )
+    assert wrong_evidence.status_code == 401
+    expired = await client.post(
+        f"{path}/attest",
+        json={
+            "assertion": _attestation_assertion(
+                approval_id,
+                "e" * 64,
+                sub="google-sub-one",
+                email="one@omniaura.ai",
+                issued_at=int(time.time()) - 121,
+            ),
+            "reason": "checked source and runtime",
+        },
+        headers=_HEADERS,
+    )
+    assert expired.status_code == 401
+    forged = await client.post(
+        f"{path}/attest",
+        json={
+            "assertion": first[:-64] + "0" * 64,
+            "reason": "checked source and runtime",
+        },
+        headers={**_HEADERS, "X-Admin-Actor": "second-reviewer"},
+    )
+    assert forged.status_code == 401
+    one = await client.post(
+        f"{path}/attest",
+        json={"assertion": first, "reason": "checked source and runtime"},
+        headers=_HEADERS,
+    )
+    assert one.status_code == 200, one.text
+    assert one.json()["status"] == "one_authenticated_reviewer"
+    same = await client.post(
+        f"{path}/attest",
+        json={"assertion": first, "reason": "checked again independently"},
+        headers={**_HEADERS, "X-Admin-Actor": "second-reviewer"},
+    )
+    assert same.json()["authenticated_reviewers"] == 1
+    same_email = await client.post(
+        f"{path}/attest",
+        json={
+            "assertion": _attestation_assertion(
+                approval_id, "e" * 64, sub="google-sub-two", email="one@omniaura.ai"
+            ),
+            "reason": "same email cannot be second reviewer",
+        },
+        headers=_HEADERS,
+    )
+    assert same_email.status_code == 409
+    second = await client.post(
+        f"{path}/attest",
+        json={
+            "assertion": _attestation_assertion(
+                approval_id, "e" * 64, sub="google-sub-two", email="two@omniaura.ai"
+            ),
+            "reason": "checked independently too",
+        },
+        headers=_HEADERS,
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "two_person_authenticated"
+    assert second.json()["authenticated_reviewers"] == 2

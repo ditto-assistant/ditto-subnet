@@ -415,6 +415,9 @@ class ApiServerConfig:
     admin_api_token: str | None = None
     """Bearer token for private Backroom/operator administration endpoints."""
 
+    v13_benign_attestation_secret: str | None = None
+    """Distinct Backroom-to-Platform HMAC key for authenticated V13 reviewers."""
+
     ditto_link: DittoLinkConfig = field(
         default_factory=lambda: DittoLinkConfig(
             enabled=False,
@@ -1005,6 +1008,9 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         ),
         inference_proxy=inference_proxy,
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
+        v13_benign_attestation_secret=(
+            os.environ.get("DITTO_V13_BENIGN_ATTESTATION_SECRET") or None
+        ),
         ditto_link=parse_ditto_link_config_from_env(),
         coding_catalog_curator_hotkeys=tuple(
             value
@@ -1136,6 +1142,13 @@ def check_config(config: ApiServerConfig) -> None:
     if config.admin_api_token is not None and len(config.admin_api_token) < 32:
         raise ApiServerConfigError(
             "DITTO_ADMIN_API_TOKEN must be at least 32 characters"
+        )
+    if (
+        config.v13_benign_attestation_secret is not None
+        and len(config.v13_benign_attestation_secret) < 32
+    ):
+        raise ApiServerConfigError(
+            "DITTO_V13_BENIGN_ATTESTATION_SECRET must be at least 32 characters"
         )
     if not 1 <= config.coding_shadow_reconciliation_selection_delay_blocks <= 10_000:
         raise ApiServerConfigError(

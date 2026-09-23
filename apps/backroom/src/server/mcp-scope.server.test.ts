@@ -1,10 +1,101 @@
 import { describe, expect, it } from 'vitest'
-import { BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE } from './mcp.server'
+import {
+  BACKROOM_ARTIFACT_SCOPE,
+  BACKROOM_READ_SCOPE,
+  BACKROOM_WRITE_SCOPE,
+  type McpGrantProps,
+} from './mcp.server'
 import {
   callsWriteTool,
+  currentMcpGrant,
   insufficientScopeResponse,
   requiredScopesForRequest,
 } from './mcp-scope.server'
+
+const priorWriteGrant: McpGrantProps = {
+  scopes: [BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_ARTIFACT_SCOPE],
+  clientName: 'review-client',
+  session: {
+    version: 2,
+    uid: 'google-sub-1',
+    email: 'reviewer@omniaura.ai',
+    name: 'Reviewer',
+    picture: '',
+    accessLevel: 'write',
+    issuedAt: Date.now(),
+    expiresAt: Date.now() + 60_000,
+  },
+}
+
+function toolCall(name: string) {
+  return new Request('https://backroom.dittobench.ai/mcp', {
+    method: 'POST',
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: {} } }),
+  })
+}
+
+describe('MCP live staff authorization', () => {
+  it('rejects an expired staff session despite a still-live write grant', async () => {
+    const expiredGrant: McpGrantProps = {
+      ...priorWriteGrant,
+      session: { ...priorWriteGrant.session, expiresAt: Date.now() - 1 },
+    }
+    for (const name of [
+      'attest_v13_known_benign',
+      'read_screening_source_file',
+      'get_queue_policy_settings',
+    ]) {
+      const denied = await currentMcpGrant(
+        toolCall(name),
+        expiredGrant,
+        { BACKROOM_ADMIN_EMAILS: 'reviewer@omniaura.ai' },
+      )
+      expect(denied).toBeInstanceOf(Response)
+      expect((denied as Response).status).toBe(403)
+      await expect((denied as Response).json()).resolves.toMatchObject({ error: 'access_denied' })
+    }
+  })
+
+  it('denies an old write grant for attestation signing after reviewer removal', async () => {
+    const denied = await currentMcpGrant(
+      toolCall('attest_v13_known_benign'),
+      priorWriteGrant,
+      { BACKROOM_ADMIN_EMAILS: '' },
+    )
+    expect(denied).toBeInstanceOf(Response)
+    expect((denied as Response).status).toBe(403)
+    await expect((denied as Response).json()).resolves.toMatchObject({ error: 'insufficient_scope' })
+
+    const read = await currentMcpGrant(
+      toolCall('get_queue_policy_settings'),
+      priorWriteGrant,
+      { BACKROOM_ADMIN_EMAILS: '' },
+    )
+    expect(read).not.toBeInstanceOf(Response)
+    expect((read as McpGrantProps).session.accessLevel).toBe('read')
+  })
+
+  it('also revokes privileged source access and denies blocked accounts', async () => {
+    const source = await currentMcpGrant(
+      toolCall('read_screening_source_file'),
+      priorWriteGrant,
+      { BACKROOM_ADMIN_EMAILS: '' },
+    )
+    expect(source).toBeInstanceOf(Response)
+    expect((source as Response).status).toBe(403)
+
+    const blocked = await currentMcpGrant(
+      toolCall('get_queue_policy_settings'),
+      priorWriteGrant,
+      {
+        BACKROOM_ADMIN_EMAILS: 'reviewer@omniaura.ai',
+        BACKROOM_BLOCKED_EMAILS: 'reviewer@omniaura.ai',
+      },
+    )
+    expect(blocked).toBeInstanceOf(Response)
+    await expect((blocked as Response).json()).resolves.toMatchObject({ error: 'access_denied' })
+  })
+})
 
 describe('MCP scope challenges', () => {
   it('recognizes write tool calls without consuming the request body', async () => {

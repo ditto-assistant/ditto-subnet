@@ -50,6 +50,7 @@ import {
   screeningArtifactInputSchema,
   screeningFailureDiagnosticInputSchema,
   v13GenerationGroupInputSchema,
+  v13BenignAttestationInputSchema,
   adjudicationAttemptsInputSchema,
   screeningSubmissionLookupInputSchema,
   sourceSearchInputSchema,
@@ -150,6 +151,8 @@ import {
   fetchAdjudicationAttempts,
   fetchScreeningVerificationReadiness,
   fetchV13GenerationGroup,
+  fetchV13BenignProvenance,
+  attestV13KnownBenign,
   fetchScreeningReviewDeadline,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
@@ -285,6 +288,8 @@ export type BackroomEnv = {
   OAUTH_KV: KVNamespace
   OAUTH_PROVIDER?: import('@cloudflare/workers-oauth-provider').OAuthHelpers
   SESSION_SECRET: string
+  /** Separate server-only key shared with Platform for V13 human attestations. */
+  DITTO_V13_BENIGN_ATTESTATION_SECRET?: string
   /** Comma-separated `@omniaura.ai` administrators who may hold write grants. */
   BACKROOM_ADMIN_EMAILS?: string
   /** Comma-separated identities denied on every console and MCP request. */
@@ -292,6 +297,7 @@ export type BackroomEnv = {
 }
 
 export const WRITE_TOOL_NAMES = new Set([
+  'attest_v13_known_benign',
   'create_screener_bootstrap_grant',
   'set_screener_provider_settings',
   'set_screener_node_channel_settings',
@@ -546,6 +552,10 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
+  get_v13_known_benign_provenance:
+    'Read the authenticated reviewer quorum for one exact V13 known-benign approval.',
+  attest_v13_known_benign:
+    'Sign this operator’s V13 control attestation; two distinct Google accounts are required. No seed or verdict.',
   get_ledger_epoch_snapshots:
     'Read the epoch-pinned validator ledger history: per chain epoch, the frozen fold input digest, champion, incumbent, recipients, and whether the crown changed.',
   create_ath_rulings_upload:
@@ -1262,6 +1272,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchV13GenerationGroup(input)),
+  )
+
+  registerTool(
+    'get_v13_known_benign_provenance',
+    {
+      title: 'Get V13 known-benign approval provenance',
+      description:
+        'Read authenticated reviewer count for one exact approval. Two distinct Google OAuth subjects are required; a recorded approval or actor label alone is unverified. No hidden cases or verdict.',
+      inputSchema: v13BenignAttestationInputSchema.pick({ approvalId: true }),
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchV13BenignProvenance(input)),
+  )
+
+  registerTool(
+    'attest_v13_known_benign',
+    {
+      title: 'Attest a V13 known-benign control',
+      description:
+        'Record this signed-in operator’s independent review of the exact approval/evidence digest. Two distinct authenticated Google accounts must attest. Requires backroom:write and a configured dedicated signing secret. This cannot issue seeds or clear a hold.',
+      inputSchema: v13BenignAttestationInputSchema,
+      annotations: toolAnnotations('write'),
+    },
+    async (input) => write(() => attestV13KnownBenign(props.session, input)),
   )
 
   registerTool(

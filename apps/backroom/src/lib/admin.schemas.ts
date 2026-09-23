@@ -4996,6 +4996,23 @@ export const screeningFailureDiagnosticInputSchema = z.object({
 
 export const v13GenerationGroupInputSchema = z.object({ groupId: z.string().uuid() })
 
+export const v13BenignAttestationInputSchema = z.object({
+  approvalId: z.string().uuid(),
+  reviewEvidenceSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string().trim().min(8),
+})
+
+export const v13BenignProvenanceSchema = z.object({
+  approval_id: z.string().uuid(),
+  review_evidence_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  authenticated_reviewers: z.number().int().min(0).max(2),
+  status: z.enum([
+    'recorded_unverified', 'one_authenticated_reviewer', 'two_person_authenticated',
+  ]),
+  provenance_receipt_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  completed_at: z.string().nullable(),
+})
+
 export const v13GenerationGroupSchema = z.object({
   group_id: z.string().uuid(),
   target_agent_id: z.string().uuid(),
