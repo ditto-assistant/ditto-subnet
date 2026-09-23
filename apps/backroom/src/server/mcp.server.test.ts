@@ -341,7 +341,8 @@ describe('Backroom MCP tools', () => {
     // One bounded conversation observation tool adds ~900 bytes.
     // The audited retry adds exact report/artifact digests; measured 136,355 bytes.
     // Exact-agent continual retest diagnosis adds one bounded read schema.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(137_200)
+    // The optional L4 completion cap adds 39 bytes to the settings schema.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(137_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

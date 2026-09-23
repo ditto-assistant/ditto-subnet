@@ -335,9 +335,7 @@ class EffectiveReviewSettings(BaseModel):
             adjudicator_model=value.adjudicator_model,
             adjudicator_max_steps=value.adjudicator_max_steps,
             adjudicator_timeout_seconds=float(value.adjudicator_timeout_seconds),
-            adjudicator_max_completion_tokens=(
-                value.adjudicator_max_completion_tokens
-            ),
+            adjudicator_max_completion_tokens=(value.adjudicator_max_completion_tokens),
             l2_max_input_tokens=value.max_input_tokens,
             l2_max_output_tokens=value.max_output_tokens,
             l2_max_completion_tokens=value.max_completion_tokens,

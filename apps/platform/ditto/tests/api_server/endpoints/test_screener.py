@@ -190,9 +190,7 @@ def test_always_escalate_is_bound_into_the_checksum_only_when_enabled() -> None:
 
 def test_explicit_l4_cap_changes_checksum_without_changing_l2() -> None:
     inherited = ScreenerReviewSettings(max_completion_tokens=16_000)
-    bounded = inherited.model_copy(
-        update={"adjudicator_max_completion_tokens": 4_000}
-    )
+    bounded = inherited.model_copy(update={"adjudicator_max_completion_tokens": 4_000})
     assert inherited.max_completion_tokens == bounded.max_completion_tokens
     assert _review_settings_checksum(inherited) != _review_settings_checksum(bounded)
 
