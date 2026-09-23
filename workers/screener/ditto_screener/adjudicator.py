@@ -1814,6 +1814,17 @@ async def _completion_stream_payload(
     stream_started = asyncio.get_running_loop().time()
     saw_tool_piece = False
 
+    def require_tool_progress() -> None:
+        # Check every line as well as completed data events. SSE comments and
+        # other non-data heartbeats still keep the socket read timeout alive.
+        if (
+            not saw_tool_piece
+            and first_tool_deadline_seconds is not None
+            and asyncio.get_running_loop().time() - stream_started
+            >= first_tool_deadline_seconds
+        ):
+            raise NoToolProgressError("adjudicator stream made no tool progress")
+
     def consume_event() -> bool:
         nonlocal usage, model, finish_reason, retained_bytes, saw_tool_piece
         if not data_lines:
@@ -1829,13 +1840,7 @@ async def _completion_stream_payload(
         if request_trace is not None:
             request_trace.observe_event()
         _observe_upstream(event)
-        if (
-            not saw_tool_piece
-            and first_tool_deadline_seconds is not None
-            and asyncio.get_running_loop().time() - stream_started
-            >= first_tool_deadline_seconds
-        ):
-            raise NoToolProgressError("adjudicator stream made no tool progress")
+        require_tool_progress()
         if event.get("error"):
             raise ProviderStreamError("adjudicator stream returned a provider error")
         model = event.get("model") or model
@@ -1851,14 +1856,19 @@ async def _completion_stream_payload(
         if not isinstance(delta, dict):
             raise ValueError("adjudicator stream delta is invalid")
         tool_pieces = delta.get("tool_calls") or []
-        if tool_pieces:
-            saw_tool_piece = True
         for piece in tool_pieces:
             if not isinstance(piece, dict) or not isinstance(piece.get("index"), int):
                 raise ValueError("adjudicator stream tool index is invalid")
             index = piece["index"]
             if index < 0 or index >= 32:
                 raise ValueError("adjudicator stream tool index exceeded bound")
+            fragment = piece.get("function") or {}
+            if not isinstance(fragment, dict):
+                raise ValueError("adjudicator stream function is invalid")
+            if piece.get("id") or fragment.get("name") or fragment.get("arguments"):
+                # An index-only shell is not evidence that the model started
+                # an actual call; keep the no-tool budget active for it.
+                saw_tool_piece = True
             call = calls.setdefault(index, {"type": "function", "function": {}})
             for key in ("id", "type"):
                 if key in piece:
@@ -1877,9 +1887,6 @@ async def _completion_stream_payload(
                             "adjudicator completion exceeded response bound"
                         )
                     call[key] = piece[key]
-            fragment = piece.get("function") or {}
-            if not isinstance(fragment, dict):
-                raise ValueError("adjudicator stream function is invalid")
             function = call["function"]
             if not isinstance(function, dict):
                 raise ValueError("adjudicator stream function is invalid")
@@ -1903,6 +1910,7 @@ async def _completion_stream_payload(
         return False
 
     async for line in response.aiter_lines():
+        require_tool_progress()
         total_bytes += len(line.encode("utf-8")) + 1
         if total_bytes > _MAX_COMPLETION_STREAM_BYTES:
             raise CompletionWireTooLarge(

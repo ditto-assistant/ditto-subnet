@@ -368,11 +368,19 @@ async def test_active_stream_without_tool_progress_retries_then_holds(
 
     class NonToolStream(httpx.AsyncByteStream):
         async def __aiter__(self):
-            for _ in range(4):
-                yield (
-                    b'data: {"provider":"Together","choices":'
-                    b'[{"delta":{"content":"private reasoning"}}]}\n\n'
-                )
+            for index in range(4):
+                if index == 1:
+                    # An indexed shell without an ID/name/argument fragment
+                    # must not disable the first-tool progress bound.
+                    yield (
+                        b'data: {"provider":"Together","choices":'
+                        b'[{"delta":{"tool_calls":[{"index":0}]}}]}\n\n'
+                    )
+                else:
+                    yield (
+                        b'data: {"provider":"Together","choices":'
+                        b'[{"delta":{"content":"private reasoning"}}]}\n\n'
+                    )
                 await asyncio.sleep(0.03)
 
         async def aclose(self) -> None:
@@ -400,6 +408,43 @@ async def test_active_stream_without_tool_progress_retries_then_holds(
         attempt.event_count > 1 for attempt in result.run_diagnostic.request_attempts
     )
     assert "private reasoning" not in result.run_diagnostic.model_dump_json()
+
+
+async def test_heartbeat_only_stream_cannot_evade_tool_progress_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_FIRST_TOOL_SECONDS", 0.08)
+    requests = 0
+
+    class HeartbeatStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for _ in range(5):
+                yield b": heartbeat\n\n"
+                await asyncio.sleep(0.03)
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=HeartbeatStream(),
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+    assert requests == 2
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "stream-no-tool-progress"
+    assert all(
+        attempt.wire_bytes > 0 and attempt.event_count == 0
+        for attempt in result.run_diagnostic.request_attempts
+    )
 
 
 async def test_tool_call_arriving_within_progress_budget_is_accepted(
