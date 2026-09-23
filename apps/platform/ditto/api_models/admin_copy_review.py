@@ -285,11 +285,15 @@ class AdminSourceDiffFileDetail(BaseModel):
 class AdminCopyReviewResolveRequest(BaseModel):
     """Resolve one ATH hold.
 
-    Policy v13 requires every decision record to cite its evidence. A ``clear``
-    must therefore carry at least one ``file:line`` reference into the reviewed
-    source (two of five prior clears carried none and would have been refused).
-    A ``reject`` records whatever the operator cites; its reason text is the
-    miner-visible ground either way.
+    Policy v13 requires every decision record to cite its evidence, in either
+    direction: a ``clear`` must carry at least one ``file:line`` reference into
+    the reviewed source (two of five prior clears carried none and would have
+    been refused), and a ``reject`` must carry the same citation plus a
+    published policy ``reason_codes`` entry, since ``resolve_copy_review``
+    writes it as a proven violation (``violation_proven=True``,
+    ``failure_domain="artifact"``, ``precedent_weight=True``) that later
+    reviews cite as precedent. An uncited reject would otherwise fabricate
+    exactly that proof.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -311,11 +315,21 @@ class AdminCopyReviewResolveRequest(BaseModel):
     ] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def _clear_requires_cited_evidence(self) -> "AdminCopyReviewResolveRequest":
+    def _resolution_requires_cited_evidence(self) -> "AdminCopyReviewResolveRequest":
         if self.resolution in ("clear", "release") and not self.evidence_references:
             raise ValueError(
                 "clearing an ATH hold requires at least one file:line "
                 "evidence_references citation into the reviewed source"
+            )
+        if self.resolution in ("reject", "ban") and not self.evidence_references:
+            raise ValueError(
+                "rejecting an ATH hold requires at least one file:line "
+                "evidence_references citation into the reviewed source"
+            )
+        if self.resolution in ("reject", "ban") and not self.reason_codes:
+            raise ValueError(
+                "rejecting an ATH hold requires at least one published "
+                "reason_codes entry backing the proven-violation record"
             )
         return self
 

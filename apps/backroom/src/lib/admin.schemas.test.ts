@@ -2406,10 +2406,34 @@ describe('copy review schemas', () => {
     })
     expect(cleared.evidenceReferences).toHaveLength(2)
     expect(cleared.reasonCodes).toEqual(['I4.reviewed_no_rewrite'])
-    // A reject records whatever the operator cites; citations are optional.
-    expect(
-      resolveCopyReviewInputSchema.parse({ ...base, resolution: 'reject' }).evidenceReferences,
-    ).toEqual([])
+  })
+
+  it('requires cited evidence and a published reason code to reject (policy v13)', () => {
+    const base = {
+      agentId: '11111111-1111-4111-8111-111111111111',
+      reason: 'family compiler on served /run',
+    }
+    // A reject records a proven violation (violation_proven=true,
+    // precedent_weight=true) on the decision record, so it is refused with
+    // no citations at all, and with citations but no reason code.
+    expect(() =>
+      resolveCopyReviewInputSchema.parse({ ...base, resolution: 'reject' }),
+    ).toThrow(/evidence reference/)
+    expect(() =>
+      resolveCopyReviewInputSchema.parse({
+        ...base,
+        resolution: 'reject',
+        evidenceReferences: ['src/main.rs:42'],
+      }),
+    ).toThrow(/reason code/)
+    const rejected = resolveCopyReviewInputSchema.parse({
+      ...base,
+      resolution: 'reject',
+      evidenceReferences: ['src/main.rs:42'],
+      reasonCodes: ['I5.benchmark_semantic_compiler'],
+    })
+    expect(rejected.evidenceReferences).toEqual(['src/main.rs:42'])
+    expect(rejected.reasonCodes).toEqual(['I5.benchmark_semantic_compiler'])
   })
 
   it('keeps the decision record schema statically exhaustive against the generated types', () => {
@@ -4641,6 +4665,7 @@ describe('batched ATH rulings schemas', () => {
     expected_score_count: 3,
     reason: 'Reject under screening policy v12 for I5',
     evidence_references: ['routing.py:357-395', 'src/agent.rs:441'],
+    reason_codes: ['I5.benchmark_semantic_compiler'],
   }
 
   it('accepts the uploaded document shape inline and refuses ambiguous input', () => {
@@ -4666,6 +4691,7 @@ describe('batched ATH rulings schemas', () => {
       20_000,
     )
     expect(athRulingSchema.parse({ ...ruling, evidence_references: undefined }).evidence_references).toEqual([])
+    expect(athRulingSchema.parse({ ...ruling, reason_codes: undefined }).reason_codes).toEqual([])
   })
 
   it('binds execute to the exact confirmation phrase', () => {
@@ -4734,6 +4760,7 @@ describe('batched ATH rulings schemas', () => {
       'miner_hotkey',
       'ok',
       'reason',
+      'reason_codes',
       'score_count',
       'stale_guard',
       'steps',

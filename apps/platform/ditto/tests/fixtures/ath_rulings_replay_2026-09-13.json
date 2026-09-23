@@ -25,6 +25,9 @@
       "miner_hotkey": "5ECg59rv1wM4a3dY7Aka2bGRCKKCQoHmasAhAyaAJeqemR7Z",
       "failed_invariants": [
         "I5"
+      ],
+      "reason_codes": [
+        "I5.production_family_compiler"
       ]
     },
     {
@@ -49,6 +52,11 @@
         "I3",
         "I5",
         "I7"
+      ],
+      "reason_codes": [
+        "I3.model_dissent_suppressed",
+        "I5.production_family_compiler",
+        "I7.tool_catalog_withheld"
       ]
     },
     {
@@ -69,6 +77,9 @@
       "miner_hotkey": "5GhCZSCZjG3B4HoPNTPyBuH2krkttBoT6nnQMGsG3sK8bYwX",
       "failed_invariants": [
         "I5"
+      ],
+      "reason_codes": [
+        "I5.production_family_compiler"
       ]
     },
     {
@@ -92,6 +103,11 @@
         "I2",
         "I5",
         "I7"
+      ],
+      "reason_codes": [
+        "I2.record_shape_altered",
+        "I5.production_family_compiler",
+        "I7.tool_catalog_withheld"
       ]
     },
     {
@@ -115,6 +131,10 @@
       "failed_invariants": [
         "I5",
         "I7"
+      ],
+      "reason_codes": [
+        "I5.production_family_compiler",
+        "I7.tool_catalog_withheld"
       ]
     }
   ]

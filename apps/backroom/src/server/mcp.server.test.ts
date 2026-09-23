@@ -4892,6 +4892,7 @@ describe('Backroom MCP tools', () => {
       expected_score_count: 3,
       reason: 'Reject lets_623 v1 under screening policy v12 for I5 (production-general engine)',
       evidence_references: ['routing.py:357-395', 'baseline.py:1884-1887'],
+      reason_codes: ['I5.benchmark_semantic_compiler'],
     }
     const board = {
       bench_version: 12,

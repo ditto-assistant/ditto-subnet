@@ -228,6 +228,7 @@ def _ruling(
     score_count: int = 3,
     reason: str = "Reject under policy v12 for I5: served prompt compiler",
     refs: tuple[str, ...] = ("src/baseline.rs:1195-1207",),
+    codes: tuple[str, ...] = ("I5.benchmark_semantic_compiler",),
 ) -> dict[str, object]:
     return {
         "action": action,
@@ -236,6 +237,9 @@ def _ruling(
         "expected_score_count": score_count,
         "reason": reason,
         "evidence_references": list(refs),
+        # A clear needs no reason code -- only a reject does -- so the default
+        # is harmless on a clear ruling and required on a reject one.
+        "reason_codes": list(codes),
     }
 
 
@@ -1198,3 +1202,59 @@ async def test_an_uncited_clear_is_invalid_on_both_legs(
     assert [action.action for action in actions] == ["clear"]
     # The citation reached the shared resolve path, not only the batch note.
     assert actions[0].evidence["evidence_references"] == ["src/baseline.rs:1195-1207"]
+
+
+async def test_a_reject_with_no_reason_code_is_invalid_on_both_legs(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A reject records a proven violation, so it must also cite a reason code.
+
+    ``AdminCopyReviewResolveRequest`` refuses an uncoded reject even when it
+    is cited; the preview classifies it ``invalid`` instead of promising a
+    "ready" item that execute would fail, and a coded reject on the same hold
+    still lands.
+    """
+    await _activate(maker)
+    uncoded = await _seed_held(
+        maker, hotkey="5Uncoded", composite=0.7, created_at=_T0 - timedelta(hours=1)
+    )
+    coded = await _seed_held(
+        maker, hotkey="5Coded", composite=0.6, created_at=_T0 - timedelta(hours=1)
+    )
+    _install(app, maker)
+
+    rulings = [
+        _ruling("reject", uncoded[0], uncoded[1], codes=()),
+        _ruling("reject", coded[0], coded[1]),
+    ]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    items = preview.json()["items"]
+    assert [item["disposition"] for item in items] == ["invalid", "ready"]
+    assert items[0]["conflict_reason"] == "reject requires reason_codes"
+    assert items[0]["message"] == (
+        "a reject ruling must cite at least one published reason code"
+    )
+    assert preview.json()["blocked_count"] == 1
+
+    executed = await client.post(
+        _EXECUTE,
+        json={
+            "preview_token": preview.json()["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+        headers=_HEADERS,
+    )
+    assert executed.status_code == 200, executed.text
+    assert [item["status"] for item in executed.json()["items"]] == [
+        "failed",
+        "applied",
+    ]
+    assert executed.json()["items"][0]["message"] == "reject requires reason_codes"
+    assert await _status(maker, uncoded[0]) == AgentStatus.ATH_PENDING_REVIEW.value
+    assert await _status(maker, coded[0]) == AgentStatus.BANNED.value
+    _, actions = await _review(maker, coded[0])
+    assert [action.action for action in actions] == ["reject"]
+    # The reason code reached the shared resolve path, not only the batch note.
+    assert actions[0].evidence["reason_codes"] == ["I5.benchmark_semantic_compiler"]

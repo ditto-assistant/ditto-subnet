@@ -580,7 +580,12 @@ async def test_rejected_review_reopens_and_clear_restores_previous_status(
     assert opened.status_code == 200
     rejected = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "reject", "reason": "Initial review rejected it"},
+        json={
+            "resolution": "reject",
+            "reason": "Initial review rejected it",
+            "evidence_references": ["src/main.rs:42"],
+            "reason_codes": ["I5.benchmark_semantic_compiler"],
+        },
         headers=_HEADERS,
     )
     assert rejected.status_code == 200
@@ -794,7 +799,12 @@ async def test_rejected_score_finalization_copy_hold_reopens_without_previous_st
 
     rejected = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "reject", "reason": "Third-party clone pending owner-link"},
+        json={
+            "resolution": "reject",
+            "reason": "Third-party clone pending owner-link",
+            "evidence_references": ["src/main.rs:42"],
+            "reason_codes": ["I5.benchmark_semantic_compiler"],
+        },
         headers=_HEADERS,
     )
     assert rejected.status_code == 200
@@ -868,7 +878,12 @@ async def test_reject_expires_live_retest_leases(
         )
     rejected = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "reject", "reason": "Family compiler on served /run"},
+        json={
+            "resolution": "reject",
+            "reason": "Family compiler on served /run",
+            "evidence_references": ["src/main.rs:42"],
+            "reason_codes": ["I5.benchmark_semantic_compiler"],
+        },
         headers=_HEADERS,
     )
     assert rejected.status_code == 200
@@ -1427,7 +1442,12 @@ async def test_conflicting_retry_and_changed_snapshot_fail_closed(
         agent.duplicate_of = None
     mismatch = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "ban", "reason": "Confirmed copied implementation"},
+        json={
+            "resolution": "ban",
+            "reason": "Confirmed copied implementation",
+            "evidence_references": ["src/main.rs:42"],
+            "reason_codes": ["I5.benchmark_semantic_compiler"],
+        },
         headers=_HEADERS,
     )
     assert mismatch.status_code == 409
@@ -1983,9 +2003,17 @@ async def test_clear_requires_cited_evidence_references(
     assert record.review_scope == "benchmark_overfit"
 
 
-async def test_reject_records_a_proven_violation_without_requiring_citations(
+async def test_reject_requires_cited_evidence_and_a_reason_code(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
+    """Policy v13: an uncited reject is refused, not recorded as proven.
+
+    ``resolve_copy_review`` writes a reject as ``violation_proven=True``,
+    ``failure_domain="artifact"``, ``precedent_weight=True`` -- a stronger
+    claim than a clear makes, cited by later reviews as precedent. It must
+    therefore carry at least the same file:line citation a clear requires,
+    plus a published reason code backing the proven violation.
+    """
     from ditto.db.models import ScreeningDecisionRecord
 
     agent_id, sha256 = await _seed_scored_agent(maker)
@@ -2001,11 +2029,44 @@ async def test_reject_records_a_proven_violation_without_requiring_citations(
     )
     assert opened.status_code == 200
 
+    no_evidence = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "reject",
+            "reason": "Family compiler on served /run",
+            "reason_codes": ["I5.benchmark_semantic_compiler"],
+        },
+        headers=_HEADERS,
+    )
+    assert no_evidence.status_code == 422
+    no_reason_code = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "reject",
+            "reason": "Family compiler on served /run",
+            "evidence_references": ["src/main.rs:42"],
+        },
+        headers=_HEADERS,
+    )
+    assert no_reason_code.status_code == 422
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None and agent.status == AgentStatus.ATH_PENDING_REVIEW
+        assert (
+            await session.scalar(
+                select(ScreeningDecisionRecord).where(
+                    ScreeningDecisionRecord.agent_id == agent_id
+                )
+            )
+            is None
+        )
+
     rejected = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
         json={
             "resolution": "reject",
             "reason": "Family compiler on served /run",
+            "evidence_references": ["src/main.rs:42"],
             "reason_codes": ["I5.benchmark_semantic_compiler"],
         },
         headers=_HEADERS,
@@ -2024,4 +2085,4 @@ async def test_reject_records_a_proven_violation_without_requiring_citations(
     assert record.violation_proven is True
     assert record.failure_domain == "artifact"
     assert record.reason_codes == ["I5.benchmark_semantic_compiler"]
-    assert record.evidence_references == []
+    assert record.evidence_references == ["src/main.rs:42"]

@@ -491,6 +491,7 @@ async def _preview_ruling(
         "agent_id": ruling.agent_id,
         "reason": ruling.reason,
         "evidence_references": list(ruling.evidence_references),
+        "reason_codes": list(ruling.reason_codes),
         "would_change_crown": False,
         "stale_guard": False,
     }
@@ -543,14 +544,25 @@ async def _preview_ruling(
     if ruling.action != "open" and not ruling.evidence_references:
         # Policy v13 makes every decision record cite its evidence, so
         # ``AdminCopyReviewResolveRequest`` refuses an uncited clear as well as
-        # the uncited reject this court always refused; mirror both here so a
-        # "ready" item cannot fail at execute on a validation the preview saw.
+        # an uncited reject; mirror both here so a "ready" item cannot fail at
+        # execute on a validation the preview saw.
         return _blocked(
             **base,
             ok=False,
             disposition="invalid",
             conflict_reason=f"{ruling.action} requires evidence_references",
             message=f"a {ruling.action} ruling must cite at least one path:line",
+        )
+    if ruling.action == "reject" and not ruling.reason_codes:
+        # A reject records a proven violation (``violation_proven=True``,
+        # ``precedent_weight=True``); ``AdminCopyReviewResolveRequest`` refuses
+        # one with no published reason_codes entry backing that record.
+        return _blocked(
+            **base,
+            ok=False,
+            disposition="invalid",
+            conflict_reason="reject requires reason_codes",
+            message="a reject ruling must cite at least one published reason code",
         )
 
     held = (
@@ -869,6 +881,7 @@ async def _apply_step(
                 resolution=step,
                 reason=ruling.reason,
                 evidence_references=list(ruling.evidence_references),
+                reason_codes=list(ruling.reason_codes),
             ),
             None,
             session,
@@ -1090,6 +1103,7 @@ async def execute_ath_rulings_batch(
                 "upload_key": key,
                 "source": document.source,
                 "evidence_references": list(ruling.evidence_references),
+                "reason_codes": list(ruling.reason_codes),
                 "would_change_crown": preview.would_change_crown,
                 "board_fingerprint": board_now.fingerprint,
             },

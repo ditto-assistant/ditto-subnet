@@ -554,3 +554,119 @@ async def test_resolved_quarantine_without_a_decision_reports_no_active_quaranti
     assert body["quarantine_status"] == "resolved"
     assert body["verification_deadline"] is None
     assert body["decision"] is None
+
+
+async def test_a_decision_tied_to_a_finding_hold_never_reads_as_finalized(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decision tied to the latest quarantine is "finalized" only when the
+    deadline finalizer itself wrote it (``outcome == review_timed_out``).
+
+    Nothing today writes a ``ScreeningDecisionRecord`` against an operator
+    finding hold's ``quarantine_id`` -- ``resolve_copy_review`` never sets
+    ``quarantine_id`` at all -- but the read endpoint must not fabricate a
+    ``finalized`` state and a 24-hour ``verification_deadline`` for one if it
+    ever did: an operator's own manual reject on a finding hold is not a
+    no-fault processing timeout.
+    """
+    monkeypatch.setenv(REVIEW_TIMEOUT_FINALIZER_MODE_ENV, "enforce")
+    _install(app, session_maker)
+    agent_id = uuid4()
+    agent_id, attempt_id, quarantine_id = await _seed_hold(
+        session_maker,
+        agent_id=agent_id,
+        reason_code="agentic-source-review-tripwire",
+        finding_digest="b" * 64,
+        finding={
+            "artifact_sha256": agent_id.hex * 2,
+            "prompt_revision": "source-review-v2",
+            "risk_level": "high",
+            "confidence": 0.9,
+            "categories": ["benchmark_emulation"],
+            "evidence": [],
+            "summary": "flagged pattern",
+        },
+    )
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        await record_screening_decision(
+            session,
+            agent=agent,
+            outcome="reject",
+            reason_codes=["I5.benchmark_semantic_compiler"],
+            violation_proven=True,
+            failure_domain="artifact",
+            retry_count=0,
+            independent_workers=0,
+            policy_version=STRICT_TWO_OUTCOME_POLICY_VERSION,
+            public_reason="Operator confirmed the finding manually",
+            reviewer="operator",
+            decided_at=datetime.now(UTC),
+            evidence_references=["src/main.rs:42"],
+            completed_checks=["operator-source-review"],
+            failed_checks=["operator-source-review"],
+            limitations=[],
+            attempt_id=attempt_id,
+            quarantine_id=quarantine_id,
+        )
+
+    body = await _get(client, agent_id)
+
+    assert body["finalizer_state"] == "not_configured"
+    assert body["not_applicable_reason"] == "operator_finding_hold"
+    assert body["verification_deadline"] is None
+    assert body["decision"] is None
+
+
+async def test_a_decision_tied_to_a_pre_v13_quarantine_never_reads_as_finalized(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same guard, for a quarantine predating the finalizer's policy floor.
+
+    ``select_timed_out_quarantines`` never selects a pre-v13 quarantine, so
+    the finalizer itself cannot write this combination today either -- this
+    defends the read endpoint's own precedence order regardless.
+    """
+    monkeypatch.setenv(REVIEW_TIMEOUT_FINALIZER_MODE_ENV, "enforce")
+    _install(app, session_maker)
+    agent_id, attempt_id, quarantine_id = await _seed_hold(
+        session_maker, policy_version=STRICT_TWO_OUTCOME_POLICY_VERSION - 1
+    )
+    async with session_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        await record_screening_decision(
+            session,
+            agent=agent,
+            outcome="reject",
+            reason_codes=["I5.benchmark_semantic_compiler"],
+            violation_proven=True,
+            failure_domain="artifact",
+            retry_count=0,
+            independent_workers=0,
+            policy_version=STRICT_TWO_OUTCOME_POLICY_VERSION - 1,
+            public_reason="Operator confirmed the finding manually",
+            reviewer="operator",
+            decided_at=datetime.now(UTC),
+            evidence_references=["src/main.rs:42"],
+            completed_checks=["operator-source-review"],
+            failed_checks=["operator-source-review"],
+            limitations=[],
+            attempt_id=attempt_id,
+            quarantine_id=quarantine_id,
+        )
+
+    body = await _get(client, agent_id)
+
+    assert body["policy_covered_by_finalizer"] is False
+    assert body["finalizer_state"] == "not_configured"
+    assert body["not_applicable_reason"] == "policy_version_not_covered"
+    assert body["verification_deadline"] is None
+    assert body["decision"] is None

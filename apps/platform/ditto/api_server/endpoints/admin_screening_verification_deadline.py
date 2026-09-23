@@ -49,6 +49,7 @@ from ditto.db.models import (
 from ditto_screening_protocol import (
     NON_DECISIVE_REASON_CODES,
     PUBLISHED_REVIEW_TIMEOUT_POLICY,
+    REVIEW_TIMED_OUT_OUTCOME,
     FailureDomain,
     SourceReviewFinding,
     failure_domain_for_reason_code,
@@ -125,9 +126,9 @@ async def get_screening_verification_deadline(
         .limit(1)
     )
 
-    quarantine_decision: ScreeningDecisionRecord | None = None
+    latest_quarantine_decision: ScreeningDecisionRecord | None = None
     if quarantine is not None:
-        quarantine_decision = await session.scalar(
+        latest_quarantine_decision = await session.scalar(
             select(ScreeningDecisionRecord)
             .where(ScreeningDecisionRecord.quarantine_id == quarantine.quarantine_id)
             .order_by(
@@ -136,6 +137,20 @@ async def get_screening_verification_deadline(
             )
             .limit(1)
         )
+    # A decision tied to the latest quarantine is only "finalized" -- and only
+    # authoritative over the fields below -- when the deadline finalizer
+    # itself wrote it. An operator manual clear/reject, a pre-v13 quarantine,
+    # or a finding hold can (in principle, and defensively even if no writer
+    # does this today) carry a decision tied to the same quarantine_id without
+    # ever having gone through the timeout finalizer; treating that as
+    # "finalized" would fabricate a verification_deadline for a row the
+    # finalizer never touched.
+    quarantine_decision: ScreeningDecisionRecord | None = (
+        latest_quarantine_decision
+        if latest_quarantine_decision is not None
+        and latest_quarantine_decision.outcome == REVIEW_TIMED_OUT_OUTCOME
+        else None
+    )
 
     attempt: ScreeningAttempt | None = None
     if quarantine is not None:
@@ -144,9 +159,9 @@ async def get_screening_verification_deadline(
         # No quarantine at all (never held, or the hold already fully
         # resolved by an operator through a path that writes no decision
         # record): still surface the most recent attempt for context. This
-        # never feeds finalizer_state or `decision` -- only a decision tied
-        # to the CURRENT hold can make finalizer_state "finalized", and
-        # `decision` mirrors that same invariant exactly.
+        # never feeds finalizer_state or `decision` -- only a decision the
+        # finalizer itself wrote for the CURRENT hold can make finalizer_state
+        # "finalized", and `decision` mirrors that same invariant exactly.
         attempt = await session.scalar(
             select(ScreeningAttempt)
             .where(ScreeningAttempt.agent_id == agent_id)

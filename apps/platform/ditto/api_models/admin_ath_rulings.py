@@ -60,6 +60,13 @@ class AdminAthRuling(BaseModel):
     evidence_references: Annotated[list[EvidenceReference], Field(max_length=64)] = (
         Field(default_factory=list)
     )
+    # Published policy reason codes for a ``reject`` (e.g.
+    # ``I5.benchmark_semantic_compiler``); ``AdminCopyReviewResolveRequest``
+    # refuses an uncited reject the same way it refuses an uncited clear.
+    reason_codes: Annotated[
+        list[Annotated[str, StringConstraints(strip_whitespace=True, min_length=2)]],
+        Field(max_length=64),
+    ] = Field(default_factory=list)
 
 
 class AdminAthRulingsDocument(BaseModel):
@@ -169,6 +176,7 @@ class AdminAthRulingPreviewItem(BaseModel):
     steps: list[Literal["open", "clear", "reject"]] = Field(default_factory=list)
     reason: str
     evidence_references: list[str] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
     message: str
 
 

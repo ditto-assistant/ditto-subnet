@@ -7301,10 +7301,21 @@ export const resolveCopyReviewInputSchema = z
     reasonCodes: z.array(z.string().trim().min(2)).default([]),
   })
   .refine(
-    (input) => input.resolution !== 'clear' || input.evidenceReferences.length > 0,
+    (input) =>
+      !['clear', 'reject'].includes(input.resolution) ||
+      input.evidenceReferences.length > 0,
     {
-      message: 'clearing an ATH hold requires at least one file:line evidence reference',
+      message:
+        'clearing or rejecting an ATH hold requires at least one file:line evidence reference',
       path: ['evidenceReferences'],
+    },
+  )
+  .refine(
+    (input) => input.resolution !== 'reject' || input.reasonCodes.length > 0,
+    {
+      message:
+        'rejecting an ATH hold requires at least one published reason code',
+      path: ['reasonCodes'],
     },
   )
 
@@ -7640,6 +7651,9 @@ export const athRulingSchema = z.object({
   expected_score_count: z.number().int().nonnegative(),
   reason: auditReasonSchema(3),
   evidence_references: z.array(athRulingEvidenceReferenceSchema).max(64).default([]),
+  // Required for a `reject` (a proven-violation decision record); a `clear`
+  // needs no reason code, only the evidence_references citation above.
+  reason_codes: z.array(z.string().trim().min(2)).max(64).default([]),
 })
 
 const uniqueRulingAgents = (
@@ -7714,6 +7728,7 @@ export const athRulingPreviewItemSchema = z.object({
   steps: z.array(athRulingActionSchema).default([]),
   reason: z.string(),
   evidence_references: z.array(z.string()).default([]),
+  reason_codes: z.array(z.string()).default([]),
   message: z.string(),
 } satisfies PlatformResponseShape<GeneratedAthRulingPreviewItem>)
 
