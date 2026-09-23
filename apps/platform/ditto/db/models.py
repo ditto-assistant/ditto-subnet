@@ -759,6 +759,127 @@ class ScreeningPrivatePackageRegistration(Base):
     )
 
 
+class ScreeningVerificationReplay(Base):
+    """Independent, report-only replay of one pinned source-review artifact.
+
+    A replay never changes the source screening attempt, quarantine, or agent
+    lifecycle. Its receipts are deliberately separate from attempt-time ones.
+    """
+
+    __tablename__ = "screening_verification_replays"
+
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    quarantine_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    source_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # A pre-build hold normally has no screened image. A claimed independent
+    # worker may upload one to this replay's own immutable object key; it is
+    # never attached to Agent or represented as the original attempt's image.
+    image_upload_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    image_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    image_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_staging_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    image_verified_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_deadline: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    failure_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["quarantine_id"],
+            ["screening_quarantines.quarantine_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["source_attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["image_upload_id"],
+            ["screened_image_uploads.image_upload_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="svrp_artifact_sha_check"
+        ),
+        CheckConstraint(
+            "image_sha256 IS NULL OR image_sha256 ~ '^[0-9a-f]{64}$'",
+            name="svrp_image_sha_check",
+        ),
+        CheckConstraint(
+            "(image_sha256 IS NULL AND image_size_bytes IS NULL AND image_id IS NULL "
+            "AND image_verified_at IS NULL) OR "
+            "(image_sha256 IS NOT NULL AND image_size_bytes > 0 "
+            "AND image_id IS NOT NULL)",
+            name="svrp_image_metadata_check",
+        ),
+        CheckConstraint("policy_version = 13", name="svrp_policy_check"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'completed', 'failed')",
+            name="svrp_status_check",
+        ),
+        Index(
+            "svrp_one_active_source_idx",
+            "agent_id",
+            "source_attempt_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
+        ),
+        Index("svrp_claim_idx", "status", "created_at"),
+    )
+
+
+class ScreeningVerificationReplayReceipt(Base):
+    """Append-only report-only observation tied to one independent replay."""
+
+    __tablename__ = "screening_verification_replay_receipts"
+
+    receipt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    check_code: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    worker_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("length(evidence_sha256) = 64", name="svrr_evidence_sha_check"),
+        CheckConstraint(
+            "length(check_code) BETWEEN 1 AND 64", name="svrr_check_code_check"
+        ),
+        Index("svrr_replay_code_idx", "replay_id", "check_code", unique=True),
+    )
+
+
 class AthReview(Base):
     """Durable, immutable-evidence audit record for an ATH copy hold."""
 
