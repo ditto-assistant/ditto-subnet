@@ -1228,6 +1228,8 @@ class AdjudicationRunDiagnostic(BaseModel):
             "stream-no-tool-call",
             "stream-invalid",
             "response-too-large",
+            "response-wire-too-large",
+            "response-tool-too-large",
             "response-json-invalid",
             "tool-call-invalid",
             "verdict-invalid",

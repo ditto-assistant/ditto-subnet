@@ -391,6 +391,32 @@ async def test_large_wire_with_small_tool_call_keeps_verdict(
     assert message.get("content") is None
 
 
+async def test_valid_token_framing_over_old_wire_ceiling_keeps_verdict(
+    tmp_path: Path,
+) -> None:
+    call = _call("submit_adjudication", {"decision": "clear", "reason": "valid"})
+    # One SSE frame per token, each with a normal repeated request ID, can
+    # exceed the old 2 MB transport cap with a 16k-token completion budget.
+    noise = json.dumps(
+        {"id": "chatcmpl-" + "x" * 100, "choices": [{"delta": {"content": "x"}}]}
+    )
+    tool = json.dumps({"choices": [{"delta": {"tool_calls": [{"index": 0, **call}]}}]})
+    body = (f"data: {noise}\n\n" * 15_000) + f"data: {tool}\n\ndata: [DONE]\n\n"
+    assert (
+        2_000_000 < len(body.encode()) < adjudicator_module._MAX_COMPLETION_STREAM_BYTES
+    )
+    response = httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, text=body
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: response)
+    ) as client:
+        message = await _adjudicator(
+            _key(tmp_path), httpx.MockTransport(lambda _request: response)
+        )._completion_message(client, "sk-test", [], timeout=10)
+    assert message["tool_calls"] == [call]
+
+
 @pytest.mark.parametrize("streamed", [False, True])
 async def test_oversized_tool_arguments_still_fail_closed(
     tmp_path: Path, streamed: bool
@@ -411,13 +437,20 @@ async def test_oversized_tool_arguments_still_fail_closed(
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _request: response)
     ) as client:
-        with pytest.raises(ValueError, match="exceeded response bound"):
+        with pytest.raises(
+            adjudicator_module.CompletionToolTooLarge,
+            match="exceeded response bound",
+        ) as error:
             await _adjudicator(
                 _key(tmp_path), httpx.MockTransport(lambda _request: response)
             )._completion_message(client, "sk-test", [], timeout=10)
+    assert adjudicator_module._failure_code(error.value) == "response-tool-too-large"
 
 
-async def test_stream_wire_limit_still_fails_closed(tmp_path: Path) -> None:
+async def test_stream_wire_limit_still_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_STREAM_BYTES", 1_000_000)
     noise = json.dumps({"choices": [{"delta": {"content": "x" * 1_000}}]})
     body = f"data: {noise}\n\n" * 2_000
     assert len(body.encode()) > adjudicator_module._MAX_COMPLETION_STREAM_BYTES
@@ -428,10 +461,40 @@ async def test_stream_wire_limit_still_fails_closed(tmp_path: Path) -> None:
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _request: response)
     ) as client:
-        with pytest.raises(ValueError, match="exceeded response bound"):
+        with pytest.raises(
+            adjudicator_module.CompletionWireTooLarge,
+            match="exceeded response bound",
+        ) as error:
             await _adjudicator(
                 _key(tmp_path), httpx.MockTransport(lambda _request: response)
             )._completion_message(client, "sk-test", [], timeout=10)
+    assert adjudicator_module._failure_code(error.value) == "response-wire-too-large"
+
+
+@pytest.mark.parametrize(
+    ("bound_name", "expected_code"),
+    [
+        ("_MAX_COMPLETION_STREAM_BYTES", "response-wire-too-large"),
+        ("_MAX_COMPLETION_RESPONSE_BYTES", "response-tool-too-large"),
+    ],
+)
+async def test_response_bound_subtype_survives_diagnostic_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bound_name: str,
+    expected_code: str,
+) -> None:
+    monkeypatch.setattr(adjudicator_module, bound_name, 100)
+    call = _call("submit_adjudication", {"decision": "clear", "reason": "valid"})
+    response = httpx.Response(
+        200, json={"choices": [{"message": {"tool_calls": [call]}}]}
+    )
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(lambda _request: response)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == expected_code
 
 
 async def test_gateway_rejecting_stream_uses_one_buffered_attempt(
