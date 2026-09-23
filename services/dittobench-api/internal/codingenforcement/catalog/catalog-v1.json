@@ -1,0 +1,1392 @@
+{
+  "coverage": "same_boot",
+  "freshness_max_seconds": 21600,
+  "kinds": {
+    "cleanup_recovery": {
+      "endpoint_roles": {},
+      "inputs": [
+        "execution_profile_sha256"
+      ],
+      "phases": [
+        "normal_stop",
+        "partial_start",
+        "timeout",
+        "oom",
+        "escaped_setsid",
+        "runner_sigterm",
+        "runner_sigkill",
+        "rerun"
+      ],
+      "probes": [
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "containers": 0,
+              "networks": 0,
+              "processes": 0,
+              "volumes": 0
+            }
+          },
+          "id": "cleanup.normal_stop.absent",
+          "phase": "normal_stop",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "containers": 0,
+              "networks": 0,
+              "processes": 0,
+              "volumes": 0
+            }
+          },
+          "id": "cleanup.partial_start.absent",
+          "phase": "partial_start",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "containers": 0,
+              "networks": 0,
+              "processes": 0,
+              "volumes": 0
+            }
+          },
+          "id": "cleanup.timeout.absent",
+          "phase": "timeout",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "containers": 0,
+              "networks": 0,
+              "processes": 0,
+              "volumes": 0
+            }
+          },
+          "id": "cleanup.oom.absent",
+          "phase": "oom",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "containers": 0,
+              "networks": 0,
+              "processes": 0,
+              "volumes": 0
+            }
+          },
+          "id": "cleanup.escaped_setsid.absent",
+          "phase": "escaped_setsid",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "containers": 0,
+              "networks": 0,
+              "processes": 0,
+              "volumes": 0
+            }
+          },
+          "id": "cleanup.runner_sigterm.absent",
+          "phase": "runner_sigterm",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "containers": 0,
+              "networks": 0,
+              "processes": 0,
+              "volumes": 0
+            }
+          },
+          "id": "cleanup.runner_sigkill.reconciled_absent",
+          "phase": "runner_sigkill",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "journal_ids_only"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "cleanup.runner_sigkill.journal_ids_only",
+          "phase": "runner_sigkill",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "present"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "cleanup.runner_sigkill.sentinel_network",
+          "phase": "runner_sigkill",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "refused"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "cleanup.rerun.consumed_marker",
+          "phase": "rerun",
+          "scope": "host"
+        }
+      ]
+    },
+    "network_enforcement": {
+      "endpoint_roles": {
+        "refusing_proxy": {
+          "max": 1,
+          "min": 1
+        },
+        "router": {
+          "max": 1,
+          "min": 1
+        },
+        "trusted": {
+          "max": 32,
+          "min": 1
+        },
+        "trusted_dns": {
+          "max": 2,
+          "min": 0
+        }
+      },
+      "inputs": [
+        "connectivity_profile_sha256"
+      ],
+      "phases": [
+        "active",
+        "stop_rollback",
+        "expiry",
+        "failed_start"
+      ],
+      "probes": [
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "container_address"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.router.source",
+          "phase": "active",
+          "scope": "router_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "connected"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.router.connect",
+          "phase": "active",
+          "scope": "router_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "connected"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.proxy.connect",
+          "phase": "active",
+          "scope": "proxy_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "proxy_refused"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.proxy.forward",
+          "phase": "active",
+          "scope": "proxy_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.dns",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.metadata",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.public",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.ipv6",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.host_loopback",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.sibling_attempt",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.docker_api",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.trusted",
+          "phase": "active",
+          "scope": "trusted_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "gid": 65532,
+              "uid": 65532
+            }
+          },
+          "id": "candidate.identity",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "gid": 65532,
+            "type": "subordinate_ids",
+            "uid": 65532
+          },
+          "id": "candidate.host_ids",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "interfaces": [
+                "lo"
+              ]
+            }
+          },
+          "id": "executor.interfaces",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "handshake_completed"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "worker.trusted.handshake",
+          "phase": "active",
+          "scope": "trusted_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "worker.public",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "worker.metadata",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "daemon.trusted",
+          "phase": "active",
+          "scope": "trusted_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "daemon.public",
+          "phase": "active",
+          "scope": "host"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "worker.trusted.after_stop",
+          "phase": "stop_rollback",
+          "scope": "trusted_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.router.after_stop",
+          "phase": "stop_rollback",
+          "scope": "router_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "closed",
+              "not_permitted",
+              "reset",
+              "timeout"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "worker.trusted.established_after_expiry",
+          "phase": "expiry",
+          "scope": "trusted_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "worker.trusted.new_after_expiry",
+          "phase": "expiry",
+          "scope": "trusted_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "closed",
+              "not_permitted",
+              "reset",
+              "timeout"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.router.established_after_expiry",
+          "phase": "expiry",
+          "scope": "router_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "candidate.router.new_after_expiry",
+          "phase": "expiry",
+          "scope": "router_endpoint"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "not_permitted",
+              "refused",
+              "reset",
+              "timeout",
+              "unreachable"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "worker.trusted.after_failed_start",
+          "phase": "failed_start",
+          "scope": "trusted_endpoint"
+        }
+      ]
+    },
+    "preexec_confinement": {
+      "endpoint_roles": {},
+      "inputs": [
+        "execution_profile_sha256",
+        "grading_profile_sha256"
+      ],
+      "phases": [
+        "controls",
+        "identity",
+        "hostile"
+      ],
+      "probes": [
+        {
+          "bind": {},
+          "expect": {
+            "result": "all_pass",
+            "type": "control"
+          },
+          "id": "control.pass",
+          "phase": "controls",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "result": "some_fail",
+            "type": "control"
+          },
+          "id": "control.wrong",
+          "phase": "controls",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "result": "timeout",
+            "type": "control"
+          },
+          "id": "control.hang",
+          "phase": "controls",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "gid": 10001,
+              "uid": 10001
+            }
+          },
+          "id": "identity.candidate",
+          "phase": "identity",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "gid": 10001,
+            "type": "subordinate_ids",
+            "uid": 10001
+          },
+          "id": "identity.host_ids",
+          "phase": "identity",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "ambient": 0,
+              "bounding": 0,
+              "effective": 0,
+              "inheritable": 0,
+              "permitted": 0
+            }
+          },
+          "id": "identity.capabilities",
+          "phase": "identity",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "no_new_privs": 1
+            }
+          },
+          "id": "identity.no_new_privs",
+          "phase": "identity",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "seccomp_mode": 2
+            }
+          },
+          "id": "identity.seccomp",
+          "phase": "identity",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.fork_exec",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.process_group_escape",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.setuid",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.signal_supervisor",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.capability_use",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.grader_mount_read",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.control_file_forge",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.network",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.scratch_exec",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.unshare",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.mount",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.ptrace",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "denied"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.load_time_escape",
+          "phase": "hostile",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "absent"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "hostile.credential_env",
+          "phase": "hostile",
+          "scope": "language"
+        }
+      ]
+    },
+    "resource_enforcement": {
+      "endpoint_roles": {},
+      "inputs": [
+        "execution_profile_sha256",
+        "grading_profile_sha256"
+      ],
+      "phases": [
+        "cgroup",
+        "measured"
+      ],
+      "probes": [
+        {
+          "bind": {
+            "profile": "memory_limit_bytes"
+          },
+          "expect": {
+            "type": "profile_equal"
+          },
+          "id": "harness.memory_max",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "swap_max_bytes": 0
+            }
+          },
+          "id": "harness.memory_swap_max",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "profile": "cpu_quota_millis"
+          },
+          "expect": {
+            "type": "profile_equal"
+          },
+          "id": "harness.cpu_quota",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "profile": "pids_limit"
+          },
+          "expect": {
+            "type": "profile_equal"
+          },
+          "id": "harness.pids_max",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "memory_limit_bytes"
+          },
+          "expect": {
+            "floor": "memory_peak_min_permille_of_limit",
+            "tolerance": "memory_peak_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "harness.memory_oom",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "cpu_quota_millis"
+          },
+          "expect": {
+            "floor": "cpu_usage_min_permille_of_quota",
+            "tolerance": "cpu_usage_max_permille_of_quota",
+            "type": "bounded"
+          },
+          "id": "harness.cpu_throttle",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "pids_limit"
+          },
+          "expect": {
+            "floor": "pids_min_permille_of_limit",
+            "tolerance": "pids_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "harness.pids_cap",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "scratch_limit_bytes"
+          },
+          "expect": {
+            "floor": "scratch_min_permille_of_limit",
+            "tolerance": "scratch_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "harness.scratch_enospc",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "read_only"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "harness.rootfs_read_only",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "nofile_limit"
+          },
+          "expect": {
+            "floor": "nofile_min_permille_of_limit",
+            "tolerance": "nofile_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "harness.nofile_cap",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "log_limit_bytes"
+          },
+          "expect": {
+            "floor": "log_min_permille_of_limit",
+            "tolerance": "log_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "harness.log_bound",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "profile": "memory_limit_bytes"
+          },
+          "expect": {
+            "type": "profile_equal"
+          },
+          "id": "executor_authoring.memory_max",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "swap_max_bytes": 0
+            }
+          },
+          "id": "executor_authoring.memory_swap_max",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "profile": "cpu_quota_millis"
+          },
+          "expect": {
+            "type": "profile_equal"
+          },
+          "id": "executor_authoring.cpu_quota",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "profile": "pids_limit"
+          },
+          "expect": {
+            "type": "profile_equal"
+          },
+          "id": "executor_authoring.pids_max",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "memory_limit_bytes"
+          },
+          "expect": {
+            "floor": "memory_peak_min_permille_of_limit",
+            "tolerance": "memory_peak_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "executor_authoring.memory_oom",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "cpu_quota_millis"
+          },
+          "expect": {
+            "floor": "cpu_usage_min_permille_of_quota",
+            "tolerance": "cpu_usage_max_permille_of_quota",
+            "type": "bounded"
+          },
+          "id": "executor_authoring.cpu_throttle",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "pids_limit"
+          },
+          "expect": {
+            "floor": "pids_min_permille_of_limit",
+            "tolerance": "pids_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "executor_authoring.pids_cap",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "scratch_limit_bytes"
+          },
+          "expect": {
+            "floor": "scratch_min_permille_of_limit",
+            "tolerance": "scratch_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "executor_authoring.scratch_enospc",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "read_only"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "executor_authoring.rootfs_read_only",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "nofile_limit"
+          },
+          "expect": {
+            "floor": "nofile_min_permille_of_limit",
+            "tolerance": "nofile_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "executor_authoring.nofile_cap",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "log_limit_bytes"
+          },
+          "expect": {
+            "floor": "log_min_permille_of_limit",
+            "tolerance": "log_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "executor_authoring.log_bound",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "profile": "memory_limit_bytes"
+          },
+          "expect": {
+            "type": "profile_equal"
+          },
+          "id": "executor_grading.memory_max",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "type": "exact",
+            "value": {
+              "swap_max_bytes": 0
+            }
+          },
+          "id": "executor_grading.memory_swap_max",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "profile": "cpu_quota_millis"
+          },
+          "expect": {
+            "type": "profile_equal"
+          },
+          "id": "executor_grading.cpu_quota",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "profile": "pids_limit"
+          },
+          "expect": {
+            "type": "profile_equal"
+          },
+          "id": "executor_grading.pids_max",
+          "phase": "cgroup",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "memory_limit_bytes"
+          },
+          "expect": {
+            "floor": "memory_peak_min_permille_of_limit",
+            "tolerance": "memory_peak_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "executor_grading.memory_oom",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "cpu_quota_millis"
+          },
+          "expect": {
+            "floor": "cpu_usage_min_permille_of_quota",
+            "tolerance": "cpu_usage_max_permille_of_quota",
+            "type": "bounded"
+          },
+          "id": "executor_grading.cpu_throttle",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "pids_limit"
+          },
+          "expect": {
+            "floor": "pids_min_permille_of_limit",
+            "tolerance": "pids_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "executor_grading.pids_cap",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "scratch_limit_bytes"
+          },
+          "expect": {
+            "floor": "scratch_min_permille_of_limit",
+            "tolerance": "scratch_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "executor_grading.scratch_enospc",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {},
+          "expect": {
+            "accept": [
+              "read_only"
+            ],
+            "type": "outcome_in"
+          },
+          "id": "executor_grading.rootfs_read_only",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "nofile_limit"
+          },
+          "expect": {
+            "floor": "nofile_min_permille_of_limit",
+            "tolerance": "nofile_max_permille_of_limit",
+            "type": "bounded"
+          },
+          "id": "executor_grading.nofile_cap",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "limit": "log_limit_bytes"
+          },
+          "expect": {
+            "type": "zero_retained"
+          },
+          "id": "executor_grading.log_bound",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "deadline_ms": "hidden_command_timeout_ms"
+          },
+          "expect": {
+            "tolerance": "timeout_elapsed_max_permille_of_deadline",
+            "type": "supervisor_timeout"
+          },
+          "id": "executor_grading.supervisor_timeout.hidden",
+          "phase": "measured",
+          "scope": "language"
+        },
+        {
+          "bind": {
+            "deadline_ms": "visible_command_timeout_ms"
+          },
+          "expect": {
+            "tolerance": "timeout_elapsed_max_permille_of_deadline",
+            "type": "supervisor_timeout"
+          },
+          "id": "executor_grading.supervisor_timeout.visible",
+          "phase": "measured",
+          "scope": "language"
+        }
+      ]
+    }
+  },
+  "languages": [
+    "go",
+    "node",
+    "python",
+    "rust"
+  ],
+  "not_covered": [
+    "daemon_restart_recovery",
+    "reboot_recovery"
+  ],
+  "outcomes": [
+    "absent",
+    "accepted",
+    "closed",
+    "connected",
+    "container_address",
+    "denied",
+    "extra_ids_touched",
+    "handshake_completed",
+    "handshake_failed",
+    "host_address",
+    "journal_ids_only",
+    "not_permitted",
+    "other_address",
+    "permitted",
+    "present",
+    "probe_error",
+    "proxy_forwarded",
+    "proxy_refused",
+    "read_only",
+    "refused",
+    "reset",
+    "timeout",
+    "unreachable",
+    "writable"
+  ],
+  "pre_collection_preflight_max_age_seconds": 900,
+  "record_schema": "dittobench-coding-native-enforcement-evidence-v1",
+  "resource_containers": {
+    "executor_authoring": {
+      "log_limit_bytes": 24576,
+      "nofile_limit": 1024,
+      "profile": "execution_profile_sha256",
+      "scratch": "executor"
+    },
+    "executor_grading": {
+      "log_limit_bytes": 24576,
+      "nofile_limit": 1024,
+      "profile": "grading_profile_sha256",
+      "scratch": "executor"
+    },
+    "harness": {
+      "log_limit_bytes": 8388608,
+      "nofile_limit": 1024,
+      "profile": "execution_profile_sha256",
+      "scratch": "full"
+    }
+  },
+  "review_schema": "dittobench-coding-native-evidence-review-v1",
+  "router_namespaces": [
+    "host",
+    "rootless-netns"
+  ],
+  "schema": "dittobench-coding-native-enforcement-catalog-v1",
+  "tolerances": {
+    "cpu_usage_max_permille_of_quota": 1150,
+    "cpu_usage_min_permille_of_quota": 750,
+    "log_max_permille_of_limit": 1000,
+    "log_min_permille_of_limit": 500,
+    "memory_peak_max_permille_of_limit": 1000,
+    "memory_peak_min_permille_of_limit": 900,
+    "nofile_max_permille_of_limit": 1000,
+    "nofile_min_permille_of_limit": 990,
+    "pids_max_permille_of_limit": 1000,
+    "pids_min_permille_of_limit": 1000,
+    "scratch_max_permille_of_limit": 1000,
+    "scratch_min_permille_of_limit": 950,
+    "timeout_elapsed_max_permille_of_deadline": 1100,
+    "version": "dittobench-coding-native-enforcement-tolerances-v1"
+  }
+}
