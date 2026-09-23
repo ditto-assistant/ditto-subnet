@@ -8029,7 +8029,7 @@ class TestQuarantineAdmin:
                     artifact_sha256=_SHA256,
                     policy_version=13,
                     manifest_digest="b" * 64,
-                    start_event="first-policy-claim",
+                    start_event="first-v13-screening-claim",
                     started_at=started,
                     deadline_at=started + timedelta(hours=1),
                 )
