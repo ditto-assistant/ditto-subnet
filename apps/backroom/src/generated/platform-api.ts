@@ -2892,7 +2892,9 @@ export interface paths {
         put?: never;
         /**
          * Record Known Benign Approval
-         * @description Audit a separately reviewed clean candidate; no semantic pass inferred.
+         * @description Audit an operator-claimed clean candidate; no semantic pass inferred.
+         *
+         *     X-Admin-Actor is an audit label, not proof of an independent approver.
          */
         post: operations["record_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals_post"];
         delete?: never;
