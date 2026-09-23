@@ -8175,7 +8175,11 @@ class ScreeningReviewDeadlineActivation(Base):
 
     revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The historical policy_digest column pins the worker's module manifest.
+    # Keep the normative document hash separate so a rotation cannot be
+    # mistaken for a change to published policy text.
     policy_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_document_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
     activate_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
     )
@@ -8189,6 +8193,10 @@ class ScreeningReviewDeadlineActivation(Base):
     __table_args__ = (
         CheckConstraint("policy_version >= 13", name="srda_policy_check"),
         CheckConstraint("length(policy_digest) = 64", name="srda_digest_check"),
+        CheckConstraint(
+            "policy_document_digest IS NULL OR length(policy_document_digest) = 64",
+            name="srda_document_digest_check",
+        ),
         CheckConstraint(
             "window_seconds BETWEEN 3600 AND 604800", name="srda_window_check"
         ),
@@ -8204,9 +8212,9 @@ class ScreeningReviewDeadlineActivation(Base):
 class ScreeningReviewWindow(Base):
     """Explicit immutable start/deadline for one exact submission and policy.
 
-    This table has no writer yet. A later reviewed writer must bind the start
-    event named by the published policy and a prior activation in the same
-    first-claim transaction. A finalizer may not infer a window from age.
+    A configured V13 first-claim writer binds this to one exact artifact and
+    prior activation in the claim transaction. It does not finalize a review;
+    a finalizer may not infer a window from age.
     """
 
     __tablename__ = "screening_review_windows"

@@ -352,6 +352,7 @@ class AdminScreeningReviewDeadlineDiagnostic(BaseModel):
     deadline_state: Literal["bound", "not_configured"]
     finalizer_state: Literal["not_configured"] = "not_configured"
     activation_revision: int | None
+    policy_document_digest: str | None = None
     activation_actor: str | None
     activation_reason: str | None
     activated_at: datetime | None

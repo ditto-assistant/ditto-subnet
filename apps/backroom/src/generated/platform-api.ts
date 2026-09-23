@@ -1867,6 +1867,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-policy-activation/review-clock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get V13 Review Clock
+         * @description Read the explicit future schedule; absence means no active cutoff.
+         */
+        get: operations["get_v13_review_clock_api_v1_admin_screener_policy_activation_review_clock_get"];
+        put?: never;
+        /**
+         * Schedule V13 Review Clock
+         * @description Schedule a future first-claim clock; never backfill existing attempts.
+         */
+        post: operations["schedule_v13_review_clock_api_v1_admin_screener_policy_activation_review_clock_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-policy-activation/scored-rescreen": {
         parameters: {
             query?: never;
@@ -4483,6 +4507,26 @@ export interface paths {
          *     excluded: only settled public scores appear.
          */
         get: operations["submissions_api_v1_public_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/v13-review-clock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public V13 Review Clock
+         * @description Publish the configured first-claim window without operator identity.
+         */
+        get: operations["public_v13_review_clock_api_v1_public_v13_review_clock_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10898,6 +10942,8 @@ export interface components {
             observed_worker_hotkeys: string[];
             /** Outstanding Mandatory Checks */
             outstanding_mandatory_checks?: null;
+            /** Policy Document Digest */
+            policy_document_digest?: string | null;
             /** Policy Version */
             policy_version: number;
             /** Quarantine Artifact Matches */
@@ -24855,6 +24901,54 @@ export interface components {
             usage_unavailable: number;
         };
         /**
+         * PublicV13ReviewClockRevision
+         * @description One public notice, without private operator identity or reason text.
+         */
+        PublicV13ReviewClockRevision: {
+            /**
+             * Activate At
+             * Format: date-time
+             */
+            activate_at: string;
+            /** Policy Document Digest */
+            policy_document_digest: string;
+            /** Policy Manifest Digest */
+            policy_manifest_digest: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Start Event
+             * @default first-v13-screening-claim
+             * @constant
+             */
+            start_event: "first-v13-screening-claim";
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "due";
+            /** Window Seconds */
+            window_seconds: number;
+        };
+        /**
+         * PublicV13ReviewClockSchedule
+         * @description Miner-visible schedule; a due revision is not verification readiness.
+         */
+        PublicV13ReviewClockSchedule: {
+            /** Current Policy Document Digest */
+            current_policy_document_digest: string;
+            /** Due Revision */
+            due_revision: number | null;
+            /**
+             * Finalizer State
+             * @default not_configured
+             * @constant
+             */
+            finalizer_state: "not_configured";
+            /** Revisions */
+            revisions: components["schemas"]["PublicV13ReviewClockRevision"][];
+        };
+        /**
          * PublicV9AuthoritativeToolGate
          * @description Allowlisted trusted tool-server counts behind the v9 tool gate.
          */
@@ -25948,6 +26042,39 @@ export interface components {
             rescreen_scored: boolean;
             /** Target Policy Version */
             target_policy_version: number;
+        };
+        /**
+         * ScheduleV13ReviewClockRequest
+         * @description A future, manifest-bound deadline schedule; never a retroactive clock.
+         */
+        ScheduleV13ReviewClockRequest: {
+            /**
+             * Activate At
+             * Format: date-time
+             */
+            activate_at: string;
+            /** Actor */
+            actor: string;
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "SCHEDULE V13 REVIEW CLOCK";
+            /** Expected Revision */
+            expected_revision: number;
+            /** Policy Document Digest */
+            policy_document_digest: string;
+            /** Policy Manifest Digest */
+            policy_manifest_digest: string;
+            /**
+             * Policy Version
+             * @constant
+             */
+            policy_version: 13;
+            /** Reason */
+            reason: string;
+            /** Window Seconds */
+            window_seconds: number;
         };
         /**
          * ScoreReport
@@ -29790,6 +29917,58 @@ export interface components {
             unsettled_cases: number;
             /** Zeroed Cases */
             zeroed_cases: number;
+        };
+        /** V13ReviewClockRevision */
+        V13ReviewClockRevision: {
+            /**
+             * Activate At
+             * Format: date-time
+             */
+            activate_at: string;
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Policy Document Digest */
+            policy_document_digest: string | null;
+            /** Policy Manifest Digest */
+            policy_manifest_digest: string;
+            /** Policy Version */
+            policy_version: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Start Event
+             * @default first-v13-screening-claim
+             * @constant
+             */
+            start_event: "first-v13-screening-claim";
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "pending" | "due";
+            /** Window Seconds */
+            window_seconds: number;
+        };
+        /** V13ReviewClockSchedule */
+        V13ReviewClockSchedule: {
+            /** Current Policy Document Digest */
+            current_policy_document_digest: string;
+            /**
+             * Finalizer State
+             * @default not_configured
+             * @constant
+             */
+            finalizer_state: "not_configured";
+            latest: components["schemas"]["V13ReviewClockRevision"] | null;
+            /** Revisions */
+            revisions: components["schemas"]["V13ReviewClockRevision"][];
         };
         /** V7InferenceCalibration */
         V7InferenceCalibration: {
@@ -34694,6 +34873,72 @@ export interface operations {
             };
         };
     };
+    get_v13_review_clock_api_v1_admin_screener_policy_activation_review_clock_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13ReviewClockSchedule"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    schedule_v13_review_clock_api_v1_admin_screener_policy_activation_review_clock_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScheduleV13ReviewClockRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13ReviewClockSchedule"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_scored_rescreen_api_v1_admin_screener_policy_activation_scored_rescreen_get: {
         parameters: {
             query?: never;
@@ -39059,6 +39304,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_v13_review_clock_api_v1_public_v13_review_clock_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicV13ReviewClockSchedule"];
                 };
             };
         };

@@ -1,6 +1,11 @@
 import '@tanstack/react-start/server-only'
 
 import {
+  scheduleV13ReviewClockInputSchema,
+  v13ReviewClockScheduleSchema,
+} from '../lib/review-clock.schemas'
+
+import {
   conversationAssessmentInputSchema,
   conversationObservationsSchema,
   conversationReportSchema,
@@ -1148,6 +1153,31 @@ export async function setQueuePolicySettings(rawInput: unknown, actor: string) {
 }
 
 const SCREENER_POLICY_ACTIVATION_PATH = '/api/v1/admin/screener-policy-activation'
+const V13_REVIEW_CLOCK_PATH = `${SCREENER_POLICY_ACTIVATION_PATH}/review-clock`
+
+export async function fetchV13ReviewClock() {
+  return v13ReviewClockScheduleSchema.parse(await platformAdminRequest(V13_REVIEW_CLOCK_PATH))
+}
+
+export async function scheduleV13ReviewClock(rawInput: unknown, actor: string) {
+  const input = scheduleV13ReviewClockInputSchema.parse(rawInput)
+  await platformAdminRequest(V13_REVIEW_CLOCK_PATH, {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      policy_version: 13,
+      policy_document_digest: input.policyDocumentDigest,
+      policy_manifest_digest: input.policyManifestDigest,
+      activate_at: input.activateAt,
+      window_seconds: input.windowSeconds,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchV13ReviewClock()
+}
 
 export async function fetchScreenerPolicyActivation() {
   const payload = await platformAdminRequest(SCREENER_POLICY_ACTIVATION_PATH)

@@ -182,6 +182,10 @@ from ditto.api_models.screener import (
     ScreenEvidenceItem,
     SourceReviewFinding,
 )
+from ditto.api_models.screener_policy_activation import (
+    PublicV13ReviewClockRevision,
+    PublicV13ReviewClockSchedule,
+)
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import (
     SystemMetrics,
@@ -280,6 +284,7 @@ from ditto.db.models import (
     ScreeningDispute,
     ScreeningQuarantine,
     ScreeningRetryOverride,
+    ScreeningReviewDeadlineActivation,
     SubmissionImageBuild,
     ValidatorHeartbeat,
     ValidatorTicket,
@@ -395,6 +400,7 @@ from ditto.db.queries.screening_infra_retry import (
     plan_infra_retries,
 )
 from ditto.db.queries.screening_retry import failed_screening_retry_authorized
+from ditto.db.queries.screening_review_deadlines import POLICY_V13_DOCUMENT_DIGEST
 from ditto.db.queries.tickets import (
     get_score_continuation_floor,
     get_score_continuation_floor_row,
@@ -4941,6 +4947,56 @@ async def public_miner_avatar(
             "ETag": etag,
             "Cache-Control": "public, max-age=30",
         },
+    )
+
+
+@router.get("/v13-review-clock", response_model=PublicV13ReviewClockSchedule)
+async def public_v13_review_clock(
+    response: Response,
+    session: SessionDep,
+) -> PublicV13ReviewClockSchedule:
+    """Publish the configured first-claim window without operator identity."""
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    rows = list(
+        await session.scalars(
+            select(ScreeningReviewDeadlineActivation)
+            .where(ScreeningReviewDeadlineActivation.policy_version == 13)
+            .order_by(ScreeningReviewDeadlineActivation.revision.desc())
+            .limit(100)
+        )
+    )
+    now = datetime.now(UTC)
+    configured = [
+        row for row in rows if row.policy_document_digest == POLICY_V13_DOCUMENT_DIGEST
+    ]
+    latest_due = await session.scalar(
+        select(ScreeningReviewDeadlineActivation)
+        .where(
+            ScreeningReviewDeadlineActivation.policy_version == 13,
+            ScreeningReviewDeadlineActivation.activate_at <= now,
+        )
+        .order_by(ScreeningReviewDeadlineActivation.revision.desc())
+        .limit(1)
+    )
+    return PublicV13ReviewClockSchedule(
+        current_policy_document_digest=POLICY_V13_DOCUMENT_DIGEST,
+        due_revision=(
+            latest_due.revision
+            if latest_due is not None
+            and latest_due.policy_document_digest == POLICY_V13_DOCUMENT_DIGEST
+            else None
+        ),
+        revisions=[
+            PublicV13ReviewClockRevision(
+                revision=row.revision,
+                policy_document_digest=cast(str, row.policy_document_digest),
+                policy_manifest_digest=row.policy_digest,
+                activate_at=row.activate_at,
+                window_seconds=row.window_seconds,
+                state="due" if _timeline_utc(row.activate_at) <= now else "pending",
+            )
+            for row in configured
+        ],
     )
 
 

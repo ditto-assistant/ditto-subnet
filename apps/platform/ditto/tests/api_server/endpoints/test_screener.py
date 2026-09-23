@@ -8012,6 +8012,7 @@ class TestQuarantineAdmin:
             activation = ScreeningReviewDeadlineActivation(
                 policy_version=13,
                 policy_digest="b" * 64,
+                policy_document_digest="c" * 64,
                 activate_at=now + timedelta(hours=1),
                 window_seconds=3600,
                 reason="explicit post-activation review window",
@@ -8040,6 +8041,7 @@ class TestQuarantineAdmin:
             bound.json()["deadline_at"].replace("Z", "+00:00")
         ) == started + timedelta(hours=1)
         assert bound.json()["activation_actor"] == "test-operator"
+        assert bound.json()["policy_document_digest"] == "c" * 64
         assert bound.json()["finalizer_state"] == "not_configured"
 
         async with session_maker() as session, session.begin():

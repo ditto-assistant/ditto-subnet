@@ -63,6 +63,7 @@ from ditto.db.queries.screening_retry import (
     failed_screening_retry_authorized,
     latest_screening_attempt_id,
 )
+from ditto.db.queries.screening_review_deadlines import record_first_v13_claim_window
 from ditto.screener_policy_state import (
     effective_rescreen_scored,
     effective_scored_rescreen_activation_revision,
@@ -1527,6 +1528,9 @@ async def claim_screening_attempts(
             ),
         )
         session.add(attempt)
+        await record_first_v13_claim_window(
+            session, agent=agent, attempt=attempt, lease_ttl=ttl
+        )
         if policy_rescreen_release is not None:
             # The release FK is intentionally one-way (an attempt has no ORM
             # collection of rollout releases), so flush the new attempt before

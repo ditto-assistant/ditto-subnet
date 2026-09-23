@@ -2018,6 +2018,9 @@ async def get_screening_review_deadline(
         activation_revision=binding.activation_revision
         if binding is not None
         else None,
+        policy_document_digest=(
+            binding.policy_document_digest if binding is not None else None
+        ),
         activation_actor=activation.actor if activation is not None else None,
         activation_reason=activation.reason if activation is not None else None,
         activated_at=binding.activated_at if binding is not None else None,

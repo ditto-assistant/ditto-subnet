@@ -1,4 +1,5 @@
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
+import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import '@tanstack/react-start/server-only'
 
@@ -223,8 +224,10 @@ import {
   downloadRuntimeProfile,
   fetchQueuePolicySettings,
   fetchScreenerPolicyActivation,
+  fetchV13ReviewClock,
   fetchScoredPolicyRescreen,
   scheduleScreenerPolicyActivation,
+  scheduleV13ReviewClock,
   advanceScoredPolicyRescreen,
   restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
@@ -331,6 +334,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'apply_screener_review_settings',
   'rotate_screener_policy_manifest',
   'schedule_screener_policy_activation',
+  'schedule_v13_review_clock',
   'restore_scored_screening_snapshot',
   'set_validator_slot_settings',
   'apply_copy_court_settings',
@@ -654,6 +658,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read effective queue policy, rollout-locked fields, defaults, and optionally paged newest-first revision history. Open-rollout targets are snapshots: settings do not resize an in-flight rollout. historyLimit defaults to 0.',
   get_screener_policy_activation:
     'Read the scheduled screening-policy activation and its revision history; latest is null when none was ever scheduled.',
+  get_v13_review_clock:
+    'Read the explicitly scheduled V13 first-claim review clock. No row means no authoritative deadline; this does not activate a finalizer.',
+  schedule_v13_review_clock:
+    'Schedule a future V13 first-claim clock for new submissions only. Requires exact document/manifest digests, 65-minute notice, revision guard, and confirmation. Does not finalize holds.',
   schedule_screener_policy_activation:
     'Schedule one future screening-policy activation. `canaryOnly` keeps ordinary submissions on the current policy and permits only explicit scored releases to attest the target. Confirmation: "SCHEDULE SCREENER POLICY ACTIVATION". 409 stale revision; 422 bad phrase, naive/past time, or out-of-range target.',
   restore_scored_screening_snapshot:
@@ -2186,10 +2194,33 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screener policy activation',
       description:
-        'Read the screening-policy activation schedule: the effective policy version in force, the floor and builtin versions bounding what can be scheduled, the latest scheduled activation (null when none has ever been written), and the append-only revision history newest-first. `state` is computed at read time — "due" once now >= activate_at, "pending" before it. Read this before schedule_screener_policy_activation to get the expectedRevision and version bounds. Requires backroom:read.',
+        'Read effective screening policy, version bounds, latest scheduled activation, and revision history. Read before scheduling to get expectedRevision. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerPolicyActivation()),
+  )
+
+  registerTool(
+    'get_v13_review_clock',
+    {
+      title: 'Get V13 review clock schedule',
+      description:
+        'Read V13 first-claim clock revisions. No row means no configured deadline. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchV13ReviewClock()),
+  )
+
+  registerTool(
+    'schedule_v13_review_clock',
+    {
+      title: 'Schedule V13 review clock',
+      description:
+        'Future V13 first-claim clock for new UUIDs only: exact document/manifest SHA, revision, 65-minute notice, confirmation SCHEDULE V13 REVIEW CLOCK. No backfill or finalizer. Requires backroom:write.',
+      inputSchema: scheduleV13ReviewClockInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => scheduleV13ReviewClock(input, props.session.email)),
   )
 
   registerTool(
@@ -2197,7 +2228,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Schedule screener policy activation',
       description:
-        'Schedule one future screening-policy activation, append-only: expectedRevision as the concurrent-write guard (409 stale), targetPolicyVersion within the floor..builtin bounds the read reports (422 out of range), activateAt as ISO-8601 that MUST carry a timezone offset (422 naive or in the past), rescreenScored (default true), and an auditable reason. Set canaryOnly true to keep ordinary submissions on the current policy while explicit scored releases alone attest the target; it requires rescreenScored and a target above the floor. Exact confirmation "SCHEDULE SCREENER POLICY ACTIVATION" required. Requires backroom:write.',
+        'Schedule a future policy activation with expectedRevision, bounded targetPolicyVersion, timezone-aware activateAt, and reason. canaryOnly limits rollout to explicit scored releases and requires rescreenScored. Confirmation SCHEDULE SCREENER POLICY ACTIVATION. Requires backroom:write.',
       inputSchema: scheduleScreenerPolicyActivationInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2221,7 +2252,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Advance scored policy rescreen',
       description:
-        'Fill up to maxActiveReleases (1–4) top-down stale-score slots, or retry one paused row. Existing V10 scores and ranks remain visible. A terminal verdict frees one slot; a pause prevents later positions from being released. A canary-only activation requires reviewSettingsRevision for an immutable enforce-mode L3/L4 posture. Exact confirmation "ADVANCE SCORED POLICY RESCREEN" required. Requires backroom:write.',
+        'Fill 1–4 stale-score rescreen slots or retry one paused row; existing scores remain visible. canaryOnly requires reviewSettingsRevision. Confirmation ADVANCE SCORED POLICY RESCREEN. Requires backroom:write.',
       inputSchema: advanceScoredPolicyRescreenInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2234,7 +2265,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Restore scored screening snapshot',
       description:
-        'Incident recovery for a cohort that already has a complete benchmark score quorum but was displaced by a later scored-rescreen activation. The Platform derives the exact cohort under row locks, requires its latest attempt to belong to sourcePolicyVersion after sourceActivationRevision, restores each submission to its last successful screening attempt at or below targetPolicyVersion, and appends one immutable audit row per submission. It does not create screening attempts, builds, datasets, scores, or validator leases. Supply expectedCurrentActivationRevision, sourceActivationRevision, sourcePolicyVersion, targetPolicyVersion, benchVersion, expectedCount, an auditable reason, and exact confirmation "RESTORE SCORED SCREENING SNAPSHOT". Requires backroom:write.',
+        'Restore an exact scored cohort displaced by policy rescreen, preserving scores and audit history. Requires current/source activation and policy revisions, bench version, expected count, reason, and confirmation RESTORE SCORED SCREENING SNAPSHOT. Requires backroom:write.',
       inputSchema: restoreScoredScreeningSnapshotInputSchema,
       annotations: toolAnnotations('write', true),
     },

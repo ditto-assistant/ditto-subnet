@@ -184,7 +184,9 @@ describe('Backroom MCP tools', () => {
         'get_screener_policy_manifest',
         'rotate_screener_policy_manifest',
         'get_screener_policy_activation',
+        'get_v13_review_clock',
         'schedule_screener_policy_activation',
+        'schedule_v13_review_clock',
         'restore_scored_screening_snapshot',
         'get_validator_fleet',
         'get_validator_slot_settings',
@@ -345,7 +347,9 @@ describe('Backroom MCP tools', () => {
     // The audited retry adds exact report/artifact digests; measured 136,355 bytes.
     // Exact-agent continual retest diagnosis adds one bounded read schema.
     // One bounded L4 cohort read adds a compact schema and catalog line.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(140_000)
+    // Two bounded V13 clock tools add their exact SHA and schedule input
+    // schema; keep the full catalog below a measured 142 KB ceiling.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(142_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -365,7 +369,7 @@ describe('Backroom MCP tools', () => {
     // and dispute tools land at 25_237, so it moves to 25_400. The short
     // L4 cohort diagnostic adds one catalog line without another tutorial.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      26_000, // Includes continual retest and L4 cohort read summaries.
+      26_300, // Includes concise V13 clock read/write summaries.
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -3637,6 +3641,68 @@ describe('Backroom MCP tools', () => {
       reason: 'scheduled v11 activation for the planner-forced I7 amendment',
       actor: 'peyton@omniaura.ai',
       confirmation: 'SCHEDULE SCREENER POLICY ACTIVATION',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the default-off V13 review clock and guards its exact schedule write', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const empty = {
+      current_policy_document_digest: 'a'.repeat(64),
+      latest: null,
+      revisions: [],
+      finalizer_state: 'not_configured',
+    }
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(Response.json(empty)))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const read = await client.callTool({ name: 'get_v13_review_clock', arguments: {} })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toEqual(empty)
+    const invalid = await client.callTool({
+      name: 'schedule_v13_review_clock',
+      arguments: {
+        expectedRevision: 0,
+        policyDocumentDigest: 'a'.repeat(64),
+        policyManifestDigest: 'b'.repeat(64),
+        activateAt: '2026-10-01T12:00:00Z',
+        windowSeconds: 86400,
+        reason: 'publish a future first-claim window',
+        confirmation: 'WRONG PHRASE',
+      },
+    })
+    expect(invalid.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const scheduled = await client.callTool({
+      name: 'schedule_v13_review_clock',
+      arguments: {
+        expectedRevision: 0,
+        policyDocumentDigest: 'a'.repeat(64),
+        policyManifestDigest: 'b'.repeat(64),
+        activateAt: '2026-10-01T12:00:00Z',
+        windowSeconds: 86400,
+        reason: 'publish a future first-claim window',
+        confirmation: 'SCHEDULE V13 REVIEW CLOCK',
+      },
+    })
+    expect(scheduled.isError).not.toBe(true)
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/review-clock')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      expected_revision: 0,
+      policy_version: 13,
+      policy_document_digest: 'a'.repeat(64),
+      policy_manifest_digest: 'b'.repeat(64),
+      activate_at: '2026-10-01T12:00:00Z',
+      window_seconds: 86400,
+      reason: 'publish a future first-claim window',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'SCHEDULE V13 REVIEW CLOCK',
     })
 
     await client.close()
