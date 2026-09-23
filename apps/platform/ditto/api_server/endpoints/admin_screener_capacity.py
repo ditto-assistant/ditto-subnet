@@ -20,7 +20,9 @@ from ditto.api_models.screener_node_settings import (
     ScreenerNodeChannelSettingsRevision,
     ScreenerNodeChannelSettingsWriteRequest,
     ScreenerNodeChannelUsage,
+    ScreenerNodeReplayCapacityWriteRequest,
     node_channel_settings_confirmation,
+    node_replay_capacity_confirmation,
     node_status_confirmation,
 )
 from ditto.api_models.screener_nodes import (
@@ -552,6 +554,77 @@ async def set_screener_node_channel_settings(
     return _node_channel_revision(row)
 
 
+@router.post("/screener-nodes/{node_id}/verification-replay-capacity", status_code=204)
+async def set_screener_node_replay_capacity(
+    node_id: str,
+    payload: ScreenerNodeReplayCapacityWriteRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> None:
+    """Enable at most one report-only replay on the independently enrolled node."""
+    actor = x_admin_actor.strip() if x_admin_actor else ""
+    if not 1 <= len(actor) <= 120:
+        raise HTTPException(400, "X-Admin-Actor is required")
+    if node_id != "subnet-screener-2":
+        raise HTTPException(409, "only the independent second node may replay")
+    expected_confirmation = node_replay_capacity_confirmation(
+        node_id, payload.expected_hotkey, payload.capacity
+    )
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            409, f"confirmation must be exactly {expected_confirmation}"
+        )
+    now = datetime.now(UTC)
+    async with session.begin():
+        node = await session.scalar(
+            select(ScreenerNode)
+            .where(ScreenerNode.node_id == node_id)
+            .with_for_update()
+        )
+        if node is None or node.environment != "prod":
+            raise HTTPException(404, "production screener node not found")
+        if (
+            node.screener_hotkey != payload.expected_hotkey
+            or node.status != payload.expected_status
+            or node.verification_replay_capacity != payload.expected_capacity
+        ):
+            raise HTTPException(
+                409, "node replay identity or capacity changed; refresh"
+            )
+        if payload.capacity == payload.expected_capacity:
+            raise HTTPException(409, "replay capacity is unchanged")
+        if payload.capacity > 0:
+            source_node = await session.get(ScreenerNode, "subnet-screener-1")
+            if (
+                source_node is None
+                or source_node.environment != "prod"
+                or source_node.screener_hotkey == node.screener_hotkey
+                or source_node.provider_resource_id == node.provider_resource_id
+                or node.provider != "hetzner"
+                or node.status != "active"
+                or _required_aware(node.token_expires_at) <= now
+            ):
+                raise HTTPException(409, "independent active node identity unavailable")
+        node.verification_replay_capacity = payload.capacity
+        session.add(
+            ScreenerCapacityEvent(
+                event_id=uuid4(),
+                environment="prod",
+                event_type="verification_replay_capacity_changed",
+                provider=cast(ScreenerProvider, node.provider),
+                node_id=node_id,
+                detail=(
+                    f"hotkey={node.screener_hotkey} "
+                    f"capacity={payload.expected_capacity}->{payload.capacity} "
+                    f"actor={actor} reason={payload.reason.strip()}"
+                )[:500],
+                controller_epoch="backroom-replay-control",
+                created_at=now,
+            )
+        )
+
+
 @router.post(
     "/screener-nodes/{node_id}/status",
     response_model=None,
@@ -821,6 +894,7 @@ async def screener_capacity(
                 screener_hotkey=node.screener_hotkey,
                 status=cast(ScreenerNodeStatus, node.status),
                 capacity=node.capacity,
+                verification_replay_capacity=node.verification_replay_capacity,
                 image_reference=node.image_reference,
                 token_expires_at=_required_aware(node.token_expires_at),
                 registered_at=_required_aware(node.registered_at),

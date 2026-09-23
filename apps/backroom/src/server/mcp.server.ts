@@ -124,6 +124,7 @@ import {
   createScreenerBootstrapGrantInputSchema,
   setScreenerProviderSettingsInputSchema,
   setScreenerNodeChannelSettingsInputSchema,
+  setScreenerNodeReplayCapacityInputSchema,
   setConfirmationBundleSettingsInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
   retryTrustedImageBuildInputSchema,
@@ -234,6 +235,7 @@ import {
   fetchScreenerCapacity,
   updateScreenerProviderSettings,
   updateScreenerNodeChannelSettings,
+  updateScreenerNodeReplayCapacity,
   fetchScreenerReviewControl,
   fetchScreenerFanoutShadow,
   fetchCopyCourtControl,
@@ -291,6 +293,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'create_screener_bootstrap_grant',
   'set_screener_provider_settings',
   'set_screener_node_channel_settings',
+  'set_screener_node_replay_capacity',
   'register_coding_catalog_release',
   'supersede_coding_catalog_release',
   'retire_coding_catalog_release',
@@ -561,6 +564,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Apply complete revisioned screener routing and bounded GCE overflow settings after reading get_screener_capacity.',
   set_screener_node_channel_settings:
     'Apply complete revisioned concurrency limits for one enrolled screener node after reading get_screener_capacity.',
+  set_screener_node_replay_capacity:
+    'Set report-only replay capacity to zero or one on the independently enrolled second screener, with exact hotkey, status, capacity, confirmation and audit guards. Read get_screener_capacity first.',
   get_coding_catalog_releases:
     'Read signed shadow catalog commitments, retirement, and exposure counts.',
   get_coding_private_v2_releases:
@@ -2035,6 +2040,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => updateScreenerNodeChannelSettings(props.session.email, input)),
+  )
+
+  registerTool(
+    'set_screener_node_replay_capacity',
+    {
+      title: 'Set independent screener replay capacity',
+      description:
+        'Enable at most one report-only V13 verification replay on enrolled subnet-screener-2, or disable it with capacity zero. Read get_screener_capacity first and supply the exact node hotkey, status, current replay capacity, audit reason, and confirmation "SET SCREENER NODE subnet-screener-2 HOTKEY=<hotkey> REPLAY_CAPACITY=<0|1>". This cannot clear a hold or authorize emissions. Requires backroom:write.',
+      inputSchema: setScreenerNodeReplayCapacityInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => updateScreenerNodeReplayCapacity(props.session.email, input)),
   )
 
   registerTool(

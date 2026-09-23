@@ -654,6 +654,16 @@ export const setScreenerNodeChannelSettingsInputSchema = z.object({
   confirmation: z.string(),
 })
 
+export const setScreenerNodeReplayCapacityInputSchema = z.object({
+  nodeId: z.literal('subnet-screener-2'),
+  expectedHotkey: z.string().min(1),
+  expectedStatus: z.enum(['active', 'draining', 'quarantined', 'revoked']),
+  expectedCapacity: z.number().int().min(0).max(4),
+  capacity: z.union([z.literal(0), z.literal(1)]),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
 export function screenerNodeChannelSettingsConfirmation(
   nodeId: string,
   settings: z.infer<typeof screenerNodeChannelSettingsSchema>,
@@ -754,6 +764,7 @@ export const screenerCapacityNodeSchema = z.object({
   screener_hotkey: z.string().min(1),
   status: screenerNodeStatusSchema,
   capacity: z.number().int().positive(),
+  verification_replay_capacity: z.number().int().min(0).max(4).default(0),
   token_expires_at: z.string(),
   registered_at: z.string(),
   rotated_at: z.string(),

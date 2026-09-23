@@ -355,6 +355,95 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
     assert capacity.json()["node_controls"][0]["current"]["settings"] == settings
 
 
+async def test_independent_replay_capacity_is_guarded_and_audited(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    source_hotkey = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+    replay_hotkey = "5EKvqERH4xCV2MuQwb8cenyCVayfvrfjHaoeDPb9RFXxbsND"
+    async with session_maker() as session, session.begin():
+        for node_id, hotkey in (
+            ("subnet-screener-1", source_hotkey),
+            ("subnet-screener-2", replay_hotkey),
+        ):
+            session.add(
+                ScreenerNode(
+                    environment="prod",
+                    node_id=node_id,
+                    provider="hetzner",
+                    provider_resource_id=f"robot-{node_id}",
+                    screener_hotkey=hotkey,
+                    token_hash=hashlib.sha256(
+                        (node_id + _NODE_TOKEN).encode()
+                    ).hexdigest(),
+                    token_expires_at=now + timedelta(hours=6),
+                    status="active",
+                    capacity=1,
+                )
+            )
+    path = "/api/v1/admin/screener-nodes/subnet-screener-2/verification-replay-capacity"
+    headers = {**_HEADERS, "X-Admin-Actor": "operator@example.com"}
+    payload = {
+        "expected_hotkey": replay_hotkey,
+        "expected_status": "active",
+        "expected_capacity": 0,
+        "capacity": 1,
+        "reason": "Enable one report-only canary after independent enrollment",
+        "confirmation": (
+            f"SET SCREENER NODE subnet-screener-2 HOTKEY={replay_hotkey} "
+            "REPLAY_CAPACITY=1"
+        ),
+    }
+    before = await client.get("/api/v1/admin/screener-capacity", headers=_HEADERS)
+    assert before.status_code == 200
+    assert (
+        next(n for n in before.json()["nodes"] if n["node_id"] == "subnet-screener-2")[
+            "verification_replay_capacity"
+        ]
+        == 0
+    )
+    assert (
+        await client.post(path, headers=headers, json={**payload, "capacity": 2})
+    ).status_code == 422
+    assert (
+        await client.post(
+            path, headers=headers, json={**payload, "expected_hotkey": source_hotkey}
+        )
+    ).status_code == 409
+    applied = await client.post(path, headers=headers, json=payload)
+    assert applied.status_code == 204, applied.text
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    after = await client.get("/api/v1/admin/screener-capacity", headers=_HEADERS)
+    assert (
+        next(n for n in after.json()["nodes"] if n["node_id"] == "subnet-screener-2")[
+            "verification_replay_capacity"
+        ]
+        == 1
+    )
+    assert any(
+        e["event_type"] == "verification_replay_capacity_changed"
+        and "operator@example.com" in e["detail"]
+        for e in after.json()["events"]
+    )
+    disabled = await client.post(
+        path,
+        headers=headers,
+        json={
+            **payload,
+            "expected_capacity": 1,
+            "capacity": 0,
+            "confirmation": (
+                f"SET SCREENER NODE subnet-screener-2 HOTKEY={replay_hotkey} "
+                "REPLAY_CAPACITY=0"
+            ),
+        },
+    )
+    assert disabled.status_code == 204, disabled.text
+
+
 async def test_capacity_attributes_all_persistent_worker_heartbeats_to_node(
     app: FastAPI,
     client: httpx.AsyncClient,

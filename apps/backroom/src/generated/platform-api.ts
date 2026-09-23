@@ -1789,6 +1789,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-nodes/{node_id}/verification-replay-capacity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Screener Node Replay Capacity
+         * @description Enable at most one report-only replay on the independently enrolled node.
+         */
+        post: operations["set_screener_node_replay_capacity_api_v1_admin_screener_nodes__node_id__verification_replay_capacity_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-policy-activation": {
         parameters: {
             query?: never;
@@ -27233,6 +27253,36 @@ export interface components {
             /** Timestamp */
             timestamp: number;
         };
+        /**
+         * ScreenerNodeReplayCapacityWriteRequest
+         * @description Explicit, single-node report-only replay admission switch.
+         */
+        ScreenerNodeReplayCapacityWriteRequest: {
+            /**
+             * Capacity
+             * @enum {integer}
+             */
+            capacity: 0 | 1;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Environment
+             * @default prod
+             * @constant
+             */
+            environment: "prod";
+            /** Expected Capacity */
+            expected_capacity: number;
+            /** Expected Hotkey */
+            expected_hotkey: string;
+            /**
+             * Expected Status
+             * @enum {string}
+             */
+            expected_status: "active" | "draining" | "quarantined" | "revoked";
+            /** Reason */
+            reason: string;
+        };
         /** ScreenerNodeRuntimeResultRequest */
         ScreenerNodeRuntimeResultRequest: {
             /** Error Code */
@@ -27316,6 +27366,11 @@ export interface components {
              * Format: date-time
              */
             token_expires_at: string;
+            /**
+             * Verification Replay Capacity
+             * @default 0
+             */
+            verification_replay_capacity: number;
             /** Workers */
             workers?: components["schemas"]["ScreenerNodeWorkerView"][];
         };
@@ -34716,6 +34771,42 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ScreenerNodeAdminStatusWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_screener_node_replay_capacity_api_v1_admin_screener_nodes__node_id__verification_replay_capacity_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerNodeReplayCapacityWriteRequest"];
             };
         };
         responses: {

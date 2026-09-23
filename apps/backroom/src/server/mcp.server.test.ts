@@ -176,6 +176,7 @@ describe('Backroom MCP tools', () => {
         'get_screener_capacity',
         'set_screener_provider_settings',
         'set_screener_node_channel_settings',
+        'set_screener_node_replay_capacity',
         'create_screener_bootstrap_grant',
         'get_screener_review_settings',
         'get_screener_fanout_shadow',
@@ -347,9 +348,9 @@ describe('Backroom MCP tools', () => {
     // The audited retry adds exact report/artifact digests; measured 136,355 bytes.
     // Exact-agent continual retest diagnosis adds one bounded read schema.
     // One bounded L4 cohort read adds a compact schema and catalog line.
-    // Two bounded V13 clock tools add their exact SHA and schedule input
-    // schema; keep the full catalog below a measured 142 KB ceiling.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(142_000)
+    // The two V13 clock tools and bounded, default-off replay control bring
+    // the measured catalog just above 142 KB.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(143_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -369,7 +370,7 @@ describe('Backroom MCP tools', () => {
     // and dispute tools land at 25_237, so it moves to 25_400. The short
     // L4 cohort diagnostic adds one catalog line without another tutorial.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      26_300, // Includes concise V13 clock read/write summaries.
+      26_500, // Includes the V13 clock and independent replay summaries.
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2430,6 +2431,38 @@ describe('Backroom MCP tools', () => {
 
     expect(response.isError).toBe(true)
     expect(fetchMock).not.toHaveBeenCalled()
+    await client.close()
+    await server.close()
+  })
+
+  it('sets only the exact independent node replay cap with operator audit', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const hotkey = '5IndependentReplayHotkey'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json({
+        snapshot: null, nodes: [], events: [], event_retention_days: null,
+        builds: [], provider_jobs: [], node_controls: [],
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const response = await client.callTool({
+      name: 'set_screener_node_replay_capacity',
+      arguments: {
+        nodeId: 'subnet-screener-2', expectedHotkey: hotkey,
+        expectedStatus: 'active', expectedCapacity: 0, capacity: 1,
+        reason: 'Start one independent report-only replay canary',
+        confirmation: `SET SCREENER NODE subnet-screener-2 HOTKEY=${hotkey} REPLAY_CAPACITY=1`,
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-nodes/subnet-screener-2/verification-replay-capacity')
+    expect(init.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      expected_hotkey: hotkey, expected_status: 'active', expected_capacity: 0,
+      capacity: 1, reason: 'Start one independent report-only replay canary',
+    })
     await client.close()
     await server.close()
   })

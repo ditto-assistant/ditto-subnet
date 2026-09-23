@@ -270,6 +270,7 @@ import {
   screenerProviderSettingsControlSchema,
   setScreenerProviderSettingsInputSchema,
   setScreenerNodeChannelSettingsInputSchema,
+  setScreenerNodeReplayCapacityInputSchema,
   screenerNodeChannelSettingsControlSchema,
   retryTrustedImageBuildInputSchema,
   trustedImageBuildSchema,
@@ -697,6 +698,27 @@ export async function updateScreenerNodeChannelSettings(actor: string, rawInput:
   })
   const payload = await platformAdminRequest(path)
   return screenerNodeChannelSettingsControlSchema.parse(payload)
+}
+
+export async function updateScreenerNodeReplayCapacity(actor: string, rawInput: unknown) {
+  const input = setScreenerNodeReplayCapacityInputSchema.parse(rawInput)
+  await platformAdminRequest(
+    `/api/v1/admin/screener-nodes/${input.nodeId}/verification-replay-capacity`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        environment: 'prod',
+        expected_hotkey: input.expectedHotkey,
+        expected_status: input.expectedStatus,
+        expected_capacity: input.expectedCapacity,
+        capacity: input.capacity,
+        reason: input.reason,
+        confirmation: input.confirmation,
+      },
+    },
+  )
+  return fetchScreenerCapacity()
 }
 
 export async function fetchArtifactReleaseControl() {
