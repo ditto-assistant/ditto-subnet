@@ -17,6 +17,11 @@ disposition matrix keeps inconclusive and infrastructure failures out of the
 certified-safe count and reports failure-code frequencies. Request attempts,
 responses, and unmetered responses are counted separately; reported cost is
 not a total bill when a response lacks provider cost data.
+The binary classification summary also keeps unclassified safe and violation
+cases separate from true negatives and false negatives. Violation recall counts
+all labeled violations in its denominator, including incomplete reviews;
+classification coverage exposes non-completion rather than crediting it as a
+pass. False-positive rate uses only terminally classified safe controls.
 
 ## Context compaction
 

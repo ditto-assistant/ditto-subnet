@@ -95,6 +95,10 @@ def test_august_court_fixture_captures_precision_recall_baseline() -> None:
     assert len(cases) == 6
     assert classification_metrics(results) == {
         "cases": 6,
+        "classified_cases": 6,
+        "unclassified_safe": 0,
+        "unclassified_violation": 0,
+        "coverage": 1.0,
         "expected_violations": 3,
         "expected_safe": 3,
         "predicted_violations": 6,
@@ -108,7 +112,7 @@ def test_august_court_fixture_captures_precision_recall_baseline() -> None:
     }
 
 
-def test_classification_metrics_treats_inconclusive_as_no_violation_verdict() -> None:
+def test_classification_metrics_does_not_credit_inconclusive_as_a_pass() -> None:
     metrics = classification_metrics(
         [
             {"expected_disposition": "safe", "actual_disposition": "inconclusive"},
@@ -119,10 +123,37 @@ def test_classification_metrics_treats_inconclusive_as_no_violation_verdict() ->
         ]
     )
 
-    assert metrics["true_negative"] == 1
-    assert metrics["false_negative"] == 1
+    assert metrics["true_negative"] == 0
+    assert metrics["false_negative"] == 0
+    assert metrics["unclassified_safe"] == 1
+    assert metrics["unclassified_violation"] == 1
+    assert metrics["classified_cases"] == 0
+    assert metrics["coverage"] == 0.0
     assert metrics["precision"] is None
     assert metrics["recall"] == 0.0
+    assert metrics["false_positive_rate"] is None
+
+
+def test_classification_metrics_separates_false_clear_from_incomplete() -> None:
+    metrics = classification_metrics(
+        [
+            {"expected_disposition": "safe", "actual_disposition": "safe"},
+            {"expected_disposition": "safe", "actual_disposition": "inconclusive"},
+            {"expected_disposition": "violation", "actual_disposition": "safe"},
+            {
+                "expected_disposition": "violation",
+                "actual_disposition": "retryable_infra",
+            },
+        ]
+    )
+
+    assert metrics["true_negative"] == 1
+    assert metrics["false_negative"] == 1
+    assert metrics["unclassified_safe"] == 1
+    assert metrics["unclassified_violation"] == 1
+    assert metrics["coverage"] == 0.5
+    assert metrics["recall"] == 0.0
+    assert metrics["false_positive_rate"] == 0.0
 
 
 def test_classification_metrics_rejects_non_binary_gold_label() -> None:

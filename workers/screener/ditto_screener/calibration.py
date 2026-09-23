@@ -61,36 +61,45 @@ def disposition_metrics(
 def classification_metrics(
     items: Sequence[Mapping[str, object]],
 ) -> dict[str, int | float | None]:
-    """Measure violation precision/recall against operator-adjudicated labels.
+    """Measure terminal classifications without crediting incomplete reviews.
 
-    A non-violation model outcome, including ``inconclusive`` or
-    ``retryable_infra``, is a negative classification. Operational outcome counts
-    remain available on each result row; this summary measures only whether the
-    court correctly separated confirmed violations from safe controls.
+    Recall uses every labeled violation in its denominator, so an incomplete
+    review lowers detection rather than disappearing from the comparison.
+    False-positive rate uses only terminally classified safe controls; coverage
+    separately exposes the cases the reviewer could not classify.
     """
 
     true_positive = false_positive = true_negative = false_negative = 0
+    unclassified_safe = unclassified_violation = 0
     for item in items:
         expected = item.get("expected_disposition")
         actual = item.get("actual_disposition")
         if expected not in {"safe", "violation"}:
             raise ValueError("expected_disposition must be safe or violation")
-        expected_violation = expected == "violation"
-        predicted_violation = actual == "violation"
-        if expected_violation and predicted_violation:
+        if actual not in {"safe", "violation"}:
+            if expected == "violation":
+                unclassified_violation += 1
+            else:
+                unclassified_safe += 1
+        elif expected == "violation" and actual == "violation":
             true_positive += 1
-        elif not expected_violation and predicted_violation:
+        elif expected == "safe" and actual == "violation":
             false_positive += 1
-        elif not expected_violation and not predicted_violation:
+        elif expected == "safe":
             true_negative += 1
         else:
             false_negative += 1
 
     predicted_positive = true_positive + false_positive
-    actual_positive = true_positive + false_negative
-    actual_negative = true_negative + false_positive
+    actual_positive = true_positive + false_negative + unclassified_violation
+    actual_negative = true_negative + false_positive + unclassified_safe
+    classified_cases = true_positive + false_positive + true_negative + false_negative
     return {
         "cases": len(items),
+        "classified_cases": classified_cases,
+        "unclassified_safe": unclassified_safe,
+        "unclassified_violation": unclassified_violation,
+        "coverage": classified_cases / len(items) if items else None,
         "expected_violations": actual_positive,
         "expected_safe": actual_negative,
         "predicted_violations": predicted_positive,
@@ -103,7 +112,9 @@ def classification_metrics(
         ),
         "recall": true_positive / actual_positive if actual_positive else None,
         "false_positive_rate": (
-            false_positive / actual_negative if actual_negative else None
+            false_positive / (false_positive + true_negative)
+            if false_positive + true_negative
+            else None
         ),
     }
 
