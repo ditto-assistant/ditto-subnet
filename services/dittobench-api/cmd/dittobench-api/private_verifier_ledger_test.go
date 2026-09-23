@@ -107,6 +107,9 @@ func TestPrivateVerifierLedgerClassifiesAttributionFailures(t *testing.T) {
 		{"truncated", func(_ *inferenceBroker, id privateVerifierCaseIdentity, s *brokerSession) {
 			s.claimSpanCases[id.CaseID].ledger.Truncated = true
 		}, "truncated"},
+		{"unreadable request", func(_ *inferenceBroker, id privateVerifierCaseIdentity, s *brokerSession) {
+			s.claimSpanCases[id.CaseID].unparseableRequests = 1
+		}, "unreadable"},
 		{"cross-case claim", func(_ *inferenceBroker, _ privateVerifierCaseIdentity, s *brokerSession) {
 			_ = beginClaimSpanCompletionLocked(s, 0, "different-hidden-case")
 		}, "cross_case"},

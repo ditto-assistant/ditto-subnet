@@ -50,6 +50,7 @@ type privateVerifierCaseLedger struct {
 	SuccessfulResponses uint64 `json:"successful_responses"`
 	AttributedResponses uint64 `json:"attributed_responses"`
 	Unattributed        uint64 `json:"unattributed"`
+	UnreadableRequests  int    `json:"unreadable_requests"`
 	Truncated           bool   `json:"truncated"`
 	CrossCaseStarts     uint64 `json:"cross_case_starts"`
 	CrossCaseClaims     uint64 `json:"cross_case_claims"`
@@ -138,6 +139,7 @@ func (b *inferenceBroker) settledPrivateVerifierCaseLedger(identity privateVerif
 		SuccessfulResponses: session.claimSpanCompletions,
 		AttributedResponses: uint64(ledger.ledger.Completions),
 		Unattributed:        session.claimSpanUnattributed,
+		UnreadableRequests:  ledger.unparseableRequests,
 		Truncated:           ledger.ledger.Truncated,
 		CrossCaseStarts:     binding.crossCaseStarts,
 		CrossCaseClaims:     binding.crossCaseClaims,
@@ -148,6 +150,8 @@ func (b *inferenceBroker) settledPrivateVerifierCaseLedger(identity privateVerif
 		result.Status = "cross_case"
 	case result.Truncated:
 		result.Status = "truncated"
+	case result.UnreadableRequests != 0:
+		result.Status = "unreadable"
 	case result.Unattributed != 0 || ledger.unattributedOverlap != 0 ||
 		result.AttributedResponses != result.SuccessfulResponses:
 		result.Status = "unattributed"
