@@ -957,6 +957,18 @@ independent worker required for platform/provider failure: yes
 maximum verification window: 24 hours
 ```
 
+For a future explicitly scheduled v13 deadline activation, the review-window
+start event is the **first v13 screening claim for the submission UUID**. It
+includes a build-only or deferred-admission claim; a later deep-review claim,
+rescreen, or infrastructure retry does not restart the clock. The activation
+must publish its configured duration and separately bind this normative policy
+document digest and the worker's module-manifest digest before that first
+claim. The 24-hour value above remains a recommendation, not an active cutoff.
+An existing submission with any earlier v13 claim receives no retroactive
+window from a later activation. Its transition requires a separate published
+rule and exact-artifact review. A deadline alone never supplies evidence for
+`CLEAR` or a verification-failure `REJECT`.
+
 At the end of the window, the result must be `CLEAR` or `REJECT`.
 
 ## Required reason codes

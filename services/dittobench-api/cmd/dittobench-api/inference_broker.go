@@ -243,6 +243,9 @@ type brokerSession struct {
 	// tokens across the whole session (all cases, attributed or not); it exempts
 	// assistant-role prompt spans from the causal gate.
 	claimSpanSessionCompletion scoregates.TokenSet
+	// Optional, trusted-process-only V13 private verifier binding. Ordinary
+	// scoring never installs this and its ledger semantics remain unchanged.
+	privateVerifier *privateVerifierCaseBinding
 	// Bench v13 catalog capture (catalog_capture.go): per wire case, what the
 	// harness OFFERED the model on each attributed chat completion, plus the
 	// run-wide counters. Populated only for bench_version>=13, so v9..v12 are
@@ -4545,6 +4548,13 @@ func (b *inferenceBroker) beginRunCase(id, caseID string) (caseURL string, start
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if binding := session.privateVerifier; binding != nil {
+		if caseID != binding.caseID || binding.started {
+			binding.crossCaseStarts++
+			return "", false
+		}
+		binding.started = true
+	}
 	if session.runCases == nil {
 		session.runCases = make(map[string]int)
 	}
@@ -4585,6 +4595,9 @@ func (b *inferenceBroker) endRunCase(id, caseID string) {
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if binding := session.privateVerifier; binding != nil && caseID == binding.caseID {
+		binding.ended = true
+	}
 	if session.runCases[caseID] <= 1 {
 		delete(session.runCases, caseID)
 		if token := session.urlCaseTokens[caseID]; token != "" {

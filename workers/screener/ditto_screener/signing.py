@@ -26,6 +26,7 @@ from ditto_screener.heartbeat import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenResultOutcome,
+    completion_receipt_signing_message,
     router_source_screen_signing_message,
     verdict_signing_message,
 )
@@ -34,7 +35,33 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from ditto_screener.config import ScreenerConfig
-    from ditto_screening_protocol import RouterSourceScreenEvidence
+    from ditto_screening_protocol import (
+        AdjudicationCompletionReceipt,
+        RouterSourceScreenEvidence,
+    )
+
+
+def sign_completion_receipt(
+    keypair: Any,
+    *,
+    screener_hotkey: str,
+    agent_id: UUID,
+    attempt_id: UUID,
+    artifact_sha256: str,
+    adjudication_digest: str,
+    receipt: AdjudicationCompletionReceipt,
+) -> str:
+    """Sign successful L4 telemetry independently of the stable verdict wire."""
+    return keypair.sign(
+        completion_receipt_signing_message(
+            screener_hotkey=screener_hotkey,
+            agent_id=agent_id,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            adjudication_digest=adjudication_digest,
+            receipt=receipt,
+        )
+    ).hex()
 
 
 def load_screener_keypair(config: ScreenerConfig) -> Any:

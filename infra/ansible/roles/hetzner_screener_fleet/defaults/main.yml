@@ -26,7 +26,7 @@ screener_fleet_state_dir: /var/lib/ditto-screener-fleet
 screener_fleet_config_dir: /etc/ditto-screener-fleet
 screener_fleet_secret_agent_user: ditto-screener-secrets
 screener_fleet_x509_enabled: false
-screener_fleet_x509_subject: spiffe://dittobench.ai/screener/subnet-screener-1
+screener_fleet_x509_subject: "spiffe://dittobench.ai/screener/{{ screener_fleet_node_id }}"
 screener_fleet_x509_provider: ""
 screener_fleet_x509_service_account_email: ""
 screener_fleet_x509_ca_certificate_pem: ""

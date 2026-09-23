@@ -506,6 +506,20 @@ def test_session_safe_harbors_are_shared_by_l2_and_l3() -> None:
     assert "inconclusive rather than manufacturing" in _VIOLATION_CAUSE_TASK
 
 
+def test_v13_i6_review_requires_scored_endpoint_reachability() -> None:
+    analyst = _l2_review_system_prompt(13)
+    assert "local stub only when the request omits" in analyst
+    assert "valid endpoint-present scored path" in analyst
+    assert "not validator-observed" in analyst
+    assert "do not treat it as a v13 eligibility pass" in analyst
+
+    adjudicator = _SAFETY_ADJUDICATOR_TASK
+    assert "trace the other branch and the scored request contract" in adjudicator
+    assert "endpoint-present path skips the POST" in adjudicator
+    assert "falsely reports success after an endpoint error" in adjudicator
+    assert "rest of the artifact from refuting this one lead" in adjudicator
+
+
 def test_dittobench_preflight_clearance_is_exact_and_shared() -> None:
     for prompt in (SYSTEM_PROMPT, _SAFETY_ADJUDICATOR_TASK):
         assert "preflight:" in prompt

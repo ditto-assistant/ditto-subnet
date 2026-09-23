@@ -242,7 +242,12 @@ from ditto_screening_protocol import (
     ScreenResultOutcome,
     SourceReviewFinding,
     SourceReviewObservationPayload,
+    completion_receipt_signing_message,
     verdict_signing_message,
+)
+from ditto_screening_protocol.mechanical_verification import (
+    MECHANICAL_PROFILE_SHA256,
+    mechanical_evidence_sha256,
 )
 from ditto_screening_protocol.models import source_review_invariants_for_policy
 from ditto_screening_protocol.private_failure import (
@@ -570,10 +575,12 @@ async def record_screening_verification_receipt(
     screener_hotkey: ScreenerDep,
     session: SessionDep,
 ) -> None:
-    """Append one mechanical-check digest under the active v13 lease.
+    """Append one check digest under the active v13 lease.
 
     Only the authenticated owner of a running, unexpired attempt may write.
-    The row is intentionally evidence presence, not a check-pass or CLEAR.
+    Platform recomputes mechanical digests from the committed artifact and
+    verified image upload. Runtime rows remain observation-only. Neither kind
+    is a complete policy-v13 check pass or CLEAR authorization.
     A deterministic receipt ID makes an uncertain HTTP retry idempotent.
     """
     async with session.begin():
@@ -590,15 +597,31 @@ async def record_screening_verification_receipt(
         deadline = attempt.deadline
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=UTC)
+        mechanical = payload.check_code in {"archive_sha", "build_image_digest"}
         if (
             attempt.screener_hotkey != screener_hotkey
             or attempt.policy_version != payload.policy_version
             or attempt.status != "running"
             or now >= deadline
             or agent.sha256.lower() != payload.artifact_sha256
+            or (
+                (mechanical or attempt.artifact_sha256 is not None)
+                and (
+                    attempt.artifact_sha256 is None
+                    or attempt.artifact_sha256.lower() != payload.artifact_sha256
+                )
+            )
         ):
             raise HTTPException(
                 status_code=409, detail="verification receipt lease is stale"
+            )
+        if mechanical and payload.evidence_sha256 != mechanical_evidence_sha256(
+            check_code=payload.check_code,
+            artifact_sha256=agent.sha256.lower(),
+            image_sha256=payload.image_sha256,
+        ):
+            raise HTTPException(
+                status_code=409, detail="mechanical receipt evidence digest mismatch"
             )
         if payload.check_code == "build_image_digest":
             verified_image = await session.scalar(
@@ -639,7 +662,7 @@ async def record_screening_verification_receipt(
                     check_code=payload.check_code,
                     evidence_sha256=payload.evidence_sha256,
                     image_sha256=payload.image_sha256,
-                    profile_sha256=None,
+                    profile_sha256=MECHANICAL_PROFILE_SHA256 if mechanical else None,
                     challenge_manifest_sha256=None,
                     worker_hotkey=screener_hotkey,
                     created_at=now,
@@ -5779,6 +5802,16 @@ def _court_diagnostic_json(payload: ScreenResultRequest) -> dict[str, object] | 
     return adjudication.run_diagnostic.model_dump(mode="json")
 
 
+def _court_completion_receipt_json(
+    payload: ScreenResultRequest,
+) -> dict[str, object] | None:
+    """Copy only the typed, text-free completed-court measurements."""
+    adjudication = payload.adjudication
+    if adjudication is None or adjudication.completion_receipt is None:
+        return None
+    return adjudication.completion_receipt.model_dump(mode="json")
+
+
 async def _queue_fanout_shadow_review(
     session: AsyncSession,
     *,
@@ -5890,12 +5923,14 @@ async def _backfill_quarantine_payloads(
         else None
     )
     court_json = _court_diagnostic_json(payload)
+    completion_json = _court_completion_receipt_json(payload)
     if (
         evidence_json is None
         and finding_json is None
         and audit_json is None
         and notes_json is None
         and court_json is None
+        and completion_json is None
     ):
         return
     quarantine = await session.scalar(
@@ -5935,6 +5970,13 @@ async def _backfill_quarantine_payloads(
         quarantine.finding = finding_json
     if quarantine.court_diagnostic is None and court_json is not None:
         quarantine.court_diagnostic = court_json
+    if completion_json is not None:
+        if quarantine.court_completion_receipt is None:
+            quarantine.court_completion_receipt = completion_json
+        elif quarantine.court_completion_receipt != completion_json:
+            raise AgentNotScreenableError(
+                "re-reported court completion telemetry conflicts with retained receipt"
+            )
 
 
 def _backfill_private_failure_feedback(
@@ -6193,6 +6235,40 @@ async def submit_result(
                 previous = deferred_review.original_evidence.get("previous_status")
                 if previous == AgentStatus.LIVE.value:
                     restore_status = AgentStatus.LIVE
+
+    receipt = (
+        payload.adjudication.completion_receipt
+        if payload.adjudication is not None
+        else None
+    )
+    if receipt is not None:
+        if (
+            payload.attempt_id is None
+            or payload.adjudication_digest is None
+            or payload.completion_receipt_signature is None
+            or reported_attempt is None
+            or current_agent is None
+            or reported_attempt.agent_id != agent_id
+            or reported_attempt.artifact_sha256 is None
+            or reported_attempt.artifact_sha256.lower() != current_agent.sha256.lower()
+        ):
+            raise ScreenerAuthError(
+                "completion receipt is not bound to this screening artifact"
+            )
+        receipt_message = completion_receipt_signing_message(
+            screener_hotkey=screener_hotkey,
+            agent_id=agent_id,
+            attempt_id=payload.attempt_id,
+            artifact_sha256=reported_attempt.artifact_sha256.lower(),
+            adjudication_digest=payload.adjudication_digest,
+            receipt=receipt,
+        )
+        if not _verify_signature(
+            screener_hotkey,
+            receipt_message,
+            payload.completion_receipt_signature,
+        ):
+            raise ScreenerAuthError("completion receipt signature did not verify")
 
     deferred_mechanical_admission = bool(
         reported_attempt is not None
@@ -6764,6 +6840,7 @@ async def submit_result(
             )
         if attempt is None and not idempotent:
             now = datetime.now(UTC)
+            # Compatibility-only terminal receipt; no claim pinned this artifact.
             attempt = ScreeningAttempt(
                 attempt_id=payload.attempt_id or UUID(int=secrets.randbits(128)),
                 agent_id=agent_id,
@@ -6867,6 +6944,9 @@ async def submit_result(
                         evidence=evidence_json,
                         finding=finding_json,
                         court_diagnostic=_court_diagnostic_json(payload),
+                        court_completion_receipt=_court_completion_receipt_json(
+                            payload
+                        ),
                         status="resolved" if evidence_deferred else "active",
                         resolved_at=resolved_at,
                         resolved_by=(

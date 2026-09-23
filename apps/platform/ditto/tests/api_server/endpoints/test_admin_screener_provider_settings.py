@@ -355,6 +355,207 @@ async def test_node_channel_settings_default_disabled_and_cas_guarded(
     assert capacity.json()["node_controls"][0]["current"]["settings"] == settings
 
 
+async def test_independent_replay_capacity_is_guarded_and_audited(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ditto.api_server.endpoints import admin_screener_capacity
+
+    _install(app, session_maker)
+    now = datetime.now(UTC)
+    source_hotkey = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+    replay_hotkey = "5EKvqERH4xCV2MuQwb8cenyCVayfvrfjHaoeDPb9RFXxbsND"
+    async with session_maker() as session, session.begin():
+        for node_id, hotkey in (
+            ("subnet-screener-1", source_hotkey),
+            ("subnet-screener-2", replay_hotkey),
+        ):
+            session.add(
+                ScreenerNode(
+                    environment="prod",
+                    node_id=node_id,
+                    provider="hetzner",
+                    provider_resource_id=f"robot-{node_id}",
+                    screener_hotkey=hotkey,
+                    token_hash=hashlib.sha256(
+                        (node_id + _NODE_TOKEN).encode()
+                    ).hexdigest(),
+                    token_expires_at=now + timedelta(hours=6),
+                    status="active",
+                    capacity=1,
+                )
+            )
+    path = "/api/v1/admin/screener-nodes/subnet-screener-2/verification-replay-capacity"
+    headers = {**_HEADERS, "X-Admin-Actor": "operator@example.com"}
+    payload = {
+        "expected_hotkey": replay_hotkey,
+        "expected_status": "active",
+        "expected_capacity": 0,
+        "capacity": 1,
+        "reason": "Enable one report-only canary after independent enrollment",
+        "confirmation": (
+            f"SET SCREENER NODE subnet-screener-2 HOTKEY={replay_hotkey} "
+            "REPLAY_CAPACITY=1"
+        ),
+    }
+    before = await client.get("/api/v1/admin/screener-capacity", headers=_HEADERS)
+    assert before.status_code == 200
+    assert (
+        next(n for n in before.json()["nodes"] if n["node_id"] == "subnet-screener-2")[
+            "verification_replay_capacity"
+        ]
+        == 0
+    )
+    assert (
+        await client.post(path, headers=headers, json={**payload, "capacity": 2})
+    ).status_code == 422
+    assert (
+        await client.post(
+            path, headers=headers, json={**payload, "expected_hotkey": source_hotkey}
+        )
+    ).status_code == 409
+    # Enrolled identity alone cannot turn on replay: the runner has not shipped.
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    monkeypatch.setattr(
+        admin_screener_capacity,
+        "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE",
+        (0, 999, 0),
+    )
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerHeartbeat(
+                screener_hotkey=replay_hotkey,
+                instance_id="subnet-screener-2-worker-1",
+                software_version="v0.999.0",
+                protocol_version=7,
+                policy_version=13,
+                state="polling",
+                first_seen_at=now - timedelta(minutes=10),
+                reported_at=now - timedelta(minutes=10),
+                seen_at=now - timedelta(minutes=10),
+                signature="ab" * 64,
+                system_metrics={
+                    "release": {
+                        "builtin_policy_version": 13,
+                        "revision": "a" * 40,
+                        "version": "v0.999.0",
+                        "activated_at": int(now.timestamp()),
+                    }
+                },
+            )
+        )
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.get(
+            ScreenerHeartbeat, (replay_hotkey, "subnet-screener-2-worker-1")
+        )
+        assert heartbeat is not None
+        heartbeat.seen_at = now
+        heartbeat.policy_version = 12
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.get(
+            ScreenerHeartbeat, (replay_hotkey, "subnet-screener-2-worker-1")
+        )
+        assert heartbeat is not None
+        heartbeat.policy_version = 13
+        heartbeat.system_metrics = {
+            "release": {
+                "builtin_policy_version": 13,
+                "revision": "a" * 40,
+                "version": "v0.998.9",
+                "activated_at": int(now.timestamp()),
+            }
+        }
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.get(
+            ScreenerHeartbeat, (replay_hotkey, "subnet-screener-2-worker-1")
+        )
+        assert heartbeat is not None
+        heartbeat.system_metrics = {
+            "release": {
+                "builtin_policy_version": 13,
+                "revision": "a" * 40,
+                "version": "v0.999.0",
+                "activated_at": int(now.timestamp()),
+            }
+        }
+        session.add(
+            ScreenerHeartbeat(
+                screener_hotkey=replay_hotkey,
+                instance_id="subnet-screener-2-worker-2",
+                software_version="v0.998.9",
+                protocol_version=7,
+                policy_version=13,
+                state="polling",
+                first_seen_at=now,
+                reported_at=now,
+                seen_at=now,
+                signature="cd" * 64,
+                system_metrics={
+                    "release": {
+                        "builtin_policy_version": 13,
+                        "revision": "b" * 40,
+                        "version": "v0.998.9",
+                        "activated_at": int(now.timestamp()),
+                    }
+                },
+            )
+        )
+    # One newly adopted worker cannot enable while its sibling can still claim.
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    async with session_maker() as session, session.begin():
+        heartbeat = await session.get(
+            ScreenerHeartbeat, (replay_hotkey, "subnet-screener-2-worker-2")
+        )
+        assert heartbeat is not None
+        heartbeat.system_metrics = {
+            "release": {
+                "builtin_policy_version": 13,
+                "revision": "b" * 40,
+                "version": "v0.999.0",
+                "activated_at": int(now.timestamp()),
+            }
+        }
+    applied = await client.post(path, headers=headers, json=payload)
+    assert applied.status_code == 204, applied.text
+    assert (await client.post(path, headers=headers, json=payload)).status_code == 409
+    after = await client.get("/api/v1/admin/screener-capacity", headers=_HEADERS)
+    assert (
+        next(n for n in after.json()["nodes"] if n["node_id"] == "subnet-screener-2")[
+            "verification_replay_capacity"
+        ]
+        == 1
+    )
+    assert any(
+        e["event_type"] == "verification_replay_capacity_changed"
+        and "operator@example.com" in e["detail"]
+        for e in after.json()["events"]
+    )
+    # Emergency disable remains available even when worker evidence disappears.
+    monkeypatch.setattr(
+        admin_screener_capacity, "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE", None
+    )
+    disabled = await client.post(
+        path,
+        headers=headers,
+        json={
+            **payload,
+            "expected_capacity": 1,
+            "capacity": 0,
+            "confirmation": (
+                f"SET SCREENER NODE subnet-screener-2 HOTKEY={replay_hotkey} "
+                "REPLAY_CAPACITY=0"
+            ),
+        },
+    )
+    assert disabled.status_code == 204, disabled.text
+
+
 async def test_capacity_attributes_all_persistent_worker_heartbeats_to_node(
     app: FastAPI,
     client: httpx.AsyncClient,

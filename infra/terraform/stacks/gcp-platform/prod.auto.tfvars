@@ -34,7 +34,8 @@ enable_screener_capacity_controller = true
 enable_screener_fleet_dev_host = false
 # The bare-metal X.509 identity is live on subnet-screener-1. Preserve its
 # pool, provider, service account, and one-secret grants on routine plans.
-enable_screener_fleet_x509_identity = true
+enable_screener_fleet_x509_identity       = true
+enable_screener_fleet_x509_node2_identity = false
 
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6

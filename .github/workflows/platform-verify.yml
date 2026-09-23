@@ -161,13 +161,39 @@ jobs:
               ditto/tests/api_server/endpoints/test_screener.py
               ditto/tests/api_server/endpoints/test_inference.py
             object_storage: false
-          - suite: other-endpoints
+          # The former catch-all endpoint shard took nearly eight minutes in
+          # release verification. Keep every file covered while running the
+          # ten largest files alongside the remaining endpoint tests.
+          - suite: other-endpoints-large
+            pytest_args: >-
+              ditto/tests/api_server/endpoints/test_validator_v9_confirmation_transport.py
+              ditto/tests/api_server/endpoints/test_upload.py
+              ditto/tests/api_server/endpoints/test_admin_validation_retry.py
+              ditto/tests/api_server/endpoints/test_scoring.py
+              ditto/tests/api_server/endpoints/test_admin_copy_review.py
+              ditto/tests/api_server/endpoints/test_validator_slot_cap.py
+              ditto/tests/api_server/endpoints/test_admin_queue_policy_settings.py
+              ditto/tests/api_server/endpoints/test_admin_validator_slot_settings.py
+              ditto/tests/api_server/endpoints/test_admin_confirmation_bundles.py
+              ditto/tests/api_server/endpoints/test_gate_notes.py
+            object_storage: false
+          - suite: other-endpoints-remaining
             pytest_args: >-
               ditto/tests/api_server/endpoints
               --ignore=ditto/tests/api_server/endpoints/test_public.py
               --ignore=ditto/tests/api_server/endpoints/test_validator.py
               --ignore=ditto/tests/api_server/endpoints/test_screener.py
               --ignore=ditto/tests/api_server/endpoints/test_inference.py
+              --ignore=ditto/tests/api_server/endpoints/test_validator_v9_confirmation_transport.py
+              --ignore=ditto/tests/api_server/endpoints/test_upload.py
+              --ignore=ditto/tests/api_server/endpoints/test_admin_validation_retry.py
+              --ignore=ditto/tests/api_server/endpoints/test_scoring.py
+              --ignore=ditto/tests/api_server/endpoints/test_admin_copy_review.py
+              --ignore=ditto/tests/api_server/endpoints/test_validator_slot_cap.py
+              --ignore=ditto/tests/api_server/endpoints/test_admin_queue_policy_settings.py
+              --ignore=ditto/tests/api_server/endpoints/test_admin_validator_slot_settings.py
+              --ignore=ditto/tests/api_server/endpoints/test_admin_confirmation_bundles.py
+              --ignore=ditto/tests/api_server/endpoints/test_gate_notes.py
             object_storage: false
           - suite: api-server
             pytest_args: ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints

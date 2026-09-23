@@ -22,6 +22,8 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from ditto.api_models.admin_quarantine import (
     MANDATORY_V13_VERIFICATION_CHECKS,
+    AdminAdjudicationAttemptTelemetry,
+    AdminAdjudicationAttemptTelemetryList,
     AdminArtifactDuplicate,
     AdminBaselineDiffFileDetail,
     AdminBaselineDiffManifest,
@@ -75,6 +77,8 @@ from ditto.api_models.admin_quarantine import (
     AdminScreeningRescreenResponse,
     AdminScreeningRetryNowRequest,
     AdminScreeningRetryNowResponse,
+    AdminScreeningReviewDeadlineAttempt,
+    AdminScreeningReviewDeadlineDiagnostic,
     AdminScreeningSubmission,
     AdminScreeningSubmissionList,
     AdminScreeningVerificationCheck,
@@ -84,6 +88,9 @@ from ditto.api_models.admin_quarantine import (
     AdminSourceListing,
     AdminSourceSearchResult,
     AdminStarterKitProvenance,
+    AdminV13PrivatePackageReadiness,
+    AdminV13PrivatePackageRegisterRequest,
+    AdminV13PrivatePrerequisite,
     AdminValidatorAssignment,
     AdminValidatorAssignmentList,
     AdminValidatorAssignmentReleaseRequest,
@@ -141,13 +148,16 @@ from ditto.db.models import (
     BenchmarkRolloutMember,
     EvaluationPayment,
     Score,
+    ScreenedImageUpload,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
     ScreeningAttempt,
     ScreeningDispute,
+    ScreeningPrivatePackageRegistration,
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
+    ScreeningReviewDeadlineActivation,
     ScreeningVerificationReceipt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -184,13 +194,20 @@ from ditto.db.queries.payments import (
     get_miner_coldkey_for_agent,
     get_miner_coldkeys_for_agents,
 )
+from ditto.db.queries.screening_review_deadlines import review_deadline_binding
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol import (
+    AdjudicationCompletionReceipt,
     AdjudicationRunDiagnostic,
     SourceReviewNote,
     source_review_notes_digest,
 )
+from ditto_screening_protocol.mechanical_verification import (
+    MECHANICAL_PROFILE_SHA256,
+    mechanical_evidence_sha256,
+)
+from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE_SHA256
 
 logger = logging.getLogger(__name__)
 
@@ -1896,6 +1913,228 @@ async def get_screening_submission(
 
 
 @router.get(
+    "/screening-submissions/{agent_id}/review-deadline",
+    response_model=AdminScreeningReviewDeadlineDiagnostic,
+)
+async def get_screening_review_deadline(
+    agent_id: UUID, _admin: AdminDep, session: SessionDep
+) -> AdminScreeningReviewDeadlineDiagnostic:
+    """Report only a persisted, exact-artifact v13 window proven by its binding.
+
+    No current Platform writer activates a deadline or finalizes source holds.
+    In particular, a screening-attempt lease deadline and policy's recommended
+    24 hours are never substituted for an absent review window.
+    """
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="screening submission not found")
+    quarantine = await session.scalar(
+        select(ScreeningQuarantine)
+        .where(
+            ScreeningQuarantine.agent_id == agent_id,
+            ScreeningQuarantine.status == "active",
+        )
+        .order_by(
+            ScreeningQuarantine.created_at.desc(),
+            ScreeningQuarantine.quarantine_id.desc(),
+        )
+        .limit(1)
+    )
+    if quarantine is None:
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine)
+            .where(ScreeningQuarantine.agent_id == agent_id)
+            .order_by(
+                ScreeningQuarantine.created_at.desc(),
+                ScreeningQuarantine.quarantine_id.desc(),
+            )
+            .limit(1)
+        )
+    quarantine_attempt = (
+        await session.get(ScreeningAttempt, quarantine.attempt_id)
+        if quarantine is not None
+        else None
+    )
+    quarantine_artifact_matches = (
+        (
+            quarantine_attempt is not None
+            and quarantine_attempt.agent_id == agent_id
+            and quarantine_attempt.policy_version == quarantine.policy_version
+            and quarantine_attempt.artifact_sha256 is not None
+            and quarantine_attempt.artifact_sha256.lower() == agent.sha256.lower()
+        )
+        if quarantine is not None
+        else None
+    )
+    policy_version = (
+        quarantine.policy_version
+        if quarantine_artifact_matches and quarantine is not None
+        else agent.screening_policy_version
+    )
+    attempts = list(
+        await session.scalars(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.agent_id == agent_id,
+                ScreeningAttempt.policy_version == policy_version,
+                func.lower(ScreeningAttempt.artifact_sha256) == agent.sha256.lower(),
+            )
+            .order_by(
+                ScreeningAttempt.started_at.asc(),
+                ScreeningAttempt.attempt_id.asc(),
+            )
+        )
+    )
+    binding = (
+        await review_deadline_binding(session, quarantine_id=quarantine.quarantine_id)
+        if quarantine_artifact_matches
+        and quarantine is not None
+        and quarantine.policy_version == 13
+        else None
+    )
+    activation = (
+        await session.get(
+            ScreeningReviewDeadlineActivation, binding.activation_revision
+        )
+        if binding is not None
+        else None
+    )
+    return AdminScreeningReviewDeadlineDiagnostic(
+        agent_id=agent_id,
+        artifact_sha256=agent.sha256,
+        agent_status=agent.status,
+        policy_version=policy_version,
+        quarantine_id=quarantine.quarantine_id if quarantine is not None else None,
+        quarantine_status=quarantine.status if quarantine is not None else None,
+        quarantine_resolution=quarantine.resolution if quarantine is not None else None,
+        quarantine_attempt_id=quarantine.attempt_id if quarantine is not None else None,
+        quarantine_artifact_matches=quarantine_artifact_matches,
+        manifest_digest=(
+            quarantine.manifest_digest
+            if quarantine_artifact_matches and quarantine is not None
+            else None
+        ),
+        deadline_state="bound" if binding is not None else "not_configured",
+        activation_revision=binding.activation_revision
+        if binding is not None
+        else None,
+        policy_document_digest=(
+            binding.policy_document_digest if binding is not None else None
+        ),
+        activation_actor=activation.actor if activation is not None else None,
+        activation_reason=activation.reason if activation is not None else None,
+        activated_at=binding.activated_at if binding is not None else None,
+        start_event=binding.start_event if binding is not None else None,
+        window_started_at=binding.window_started_at if binding is not None else None,
+        deadline_at=binding.deadline_at if binding is not None else None,
+        recorded_attempts=[
+            AdminScreeningReviewDeadlineAttempt(
+                attempt_id=attempt.attempt_id,
+                status=attempt.status,
+                screener_hotkey=attempt.screener_hotkey,
+                started_at=attempt.started_at,
+                finished_at=attempt.finished_at,
+                reason_code=attempt.reason_code,
+            )
+            for attempt in attempts
+        ],
+        observed_worker_hotkeys=sorted(
+            {attempt.screener_hotkey for attempt in attempts}
+        ),
+    )
+
+
+@router.post(
+    "/screening-submissions/{agent_id}/attempts/{attempt_id}/private-package-registration",
+    response_model=None,
+    status_code=204,
+)
+async def register_v13_private_package(
+    agent_id: UUID,
+    attempt_id: UUID,
+    payload: AdminV13PrivatePackageRegisterRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> None:
+    """Persist exact digests only; this cannot verify cases or clear a hold."""
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    async with session.begin():
+        agent = await session.get(Agent, agent_id, with_for_update=True)
+        attempt = await session.get(ScreeningAttempt, attempt_id, with_for_update=True)
+        clean_agent = await session.get(Agent, payload.clean_agent_id)
+        clean_attempt = await session.get(ScreeningAttempt, payload.clean_attempt_id)
+        if (
+            agent is None
+            or attempt is None
+            or attempt.agent_id != agent_id
+            or clean_agent is None
+            or clean_attempt is None
+            or clean_attempt.agent_id != payload.clean_agent_id
+        ):
+            raise HTTPException(
+                status_code=404, detail="private package identity not found"
+            )
+        if (
+            attempt.policy_version != 13
+            or attempt.status not in {"quarantined", "passed"}
+            or agent.status
+            not in {AgentStatus.QUARANTINED, AgentStatus.ATH_PENDING_REVIEW}
+            or attempt.artifact_sha256 is None
+            or attempt.artifact_sha256.lower() != agent.sha256.lower()
+            or payload.artifact_sha256 != agent.sha256.lower()
+            or payload.profile_sha256 != V13_PRIVATE_PROFILE_SHA256
+            or payload.clean_agent_id == agent_id
+            or clean_attempt.artifact_sha256 is None
+            or clean_attempt.artifact_sha256.lower() != clean_agent.sha256.lower()
+            or payload.clean_artifact_sha256 != clean_agent.sha256.lower()
+            or clean_agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+        ):
+            raise HTTPException(
+                status_code=409, detail="private package guard mismatch"
+            )
+        for bound_agent, bound_attempt, bound_hotkey, image_sha in (
+            (agent_id, attempt_id, attempt.screener_hotkey, payload.image_sha256),
+            (
+                payload.clean_agent_id,
+                payload.clean_attempt_id,
+                clean_attempt.screener_hotkey,
+                payload.clean_image_sha256,
+            ),
+        ):
+            image = await session.scalar(
+                select(ScreenedImageUpload.image_upload_id).where(
+                    ScreenedImageUpload.agent_id == bound_agent,
+                    ScreenedImageUpload.attempt_id == bound_attempt,
+                    ScreenedImageUpload.screener_hotkey == bound_hotkey,
+                    ScreenedImageUpload.sha256 == image_sha,
+                    ScreenedImageUpload.status == "verified",
+                )
+            )
+            if image is None:
+                raise HTTPException(
+                    status_code=409, detail="private package image not verified"
+                )
+        existing = await session.get(ScreeningPrivatePackageRegistration, attempt_id)
+        fields = payload.model_dump(mode="python")
+        if existing is not None:
+            if any(getattr(existing, key) != value for key, value in fields.items()):
+                raise HTTPException(
+                    status_code=409, detail="private package registration conflicts"
+                )
+            return
+        session.add(
+            ScreeningPrivatePackageRegistration(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                registrar_actor=x_admin_actor,
+                **fields,
+            )
+        )
+
+
+@router.get(
     "/screening-submissions/{agent_id}/attempts/{attempt_id}/verification-readiness",
     response_model=AdminScreeningVerificationReadiness,
 )
@@ -1906,11 +2145,11 @@ async def get_screening_verification_readiness(
     session: SessionDep,
     x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> AdminScreeningVerificationReadiness:
-    """Read exact-artifact verification receipts without implying completion.
+    """Read exact-artifact receipts with narrow mechanical verification status.
 
-    This first read foundation has no writer. Absence means no matching
-    Platform receipt, not proof that an external check never ran. Existing
-    screening/oracle results never synthesize mandatory-v13 receipts.
+    Absence means no matching Platform receipt, not proof that an external
+    check never ran. The two mechanically verified checks never imply full
+    policy-v13 completion; runtime/private observations remain unverified.
     """
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
@@ -1952,6 +2191,117 @@ async def get_screening_verification_readiness(
         )
     ).all()
     total = sum(counts.values())
+    verified_images = set(
+        (
+            await session.execute(
+                select(
+                    ScreenedImageUpload.sha256,
+                    ScreenedImageUpload.screener_hotkey,
+                ).where(
+                    ScreenedImageUpload.agent_id == agent_id,
+                    ScreenedImageUpload.attempt_id == attempt_id,
+                    ScreenedImageUpload.status == "verified",
+                )
+            )
+        ).all()
+    )
+    exact_verified_image_sha256s = sorted(
+        sha
+        for sha, hotkey in verified_images
+        if hotkey == attempt.screener_hotkey
+        and len(sha) == 64
+        and all(char in "0123456789abcdef" for char in sha)
+    )
+    mechanically_verified: set[str] = set()
+    for row in rows:
+        if (
+            row.check_code not in {"archive_sha", "build_image_digest"}
+            or attempt.artifact_sha256 is None
+            or attempt.artifact_sha256.lower() != agent.sha256.lower()
+            or row.profile_sha256 != MECHANICAL_PROFILE_SHA256
+            or row.worker_hotkey != attempt.screener_hotkey
+            or (
+                row.check_code == "build_image_digest"
+                and (row.image_sha256, row.worker_hotkey) not in verified_images
+            )
+        ):
+            continue
+        try:
+            expected = mechanical_evidence_sha256(
+                check_code=row.check_code,
+                artifact_sha256=agent.sha256.lower(),
+                image_sha256=row.image_sha256,
+            )
+        except ValueError:
+            continue
+        if row.evidence_sha256 == expected:
+            mechanically_verified.add(row.check_code)
+    registration = await session.get(ScreeningPrivatePackageRegistration, attempt_id)
+    registration_matches = (
+        registration is not None
+        and registration.agent_id == agent_id
+        and registration.artifact_sha256 == agent.sha256.lower()
+        and attempt.artifact_sha256 is not None
+        and registration.artifact_sha256 == attempt.artifact_sha256.lower()
+        and registration.profile_sha256 == V13_PRIVATE_PROFILE_SHA256
+    )
+    target_image_bound = bool(
+        registration_matches
+        and registration is not None
+        and (
+            registration.image_sha256,
+            attempt.screener_hotkey,
+        )
+        in verified_images
+    )
+    clean_image_bound = False
+    if registration_matches and registration is not None:
+        clean_attempt = await session.get(
+            ScreeningAttempt, registration.clean_attempt_id
+        )
+        clean_agent = await session.get(Agent, registration.clean_agent_id)
+        clean_image_bound = bool(
+            clean_attempt is not None
+            and clean_agent is not None
+            and clean_agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+            and clean_attempt.agent_id == registration.clean_agent_id
+            and clean_attempt.artifact_sha256 is not None
+            and clean_attempt.artifact_sha256.lower()
+            == registration.clean_artifact_sha256
+            and clean_agent.sha256.lower() == registration.clean_artifact_sha256
+            and await session.scalar(
+                select(ScreenedImageUpload.image_upload_id).where(
+                    ScreenedImageUpload.agent_id == registration.clean_agent_id,
+                    ScreenedImageUpload.attempt_id == registration.clean_attempt_id,
+                    ScreenedImageUpload.screener_hotkey
+                    == clean_attempt.screener_hotkey,
+                    ScreenedImageUpload.sha256 == registration.clean_image_sha256,
+                    ScreenedImageUpload.status == "verified",
+                )
+            )
+            is not None
+        )
+    private_prerequisites = (
+        (
+            "target_artifact_commitment",
+            bool(
+                attempt.artifact_sha256 is not None
+                and attempt.artifact_sha256.lower() == agent.sha256.lower()
+            ),
+            True,
+        ),
+        ("target_verified_image", target_image_bound, True),
+        ("sealed_manifest_registration", registration_matches, False),
+        ("clean_image_candidate", clean_image_bound, False),
+        ("known_benign_control_provenance", False, False),
+        ("protected_blueprint_bank", False, False),
+        ("sealed_store_reachable", False, False),
+        ("runner_hotkey_registration", registration_matches, False),
+        ("trusted_runner_key", False, False),
+        ("fresh_isolated_paired_execution", False, False),
+        ("powered_statistical_plan", False, False),
+        ("all_19_checks_verified", False, False),
+    )
     logger.info(
         "admin_actor=%s read screening verification readiness agent_id=%s "
         "attempt_id=%s receipt_count=%d",
@@ -1966,16 +2316,41 @@ async def get_screening_verification_readiness(
         attempt_id=attempt_id,
         policy_version=attempt.policy_version,
         attempt_status=attempt.status,
+        verified_image_sha256s=exact_verified_image_sha256s[:16],
+        verified_image_count=len(exact_verified_image_sha256s),
+        verified_images_truncated=len(exact_verified_image_sha256s) > 16,
         checks=[
             AdminScreeningVerificationCheck(
                 check_code=code,
-                record_status="recorded_unverified"
-                if counts.get(code, 0)
-                else "not_recorded",
+                record_status=(
+                    "mechanically_verified"
+                    if code in mechanically_verified
+                    else "recorded_unverified"
+                    if counts.get(code, 0)
+                    else "not_recorded"
+                ),
                 receipt_count=counts.get(code, 0),
             )
             for code in MANDATORY_V13_VERIFICATION_CHECKS
         ],
+        private_package=AdminV13PrivatePackageReadiness(
+            registration_status=(
+                "registered_unverified" if registration_matches else "not_registered"
+            ),
+            prerequisites=[
+                AdminV13PrivatePrerequisite(
+                    code=code,
+                    status=(
+                        "mechanically_verified"
+                        if present and mechanical
+                        else "recorded_unverified"
+                        if present
+                        else "not_observed"
+                    ),
+                )
+                for code, present, mechanical in private_prerequisites
+            ],
+        ),
         receipts=[
             AdminScreeningVerificationReceipt(
                 receipt_id=row.receipt_id,
@@ -2047,6 +2422,7 @@ async def get_screening_failure_diagnostic(
         private_failure_detail=attempt.private_failure_detail,
         private_failure_log_tail=attempt.private_failure_log_tail,
         court_diagnostic=await _court_diagnostic(session, attempt_id),
+        court_completion_receipt=await _court_completion_receipt(session, attempt_id),
     )
 
 
@@ -2063,6 +2439,213 @@ async def _court_diagnostic(
         return AdjudicationRunDiagnostic.model_validate(quarantine.court_diagnostic)
     except ValidationError:
         logger.warning("screening court diagnostic rejected attempt_id=%s", attempt_id)
+        return None
+
+
+@router.get(
+    "/screening-adjudication-attempts",
+    response_model=AdminAdjudicationAttemptTelemetryList,
+)
+async def list_screening_adjudication_attempts(
+    _admin: AdminDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
+    offset: Annotated[int, Query(ge=0, le=10_000)] = 0,
+    lookback_hours: Annotated[int, Query(ge=1, le=720)] = 72,
+) -> AdminAdjudicationAttemptTelemetryList:
+    """Compare bounded, persisted L4 outcomes without source or model text.
+
+    Success timing and upstream were not historically recorded. New success
+    receipts expose final-request bytes/events and first tool-call signal;
+    failures retain aggregate request trace counts. A null means no receipt,
+    not a zero-latency or provider-independent completion.
+    Pinned settings describe configuration, not necessarily the served model.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=lookback_hours)
+    rows = (
+        await session.execute(
+            select(
+                ScreeningQuarantine,
+                ScreeningAttempt,
+                ScreenerReviewSettingsRevision,
+            )
+            .join(
+                ScreeningAttempt,
+                ScreeningAttempt.attempt_id == ScreeningQuarantine.attempt_id,
+            )
+            .outerjoin(
+                ScreenerReviewSettingsRevision,
+                ScreenerReviewSettingsRevision.revision
+                == ScreeningAttempt.review_settings_revision,
+            )
+            .where(
+                ScreeningQuarantine.created_at >= cutoff,
+                ScreeningQuarantine.reason_code.like("adjudicated-source-review-%"),
+            )
+            .order_by(
+                ScreeningQuarantine.created_at.desc(),
+                ScreeningQuarantine.quarantine_id.desc(),
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    items: list[AdminAdjudicationAttemptTelemetry] = []
+    for quarantine, attempt, revision in rows:
+        decision = quarantine.reason_code.removeprefix("adjudicated-source-review-")
+        if decision not in {"clear", "reject", "escalate"}:
+            continue
+        settings: ScreenerReviewSettings | None = None
+        if (
+            revision is not None
+            and revision.checksum == attempt.review_settings_checksum
+            and revision.scope == attempt.review_settings_scope
+        ):
+            try:
+                settings = ScreenerReviewSettings.model_validate(revision.settings)
+            except ValueError:
+                logger.warning(
+                    "invalid pinned screener settings attempt_id=%s", attempt.attempt_id
+                )
+        diagnostic: AdjudicationRunDiagnostic | None = None
+        if quarantine.court_diagnostic is not None:
+            try:
+                diagnostic = AdjudicationRunDiagnostic.model_validate(
+                    quarantine.court_diagnostic
+                )
+            except ValidationError:
+                logger.warning(
+                    "invalid court telemetry attempt_id=%s", attempt.attempt_id
+                )
+        completion: AdjudicationCompletionReceipt | None = None
+        if quarantine.court_completion_receipt is not None:
+            try:
+                completion = AdjudicationCompletionReceipt.model_validate(
+                    quarantine.court_completion_receipt
+                )
+            except ValidationError:
+                logger.warning(
+                    "invalid completion telemetry attempt_id=%s", attempt.attempt_id
+                )
+        requests = diagnostic.request_attempts if diagnostic is not None else None
+        items.append(
+            AdminAdjudicationAttemptTelemetry(
+                agent_id=attempt.agent_id,
+                attempt_id=attempt.attempt_id,
+                artifact_sha256=attempt.artifact_sha256,
+                policy_version=attempt.policy_version,
+                manifest_digest=quarantine.manifest_digest,
+                started_at=attempt.started_at,
+                finished_at=attempt.finished_at,
+                attempt_status=attempt.status,
+                adjudication_decision=decision,
+                review_settings_revision=attempt.review_settings_revision,
+                review_settings_checksum=attempt.review_settings_checksum,
+                configured_model=settings.adjudicator_model if settings else None,
+                configured_timeout_seconds=(
+                    settings.adjudicator_timeout_seconds if settings else None
+                ),
+                configured_completion_ceiling=(
+                    settings.adjudicator_max_completion_tokens
+                    or settings.max_completion_tokens
+                    if settings
+                    else None
+                ),
+                observed_model=(
+                    completion.observed_model
+                    if completion
+                    else diagnostic.model
+                    if diagnostic
+                    else None
+                ),
+                observed_provider=(
+                    completion.gateway_provider
+                    if completion
+                    else diagnostic.provider
+                    if diagnostic
+                    else None
+                ),
+                observed_upstream=(
+                    completion.observed_upstream
+                    if completion
+                    else diagnostic.upstream
+                    if diagnostic
+                    else None
+                ),
+                failure_code=diagnostic.failure_code if diagnostic else None,
+                elapsed_ms=completion.elapsed_ms
+                if completion
+                else diagnostic.elapsed_ms
+                if diagnostic
+                else None,
+                first_tool_call_ms=completion.first_tool_call_ms
+                if completion
+                else None,
+                first_tool_observation=completion.first_tool_observation
+                if completion
+                else None,
+                request_count=completion.request_count
+                if completion
+                else diagnostic.request_count
+                if diagnostic
+                else None,
+                request_prompt_bytes=(
+                    completion.final_request_prompt_bytes
+                    if completion
+                    else sum(request.prompt_bytes for request in requests)
+                    if requests is not None
+                    else None
+                ),
+                request_wire_bytes=(
+                    completion.final_request_wire_bytes
+                    if completion
+                    else sum(request.wire_bytes for request in requests)
+                    if requests is not None
+                    else None
+                ),
+                request_event_count=(
+                    completion.final_request_event_count
+                    if completion
+                    else sum(request.event_count for request in requests)
+                    if requests is not None
+                    else None
+                ),
+                prompt_tokens=completion.prompt_tokens
+                if completion
+                else diagnostic.prompt_tokens
+                if diagnostic
+                else None,
+                completion_tokens=(
+                    completion.completion_tokens
+                    if completion
+                    else diagnostic.completion_tokens
+                    if diagnostic
+                    else None
+                ),
+            )
+        )
+    return AdminAdjudicationAttemptTelemetryList(
+        items=items, limit=limit, offset=offset, lookback_hours=lookback_hours
+    )
+
+
+async def _court_completion_receipt(
+    session: AsyncSession, attempt_id: UUID
+) -> AdjudicationCompletionReceipt | None:
+    """Load typed completion telemetry without promoting it into a verdict."""
+    quarantine = await session.scalar(
+        select(ScreeningQuarantine).where(ScreeningQuarantine.attempt_id == attempt_id)
+    )
+    if quarantine is None or quarantine.court_completion_receipt is None:
+        return None
+    try:
+        return AdjudicationCompletionReceipt.model_validate(
+            quarantine.court_completion_receipt
+        )
+    except ValidationError:
+        logger.warning(
+            "screening completion receipt rejected attempt_id=%s", attempt_id
+        )
         return None
 
 

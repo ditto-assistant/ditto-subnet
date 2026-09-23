@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
@@ -20,7 +21,9 @@ from ditto.api_models.screener_node_settings import (
     ScreenerNodeChannelSettingsRevision,
     ScreenerNodeChannelSettingsWriteRequest,
     ScreenerNodeChannelUsage,
+    ScreenerNodeReplayCapacityWriteRequest,
     node_channel_settings_confirmation,
+    node_replay_capacity_confirmation,
     node_status_confirmation,
 )
 from ditto.api_models.screener_nodes import (
@@ -80,12 +83,18 @@ from ditto.db.queries.screener_provider_settings import (
     DEFAULT_SCREENER_PROVIDER_SETTINGS,
     latest_screener_provider_settings,
 )
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 AdminDep = Annotated[None, Depends(require_admin)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 _SOURCE_REPOSITORY = "https://github.com/ditto-assistant/ditto-subnet.git"
 _RUNTIME_REGISTRY = "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime"
+# Deliberately unset until the independent replay runner is implemented and
+# released. A heartbeat from today's ordinary screener must not enable replay.
+_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE: tuple[int, int, int] | None = None
+_REPLAY_HEARTBEAT_FRESHNESS = timedelta(minutes=5)
+_STABLE_RELEASE_VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -134,6 +143,52 @@ def _worker_view(row: ScreenerHeartbeat) -> ScreenerNodeWorkerView:
         host_specs=host_specs_from_heartbeat_envelope(row.system_metrics),
         release=fleet_release_from_heartbeat_envelope(row.system_metrics),
     )
+
+
+async def _replay_workers_ready(
+    session: AsyncSession, *, node: ScreenerNode, now: datetime
+) -> bool:
+    """Require every fresh worker on the enrolled node to run the replay build."""
+    minimum = _MIN_VERIFICATION_REPLAY_RUNNER_RELEASE
+    if minimum is None:
+        return False
+    rows = list(
+        await session.scalars(
+            select(ScreenerHeartbeat).where(
+                ScreenerHeartbeat.screener_hotkey == node.screener_hotkey,
+                ScreenerHeartbeat.seen_at >= now - _REPLAY_HEARTBEAT_FRESHNESS,
+            )
+        )
+    )
+    workers = [
+        row
+        for row in rows
+        if is_enrolled_node_heartbeat_instance(
+            node_id=node.node_id, instance_id=row.instance_id
+        )
+    ]
+    if not workers:
+        return False
+    for row in workers:
+        release = fleet_release_from_heartbeat_envelope(row.system_metrics)
+        version = (
+            _STABLE_RELEASE_VERSION.fullmatch(release.version)
+            if release is not None and release.version is not None
+            else None
+        )
+        if (
+            row.protocol_version < 7
+            or row.policy_version != SCREENING_POLICY_VERSION
+            or row.state not in {"polling", "screening"}
+            or release is None
+            or release.builtin_policy_version != SCREENING_POLICY_VERSION
+            or release.revision is None
+            or release.activated_at is None
+            or version is None
+            or tuple(int(part) for part in version.groups()) < minimum
+        ):
+            return False
+    return True
 
 
 def _build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
@@ -552,6 +607,82 @@ async def set_screener_node_channel_settings(
     return _node_channel_revision(row)
 
 
+@router.post("/screener-nodes/{node_id}/verification-replay-capacity", status_code=204)
+async def set_screener_node_replay_capacity(
+    node_id: str,
+    payload: ScreenerNodeReplayCapacityWriteRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> None:
+    """Enable at most one report-only replay on the independently enrolled node."""
+    actor = x_admin_actor.strip() if x_admin_actor else ""
+    if not 1 <= len(actor) <= 120:
+        raise HTTPException(400, "X-Admin-Actor is required")
+    if node_id != "subnet-screener-2":
+        raise HTTPException(409, "only the independent second node may replay")
+    expected_confirmation = node_replay_capacity_confirmation(
+        node_id, payload.expected_hotkey, payload.capacity
+    )
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            409, f"confirmation must be exactly {expected_confirmation}"
+        )
+    now = datetime.now(UTC)
+    async with session.begin():
+        node = await session.scalar(
+            select(ScreenerNode)
+            .where(ScreenerNode.node_id == node_id)
+            .with_for_update()
+        )
+        if node is None or node.environment != "prod":
+            raise HTTPException(404, "production screener node not found")
+        if (
+            node.screener_hotkey != payload.expected_hotkey
+            or node.status != payload.expected_status
+            or node.verification_replay_capacity != payload.expected_capacity
+        ):
+            raise HTTPException(
+                409, "node replay identity or capacity changed; refresh"
+            )
+        if payload.capacity == payload.expected_capacity:
+            raise HTTPException(409, "replay capacity is unchanged")
+        if payload.capacity > 0:
+            source_node = await session.get(ScreenerNode, "subnet-screener-1")
+            if (
+                source_node is None
+                or source_node.environment != "prod"
+                or source_node.screener_hotkey == node.screener_hotkey
+                or source_node.provider_resource_id == node.provider_resource_id
+                or node.provider != "hetzner"
+                or node.status != "active"
+                or _required_aware(node.token_expires_at) <= now
+            ):
+                raise HTTPException(409, "independent active node identity unavailable")
+            if not await _replay_workers_ready(session, node=node, now=now):
+                raise HTTPException(
+                    409,
+                    "fresh v13 replay-runner workers on independent node unavailable",
+                )
+        node.verification_replay_capacity = payload.capacity
+        session.add(
+            ScreenerCapacityEvent(
+                event_id=uuid4(),
+                environment="prod",
+                event_type="verification_replay_capacity_changed",
+                provider=cast(ScreenerProvider, node.provider),
+                node_id=node_id,
+                detail=(
+                    f"hotkey={node.screener_hotkey} "
+                    f"capacity={payload.expected_capacity}->{payload.capacity} "
+                    f"actor={actor} reason={payload.reason.strip()}"
+                ),
+                controller_epoch="backroom-replay-control",
+                created_at=now,
+            )
+        )
+
+
 @router.post(
     "/screener-nodes/{node_id}/status",
     response_model=None,
@@ -821,6 +952,7 @@ async def screener_capacity(
                 screener_hotkey=node.screener_hotkey,
                 status=cast(ScreenerNodeStatus, node.status),
                 capacity=node.capacity,
+                verification_replay_capacity=node.verification_replay_capacity,
                 image_reference=node.image_reference,
                 token_expires_at=_required_aware(node.token_expires_at),
                 registered_at=_required_aware(node.registered_at),

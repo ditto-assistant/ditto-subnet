@@ -14,7 +14,11 @@ from ditto.api_models.screener import (
     SourceReviewFinding,
 )
 from ditto.api_models.screener_review_settings import AdminShadowReviewObservation
-from ditto_screening_protocol import AdjudicationRunDiagnostic, SourceReviewNote
+from ditto_screening_protocol import (
+    AdjudicationCompletionReceipt,
+    AdjudicationRunDiagnostic,
+    SourceReviewNote,
+)
 
 QuarantineResolution = Literal["release", "rescreen", "reject"]
 DisputeResolution = Literal["release", "uphold"]
@@ -194,6 +198,51 @@ class AdminScreeningFailureDiagnostic(BaseModel):
     court_diagnostic: AdjudicationRunDiagnostic | None = None
     """Sanitized automated-court trace for this attempt. Null when the attempt
     has no such trace, including rows screened before the field existed."""
+    court_completion_receipt: AdjudicationCompletionReceipt | None = None
+    """Successful L4 timing/attribution only; null for historical completions."""
+
+
+class AdminAdjudicationAttemptTelemetry(BaseModel):
+    """Text-free L4 cohort row; absent telemetry stays absent."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    attempt_id: UUID
+    artifact_sha256: str | None
+    policy_version: int
+    manifest_digest: str
+    started_at: datetime
+    finished_at: datetime | None
+    attempt_status: str
+    adjudication_decision: Literal["clear", "reject", "escalate"]
+    review_settings_revision: int | None
+    review_settings_checksum: str | None
+    configured_model: str | None
+    configured_timeout_seconds: int | None
+    configured_completion_ceiling: int | None
+    observed_model: str | None
+    observed_provider: str | None
+    observed_upstream: str | None
+    failure_code: str | None
+    elapsed_ms: int | None
+    first_tool_call_ms: int | None = None
+    first_tool_observation: Literal["stream_delta", "complete_body"] | None = None
+    request_count: int | None
+    request_prompt_bytes: int | None
+    request_wire_bytes: int | None
+    request_event_count: int | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+
+
+class AdminAdjudicationAttemptTelemetryList(BaseModel):
+    """Most recent persisted L4 decisions, including clear and reject."""
+
+    items: list[AdminAdjudicationAttemptTelemetry]
+    limit: int
+    offset: int
+    lookback_hours: int
 
 
 class AdminScreeningVerificationReceipt(BaseModel):
@@ -211,8 +260,40 @@ class AdminScreeningVerificationReceipt(BaseModel):
 
 class AdminScreeningVerificationCheck(BaseModel):
     check_code: str
-    record_status: Literal["not_recorded", "recorded_unverified"]
+    record_status: Literal[
+        "not_recorded", "recorded_unverified", "mechanically_verified"
+    ]
     receipt_count: int
+
+
+class AdminV13PrivatePackageRegisterRequest(BaseModel):
+    """Operator assertion of sealed digests; never private case bytes."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pair_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    clean_agent_id: UUID
+    clean_attempt_id: UUID
+    clean_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    clean_image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runner_hotkey: str = Field(min_length=1, max_length=120)
+
+
+class AdminV13PrivatePrerequisite(BaseModel):
+    code: str
+    status: Literal["not_observed", "recorded_unverified", "mechanically_verified"]
+
+
+class AdminV13PrivatePackageReadiness(BaseModel):
+    """Prerequisite visibility only: no V13 policy pass or CLEAR status."""
+
+    registration_status: Literal["not_registered", "registered_unverified"]
+    prerequisites: list[AdminV13PrivatePrerequisite]
+    clear_authorized: Literal[False] = False
 
 
 class AdminScreeningVerificationReadiness(BaseModel):
@@ -220,9 +301,10 @@ class AdminScreeningVerificationReadiness(BaseModel):
 
     `not_recorded` means there is no matching receipt in this Platform ledger;
     it does not prove the check never ran in an external system. The trusted
-    screener records only archive and built-image mechanical observations;
-    neither those receipts nor the small behavioral oracle can certify v13's
-    mandatory 19 checks or private 60-pair package.
+    screener records archive and built-image mechanical observations. Only
+    those checks can be `mechanically_verified` after Platform recomputes their
+    canonical digest and matches the committed artifact / verified image.
+    Neither status certifies the other 17 checks or private 60-pair package.
     """
 
     agent_id: UUID
@@ -230,11 +312,62 @@ class AdminScreeningVerificationReadiness(BaseModel):
     attempt_id: UUID
     policy_version: int
     attempt_status: str
+    verified_image_sha256s: list[str] = Field(max_length=16)
+    verified_image_count: int = Field(ge=0)
+    verified_images_truncated: bool
     checks: list[AdminScreeningVerificationCheck]
     private_metamorphic_applicability: Literal["not_recorded"] = "not_recorded"
+    private_package: AdminV13PrivatePackageReadiness | None = None
     receipts: list[AdminScreeningVerificationReceipt]
     receipt_count: int
     receipts_truncated: bool
+
+
+class AdminScreeningReviewDeadlineAttempt(BaseModel):
+    """One recorded attempt for the exact current artifact and policy."""
+
+    attempt_id: UUID
+    status: str
+    screener_hotkey: str
+    started_at: datetime
+    finished_at: datetime | None
+    reason_code: str | None
+
+
+class AdminScreeningReviewDeadlineDiagnostic(BaseModel):
+    """Read-only exact-artifact clock evidence, never a finalizer verdict.
+
+    No deployed writer/finalizer is implied by a policy recommendation or a
+    screening lease deadline. Distinct hotkeys are observed identities, not
+    proof of independent workers or a completed retry requirement.
+    """
+
+    agent_id: UUID
+    artifact_sha256: str
+    agent_status: str
+    policy_version: int = Field(ge=0)
+    quarantine_id: UUID | None
+    quarantine_status: str | None
+    quarantine_resolution: str | None
+    quarantine_attempt_id: UUID | None
+    quarantine_artifact_matches: bool | None
+    manifest_digest: str | None
+    deadline_state: Literal["bound", "not_configured"]
+    finalizer_state: Literal["not_configured"] = "not_configured"
+    activation_revision: int | None
+    policy_document_digest: str | None = None
+    activation_actor: str | None
+    activation_reason: str | None
+    activated_at: datetime | None
+    start_event: str | None
+    window_started_at: datetime | None
+    deadline_at: datetime | None
+    recorded_attempts: list[AdminScreeningReviewDeadlineAttempt]
+    observed_worker_hotkeys: list[str]
+    required_retries: None = None
+    independent_worker_count: None = None
+    failure_domain: None = None
+    outstanding_mandatory_checks: None = None
 
 
 class AdminScreeningImageBuild(BaseModel):
@@ -987,10 +1120,14 @@ __all__ = [
     "AdminScreeningDisputeResolveResponse",
     "AdminScreeningFailureExample",
     "AdminScreeningFailureDiagnostic",
+    "AdminAdjudicationAttemptTelemetry",
+    "AdminAdjudicationAttemptTelemetryList",
     "AdminScreeningFailureGroup",
     "AdminScreeningFailureSummary",
     "AdminScreeningVerificationCheck",
     "AdminScreeningVerificationReadiness",
+    "AdminScreeningReviewDeadlineAttempt",
+    "AdminScreeningReviewDeadlineDiagnostic",
     "AdminScreeningVerificationReceipt",
     "AdminScreeningSubmission",
     "AdminScreeningSubmissionList",

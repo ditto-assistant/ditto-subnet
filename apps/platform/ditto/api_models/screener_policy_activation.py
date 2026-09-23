@@ -30,8 +30,75 @@ from pydantic import BaseModel, ConfigDict, Field
 CONFIRMATION = "SCHEDULE SCREENER POLICY ACTIVATION"
 RESTORE_SCORED_CONFIRMATION = "RESTORE SCORED SCREENING SNAPSHOT"
 ADVANCE_SCORED_RESCREEN_CONFIRMATION = "ADVANCE SCORED POLICY RESCREEN"
+REVIEW_CLOCK_CONFIRMATION = "SCHEDULE V13 REVIEW CLOCK"
 
 ActivationState = Literal["pending", "due"]
+
+
+class ScheduleV13ReviewClockRequest(BaseModel):
+    """A future, manifest-bound deadline schedule; never a retroactive clock."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    expected_revision: int = Field(ge=0)
+    policy_version: Literal[13]
+    policy_document_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    policy_manifest_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    activate_at: datetime
+    window_seconds: int = Field(ge=3600, le=604800)
+    reason: str = Field(min_length=8)
+    confirmation: Literal["SCHEDULE V13 REVIEW CLOCK"]
+    actor: str = Field(min_length=1, max_length=120)
+
+
+class V13ReviewClockRevision(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    revision: int
+    policy_version: int
+    policy_document_digest: str | None
+    policy_manifest_digest: str
+    activate_at: datetime
+    window_seconds: int
+    start_event: Literal["first-v13-screening-claim"] = "first-v13-screening-claim"
+    reason: str
+    actor: str
+    created_at: datetime
+    state: ActivationState
+
+
+class V13ReviewClockSchedule(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    current_policy_document_digest: str
+    latest: V13ReviewClockRevision | None
+    revisions: list[V13ReviewClockRevision]
+    finalizer_state: Literal["not_configured"] = "not_configured"
+
+
+class PublicV13ReviewClockRevision(BaseModel):
+    """One public notice, without private operator identity or reason text."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    revision: int
+    policy_document_digest: str
+    policy_manifest_digest: str
+    activate_at: datetime
+    window_seconds: int
+    start_event: Literal["first-v13-screening-claim"] = "first-v13-screening-claim"
+    state: ActivationState
+
+
+class PublicV13ReviewClockSchedule(BaseModel):
+    """Miner-visible schedule; a due revision is not verification readiness."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    current_policy_document_digest: str
+    due_revision: int | None
+    revisions: list[PublicV13ReviewClockRevision]
+    finalizer_state: Literal["not_configured"] = "not_configured"
 
 
 class ScreenerPolicyActivationRevision(BaseModel):

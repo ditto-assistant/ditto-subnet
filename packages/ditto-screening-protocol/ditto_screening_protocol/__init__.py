@@ -21,6 +21,9 @@ from ditto_screening_protocol.models import (
     STRICT_TWO_OUTCOME_POLICY_VERSION,
     TYPED_OUTCOME_POLICY_VERSION,
     AdjudicationClearClause,
+    AdjudicationCompletionReceipt,
+    AdjudicationRequestAttemptDiagnostic,
+    AdjudicationRunDiagnostic,
     AgentStatus,
     ArtifactResponse,
     ScreenedImageCompletedPart,
@@ -40,8 +43,6 @@ from ditto_screening_protocol.models import (
     ScreenResultRequest,
     ScreenResultResponse,
     ScreenReviewAudit,
-    AdjudicationRequestAttemptDiagnostic,
-    AdjudicationRunDiagnostic,
     SourceReviewAdjudication,
     SourceReviewAuthorityTransition,
     SourceReviewCausalEvidence,
@@ -82,7 +83,10 @@ from ditto_screening_protocol.router_source_screen import (
     router_source_screen_signing_message,
     screen_router_submission,
 )
-from ditto_screening_protocol.signing import verdict_signing_message
+from ditto_screening_protocol.signing import (
+    completion_receipt_signing_message,
+    verdict_signing_message,
+)
 
 __all__ = [
     "MAX_CONFIRMATION_SLOTS",
@@ -142,6 +146,7 @@ __all__ = [
     "AdjudicationClearClause",
     "AdjudicationRequestAttemptDiagnostic",
     "AdjudicationRunDiagnostic",
+    "AdjudicationCompletionReceipt",
     "SourceReviewAdjudication",
     "SourceReviewCitation",
     "SourceReviewInvariant",
@@ -160,4 +165,5 @@ __all__ = [
     "coding_source_screen_digest",
     "coding_source_screen_signing_message",
     "verdict_signing_message",
+    "completion_receipt_signing_message",
 ]

@@ -287,7 +287,6 @@ async def test_request_uses_provider_supported_completion_parameter(
     assert requests[0]["stream"] is True
     assert requests[0]["provider"] == {
         "allow_fallbacks": True,
-        "sort": "throughput",
         "data_collection": "deny",
         "require_parameters": True,
     }
@@ -359,6 +358,170 @@ async def test_streamed_tool_call_is_assembled_before_verdict(tmp_path: Path) ->
     assert message["tool_calls"] == [
         _call("submit_adjudication", json.loads(arguments)) | {"id": "verdict-1"}
     ]
+
+
+async def test_active_stream_without_tool_progress_retries_then_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_FIRST_TOOL_SECONDS", 0.08)
+    requests = 0
+
+    class NonToolStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for index in range(4):
+                if index == 1:
+                    # An indexed, ID-only shell must not disable the
+                    # first-tool progress bound.
+                    yield (
+                        b'data: {"provider":"Together","choices":'
+                        b'[{"delta":{"tool_calls":'
+                        b'[{"index":0,"id":"verdict-1"}]}}]}\n\n'
+                    )
+                else:
+                    yield (
+                        b'data: {"provider":"Together","choices":'
+                        b'[{"delta":{"content":"private reasoning"}}]}\n\n'
+                    )
+                await asyncio.sleep(0.03)
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=NonToolStream(),
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+    assert requests == 2
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "stream-no-tool-progress"
+    assert result.run_diagnostic.upstream == "together"
+    assert result.run_diagnostic.request_count == 2
+    assert all(
+        attempt.event_count > 1 for attempt in result.run_diagnostic.request_attempts
+    )
+    assert "private reasoning" not in result.run_diagnostic.model_dump_json()
+
+
+async def test_heartbeat_only_stream_cannot_evade_tool_progress_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_FIRST_TOOL_SECONDS", 0.08)
+    requests = 0
+
+    class HeartbeatStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for _ in range(5):
+                yield b": heartbeat\n\n"
+                await asyncio.sleep(0.03)
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=HeartbeatStream(),
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+    assert requests == 2
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "stream-no-tool-progress"
+    assert all(
+        attempt.wire_bytes > 0 and attempt.event_count == 0
+        for attempt in result.run_diagnostic.request_attempts
+    )
+
+
+async def test_tool_call_arriving_within_progress_budget_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_FIRST_TOOL_SECONDS", 0.2)
+    arguments = json.dumps(
+        {"decision": "clear", "reason": "Bounded evidence.", "citations": []}
+    )
+
+    class LateToolStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"thinking"}}]}\n\n'
+            await asyncio.sleep(0.025)
+            yield (
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                '"id":"verdict-1","type":"function","function":'
+                '{"name":"submit_adjudication","arguments":'
+                + json.dumps(arguments)
+                + "}}]}}]}\n\n"
+            ).encode()
+            yield b"data: [DONE]\n\n"
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=LateToolStream(),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        message = await _adjudicator(
+            _key(tmp_path), httpx.MockTransport(handler)
+        )._completion_message(client, "sk-test", [], timeout=1)
+    assert message["tool_calls"] == [
+        _call("submit_adjudication", json.loads(arguments)) | {"id": "verdict-1"}
+    ]
+
+
+async def test_partial_tool_arguments_still_require_complete_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_FIRST_TOOL_SECONDS", 0.08)
+
+    class PartialToolStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (
+                b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                b'"id":"verdict-1","function":{"name":"submit_adjudication",'
+                b'"arguments":"{\\"decision\\":"}}]}}]}\n\n'
+            )
+            for _ in range(5):
+                await asyncio.sleep(0.015)
+                yield b'data: {"choices":[{"delta":{"content":"still thinking"}}]}\n\n'
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=PartialToolStream(),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(
+            (TimeoutError, adjudicator_module.IncompleteStreamError)
+        ) as caught:
+            await _adjudicator(
+                _key(tmp_path), httpx.MockTransport(handler)
+            )._completion_message(client, "sk-test", [], timeout=0.05)
+    assert not isinstance(caught.value, adjudicator_module.NoToolProgressError)
 
 
 @pytest.mark.parametrize("streamed", [False, True])
@@ -627,6 +790,11 @@ async def test_stream_function_name_repeats_and_fragments_preserve_verdict(
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
     assert result.decision == "clear"
     assert result.escalation_code is None
+    assert result.completion_receipt is not None
+    assert result.completion_receipt.first_tool_observation == "stream_delta"
+    assert result.completion_receipt.first_tool_call_ms is not None
+    assert result.completion_receipt.final_request_event_count == 2
+    assert result.completion_receipt.observed_upstream is None
 
 
 @pytest.mark.parametrize("streamed", [False, True])
@@ -708,6 +876,7 @@ async def test_response_bound_subtype_survives_diagnostic_validation(
     assert result.run_diagnostic is not None
     assert result.run_diagnostic.failure_code == "response-too-large"
     assert result.run_diagnostic.response_bound_kind == expected_code
+    assert result.completion_receipt is None
 
 
 async def test_gateway_rejecting_stream_uses_one_buffered_attempt(
@@ -1292,6 +1461,9 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
         return httpx.Response(
             200,
             json={
+                "model": "served/model-v1",
+                "provider": "Together",
+                "usage": {"prompt_tokens": 200, "completion_tokens": 40},
                 "choices": [
                     {
                         "message": {
@@ -1312,7 +1484,7 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
                             ],
                         }
                     }
-                ]
+                ],
             },
         )
 
@@ -1335,6 +1507,14 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
 
     assert result.decision == "clear"
     assert result.citations[0].path == "src/main.rs"
+    assert result.completion_receipt is not None
+    assert result.completion_receipt.first_tool_observation == "complete_body"
+    assert result.completion_receipt.first_tool_call_ms is not None
+    assert result.completion_receipt.observed_model == "served/model-v1"
+    assert result.completion_receipt.observed_upstream == "together"
+    assert result.completion_receipt.gateway_provider == "openrouter"
+    assert result.completion_receipt.prompt_tokens == 200
+    assert result.completion_receipt.completion_tokens == 40
     assert len(requests) == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
         "submit_adjudication",
@@ -1394,6 +1574,9 @@ async def test_later_unread_concern_cannot_be_silently_cleared(
     if decision == "clear":
         assert result.decision == "escalate"
         assert result.escalation_code == "adjudicator-evidence-incomplete"
+        assert result.run_diagnostic is None
+        assert result.completion_receipt is not None
+        assert result.completion_receipt.request_count == 1
     else:
         assert result.decision == "reject"
 
@@ -1444,6 +1627,7 @@ async def test_budget_terminated_review_without_evidence_settles_immediately(
     assert result.decision == "escalate"
     assert result.clear_clause is None
     assert result.escalation_code == "adjudicator-no-evidence"
+    assert result.completion_receipt is None
     assert requests == 0
 
 
@@ -1558,6 +1742,9 @@ async def test_policy_v13_can_keep_incomplete_mandatory_review_held(
     assert result.escalation_code == "adjudicator-evidence-incomplete"
     assert result.clear_clause is None
     assert result.reject_invariant is None
+    assert result.run_diagnostic is None
+    assert result.completion_receipt is not None
+    assert result.completion_receipt.request_count == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
         "submit_adjudication",
         "request_operator_review",

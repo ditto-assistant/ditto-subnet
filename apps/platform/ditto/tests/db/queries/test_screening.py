@@ -126,6 +126,10 @@ async def test_four_concurrent_claims_are_unique_and_capacity_bounded(
                 select(ScreeningAttempt).where(ScreeningAttempt.status == "running")
             )
         )
+        for attempt in running:
+            agent = await session.get(Agent, attempt.agent_id)
+            assert agent is not None
+            assert attempt.artifact_sha256 == agent.sha256
     assert len(running) == 4
 
 
@@ -2038,6 +2042,13 @@ async def test_evaluating_agent_missing_screened_image_is_reclaimed(
     # It already cleared the anti-cheat review (it was EVALUATING on the current
     # policy), so this is a BUILD-ONLY pass — rebuild the image, do not re-review.
     assert attempt.build_only is True
+    historical = await session.scalar(
+        select(ScreeningAttempt).where(
+            ScreeningAttempt.agent_id == agent.agent_id,
+            ScreeningAttempt.status == "passed",
+        )
+    )
+    assert historical is not None and historical.artifact_sha256 is None
 
 
 async def test_release_after_expiry_cap_gets_build_only_attempt(
@@ -2120,6 +2131,14 @@ async def test_expiries_after_release_still_exhaust(session: AsyncSession) -> No
     assert refreshed is not None
     assert refreshed.status == AgentStatus.QUARANTINED
     assert refreshed.screening_reason_code == "repeatedly-inconclusive"
+    parked = await session.scalar(
+        select(ScreeningAttempt).where(
+            ScreeningAttempt.agent_id == agent.agent_id,
+            ScreeningAttempt.reason_code == "repeatedly-inconclusive",
+            ScreeningAttempt.status == "quarantined",
+        )
+    )
+    assert parked is not None and parked.artifact_sha256 is None
 
 
 async def test_fresh_upload_claim_is_not_build_only(

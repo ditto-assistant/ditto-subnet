@@ -58,6 +58,7 @@ from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     AdjudicationClearClause,
+    AdjudicationCompletionReceipt,
     AdjudicationRequestAttemptDiagnostic,
     AdjudicationRunDiagnostic,
     SourceReviewAdjudication,
@@ -86,6 +87,7 @@ def _clear_request_trace() -> None:
         trace.completion_ceiling_reached = None
         trace.http_status = None
         trace.upstream = None
+        trace.observed_model = None
 
 
 def _observe_upstream(payload: object) -> None:
@@ -103,6 +105,9 @@ def _observe_upstream(payload: object) -> None:
     trace = _run_trace.get()
     if trace is None or not isinstance(payload, dict):
         return
+    response_model = payload.get("model")
+    if isinstance(response_model, str) and _MODEL_RE.fullmatch(response_model):
+        trace.observed_model = response_model
     upstream = _upstream_slug(payload.get("provider"))
     if upstream is not None:
         trace.upstream = upstream
@@ -156,6 +161,8 @@ class _RequestTrace:
     event_count: int = 0
     wire_bytes: int = 0
     upstream: str | None = None
+    first_tool_delta_ms: int | None = None
+    first_tool_observation: Literal["stream_delta", "complete_body"] | None = None
 
     def observe_bytes(self, chunk: bytes) -> None:
         if not chunk:
@@ -223,6 +230,7 @@ class _RunTrace:
     completion_ceiling_reached: bool | None = None
     http_status: int | None = None
     upstream: str | None = None
+    observed_model: str | None = None
     request_count: int = 0
     request_attempts: list[_RequestTrace] = field(default_factory=list)
 
@@ -236,6 +244,16 @@ _run_trace: contextvars.ContextVar[_RunTrace | None] = contextvars.ContextVar(
 def _current_request_trace() -> _RequestTrace | None:
     trace = _run_trace.get()
     return trace.request_attempts[-1] if trace and trace.request_attempts else None
+
+
+def _observe_first_tool_call(
+    source: Literal["stream_delta", "complete_body"],
+) -> None:
+    """Mark the first tool-call signal on this request without retaining data."""
+    request = _current_request_trace()
+    if request is not None and request.first_tool_delta_ms is None:
+        request.first_tool_delta_ms = _elapsed_ms(request.started)
+        request.first_tool_observation = source
 
 
 _SUPPORTED_POLICY_VERSIONS = tuple(
@@ -276,6 +294,13 @@ _MAX_COMPLETION_TOKENS = 6_000
 _MAX_COMPLETION_REQUEST_SECONDS = 180.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 _MAX_COMPLETION_IDLE_SECONDS = 75.0
+# A court turn has no useful free-form output: if a healthy SSE
+# connection has not started any tool call after two minutes, stop that request
+# while the lease still has room for the existing single retry. This is below
+# the 180-second request wall but deliberately leaves ample time for reasoning.
+# It never turns partial text into a verdict. Successful first-tool timings are
+# not yet exposed by Backroom, so keep this conservative until calibrated.
+_MAX_COMPLETION_FIRST_TOOL_SECONDS = 120.0
 _MAX_COMPLETION_RESPONSE_BYTES = 512_000
 # SSE repeats JSON framing for every token, and a 16k-token completion can
 # exceed 2 MB of wire data even when its final tool call is small. This is a
@@ -302,6 +327,10 @@ class ProviderStreamError(ValueError):
 
 class ProviderBodyError(ValueError):
     """A complete JSON body reported a retryable upstream failure."""
+
+
+class NoToolProgressError(TimeoutError):
+    """An active SSE response made no tool-call progress within its budget."""
 
 
 # Bounded by the repository tools themselves; this only caps how many of
@@ -805,6 +834,8 @@ def _failure_code(error: BaseException) -> str:
         return "provider-body-error"
     if isinstance(error, IncompleteStreamError):
         return "stream-incomplete"
+    if isinstance(error, NoToolProgressError):
+        return "stream-no-tool-progress"
     if isinstance(error, (TimeoutError, httpx.TimeoutException)):
         return "completion-timeout"
     if isinstance(error, httpx.HTTPStatusError):
@@ -863,6 +894,7 @@ def _observe_completion(payload: object) -> None:
     if not isinstance(calls, list) or not calls:
         trace.final_tool_call_returned = False
         return
+    _observe_first_tool_call("complete_body")
     trace.final_tool_call_returned = any(
         isinstance(call, dict)
         and isinstance(call.get("function"), dict)
@@ -1256,7 +1288,7 @@ class SourceReviewAdjudicator:
                         escalation_code="adjudicator-failed",
                     ),
                 )
-            return self._certify(
+            result = self._certify(
                 verdict,
                 repository=repository,
                 read_locations=read_locations,
@@ -1264,8 +1296,49 @@ class SourceReviewAdjudicator:
                 policy_version=policy_version,
                 unreviewed_concerns=unreviewed_concerns,
             )
+            receipt = self._completion_receipt(trace)
+            return (
+                result.model_copy(update={"completion_receipt": receipt})
+                if receipt is not None
+                else result
+            )
         finally:
             _run_trace.reset(token)
+
+    def _completion_receipt(
+        self, trace: _RunTrace
+    ) -> AdjudicationCompletionReceipt | None:
+        """Build bounded, text-free telemetry for a completed court decision."""
+        request = trace.request_attempts[-1] if trace.request_attempts else None
+        first_tool_ms = (
+            min(request.started_ms + request.first_tool_delta_ms, 3_600_000)
+            if request is not None and request.first_tool_delta_ms is not None
+            else None
+        )
+        try:
+            return AdjudicationCompletionReceipt(
+                elapsed_ms=min(_elapsed_ms(trace.started), 3_600_000),
+                first_tool_call_ms=first_tool_ms,
+                first_tool_observation=(
+                    request.first_tool_observation if request else None
+                ),
+                observed_model=trace.observed_model,
+                gateway_provider=(
+                    self._inference_provider
+                    if _PROVIDER_RE.fullmatch(self._inference_provider)
+                    else None
+                ),
+                observed_upstream=trace.upstream,
+                request_count=min(trace.request_count, 1_024),
+                final_request_prompt_bytes=request.prompt_bytes if request else None,
+                final_request_wire_bytes=request.wire_bytes if request else None,
+                final_request_event_count=request.event_count if request else None,
+                prompt_tokens=trace.prompt_tokens,
+                completion_tokens=trace.completion_tokens,
+            )
+        except ValidationError:
+            logger.warning("adjudication completion telemetry was not attachable")
+            return None
 
     def _with_diagnostic(
         self,
@@ -1645,13 +1718,11 @@ class SourceReviewAdjudicator:
             # router returns a misleading 404.
             "max_tokens": self._max_completion_tokens,
             "provider": {
-                # Preserve the same model and strict privacy/tool contract,
-                # while allowing the router to fail over between compatible
-                # healthy providers instead of timing out behind one endpoint.
+                # Preserve the strict privacy/tool contract and allow fallback.
+                # Do not force throughput sorting: this is a required-tool
+                # request, so the router's tool-call-quality ordering matters
+                # more than raw output speed.
                 "allow_fallbacks": True,
-                # The default is price-weighted. L4 has a short, finite lease;
-                # rank eligible endpoints by output speed before fallback.
-                "sort": "throughput",
                 "data_collection": "deny",
                 "require_parameters": True,
             },
@@ -1723,6 +1794,9 @@ class SourceReviewAdjudicator:
                         payload = await _completion_stream_payload(
                             response,
                             requested_max_tokens=self._max_completion_tokens,
+                            first_tool_deadline_seconds=(
+                                _MAX_COMPLETION_FIRST_TOOL_SECONDS
+                            ),
                         )
                         if request_trace is not None:
                             request_trace.stage = "complete"
@@ -1753,7 +1827,10 @@ class SourceReviewAdjudicator:
 
 
 async def _completion_stream_payload(
-    response: httpx.Response, *, requested_max_tokens: int | None = None
+    response: httpx.Response,
+    *,
+    requested_max_tokens: int | None = None,
+    first_tool_deadline_seconds: float | None = None,
 ) -> object:
     """Assemble one bounded OpenAI-compatible streamed tool-call response.
 
@@ -1794,9 +1871,22 @@ async def _completion_stream_payload(
     total_bytes = 0
     retained_bytes = 0
     done = False
+    stream_started = asyncio.get_running_loop().time()
+    saw_tool_piece = False
+
+    def require_tool_progress() -> None:
+        # Check every line as well as completed data events. SSE comments and
+        # other non-data heartbeats still keep the socket read timeout alive.
+        if (
+            not saw_tool_piece
+            and first_tool_deadline_seconds is not None
+            and asyncio.get_running_loop().time() - stream_started
+            >= first_tool_deadline_seconds
+        ):
+            raise NoToolProgressError("adjudicator stream made no tool progress")
 
     def consume_event() -> bool:
-        nonlocal usage, model, finish_reason, retained_bytes
+        nonlocal usage, model, finish_reason, retained_bytes, saw_tool_piece
         if not data_lines:
             return False
         data = "\n".join(data_lines)
@@ -1810,6 +1900,7 @@ async def _completion_stream_payload(
         if request_trace is not None:
             request_trace.observe_event()
         _observe_upstream(event)
+        require_tool_progress()
         if event.get("error"):
             raise ProviderStreamError("adjudicator stream returned a provider error")
         model = event.get("model") or model
@@ -1824,12 +1915,24 @@ async def _completion_stream_payload(
         delta = choice.get("delta") or {}
         if not isinstance(delta, dict):
             raise ValueError("adjudicator stream delta is invalid")
-        for piece in delta.get("tool_calls") or []:
+        tool_pieces = delta.get("tool_calls") or []
+        for piece in tool_pieces:
             if not isinstance(piece, dict) or not isinstance(piece.get("index"), int):
                 raise ValueError("adjudicator stream tool index is invalid")
             index = piece["index"]
             if index < 0 or index >= 32:
                 raise ValueError("adjudicator stream tool index exceeded bound")
+            fragment = piece.get("function") or {}
+            if not isinstance(fragment, dict):
+                raise ValueError("adjudicator stream function is invalid")
+            if any(
+                isinstance(fragment.get(key), str) and fragment[key].strip()
+                for key in ("name", "arguments")
+            ):
+                # An index or ID-only shell is not evidence that the model
+                # started a function call; keep the budget active for it.
+                saw_tool_piece = True
+                _observe_first_tool_call("stream_delta")
             call = calls.setdefault(index, {"type": "function", "function": {}})
             for key in ("id", "type"):
                 if key in piece:
@@ -1848,9 +1951,6 @@ async def _completion_stream_payload(
                             "adjudicator completion exceeded response bound"
                         )
                     call[key] = piece[key]
-            fragment = piece.get("function") or {}
-            if not isinstance(fragment, dict):
-                raise ValueError("adjudicator stream function is invalid")
             function = call["function"]
             if not isinstance(function, dict):
                 raise ValueError("adjudicator stream function is invalid")
@@ -1874,6 +1974,7 @@ async def _completion_stream_payload(
         return False
 
     async for line in response.aiter_lines():
+        require_tool_progress()
         total_bytes += len(line.encode("utf-8")) + 1
         if total_bytes > _MAX_COMPLETION_STREAM_BYTES:
             raise CompletionWireTooLarge(

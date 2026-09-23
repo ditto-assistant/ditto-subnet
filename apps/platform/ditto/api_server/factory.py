@@ -104,6 +104,7 @@ from ditto.api_server.endpoints import (
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
     admin_traces_router,
+    admin_v13_private_generation_router,
     admin_validation_retry_router,
     admin_validator_slot_settings_router,
     admin_validator_weights_router,
@@ -152,6 +153,12 @@ from ditto.api_server.endpoints.validator_coding_hosted import (
 )
 from ditto.api_server.endpoints.validator_coding_inference import (
     coding_inference_transport_from_env,
+)
+from ditto.api_server.endpoints.verification_replay import (
+    admin_router as admin_verification_replay_router,
+)
+from ditto.api_server.endpoints.verification_replay import (
+    screener_router as screener_verification_replay_router,
 )
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
 from ditto.api_server.inference_concurrency_settings import (
@@ -729,6 +736,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_benchmark_canary_router, prefix="/api/v1")
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
+    app.include_router(admin_v13_private_generation_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")
@@ -768,6 +776,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
     app.include_router(admin_conversation_router, prefix="/api/v1")
     app.include_router(screener_conversation_router, prefix="/api/v1")
+    app.include_router(admin_verification_replay_router, prefix="/api/v1")
+    app.include_router(screener_verification_replay_router, prefix="/api/v1")
 
     # Serve the public dashboard SPA same-origin at ``/`` so the platform is the
     # transparency front door (its ``/api/v1/public/*`` calls need no CORS). The

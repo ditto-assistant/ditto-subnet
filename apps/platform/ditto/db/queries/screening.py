@@ -63,6 +63,7 @@ from ditto.db.queries.screening_retry import (
     failed_screening_retry_authorized,
     latest_screening_attempt_id,
 )
+from ditto.db.queries.screening_review_deadlines import record_first_v13_claim_window
 from ditto.screener_policy_state import (
     effective_rescreen_scored,
     effective_scored_rescreen_activation_revision,
@@ -745,6 +746,7 @@ async def _park_repeatedly_inconclusive(
     agent leaves the retry pool and a human decides its fate instead of the
     screener re-attempting it every lease forever.
     """
+    # This is an operator park, not an artifact-bound execution lease.
     attempt = ScreeningAttempt(
         attempt_id=uuid4(),
         agent_id=agent.agent_id,
@@ -1310,6 +1312,7 @@ async def claim_screening_attempts(
                 AgentStatus.SCREENING_FAILED: "failed",
             }.get(agent.status)
             if legacy_status is not None:
+                # Historical state has no observed attempt/artifact receipt.
                 session.add(
                     ScreeningAttempt(
                         attempt_id=uuid4(),
@@ -1486,6 +1489,7 @@ async def claim_screening_attempts(
         attempt = ScreeningAttempt(
             attempt_id=uuid4(),
             agent_id=agent.agent_id,
+            artifact_sha256=agent.sha256,
             screener_hotkey=screener_hotkey,
             policy_version=attempt_policy_version,
             status="running",
@@ -1524,6 +1528,9 @@ async def claim_screening_attempts(
             ),
         )
         session.add(attempt)
+        await record_first_v13_claim_window(
+            session, agent=agent, attempt=attempt, lease_ttl=ttl
+        )
         if policy_rescreen_release is not None:
             # The release FK is intentionally one-way (an attempt has no ORM
             # collection of rollout releases), so flush the new attempt before

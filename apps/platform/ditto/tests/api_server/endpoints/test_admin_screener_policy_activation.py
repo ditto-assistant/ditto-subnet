@@ -22,6 +22,10 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.screener_review_settings import (
+    ScreenerReviewSettings,
+    policy_manifest_digest,
+)
 from ditto.api_server.dependencies import get_session
 from ditto.db.models import (
     Agent,
@@ -35,6 +39,7 @@ from ditto.db.models import (
 from ditto.db.queries.screener_policy_activation import (
     insert_screener_policy_activation,
 )
+from ditto.db.queries.screening_review_deadlines import POLICY_V13_DOCUMENT_DIGEST
 from ditto_screening_protocol import (
     SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
@@ -49,6 +54,121 @@ _URL = "/api/v1/admin/screener-policy-activation"
 _CONFIRMATION = "SCHEDULE SCREENER POLICY ACTIVATION"
 _RESTORE_CONFIRMATION = "RESTORE SCORED SCREENING SNAPSHOT"
 _ADVANCE_CONFIRMATION = "ADVANCE SCORED POLICY RESCREEN"
+_CLOCK_URL = f"{_URL}/review-clock"
+
+
+async def test_v13_review_clock_is_default_off_and_schedule_is_guarded(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    activation_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, activation_maker)
+    assert (await client.get(_CLOCK_URL)).status_code == 401
+    empty = await client.get(_CLOCK_URL, headers=_HEADERS)
+    assert empty.status_code == 200
+    assert empty.json()["latest"] is None
+    assert empty.json()["finalizer_state"] == "not_configured"
+    public_empty = await client.get("/api/v1/public/v13-review-clock")
+    assert public_empty.status_code == 200
+    assert public_empty.headers["cache-control"] == "no-store, max-age=0"
+    assert public_empty.json()["due_revision"] is None
+    assert public_empty.json()["revisions"] == []
+    settings = ScreenerReviewSettings()
+    body = {
+        "expected_revision": 0,
+        "policy_version": 13,
+        "policy_document_digest": POLICY_V13_DOCUMENT_DIGEST,
+        "policy_manifest_digest": policy_manifest_digest(
+            settings.policy_manifest_profile, settings.policy_manifest_rotation_id
+        ),
+        "activate_at": _future(2),
+        "window_seconds": 7200,
+        "reason": "published first-claim review window",
+        "actor": "operator@example.com",
+        "confirmation": "SCHEDULE V13 REVIEW CLOCK",
+    }
+    assert (await client.post(_CLOCK_URL, json=body)).status_code == 401
+    wrong_digest = await client.post(
+        _CLOCK_URL,
+        headers=_HEADERS,
+        json={**body, "policy_document_digest": "0" * 64},
+    )
+    assert wrong_digest.status_code == 409
+    too_soon = await client.post(
+        _CLOCK_URL,
+        headers=_HEADERS,
+        json={**body, "activate_at": _future(0.5)},
+    )
+    assert too_soon.status_code == 422
+    inside_publication_margin = await client.post(
+        _CLOCK_URL,
+        headers=_HEADERS,
+        json={**body, "activate_at": _future(1.02)},
+    )
+    assert inside_publication_margin.status_code == 422
+    scheduled = await client.post(_CLOCK_URL, headers=_HEADERS, json=body)
+    assert scheduled.status_code == 200, scheduled.text
+    latest = scheduled.json()["latest"]
+    assert latest["revision"] == 1
+    assert latest["policy_document_digest"] == POLICY_V13_DOCUMENT_DIGEST
+    assert latest["policy_manifest_digest"] == body["policy_manifest_digest"]
+    assert latest["start_event"] == "first-v13-screening-claim"
+    assert latest["window_seconds"] == 7200
+    assert latest["state"] == "pending"
+    public_scheduled = await client.get("/api/v1/public/v13-review-clock")
+    assert public_scheduled.status_code == 200
+    assert public_scheduled.headers["cache-control"] == "no-store, max-age=0"
+    public_body = public_scheduled.json()
+    assert public_body["due_revision"] is None
+    assert public_body["revisions"][0]["window_seconds"] == 7200
+    assert public_body["revisions"][0]["state"] == "pending"
+    assert "actor" not in public_body["revisions"][0]
+    assert "reason" not in public_body["revisions"][0]
+    stale = await client.post(_CLOCK_URL, headers=_HEADERS, json=body)
+    assert stale.status_code == 409
+
+
+async def test_v13_clock_rechecks_database_notice_after_schedule_lock(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    activation_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, activation_maker)
+    settings = ScreenerReviewSettings()
+    activate_at = datetime.now(UTC) + timedelta(hours=2)
+
+    async def delayed_database_clock(session: AsyncSession) -> datetime:
+        assert session.in_transaction()
+        # The request initially has two hours of notice, but loses almost
+        # all of it while waiting for the serialized write boundary.
+        return activate_at - timedelta(minutes=30)
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_screener_policy_activation._review_clock_database_now",
+        delayed_database_clock,
+    )
+    response = await client.post(
+        _CLOCK_URL,
+        headers=_HEADERS,
+        json={
+            "expected_revision": 0,
+            "policy_version": 13,
+            "policy_document_digest": POLICY_V13_DOCUMENT_DIGEST,
+            "policy_manifest_digest": policy_manifest_digest(
+                settings.policy_manifest_profile, settings.policy_manifest_rotation_id
+            ),
+            "activate_at": activate_at.isoformat(),
+            "window_seconds": 7200,
+            "reason": "publish a durable first-claim window",
+            "actor": "operator@example.com",
+            "confirmation": "SCHEDULE V13 REVIEW CLOCK",
+        },
+    )
+    assert response.status_code == 422
+    schedule = await client.get(_CLOCK_URL, headers=_HEADERS)
+    assert schedule.status_code == 200
+    assert schedule.json()["latest"] is None
 
 
 @pytest.fixture

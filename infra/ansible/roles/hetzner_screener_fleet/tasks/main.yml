@@ -173,7 +173,7 @@
       - -out
       - "{{ screener_fleet_x509_csr_file }}"
       - -subj
-      - /CN=subnet-screener-1
+      - "/CN={{ screener_fleet_node_id }}"
       - -addext
       - "subjectAltName=URI:{{ screener_fleet_x509_subject }}"
       - -addext
@@ -499,9 +499,9 @@
 - name: Require the exact X.509 federation contract
   ansible.builtin.assert:
     that:
-      - screener_fleet_x509_subject == 'spiffe://dittobench.ai/screener/subnet-screener-1'
-      - screener_fleet_x509_provider is regex('^projects/[0-9]+/locations/global/workloadIdentityPools/screener-fleet-x509/providers/subnet-screener-1$')
-      - screener_fleet_x509_service_account_email is regex('^subnet-screener-1@[a-z][a-z0-9-]+\\.iam\\.gserviceaccount\\.com$')
+      - screener_fleet_x509_subject == 'spiffe://dittobench.ai/screener/' + screener_fleet_node_id
+      - screener_fleet_x509_provider is regex('^projects/[0-9]+/locations/global/workloadIdentityPools/screener-fleet-x509/providers/' + screener_fleet_node_id + '$')
+      - screener_fleet_x509_service_account_email is regex('^' + screener_fleet_node_id + '@[a-z][a-z0-9-]+\\.iam\\.gserviceaccount\\.com$')
       - >-
         (('BEGIN CERTIFICATE' in screener_fleet_x509_ca_certificate_pem) and
          ('PRIVATE KEY' not in screener_fleet_x509_ca_certificate_pem) and
@@ -514,7 +514,7 @@
     fail_msg: >-
       Runtime X.509 federation requires the exact Terraform provider output,
       dedicated service account output, public offline-CA certificate, and a
-      signed leaf certificate for subnet-screener-1. No private key belongs in
+      signed leaf certificate for the exact node. No private key belongs in
       inventory, Vault, Terraform, or Git.
   when:
     - screener_fleet_runtime_enabled
@@ -593,7 +593,7 @@
     - screener_fleet_runtime_enabled
     - screener_fleet_x509_enabled
 
-- name: Require the exact subnet-screener-1 URI SAN
+- name: Require the exact node URI SAN
   ansible.builtin.assert:
     that:
       - "('URI:' + screener_fleet_x509_subject) in screener_fleet_x509_san.stdout"

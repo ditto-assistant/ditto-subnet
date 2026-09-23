@@ -138,3 +138,108 @@ output "screener_fleet_x509_subject" {
   description = "Exact URI SAN required in the subnet-screener-1 client certificate."
   value       = var.enable_screener_fleet_x509_identity ? local.screener_fleet_x509_subject : ""
 }
+
+# A second, independently enrolled Hetzner node can replay source reviews
+# originating from subnet-screener-1. This is inert until separately enabled
+# through a reviewed Terraform plan and a node-bound Platform bootstrap grant.
+# It shares only the WIF pool; its trust anchor, subject, provider, service
+# account, and Secret Manager grant are distinct from node 1.
+variable "enable_screener_fleet_x509_node2_identity" {
+  description = "Add the exact-subject X.509 WIF identity for subnet-screener-2. Requires the existing node-1 fleet pool and a separate, host-generated client key."
+  type        = bool
+  default     = false
+}
+
+variable "screener_fleet_x509_node2_ca_certificate_pem" {
+  description = "Public certificate of node 2's separate offline CA; never the private key."
+  type        = string
+  default     = ""
+
+  validation {
+    condition = (
+      var.screener_fleet_x509_node2_ca_certificate_pem == "" ||
+      can(regex(
+        "^-----BEGIN CERTIFICATE-----\\n(?:[A-Za-z0-9+/=]+\\n)+-----END CERTIFICATE-----\\n?$",
+        var.screener_fleet_x509_node2_ca_certificate_pem,
+      ))
+    )
+    error_message = "screener_fleet_x509_node2_ca_certificate_pem must be one PEM certificate with no private key."
+  }
+}
+
+locals {
+  screener_fleet_x509_node2_subject = "spiffe://dittobench.ai/screener/subnet-screener-2"
+  screener_fleet_x509_node2_count   = var.enable_screener_fleet_x509_node2_identity ? 1 : 0
+}
+
+resource "google_service_account" "screener_fleet_x509_node2" {
+  count        = local.screener_fleet_x509_node2_count
+  project      = var.project
+  account_id   = "subnet-screener-2"
+  display_name = "Hetzner screener subnet-screener-2"
+  description  = "Exact node-2 X.509 identity; reads only the Ditto source-review secret."
+}
+
+resource "google_iam_workload_identity_pool_provider" "screener_fleet_x509_node2" {
+  count                              = local.screener_fleet_x509_node2_count
+  project                            = var.project
+  workload_identity_pool_id          = google_iam_workload_identity_pool.screener_fleet_x509[0].workload_identity_pool_id
+  workload_identity_pool_provider_id = "subnet-screener-2"
+  display_name                       = "subnet-screener-2"
+  description                        = "Exact URI-SAN identity for the second Hetzner screener."
+  attribute_mapping = {
+    "google.subject" = "assertion.san.uri"
+  }
+  attribute_condition = "assertion.san.uri == '${local.screener_fleet_x509_node2_subject}'"
+
+  x509 {
+    trust_store {
+      trust_anchors {
+        pem_certificate = var.screener_fleet_x509_node2_ca_certificate_pem
+      }
+    }
+  }
+
+  lifecycle {
+    precondition {
+      condition = (
+        var.enable_screener_fleet_x509_identity &&
+        var.screener_fleet_x509_node2_ca_certificate_pem != "" &&
+        trimspace(var.screener_fleet_x509_node2_ca_certificate_pem) != trimspace(var.screener_fleet_x509_ca_certificate_pem)
+      )
+      error_message = "Node 2 requires the existing fleet pool and a distinct public offline CA certificate."
+    }
+  }
+}
+
+resource "google_service_account_iam_member" "screener_fleet_x509_node2_impersonation" {
+  count              = local.screener_fleet_x509_node2_count
+  service_account_id = google_service_account.screener_fleet_x509_node2[0].name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${google_iam_workload_identity_pool.screener_fleet_x509[0].workload_identity_pool_id}/subject/${local.screener_fleet_x509_node2_subject}"
+}
+
+resource "google_secret_manager_secret_iam_member" "screener_fleet_x509_node2_review" {
+  count     = local.screener_fleet_x509_node2_count
+  project   = var.project
+  secret_id = "screener-review-ditto-inference-key"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = google_service_account.screener_fleet_x509_node2[0].member
+
+  depends_on = [google_secret_manager_secret.screener_review_ditto_inference_key]
+}
+
+output "screener_fleet_x509_node2_provider" {
+  description = "Provider audience for subnet-screener-2; empty until explicitly enabled."
+  value       = var.enable_screener_fleet_x509_node2_identity ? google_iam_workload_identity_pool_provider.screener_fleet_x509_node2[0].name : ""
+}
+
+output "screener_fleet_x509_node2_service_account_email" {
+  description = "Dedicated node-2 service account with only the Ditto review-secret grant."
+  value       = var.enable_screener_fleet_x509_node2_identity ? google_service_account.screener_fleet_x509_node2[0].email : ""
+}
+
+output "screener_fleet_x509_node2_subject" {
+  description = "Exact URI SAN required in subnet-screener-2's client certificate."
+  value       = var.enable_screener_fleet_x509_node2_identity ? local.screener_fleet_x509_node2_subject : ""
+}

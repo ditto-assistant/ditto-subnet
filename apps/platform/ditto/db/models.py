@@ -530,6 +530,9 @@ class ScreeningAttempt(Base):
 
     attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
     agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    # Pinned when a new lease is created. Legacy attempts remain NULL and
+    # cannot establish the unchanged-artifact prerequisite for v13 finality.
+    artifact_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
     policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
@@ -571,6 +574,10 @@ class ScreeningAttempt(Base):
             ["agents.agent_id"],
             ondelete="CASCADE",
             name="screening_attempts_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "artifact_sha256 IS NULL OR length(artifact_sha256) = 64",
+            name="screening_attempts_artifact_sha_check",
         ),
         ForeignKeyConstraint(
             ["duplicate_of"],
@@ -693,6 +700,353 @@ class ScreeningVerificationReceipt(Base):
             "length(worker_hotkey) BETWEEN 1 AND 120", name="svr_worker_check"
         ),
         Index("svr_attempt_created_idx", "attempt_id", "created_at", "receipt_id"),
+    )
+
+
+class V13KnownBenignControlApproval(Base):
+    """Append-only operator approval of one exact, verified clean image.
+
+    This records provenance only. Platform cannot prove semantic benignness from
+    the supplied review digest, and this row never authorizes a V13 verdict.
+    """
+
+    __tablename__ = "v13_known_benign_control_approvals"
+
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    review_evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["attempt_id"], ["screening_attempts.attempt_id"], ondelete="RESTRICT"
+        ),
+        UniqueConstraint("attempt_id", "profile_sha256"),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13kb_{name}_check")
+            for name in (
+                "artifact_sha256",
+                "image_sha256",
+                "profile_sha256",
+                "review_evidence_sha256",
+                "approval_receipt_sha256",
+            )
+        ),
+        CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13kb_actor"),
+        CheckConstraint("length(reason) >= 8", name="v13kb_reason"),
+    )
+
+
+class V13PrivateGenerationGroup(Base):
+    """One pre-randomness DB-time event shared by target and clean roles."""
+
+    __tablename__ = "v13_private_generation_groups"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    target_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    target_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    target_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    control_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    control_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    approval_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["target_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["target_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["control_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["control_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["approval_id"],
+            ["v13_known_benign_control_approvals.approval_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("target_attempt_id"),
+        CheckConstraint("target_agent_id <> control_agent_id", name="v13pg_distinct"),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13pg_{name}_check")
+            for name in (
+                "target_artifact_sha256",
+                "target_image_sha256",
+                "control_artifact_sha256",
+                "control_image_sha256",
+                "approval_receipt_sha256",
+                "profile_sha256",
+                "target_receipt_sha256",
+                "control_receipt_sha256",
+            )
+        ),
+        CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13pg_actor"),
+    )
+
+
+class ScreeningPrivatePackageRegistration(Base):
+    """Operator-registered V13 manifest identity; never private bytes or a pass."""
+
+    __tablename__ = "screening_private_package_registrations"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    pair_inventory_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    clean_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    clean_attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    clean_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    clean_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    registrar_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["clean_agent_id"], ["agents.agent_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["clean_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+        ),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"sppr_{name}_check")
+            for name in (
+                "artifact_sha256",
+                "image_sha256",
+                "profile_sha256",
+                "manifest_sha256",
+                "pair_inventory_sha256",
+                "clean_artifact_sha256",
+                "clean_image_sha256",
+            )
+        ),
+        CheckConstraint(
+            "length(runner_hotkey) BETWEEN 1 AND 120", name="sppr_runner_check"
+        ),
+        CheckConstraint(
+            "length(registrar_actor) BETWEEN 1 AND 120", name="sppr_actor_check"
+        ),
+    )
+
+
+class V13GroupPackageRegistration(Base):
+    """Append-only digest registration for one private generation group role.
+
+    Unlike legacy attempt-keyed rows, a reusable clean attempt may have one
+    separate sealed package for each target-specific generation group.
+    """
+
+    __tablename__ = "v13_group_package_registrations"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    role: Mapped[str] = mapped_column(Text, primary_key=True)
+    generation_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    pair_inventory_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    registrar_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["group_id"],
+            ["v13_private_generation_groups.group_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("role IN ('target', 'known_benign')", name="v13gpr_role_check"),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13gpr_{name}_check")
+            for name in (
+                "generation_receipt_sha256",
+                "manifest_sha256",
+                "pair_inventory_sha256",
+            )
+        ),
+        CheckConstraint(
+            "length(registrar_actor) BETWEEN 1 AND 120", name="v13gpr_actor_check"
+        ),
+    )
+
+
+class ScreeningVerificationReplay(Base):
+    """Independent, report-only replay of one pinned source-review artifact.
+
+    A replay never changes the source screening attempt, quarantine, or agent
+    lifecycle. Its receipts are deliberately separate from attempt-time ones.
+    """
+
+    __tablename__ = "screening_verification_replays"
+
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    quarantine_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    source_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # A pre-build hold normally has no screened image. A claimed independent
+    # worker may upload one to this replay's own immutable object key; it is
+    # never attached to Agent or represented as the original attempt's image.
+    image_upload_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    image_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    image_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    image_staging_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    image_verified_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    image_verified_storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    worker_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lease_deadline: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    lease_started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    lease_renewals: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    failure_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("request_id", name="svrp_request_id_key"),
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["quarantine_id"],
+            ["screening_quarantines.quarantine_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["source_attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["image_upload_id"],
+            ["screened_image_uploads.image_upload_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="svrp_artifact_sha_check"
+        ),
+        CheckConstraint(
+            "image_sha256 IS NULL OR image_sha256 ~ '^[0-9a-f]{64}$'",
+            name="svrp_image_sha_check",
+        ),
+        CheckConstraint(
+            "(image_sha256 IS NULL AND image_size_bytes IS NULL AND image_id IS NULL "
+            "AND image_verified_at IS NULL) OR "
+            "(image_sha256 IS NOT NULL AND image_size_bytes > 0 "
+            "AND image_id IS NOT NULL)",
+            name="svrp_image_metadata_check",
+        ),
+        CheckConstraint(
+            "image_upload_id IS NOT NULL OR image_verified_at IS NULL OR "
+            "image_verified_storage_key IS NOT NULL",
+            name="svrp_verified_storage_key_check",
+        ),
+        CheckConstraint("policy_version = 13", name="svrp_policy_check"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'reported', 'failed')",
+            name="svrp_status_check",
+        ),
+        CheckConstraint(
+            "lease_renewals BETWEEN 0 AND 8", name="svrp_lease_renewals_check"
+        ),
+        Index(
+            "svrp_one_active_source_idx",
+            "agent_id",
+            "source_attempt_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'running')"),
+            sqlite_where=text("status IN ('queued', 'running')"),
+        ),
+        Index("svrp_claim_idx", "status", "created_at"),
+    )
+
+
+class ScreeningVerificationReplayReceipt(Base):
+    """Append-only report-only observation tied to one independent replay."""
+
+    __tablename__ = "screening_verification_replay_receipts"
+
+    receipt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    check_code: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    worker_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("length(evidence_sha256) = 64", name="svrr_evidence_sha_check"),
+        CheckConstraint(
+            "length(check_code) BETWEEN 1 AND 64", name="svrr_check_code_check"
+        ),
+        Index("svrr_replay_code_idx", "replay_id", "check_code", unique=True),
     )
 
 
@@ -1011,6 +1365,11 @@ class ScreeningQuarantine(Base):
     status, elapsed time, and token counts. No source, prompt, credentials, or
     model text. Null when the court did not fail this way and on rows written
     before the trace existed."""
+    court_completion_receipt: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Append-only text-free timing and attribution from a completed L4 run.
+    Null for historical rows and for runs that did not complete."""
 
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(
@@ -5178,6 +5537,9 @@ class ScreenerNode(Base):
     )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     capacity: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    verification_replay_capacity: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
     image_reference: Mapped[str | None] = mapped_column(Text)
     registered_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
@@ -5211,6 +5573,10 @@ class ScreenerNode(Base):
         CheckConstraint(
             "status IN ('active', 'draining', 'quarantined', 'revoked')",
             name="screener_nodes_status_check",
+        ),
+        CheckConstraint(
+            "verification_replay_capacity BETWEEN 0 AND 4",
+            name="screener_nodes_replay_capacity_check",
         ),
         CheckConstraint(
             "capacity BETWEEN 1 AND 16", name="screener_nodes_capacity_check"
@@ -7947,6 +8313,99 @@ class QueuePolicySettingsRevision(Base):
             "parent_revision",
             name="queue_policy_settings_scope_parent_key",
         ),
+    )
+
+
+class ScreeningReviewDeadlineActivation(Base):
+    """Immutable schedule for a v13 verification window, separate from policy text.
+
+    An exact submission window may cite only an activation recorded and active
+    before its published start event. No writer or terminal decision consumes
+    this table yet; activation is a separate reviewed step.
+    """
+
+    __tablename__ = "screening_review_deadline_activations"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    # The historical policy_digest column pins the worker's module manifest.
+    # Keep the normative document hash separate so a rotation cannot be
+    # mistaken for a change to published policy text.
+    policy_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_document_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    activate_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    window_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("policy_version >= 13", name="srda_policy_check"),
+        CheckConstraint("length(policy_digest) = 64", name="srda_digest_check"),
+        CheckConstraint(
+            "policy_document_digest IS NULL OR length(policy_document_digest) = 64",
+            name="srda_document_digest_check",
+        ),
+        CheckConstraint(
+            "window_seconds BETWEEN 3600 AND 604800", name="srda_window_check"
+        ),
+        CheckConstraint("activate_at >= created_at", name="srda_no_backdate_check"),
+        CheckConstraint("length(trim(reason)) >= 8", name="srda_reason_check"),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120", name="srda_actor_check"
+        ),
+        Index("srda_policy_activate_idx", "policy_version", "activate_at", "revision"),
+    )
+
+
+class ScreeningReviewWindow(Base):
+    """Explicit immutable start/deadline for one exact submission and policy.
+
+    A configured V13 first-claim writer binds this to one exact artifact and
+    prior activation in the claim transaction. It does not finalize a review;
+    a finalizer may not infer a window from age.
+    """
+
+    __tablename__ = "screening_review_windows"
+
+    window_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    first_attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    activation_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    start_event: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    deadline_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["first_attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["activation_revision"],
+            ["screening_review_deadline_activations.revision"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("agent_id", "policy_version", name="srw_agent_policy_key"),
+        CheckConstraint("length(artifact_sha256) = 64", name="srw_artifact_check"),
+        CheckConstraint("length(manifest_digest) = 64", name="srw_manifest_check"),
+        CheckConstraint("policy_version >= 13", name="srw_policy_check"),
+        CheckConstraint("length(trim(start_event)) >= 3", name="srw_event_check"),
+        CheckConstraint("deadline_at > started_at", name="srw_deadline_check"),
     )
 
 

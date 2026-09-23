@@ -210,6 +210,19 @@
       "related": ["backroom-review", "mine", "validator-miner"]
     },
     {
+      "id": "discord-miner-triage",
+      "title": "Recurring Discord miner channel and DM triage",
+      "keywords": ["discord triage", "miner dm triage", "scheduled discord", "overnight discord", "discord catch-up", "discord sweep"],
+      "summary": "Sweep the logged-in Discord web channel and miner DMs, route substantive investigations, verify exact outcomes, and carry a compact checkpoint into the next run.",
+      "skills": ["discord-miner-triage"],
+      "owns": [".agents/skills/discord-miner-triage"],
+      "read": [".agents/skills/discord-miner-triage/SKILL.md", ".agents/skills/miner-comms/SKILL.md", ".agents/skills/backroom-review/SKILL.md"],
+      "search": ["rg -n 'discord-miner-triage|miner-comms|backroom-review' .agents/skills"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/discord-miner-triage"],
+      "invariants": ["Use the logged-in Discord web tab and verify exact live state before decisions.", "Do not repeat settled replies, investigations, or guarded writes without new evidence."],
+      "related": ["miner-comms", "backroom-review", "platform-api"]
+    },
+    {
       "id": "screener-capacity",
       "title": "Screener queue, autoscaling, Targon, GCE, and trusted builds",
       "keywords": ["screener", "screening", "capacity", "autoscale", "targon", "gce", "trusted builder", "kaniko build", "rental", "scale zero", "cloud run", "cloudrun", "CLOUDRUN_PROVISION_ERROR", "source review job"],

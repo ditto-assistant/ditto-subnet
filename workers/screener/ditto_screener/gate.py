@@ -106,6 +106,13 @@ from ditto_screener.preflight_audit import (
     StaticPreflightAuditError,
     StaticPreflightAuditJournal,
 )
+from ditto_screener.runtime_semantics import (
+    SemanticOutcome,
+    judge_isolation,
+    judge_memory_run,
+    judge_ordinary_run,
+    judge_tool_run,
+)
 from ditto_screener.runtime_verification import runtime_evidence_sha256
 from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
@@ -689,10 +696,53 @@ def _prepare_gateway_state() -> tuple[str, str]:
         fd = os.open(state_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         os.chmod(state_file, 0o622)
+        events_file = Path(state_dir) / "semantic-events"
+        fd = os.open(events_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        os.chmod(events_file, 0o622)
     except Exception:
         shutil.rmtree(state_dir, ignore_errors=True)
         raise
     return state_dir, state_file
+
+
+def _set_semantic_probe(state_file: str, probe: Mapping[str, object]) -> bool:
+    """Atomically stage a bounded private probe for the gateway sidecar only."""
+    path = Path(state_file).with_name("semantic-probe.json")
+    staged = path.with_suffix(".new")
+    payload = json.dumps(probe, sort_keys=True, separators=(",", ":")).encode()
+    if len(payload) > 4096:
+        return False
+    try:
+        staged.write_bytes(payload)
+        os.chmod(staged, 0o644)
+        os.replace(staged, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            staged.unlink()
+        return False
+    return True
+
+
+def _semantic_events(state_file: str, probe_id: str) -> list[str]:
+    path = Path(state_file).with_name("semantic-events")
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return []
+    if len(raw) > 64 * 1024:
+        return []
+    events: list[str] = []
+    for line in raw.splitlines():
+        try:
+            item = json.loads(line)
+        except (UnicodeError, ValueError):
+            continue
+        if isinstance(item, dict) and item.get("probe_id") == probe_id:
+            event = item.get("event")
+            if isinstance(event, str):
+                events.append(event)
+    return events
 
 
 def _write_openrouter_shim_certs(state_dir: str) -> None:
@@ -1891,6 +1941,7 @@ class BuildGate:
                             await self._run_v13_runtime_observations(
                                 audit_runtime=active_audit_runtime,
                                 probe_container=gateway_container,
+                                attempt_id=attempt_id,
                                 artifact_sha256=sha256.lower(),
                                 image_id=built_image_id,
                                 bench_version=bench_version,
@@ -3065,6 +3116,10 @@ class BuildGate:
                 "-e",
                 "DITTO_FAKE_GATEWAY_STATE_FILE=/state/model-called",
                 "-e",
+                "DITTO_FAKE_GATEWAY_SEMANTIC_CONFIG=/state/semantic-probe.json",
+                "-e",
+                "DITTO_FAKE_GATEWAY_SEMANTIC_EVENTS=/state/semantic-events",
+                "-e",
                 "DITTO_FAKE_GATEWAY_TLS_CERT=/state/leaf.crt",
                 "-e",
                 "DITTO_FAKE_GATEWAY_TLS_KEY=/state/leaf.key",
@@ -3312,6 +3367,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         *,
         audit_runtime: _AuditRuntime,
         probe_container: str,
+        attempt_id: UUID,
         artifact_sha256: str,
         image_id: str,
         bench_version: int,
@@ -3319,14 +3375,15 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         record: Callable[[str, str], Awaitable[None]],
         include_runs: bool,
     ) -> None:
-        """Shadow-observe mandatory checks 3–7 in the isolated smoke network.
+        """Sample runtime behavior relevant to v13 checks 3–7 in smoke isolation.
 
-        Every receipt remains ``recorded_unverified``. In particular, the fake
-        broker's text response cannot establish real tool choice, memory
-        correctness, or cross-user non-disclosure. Failed/incomplete requests
-        leave the corresponding check ``not_recorded``; they never change the
-        screening decision. A separate verifier must assess behavior and the
-        remaining v13 checks before any CLEAR.
+        The isolated broker supplies model-authored tool calls and one-use
+        execution evidence; random seeded values are checked per user. Coded
+        outcomes are logged with exact attempt/artifact/image identity but are
+        report-only. A probe pass is not a full v13 check pass: coverage is
+        bounded to these prompts and observable broker traffic, with internal
+        container paths and private controls unexamined. Every Platform receipt
+        remains ``recorded_unverified`` and cannot authorize CLEAR.
         """
 
         async def emit(
@@ -3348,6 +3405,18 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             except Exception:  # noqa: BLE001 - shadow evidence cannot settle a screen
                 logger.warning("v13 runtime receipt unavailable check=%s", code)
 
+        def log_outcome(code: str, outcome: SemanticOutcome) -> None:
+            logger.info(
+                "v13 shadow semantic attempt_id=%s artifact_sha256=%s image_id=%s "
+                "check=%s status=%s reason=%s",
+                attempt_id,
+                artifact_sha256,
+                image_id,
+                code,
+                outcome.status,
+                outcome.reason,
+            )
+
         await emit("health", [], [], 0)
         if not include_runs:
             return
@@ -3360,7 +3429,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
 
         async def post(
             path: str, payload: dict[str, object], *, seed_pairs: int = 0
-        ) -> tuple[str, str, int] | None:
+        ) -> tuple[str, str, int, dict[str, object]] | None:
             if not budget_available():
                 return None
             request_bytes = json.dumps(
@@ -3394,9 +3463,15 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 hashlib.sha256(request_bytes).hexdigest(),
                 hashlib.sha256(body.encode()).hexdigest(),
                 calls,
+                parsed,
             )
 
-        token = secrets.token_hex(12)
+        ordinary_token = secrets.token_hex(12)
+        ordinary_probe_id = secrets.token_hex(12)
+        ordinary_response_token = secrets.token_hex(16)
+        ordinary_oracle_token = secrets.token_hex(16)
+        tool_token = secrets.token_hex(12)
+        memory_a = secrets.token_hex(12)
         user_a = f"u-{secrets.token_hex(12)}"
         user_b = f"u-{secrets.token_hex(12)}"
         system_prompt = (
@@ -3415,18 +3490,43 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 "bench_version": bench_version,
             }
 
+        _set_semantic_probe(
+            audit_runtime.gateway_state_file,
+            {
+                "kind": "ordinary",
+                "probe_id": ordinary_probe_id,
+                "challenge_token": ordinary_token,
+                "response_token": ordinary_response_token,
+                "oracle_token": ordinary_oracle_token,
+            },
+        )
         ordinary = await post(
-            "/run", run_request(user_a, f"Explain this ordinary request: {token}")
+            "/run",
+            run_request(user_a, f"Explain this ordinary request: {ordinary_token}"),
         )
         if ordinary is not None and ordinary[2] > 0:
             await emit("ordinary_model_run", [ordinary[0]], [ordinary[1]], ordinary[2])
+        ordinary_outcome = judge_ordinary_run(
+            ordinary[3] if ordinary is not None else None,
+            challenge_tokens=(ordinary_response_token, ordinary_oracle_token),
+            model_calls=ordinary[2] if ordinary is not None else 0,
+            events=_semantic_events(
+                audit_runtime.gateway_state_file, ordinary_probe_id
+            ),
+        )
+        log_outcome("ordinary_model_run", ordinary_outcome)
 
+        tool_name = "search_web"
+        tool_case = f"c-{secrets.token_hex(12)}"
+        tool_probe_id = secrets.token_hex(12)
+        tool_query = f"current information about {tool_token}"
+        tool_result = secrets.token_hex(16)
         tool_request = run_request(
             user_a,
-            f"Search for the current information about {token}.",
+            f"Search for the current information about {tool_token}.",
             tools=[
                 {
-                    "name": "search_web",
+                    "name": tool_name,
                     "description": "Search the public web.",
                     "parameters": {
                         "type": "object",
@@ -3436,6 +3536,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 }
             ],
         )
+        tool_request["case_id"] = tool_case
         try:
             tool_request = _with_tool_endpoint(
                 tool_request,
@@ -3445,9 +3546,37 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         except ValueError:
             tool_request = {}
         if tool_request:
+            tool_configured = _set_semantic_probe(
+                audit_runtime.gateway_state_file,
+                {
+                    "kind": "tool",
+                    "probe_id": tool_probe_id,
+                    "challenge_token": tool_token,
+                    "case_id": tool_case,
+                    "user_id": user_a,
+                    "name": tool_name,
+                    "args": {"query": tool_query},
+                    "result": tool_result,
+                },
+            )
             tool = await post("/run", tool_request)
             if tool is not None and tool[2] > 0:
                 await emit("tool_selection_run", [tool[0]], [tool[1]], tool[2])
+            if tool_configured:
+                outcome = judge_tool_run(
+                    tool[3] if tool is not None else None,
+                    expected_result=tool_result,
+                    model_calls=tool[2] if tool is not None else 0,
+                    events=_semantic_events(
+                        audit_runtime.gateway_state_file, tool_probe_id
+                    ),
+                )
+                log_outcome("tool_selection_run", outcome)
+            else:
+                log_outcome(
+                    "tool_selection_run",
+                    SemanticOutcome("inconclusive", "probe_state_unavailable"),
+                )
 
         def seed_request(user_id: str, marker: str) -> dict[str, object]:
             return {
@@ -3467,46 +3596,164 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             }
 
         seeded_a = await post(
-            self._config.seed_path, seed_request(user_a, token), seed_pairs=1
+            self._config.seed_path, seed_request(user_a, memory_a), seed_pairs=1
         )
         if seeded_a is None:
+            log_outcome(
+                "seed_memory_run",
+                SemanticOutcome("inconclusive", "seed_ack_unavailable"),
+            )
             return
-        memory_a = await post(
-            "/run", run_request(user_a, "What is my reference marker?")
+        memory_b = secrets.token_hex(12)
+        memory_probe_id = secrets.token_hex(12)
+        memory_challenge_token = secrets.token_hex(12)
+        memory_request_a = run_request(
+            user_a,
+            f"What is my reference marker? {memory_challenge_token}",
         )
-        if memory_a is None or memory_a[2] == 0:
+        memory_configured = _set_semantic_probe(
+            audit_runtime.gateway_state_file,
+            {
+                "kind": "memory",
+                "markers": [memory_a, memory_b],
+                "challenges": [
+                    {
+                        "probe_id": memory_probe_id,
+                        "challenge_token": memory_challenge_token,
+                        "case_id": memory_request_a["case_id"],
+                        "user_id": user_a,
+                        "forbidden": memory_b,
+                    }
+                ],
+            },
+        )
+        memory_run_a = await post("/run", memory_request_a)
+        if memory_run_a is None:
+            log_outcome(
+                "seed_memory_run",
+                SemanticOutcome("inconclusive", "run_response_unavailable"),
+            )
             return
         await emit(
             "seed_memory_run",
-            [seeded_a[0], memory_a[0]],
-            [seeded_a[1], memory_a[1]],
-            seeded_a[2] + memory_a[2],
+            [seeded_a[0], memory_run_a[0]],
+            [seeded_a[1], memory_run_a[1]],
+            seeded_a[2] + memory_run_a[2],
         )
+        if memory_configured:
+            outcome = judge_memory_run(
+                memory_run_a[3],
+                expected=memory_a,
+                forbidden=None,
+                model_calls=memory_run_a[2],
+                events=_semantic_events(
+                    audit_runtime.gateway_state_file, memory_probe_id
+                ),
+            )
+            log_outcome("seed_memory_run", outcome)
+        else:
+            log_outcome(
+                "seed_memory_run",
+                SemanticOutcome("inconclusive", "probe_state_unavailable"),
+            )
 
         seeded_b = await post(
             self._config.seed_path,
-            seed_request(user_b, secrets.token_hex(12)),
+            seed_request(user_b, memory_b),
             seed_pairs=1,
         )
         if seeded_b is None:
+            log_outcome(
+                "two_user_isolation",
+                SemanticOutcome("inconclusive", "second_seed_ack_unavailable"),
+            )
             return
-        isolation_a = await post(
-            "/run", run_request(user_a, "Repeat only my own reference marker.")
+        isolation_a_id = secrets.token_hex(12)
+        isolation_b_id = secrets.token_hex(12)
+        isolation_a_token = secrets.token_hex(12)
+        isolation_b_token = secrets.token_hex(12)
+        isolation_request_a = run_request(
+            user_a, f"Repeat only my own reference marker. {isolation_a_token}"
         )
-        isolation_b = await post(
-            "/run", run_request(user_b, "Repeat only my own reference marker.")
+        isolation_request_b = run_request(
+            user_b, f"Repeat only my own reference marker. {isolation_b_token}"
         )
-        if (
-            isolation_a is not None
-            and isolation_b is not None
-            and isolation_a[2] > 0
-            and isolation_b[2] > 0
-        ):
+
+        def configure_isolation(
+            probe_id: str,
+            challenge_token: str,
+            request: Mapping[str, object],
+            user_id: str,
+            forbidden: str,
+        ) -> bool:
+            # Only one /run is active at a time. Every observable model/tool
+            # request during that window is scanned for the other user's value,
+            # even if the harness omitted the challenge from that request.
+            return _set_semantic_probe(
+                audit_runtime.gateway_state_file,
+                {
+                    "kind": "memory",
+                    "markers": [memory_a, memory_b],
+                    "challenges": [
+                        {
+                            "probe_id": probe_id,
+                            "challenge_token": challenge_token,
+                            "case_id": request["case_id"],
+                            "user_id": user_id,
+                            "forbidden": forbidden,
+                        }
+                    ],
+                },
+            )
+
+        isolation_a_configured = configure_isolation(
+            isolation_a_id,
+            isolation_a_token,
+            isolation_request_a,
+            user_a,
+            memory_b,
+        )
+        isolation_a = await post("/run", isolation_request_a)
+        isolation_b_configured = configure_isolation(
+            isolation_b_id,
+            isolation_b_token,
+            isolation_request_b,
+            user_b,
+            memory_a,
+        )
+        isolation_b = await post("/run", isolation_request_b)
+        if isolation_a is not None and isolation_b is not None:
             await emit(
                 "two_user_isolation",
                 [seeded_a[0], seeded_b[0], isolation_a[0], isolation_b[0]],
                 [seeded_a[1], seeded_b[1], isolation_a[1], isolation_b[1]],
                 sum(item[2] for item in (seeded_a, seeded_b, isolation_a, isolation_b)),
+            )
+            if isolation_a_configured and isolation_b_configured:
+                outcome = judge_isolation(
+                    isolation_a[3],
+                    isolation_b[3],
+                    first_value=memory_a,
+                    second_value=memory_b,
+                    first_model_calls=isolation_a[2],
+                    second_model_calls=isolation_b[2],
+                    first_events=_semantic_events(
+                        audit_runtime.gateway_state_file, isolation_a_id
+                    ),
+                    second_events=_semantic_events(
+                        audit_runtime.gateway_state_file, isolation_b_id
+                    ),
+                )
+                log_outcome("two_user_isolation", outcome)
+            else:
+                log_outcome(
+                    "two_user_isolation",
+                    SemanticOutcome("inconclusive", "probe_state_unavailable"),
+                )
+        else:
+            log_outcome(
+                "two_user_isolation",
+                SemanticOutcome("inconclusive", "run_response_unavailable"),
             )
 
     async def _run_private_challenge_with_compatibility(

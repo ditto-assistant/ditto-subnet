@@ -231,6 +231,7 @@ class ScreenerNodeView(BaseModel):
     screener_hotkey: str
     status: ScreenerNodeStatus
     capacity: int
+    verification_replay_capacity: int = 0
     image_reference: str | None = None
     token_expires_at: datetime
     registered_at: datetime

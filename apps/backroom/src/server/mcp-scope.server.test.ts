@@ -624,6 +624,20 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
   })
 
+  it('keeps the text-free L4 cohort on ordinary read scope', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'list_screening_adjudication_attempts', arguments: {} },
+      }),
+    })
+    expect(await callsWriteTool(request)).toBe(false)
+    expect(await requiredScopesForRequest(request)).toEqual([])
+  })
+
   it('gates source search on the artifact scope like an excerpt read', async () => {
     // A search returns the matching source lines themselves. Treating it as an
     // ordinary read because it "only" answers a location question would let a
