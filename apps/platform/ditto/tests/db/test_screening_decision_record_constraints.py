@@ -22,7 +22,7 @@ _MIGRATION = (
     Path(__file__).resolve().parents[3]
     / "alembic"
     / "versions"
-    / "2026_09_22_add_screening_decision_records.py"
+    / "2026_09_23_add_screening_decision_records.py"
 )
 _CHECK = re.compile(
     r'sa\.CheckConstraint\(\s*((?:"[^"]*"\s*)+),\s*name="([^"]+)"', re.S
