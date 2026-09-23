@@ -1627,6 +1627,7 @@ async def test_budget_terminated_review_without_evidence_settles_immediately(
     assert result.decision == "escalate"
     assert result.clear_clause is None
     assert result.escalation_code == "adjudicator-no-evidence"
+    assert result.completion_receipt is None
     assert requests == 0
 
 
@@ -1741,6 +1742,9 @@ async def test_policy_v13_can_keep_incomplete_mandatory_review_held(
     assert result.escalation_code == "adjudicator-evidence-incomplete"
     assert result.clear_clause is None
     assert result.reject_invariant is None
+    assert result.run_diagnostic is None
+    assert result.completion_receipt is not None
+    assert result.completion_receipt.request_count == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
         "submit_adjudication",
         "request_operator_review",
