@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 from importlib import metadata
+from typing import Literal
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ditto_screening_protocol import (
     AdjudicationRunDiagnostic,
@@ -792,6 +793,22 @@ def test_run_diagnostic_stays_out_of_the_signed_adjudication() -> None:
             prompt_revision="adjudicator-v3-policy-v13",
             run_diagnostic=AdjudicationRunDiagnostic(elapsed_ms=1),
         )
+
+
+def test_response_bound_detail_is_safe_for_an_older_platform_consumer() -> None:
+    class OldDiagnostic(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+
+        failure_code: Literal["response-too-large"]
+
+    current = AdjudicationRunDiagnostic(
+        elapsed_ms=1,
+        failure_code="response-too-large",
+        response_bound_kind="wire",
+    )
+    older = OldDiagnostic.model_validate(current.model_dump(mode="json"))
+    assert older.failure_code == "response-too-large"
+    assert "response_bound_kind" not in older.model_dump()
 
 
 def test_observation_decision_fields_are_bound_to_the_finding() -> None:

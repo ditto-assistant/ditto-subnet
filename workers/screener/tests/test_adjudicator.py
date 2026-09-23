@@ -444,7 +444,7 @@ async def test_oversized_tool_arguments_still_fail_closed(
             await _adjudicator(
                 _key(tmp_path), httpx.MockTransport(lambda _request: response)
             )._completion_message(client, "sk-test", [], timeout=10)
-    assert adjudicator_module._failure_code(error.value) == "response-tool-too-large"
+    assert adjudicator_module._failure_code(error.value) == "response-too-large"
 
 
 async def test_stream_wire_limit_still_fails_closed(
@@ -468,14 +468,14 @@ async def test_stream_wire_limit_still_fails_closed(
             await _adjudicator(
                 _key(tmp_path), httpx.MockTransport(lambda _request: response)
             )._completion_message(client, "sk-test", [], timeout=10)
-    assert adjudicator_module._failure_code(error.value) == "response-wire-too-large"
+    assert adjudicator_module._failure_code(error.value) == "response-too-large"
 
 
 @pytest.mark.parametrize(
     ("bound_name", "expected_code"),
     [
-        ("_MAX_COMPLETION_STREAM_BYTES", "response-wire-too-large"),
-        ("_MAX_COMPLETION_RESPONSE_BYTES", "response-tool-too-large"),
+        ("_MAX_COMPLETION_STREAM_BYTES", "wire"),
+        ("_MAX_COMPLETION_RESPONSE_BYTES", "tool"),
     ],
 )
 async def test_response_bound_subtype_survives_diagnostic_validation(
@@ -494,7 +494,8 @@ async def test_response_bound_subtype_survives_diagnostic_validation(
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
     assert result.decision == "escalate"
     assert result.run_diagnostic is not None
-    assert result.run_diagnostic.failure_code == expected_code
+    assert result.run_diagnostic.failure_code == "response-too-large"
+    assert result.run_diagnostic.response_bound_kind == expected_code
 
 
 async def test_gateway_rejecting_stream_uses_one_buffered_attempt(

@@ -635,10 +635,10 @@ def _failure_stage(error: BaseException) -> _RunStage:
 
 def _failure_code(error: BaseException) -> str:
     """Classify only known local failure shapes; never persist exception text."""
-    if isinstance(error, CompletionWireTooLarge):
-        return "response-wire-too-large"
-    if isinstance(error, CompletionToolTooLarge):
-        return "response-tool-too-large"
+    if isinstance(error, (CompletionWireTooLarge, CompletionToolTooLarge)):
+        # Keep the old failure_code wire value so an older Platform deployment
+        # can still validate this observation during a rolling release.
+        return "response-too-large"
     if isinstance(error, ProviderStreamError):
         return "provider-stream-error"
     if isinstance(error, ProviderBodyError):
@@ -1090,6 +1090,13 @@ class SourceReviewAdjudicator:
                 model=model,
                 provider=provider,
                 upstream=trace.upstream,
+                response_bound_kind=(
+                    "wire"
+                    if isinstance(error, CompletionWireTooLarge)
+                    else "tool"
+                    if isinstance(error, CompletionToolTooLarge)
+                    else None
+                ),
             )
         except ValidationError:
             logger.warning(

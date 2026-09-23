@@ -6774,6 +6774,8 @@ export interface components {
             prompt_tokens?: number | null;
             /** Provider */
             provider?: string | null;
+            /** Response Bound Kind */
+            response_bound_kind?: ("wire" | "tool") | null;
             /** Timeout Stage */
             timeout_stage?: ("completion" | "lease" | "step-budget" | "unavailable" | "response") | null;
             /** Upstream */
