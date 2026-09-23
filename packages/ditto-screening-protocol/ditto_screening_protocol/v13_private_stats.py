@@ -140,7 +140,8 @@ def analyze_v13_private_pairs(
         raise PrivateStatisticalUnavailable("private control pairing unavailable")
 
     # H0: paired degradation is at most the predeclared 5pp threshold.
-    candidates: list[tuple[str, int, float, float, bool, bool]] = []
+    candidates: list[tuple[str, int, float, float, bool]] = []
+    all_clean_ok = True
     for name, rows in target_rows.items():
         n, effect = _pooled_delta(rows)
         _, clean_effect = _pooled_delta(clean_rows[name])
@@ -148,7 +149,8 @@ def analyze_v13_private_pairs(
         clean_ok = clean_effect <= _CLEAN_MAX and all(
             _delta(row) <= _CLEAN_MAX for row in clean_rows[name].values()
         )
-        candidates.append((name, n, effect, clean_effect, seed_replication, clean_ok))
+        all_clean_ok = all_clean_ok and clean_ok
+        candidates.append((name, n, effect, clean_effect, seed_replication))
     candidates.sort(
         key=lambda item: math.exp(
             -item[1] * max(0.0, item[2] - _LOWER_THRESHOLD) ** 2 / 2
@@ -156,9 +158,7 @@ def analyze_v13_private_pairs(
     )
     analyses: list[PrivateClassAnalysis] = []
     holm_open = True
-    for index, (name, n, effect, clean_effect, replication, clean_ok) in enumerate(
-        candidates
-    ):
+    for index, (name, n, effect, clean_effect, replication) in enumerate(candidates):
         adjusted_alpha = _ALPHA / (len(candidates) - index)
         lower = effect - math.sqrt(2 * math.log(1 / adjusted_alpha) / n)
         significant = holm_open and lower > _LOWER_THRESHOLD
@@ -174,7 +174,7 @@ def analyze_v13_private_pairs(
                 seed_replication=replication,
                 holm_significant=significant,
                 evidence_of_material_degradation=(
-                    effect >= _MATERIAL and significant and replication and clean_ok
+                    effect >= _MATERIAL and significant and replication and all_clean_ok
                 ),
             )
         )

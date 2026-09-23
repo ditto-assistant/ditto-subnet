@@ -105,10 +105,7 @@ def test_degraded_clean_control_blocks_candidate_effect() -> None:
         image="b" * 64,
         degradation={(CLASSES[0], seed): 10 for seed in SEEDS},
     )
-    clean = _result(
-        image="e" * 64,
-        degradation={(CLASSES[0], SEEDS[0]): 1},
-    )
+    clean = _result(image="e" * 64, degradation={(CLASSES[1], SEEDS[0]): 1})
     analysis = analyze_v13_private_pairs(target=target, clean_control=clean)
     assert analysis.status == "report_only_inconclusive"
 
