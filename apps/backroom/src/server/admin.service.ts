@@ -112,6 +112,8 @@ import {
   screeningArtifactInputSchema,
   screeningArtifactSchema,
   screeningFailureDiagnosticInputSchema,
+  v13GenerationGroupInputSchema,
+  v13GenerationGroupSchema,
   screeningFailureDiagnosticSchema,
   adjudicationAttemptsInputSchema,
   adjudicationAttemptsSchema,
@@ -1980,6 +1982,14 @@ export async function fetchScreeningVerificationReadiness(rawInput: unknown, act
     { actor },
   )
   return screeningVerificationReadinessSchema.parse(payload)
+}
+
+export async function fetchV13GenerationGroup(rawInput: unknown) {
+  const input = v13GenerationGroupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/groups/${encodeURIComponent(input.groupId)}`,
+  )
+  return v13GenerationGroupSchema.parse(payload)
 }
 
 export async function fetchScreeningReviewDeadline(rawInput: unknown) {

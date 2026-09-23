@@ -703,6 +703,119 @@ class ScreeningVerificationReceipt(Base):
     )
 
 
+class V13KnownBenignControlApproval(Base):
+    """Append-only operator approval of one exact, verified clean image.
+
+    This records provenance only. Platform cannot prove semantic benignness from
+    the supplied review digest, and this row never authorizes a V13 verdict.
+    """
+
+    __tablename__ = "v13_known_benign_control_approvals"
+
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    review_evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["attempt_id"], ["screening_attempts.attempt_id"], ondelete="RESTRICT"
+        ),
+        UniqueConstraint("attempt_id", "profile_sha256"),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13kb_{name}_check")
+            for name in (
+                "artifact_sha256",
+                "image_sha256",
+                "profile_sha256",
+                "review_evidence_sha256",
+                "approval_receipt_sha256",
+            )
+        ),
+        CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13kb_actor"),
+        CheckConstraint("length(reason) BETWEEN 8 AND 500", name="v13kb_reason"),
+    )
+
+
+class V13PrivateGenerationGroup(Base):
+    """One pre-randomness DB-time event shared by target and clean roles."""
+
+    __tablename__ = "v13_private_generation_groups"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    target_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    target_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    target_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    control_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    control_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    approval_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["target_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["target_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["control_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["control_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["approval_id"],
+            ["v13_known_benign_control_approvals.approval_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("target_attempt_id"),
+        CheckConstraint("target_agent_id <> control_agent_id", name="v13pg_distinct"),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13pg_{name}_check")
+            for name in (
+                "target_artifact_sha256",
+                "target_image_sha256",
+                "control_artifact_sha256",
+                "control_image_sha256",
+                "approval_receipt_sha256",
+                "profile_sha256",
+                "target_receipt_sha256",
+                "control_receipt_sha256",
+            )
+        ),
+        CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13pg_actor"),
+    )
+
+
 class ScreeningPrivatePackageRegistration(Base):
     """Operator-registered V13 manifest identity; never private bytes or a pass."""
 

@@ -49,6 +49,7 @@ import {
   screeningDisputeResolutionSchema,
   screeningArtifactInputSchema,
   screeningFailureDiagnosticInputSchema,
+  v13GenerationGroupInputSchema,
   adjudicationAttemptsInputSchema,
   screeningSubmissionLookupInputSchema,
   sourceSearchInputSchema,
@@ -148,6 +149,7 @@ import {
   fetchScreeningFailureDiagnostic,
   fetchAdjudicationAttempts,
   fetchScreeningVerificationReadiness,
+  fetchV13GenerationGroup,
   fetchScreeningReviewDeadline,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
@@ -646,15 +648,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_owner_attestations:
     'Read direct signed owner links, including revoked history. Direct-only, non-transitive, and limited to near-duplicate review.',
   list_lease_revocations:
-    'Page newest-first through platform-ended validator leases. evidence is WHOLE AND UNTYPED validator_lease_audit context; response can include operator_evicted rows and preserve exact verdict strings. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE. Use filters to narrow the audit.',
+    'Page ended leases with operator_evicted and exact verdicts. Evidence is WHOLE AND UNTYPED validator_lease_audit context. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE.',
   list_stuck_submissions:
-    'Page the current-benchmark platform triage order for stuck submissions. Pass generation=all only for a cross-benchmark audit. Returns ticket-state counts and silent_expiry_count; use get_validation_retry for one submission\'s complete ticket history, including infra_retry_grants. This urgency queue is intentionally not newest-first.',
+    'Page stuck-submission urgency order with ticket counts and silent_expiry_count. generation=all spans benchmarks; get_validation_retry includes infra_retry_grants.',
   summarize_screening_failures:
     'Group active-benchmark screening / screening_failed agents by reason_code. Pass generation=all only for a cross-benchmark audit. Use get_screening_submission for one row.',
   get_screening_failure_diagnostic:
     'Private exact-attempt failure diagnostic; artifact scope.',
   get_screening_verification_readiness:
-    'Read exact v13 receipt presence; no completion claim. Artifact scope.',
+    'Read V13 receipt presence; no pass or CLEAR. Artifact scope.',
+  get_v13_private_generation_group:
+    'Read exact V13 target/control generation-start identities and digests; no verdict.',
   get_screening_review_deadline:
     'Read exact V13 artifact deadline binding; null/not_configured means no authoritative window. Attempt leases are not finalizer dates.',
   reject_screening_submission:
@@ -1238,7 +1242,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening verification readiness',
       description:
-        'Read exact v13 UUID/SHA/attempt receipts for 19 checks plus the conditional private package. `not_recorded` means no Platform receipt, not proof an external check never ran; `recorded_unverified` is not a pass. `mechanically_verified` applies only to the archive/image identity checks and never authorizes CLEAR. No CLEAR, REJECT, or retry. Requires backroom:artifact:read.',
+        'Read exact V13 attempt receipts and private prerequisites. Missing or recorded_unverified is not a pass; mechanically_verified covers only archive/image identity. Never authorizes CLEAR. Artifact scope.',
       inputSchema: screeningFailureDiagnosticInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1246,6 +1250,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       artifact(() =>
         fetchScreeningVerificationReadiness(input, props.session.email),
       ),
+  )
+
+  registerTool(
+    'get_v13_private_generation_group',
+    {
+      title: 'Get V13 private generation group',
+      description:
+        'Read one immutable V13 generation-start group: DB time, target/control identities and role digests. No private case bytes or verdict.',
+      inputSchema: v13GenerationGroupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchV13GenerationGroup(input)),
   )
 
   registerTool(

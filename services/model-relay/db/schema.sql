@@ -897,6 +897,19 @@ CREATE FUNCTION public.reject_screening_attempt_artifact_change() RETURNS trigge
 
 
 --
+-- Name: reject_v13_private_generation_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_v13_private_generation_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$
+        BEGIN
+            RAISE EXCEPTION 'V13 private generation records are append-only';
+        END;
+        $$;
+
+
+--
 -- Name: reject_verification_replay_binding_change(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -4826,6 +4839,66 @@ CREATE TABLE public.upload_admission_reservations (
 
 
 --
+-- Name: v13_known_benign_control_approvals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_known_benign_control_approvals (
+    approval_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    attempt_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    image_sha256 text NOT NULL,
+    profile_sha256 text NOT NULL,
+    review_evidence_sha256 text NOT NULL,
+    approval_receipt_sha256 text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    approved_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_actor CHECK (((length(actor) >= 1) AND (length(actor) <= 120))),
+    CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_approval_re_f983 CHECK ((length(approval_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_artifact_sh_3c38 CHECK ((length(artifact_sha256) = 64)),
+    CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_image_sha256_check CHECK ((length(image_sha256) = 64)),
+    CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_profile_sha_af5d CHECK ((length(profile_sha256) = 64)),
+    CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_reason CHECK (((length(reason) >= 8) AND (length(reason) <= 500))),
+    CONSTRAINT ck_v13_known_benign_control_approvals_v13kb_review_evid_d26b CHECK ((length(review_evidence_sha256) = 64))
+);
+
+
+--
+-- Name: v13_private_generation_groups; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_private_generation_groups (
+    group_id uuid NOT NULL,
+    target_agent_id uuid NOT NULL,
+    target_attempt_id uuid NOT NULL,
+    target_artifact_sha256 text NOT NULL,
+    target_image_sha256 text NOT NULL,
+    control_agent_id uuid NOT NULL,
+    control_attempt_id uuid NOT NULL,
+    control_artifact_sha256 text NOT NULL,
+    control_image_sha256 text NOT NULL,
+    approval_id uuid NOT NULL,
+    approval_receipt_sha256 text NOT NULL,
+    profile_sha256 text NOT NULL,
+    target_receipt_sha256 text NOT NULL,
+    control_receipt_sha256 text NOT NULL,
+    actor text NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_actor CHECK (((length(actor) >= 1) AND (length(actor) <= 120))),
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_approval_receipt_9a5b CHECK ((length(approval_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_control_artifact_b0e8 CHECK ((length(control_artifact_sha256) = 64)),
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_control_image_sh_6ca2 CHECK ((length(control_image_sha256) = 64)),
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_control_receipt__a331 CHECK ((length(control_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_distinct CHECK ((target_agent_id <> control_agent_id)),
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_profile_sha256_check CHECK ((length(profile_sha256) = 64)),
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_target_artifact__febb CHECK ((length(target_artifact_sha256) = 64)),
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_target_image_sha_a15d CHECK ((length(target_image_sha256) = 64)),
+    CONSTRAINT ck_v13_private_generation_groups_v13pg_target_receipt_s_4208 CHECK ((length(target_receipt_sha256) = 64))
+);
+
+
+--
 -- Name: validator_heartbeats; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7013,6 +7086,22 @@ ALTER TABLE ONLY public.upload_admission_reservations
 
 
 --
+-- Name: v13_known_benign_control_approvals pk_v13_known_benign_control_approvals; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_known_benign_control_approvals
+    ADD CONSTRAINT pk_v13_known_benign_control_approvals PRIMARY KEY (approval_id);
+
+
+--
+-- Name: v13_private_generation_groups pk_v13_private_generation_groups; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_private_generation_groups
+    ADD CONSTRAINT pk_v13_private_generation_groups PRIMARY KEY (group_id);
+
+
+--
 -- Name: validator_lease_audit pk_validator_lease_audit; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7498,6 +7587,22 @@ ALTER TABLE ONLY public.screener_nodes
 
 ALTER TABLE ONLY public.upload_admission_reservations
     ADD CONSTRAINT uq_upload_admission_reservations_token UNIQUE (token);
+
+
+--
+-- Name: v13_known_benign_control_approvals uq_v13_known_benign_control_approvals_attempt_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_known_benign_control_approvals
+    ADD CONSTRAINT uq_v13_known_benign_control_approvals_attempt_id UNIQUE (attempt_id, profile_sha256);
+
+
+--
+-- Name: v13_private_generation_groups uq_v13_private_generation_groups_target_attempt_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_private_generation_groups
+    ADD CONSTRAINT uq_v13_private_generation_groups_target_attempt_id UNIQUE (target_attempt_id);
 
 
 --
@@ -8930,6 +9035,20 @@ CREATE TRIGGER screening_attempt_artifact_immutable BEFORE UPDATE OF artifact_sh
 
 
 --
+-- Name: v13_known_benign_control_approvals v13_known_benign_control_approvals_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_known_benign_control_approvals_immutable BEFORE DELETE OR UPDATE ON public.v13_known_benign_control_approvals FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: v13_private_generation_groups v13_private_generation_groups_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_private_generation_groups_immutable BEFORE DELETE OR UPDATE ON public.v13_private_generation_groups FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
 -- Name: validator_tickets validator_tickets_bench_version_floor; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -9771,6 +9890,62 @@ ALTER TABLE ONLY public.screening_verification_replays
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT fk_screening_verification_replays_source_attempt_id_scr_729c FOREIGN KEY (source_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: v13_known_benign_control_approvals fk_v13_known_benign_control_approvals_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_known_benign_control_approvals
+    ADD CONSTRAINT fk_v13_known_benign_control_approvals_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_known_benign_control_approvals fk_v13_known_benign_control_approvals_attempt_id_screen_70b4; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_known_benign_control_approvals
+    ADD CONSTRAINT fk_v13_known_benign_control_approvals_attempt_id_screen_70b4 FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_private_generation_groups fk_v13_private_generation_groups_approval_id_v13_known__e2dc; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_private_generation_groups
+    ADD CONSTRAINT fk_v13_private_generation_groups_approval_id_v13_known__e2dc FOREIGN KEY (approval_id) REFERENCES public.v13_known_benign_control_approvals(approval_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_private_generation_groups fk_v13_private_generation_groups_control_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_private_generation_groups
+    ADD CONSTRAINT fk_v13_private_generation_groups_control_agent_id_agents FOREIGN KEY (control_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_private_generation_groups fk_v13_private_generation_groups_control_attempt_id_scr_6277; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_private_generation_groups
+    ADD CONSTRAINT fk_v13_private_generation_groups_control_attempt_id_scr_6277 FOREIGN KEY (control_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_private_generation_groups fk_v13_private_generation_groups_target_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_private_generation_groups
+    ADD CONSTRAINT fk_v13_private_generation_groups_target_agent_id_agents FOREIGN KEY (target_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_private_generation_groups fk_v13_private_generation_groups_target_attempt_id_scre_ac0a; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_private_generation_groups
+    ADD CONSTRAINT fk_v13_private_generation_groups_target_attempt_id_scre_ac0a FOREIGN KEY (target_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
 
 
 --

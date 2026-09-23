@@ -212,6 +212,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_failure_diagnostic',
         'list_screening_adjudication_attempts',
         'get_screening_verification_readiness',
+        'get_v13_private_generation_group',
         'get_screening_submission',
         'get_source_release_policy',
         'get_owner_attestations',
