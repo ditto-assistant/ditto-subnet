@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import Agent
+from ditto.db.models import Agent, ScreeningAttempt, ScreeningQuarantine
 from ditto.db.queries.screening_decisions import record_screening_decision
 from ditto_screening_protocol import (
     PUBLISHED_REVIEW_TIMEOUT_POLICY,
@@ -196,3 +196,124 @@ async def test_decision_reads_require_admin(
     assert response.status_code in (401, 403)
     response = await client.get("/api/v1/admin/screening-decisions")
     assert response.status_code in (401, 403)
+
+
+async def test_verification_state_keeps_attempt_and_artifact_deadlines_separate(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, session_maker)
+    agent = await _seed_agent(session_maker)
+    started = datetime.now(UTC) - timedelta(hours=25)
+    attempt_id, quarantine_id = uuid4(), uuid4()
+    async with session_maker() as session, session.begin():
+        locked = await session.get(Agent, agent.agent_id)
+        assert locked is not None
+        locked.status = AgentStatus.QUARANTINED
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent.agent_id,
+                screener_hotkey="5WorkerA",
+                policy_version=13,
+                status="quarantined",
+                started_at=started,
+                deadline=started + timedelta(minutes=20),
+                finished_at=started + timedelta(minutes=10),
+                reason_code="source-review-inconclusive",
+            )
+        )
+        await session.flush()
+        session.add(
+            ScreeningQuarantine(
+                quarantine_id=quarantine_id,
+                agent_id=agent.agent_id,
+                attempt_id=attempt_id,
+                screener_hotkey="5WorkerA",
+                policy_version=13,
+                manifest_digest="a" * 64,
+                reason_code="source-review-inconclusive",
+                status="active",
+                created_at=started,
+            )
+        )
+
+    url = f"/api/v1/admin/screening-decisions/{agent.agent_id}/verification-state"
+    monkeypatch.setenv("DITTO_REVIEW_TIMEOUT_FINALIZER_MODE", "shadow")
+    shadow = await client.get(url, headers=_HEADERS)
+    assert shadow.status_code == 200
+    assert shadow.json()["finalizer_state"] == "not_configured"
+    assert shadow.json()["verification_deadline"] is None
+    assert shadow.json()["attempt_deadline"] is not None
+    assert shadow.json()["mandatory_checks_state"] == "not_recorded"
+
+    monkeypatch.setenv("DITTO_REVIEW_TIMEOUT_FINALIZER_MODE", "enforce")
+    enforced = await client.get(url, headers=_HEADERS)
+    assert enforced.status_code == 200
+    body = enforced.json()
+    assert body["finalizer_state"] == "ready"
+    assert datetime.fromisoformat(body["verification_deadline"]) == started + timedelta(
+        hours=24
+    )
+    assert body["deadline_provenance"].startswith("shipped_finalizer_default")
+    assert body["attempts_recorded"] == 1
+    assert body["independent_workers"] == 1
+    assert body["automatic_retry_budget"] == 2
+    assert body["retries_used"] == 0
+
+
+async def test_verification_state_unknown_agent_has_no_deadline(
+    app: FastAPI, client: httpx.AsyncClient, session_maker: async_sessionmaker
+) -> None:
+    _install(app, session_maker)
+    response = await client.get(
+        f"/api/v1/admin/screening-decisions/{uuid4()}/verification-state",
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["finalizer_state"] == "not_configured"
+    assert response.json()["verification_deadline"] is None
+
+
+async def test_verification_state_legacy_and_changed_artifact_are_not_finalized(
+    app: FastAPI, client: httpx.AsyncClient, session_maker: async_sessionmaker
+) -> None:
+    _install(app, session_maker)
+    agent = await _seed_agent(session_maker)
+    async with session_maker() as session, session.begin():
+        locked = await session.get(Agent, agent.agent_id)
+        assert locked is not None
+        await record_screening_decision(
+            session,
+            agent=locked,
+            outcome="clear",
+            reason_codes=[],
+            violation_proven=False,
+            failure_domain="none",
+            retry_count=0,
+            independent_workers=0,
+            policy_version=13,
+            public_reason="source reviewed",
+            reviewer="operator@example.test",
+            decided_at=datetime.now(UTC),
+            evidence_references=["src/main.rs:42"],
+            completed_checks=["source-review"],
+            failed_checks=[],
+            limitations=[],
+        )
+        locked.sha256 = "f" * 64
+        locked.screening_policy_version = 12
+
+    response = await client.get(
+        f"/api/v1/admin/screening-decisions/{agent.agent_id}/verification-state",
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["policy_version"] == 12
+    assert body["decision_matches_artifact"] is False
+    assert body["finalizer_state"] == "not_configured"
+    assert body["verification_deadline"] is None
+    assert body["image_digest"] is None

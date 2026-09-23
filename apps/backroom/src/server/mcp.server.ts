@@ -124,6 +124,7 @@ import {
   fetchCopyReviewSourceDiffFile,
   fetchAthReview,
   fetchScreeningDecisionRecord,
+  fetchScreeningVerificationState,
   fetchScreeningDecisions,
   fetchAthPrecedents,
   fetchQuarantineBaselineDiff,
@@ -529,6 +530,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Apply the previewed rulings under "APPLY ATH RULINGS BATCH"; re-reads the board, audits per item, refuses rows whose guards or crown outcome moved. Requires backroom:write.',
   get_screening_decision_record:
     'Read one agent\'s policy-v13 decision records (clear | reject | no-fault review_timed_out): reason_codes, violation_proven, failure_domain, retry evidence, identities, evidence_references, published timeout policy.',
+  get_screening_verification_state:
+    'Read one exact agent\'s finalizer mode and enforceable artifact deadline, retry and worker evidence, failure domain, and missing verification evidence. Off/shadow returns a null deadline.',
   list_screening_decisions:
     'Page policy-v13 decision records with subnet-wide outcome counts; review_timed_out is the activation monitor.',
   resolve_ath_review:
@@ -948,6 +951,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchAthReview(input)),
+  )
+
+  registerTool(
+    'get_screening_verification_state',
+    {
+      title: 'Get screening verification state',
+      description:
+        'Read one exact agent UUID: artifact SHA, policy digest, active quarantine and attempt, finalizer mode/state, enforceable artifact deadline with provenance, separate attempt deadline, retry budget and independent-worker count, failure domain, and latest terminal decision. A null verification_deadline means no enforceable finalizer deadline is configured for this row. mandatory_checks_state=not_recorded means the active hold has no persisted per-check proof; do not infer a CLEAR or REJECT from this diagnostic. Requires backroom:read; no source or private challenge content.',
+      inputSchema: getScreeningDecisionRecordInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchScreeningVerificationState(input)),
   )
 
   registerTool(

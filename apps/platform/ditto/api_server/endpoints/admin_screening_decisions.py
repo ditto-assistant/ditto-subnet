@@ -10,6 +10,7 @@ only: decisions are written by ``resolve_ath_review`` and the finalizer.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
@@ -17,9 +18,11 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screening_decision import (
     AdminScreeningDecisionList,
     AdminScreeningDecisionRecordResponse,
+    AdminScreeningVerificationState,
     ScreeningDecisionIdentities,
     ScreeningDecisionOutcome,
     ScreeningDecisionRecordView,
@@ -29,8 +32,20 @@ from ditto.api_models.screening_decision import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import Agent, ScreeningDecisionRecord
-from ditto_screening_protocol import REVIEW_TIMED_OUT_OUTCOME
+from ditto.api_server.review_timeout_finalizer import configured_finalizer_mode
+from ditto.db.models import (
+    Agent,
+    ScoredPolicyRescreenRelease,
+    ScreeningAttempt,
+    ScreeningDecisionRecord,
+    ScreeningQuarantine,
+)
+from ditto_screening_protocol import (
+    NON_DECISIVE_REASON_CODES,
+    PUBLISHED_REVIEW_TIMEOUT_POLICY,
+    REVIEW_TIMED_OUT_OUTCOME,
+    failure_domain_for_reason_code,
+)
 
 router = APIRouter(prefix="/admin/screening-decisions", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -173,4 +188,188 @@ async def get_screening_decision_record(
         decisions=decisions,
         review_timeout_policy=review_timeout_policy_view(),
         review_capacity_thresholds=review_capacity_thresholds_view(),
+    )
+
+
+@router.get(
+    "/{agent_id}/verification-state", response_model=AdminScreeningVerificationState
+)
+async def get_screening_verification_state(
+    agent_id: UUID, _admin: AdminDep, session: SessionDep
+) -> AdminScreeningVerificationState:
+    """Report only finalizer facts persisted for this exact submission.
+
+    The attempt lease deadline is distinct from the finalizer's artifact
+    deadline. In off/shadow mode no enforceable deadline is returned. The
+    policy's recommended window becomes effective only when the finalizer is
+    configured to enforce it.
+    """
+    agent = await session.get(Agent, agent_id)
+    quarantine = await session.scalar(
+        select(ScreeningQuarantine)
+        .where(
+            ScreeningQuarantine.agent_id == agent_id,
+            ScreeningQuarantine.status == "active",
+        )
+        .order_by(ScreeningQuarantine.created_at.desc())
+        .limit(1)
+    )
+    decision_row = await session.scalar(
+        select(ScreeningDecisionRecord)
+        .where(ScreeningDecisionRecord.agent_id == agent_id)
+        .order_by(ScreeningDecisionRecord.decided_at.desc())
+        .limit(1)
+    )
+    latest_decision = _view(decision_row) if decision_row is not None else None
+    decision_matches_artifact = (
+        decision_row.identities.get("artifact_sha256") == agent.sha256
+        if decision_row is not None
+        and agent is not None
+        and isinstance(decision_row.identities, dict)
+        else None
+    )
+    attempt = (
+        await session.get(ScreeningAttempt, quarantine.attempt_id)
+        if quarantine is not None
+        else None
+    )
+    release = (
+        await session.scalar(
+            select(ScoredPolicyRescreenRelease).where(
+                ScoredPolicyRescreenRelease.attempt_id == quarantine.attempt_id
+            )
+        )
+        if quarantine is not None
+        else None
+    )
+    policy = PUBLISHED_REVIEW_TIMEOUT_POLICY
+    evidence_rows = (
+        await session.execute(
+            select(
+                func.count(ScreeningAttempt.attempt_id),
+                func.count(func.distinct(ScreeningAttempt.screener_hotkey)),
+            ).where(
+                ScreeningAttempt.agent_id == agent_id,
+                ScreeningAttempt.policy_version >= policy.applies_from_policy_version,
+            )
+        )
+    ).one()
+    attempts_recorded = int(evidence_rows[0] or 0)
+    independent_workers = int(evidence_rows[1] or 0)
+    retries_used = policy.automatic_retries_used(attempts_recorded)
+    failure_domain = (
+        failure_domain_for_reason_code(
+            quarantine.reason_code,
+            failure_provider=attempt.failure_provider if attempt is not None else None,
+        )
+        if quarantine is not None
+        and quarantine.reason_code in NON_DECISIVE_REASON_CODES
+        else None
+    )
+    mode = configured_finalizer_mode()
+    state = "not_configured"
+    reason = "no enforceable finalizer deadline is configured"
+    started_at = None
+    deadline = None
+    provenance = None
+    if quarantine is not None:
+        if quarantine.policy_version < policy.applies_from_policy_version:
+            reason = "legacy policy is outside the v13 finalizer"
+        elif (
+            quarantine.reason_code not in NON_DECISIVE_REASON_CODES
+            or quarantine.finding is not None
+            or quarantine.finding_digest is not None
+        ):
+            reason = (
+                "finding-backed or other operator hold is outside the timeout finalizer"
+            )
+        elif mode != "enforce":
+            reason = f"finalizer mode is {mode}; no enforceable deadline"
+        elif (
+            agent is None
+            or (release is None and agent.status != AgentStatus.QUARANTINED)
+            or (release is not None and release.state != "paused")
+        ):
+            reason = (
+                "agent or scored-rescreen release is outside the "
+                "finalizer's eligible state"
+            )
+        else:
+            started_at = quarantine.created_at
+            deadline = started_at + policy.max_verification_window
+            provenance = (
+                "shipped_finalizer_default; no artifact activation revision is stored"
+            )
+            state = "ready" if datetime.now(UTC) >= deadline else "pending"
+            reason = "active non-decisive v13 quarantine eligible for no-fault timeout"
+    elif latest_decision is not None and decision_matches_artifact:
+        state = "finalized"
+        reason = "terminal decision recorded for this artifact"
+    elif latest_decision is not None:
+        reason = "latest decision belongs to a different artifact digest"
+    elif agent is None:
+        reason = "agent not found"
+    else:
+        reason = "no active finalizer-eligible quarantine or terminal decision"
+    identities = (
+        latest_decision.identities
+        if latest_decision and decision_matches_artifact
+        else None
+    )
+    return AdminScreeningVerificationState(
+        agent_id=agent_id,
+        agent_status=agent.status.value if agent is not None else None,
+        artifact_sha256=agent.sha256 if agent is not None else None,
+        decision_matches_artifact=decision_matches_artifact,
+        policy_version=quarantine.policy_version
+        if quarantine is not None
+        else (agent.screening_policy_version if agent is not None else None),
+        policy_digest=quarantine.manifest_digest
+        if quarantine is not None
+        else (identities.policy_digest if identities is not None else None),
+        quarantine_id=quarantine.quarantine_id if quarantine is not None else None,
+        attempt_id=quarantine.attempt_id if quarantine is not None else None,
+        reason_code=quarantine.reason_code if quarantine is not None else None,
+        finalizer_mode=mode,
+        finalizer_state=state,
+        finalizer_reason=reason,
+        verification_started_at=started_at,
+        verification_deadline=deadline,
+        deadline_provenance=provenance,
+        attempt_deadline=attempt.deadline if attempt is not None else None,
+        review_settings_revision=(
+            attempt.review_settings_revision if attempt is not None else None
+        ),
+        review_settings_instance_id=(
+            attempt.review_settings_instance_id if attempt is not None else None
+        ),
+        review_settings_scope=(
+            attempt.review_settings_scope if attempt is not None else None
+        ),
+        review_settings_checksum=(
+            attempt.review_settings_checksum if attempt is not None else None
+        ),
+        failure_domain=failure_domain,
+        automatic_retry_budget=policy.automatic_retry_budget(failure_domain)
+        if failure_domain
+        else None,
+        retries_used=retries_used,
+        attempts_recorded=attempts_recorded,
+        independent_workers=independent_workers,
+        independent_worker_required=policy.independent_worker_required(failure_domain)
+        if failure_domain
+        else None,
+        latest_decision=latest_decision,
+        mandatory_checks_state="terminal_record_only"
+        if identities is not None
+        else "not_recorded",
+        image_digest=identities.image_digest if identities is not None else None,
+        build_configuration=identities.build_configuration
+        if identities is not None
+        else None,
+        permitted_runtime_configuration=(
+            identities.permitted_runtime_configuration
+            if identities is not None
+            else None
+        ),
     )

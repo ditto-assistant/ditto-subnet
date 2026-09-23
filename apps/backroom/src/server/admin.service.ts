@@ -19,6 +19,7 @@ import {
   listScreeningDecisionsInputSchema,
   screeningDecisionListSchema,
   screeningDecisionRecordResponseSchema,
+  screeningVerificationStateSchema,
   openAthReviewInputSchema,
   searchAthPrecedentsInputSchema,
   openAthReviewResponseSchema,
@@ -1732,6 +1733,14 @@ export async function fetchScreeningDecisionRecord(rawInput: unknown) {
     `/api/v1/admin/screening-decisions/${encodeURIComponent(input.agentId)}`,
   )
   return screeningDecisionRecordResponseSchema.parse(payload)
+}
+
+export async function fetchScreeningVerificationState(rawInput: unknown) {
+  const input = getScreeningDecisionRecordInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-decisions/${encodeURIComponent(input.agentId)}/verification-state`,
+  )
+  return screeningVerificationStateSchema.parse(payload)
 }
 
 export async function fetchScreeningDecisions(

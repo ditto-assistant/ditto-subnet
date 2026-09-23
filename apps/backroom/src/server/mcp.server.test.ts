@@ -125,6 +125,7 @@ describe('Backroom MCP tools', () => {
         'get_backroom_tool_help',
         'get_ath_review',
         'get_screening_decision_record',
+        'get_screening_verification_state',
         'list_screening_decisions',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
@@ -316,9 +317,11 @@ describe('Backroom MCP tools', () => {
     // execute). The two one-line policy-v13 decision-record reads
     // (get_screening_decision_record, list_screening_decisions) and the
     // resolve_ath_review citation rule fit under the same bound (24_938 at
-    // the time of writing).
+    // the time of writing). The exact-agent finalizer-state read adds one
+    // concise catalog line, so allow 25_600 without widening per-tool
+    // tutorial text.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      25_100,
+      25_600,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
