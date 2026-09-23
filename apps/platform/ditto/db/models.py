@@ -743,7 +743,7 @@ class V13KnownBenignControlApproval(Base):
             )
         ),
         CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13kb_actor"),
-        CheckConstraint("length(reason) BETWEEN 8 AND 500", name="v13kb_reason"),
+        CheckConstraint("length(reason) >= 8", name="v13kb_reason"),
     )
 
 
