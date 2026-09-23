@@ -83,8 +83,8 @@ class VerificationReplayClaimability(BaseModel):
     replay_id: UUID
     original_screener_hotkey: str
     source_binding_current: bool
-    independent_enrolled_hotkeys: list[str]
-    independently_enrolled: bool
+    replay_enabled_independent_hotkeys: list[str]
+    independent_replay_enabled: bool
     note: str
 
 

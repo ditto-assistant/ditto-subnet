@@ -53,8 +53,18 @@ def _request(storage=None, *, node_id=SECOND_NODE):
 
 
 async def _enroll(
-    session, *, environment="prod", hotkey=SECOND_WORKER, node_id=SECOND_NODE
+    session,
+    *,
+    environment="prod",
+    hotkey=SECOND_WORKER,
+    node_id=SECOND_NODE,
+    replay_capacity=None,
 ):
+    settings = (
+        {}
+        if replay_capacity is None
+        else {"verification_replay_capacity": replay_capacity}
+    )
     session.add(
         ScreenerNode(
             environment=environment,
@@ -65,6 +75,7 @@ async def _enroll(
             token_hash="f" * 64,
             token_expires_at=datetime.now(UTC) + timedelta(hours=1),
             status="active",
+            **settings,
         )
     )
     await session.commit()
@@ -166,8 +177,8 @@ async def test_replay_exact_guards_independent_claim_and_report_only(session):
     )
     assert availability.source_binding_current is True
     assert availability.original_screener_hotkey == FIRST_WORKER
-    assert availability.independently_enrolled is False
-    assert availability.independent_enrolled_hotkeys == []
+    assert availability.independent_replay_enabled is False
+    assert availability.replay_enabled_independent_hotkeys == []
     again = await create_replay(agent_id, payload, None, session)
     assert first.replay_id == again.replay_id
     with pytest.raises(HTTPException) as separate_request:
@@ -181,19 +192,29 @@ async def test_replay_exact_guards_independent_claim_and_report_only(session):
     with pytest.raises(HTTPException) as legacy:
         await claim_replay(_request(node_id=None), SECOND_WORKER, session)
     assert legacy.value.status_code == 403
-    await _enroll(session)
+    await _enroll(session, replay_capacity=1)
     availability = await get_replay_claimability(
         agent_id, first.replay_id, None, session
     )
-    assert availability.independently_enrolled is True
-    assert availability.independent_enrolled_hotkeys == [SECOND_WORKER]
-    await _enroll(session, hotkey=FIRST_WORKER, node_id="replay-original")
+    assert availability.independent_replay_enabled is True
+    assert availability.replay_enabled_independent_hotkeys == [SECOND_WORKER]
+    await _enroll(
+        session, hotkey=FIRST_WORKER, node_id="replay-original", replay_capacity=1
+    )
     assert (
         await claim_replay(_request(node_id="replay-original"), FIRST_WORKER, session)
         is None
     )
     claimed = await claim_replay(_request(), SECOND_WORKER, session)
     assert claimed is not None and claimed.replay_id == first.replay_id
+    next_agent, next_attempt, next_quarantine, next_image = await _seed(session)
+    await create_replay(
+        next_agent,
+        _payload(next_attempt, next_quarantine, next_image),
+        None,
+        session,
+    )
+    assert await claim_replay(_request(), SECOND_WORKER, session) is None
 
     storage = SimpleNamespace(
         presigned_get_url=AsyncMock(side_effect=["source-url", "image-url"])
@@ -318,11 +339,27 @@ async def test_replay_refuses_nonproduction_enrollment(session):
     created = await create_replay(
         agent_id, _payload(attempt_id, quarantine_id, image_id), None, session
     )
-    await _enroll(session, environment="test")
+    await _enroll(session, environment="test", replay_capacity=1)
     availability = await get_replay_claimability(
         agent_id, created.replay_id, None, session
     )
-    assert availability.independently_enrolled is False
+    assert availability.independent_replay_enabled is False
+    with pytest.raises(HTTPException) as unauthorized:
+        await claim_replay(_request(), SECOND_WORKER, session)
+    assert unauthorized.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_newly_enrolled_node_has_no_replay_authority_by_default(session):
+    agent_id, attempt_id, quarantine_id, image_id = await _seed(session)
+    created = await create_replay(
+        agent_id, _payload(attempt_id, quarantine_id, image_id), None, session
+    )
+    await _enroll(session)
+    availability = await get_replay_claimability(
+        agent_id, created.replay_id, None, session
+    )
+    assert availability.independent_replay_enabled is False
     with pytest.raises(HTTPException) as unauthorized:
         await claim_replay(_request(), SECOND_WORKER, session)
     assert unauthorized.value.status_code == 403
@@ -344,7 +381,7 @@ async def test_prebuild_hold_gets_separate_verified_replay_image(session):
     )
     created = await create_replay(agent_id, payload, None, session)
     assert created.image_sha256 is None
-    await _enroll(session)
+    await _enroll(session, replay_capacity=1)
     claimed = await claim_replay(_request(), SECOND_WORKER, session)
     assert claimed is not None and claimed.replay_id == created.replay_id
     with pytest.raises(HTTPException) as original_worker:

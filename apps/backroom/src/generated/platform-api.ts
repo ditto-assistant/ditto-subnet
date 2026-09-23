@@ -30701,14 +30701,14 @@ export interface components {
         };
         /** VerificationReplayClaimability */
         VerificationReplayClaimability: {
-            /** Independent Enrolled Hotkeys */
-            independent_enrolled_hotkeys: string[];
-            /** Independently Enrolled */
-            independently_enrolled: boolean;
+            /** Independent Replay Enabled */
+            independent_replay_enabled: boolean;
             /** Note */
             note: string;
             /** Original Screener Hotkey */
             original_screener_hotkey: string;
+            /** Replay Enabled Independent Hotkeys */
+            replay_enabled_independent_hotkeys: string[];
             /**
              * Replay Id
              * Format: uuid

@@ -19,6 +19,22 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # Existing and newly enrolled nodes start with replay disabled. Ordinary
+    # screening channel capacity never enables this separate trust path.
+    op.add_column(
+        "screener_nodes",
+        sa.Column(
+            "verification_replay_capacity",
+            sa.Integer(),
+            nullable=False,
+            server_default="0",
+        ),
+    )
+    op.create_check_constraint(
+        "screener_nodes_replay_capacity_check",
+        "screener_nodes",
+        "verification_replay_capacity BETWEEN 0 AND 4",
+    )
     op.create_table(
         "screening_verification_replays",
         sa.Column("replay_id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -195,3 +211,7 @@ def downgrade() -> None:
         "svrp_one_active_source_idx", table_name="screening_verification_replays"
     )
     op.drop_table("screening_verification_replays")
+    op.drop_constraint(
+        "screener_nodes_replay_capacity_check", "screener_nodes", type_="check"
+    )
+    op.drop_column("screener_nodes", "verification_replay_capacity")

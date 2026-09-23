@@ -5370,6 +5370,9 @@ class ScreenerNode(Base):
     )
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     capacity: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    verification_replay_capacity: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
     image_reference: Mapped[str | None] = mapped_column(Text)
     registered_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
@@ -5403,6 +5406,10 @@ class ScreenerNode(Base):
         CheckConstraint(
             "status IN ('active', 'draining', 'quarantined', 'revoked')",
             name="screener_nodes_status_check",
+        ),
+        CheckConstraint(
+            "verification_replay_capacity BETWEEN 0 AND 4",
+            name="screener_nodes_replay_capacity_check",
         ),
         CheckConstraint(
             "capacity BETWEEN 1 AND 16", name="screener_nodes_capacity_check"

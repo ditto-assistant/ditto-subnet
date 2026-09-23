@@ -62,7 +62,7 @@ def _replay_verified_image_key(replay_id: UUID, candidate_id: UUID) -> str:
 
 async def _require_enrolled_replay_worker(
     request: Request, worker: str, session: AsyncSession
-) -> None:
+) -> ScreenerNode:
     """Legacy fleet tokens and non-prod nodes are not replay authority."""
     node_id = getattr(request.state, "screener_node_id", None)
     if node_id is None or request.state.screener_node_status != "active":
@@ -76,8 +76,10 @@ async def _require_enrolled_replay_worker(
         or node.environment != "prod"
         or node.screener_hotkey != worker
         or node.token_expires_at <= datetime.now(UTC)
+        or node.verification_replay_capacity <= 0
     ):
         raise HTTPException(403, "independent enrolled screener node required")
+    return node
 
 
 def _state(
@@ -313,6 +315,7 @@ async def get_replay_claimability(
                     ScreenerNode.status == "active",
                     ScreenerNode.environment == "prod",
                     ScreenerNode.token_expires_at > now,
+                    ScreenerNode.verification_replay_capacity > 0,
                     ScreenerNode.screener_hotkey != attempt.screener_hotkey,
                 )
                 .order_by(ScreenerNode.screener_hotkey)
@@ -324,10 +327,10 @@ async def get_replay_claimability(
         replay_id=replay_id,
         original_screener_hotkey=attempt.screener_hotkey,
         source_binding_current=bound,
-        independent_enrolled_hotkeys=eligible,
-        independently_enrolled=bool(eligible),
+        replay_enabled_independent_hotkeys=eligible,
+        independent_replay_enabled=bool(eligible),
         note=(
-            "Enrollment alone does not prove a deployed or healthy worker; "
+            "Replay enablement does not prove a deployed or healthy worker; "
             "this replay remains report-only and cannot clear a hold."
         ),
     )
@@ -365,8 +368,17 @@ async def _active_claim(
 async def claim_replay(
     request: Request, worker: ScreenerDep, session: SessionDep
 ) -> VerificationReplayState | None:
-    await _require_enrolled_replay_worker(request, worker, session)
+    node = await _require_enrolled_replay_worker(request, worker, session)
     now = datetime.now(UTC)
+    active = await session.scalar(
+        select(func.count()).where(
+            ScreeningVerificationReplay.worker_hotkey == worker,
+            ScreeningVerificationReplay.status == "running",
+            ScreeningVerificationReplay.lease_deadline > now,
+        )
+    )
+    if (active or 0) >= node.verification_replay_capacity:
+        return None
     # An expired lease never silently re-enters the queue. Take the same
     # source-first locks as every other replay writer before terminalizing it.
     expired = (
