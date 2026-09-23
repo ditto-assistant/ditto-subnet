@@ -703,6 +703,62 @@ class ScreeningVerificationReceipt(Base):
     )
 
 
+class ScreeningPrivatePackageRegistration(Base):
+    """Operator-registered V13 manifest identity; never private bytes or a pass."""
+
+    __tablename__ = "screening_private_package_registrations"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    pair_inventory_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    clean_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    clean_attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    clean_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    clean_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    registrar_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["clean_agent_id"], ["agents.agent_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["clean_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+        ),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"sppr_{name}_check")
+            for name in (
+                "artifact_sha256",
+                "image_sha256",
+                "profile_sha256",
+                "manifest_sha256",
+                "pair_inventory_sha256",
+                "clean_artifact_sha256",
+                "clean_image_sha256",
+            )
+        ),
+        CheckConstraint(
+            "length(runner_hotkey) BETWEEN 1 AND 120", name="sppr_runner_check"
+        ),
+        CheckConstraint(
+            "length(registrar_actor) BETWEEN 1 AND 120", name="sppr_actor_check"
+        ),
+    )
+
+
 class AthReview(Base):
     """Durable, immutable-evidence audit record for an ATH copy hold."""
 

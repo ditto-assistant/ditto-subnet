@@ -259,6 +259,36 @@ class AdminScreeningVerificationCheck(BaseModel):
     receipt_count: int
 
 
+class AdminV13PrivatePackageRegisterRequest(BaseModel):
+    """Operator assertion of sealed digests; never private case bytes."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    pair_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    clean_agent_id: UUID
+    clean_attempt_id: UUID
+    clean_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    clean_image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    runner_hotkey: str = Field(min_length=1, max_length=120)
+
+
+class AdminV13PrivatePrerequisite(BaseModel):
+    code: str
+    status: Literal["not_observed", "recorded_unverified", "mechanically_verified"]
+
+
+class AdminV13PrivatePackageReadiness(BaseModel):
+    """Prerequisite visibility only: no V13 policy pass or CLEAR status."""
+
+    registration_status: Literal["not_registered", "registered_unverified"]
+    prerequisites: list[AdminV13PrivatePrerequisite]
+    clear_authorized: Literal[False] = False
+
+
 class AdminScreeningVerificationReadiness(BaseModel):
     """Exact-attempt Platform receipt inventory, never a CLEAR authorization.
 
@@ -277,6 +307,7 @@ class AdminScreeningVerificationReadiness(BaseModel):
     attempt_status: str
     checks: list[AdminScreeningVerificationCheck]
     private_metamorphic_applicability: Literal["not_recorded"] = "not_recorded"
+    private_package: AdminV13PrivatePackageReadiness | None = None
     receipts: list[AdminScreeningVerificationReceipt]
     receipt_count: int
     receipts_truncated: bool

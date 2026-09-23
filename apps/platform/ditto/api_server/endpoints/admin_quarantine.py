@@ -86,6 +86,9 @@ from ditto.api_models.admin_quarantine import (
     AdminSourceListing,
     AdminSourceSearchResult,
     AdminStarterKitProvenance,
+    AdminV13PrivatePackageReadiness,
+    AdminV13PrivatePackageRegisterRequest,
+    AdminV13PrivatePrerequisite,
     AdminValidatorAssignment,
     AdminValidatorAssignmentList,
     AdminValidatorAssignmentReleaseRequest,
@@ -148,6 +151,7 @@ from ditto.db.models import (
     ScreenerShadowReview,
     ScreeningAttempt,
     ScreeningDispute,
+    ScreeningPrivatePackageRegistration,
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
@@ -198,6 +202,7 @@ from ditto_screening_protocol.mechanical_verification import (
     MECHANICAL_PROFILE_SHA256,
     mechanical_evidence_sha256,
 )
+from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE_SHA256
 
 logger = logging.getLogger(__name__)
 
@@ -1902,6 +1907,96 @@ async def get_screening_submission(
     )
 
 
+@router.post(
+    "/screening-submissions/{agent_id}/attempts/{attempt_id}/private-package-registration",
+    response_model=None,
+    status_code=204,
+)
+async def register_v13_private_package(
+    agent_id: UUID,
+    attempt_id: UUID,
+    payload: AdminV13PrivatePackageRegisterRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> None:
+    """Persist exact digests only; this cannot verify cases or clear a hold."""
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    async with session.begin():
+        agent = await session.get(Agent, agent_id, with_for_update=True)
+        attempt = await session.get(ScreeningAttempt, attempt_id, with_for_update=True)
+        clean_agent = await session.get(Agent, payload.clean_agent_id)
+        clean_attempt = await session.get(ScreeningAttempt, payload.clean_attempt_id)
+        if (
+            agent is None
+            or attempt is None
+            or attempt.agent_id != agent_id
+            or clean_agent is None
+            or clean_attempt is None
+            or clean_attempt.agent_id != payload.clean_agent_id
+        ):
+            raise HTTPException(
+                status_code=404, detail="private package identity not found"
+            )
+        if (
+            attempt.policy_version != 13
+            or attempt.status not in {"quarantined", "passed"}
+            or agent.status
+            not in {AgentStatus.QUARANTINED, AgentStatus.ATH_PENDING_REVIEW}
+            or attempt.artifact_sha256 is None
+            or attempt.artifact_sha256.lower() != agent.sha256.lower()
+            or payload.artifact_sha256 != agent.sha256.lower()
+            or payload.profile_sha256 != V13_PRIVATE_PROFILE_SHA256
+            or payload.clean_agent_id == agent_id
+            or clean_attempt.artifact_sha256 is None
+            or clean_attempt.artifact_sha256.lower() != clean_agent.sha256.lower()
+            or payload.clean_artifact_sha256 != clean_agent.sha256.lower()
+            or clean_agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+        ):
+            raise HTTPException(
+                status_code=409, detail="private package guard mismatch"
+            )
+        for bound_agent, bound_attempt, bound_hotkey, image_sha in (
+            (agent_id, attempt_id, attempt.screener_hotkey, payload.image_sha256),
+            (
+                payload.clean_agent_id,
+                payload.clean_attempt_id,
+                clean_attempt.screener_hotkey,
+                payload.clean_image_sha256,
+            ),
+        ):
+            image = await session.scalar(
+                select(ScreenedImageUpload.image_upload_id).where(
+                    ScreenedImageUpload.agent_id == bound_agent,
+                    ScreenedImageUpload.attempt_id == bound_attempt,
+                    ScreenedImageUpload.screener_hotkey == bound_hotkey,
+                    ScreenedImageUpload.sha256 == image_sha,
+                    ScreenedImageUpload.status == "verified",
+                )
+            )
+            if image is None:
+                raise HTTPException(
+                    status_code=409, detail="private package image not verified"
+                )
+        existing = await session.get(ScreeningPrivatePackageRegistration, attempt_id)
+        fields = payload.model_dump(mode="python")
+        if existing is not None:
+            if any(getattr(existing, key) != value for key, value in fields.items()):
+                raise HTTPException(
+                    status_code=409, detail="private package registration conflicts"
+                )
+            return
+        session.add(
+            ScreeningPrivatePackageRegistration(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                registrar_actor=x_admin_actor,
+                **fields,
+            )
+        )
+
+
 @router.get(
     "/screening-submissions/{agent_id}/attempts/{attempt_id}/verification-readiness",
     response_model=AdminScreeningVerificationReadiness,
@@ -1997,6 +2092,70 @@ async def get_screening_verification_readiness(
             continue
         if row.evidence_sha256 == expected:
             mechanically_verified.add(row.check_code)
+    registration = await session.get(ScreeningPrivatePackageRegistration, attempt_id)
+    registration_matches = (
+        registration is not None
+        and registration.agent_id == agent_id
+        and registration.artifact_sha256 == agent.sha256.lower()
+        and attempt.artifact_sha256 is not None
+        and registration.artifact_sha256 == attempt.artifact_sha256.lower()
+        and registration.profile_sha256 == V13_PRIVATE_PROFILE_SHA256
+    )
+    target_image_bound = bool(
+        registration_matches
+        and registration is not None
+        and (
+            registration.image_sha256,
+            attempt.screener_hotkey,
+        )
+        in verified_images
+    )
+    clean_image_bound = False
+    if registration_matches and registration is not None:
+        clean_attempt = await session.get(
+            ScreeningAttempt, registration.clean_attempt_id
+        )
+        clean_agent = await session.get(Agent, registration.clean_agent_id)
+        clean_image_bound = bool(
+            clean_attempt is not None
+            and clean_agent is not None
+            and clean_attempt.agent_id == registration.clean_agent_id
+            and clean_attempt.artifact_sha256 is not None
+            and clean_attempt.artifact_sha256.lower()
+            == registration.clean_artifact_sha256
+            and clean_agent.sha256.lower() == registration.clean_artifact_sha256
+            and await session.scalar(
+                select(ScreenedImageUpload.image_upload_id).where(
+                    ScreenedImageUpload.agent_id == registration.clean_agent_id,
+                    ScreenedImageUpload.attempt_id == registration.clean_attempt_id,
+                    ScreenedImageUpload.screener_hotkey
+                    == clean_attempt.screener_hotkey,
+                    ScreenedImageUpload.sha256 == registration.clean_image_sha256,
+                    ScreenedImageUpload.status == "verified",
+                )
+            )
+            is not None
+        )
+    private_prerequisites = (
+        (
+            "target_artifact_commitment",
+            bool(
+                attempt.artifact_sha256 is not None
+                and attempt.artifact_sha256.lower() == agent.sha256.lower()
+            ),
+            True,
+        ),
+        ("target_verified_image", target_image_bound, True),
+        ("sealed_manifest_registration", registration_matches, False),
+        ("clean_image_candidate", clean_image_bound, False),
+        ("known_benign_control_provenance", False, False),
+        ("protected_blueprint_bank", False, False),
+        ("sealed_store_reachable", False, False),
+        ("trusted_runner_key", registration_matches, False),
+        ("fresh_isolated_paired_execution", False, False),
+        ("powered_statistical_plan", False, False),
+        ("all_19_checks_verified", False, False),
+    )
     logger.info(
         "admin_actor=%s read screening verification readiness agent_id=%s "
         "attempt_id=%s receipt_count=%d",
@@ -2025,6 +2184,24 @@ async def get_screening_verification_readiness(
             )
             for code in MANDATORY_V13_VERIFICATION_CHECKS
         ],
+        private_package=AdminV13PrivatePackageReadiness(
+            registration_status=(
+                "registered_unverified" if registration_matches else "not_registered"
+            ),
+            prerequisites=[
+                AdminV13PrivatePrerequisite(
+                    code=code,
+                    status=(
+                        "mechanically_verified"
+                        if present and mechanical
+                        else "recorded_unverified"
+                        if present
+                        else "not_observed"
+                    ),
+                )
+                for code, present, mechanical in private_prerequisites
+            ],
+        ),
         receipts=[
             AdminScreeningVerificationReceipt(
                 receipt_id=row.receipt_id,

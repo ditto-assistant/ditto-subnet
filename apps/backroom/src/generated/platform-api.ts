@@ -2218,6 +2218,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-submissions/{agent_id}/attempts/{attempt_id}/private-package-registration": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Register V13 Private Package
+         * @description Persist exact digests only; this cannot verify cases or clear a hold.
+         */
+        post: operations["register_v13_private_package_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__private_package_registration_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-submissions/{agent_id}/attempts/{attempt_id}/verification-readiness": {
         parameters: {
             query?: never;
@@ -10649,6 +10669,7 @@ export interface components {
              * @constant
              */
             private_metamorphic_applicability: "not_recorded";
+            private_package?: components["schemas"]["AdminV13PrivatePackageReadiness"] | null;
             /** Receipt Count */
             receipt_count: number;
             /** Receipts */
@@ -11161,6 +11182,67 @@ export interface components {
             expected_registration_sha256: string;
             /** Reason */
             reason: string;
+        };
+        /**
+         * AdminV13PrivatePackageReadiness
+         * @description Prerequisite visibility only: no V13 policy pass or CLEAR status.
+         */
+        AdminV13PrivatePackageReadiness: {
+            /**
+             * Clear Authorized
+             * @default false
+             * @constant
+             */
+            clear_authorized: false;
+            /** Prerequisites */
+            prerequisites: components["schemas"]["AdminV13PrivatePrerequisite"][];
+            /**
+             * Registration Status
+             * @enum {string}
+             */
+            registration_status: "not_registered" | "registered_unverified";
+        };
+        /**
+         * AdminV13PrivatePackageRegisterRequest
+         * @description Operator assertion of sealed digests; never private case bytes.
+         */
+        AdminV13PrivatePackageRegisterRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Clean Agent Id
+             * Format: uuid
+             */
+            clean_agent_id: string;
+            /** Clean Artifact Sha256 */
+            clean_artifact_sha256: string;
+            /**
+             * Clean Attempt Id
+             * Format: uuid
+             */
+            clean_attempt_id: string;
+            /** Clean Image Sha256 */
+            clean_image_sha256: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Pair Inventory Sha256 */
+            pair_inventory_sha256: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /** Runner Hotkey */
+            runner_hotkey: string;
+        };
+        /** AdminV13PrivatePrerequisite */
+        AdminV13PrivatePrerequisite: {
+            /** Code */
+            code: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "not_observed" | "recorded_unverified" | "mechanically_verified";
         };
         /** AdminV9ContractRetestItem */
         AdminV9ContractRetestItem: {
@@ -34681,6 +34763,43 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AdminScreeningFailureDiagnostic"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_v13_private_package_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__private_package_registration_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminV13PrivatePackageRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -4459,6 +4459,14 @@ export const screeningVerificationReadinessSchema = z.object({
     receipt_count: z.number().int().nonnegative(),
   })).length(20),
   private_metamorphic_applicability: z.literal('not_recorded'),
+  private_package: z.object({
+    registration_status: z.enum(['not_registered', 'registered_unverified']),
+    prerequisites: z.array(z.object({
+      code: z.string(),
+      status: z.enum(['not_observed', 'recorded_unverified', 'mechanically_verified']),
+    })),
+    clear_authorized: z.literal(false),
+  }).nullish(),
   receipts: z.array(z.object({
     receipt_id: z.string().uuid(),
     check_code: z.string().regex(/^[a-z0-9_]{1,64}$/),
