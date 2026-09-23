@@ -2572,6 +2572,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-verification-replays/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Replay */
+        post: operations["create_replay_api_v1_admin_screening_verification_replays__agent_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screening-verification-replays/{agent_id}/{replay_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Replay */
+        get: operations["get_replay_api_v1_admin_screening_verification_replays__agent_id___replay_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/submission-deposit-address": {
         parameters: {
             query?: never;
@@ -5686,6 +5720,114 @@ export interface paths {
         get: operations["get_submission_source_review_source_api_v1_screener_submission_source_reviews__review_id__source_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/verification-replays/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Replay */
+        post: operations["claim_replay_api_v1_screener_verification_replays_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/verification-replays/{replay_id}/build-upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mint Replay Build Upload
+         * @description Mint a short-lived PUT for a new isolated build, never the Agent image key.
+         */
+        post: operations["mint_replay_build_upload_api_v1_screener_verification_replays__replay_id__build_upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/verification-replays/{replay_id}/build-verify": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Verify Replay Build
+         * @description Verify staged bytes, copy to a key the worker cannot overwrite, verify again.
+         */
+        post: operations["verify_replay_build_api_v1_screener_verification_replays__replay_id__build_verify_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/verification-replays/{replay_id}/finish": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Finish Replay */
+        post: operations["finish_replay_api_v1_screener_verification_replays__replay_id__finish_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/verification-replays/{replay_id}/inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Replay Inputs */
+        get: operations["get_replay_inputs_api_v1_screener_verification_replays__replay_id__inputs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/verification-replays/{replay_id}/receipts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Append Replay Receipt */
+        post: operations["append_replay_receipt_api_v1_screener_verification_replays__replay_id__receipts_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -30492,6 +30634,217 @@ export interface components {
             /** Weights */
             weights?: components["schemas"]["PublicChainWeight"][];
         };
+        /** VerificationReplayBuildUpload */
+        VerificationReplayBuildUpload: {
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            /** Required Headers */
+            required_headers: {
+                [key: string]: string;
+            };
+            /** Upload Url */
+            upload_url: string;
+        };
+        /** VerificationReplayBuildUploadRequest */
+        VerificationReplayBuildUploadRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Image Id */
+            image_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
+        /** VerificationReplayBuildVerifyRequest */
+        VerificationReplayBuildVerifyRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Image Id */
+            image_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /** Size Bytes */
+            size_bytes: number;
+        };
+        /** VerificationReplayCreate */
+        VerificationReplayCreate: {
+            /** Actor */
+            actor: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Expected Agent Status
+             * @constant
+             */
+            expected_agent_status: "quarantined";
+            /** Image Sha256 */
+            image_sha256?: string | null;
+            /** Image Upload Id */
+            image_upload_id?: string | null;
+            /**
+             * Policy Version
+             * @constant
+             */
+            policy_version: 13;
+            /**
+             * Quarantine Id
+             * Format: uuid
+             */
+            quarantine_id: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
+        };
+        /** VerificationReplayFinish */
+        VerificationReplayFinish: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Failure Code */
+            failure_code?: string | null;
+            /** Image Sha256 */
+            image_sha256?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed";
+        };
+        /** VerificationReplayInputs */
+        VerificationReplayInputs: {
+            /** Artifact Url */
+            artifact_url: string;
+            /** Image Url */
+            image_url: string | null;
+            replay: components["schemas"]["VerificationReplayState"];
+            /**
+             * Urls Expire At
+             * Format: date-time
+             */
+            urls_expire_at: string;
+        };
+        /** VerificationReplayReceiptRequest */
+        VerificationReplayReceiptRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Check Code
+             * @enum {string}
+             */
+            check_code: "archive_sha" | "build_image_digest" | "health" | "ordinary_model_run" | "tool_selection_run" | "seed_memory_run" | "two_user_isolation";
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /** Image Sha256 */
+            image_sha256?: string | null;
+            /** Image Upload Id */
+            image_upload_id?: string | null;
+            /**
+             * Policy Version
+             * @constant
+             */
+            policy_version: 13;
+        };
+        /** VerificationReplayReceiptState */
+        VerificationReplayReceiptState: {
+            /**
+             * Check Code
+             * @enum {string}
+             */
+            check_code: "archive_sha" | "build_image_digest" | "health" | "ordinary_model_run" | "tool_selection_run" | "seed_memory_run" | "two_user_isolation";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /**
+             * Receipt Id
+             * Format: uuid
+             */
+            receipt_id: string;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            /** Worker Hotkey */
+            worker_hotkey: string;
+        };
+        /** VerificationReplayState */
+        VerificationReplayState: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Failure Code */
+            failure_code: string | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Image Id */
+            image_id: string | null;
+            /** Image Sha256 */
+            image_sha256: string | null;
+            /** Image Size Bytes */
+            image_size_bytes: number | null;
+            /** Image Staging Id */
+            image_staging_id: string | null;
+            /** Image Upload Id */
+            image_upload_id: string | null;
+            /** Image Verified At */
+            image_verified_at: string | null;
+            /** Lease Deadline */
+            lease_deadline: string | null;
+            /** Policy Version */
+            policy_version: number;
+            /**
+             * Quarantine Id
+             * Format: uuid
+             */
+            quarantine_id: string;
+            /**
+             * Receipt Count
+             * @default 0
+             */
+            receipt_count: number;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "completed" | "failed";
+            /** Worker Hotkey */
+            worker_hotkey: string | null;
+        };
         /** WeightConsensusObservation */
         WeightConsensusObservation: {
             /** Uid */
@@ -35499,6 +35852,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminSourceSearchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_replay_api_v1_admin_screening_verification_replays__agent_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationReplayCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_replay_api_v1_admin_screening_verification_replays__agent_id___replay_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayState"];
                 };
             };
             /** @description Validation Error */
@@ -40901,6 +41325,224 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmissionSourceReviewSourceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_replay_api_v1_screener_verification_replays_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayState"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mint_replay_build_upload_api_v1_screener_verification_replays__replay_id__build_upload_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationReplayBuildUploadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayBuildUpload"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    verify_replay_build_api_v1_screener_verification_replays__replay_id__build_verify_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationReplayBuildVerifyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    finish_replay_api_v1_screener_verification_replays__replay_id__finish_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationReplayFinish"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_replay_inputs_api_v1_screener_verification_replays__replay_id__inputs_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayInputs"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    append_replay_receipt_api_v1_screener_verification_replays__replay_id__receipts_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VerificationReplayReceiptRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayReceiptState"];
                 };
             };
             /** @description Validation Error */
