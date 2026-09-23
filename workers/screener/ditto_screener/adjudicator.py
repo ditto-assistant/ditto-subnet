@@ -1357,6 +1357,9 @@ class SourceReviewAdjudicator:
                 # while allowing the router to fail over between compatible
                 # healthy providers instead of timing out behind one endpoint.
                 "allow_fallbacks": True,
+                # The default is price-weighted. L4 has a short, finite lease;
+                # rank eligible endpoints by output speed before fallback.
+                "sort": "throughput",
                 "data_collection": "deny",
                 "require_parameters": True,
             },
