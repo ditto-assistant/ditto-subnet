@@ -191,11 +191,166 @@ async def test_request_uses_provider_supported_completion_parameter(
     assert requests[0]["max_tokens"] == 6_000
     assert "max_completion_tokens" not in requests[0]
     assert requests[0]["tool_choice"] == "required"
+    assert requests[0]["stream"] is True
     assert requests[0]["provider"] == {
         "allow_fallbacks": True,
         "data_collection": "deny",
         "require_parameters": True,
     }
+
+
+async def test_streamed_tool_call_is_assembled_before_verdict(tmp_path: Path) -> None:
+    arguments = json.dumps(
+        {
+            "decision": "clear",
+            "clear_clause": ("retrieval_ranking_not_family_engine"),
+            "reason": "The served path keeps model authority.",
+            "citations": [],
+        }
+    )
+    fragments = [arguments[:20], arguments[20:]]
+    events = [
+        {
+            "model": "z-ai/glm-5.3-flash",
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "verdict-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_",
+                                    "arguments": fragments[0],
+                                },
+                            }
+                        ]
+                    }
+                }
+            ],
+        },
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
+                                    "name": "adjudication",
+                                    "arguments": fragments[1],
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        },
+    ]
+    body = "".join(f"data: {json.dumps(event)}\n\n" for event in events)
+    body += "data: [DONE]\n\n"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["stream"] is True
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=body
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        message = await _adjudicator(
+            _key(tmp_path), httpx.MockTransport(handler)
+        )._completion_message(client, "sk-test", [], timeout=10)
+    assert message["tool_calls"] == [
+        _call("submit_adjudication", json.loads(arguments)) | {"id": "verdict-1"}
+    ]
+
+
+async def test_truncated_stream_cannot_clear(tmp_path: Path) -> None:
+    attempts = 0
+    body = (
+        "data: "
+        + json.dumps(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "x",
+                                    "function": {
+                                        "name": "submit_adjudication",
+                                        "arguments": '{"decision":"clear"}',
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+        + "\n\n"
+    )
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=body
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert attempts == 2
+
+
+async def test_gateway_rejecting_stream_uses_one_buffered_attempt(
+    tmp_path: Path,
+) -> None:
+    modes: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        streaming = json.loads(request.content)["stream"]
+        modes.append(streaming)
+        if streaming:
+            return httpx.Response(400, json={"error": "stream not supported"})
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                _call(
+                                    "submit_adjudication",
+                                    {
+                                        "decision": "clear",
+                                        "clear_clause": (
+                                            "retrieval_ranking_not_family_engine"
+                                        ),
+                                        "reason": "fallback contract",
+                                        "citations": [],
+                                    },
+                                )
+                            ],
+                        }
+                    }
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        message = await _adjudicator(
+            _key(tmp_path), httpx.MockTransport(handler)
+        )._completion_message(client, "sk-test", [], timeout=10)
+    assert modes == [True, False]
+    assert message["tool_calls"][0]["function"]["name"] == "submit_adjudication"
 
 
 async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> None:

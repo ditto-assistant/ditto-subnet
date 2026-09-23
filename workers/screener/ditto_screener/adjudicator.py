@@ -175,6 +175,14 @@ _MAX_COMPLETION_TOKENS = 6_000
 # The outer request/lease deadline still bounds both attempts together.
 _MAX_COMPLETION_REQUEST_SECONDS = 180.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
+_MAX_COMPLETION_IDLE_SECONDS = 75.0
+_MAX_COMPLETION_RESPONSE_BYTES = 512_000
+
+
+class IncompleteStreamError(ValueError):
+    """A transport ended before the gateway committed a complete response."""
+
+
 # Bounded by the repository tools themselves; this only caps how many of
 # the served locations are remembered for citation checking.
 _MAX_RECORDED_READS = 2_048
@@ -1227,6 +1235,10 @@ class SourceReviewAdjudicator:
             "model": self._model,
             "messages": messages,
             "tools": list(tools),
+            # The court needs the final tool call, but a buffered response can
+            # hide a stalled provider for the entire request deadline. SSE
+            # exposes progress and gives each read a separate idle bound.
+            "stream": True,
             # A free-form answer cannot settle the court and previously used
             # an entire provider turn before the corrective prompt below.
             # Every valid next action is one of these bounded tools, so make
@@ -1254,39 +1266,154 @@ class SourceReviewAdjudicator:
             _clear_upstream()
             try:
                 async with asyncio.timeout(effective_timeout):
-                    response = await client.post(
+                    async with client.stream(
+                        "POST",
                         f"{self._base_url}/chat/completions",
                         headers={
                             "Authorization": f"Bearer {api_key}",
                             **review_gateway_headers(self._inference_provider),
                         },
                         json=request,
-                        timeout=effective_timeout,
-                    )
-            except (TimeoutError, httpx.TimeoutException):
+                        timeout=httpx.Timeout(
+                            effective_timeout,
+                            read=min(effective_timeout, _MAX_COMPLETION_IDLE_SECONDS),
+                        ),
+                    ) as response:
+                        # Older OpenAI-compatible gateways may reject SSE
+                        # outright. Preserve the previously working buffered
+                        # path once, without interpreting any response body as
+                        # a verdict or relaxing the request/lease deadlines.
+                        if (
+                            attempt == 0
+                            and request["stream"] is True
+                            and response.status_code in {400, 422}
+                        ):
+                            request["stream"] = False
+                            continue
+                        if response.status_code >= 400:
+                            trace = _run_trace.get()
+                            if trace is not None and 100 <= response.status_code <= 599:
+                                trace.http_status = response.status_code
+                            response.raise_for_status()
+                        payload = await _completion_stream_payload(response)
+            except (TimeoutError, httpx.TransportError, IncompleteStreamError):
                 if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
                     raise
                 logger.warning(
-                    "adjudicator completion timed out; retrying once model=%s",
+                    "adjudicator completion transport failed; retrying once model=%s",
                     self._model,
                 )
                 continue
             break
-        if response.status_code >= 400:
-            trace = _run_trace.get()
-            if (
-                trace is not None
-                and isinstance(response.status_code, int)
-                and not isinstance(response.status_code, bool)
-                and 100 <= response.status_code <= 599
-            ):
-                trace.http_status = response.status_code
-            response.raise_for_status()
-        payload: object = response.json()
         _observe_upstream(payload)
         if _retryable_model_error_type(payload) is not None:
             raise ValueError("adjudicator model body was unusable")
         return _assistant_message(payload)
+
+
+async def _completion_stream_payload(response: httpx.Response) -> object:
+    """Assemble one bounded OpenAI-compatible streamed tool-call response.
+
+    A few compatible gateways return a regular JSON response despite
+    ``stream=true``; accept that complete response too. Neither partial SSE
+    output nor a truncated JSON body can become a verdict.
+    """
+    if "text/event-stream" not in response.headers.get("content-type", "").lower():
+        body = bytearray()
+        async for chunk in response.aiter_bytes():
+            body.extend(chunk)
+            if len(body) > _MAX_COMPLETION_RESPONSE_BYTES:
+                raise ValueError("adjudicator completion exceeded response bound")
+        return json.loads(body)
+
+    calls: dict[int, dict[str, object]] = {}
+    usage: object = None
+    model: object = None
+    finish_reason: object = None
+    data_lines: list[str] = []
+    total_bytes = 0
+    done = False
+
+    def consume_event() -> bool:
+        nonlocal usage, model, finish_reason
+        if not data_lines:
+            return False
+        data = "\n".join(data_lines)
+        data_lines.clear()
+        if data == "[DONE]":
+            return True
+        event = json.loads(data)
+        if not isinstance(event, dict):
+            raise ValueError("adjudicator stream event is not an object")
+        _observe_upstream(event)
+        if event.get("error"):
+            raise ValueError("adjudicator stream returned a provider error")
+        model = event.get("model") or model
+        usage = event.get("usage") or usage
+        choices = event.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return False
+        choice = choices[0]
+        if not isinstance(choice, dict):
+            raise ValueError("adjudicator stream choice is invalid")
+        finish_reason = choice.get("finish_reason") or finish_reason
+        delta = choice.get("delta") or {}
+        if not isinstance(delta, dict):
+            raise ValueError("adjudicator stream delta is invalid")
+        for piece in delta.get("tool_calls") or []:
+            if not isinstance(piece, dict) or not isinstance(piece.get("index"), int):
+                raise ValueError("adjudicator stream tool index is invalid")
+            index = piece["index"]
+            if index < 0 or index >= 32:
+                raise ValueError("adjudicator stream tool index exceeded bound")
+            call = calls.setdefault(index, {"type": "function", "function": {}})
+            for key in ("id", "type"):
+                if key in piece:
+                    call[key] = piece[key]
+            fragment = piece.get("function") or {}
+            if not isinstance(fragment, dict):
+                raise ValueError("adjudicator stream function is invalid")
+            function = call["function"]
+            if not isinstance(function, dict):
+                raise ValueError("adjudicator stream function is invalid")
+            for key in ("name", "arguments"):
+                value = fragment.get(key)
+                if value is not None:
+                    if not isinstance(value, str):
+                        raise ValueError("adjudicator stream function field is invalid")
+                    function[key] = str(function.get(key) or "") + value
+        return False
+
+    async for line in response.aiter_lines():
+        total_bytes += len(line.encode("utf-8")) + 1
+        if total_bytes > _MAX_COMPLETION_RESPONSE_BYTES:
+            raise ValueError("adjudicator completion exceeded response bound")
+        if not line:
+            if consume_event():
+                done = True
+                break
+        elif line.startswith("data:"):
+            data_lines.append(line[5:].lstrip(" "))
+    if not done and consume_event():
+        done = True
+    if not done:
+        raise IncompleteStreamError("adjudicator stream ended before [DONE]")
+    if not calls:
+        raise ValueError("adjudicator stream ended without a tool call")
+    return {
+        "model": model,
+        "usage": usage,
+        "choices": [
+            {
+                "finish_reason": finish_reason,
+                "message": {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [calls[index] for index in sorted(calls)],
+                },
+            }
+        ],
+    }
 
 
 def _assistant_message(payload: object) -> dict[str, object]:
