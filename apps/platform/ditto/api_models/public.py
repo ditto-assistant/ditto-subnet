@@ -3372,6 +3372,26 @@ class PublicAdmissionRetry(BaseModel):
     last_failure_infrastructure: bool = False
 
 
+class PublicOrdinaryReview(BaseModel):
+    """Source-safe ordinary source-review clock (ditto-subnet#2042, slice 1).
+
+    Deliberately thin: a miner learns why their own submission is waiting and
+    roughly how long that kind of wait typically takes, never the operator
+    detail behind it (no quarantine evidence, no reason codes, no other
+    miner's data). ``typical_p50_seconds``/``typical_p95_seconds`` are
+    subnet-wide statistics, not a promise about this specific submission.
+    Null on the pipeline response whenever the submission is not currently in
+    ordinary review (covers both "never entered it" and "already resolved").
+    """
+
+    reason: Literal[
+        "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
+    ]
+    age_seconds: Annotated[float, Field(ge=0)]
+    typical_p50_seconds: Annotated[float | None, Field(default=None, ge=0)]
+    typical_p95_seconds: Annotated[float | None, Field(default=None, ge=0)]
+
+
 class PublicScreeningDispute(BaseModel):
     """Public-safe appeal state; the miner's private message is never exposed."""
 
@@ -3763,6 +3783,14 @@ class PublicSubmissionPipeline(BaseModel):
         description=(
             "Live admission-retry state while the submission is still in "
             "build & admission; null once admission is terminal."
+        ),
+    )
+    ordinary_review: PublicOrdinaryReview | None = Field(
+        default=None,
+        description=(
+            "Ordinary source-review clock and reason while the submission is "
+            "in the pre-score screening pipeline; null once it leaves that "
+            "pipeline (whichever way)."
         ),
     )
     submission_family: PublicSubmissionFamily | None = Field(

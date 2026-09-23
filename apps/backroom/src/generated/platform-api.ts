@@ -2716,6 +2716,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/source-review-queue-slo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Source Review Queue Slo
+         * @description p50/p95/oldest age, throughput, and reconciliation ghosts.
+         */
+        get: operations["get_source_review_queue_slo_api_v1_admin_source_review_queue_slo_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/submission-deposit-address": {
         parameters: {
             query?: never;
@@ -24252,6 +24272,31 @@ export interface components {
             validators: components["schemas"]["PublicValidatorHeartbeatsResponse"];
         };
         /**
+         * PublicOrdinaryReview
+         * @description Source-safe ordinary source-review clock (ditto-subnet#2042, slice 1).
+         *
+         *     Deliberately thin: a miner learns why their own submission is waiting and
+         *     roughly how long that kind of wait typically takes, never the operator
+         *     detail behind it (no quarantine evidence, no reason codes, no other
+         *     miner's data). ``typical_p50_seconds``/``typical_p95_seconds`` are
+         *     subnet-wide statistics, not a promise about this specific submission.
+         *     Null on the pipeline response whenever the submission is not currently in
+         *     ordinary review (covers both "never entered it" and "already resolved").
+         */
+        PublicOrdinaryReview: {
+            /** Age Seconds */
+            age_seconds: number;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "active_work" | "capacity_wait" | "infrastructure_backoff" | "escalation";
+            /** Typical P50 Seconds */
+            typical_p50_seconds?: number | null;
+            /** Typical P95 Seconds */
+            typical_p95_seconds?: number | null;
+        };
+        /**
          * PublicOrphanedSlot
          * @description A slot the platform released out from under a still-executing benchmark.
          *
@@ -24939,6 +24984,8 @@ export interface components {
             generated_at: string;
             /** Inference Runs */
             inference_runs?: components["schemas"]["PublicInferenceRun"][];
+            /** @description Ordinary source-review clock and reason while the submission is in the pre-score screening pipeline; null once it leaves that pipeline (whichever way). */
+            ordinary_review?: components["schemas"]["PublicOrdinaryReview"] | null;
             /** Provisional Scores */
             provisional_scores?: components["schemas"]["PublicProvisionalScore"][];
             /** Quorum */
@@ -28989,6 +29036,90 @@ export interface components {
          * @enum {string}
          */
         SourceReviewPassClause: "genuine_model_result" | "no_premodel_response" | "full_records_on_deciding_turn" | "non_authoritative_preliminary_pass" | "shape_only_validation" | "model_dissent_preserved" | "no_derived_value" | "untrusted_candidate_channel" | "runtime_described_generic_engine" | "no_family_compiler" | "model_selected_executed_tool" | "no_reported_tool_calls" | "no_tool_planning" | "policy_capability_filter_only" | "natural_singleton_class" | "evaluation_independent_runtime" | "no_evaluation_identity_branch" | "unreachable_nonruntime_code";
+        /**
+         * SourceReviewQueueSlo
+         * @description p50/p95/oldest age, throughput, overdue, and reconciliation ghosts.
+         *
+         *     Every age/threshold field is seconds. ``overdue_count`` and
+         *     ``p95_exceeds_threshold`` are ``null`` whenever their governing
+         *     threshold is unset -- never ``0`` and never a computed "healthy"
+         *     default. This endpoint is read-only: it enforces nothing (no alert, no
+         *     operator escalation action -- both are explicit ditto-subnet#2042
+         *     follow-ups).
+         */
+        SourceReviewQueueSlo: {
+            /** Active Work Count */
+            active_work_count: number;
+            /**
+             * Backlog Count
+             * @description Current, non-superseded, non-terminal, non-progressed-past-screening items counted below. Terminal ghosts are excluded here and reported separately.
+             */
+            backlog_count: number;
+            /** Capacity Wait Count */
+            capacity_wait_count: number;
+            /** Escalation Count */
+            escalation_count: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Ghost Count
+             * @description Sum of the two reconciliation counts above.
+             */
+            ghost_count: number;
+            /** Infrastructure Backoff Count */
+            infrastructure_backoff_count: number;
+            /**
+             * Max Actionable Age Threshold Seconds
+             * @description Configured overdue threshold, or null when unset. Observability-only: not enforced by this endpoint.
+             */
+            max_actionable_age_threshold_seconds?: number | null;
+            /**
+             * Oldest Age Seconds
+             * @description Age of the single oldest actionable item.
+             */
+            oldest_age_seconds?: number | null;
+            /**
+             * Overdue Count
+             * @description Actionable items older than the threshold; null when unset.
+             */
+            overdue_count?: number | null;
+            /**
+             * P50 Age Seconds
+             * @description Median actionable age; null only when the backlog is empty.
+             */
+            p50_age_seconds?: number | null;
+            /** P95 Age Seconds */
+            p95_age_seconds?: number | null;
+            /** P95 Age Threshold Seconds */
+            p95_age_threshold_seconds?: number | null;
+            /**
+             * P95 Exceeds Threshold
+             * @description Null unless a p95 threshold is configured.
+             */
+            p95_exceeds_threshold?: boolean | null;
+            /**
+             * Resolved Quarantine Ghost Count
+             * @description Agents stuck at quarantined status with no active quarantine row (a resolved quarantine that did not flip agent status).
+             */
+            resolved_quarantine_ghost_count: number;
+            /**
+             * Stale Running Ghost Count
+             * @description Agents whose latest screening attempt still looks 'running' although the agent already reached a terminal or progressed-past-screening status. Visible for reconciliation; never folded into the counts above. See ditto-subnet#2038.
+             */
+            stale_running_ghost_count: number;
+            /**
+             * Throughput Completed Count
+             * @description Full (non-build-only) screening attempts reaching a passed or rejected verdict within the throughput window.
+             */
+            throughput_completed_count: number;
+            /** Throughput Per Hour */
+            throughput_per_hour: number;
+            /** Throughput Window Hours */
+            throughput_window_hours: number;
+        };
         /**
          * SourceReviewScorerVisibleEffect
          * @description Concrete graded field or validator-owned outcome changed by a transition.
@@ -37212,6 +37343,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayClaimability"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_source_review_queue_slo_api_v1_admin_source_review_queue_slo_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceReviewQueueSlo"];
                 };
             };
             /** @description Validation Error */

@@ -220,6 +220,7 @@ import {
   setContinualRetestSettings,
   fetchInferenceConcurrencySettings,
   fetchInferenceRuntimeMetrics,
+  fetchSourceReviewQueueSlo,
   fetchInferenceTraceObjects,
   createInferenceTraceDownloadUrl,
   peekInferenceTrace,
@@ -662,6 +663,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Apply the complete hosted-inference and v10 benchmark-runtime policy with expectedRevision, reason, and "APPLY INFERENCE CONCURRENCY SETTINGS". Chat budgets affect newly minted grants; chat and embedding concurrency are live admission controls; case_concurrency is 1-64 (default 4); relay delays are off or shadow.',
   get_inference_runtime_metrics:
     'Read inference load and relay health.',
+  get_source_review_queue_slo:
+    'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
   start_runtime_profile:
     'Capture bounded private relay pprof.',
   download_runtime_profile:
@@ -2642,6 +2645,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchInferenceRuntimeMetrics()),
+  )
+
+  registerTool(
+    'get_source_review_queue_slo',
+    {
+      title: 'Get source-review queue-age SLO',
+      description:
+        'Read the ordinary (pre-score) source-review queue-age SLO: p50/p95/oldest actionable age in seconds, throughput (completions per hour over a fixed window), and the current backlog broken out by reason -- active_work (a screener is claimed and running), capacity_wait (uploaded, no screener has claimed it yet), infrastructure_backoff (the last attempt ended retryable_infra/inconclusive and is fail-closed parked for an operator-authorized retry), and escalation (an active anti-cheat quarantine hold). Also reports two reconciliation counts that are visible but NEVER folded into the metrics above: stale_running_ghost_count (a screening attempt still looks running though its agent already reached a terminal or later status) and resolved_quarantine_ghost_count (an agent stuck at quarantined status with no active quarantine row). overdue_count and p95_exceeds_threshold are null until an operator configures a threshold (there is no shipped default); this tool enforces nothing -- no alert, no operator escalation action. Covers ORDINARY screening review only: stronger top-agent review, copy review, ATH review, and human escalation are separate review classes with their own clocks, not yet built. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchSourceReviewQueueSlo()),
   )
 
   registerTool(

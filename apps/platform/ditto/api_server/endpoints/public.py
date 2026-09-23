@@ -114,6 +114,7 @@ from ditto.api_models import (
     PublicNameHandle,
     PublicNextPinProjection,
     PublicOperationsResponse,
+    PublicOrdinaryReview,
     PublicOrphanedSlot,
     PublicPinAgreement,
     PublicProvisionalScore,
@@ -401,6 +402,10 @@ from ditto.db.queries.screening_infra_retry import (
 )
 from ditto.db.queries.screening_retry import failed_screening_retry_authorized
 from ditto.db.queries.screening_review_deadlines import POLICY_V13_DOCUMENT_DIGEST
+from ditto.db.queries.source_review_queue_slo import (
+    ORDINARY_REVIEW_ACTIONABLE_STATUSES,
+    load_source_review_queue_slo_snapshot,
+)
 from ditto.db.queries.tickets import (
     get_score_continuation_floor,
     get_score_continuation_floor_row,
@@ -6985,6 +6990,62 @@ async def agent_pipeline(
             select(ScreeningQuarantine).where(ScreeningQuarantine.agent_id == agent_id)
         )
     )
+    ordinary_review: PublicOrdinaryReview | None = None
+    # Reimplements ditto.db.queries.source_review_queue_slo's
+    # load_agent_ordinary_review_state inline (reusing the attempts/quarantines
+    # rows already fetched above, rather than a second round trip). The two are
+    # behaviourally equivalent by construction; keep them in sync by hand if
+    # either changes (or fold this into a call to that function).
+    if agent.status in ORDINARY_REVIEW_ACTIONABLE_STATUSES:
+        latest_attempt = attempts[0] if attempts else None
+        ordinary_reason: (
+            Literal[
+                "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
+            ]
+            | None
+        ) = None
+        clock_started_at: datetime | None = None
+        if agent.status == AgentStatus.QUARANTINED:
+            active_quarantine = next(
+                (
+                    quarantine
+                    for quarantine in quarantines
+                    if quarantine.status == "active"
+                ),
+                None,
+            )
+            # No active quarantine row despite QUARANTINED status is the same
+            # resolved-quarantine reconciliation gap
+            # ``ditto.db.queries.source_review_queue_slo`` excludes from the
+            # operator snapshot; do not show a miner a guess here either.
+            if active_quarantine is not None:
+                ordinary_reason = "escalation"
+                clock_started_at = (
+                    latest_attempt.started_at
+                    if latest_attempt is not None
+                    else agent.created_at
+                )
+        elif latest_attempt is None:
+            ordinary_reason = "capacity_wait"
+            clock_started_at = agent.created_at
+        elif latest_attempt.status == "running":
+            ordinary_reason = "active_work"
+            clock_started_at = latest_attempt.started_at
+        elif latest_attempt.status in ("failed", "expired"):
+            ordinary_reason = "infrastructure_backoff"
+            clock_started_at = latest_attempt.started_at
+        if ordinary_reason is not None and clock_started_at is not None:
+            # Subnet-wide typical durations, not per-agent: cheap relative to
+            # the rest of this handler and bounded by the 10s response cache
+            # above; revisit with a short-TTL cache (see
+            # ``QueuePolicySettingsResolver``) if this shows up as hot.
+            typical = await load_source_review_queue_slo_snapshot(session)
+            ordinary_review = PublicOrdinaryReview(
+                reason=ordinary_reason,
+                age_seconds=max(0.0, (now - clock_started_at).total_seconds()),
+                typical_p50_seconds=typical.p50_age_seconds,
+                typical_p95_seconds=typical.p95_age_seconds,
+            )
     quarantines_by_attempt = {
         quarantine.attempt_id: quarantine for quarantine in quarantines
     }
@@ -7232,6 +7293,7 @@ async def agent_pipeline(
         generated_at=now,
         agent_id=agent_id,
         admission_retry=admission_retry,
+        ordinary_review=ordinary_review,
         artifact_release=(
             await _artifact_release_snapshot(
                 session,

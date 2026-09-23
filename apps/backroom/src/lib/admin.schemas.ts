@@ -8590,3 +8590,32 @@ export const confirmationSeedAnchorsInputSchema = z.object({
 export type ConfirmationSeedAnchorList = z.infer<
   typeof confirmationSeedAnchorListSchema
 >
+
+// Ordinary (pre-score) source-review queue-age SLO, ditto-subnet#2042 slice 1.
+// Read-only observability: overdue_count and p95_exceeds_threshold are null
+// until an operator configures a threshold, and this board enforces nothing.
+// Top-agent, copy, ATH, and human-escalation review are separate, later
+// clocks -- not covered here.
+export const sourceReviewQueueSloSchema = z.object({
+  generated_at: z.string(),
+  backlog_count: z.number().int().nonnegative(),
+  active_work_count: z.number().int().nonnegative(),
+  capacity_wait_count: z.number().int().nonnegative(),
+  infrastructure_backoff_count: z.number().int().nonnegative(),
+  escalation_count: z.number().int().nonnegative(),
+  p50_age_seconds: z.number().nonnegative().nullable(),
+  p95_age_seconds: z.number().nonnegative().nullable(),
+  oldest_age_seconds: z.number().nonnegative().nullable(),
+  throughput_window_hours: z.number().int().positive(),
+  throughput_completed_count: z.number().int().nonnegative(),
+  throughput_per_hour: z.number().nonnegative(),
+  stale_running_ghost_count: z.number().int().nonnegative(),
+  resolved_quarantine_ghost_count: z.number().int().nonnegative(),
+  ghost_count: z.number().int().nonnegative(),
+  max_actionable_age_threshold_seconds: z.number().int().positive().nullable(),
+  overdue_count: z.number().int().nonnegative().nullable(),
+  p95_age_threshold_seconds: z.number().int().positive().nullable(),
+  p95_exceeds_threshold: z.boolean().nullable(),
+})
+
+export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
