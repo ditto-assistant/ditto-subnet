@@ -1597,6 +1597,10 @@ class ScreenResultRequest(BaseModel):
         ),
     ] = None
     adjudication: SourceReviewAdjudication | None = None
+    completion_receipt_signature: Annotated[
+        str | None, Field(pattern=_SIGNATURE_HEX_PATTERN)
+    ] = None
+    """Detached hotkey signature over exact-artifact L4 completion telemetry."""
     policy_version: Annotated[
         int,
         Field(
@@ -1813,11 +1817,19 @@ class ScreenResultRequest(BaseModel):
             raise ValueError(
                 "adjudication and adjudication_digest must travel together"
             )
+        if self.adjudication is None and self.completion_receipt_signature is not None:
+            raise ValueError("completion receipt signature requires adjudication")
         if self.adjudication is not None:
             if self.review_settings_revision is None:
                 raise ValueError("adjudication requires reviewer settings binding")
             if self.adjudication.canonical_digest() != self.adjudication_digest:
                 raise ValueError("adjudication does not match adjudication_digest")
+            if (self.adjudication.completion_receipt is None) != (
+                self.completion_receipt_signature is None
+            ):
+                raise ValueError(
+                    "completion receipt and its detached signature must travel together"
+                )
             if self.outcome not in {
                 ScreenResultOutcome.PASS,
                 ScreenResultOutcome.QUARANTINE,

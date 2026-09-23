@@ -242,6 +242,7 @@ from ditto_screening_protocol import (
     ScreenResultOutcome,
     SourceReviewFinding,
     SourceReviewObservationPayload,
+    completion_receipt_signing_message,
     verdict_signing_message,
 )
 from ditto_screening_protocol.mechanical_verification import (
@@ -6234,6 +6235,40 @@ async def submit_result(
                 previous = deferred_review.original_evidence.get("previous_status")
                 if previous == AgentStatus.LIVE.value:
                     restore_status = AgentStatus.LIVE
+
+    receipt = (
+        payload.adjudication.completion_receipt
+        if payload.adjudication is not None
+        else None
+    )
+    if receipt is not None:
+        if (
+            payload.attempt_id is None
+            or payload.adjudication_digest is None
+            or payload.completion_receipt_signature is None
+            or reported_attempt is None
+            or current_agent is None
+            or reported_attempt.agent_id != agent_id
+            or reported_attempt.artifact_sha256 is None
+            or reported_attempt.artifact_sha256.lower() != current_agent.sha256.lower()
+        ):
+            raise ScreenerAuthError(
+                "completion receipt is not bound to this screening artifact"
+            )
+        receipt_message = completion_receipt_signing_message(
+            screener_hotkey=screener_hotkey,
+            agent_id=agent_id,
+            attempt_id=payload.attempt_id,
+            artifact_sha256=reported_attempt.artifact_sha256.lower(),
+            adjudication_digest=payload.adjudication_digest,
+            receipt=receipt,
+        )
+        if not _verify_signature(
+            screener_hotkey,
+            receipt_message,
+            payload.completion_receipt_signature,
+        ):
+            raise ScreenerAuthError("completion receipt signature did not verify")
 
     deferred_mechanical_admission = bool(
         reported_attempt is not None

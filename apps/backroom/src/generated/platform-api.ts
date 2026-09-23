@@ -25919,6 +25919,8 @@ export interface components {
              * @default false
              */
             build_only: boolean;
+            /** Completion Receipt Signature */
+            completion_receipt_signature?: string | null;
             /**
              * Deferred Source Review
              * @description Signed echo of a platform-issued score-first mechanical claim. The platform must verify it against the immutable attempt marker.

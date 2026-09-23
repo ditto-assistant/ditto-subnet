@@ -53,7 +53,11 @@ from ditto_screener.review_settings import (
     bootstrap_review_settings,
 )
 from ditto_screener.router_screen import build_signed_router_source_screen
-from ditto_screener.signing import sign_heartbeat, sign_verdict
+from ditto_screener.signing import (
+    sign_completion_receipt,
+    sign_heartbeat,
+    sign_verdict,
+)
 from ditto_screener.verification_receipts import mechanical_evidence_sha256
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
@@ -1005,6 +1009,21 @@ class ScreenerWorker:
                 image_ref=screened_image.image_ref if screened_image else None,
                 image_upload_id=screened_image_upload_id,
             )
+            completion_receipt_signature = (
+                sign_completion_receipt(
+                    self._keypair,
+                    screener_hotkey=self._config.screener_hotkey,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    artifact_sha256=item.sha256.lower(),
+                    adjudication_digest=adjudication_digest,
+                    receipt=adjudication.completion_receipt,
+                )
+                if adjudication is not None
+                and adjudication.completion_receipt is not None
+                and adjudication_digest is not None
+                else None
+            )
             result_submission_started = True
             resp = await self._platform.submit_result(
                 agent_id,
@@ -1048,6 +1067,7 @@ class ScreenerWorker:
                 finding=finding,
                 review_audit=review_audit,
                 adjudication=adjudication,
+                completion_receipt_signature=completion_receipt_signature,
                 review_notes=review_notes,
                 image_sha256=screened_image.sha256 if screened_image else None,
                 image_size_bytes=screened_image.size_bytes if screened_image else None,

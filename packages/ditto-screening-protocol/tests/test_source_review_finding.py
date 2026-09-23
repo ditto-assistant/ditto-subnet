@@ -4,6 +4,7 @@ import hashlib
 import json
 from importlib import metadata
 from typing import Literal
+from uuid import uuid4
 
 import pytest
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -26,6 +27,7 @@ from ditto_screening_protocol import (
     SourceReviewObservationPayload,
     SourceReviewPassClause,
     SourceReviewScorerVisibleEffect,
+    completion_receipt_signing_message,
 )
 from ditto_screening_protocol.models import source_review_invariants_for_policy
 
@@ -848,6 +850,40 @@ def test_completion_receipt_is_text_free_and_does_not_change_signed_verdict() ->
     plain = SourceReviewAdjudication(**base)
     measured = SourceReviewAdjudication(**base, completion_receipt=receipt)
     assert measured.canonical_digest() == plain.canonical_digest()
+    agent_id, attempt_id = uuid4(), uuid4()
+    message = completion_receipt_signing_message(
+        screener_hotkey="screener",
+        agent_id=agent_id,
+        attempt_id=attempt_id,
+        artifact_sha256="ab" * 32,
+        adjudication_digest=measured.canonical_digest(),
+        receipt=receipt,
+    )
+    assert message.startswith(b"ditto-screen-adjudication-completion:v1:")
+    assert message != completion_receipt_signing_message(
+        screener_hotkey="screener",
+        agent_id=agent_id,
+        attempt_id=uuid4(),
+        artifact_sha256="ab" * 32,
+        adjudication_digest=measured.canonical_digest(),
+        receipt=receipt,
+    )
+    assert message != completion_receipt_signing_message(
+        screener_hotkey="screener",
+        agent_id=agent_id,
+        attempt_id=attempt_id,
+        artifact_sha256="cd" * 32,
+        adjudication_digest=measured.canonical_digest(),
+        receipt=receipt,
+    )
+    assert message != completion_receipt_signing_message(
+        screener_hotkey="screener",
+        agent_id=agent_id,
+        attempt_id=attempt_id,
+        artifact_sha256="ab" * 32,
+        adjudication_digest=measured.canonical_digest(),
+        receipt=receipt.model_copy(update={"elapsed_ms": 4301}),
+    )
     with pytest.raises(
         ValidationError, match="completion receipt requires clear or reject"
     ):

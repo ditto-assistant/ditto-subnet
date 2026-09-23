@@ -129,6 +129,7 @@ from ditto_screening_protocol import (
     ScreenReviewAudit,
     SourceReviewAdjudication,
     SourceReviewNote,
+    completion_receipt_signing_message,
     source_review_notes_digest,
     verdict_signing_message,
 )
@@ -5317,25 +5318,57 @@ class TestClaim:
             ),
         )
 
-        response = await client.post(
-            f"/api/v1/screener/agent/{agent_id}/result",
-            json=_result_payload(
-                agent_id,
-                passed=False,
+        assert adjudication.completion_receipt is not None
+        receipt_signature = _sign(
+            completion_receipt_signing_message(
+                screener_hotkey=_SCREENER_HOTKEY,
+                agent_id=agent_id,
                 attempt_id=attempt_id,
-                outcome="quarantine",
-                manifest_digest="12" * 32,
-                reason_code="source-review-adjudicated",
-                review_settings_revision=revision_id,
-                review_settings_instance_id="ditto-screener-prod",
-                review_settings_scope="*",
-                review_settings_checksum=checksum,
+                artifact_sha256=_SHA256,
                 adjudication_digest=adjudication.canonical_digest(),
-                adjudication=adjudication.model_dump(mode="json"),
-            ),
+                receipt=adjudication.completion_receipt,
+            )
+        )
+        payload = _result_payload(
+            agent_id,
+            passed=False,
+            attempt_id=attempt_id,
+            outcome="quarantine",
+            manifest_digest="12" * 32,
+            reason_code="source-review-adjudicated",
+            review_settings_revision=revision_id,
+            review_settings_instance_id="ditto-screener-prod",
+            review_settings_scope="*",
+            review_settings_checksum=checksum,
+            adjudication_digest=adjudication.canonical_digest(),
+            adjudication=adjudication.model_dump(mode="json"),
+            completion_receipt_signature=receipt_signature,
+        )
+        tampered = dict(payload)
+        tampered["adjudication"] = dict(payload["adjudication"])
+        tampered["adjudication"]["completion_receipt"] = dict(
+            payload["adjudication"]["completion_receipt"]
+        )
+        tampered["adjudication"]["completion_receipt"]["elapsed_ms"] += 1
+        unsigned = dict(payload)
+        unsigned.pop("completion_receipt_signature")
+        missing_signature = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=unsigned
+        )
+        assert missing_signature.status_code == 422, missing_signature.text
+        rejected = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=tampered
+        )
+        assert rejected.status_code in {401, 403}, rejected.text
+        response = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
+        )
+        replay = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
 
         assert response.status_code == 200, response.text
+        assert replay.status_code == 200, replay.text
         assert response.json()["status"] == AgentStatus.REJECTED
         async with session_maker() as session:
             agent = await session.get(Agent, agent_id)
