@@ -2319,6 +2319,28 @@ const inferenceRequestKindSchema = z.enum(['chat', 'embedding'])
 const runtimeProfileTargetSchema = z.enum(['platform-relay-1', 'platform-relay-2'])
 const runtimeProfileTypeSchema = z.enum(['cpu', 'heap', 'allocs', 'goroutine'])
 
+// The relay-owned OpenRouter overload circuit (platform
+// docs/provider-outage-circuit.md). While it is open, Platform parks every
+// non-probe scoring lease; its epoch and last failure are the evidence behind a
+// `provider_outage_parked` ticket. Declared explicitly because zod strips
+// undeclared keys: without it the runtime-metrics tool silently dropped the
+// circuit the platform already served (ditto-subnet#2087).
+export const providerCircuitSnapshotSchema = z.object({
+  provider: z.string(),
+  state: z.enum(['open', 'closed']),
+  epoch: z.string().uuid(),
+  opened_at: z.string(),
+  retry_at: z.string(),
+  last_failure_at: z.string(),
+  closed_at: z.string().nullable(),
+  failure_count: z.number().int().nonnegative(),
+  last_status: z.number().int().nullable(),
+  last_error_code: z.string(),
+  probe_kind: z.enum(['scoring', 'screening']).nullable(),
+  probe_key: z.string().nullable(),
+  probe_expires_at: z.string().nullable(),
+})
+
 export const inferenceRuntimeMetricsSchema = z.object({
   observed_at: z.string(),
   settings_revision: z.number().int().nonnegative(),
@@ -2370,6 +2392,8 @@ export const inferenceRuntimeMetricsSchema = z.object({
       error: z.string().nullable().optional(),
     }),
   ),
+  // `null` is "no circuit row has ever been written", not "closed".
+  provider_circuit: providerCircuitSnapshotSchema.nullish().default(null),
 })
 
 // Which door the call went through, derived by the platform from the lane and
@@ -5547,6 +5571,13 @@ export const validationRetryDetailSchema = z.object({
   blocking_reason: z.string().nullable(),
   recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
   dominant_failure_code: z.string().nullish().default(null),
+  // ditto-subnet#2087: `recommended_action: null` with a nonzero
+  // `provider_outage_slot_count` while `provider_outage_active` is true means
+  // wait for the provider -- a grant now re-leases into the same outage. These
+  // read `null` against a platform that predates the signal.
+  provider_outage_slot_count: z.number().int().nonnegative().nullish().default(null),
+  provider_outage_active: z.boolean().nullish().default(null),
+  provider_circuit: providerCircuitSnapshotSchema.nullish().default(null),
   withdrawal_allowed: z.boolean(),
   withdrawal_blocking_reason: z.string().nullable(),
   // Eviction reporting is nullish-tolerant because Backroom and the platform
@@ -5707,6 +5738,9 @@ export const stuckSubmissionSchema = z.object({
   blocking_reason: z.string().nullable(),
   recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
   dominant_failure_code: z.string().nullish().default(null),
+  // Exhausted slots the provider circuit parked; read with the list's
+  // `provider_outage_active` (ditto-subnet#2087).
+  provider_outage_slot_count: z.number().int().nonnegative().nullish().default(null),
   earliest_retry_after: z.string().nullable(),
   attempts_used: z.number().int().nonnegative(),
   exhausted_validator_count: z.number().int().nonnegative(),
@@ -5738,6 +5772,8 @@ export const stuckSubmissionsListSchema = z.object({
   offset: z.number().int().nonnegative(),
   has_more: z.boolean(),
   submissions: z.array(stuckSubmissionSchema),
+  provider_outage_active: z.boolean().nullish().default(null),
+  provider_circuit: providerCircuitSnapshotSchema.nullish().default(null),
 })
 
 // Platform-initiated lease revocations from

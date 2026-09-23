@@ -8,6 +8,21 @@ function short(value: string, length = 16) {
   return value.length > length ? `${value.slice(0, length)}…` : value
 }
 
+type StuckSubmission = StuckSubmissionsList['submissions'][number]
+
+// ditto-subnet#2087: the platform withholds `retry` while the provider circuit
+// is still failing — for every recoverable row while it is open, and for the
+// rows it parked until the provider stays quiet. The legacy
+// `recovery_allowed ? 'retry'` fallback below exists for platforms that predate
+// `recommended_action`; it must not re-advertise a grant the platform
+// deliberately withheld, so this keys on the withheld recommendation itself
+// rather than on the parked-slot count, which is zero in the open-circuit case.
+function waitingOnProvider(item: StuckSubmission, providerOutageActive: boolean | null) {
+  return (
+    item.recommended_action === null && item.recovery_allowed && providerOutageActive === true
+  )
+}
+
 export function StuckSubmissionFleetPanel({
   initial,
   readOnly,
@@ -25,10 +40,15 @@ export function StuckSubmissionFleetPanel({
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
 
+  // "Select all" skips rows waiting on the provider so one click cannot batch
+  // grants into a live outage; an operator can still select them explicitly.
   const recoverable = useMemo(
-    () => data.submissions.filter((item) => item.recovery_allowed),
-    [data.submissions],
+    () => data.submissions.filter(
+      (item) => item.recovery_allowed && !waitingOnProvider(item, data.provider_outage_active),
+    ),
+    [data.submissions, data.provider_outage_active],
   )
+  const circuit = data.provider_circuit
 
   async function refresh() {
     setBusy(true)
@@ -79,8 +99,13 @@ export function StuckSubmissionFleetPanel({
             <h2 className="text-sm font-semibold">Fleet retry backlog</h2>
           </div>
           <p className="mt-1 max-w-[76ch] text-xs leading-5 text-[var(--muted)]">
-            Current benchmark v{data.active_bench_version}. Historical rows are hidden by default. Retry only when recommended_action is retry (verified infrastructure). Agent-attributable rows recommend withdraw — re-leasing the same image cannot repair them, and a retry grant is refused.
+            Current benchmark v{data.active_bench_version}. Historical rows are hidden by default. Retry only when recommended_action is retry (verified infrastructure). Agent-attributable rows recommend withdraw — re-leasing the same image cannot repair them, and a retry grant is refused. Rows marked wait were parked by a provider outage that is still failing; a grant now is parked again.
           </p>
+          {data.provider_outage_active && circuit ? (
+            <p role="status" className="mt-2 text-xs text-[var(--amber)]">
+              OpenRouter circuit {circuit.state} · last failure {circuit.last_failure_at} · {circuit.failure_count} failure{circuit.failure_count === 1 ? '' : 's'} this epoch
+            </p>
+          ) : null}
         </div>
         <button type="button" onClick={() => void refresh()} disabled={busy} className="ml-auto flex min-h-10 items-center gap-2 rounded-lg border border-[var(--line)] px-3 text-xs disabled:opacity-40">
           <RefreshCw className="h-3.5 w-3.5" /> Refresh
@@ -106,7 +131,7 @@ export function StuckSubmissionFleetPanel({
                 <td>{item.score_count}/{item.quorum}</td>
                 <td>{item.attempts_used}</td>
                 <td>{item.exhausted_validator_count}</td>
-                <td className="pr-3">{item.recommended_action ?? (item.recovery_allowed ? 'retry' : '—')}{item.dominant_failure_code ? ` · ${item.dominant_failure_code}` : ''}</td>
+                <td className="pr-3">{waitingOnProvider(item, data.provider_outage_active) ? 'wait · provider outage' : (item.recommended_action ?? (item.recovery_allowed ? 'retry' : '—'))}{item.dominant_failure_code ? ` · ${item.dominant_failure_code}` : ''}</td>
                 <td className="max-w-[24rem] pr-3 text-[var(--muted-strong)]">{item.blocking_reason ?? (item.recovery_allowed ? 'Operator evidence required' : 'Not recoverable')}</td>
               </tr>
             ))}

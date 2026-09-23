@@ -20,10 +20,27 @@ from ditto.db.queries.inference import revoke_ticket_inference
 
 OPENROUTER_PROVIDER = "openrouter"
 PROVIDER_PROBE_TTL = timedelta(minutes=10)
+PROVIDER_OUTAGE_PARKED_DETAIL = "provider_outage_parked"
+# The relay's cooldown is two minutes, so a still-overloaded provider flaps
+# between open, half-open, and closed. A circuit counts as healthy only after
+# it has recorded no failure for this long; until then a retry grant re-leases
+# into the same outage (ditto-subnet#2087).
+PROVIDER_RECOVERY_QUIET_WINDOW = timedelta(minutes=30)
 
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def provider_outage_active(
+    circuit: ProviderOutageCircuit | None, *, now: datetime
+) -> bool:
+    """Whether the provider is open or failed within the quiet window."""
+    if circuit is None:
+        return False
+    if circuit.state != "closed":
+        return True
+    return _aware(circuit.last_failure_at) > now - PROVIDER_RECOVERY_QUIET_WINDOW
 
 
 def scoring_probe_key(*, validator_hotkey: str, slot_id: str) -> str:
@@ -136,7 +153,7 @@ async def park_scoring_leases(
             )
             if canary is not None and canary.status == "issued":
                 canary.status = "failed"
-                canary.failure_detail = "provider_outage_parked"
+                canary.failure_detail = PROVIDER_OUTAGE_PARKED_DETAIL
                 canary.finished_at = now
             parked += 1
             continue
@@ -150,7 +167,7 @@ async def park_scoring_leases(
             circuit.epoch if ticket.provider_outage_attempted_epoch is None else None
         )
         ticket.failure_reason = "infrastructure"
-        ticket.failure_detail = "provider_outage_parked"
+        ticket.failure_detail = PROVIDER_OUTAGE_PARKED_DETAIL
         ticket.failed_at = now
         parked += 1
     return parked
@@ -158,9 +175,12 @@ async def park_scoring_leases(
 
 __all__ = [
     "OPENROUTER_PROVIDER",
+    "PROVIDER_OUTAGE_PARKED_DETAIL",
+    "PROVIDER_RECOVERY_QUIET_WINDOW",
     "ProviderWorkGate",
     "lock_provider_work_gate",
     "park_scoring_leases",
+    "provider_outage_active",
     "register_provider_probe",
     "scoring_probe_key",
 ]

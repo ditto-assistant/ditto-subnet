@@ -12175,7 +12175,9 @@ export interface components {
          *     * ``exhausted`` — no ticket can advance without an operator. Read
          *       ``recommended_action``: ``retry`` is a verified-infrastructure grant;
          *       ``withdraw`` is an agent-attributable dead end that should leave this
-         *       list via queue withdrawal, not another lease.
+         *       list via queue withdrawal, not another lease. ``None`` with
+         *       ``provider_outage_slot_count`` above zero while the response's
+         *       ``provider_outage_active`` is true means wait for the provider.
          *     * ``queued`` — below quorum with slots that have simply never been leased
          *       yet; it will advance on its own.
          */
@@ -12205,6 +12207,11 @@ export interface components {
             exhausted_validator_count: number;
             /** Miner Hotkey */
             miner_hotkey: string;
+            /**
+             * Provider Outage Slot Count
+             * @default 0
+             */
+            provider_outage_slot_count: number;
             /** Quorum */
             quorum: number;
             /** Recommended Action */
@@ -12253,6 +12260,12 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+            provider_circuit?: components["schemas"]["ProviderCircuitSnapshot"] | null;
+            /**
+             * Provider Outage Active
+             * @default false
+             */
+            provider_outage_active: boolean;
             /** Quorum */
             quorum: number;
             /** Returned */
@@ -12765,6 +12778,17 @@ export interface components {
             live_ticket_count: number;
             /** Miner Hotkey */
             miner_hotkey: string;
+            provider_circuit?: components["schemas"]["ProviderCircuitSnapshot"] | null;
+            /**
+             * Provider Outage Active
+             * @default false
+             */
+            provider_outage_active: boolean;
+            /**
+             * Provider Outage Slot Count
+             * @default 0
+             */
+            provider_outage_slot_count: number;
             /** Quorum */
             quorum: number;
             /** Recommended Action */

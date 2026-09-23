@@ -58,6 +58,7 @@ from ditto.api_models.admin_validation_retry import (
     AdminValidatorScoreRetestReleaseResponse,
 )
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.inference_observability import ProviderCircuitSnapshot
 from ditto.api_models.retry_state import RETRY_STATE_ORDER, RetryState
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.dependencies import get_session
@@ -66,6 +67,7 @@ from ditto.api_server.endpoints.miner_logs import ticket_log_is_stale
 from ditto.db.models import (
     Agent,
     BenchmarkRolloutMember,
+    ProviderOutageCircuit,
     Score,
     ScoreAuditEntry,
     ValidatorHeartbeat,
@@ -94,6 +96,10 @@ from ditto.db.queries.lease_liveness import (
     ACTION_OPERATOR_EVICTED,
     expire_issued_tickets,
 )
+from ditto.db.queries.provider_outages import (
+    OPENROUTER_PROVIDER,
+    provider_outage_active,
+)
 from ditto.db.queries.queue_removal import (
     is_in_force,
     load_queue_removal,
@@ -110,6 +116,8 @@ from ditto.db.queries.retry_state import (
     eviction_gate,
     is_exhausted,
     is_open_rollout_qualification,
+    provider_outage_slot_count,
+    provider_outage_withholds_retry,
     recommended_retry_action,
     recovery_gate,
     reinstatement_gate,
@@ -156,6 +164,17 @@ OUTLIER_GAP_RATIO = 2.0
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+async def _provider_outage_state(
+    session: AsyncSession, *, now: datetime
+) -> tuple[ProviderOutageCircuit | None, ProviderCircuitSnapshot | None, bool]:
+    """Read the relay-owned circuit once so every row's recommendation agrees."""
+    circuit = await session.get(ProviderOutageCircuit, OPENROUTER_PROVIDER)
+    snapshot = (
+        ProviderCircuitSnapshot.model_validate(circuit) if circuit is not None else None
+    )
+    return circuit, snapshot, provider_outage_active(circuit, now=now)
 
 
 def _ticket_wire(ticket: ValidatorTicket) -> dict[str, object]:
@@ -570,6 +589,9 @@ async def list_validation_retries(
             detail="unknown retry state: " + ", ".join(sorted(unknown)),
         )
 
+    circuit, provider_circuit, outage_active = await _provider_outage_state(
+        session, now=now
+    )
     agents = await list_agents_by_status(
         session, statuses=[AgentStatus.EVALUATING], limit=_STUCK_SCAN_LIMIT
     )
@@ -645,8 +667,17 @@ async def list_validation_retries(
                     scores=retry.scores,
                     tickets=retry.tickets,
                     recovery_allowed=retry.recovery_allowed,
+                    provider_outage_withheld=provider_outage_withholds_retry(
+                        circuit=circuit,
+                        scores=retry.scores,
+                        tickets=retry.tickets,
+                        now=now,
+                    ),
                 ),
                 dominant_failure_code=dominant_agent_failure_detail(
+                    scores=retry.scores, tickets=retry.tickets
+                ),
+                provider_outage_slot_count=provider_outage_slot_count(
                     scores=retry.scores, tickets=retry.tickets
                 ),
                 earliest_retry_after=retry.earliest_retry_after,
@@ -687,6 +718,8 @@ async def list_validation_retries(
         offset=offset,
         has_more=offset + len(page) < count,
         submissions=page,
+        provider_outage_active=outage_active,
+        provider_circuit=provider_circuit,
     )
 
 
@@ -756,6 +789,9 @@ async def get_validation_retry(
         if withdrawal is not None
         else eviction_reason
     )
+    circuit, provider_circuit, outage_active = await _provider_outage_state(
+        session, now=now
+    )
     return AdminValidationRetryDetail(
         agent_id=agent.agent_id,
         miner_hotkey=agent.miner_hotkey,
@@ -776,10 +812,18 @@ async def get_validation_retry(
             scores=scores,
             tickets=tickets,
             recovery_allowed=allowed and withdrawal is None,
+            provider_outage_withheld=provider_outage_withholds_retry(
+                circuit=circuit, scores=scores, tickets=tickets, now=now
+            ),
         ),
         dominant_failure_code=dominant_agent_failure_detail(
             scores=scores, tickets=tickets
         ),
+        provider_outage_slot_count=provider_outage_slot_count(
+            scores=scores, tickets=tickets
+        ),
+        provider_outage_active=outage_active,
+        provider_circuit=provider_circuit,
         withdrawal_allowed=withdrawal_allowed,
         withdrawal_blocking_reason=withdrawal_blocking_reason,
         eviction_allowed=eviction_allowed,

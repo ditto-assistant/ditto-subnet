@@ -2,6 +2,7 @@
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { StuckSubmissionsList } from '../lib/admin.schemas'
 import { StuckSubmissionFleetPanel } from './StuckSubmissionFleetPanel'
 
 const listStuckSubmissions = vi.fn()
@@ -27,6 +28,7 @@ const first = {
   blocking_reason: 'manual retry evidence required',
   recommended_action: 'retry' as const,
   dominant_failure_code: null,
+  provider_outage_slot_count: 0,
   earliest_retry_after: null,
   attempts_used: 12,
   exhausted_validator_count: 2,
@@ -58,8 +60,58 @@ const blocked = {
   snapshot: 'ef'.repeat(32),
 }
 
-function response(submissions = [first, second, blocked]) {
+const openCircuit = {
+  provider: 'openrouter',
+  state: 'open' as const,
+  epoch: '5e0e6f1c-5f3c-4a7e-9d1a-1f2e3d4c5b6a',
+  opened_at: '2026-09-21T22:49:00Z',
+  retry_at: '2026-09-21T22:55:00Z',
+  last_failure_at: '2026-09-21T22:53:00Z',
+  closed_at: null,
+  failure_count: 3,
+  last_status: 429,
+  last_error_code: 'upstream_http_429',
+  probe_kind: null,
+  probe_key: null,
+  probe_expires_at: null,
+}
+
+// ditto-subnet#2087: operator authority remains, but the platform withholds
+// `retry` because the circuit that parked this slot is still failing.
+const waitingOnProvider = {
+  ...first,
+  agent_id: '9fa5271e-2977-4501-8bd4-c1bc2fa27e82',
+  miner_hotkey: '5MinerArtemis',
+  agent_name: 'artemis',
+  agent_version: 3,
+  score_count: 2,
+  blocking_reason: null,
+  recommended_action: null,
+  provider_outage_slot_count: 1,
+  snapshot: '12'.repeat(32),
+}
+
+// Withheld purely because the circuit is open: park_scoring_leases expires every
+// issued lease, so this row is unsafe to grant even though the outage did not
+// park its last attempt (provider_outage_slot_count stays 0).
+const waitingWhileCircuitOpen = {
+  ...first,
+  agent_id: 'a9ae4512-832f-4e00-83ea-7430477f2fba',
+  agent_name: 'other-agent',
+  recommended_action: null,
+  provider_outage_slot_count: 0,
+  snapshot: '34'.repeat(32),
+}
+
+function response(
+  submissions: StuckSubmissionsList['submissions'] = [first, second, blocked],
+  outage: Pick<StuckSubmissionsList, 'provider_outage_active' | 'provider_circuit'> = {
+    provider_outage_active: false,
+    provider_circuit: null,
+  },
+): StuckSubmissionsList {
   return {
+    ...outage,
     generated_at: '2026-08-11T20:00:00Z',
     generation: 'active' as const,
     active_bench_version: 12,
@@ -143,6 +195,26 @@ describe('StuckSubmissionFleetPanel', () => {
     expect(screen.queryByText(/Select all/)).toBeNull()
     expect(screen.queryByLabelText('Fleet retry audit reason')).toBeNull()
     expect((screen.getByLabelText('Select first-agent') as HTMLInputElement).disabled).toBe(true)
+  })
+
+  it('waits instead of advertising retry while the parking provider outage persists', () => {
+    render(
+      <StuckSubmissionFleetPanel
+        initial={response([first, waitingOnProvider, waitingWhileCircuitOpen], {
+          provider_outage_active: true,
+          provider_circuit: openCircuit,
+        })}
+        readOnly={false}
+      />,
+    )
+
+    // Both the parked row and the one the open circuit merely endangers.
+    expect(screen.getAllByText('wait · provider outage')).toHaveLength(2)
+    expect(screen.getByRole('status').textContent).toContain('OpenRouter circuit open')
+    // One click must not batch a grant into the live outage...
+    expect(screen.getByText('Select all 1 recoverable')).toBeTruthy()
+    // ...but an operator can still choose it explicitly.
+    expect((screen.getByLabelText('Select artemis') as HTMLInputElement).disabled).toBe(false)
   })
 
   it('shows an honest empty state when no exhausted work remains', () => {

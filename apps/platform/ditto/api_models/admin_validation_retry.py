@@ -15,6 +15,7 @@ from pydantic import (
     model_validator,
 )
 
+from ditto.api_models.inference_observability import ProviderCircuitSnapshot
 from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
 
 
@@ -184,9 +185,20 @@ class AdminValidationRetryDetail(BaseModel):
     ``inference_allowance_exhausted``, ``model_inference_required``) cannot be
     repaired by re-leasing the same image. The documented terminal path is
     queue withdrawal, not a retry grant and not a platform-minted score of 0.
+
+    ``None`` while :attr:`provider_outage_active` is true means "wait for the
+    provider", not a dead end: a grant now would be parked by the same outage.
+    That covers every recoverable row while the circuit is open, and the rows
+    :attr:`provider_outage_slot_count` counts until the provider goes quiet.
     """
     dominant_failure_code: str | None = None
     """The remaining tickets' current ``failure_detail`` when they all agree."""
+    provider_outage_slot_count: int = 0
+    """Exhausted quorum slots whose current lease the provider circuit parked."""
+    provider_outage_active: bool = False
+    """The provider circuit is open, or failed within the recovery quiet window."""
+    provider_circuit: ProviderCircuitSnapshot | None = None
+    """The authoritative OpenRouter circuit row this recommendation read."""
     withdrawal_allowed: bool
     withdrawal_blocking_reason: str | None
     eviction_allowed: bool
@@ -219,7 +231,9 @@ class AdminStuckSubmission(BaseModel):
     * ``exhausted`` — no ticket can advance without an operator. Read
       ``recommended_action``: ``retry`` is a verified-infrastructure grant;
       ``withdraw`` is an agent-attributable dead end that should leave this
-      list via queue withdrawal, not another lease.
+      list via queue withdrawal, not another lease. ``None`` on a recoverable
+      row while the response's ``provider_outage_active`` is true means wait
+      for the provider, not a dead end.
     * ``queued`` — below quorum with slots that have simply never been leased
       yet; it will advance on its own.
     """
@@ -237,10 +251,13 @@ class AdminStuckSubmission(BaseModel):
     blocking_reason: str | None
     recommended_action: RecommendedRetryAction | None = None
     """``withdraw`` for named agent-attributable exhaustion; ``retry`` when a
-    grant can still restore quorum. ``None`` on rows that are not exhausted.
+    grant can still restore quorum. ``None`` on rows that are not exhausted,
+    and on recoverable rows while the provider circuit is still failing.
     """
     dominant_failure_code: str | None = None
     """Remaining current ``failure_detail`` when every leftover slot agrees."""
+    provider_outage_slot_count: int = 0
+    """Exhausted quorum slots whose current lease the provider circuit parked."""
     earliest_retry_after: datetime | None
     attempts_used: int
     exhausted_validator_count: int
@@ -272,6 +289,10 @@ class AdminStuckSubmissionsResponse(BaseModel):
     offset: int
     has_more: bool
     submissions: list[AdminStuckSubmission]
+    provider_outage_active: bool = False
+    """The provider circuit is open, or failed within the recovery quiet window."""
+    provider_circuit: ProviderCircuitSnapshot | None = None
+    """The authoritative OpenRouter circuit row every row's recommendation read."""
 
 
 class AdminValidationRetryRequest(BaseModel):
