@@ -2205,6 +2205,13 @@ async def get_screening_verification_readiness(
             )
         ).all()
     )
+    exact_verified_image_sha256s = sorted(
+        sha
+        for sha, hotkey in verified_images
+        if hotkey == attempt.screener_hotkey
+        and len(sha) == 64
+        and all(char in "0123456789abcdef" for char in sha)
+    )
     mechanically_verified: set[str] = set()
     for row in rows:
         if (
@@ -2309,6 +2316,9 @@ async def get_screening_verification_readiness(
         attempt_id=attempt_id,
         policy_version=attempt.policy_version,
         attempt_status=attempt.status,
+        verified_image_sha256s=exact_verified_image_sha256s[:16],
+        verified_image_count=len(exact_verified_image_sha256s),
+        verified_images_truncated=len(exact_verified_image_sha256s) > 16,
         checks=[
             AdminScreeningVerificationCheck(
                 check_code=code,

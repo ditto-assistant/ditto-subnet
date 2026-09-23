@@ -7917,6 +7917,25 @@ class TestQuarantineAdmin:
         }
         registration_path = base + "/private-package-registration"
         readiness_path = base + "/verification-readiness"
+        unregistered_readiness = await client.get(readiness_path, headers=headers)
+        assert unregistered_readiness.status_code == 200
+        assert unregistered_readiness.json()["verified_image_sha256s"] == ["a" * 64]
+        assert unregistered_readiness.json()["verified_image_count"] == 1
+        assert unregistered_readiness.json()["verified_images_truncated"] is False
+        assert (
+            unregistered_readiness.json()["private_package"]["registration_status"]
+            == "not_registered"
+        )
+        assert (
+            next(
+                item["status"]
+                for item in unregistered_readiness.json()["private_package"][
+                    "prerequisites"
+                ]
+                if item["code"] == "target_verified_image"
+            )
+            == "not_observed"
+        )
         missing_actor = await client.post(
             registration_path,
             headers={"Authorization": headers["Authorization"]},

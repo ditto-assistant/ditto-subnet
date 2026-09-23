@@ -4479,6 +4479,11 @@ export const screeningVerificationReadinessSchema = z.object({
   attempt_id: z.string().uuid(),
   policy_version: z.literal(13),
   attempt_status: z.string(),
+  // Optional while Platform and Backroom roll out independently. Omission is
+  // unknown, never evidence that no verified image exists.
+  verified_image_sha256s: z.array(z.string().regex(/^[0-9a-f]{64}$/)).max(16).optional(),
+  verified_image_count: z.number().int().nonnegative().optional(),
+  verified_images_truncated: z.boolean().optional(),
   checks: z.array(z.object({
     check_code: z.string().regex(/^[a-z0-9_]{1,64}$/),
     record_status: z.enum(['not_recorded', 'recorded_unverified', 'mechanically_verified']),

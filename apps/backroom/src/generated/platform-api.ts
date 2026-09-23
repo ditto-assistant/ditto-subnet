@@ -11154,6 +11154,12 @@ export interface components {
             receipts: components["schemas"]["AdminScreeningVerificationReceipt"][];
             /** Receipts Truncated */
             receipts_truncated: boolean;
+            /** Verified Image Count */
+            verified_image_count: number;
+            /** Verified Image Sha256S */
+            verified_image_sha256s: string[];
+            /** Verified Images Truncated */
+            verified_images_truncated: boolean;
         };
         /**
          * AdminScreeningVerificationReceipt

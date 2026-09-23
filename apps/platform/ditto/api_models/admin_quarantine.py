@@ -312,6 +312,9 @@ class AdminScreeningVerificationReadiness(BaseModel):
     attempt_id: UUID
     policy_version: int
     attempt_status: str
+    verified_image_sha256s: list[str] = Field(max_length=16)
+    verified_image_count: int = Field(ge=0)
+    verified_images_truncated: bool
     checks: list[AdminScreeningVerificationCheck]
     private_metamorphic_applicability: Literal["not_recorded"] = "not_recorded"
     private_package: AdminV13PrivatePackageReadiness | None = None
