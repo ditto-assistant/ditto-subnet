@@ -7,7 +7,7 @@ path. In particular, replay receipts do not satisfy the mandatory V13 profile.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -100,7 +100,7 @@ def _state(
         image_staging_id=row.image_staging_id,
         image_verified_at=row.image_verified_at,
         image_verified_storage_key=row.image_verified_storage_key,
-        status=row.status,
+        status=cast(Literal["queued", "running", "reported", "failed"], row.status),
         worker_hotkey=row.worker_hotkey,
         lease_deadline=row.lease_deadline,
         created_at=row.created_at,
@@ -430,14 +430,15 @@ async def claim_replay(
     ).all()
     for row in rows:
         binding_ok = await _binding_ok(session, row, lock=True)
-        row = await session.get(
+        locked_row = await session.get(
             ScreeningVerificationReplay,
             row.replay_id,
             with_for_update=True,
             populate_existing=True,
         )
-        if row is None or row.status != "queued":
+        if locked_row is None or locked_row.status != "queued":
             continue
+        row = locked_row
         if not binding_ok or not await _binding_ok(session, row, lock=True):
             row.status = "failed"
             row.finished_at = now
