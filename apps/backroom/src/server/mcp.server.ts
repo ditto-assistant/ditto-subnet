@@ -143,6 +143,7 @@ import {
   fetchScreeningQuarantines,
   fetchScreeningDisputes,
   fetchScreeningFailureDiagnostic,
+  fetchScreeningVerificationReadiness,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
@@ -346,6 +347,7 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_failure_diagnostic', BACKROOM_ARTIFACT_SCOPE],
+  ['get_screening_verification_readiness', BACKROOM_ARTIFACT_SCOPE],
   ['download_runtime_profile', BACKROOM_ARTIFACT_SCOPE],
   // Trace records carry miner prompts and full model responses, so anything
   // that discloses record CONTENT gates on the artifact scope. Listing object
@@ -639,6 +641,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Group active-benchmark screening / screening_failed agents by reason_code. Pass generation=all only for a cross-benchmark audit. Use get_screening_submission for one row.',
   get_screening_failure_diagnostic:
     'Private exact-attempt failure diagnostic; artifact scope.',
+  get_screening_verification_readiness:
+    'Read exact v13 receipt presence; no completion claim. Artifact scope.',
   reject_screening_submission:
     'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
   get_queue_policy_settings:
@@ -1177,6 +1181,21 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     async (input) =>
       artifact(() =>
         fetchScreeningFailureDiagnostic(input, props.session.email),
+      ),
+  )
+
+  registerTool(
+    'get_screening_verification_readiness',
+    {
+      title: 'Get screening verification readiness',
+      description:
+        'Read exact v13 UUID/SHA/attempt receipts for 19 checks plus the conditional private package. `not_recorded` means no Platform receipt, not proof an external check never ran; `recorded_unverified` is not a pass. Current screening does not write these receipts. No CLEAR, REJECT, or retry. Requires backroom:artifact:read.',
+      inputSchema: screeningFailureDiagnosticInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      artifact(() =>
+        fetchScreeningVerificationReadiness(input, props.session.email),
       ),
   )
 

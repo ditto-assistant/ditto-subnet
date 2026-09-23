@@ -4407,6 +4407,32 @@ export const screeningFailureDiagnosticSchema = z.object({
   court_diagnostic: adjudicationRunDiagnosticSchema.nullish().default(null),
 })
 
+export const screeningVerificationReadinessSchema = z.object({
+  agent_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  attempt_id: z.string().uuid(),
+  policy_version: z.literal(13),
+  attempt_status: z.string(),
+  checks: z.array(z.object({
+    check_code: z.string().regex(/^[a-z0-9_]{1,64}$/),
+    record_status: z.enum(['not_recorded', 'recorded_unverified']),
+    receipt_count: z.number().int().nonnegative(),
+  })).length(20),
+  private_metamorphic_applicability: z.literal('not_recorded'),
+  receipts: z.array(z.object({
+    receipt_id: z.string().uuid(),
+    check_code: z.string().regex(/^[a-z0-9_]{1,64}$/),
+    evidence_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    image_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    profile_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    challenge_manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+    worker_hotkey: z.string().min(1).max(120),
+    created_at: z.string(),
+  })).max(128),
+  receipt_count: z.number().int().nonnegative(),
+  receipts_truncated: z.boolean(),
+})
+
 export const screeningImageBuildSchema = z.object({
   build_id: z.string().uuid(),
   attempt_id: z.string().uuid(),
@@ -7280,6 +7306,9 @@ export type ScreeningDisputeKind = z.infer<typeof screeningDisputeKindSchema>
 export type ScreeningSubmission = z.infer<typeof screeningSubmissionSchema>
 export type ScreeningFailureDiagnostic = z.infer<
   typeof screeningFailureDiagnosticSchema
+>
+export type ScreeningVerificationReadiness = z.infer<
+  typeof screeningVerificationReadinessSchema
 >
 export type ScreeningEvidenceItem = z.infer<typeof screeningEvidenceItemSchema>
 export type SourceReviewFinding = z.infer<typeof sourceReviewFindingSchema>

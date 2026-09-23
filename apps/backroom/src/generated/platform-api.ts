@@ -2194,6 +2194,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-submissions/{agent_id}/attempts/{attempt_id}/verification-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screening Verification Readiness
+         * @description Read exact-artifact verification receipts without implying completion.
+         *
+         *     This first read foundation has no writer. Absence means no matching
+         *     Platform receipt, not proof that an external check never ran. Existing
+         *     screening/oracle results never synthesize mandatory-v13 receipts.
+         */
+        get: operations["get_screening_verification_readiness_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__verification_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-submissions/{agent_id}/baseline-diff": {
         parameters: {
             query?: never;
@@ -10440,6 +10464,88 @@ export interface components {
             generation: "active" | "all";
             /** Items */
             items: components["schemas"]["AdminScreeningSubmission"][];
+        };
+        /** AdminScreeningVerificationCheck */
+        AdminScreeningVerificationCheck: {
+            /** Check Code */
+            check_code: string;
+            /** Receipt Count */
+            receipt_count: number;
+            /**
+             * Record Status
+             * @enum {string}
+             */
+            record_status: "not_recorded" | "recorded_unverified";
+        };
+        /**
+         * AdminScreeningVerificationReadiness
+         * @description Exact-attempt Platform receipt inventory, never a CLEAR authorization.
+         *
+         *     `not_recorded` means there is no matching receipt in this Platform ledger;
+         *     it does not prove the check never ran in an external system. Current
+         *     screening has no writer for this ledger, so neither this view nor the
+         *     small behavioral oracle can certify v13's mandatory 19 checks or private
+         *     60-pair package. Future trusted runners may append digest-only receipts.
+         */
+        AdminScreeningVerificationReadiness: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Attempt Status */
+            attempt_status: string;
+            /** Checks */
+            checks: components["schemas"]["AdminScreeningVerificationCheck"][];
+            /** Policy Version */
+            policy_version: number;
+            /**
+             * Private Metamorphic Applicability
+             * @default not_recorded
+             * @constant
+             */
+            private_metamorphic_applicability: "not_recorded";
+            /** Receipt Count */
+            receipt_count: number;
+            /** Receipts */
+            receipts: components["schemas"]["AdminScreeningVerificationReceipt"][];
+            /** Receipts Truncated */
+            receipts_truncated: boolean;
+        };
+        /**
+         * AdminScreeningVerificationReceipt
+         * @description Digest-only evidence presence, not a verified policy outcome.
+         */
+        AdminScreeningVerificationReceipt: {
+            /** Challenge Manifest Sha256 */
+            challenge_manifest_sha256: string | null;
+            /** Check Code */
+            check_code: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /** Image Sha256 */
+            image_sha256: string | null;
+            /** Profile Sha256 */
+            profile_sha256: string | null;
+            /**
+             * Receipt Id
+             * Format: uuid
+             */
+            receipt_id: string;
+            /** Worker Hotkey */
+            worker_hotkey: string;
         };
         /** AdminShadowReviewObservation */
         AdminShadowReviewObservation: {
@@ -34371,6 +34477,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminScreeningFailureDiagnostic"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screening_verification_readiness_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__verification_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScreeningVerificationReadiness"];
                 };
             };
             /** @description Validation Error */

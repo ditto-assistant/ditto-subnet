@@ -639,6 +639,63 @@ class ScreeningAttempt(Base):
     )
 
 
+class ScreeningVerificationReceipt(Base):
+    """Artifact-bound evidence receipt, never itself a CLEAR or a completed check.
+
+    Only a future trusted verification runner may append these rows. A receipt
+    proves that Platform retained a digest for one check; it does not attest
+    that the check passed, that a private package met its minimum profile, or
+    that the full policy-v13 verification set is complete.
+    """
+
+    __tablename__ = "screening_verification_receipts"
+
+    receipt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    check_code: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    profile_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    challenge_manifest_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    worker_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["attempt_id"], ["screening_attempts.attempt_id"], ondelete="CASCADE"
+        ),
+        CheckConstraint("length(artifact_sha256) = 64", name="svr_artifact_sha_check"),
+        CheckConstraint("length(evidence_sha256) = 64", name="svr_evidence_sha_check"),
+        CheckConstraint(
+            "image_sha256 IS NULL OR length(image_sha256) = 64",
+            name="svr_image_sha_check",
+        ),
+        CheckConstraint(
+            "profile_sha256 IS NULL OR length(profile_sha256) = 64",
+            name="svr_profile_sha_check",
+        ),
+        CheckConstraint(
+            "challenge_manifest_sha256 IS NULL "
+            "OR length(challenge_manifest_sha256) = 64",
+            name="svr_manifest_sha_check",
+        ),
+        CheckConstraint("policy_version > 0", name="svr_policy_version_check"),
+        CheckConstraint(
+            "length(check_code) BETWEEN 1 AND 64", name="svr_check_code_check"
+        ),
+        CheckConstraint(
+            "length(worker_hotkey) BETWEEN 1 AND 120", name="svr_worker_check"
+        ),
+        Index("svr_attempt_created_idx", "attempt_id", "created_at", "receipt_id"),
+    )
+
+
 class AthReview(Base):
     """Durable, immutable-evidence audit record for an ATH copy hold."""
 

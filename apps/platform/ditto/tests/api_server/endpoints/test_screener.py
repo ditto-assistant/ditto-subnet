@@ -103,6 +103,7 @@ from ditto.db.models import (
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
+    ScreeningVerificationReceipt,
     SubmissionImageBuild,
     SubmissionSourceReview,
     TrustedImageBuild,
@@ -7022,6 +7023,91 @@ class TestQuarantineAdmin:
         assert "prompt text" not in diagnostic.text
         assert rejected.status_code == 200, rejected.text
         assert rejected.json()["court_diagnostic"] is None
+
+    async def test_verification_readiness_is_exact_and_never_implies_clear(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        agent_id = await _seed_agent(
+            session_maker, status=AgentStatus.QUARANTINED, name="held-v13"
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            artifact_sha256 = agent.sha256
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=13,
+                    status="quarantined",
+                    started_at=now - timedelta(minutes=2),
+                    deadline=now + timedelta(minutes=8),
+                    finished_at=now,
+                    public_reason="Submission held for review",
+                )
+            )
+        _install_db(app, session_maker)
+        headers = {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+            "X-Admin-Actor": "backroom:verification-reviewer",
+        }
+        path = (
+            f"/api/v1/admin/screening-submissions/{agent_id}/attempts/"
+            f"{attempt_id}/verification-readiness"
+        )
+        empty = await client.get(path, headers=headers)
+        assert empty.status_code == 200, empty.text
+        body = empty.json()
+        assert body["agent_id"] == str(agent_id)
+        assert body["artifact_sha256"] == artifact_sha256
+        assert body["policy_version"] == 13
+        assert len(body["checks"]) == 20
+        assert all(check["record_status"] == "not_recorded" for check in body["checks"])
+        assert body["private_metamorphic_applicability"] == "not_recorded"
+        assert body["receipt_count"] == 0
+        assert body["receipts"] == []
+
+        async with session_maker() as session, session.begin():
+            for sha in ("f" * 64, artifact_sha256):
+                session.add(
+                    ScreeningVerificationReceipt(
+                        receipt_id=uuid4(),
+                        agent_id=agent_id,
+                        attempt_id=attempt_id,
+                        artifact_sha256=sha,
+                        policy_version=13,
+                        check_code="build_image_digest",
+                        evidence_sha256="e" * 64,
+                        image_sha256="d" * 64,
+                        profile_sha256=None,
+                        challenge_manifest_sha256=None,
+                        worker_hotkey=_SCREENER_HOTKEY,
+                    )
+                )
+        recorded = await client.get(path, headers=headers)
+        assert recorded.status_code == 200, recorded.text
+        body = recorded.json()
+        assert body["receipt_count"] == 1
+        assert len(body["receipts"]) == 1
+        assert body["receipts"][0]["evidence_sha256"] == "e" * 64
+        checks = {check["check_code"]: check for check in body["checks"]}
+        assert checks["build_image_digest"]["record_status"] == "recorded_unverified"
+        assert checks["private_metamorphic"]["record_status"] == "not_recorded"
+        assert body["private_metamorphic_applicability"] == "not_recorded"
+        no_actor = await client.get(
+            path, headers={"Authorization": headers["Authorization"]}
+        )
+        assert no_actor.status_code == 422
 
     async def test_screening_failure_summary_groups_live_pipeline_by_reason_code(
         self,

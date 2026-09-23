@@ -21,6 +21,7 @@ from sqlalchemy.orm import aliased
 from sqlalchemy.sql.elements import ColumnElement
 
 from ditto.api_models.admin_quarantine import (
+    MANDATORY_V13_VERIFICATION_CHECKS,
     AdminArtifactDuplicate,
     AdminBaselineDiffFileDetail,
     AdminBaselineDiffManifest,
@@ -76,6 +77,9 @@ from ditto.api_models.admin_quarantine import (
     AdminScreeningRetryNowResponse,
     AdminScreeningSubmission,
     AdminScreeningSubmissionList,
+    AdminScreeningVerificationCheck,
+    AdminScreeningVerificationReadiness,
+    AdminScreeningVerificationReceipt,
     AdminSourceExcerpt,
     AdminSourceListing,
     AdminSourceSearchResult,
@@ -144,6 +148,7 @@ from ditto.db.models import (
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
+    ScreeningVerificationReceipt,
     SubmissionImageBuild,
     SubmissionSourceReview,
     ValidatorHeartbeat,
@@ -1887,6 +1892,105 @@ async def get_screening_submission(
     ]
     return _screening_submission(
         agent, attempts_by_agent[agent_id], coldkey, image_builds
+    )
+
+
+@router.get(
+    "/screening-submissions/{agent_id}/attempts/{attempt_id}/verification-readiness",
+    response_model=AdminScreeningVerificationReadiness,
+)
+async def get_screening_verification_readiness(
+    agent_id: UUID,
+    attempt_id: UUID,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminScreeningVerificationReadiness:
+    """Read exact-artifact verification receipts without implying completion.
+
+    This first read foundation has no writer. Absence means no matching
+    Platform receipt, not proof that an external check never ran. Existing
+    screening/oracle results never synthesize mandatory-v13 receipts.
+    """
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    agent = await session.get(Agent, agent_id)
+    attempt = await session.get(ScreeningAttempt, attempt_id)
+    if agent is None or attempt is None or attempt.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="screening attempt not found")
+    if attempt.policy_version != 13:
+        raise HTTPException(
+            status_code=409,
+            detail="this receipt profile applies only to policy v13",
+        )
+    binding = (
+        ScreeningVerificationReceipt.agent_id == agent_id,
+        ScreeningVerificationReceipt.attempt_id == attempt_id,
+        ScreeningVerificationReceipt.artifact_sha256 == agent.sha256,
+        ScreeningVerificationReceipt.policy_version == attempt.policy_version,
+    )
+    count_rows = await session.execute(
+        select(
+            ScreeningVerificationReceipt.check_code,
+            func.count(ScreeningVerificationReceipt.receipt_id),
+        )
+        .where(*binding)
+        .group_by(ScreeningVerificationReceipt.check_code)
+    )
+    counts: dict[str, int] = {}
+    for code, count in count_rows.all():
+        counts[code] = count
+    rows = (
+        await session.scalars(
+            select(ScreeningVerificationReceipt)
+            .where(*binding)
+            .order_by(
+                ScreeningVerificationReceipt.created_at.desc(),
+                ScreeningVerificationReceipt.receipt_id.desc(),
+            )
+            .limit(128)
+        )
+    ).all()
+    total = sum(counts.values())
+    logger.info(
+        "admin_actor=%s read screening verification readiness agent_id=%s "
+        "attempt_id=%s receipt_count=%d",
+        x_admin_actor,
+        agent_id,
+        attempt_id,
+        total,
+    )
+    return AdminScreeningVerificationReadiness(
+        agent_id=agent_id,
+        artifact_sha256=agent.sha256,
+        attempt_id=attempt_id,
+        policy_version=attempt.policy_version,
+        attempt_status=attempt.status,
+        checks=[
+            AdminScreeningVerificationCheck(
+                check_code=code,
+                record_status="recorded_unverified"
+                if counts.get(code, 0)
+                else "not_recorded",
+                receipt_count=counts.get(code, 0),
+            )
+            for code in MANDATORY_V13_VERIFICATION_CHECKS
+        ],
+        receipts=[
+            AdminScreeningVerificationReceipt(
+                receipt_id=row.receipt_id,
+                check_code=row.check_code,
+                evidence_sha256=row.evidence_sha256,
+                image_sha256=row.image_sha256,
+                profile_sha256=row.profile_sha256,
+                challenge_manifest_sha256=row.challenge_manifest_sha256,
+                worker_hotkey=row.worker_hotkey,
+                created_at=row.created_at,
+            )
+            for row in rows
+        ],
+        receipt_count=total,
+        receipts_truncated=total > len(rows),
     )
 
 

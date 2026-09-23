@@ -12,6 +12,7 @@ import {
   fetchScreenedImageRebuild,
   fetchBenchmarkContractMigration,
   fetchScreeningFailureDiagnostic,
+  fetchScreeningVerificationReadiness,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
@@ -897,6 +898,40 @@ describe('screening submission admin service', () => {
       ...diagnostic,
       court_diagnostic: court,
     })
+  })
+
+  it('reads exact v13 receipt absence without implying completed verification', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const checks = Array.from({ length: 20 }, (_, index) => ({
+      check_code: `check_${index}`,
+      record_status: 'not_recorded',
+      receipt_count: 0,
+    }))
+    const payload = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      attempt_id: attemptId,
+      policy_version: 13,
+      attempt_status: 'quarantined',
+      checks,
+      private_metamorphic_applicability: 'not_recorded',
+      receipts: [],
+      receipt_count: 0,
+      receipts_truncated: false,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      fetchScreeningVerificationReadiness({ agentId, attemptId }, 'peyton@omniaura.ai'),
+    ).resolves.toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(`/screening-submissions/${agentId}/attempts/${attemptId}/verification-readiness`),
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+      }),
+    )
   })
 
   it('passes the payment coldkey through on a submission read', async () => {

@@ -20,6 +20,31 @@ QuarantineResolution = Literal["release", "rescreen", "reject"]
 DisputeResolution = Literal["release", "uphold"]
 DisputeKind = Literal["screening", "gate_notes"]
 
+# One-to-one with the 19 mandatory checks in docs/policy-v13.md, plus the
+# conditional private package. Presence of a receipt is never a pass verdict.
+MANDATORY_V13_VERIFICATION_CHECKS = (
+    "archive_sha",
+    "build_image_digest",
+    "health",
+    "ordinary_model_run",
+    "tool_selection_run",
+    "seed_memory_run",
+    "two_user_isolation",
+    "system_instruction_retention",
+    "tool_revocation",
+    "successful_duplicate_suppression",
+    "same_tool_different_argument",
+    "catalog_fidelity_reordering",
+    "timeout_delivery_unknown",
+    "fallback_evidence_retention",
+    "response_field_long_answer",
+    "refusal_uncertainty",
+    "token_accounting",
+    "opaque_inventory",
+    "invariants_i1_i8_s1_s3",
+    "private_metamorphic",
+)
+
 
 class AdminQuarantineResolutionEvent(BaseModel):
     resolution: QuarantineResolution
@@ -169,6 +194,47 @@ class AdminScreeningFailureDiagnostic(BaseModel):
     court_diagnostic: AdjudicationRunDiagnostic | None = None
     """Sanitized automated-court trace for this attempt. Null when the attempt
     has no such trace, including rows screened before the field existed."""
+
+
+class AdminScreeningVerificationReceipt(BaseModel):
+    """Digest-only evidence presence, not a verified policy outcome."""
+
+    receipt_id: UUID
+    check_code: str
+    evidence_sha256: str
+    image_sha256: str | None
+    profile_sha256: str | None
+    challenge_manifest_sha256: str | None
+    worker_hotkey: str
+    created_at: datetime
+
+
+class AdminScreeningVerificationCheck(BaseModel):
+    check_code: str
+    record_status: Literal["not_recorded", "recorded_unverified"]
+    receipt_count: int
+
+
+class AdminScreeningVerificationReadiness(BaseModel):
+    """Exact-attempt Platform receipt inventory, never a CLEAR authorization.
+
+    `not_recorded` means there is no matching receipt in this Platform ledger;
+    it does not prove the check never ran in an external system. Current
+    screening has no writer for this ledger, so neither this view nor the
+    small behavioral oracle can certify v13's mandatory 19 checks or private
+    60-pair package. Future trusted runners may append digest-only receipts.
+    """
+
+    agent_id: UUID
+    artifact_sha256: str
+    attempt_id: UUID
+    policy_version: int
+    attempt_status: str
+    checks: list[AdminScreeningVerificationCheck]
+    private_metamorphic_applicability: Literal["not_recorded"] = "not_recorded"
+    receipts: list[AdminScreeningVerificationReceipt]
+    receipt_count: int
+    receipts_truncated: bool
 
 
 class AdminScreeningImageBuild(BaseModel):
@@ -923,6 +989,9 @@ __all__ = [
     "AdminScreeningFailureDiagnostic",
     "AdminScreeningFailureGroup",
     "AdminScreeningFailureSummary",
+    "AdminScreeningVerificationCheck",
+    "AdminScreeningVerificationReadiness",
+    "AdminScreeningVerificationReceipt",
     "AdminScreeningSubmission",
     "AdminScreeningSubmissionList",
     "AdminScreeningRescreenRequest",
