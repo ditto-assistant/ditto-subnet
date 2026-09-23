@@ -181,7 +181,8 @@ async def test_v13_runtime_observation_stops_at_failed_seed(
 
 
 async def test_v13_shadow_observation_runs_only_after_policy_decision(
-    make_config: Callable[..., ScreenerConfig], tmp_path: Path,
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
 ) -> None:
     tarball = _valid_tar()
     gate = _gate_with(
