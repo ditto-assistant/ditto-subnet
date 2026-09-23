@@ -24,6 +24,7 @@ from ditto_screener.calibration import (
 )
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol.models import SourceReviewFinding
 
 MODEL = "openai/gpt-5.6-sol"
 MAX_STEPS = 240
@@ -166,6 +167,39 @@ def _nonnegative_int(value: object) -> int:
     )
 
 
+def _sanitized_invariant_assessment(finding: object) -> dict[str, object] | None:
+    """Retain only bounded policy decisions and source locations, never source text."""
+
+    if finding is None:
+        return None
+    parsed = SourceReviewFinding.model_validate(finding)
+    assessment = parsed.invariant_assessment
+    if assessment is None:
+        return None
+    return {
+        "schema_version": assessment.schema_version,
+        "decisions": [
+            {
+                "invariant": decision.invariant.value,
+                "disposition": decision.disposition.value,
+                "pass_clause": (
+                    decision.pass_clause.value if decision.pass_clause else None
+                ),
+                "summary_sha256": hashlib.sha256(decision.summary.encode()).hexdigest(),
+                "evidence": [
+                    {
+                        "path": parsed.evidence[index].path,
+                        "line": parsed.evidence[index].line,
+                        "category": parsed.evidence[index].category,
+                    }
+                    for index in decision.evidence_indices
+                ],
+            }
+            for decision in assessment.decisions
+        ],
+    }
+
+
 async def _main() -> None:
     args = _arguments()
     if not 1 <= args.concurrency <= 4:
@@ -244,6 +278,9 @@ async def _main() -> None:
                 "risk_level": observation.risk_level,
                 "categories": list(observation.categories),
                 "finding_digest": observation.finding_digest,
+                "invariant_assessment": _sanitized_invariant_assessment(
+                    observation.finding
+                ),
                 "error_code": observation.error_code,
                 "failure_disposition": observation.failure_disposition,
                 "clearance_certified": observation.clearance_certified,

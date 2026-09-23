@@ -22,6 +22,11 @@ cases separate from true negatives and false negatives. Violation recall counts
 all labeled violations in its denominator, including incomplete reviews;
 classification coverage exposes non-completion rather than crediting it as a
 pass. False-positive rate uses only terminally classified safe controls.
+The private per-artifact result also retains the validated, sanitized I1–I8
+assessment (disposition, pass clause, summary digest, and cited path/line),
+without source text or prompts. S1–S3 do not have an equivalent structured
+per-clause result in this reviewer; categories or an absent finding must not be
+reported as proof that those clauses were covered or passed.
 
 ## Context compaction
 
