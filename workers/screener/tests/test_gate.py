@@ -202,6 +202,7 @@ async def _screen(  # type: ignore[no-untyped-def]
     build_only=False,
     policy_only=False,
     policy_version=SCREENING_POLICY_VERSION,
+    record_archive_verification=None,
 ):
     return await gate.screen(
         agent_id=_AGENT,
@@ -214,6 +215,7 @@ async def _screen(  # type: ignore[no-untyped-def]
         build_only=build_only,
         policy_only=policy_only,
         policy_version=policy_version,
+        record_archive_verification=record_archive_verification,
     )
 
 
@@ -688,6 +690,28 @@ async def test_default_v6_builds_and_health_checks_without_run(
     assert result.manifest_digest == CORE_ONLY_MANIFEST.digest
     assert any("http://harness:8080/health" in arg for call in calls for arg in call)
     assert not any("http://harness:8080/run" in arg for call in calls for arg in call)
+
+
+async def test_archive_receipt_follows_verified_contract_only(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    recorded: list[str] = []
+
+    async def record() -> None:
+        recorded.append("archive_sha")
+
+    async with gate._client:
+        await _screen(
+            gate,
+            hashlib.sha256(tarball).hexdigest(),
+            record_archive_verification=record,
+        )
+        await _screen(
+            gate, "00" * 32, record_archive_verification=record
+        )
+    assert recorded == ["archive_sha"]
 
 
 async def test_static_malicious_preflight_quarantines_before_docker(

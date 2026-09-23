@@ -925,6 +925,117 @@ def _authenticate_screener_client(client: httpx.AsyncClient) -> None:
     client.headers.update(_AUTH_HEADER)
 
 
+async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=13,
+                status="running",
+                started_at=now - timedelta(minutes=1),
+                deadline=now + timedelta(minutes=9),
+            )
+        )
+    _install_db(app, session_maker)
+    payload = {
+        "attempt_id": str(attempt_id),
+        "artifact_sha256": _SHA256,
+        "policy_version": 13,
+        "check_code": "archive_sha",
+        "evidence_sha256": "ab" * 32,
+    }
+    path = f"/api/v1/screener/agent/{agent_id}/verification-receipts"
+    first = await client.post(path, json=payload)
+    repeated = await client.post(path, json=payload)
+    conflicting = await client.post(
+        path, json={**payload, "evidence_sha256": "ef" * 32}
+    )
+    stale = await client.post(path, json={**payload, "artifact_sha256": "cd" * 32})
+    wrong_check = await client.post(
+        path, json={**payload, "check_code": "private_metamorphic"}
+    )
+    assert first.status_code == 204, first.text
+    assert repeated.status_code == 204, repeated.text
+    assert conflicting.status_code == 409
+    assert stale.status_code == 409
+    assert wrong_check.status_code == 422
+    async with session_maker() as session:
+        rows = (
+            await session.scalars(
+                select(ScreeningVerificationReceipt).where(
+                    ScreeningVerificationReceipt.attempt_id == attempt_id
+                )
+            )
+        ).all()
+    assert len(rows) == 1
+    assert rows[0].worker_hotkey == _SCREENER_HOTKEY
+    assert rows[0].image_sha256 is None
+    app.state.config = replace(
+        app.state.config,
+        admin_api_token="test-admin-token-at-least-32-characters",
+    )
+    readiness = await client.get(
+        f"/api/v1/admin/screening-submissions/{agent_id}/attempts/"
+        f"{attempt_id}/verification-readiness",
+        headers={
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+            "X-Admin-Actor": "backroom:verification-reviewer",
+        },
+    )
+    assert readiness.status_code == 200, readiness.text
+    checks = {
+        entry["check_code"]: entry["record_status"]
+        for entry in readiness.json()["checks"]
+    }
+    assert checks["archive_sha"] == "recorded_unverified"
+    assert checks["private_metamorphic"] == "not_recorded"
+
+
+async def test_v13_receipt_refuses_completed_attempt(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.QUARANTINED)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=13,
+                status="quarantined",
+                started_at=now - timedelta(minutes=1),
+                deadline=now + timedelta(minutes=9),
+                finished_at=now,
+            )
+        )
+    _install_db(app, session_maker)
+    response = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/verification-receipts",
+        json={
+            "attempt_id": str(attempt_id),
+            "artifact_sha256": _SHA256,
+            "policy_version": 13,
+            "check_code": "build_image_digest",
+            "evidence_sha256": "ab" * 32,
+            "image_sha256": "cd" * 32,
+        },
+    )
+    assert response.status_code == 409
+
+
 def _capacity_payload(epoch: str) -> dict[str, object]:
     return {
         "environment": "prod",

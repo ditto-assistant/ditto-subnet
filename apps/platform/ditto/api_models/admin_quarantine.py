@@ -219,10 +219,10 @@ class AdminScreeningVerificationReadiness(BaseModel):
     """Exact-attempt Platform receipt inventory, never a CLEAR authorization.
 
     `not_recorded` means there is no matching receipt in this Platform ledger;
-    it does not prove the check never ran in an external system. Current
-    screening has no writer for this ledger, so neither this view nor the
-    small behavioral oracle can certify v13's mandatory 19 checks or private
-    60-pair package. Future trusted runners may append digest-only receipts.
+    it does not prove the check never ran in an external system. The trusted
+    screener records only archive and built-image mechanical observations;
+    neither those receipts nor the small behavioral oracle can certify v13's
+    mandatory 19 checks or private 60-pair package.
     """
 
     agent_id: UUID

@@ -36,7 +36,7 @@ import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, cast
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import (
     APIRouter,
@@ -92,6 +92,7 @@ from ditto.api_models import (
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import (
+    ScreeningVerificationReceiptRequest,
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
 )
@@ -201,6 +202,7 @@ from ditto.db.models import (
     ScreenerShadowReview,
     ScreeningAttempt,
     ScreeningQuarantine,
+    ScreeningVerificationReceipt,
     SubmissionImageBuild,
     SubmissionSourceReview,
     TrustedImageBuild,
@@ -555,6 +557,75 @@ async def require_screener(
 
 
 ScreenerDep = Annotated[str, Depends(require_screener)]
+
+
+@router.post(
+    "/agent/{agent_id}/verification-receipts",
+    response_model=None,
+    status_code=204,
+)
+async def record_screening_verification_receipt(
+    agent_id: UUID,
+    payload: ScreeningVerificationReceiptRequest,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> None:
+    """Append one mechanical-check digest under the active v13 lease.
+
+    Only the authenticated owner of a running, unexpired attempt may write.
+    The row is intentionally evidence presence, not a check-pass or CLEAR.
+    A deterministic receipt ID makes an uncertain HTTP retry idempotent.
+    """
+    now = datetime.now(UTC)
+    async with session.begin():
+        agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
+        attempt = await get_screening_attempt(
+            session, attempt_id=payload.attempt_id, for_update=True
+        )
+        if agent is None or attempt is None or attempt.agent_id != agent_id:
+            raise HTTPException(status_code=404, detail="screening attempt not found")
+        deadline = attempt.deadline
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if (
+            attempt.screener_hotkey != screener_hotkey
+            or attempt.policy_version != payload.policy_version
+            or attempt.status != "running"
+            or now >= deadline
+            or agent.sha256.lower() != payload.artifact_sha256
+        ):
+            raise HTTPException(
+                status_code=409, detail="verification receipt lease is stale"
+            )
+        receipt_id = uuid5(
+            NAMESPACE_URL,
+            f"v13:{agent_id}:{payload.attempt_id}:{payload.check_code}",
+        )
+        existing = await session.get(ScreeningVerificationReceipt, receipt_id)
+        if existing is not None and (
+            existing.evidence_sha256 != payload.evidence_sha256
+            or existing.image_sha256 != payload.image_sha256
+        ):
+            raise HTTPException(
+                status_code=409, detail="verification receipt conflicts with prior evidence"
+            )
+        if existing is None:
+            session.add(
+                ScreeningVerificationReceipt(
+                    receipt_id=receipt_id,
+                    agent_id=agent_id,
+                    attempt_id=payload.attempt_id,
+                    artifact_sha256=payload.artifact_sha256,
+                    policy_version=payload.policy_version,
+                    check_code=payload.check_code,
+                    evidence_sha256=payload.evidence_sha256,
+                    image_sha256=payload.image_sha256,
+                    profile_sha256=None,
+                    challenge_manifest_sha256=None,
+                    worker_hotkey=screener_hotkey,
+                    created_at=now,
+                )
+            )
 
 
 def _is_enrolled_node_heartbeat_instance(

@@ -54,6 +54,38 @@ def _make_client(
     return PlatformClient(cfg, http), http
 
 
+async def test_mechanical_receipt_posts_only_digest_and_exact_binding(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    attempt_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        _assert_auth(request)
+        assert request.url.path == (
+            f"/api/v1/screener/agent/{_AGENT}/verification-receipts"
+        )
+        assert json.loads(request.content) == {
+            "attempt_id": str(attempt_id),
+            "artifact_sha256": "ab" * 32,
+            "policy_version": 13,
+            "check_code": "archive_sha",
+            "evidence_sha256": "cd" * 32,
+            "image_sha256": None,
+        }
+        return httpx.Response(204)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        await client.record_verification_receipt(
+            _AGENT,
+            attempt_id=attempt_id,
+            artifact_sha256="ab" * 32,
+            policy_version=13,
+            check_code="archive_sha",
+            evidence_sha256="cd" * 32,
+        )
+
+
 async def test_claim_next_parses_leased_item(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:

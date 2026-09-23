@@ -58,6 +58,31 @@ _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
 # colon-delimited signing message; mirrors ditto-screener's _INSTANCE_ID_PATTERN.
 _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
 
+
+class ScreeningVerificationReceiptRequest(BaseModel):
+    """Digest-only evidence emitted by the active trusted screener lease.
+
+    This records execution of two mechanical checks. It is not a policy pass
+    or an authorization to release a source-integrity hold.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    policy_version: Literal[13]
+    check_code: Literal["archive_sha", "build_image_digest"]
+    evidence_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    image_sha256: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+
+    @model_validator(mode="after")
+    def image_binding(self) -> ScreeningVerificationReceiptRequest:
+        if self.check_code == "build_image_digest" and self.image_sha256 is None:
+            raise ValueError("build image receipt requires image SHA")
+        if self.check_code == "archive_sha" and self.image_sha256 is not None:
+            raise ValueError("archive receipt cannot bind an image")
+        return self
+
 ScreenerRuntimeState = Literal["polling", "screening", "error", "paused"]
 ScreenerProgressStage = Literal[
     "preparing",

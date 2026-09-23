@@ -54,6 +54,7 @@ from ditto_screener.review_settings import (
 )
 from ditto_screener.router_screen import build_signed_router_source_screen
 from ditto_screener.signing import sign_heartbeat, sign_verdict
+from ditto_screener.verification_receipts import mechanical_evidence_sha256
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
@@ -607,6 +608,37 @@ class ScreenerWorker:
             screened_image: BuiltImageArtifact | None = None
             screened_image_upload_id: UUID | None = None
 
+            async def record_mechanical_verification(
+                check_code: str, *, image_sha256: str | None = None
+            ) -> None:
+                if policy_version != 13:
+                    return
+                try:
+                    await self._platform.record_verification_receipt(
+                        agent_id,
+                        attempt_id=attempt_id,
+                        artifact_sha256=item.sha256.lower(),
+                        policy_version=policy_version,
+                        check_code=check_code,
+                        evidence_sha256=mechanical_evidence_sha256(
+                            check_code=check_code,
+                            artifact_sha256=item.sha256.lower(),
+                            image_sha256=image_sha256,
+                        ),
+                        image_sha256=image_sha256,
+                    )
+                except PlatformError:
+                    # A rolling Platform upgrade or lost receipt transport
+                    # must remain visible as `not_recorded`, never become a
+                    # false screening failure or a fabricated check pass.
+                    logger.warning(
+                        "verification receipt not recorded agent_id=%s "
+                        "attempt_id=%s check=%s",
+                        agent_id,
+                        attempt_id,
+                        check_code,
+                    )
+
             async def publish_image(image: BuiltImageArtifact) -> None:
                 nonlocal screened_image, screened_image_upload_id
                 screened_image_upload_id = await self._platform.upload_screened_image(
@@ -619,6 +651,12 @@ class ScreenerWorker:
                     image_ref=image.image_ref,
                 )
                 screened_image = image
+                await record_mechanical_verification(
+                    "build_image_digest", image_sha256=image.sha256.lower()
+                )
+
+            async def record_archive_verification() -> None:
+                await record_mechanical_verification("archive_sha")
 
             if item.precheck_reason_code is not None:
                 if item.precheck_reason_code != EXACT_CROSS_MINER_DUPLICATE:
@@ -731,6 +769,7 @@ class ScreenerWorker:
                         progress=self._set_progress,
                         deadline=screen_deadline,
                         publish_image=publish_image,
+                        record_archive_verification=record_archive_verification,
                         remote_build=remote_build,
                         remote_build_consumed=remote_build_consumed,
                         remote_source_review=remote_source_review,

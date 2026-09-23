@@ -110,6 +110,7 @@ class _FakeGate:
         agent_id: UUID,
         deadline: float | None = None,
         publish_image: Any = None,
+        record_archive_verification: Any = None,
         build_only: bool = False,
         policy_only: bool = False,
         deferred_source_review: bool = False,
@@ -128,6 +129,8 @@ class _FakeGate:
             self.policy_versions.append(policy_version)
         if bench_version is not None:
             self.bench_versions.append(bench_version)
+        if record_archive_verification is not None:
+            await record_archive_verification()
         if (
             self.result.outcome
             in {
@@ -166,6 +169,7 @@ class _FakePlatform:
         self.heartbeat_lease_deadline: datetime | None = None
         self.artifact_calls: list[tuple[UUID, UUID | None]] = []
         self.image_uploads: list[dict[str, Any]] = []
+        self.verification_receipts: list[dict[str, Any]] = []
         self.review_settings_source = "bootstrap"
         self.review_settings: Any = None
         self.review_settings_revisions: dict[int, Any] = {}
@@ -174,6 +178,11 @@ class _FakePlatform:
     async def upload_screened_image(self, agent_id: UUID, **metadata: Any) -> UUID:
         self.image_uploads.append({"agent_id": agent_id, **metadata})
         return UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+
+    async def record_verification_receipt(
+        self, agent_id: UUID, **receipt: Any
+    ) -> None:
+        self.verification_receipts.append({"agent_id": agent_id, **receipt})
 
     async def submit_heartbeat(self, request: Any) -> Any:
         if self.heartbeat_error is not None:
@@ -388,6 +397,10 @@ async def test_screen_one_pass_posts_signed_pass_verdict(
     assert v["image_id"] == "sha256:" + "34" * 32
     assert v["image_upload_id"] == UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
     assert len(platform.image_uploads) == 1
+    assert {row["check_code"] for row in platform.verification_receipts} == {
+        "archive_sha",
+        "build_image_digest",
+    }
     assert platform.heartbeats[0].state == "screening"
     assert platform.heartbeats[0].progress.stage == "preparing"
     assert platform.heartbeats[-1].state == "polling"

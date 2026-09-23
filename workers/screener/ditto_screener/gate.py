@@ -1070,6 +1070,7 @@ class BuildGate:
         progress: Callable[[ScreenerProgressStage], None] | None = None,
         deadline: Deadline = None,
         publish_image: Callable[[BuiltImageArtifact], Awaitable[None]] | None = None,
+        record_archive_verification: Callable[[], Awaitable[None]] | None = None,
         remote_build: Callable[[], Awaitable[RemoteImageArchive | None]] | None = None,
         remote_build_consumed: Callable[[UUID], Awaitable[None]] | None = None,
         remote_source_review: Callable[[], Awaitable[SourceReviewObservation | None]]
@@ -1199,6 +1200,11 @@ class BuildGate:
                     detail=contract_error,
                 )
             source_digest, source_paths = self._source_metadata(tmp_path)
+            if policy_version == 13 and record_archive_verification is not None:
+                # The streamed archive digest and its bounded container
+                # contract have both been verified. Record before a later L4
+                # hold can skip the build/runtime path.
+                await record_archive_verification()
 
             # General source review is deliberately deferred until the image
             # has built and passed its runtime contract. Broken Dockerfiles and

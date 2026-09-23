@@ -458,6 +458,43 @@ class PlatformClient:
             )
         return ArtifactResponse.model_validate(resp.json())
 
+    async def record_verification_receipt(
+        self,
+        agent_id: UUID,
+        *,
+        attempt_id: UUID,
+        artifact_sha256: str,
+        policy_version: int,
+        check_code: str,
+        evidence_sha256: str,
+        image_sha256: str | None = None,
+    ) -> None:
+        """Record trusted mechanical evidence before the attempt settles.
+
+        A rejected or lost write leaves the Platform readiness view as
+        `not_recorded`; it never creates a synthetic pass.
+        """
+        try:
+            response = await self._client.post(
+                f"{self._base}{_PREFIX}/agent/{agent_id}/verification-receipts",
+                json={
+                    "attempt_id": str(attempt_id),
+                    "artifact_sha256": artifact_sha256,
+                    "policy_version": policy_version,
+                    "check_code": check_code,
+                    "evidence_sha256": evidence_sha256,
+                    "image_sha256": image_sha256,
+                },
+                headers=await self._auth_headers(),
+                timeout=30,
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError("verification receipt transport failed") from error
+        if response.status_code != 204:
+            raise PlatformError(
+                f"verification receipt rejected ({response.status_code})"
+            )
+
     async def build_submission_image(
         self,
         agent_id: UUID,
