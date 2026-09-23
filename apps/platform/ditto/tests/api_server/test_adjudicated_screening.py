@@ -446,6 +446,8 @@ async def test_adjudicator_failure_diagnostic_is_retained_on_the_hold(
             **diagnostic,
             "failure_code": None,
             "response_bound_kind": None,
+            "request_count": 0,
+            "request_attempts": [],
         }
         assert quarantine.resolution is None
 
