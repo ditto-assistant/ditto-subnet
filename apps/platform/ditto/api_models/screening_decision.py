@@ -170,6 +170,40 @@ class AdminScreeningDecisionList(BaseModel):
     review_capacity_thresholds: ReviewCapacityThresholdsView
 
 
+class AdminScreeningVerificationState(BaseModel):
+    """Exact-agent finalizer eligibility; missing evidence stays explicit."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    agent_status: str | None
+    artifact_sha256: str | None
+    decision_matches_artifact: bool | None
+    policy_version: int | None
+    policy_digest: str | None
+    quarantine_id: UUID | None
+    attempt_id: UUID | None
+    reason_code: str | None
+    finalizer_mode: ReviewTimeoutFinalizerMode
+    finalizer_state: str
+    finalizer_reason: str
+    verification_started_at: datetime | None
+    verification_deadline: datetime | None
+    deadline_provenance: str | None
+    attempt_deadline: datetime | None
+    failure_domain: ScreeningFailureDomain | None
+    automatic_retry_budget: int | None
+    retries_used: int
+    attempts_recorded: int
+    independent_workers: int
+    independent_worker_required: bool | None
+    latest_decision: ScreeningDecisionRecordView | None
+    mandatory_checks_state: str
+    image_digest: str | None
+    build_configuration: str | None
+    permitted_runtime_configuration: str | None
+
+
 def review_timeout_policy_view() -> ReviewTimeoutPolicyView:
     policy = PUBLISHED_REVIEW_TIMEOUT_POLICY
     return ReviewTimeoutPolicyView(

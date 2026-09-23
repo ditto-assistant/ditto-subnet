@@ -1765,6 +1765,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-decisions/{agent_id}/verification-state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screening Verification State
+         * @description Report only finalizer facts persisted for this exact submission.
+         *
+         *     The attempt lease deadline is distinct from the finalizer's artifact
+         *     deadline. In off/shadow mode no enforceable deadline is returned. The
+         *     policy's recommended window becomes effective only when the finalizer is
+         *     configured to enforce it.
+         */
+        get: operations["get_screening_verification_state_api_v1_admin_screening_decisions__agent_id__verification_state_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-disputes": {
         parameters: {
             query?: never;
@@ -9962,6 +9987,71 @@ export interface components {
             generation: "active" | "all";
             /** Items */
             items: components["schemas"]["AdminScreeningSubmission"][];
+        };
+        /**
+         * AdminScreeningVerificationState
+         * @description Exact-agent finalizer eligibility; missing evidence stays explicit.
+         */
+        AdminScreeningVerificationState: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string | null;
+            /** Artifact Sha256 */
+            artifact_sha256: string | null;
+            /** Attempt Deadline */
+            attempt_deadline: string | null;
+            /** Attempt Id */
+            attempt_id: string | null;
+            /** Attempts Recorded */
+            attempts_recorded: number;
+            /** Build Configuration */
+            build_configuration: string | null;
+            /** Deadline Provenance */
+            deadline_provenance: string | null;
+            /** Decision Matches Artifact */
+            decision_matches_artifact: boolean | null;
+            /** Failure Domain */
+            failure_domain: ("artifact" | "submission" | "platform" | "provider" | "none") | null;
+            /**
+             * Finalizer Mode
+             * @enum {string}
+             */
+            finalizer_mode: "off" | "shadow" | "enforce";
+            /** Finalizer Reason */
+            finalizer_reason: string;
+            /** Finalizer State */
+            finalizer_state: string;
+            /** Image Digest */
+            image_digest: string | null;
+            /** Independent Worker Required */
+            independent_worker_required: boolean | null;
+            /** Independent Workers */
+            independent_workers: number;
+            latest_decision: components["schemas"]["ScreeningDecisionRecordView"] | null;
+            /** Mandatory Checks State */
+            mandatory_checks_state: string;
+            /** Permitted Runtime Configuration */
+            permitted_runtime_configuration: string | null;
+            /** Policy Digest */
+            policy_digest: string | null;
+            /** Policy Version */
+            policy_version: number | null;
+            /** Quarantine Id */
+            quarantine_id: string | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Retries Required */
+            retries_required: number | null;
+            /** Retries Used */
+            retries_used: number;
+            /** Verification Deadline */
+            verification_deadline: string | null;
+            /** Verification Started At */
+            verification_started_at: string | null;
         };
         /** AdminShadowReviewObservation */
         AdminShadowReviewObservation: {
@@ -31314,6 +31404,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminScreeningDecisionRecordResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screening_verification_state_api_v1_admin_screening_decisions__agent_id__verification_state_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScreeningVerificationState"];
                 };
             };
             /** @description Validation Error */
