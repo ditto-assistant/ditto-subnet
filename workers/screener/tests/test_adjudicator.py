@@ -903,6 +903,61 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
     assert "Preloaded source evidence" in str(requests[0]["messages"])
 
 
+@pytest.mark.parametrize("decision", ["clear", "reject"])
+async def test_later_unread_concern_cannot_be_silently_cleared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, decision: str
+) -> None:
+    """One-turn L4 may preload fewer locations than the retained ledger."""
+    monkeypatch.setattr(adjudicator_module, "_MAX_PRELOADED_LEDGER_LOCATIONS", 1)
+    arguments: dict[str, object] = {
+        "decision": decision,
+        "reason": "The first source excerpt supports this verdict.",
+        "citations": [{"path": "src/main.rs", "line": 6}],
+    }
+    if decision == "clear":
+        arguments["clear_clause"] = "model_authors_graded_slot"
+    else:
+        arguments["reject_invariant"] = "i5_production_engine"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent = json.loads(request.content)
+        assert "src/main.rs" in str(sent["messages"])
+        evidence = str(sent["messages"][1]["content"]).split(
+            "Preloaded source evidence:\n", 1
+        )[1]
+        assert '"path": "Dockerfile"' not in evidence
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [_call("submit_adjudication", arguments)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(
+        _archive(tmp_path),
+        notes=[
+            {"kind": "observation", "path": "src/main.rs", "line": 6},
+            {"kind": "concern", "path": "Dockerfile", "line": 1},
+        ],
+        ledger_final=True,
+    )
+    if decision == "clear":
+        assert result.decision == "escalate"
+        assert result.escalation_code == "adjudicator-evidence-incomplete"
+    else:
+        assert result.decision == "reject"
+
+
 async def test_budget_terminated_review_without_evidence_settles_immediately(
     tmp_path: Path,
 ) -> None:
