@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
@@ -82,12 +83,18 @@ from ditto.db.queries.screener_provider_settings import (
     DEFAULT_SCREENER_PROVIDER_SETTINGS,
     latest_screener_provider_settings,
 )
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 AdminDep = Annotated[None, Depends(require_admin)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 _SOURCE_REPOSITORY = "https://github.com/ditto-assistant/ditto-subnet.git"
 _RUNTIME_REGISTRY = "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime"
+# Deliberately unset until the independent replay runner is implemented and
+# released. A heartbeat from today's ordinary screener must not enable replay.
+_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE: tuple[int, int, int] | None = None
+_REPLAY_HEARTBEAT_FRESHNESS = timedelta(minutes=5)
+_STABLE_RELEASE_VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
 
 def _aware(value: datetime | None) -> datetime | None:
@@ -136,6 +143,52 @@ def _worker_view(row: ScreenerHeartbeat) -> ScreenerNodeWorkerView:
         host_specs=host_specs_from_heartbeat_envelope(row.system_metrics),
         release=fleet_release_from_heartbeat_envelope(row.system_metrics),
     )
+
+
+async def _replay_workers_ready(
+    session: AsyncSession, *, node: ScreenerNode, now: datetime
+) -> bool:
+    """Require every fresh worker on the enrolled node to run the replay build."""
+    minimum = _MIN_VERIFICATION_REPLAY_RUNNER_RELEASE
+    if minimum is None:
+        return False
+    rows = list(
+        await session.scalars(
+            select(ScreenerHeartbeat).where(
+                ScreenerHeartbeat.screener_hotkey == node.screener_hotkey,
+                ScreenerHeartbeat.seen_at >= now - _REPLAY_HEARTBEAT_FRESHNESS,
+            )
+        )
+    )
+    workers = [
+        row
+        for row in rows
+        if is_enrolled_node_heartbeat_instance(
+            node_id=node.node_id, instance_id=row.instance_id
+        )
+    ]
+    if not workers:
+        return False
+    for row in workers:
+        release = fleet_release_from_heartbeat_envelope(row.system_metrics)
+        version = (
+            _STABLE_RELEASE_VERSION.fullmatch(release.version)
+            if release is not None and release.version is not None
+            else None
+        )
+        if (
+            row.protocol_version < 7
+            or row.policy_version != SCREENING_POLICY_VERSION
+            or row.state not in {"polling", "screening"}
+            or release is None
+            or release.builtin_policy_version != SCREENING_POLICY_VERSION
+            or release.revision is None
+            or release.activated_at is None
+            or version is None
+            or tuple(int(part) for part in version.groups()) < minimum
+        ):
+            return False
+    return True
 
 
 def _build_view(row: TrustedImageBuild) -> TrustedImageBuildView:
@@ -606,6 +659,11 @@ async def set_screener_node_replay_capacity(
                 or _required_aware(node.token_expires_at) <= now
             ):
                 raise HTTPException(409, "independent active node identity unavailable")
+            if not await _replay_workers_ready(session, node=node, now=now):
+                raise HTTPException(
+                    409,
+                    "fresh v13 replay-runner workers on independent node unavailable",
+                )
         node.verification_replay_capacity = payload.capacity
         session.add(
             ScreenerCapacityEvent(

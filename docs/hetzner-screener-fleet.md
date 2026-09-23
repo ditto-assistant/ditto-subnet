@@ -354,10 +354,15 @@ each enrolled node. Backroom's `get_screener_capacity` exposes its live value,
 and `set_screener_node_replay_capacity` may set only node 2 to zero or one with
 its current hotkey, status, capacity, and exact confirmation. A value of one
 requires a live, active node-2 enrollment on a distinct Hetzner resource and
-hotkey from node 1. Keep it at zero until the independent runner and complete
-V13 evidence path are ready; the ordinary five channel limits do not control
-replay claims. Returning it to zero stops new claims and preserves any active
-lease and receipt history.
+hotkey from node 1. Enabling also requires a fresh signed heartbeat from the
+exact node-2 worker identity with V13 policy and an activated replay-runner
+release. The minimum replay-runner release is deliberately unset in Platform
+until that runner ships, so capacity one currently fails closed. Verify worker
+adoption through `get_screener_capacity.nodes[].workers` (seen-at, policy and
+release) before enabling. The ordinary five channel limits do not control
+replay claims. Returning capacity to zero remains available when a worker or
+its release becomes stale; it stops new claims and preserves active lease and
+receipt history.
 Keep this node in shadow mode until the independent runner, exact-artifact
 binding, private metamorphic checks, and decision contract are reviewed and
 deployed. A failed or expired lease remains an unresolved hold. To roll back,
