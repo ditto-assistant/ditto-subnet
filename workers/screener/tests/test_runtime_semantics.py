@@ -124,7 +124,7 @@ def test_missing_response_is_inconclusive_and_ordinary_requires_gateway_token() 
     assert (
         judge_ordinary_run(
             {"final_text": "static"},
-            gateway_tokens=("first", "second"),
+            challenge_tokens=("first", "second"),
             model_calls=1,
             events=["challenge_seen"],
         ).reason
@@ -133,7 +133,7 @@ def test_missing_response_is_inconclusive_and_ordinary_requires_gateway_token() 
     assert (
         judge_ordinary_run(
             {"final_text": "first"},
-            gateway_tokens=("first", "second"),
+            challenge_tokens=("first", "second"),
             model_calls=1,
             events=[],
         ).reason

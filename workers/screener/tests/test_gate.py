@@ -248,7 +248,7 @@ async def test_v13_shadow_semantics_require_tool_and_user_specific_memory(
             return 0, json.dumps({"answer": config["result"]})
         if "reference marker" in str(payload.get("user_input")):
             return 0, json.dumps({"answer": memories[str(payload["user_id"])]})
-        return 0, '{"answer":"secret-a"}'
+        return 0, json.dumps({"answer": config["response_token"]})
 
     gate._request_from_sidecar = request  # type: ignore[method-assign]
     monkeypatch.setattr(gate_module, "_gateway_call_count", lambda _path: calls)

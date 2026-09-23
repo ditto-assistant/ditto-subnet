@@ -31,7 +31,7 @@ def _asserted_text(response: Mapping[str, object] | None) -> str | None:
 def judge_ordinary_run(
     response: Mapping[str, object] | None,
     *,
-    gateway_tokens: tuple[str, str],
+    challenge_tokens: tuple[str, str],
     model_calls: int,
     events: list[str],
 ) -> SemanticOutcome:
@@ -42,9 +42,9 @@ def judge_ordinary_run(
         return SemanticOutcome("fail", "no_model_call")
     if "challenge_seen" not in events:
         return SemanticOutcome("inconclusive", "challenge_not_forwarded_to_model")
-    if not any(token in answer for token in gateway_tokens):
+    if not any(token in answer for token in challenge_tokens):
         return SemanticOutcome("fail", "model_answer_not_used")
-    return SemanticOutcome("pass", "gateway_answer_used")
+    return SemanticOutcome("pass", "challenge_bound_gateway_answer_used")
 
 
 def judge_tool_run(

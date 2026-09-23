@@ -3375,13 +3375,15 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         record: Callable[[str, str], Awaitable[None]],
         include_runs: bool,
     ) -> None:
-        """Shadow-observe mandatory checks 3–7 in the isolated smoke network.
+        """Sample runtime behavior relevant to v13 checks 3–7 in smoke isolation.
 
         The isolated broker supplies model-authored tool calls and one-use
         execution evidence; random seeded values are checked per user. Coded
         outcomes are logged with exact attempt/artifact/image identity but are
-        report-only. Every Platform receipt remains ``recorded_unverified``;
-        the other v13 checks and private controls still gate any future CLEAR.
+        report-only. A probe pass is not a full v13 check pass: coverage is
+        bounded to these prompts and observable broker traffic, with internal
+        container paths and private controls unexamined. Every Platform receipt
+        remains ``recorded_unverified`` and cannot authorize CLEAR.
         """
 
         async def emit(
@@ -3466,6 +3468,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
 
         ordinary_token = secrets.token_hex(12)
         ordinary_probe_id = secrets.token_hex(12)
+        ordinary_response_token = secrets.token_hex(16)
+        ordinary_oracle_token = secrets.token_hex(16)
         tool_token = secrets.token_hex(12)
         memory_a = secrets.token_hex(12)
         user_a = f"u-{secrets.token_hex(12)}"
@@ -3492,6 +3496,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 "kind": "ordinary",
                 "probe_id": ordinary_probe_id,
                 "challenge_token": ordinary_token,
+                "response_token": ordinary_response_token,
+                "oracle_token": ordinary_oracle_token,
             },
         )
         ordinary = await post(
@@ -3502,10 +3508,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             await emit("ordinary_model_run", [ordinary[0]], [ordinary[1]], ordinary[2])
         ordinary_outcome = judge_ordinary_run(
             ordinary[3] if ordinary is not None else None,
-            gateway_tokens=(
-                audit_runtime.gateway_response_token,
-                audit_runtime.oracle_answer,
-            ),
+            challenge_tokens=(ordinary_response_token, ordinary_oracle_token),
             model_calls=ordinary[2] if ordinary is not None else 0,
             events=_semantic_events(
                 audit_runtime.gateway_state_file, ordinary_probe_id

@@ -30,6 +30,8 @@ async def test_ordinary_probe_requires_challenge_forwarded_to_model(
                 "kind": "ordinary",
                 "probe_id": "ordinary-1",
                 "challenge_token": "bound-question-1",
+                "response_token": "bound-response-1",
+                "oracle_token": "bound-oracle-1",
             }
         )
     )
@@ -47,11 +49,13 @@ async def test_ordinary_probe_requires_challenge_forwarded_to_model(
                 },
             )
             assert decoy.status_code == 200
+            decoy_answer = decoy.json()["choices"][0]["message"]["content"]
+            assert decoy_answer == gateway.response_text
             assert (not events.exists()) or events.read_text() == ""
             assert (
                 judge_ordinary_run(
-                    {"answer": gateway.response_text},
-                    gateway_tokens=(gateway.response_text, "unused"),
+                    {"answer": decoy_answer},
+                    challenge_tokens=("bound-response-1", "bound-oracle-1"),
                     model_calls=1,
                     events=[],
                 ).status
@@ -70,12 +74,28 @@ async def test_ordinary_probe_requires_challenge_forwarded_to_model(
     assert [json.loads(line)["event"] for line in events.read_text().splitlines()] == [
         "challenge_seen"
     ]
+    # A harness could make the challenge call ornamentally while returning an
+    # unrelated model answer. That must remain a failed observation.
+    observed_events = [
+        json.loads(line)["event"] for line in events.read_text().splitlines()
+    ]
     assert (
         judge_ordinary_run(
-            {"answer": gateway.response_text},
-            gateway_tokens=(gateway.response_text, "unused"),
-            model_calls=1,
-            events=["challenge_seen"],
+            {"answer": decoy_answer},
+            challenge_tokens=("bound-response-1", "bound-oracle-1"),
+            model_calls=2,
+            events=observed_events,
+        ).status
+        == "fail"
+    )
+    forwarded_answer = forwarded.json()["choices"][0]["message"]["content"]
+    assert forwarded_answer == "bound-response-1"
+    assert (
+        judge_ordinary_run(
+            {"answer": forwarded_answer},
+            challenge_tokens=("bound-response-1", "bound-oracle-1"),
+            model_calls=2,
+            events=observed_events,
         ).status
         == "pass"
     )

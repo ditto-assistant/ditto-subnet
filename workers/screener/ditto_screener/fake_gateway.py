@@ -175,7 +175,20 @@ class FakeModelGateway:
         """
         probe = self._semantic_probe()
         if probe is not None:
-            if probe.get("kind") == "tool":
+            if probe.get("kind") == "ordinary":
+                challenge = probe.get("challenge_token")
+                response_token = probe.get("response_token")
+                oracle_token = probe.get("oracle_token")
+                if (
+                    isinstance(challenge, str)
+                    and isinstance(response_token, str)
+                    and isinstance(oracle_token, str)
+                ):
+                    if response_token in _as_text(body):
+                        return oracle_token
+                    if challenge in _user_prompt_text(body):
+                        return response_token
+            elif probe.get("kind") == "tool":
                 result = probe.get("result")
                 if isinstance(result, str) and result in _as_text(body):
                     return result
