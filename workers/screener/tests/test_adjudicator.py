@@ -309,6 +309,84 @@ async def test_truncated_stream_cannot_clear(tmp_path: Path) -> None:
     assert attempts == 2
 
 
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_large_wire_with_small_tool_call_keeps_verdict(
+    tmp_path: Path, streamed: bool
+) -> None:
+    call = _call("submit_adjudication", {"decision": "clear", "reason": "valid"})
+    if streamed:
+        noise = json.dumps({"choices": [{"delta": {"content": "x" * 500}}]})
+        tool = json.dumps(
+            {"choices": [{"delta": {"tool_calls": [{"index": 0, **call}]}}]}
+        )
+        body = (f"data: {noise}\n\n" * 1100) + f"data: {tool}\n\ndata: [DONE]\n\n"
+        assert 512_000 < len(body.encode()) < 2_000_000
+        response = httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=body
+        )
+    else:
+        response = httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"content": "x" * 550_000, "tool_calls": [call]}}
+                ]
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: response)
+    ) as client:
+        message = await _adjudicator(
+            _key(tmp_path), httpx.MockTransport(lambda _request: response)
+        )._completion_message(client, "sk-test", [], timeout=10)
+    assert message["tool_calls"] == [call]
+    assert message.get("content") is None
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+async def test_oversized_tool_arguments_still_fail_closed(
+    tmp_path: Path, streamed: bool
+) -> None:
+    call = _call("submit_adjudication", {"decision": "clear", "reason": "x" * 520_000})
+    if streamed:
+        event = {"choices": [{"delta": {"tool_calls": [{"index": 0, **call}]}}]}
+        response = httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+        )
+    else:
+        response = httpx.Response(
+            200, json={"choices": [{"message": {"tool_calls": [call]}}]}
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: response)
+    ) as client:
+        with pytest.raises(ValueError, match="exceeded response bound"):
+            await _adjudicator(
+                _key(tmp_path), httpx.MockTransport(lambda _request: response)
+            )._completion_message(client, "sk-test", [], timeout=10)
+
+
+async def test_stream_wire_limit_still_fails_closed(tmp_path: Path) -> None:
+    noise = json.dumps({"choices": [{"delta": {"content": "x" * 1_000}}]})
+    body = f"data: {noise}\n\n" * 2_000
+    assert len(body.encode()) > adjudicator_module._MAX_COMPLETION_STREAM_BYTES
+    response = httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, text=body
+    )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: response)
+    ) as client:
+        with pytest.raises(ValueError, match="exceeded response bound"):
+            await _adjudicator(
+                _key(tmp_path), httpx.MockTransport(lambda _request: response)
+            )._completion_message(client, "sk-test", [], timeout=10)
+
+
 async def test_gateway_rejecting_stream_uses_one_buffered_attempt(
     tmp_path: Path,
 ) -> None:

@@ -181,6 +181,10 @@ _MAX_COMPLETION_REQUEST_SECONDS = 180.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
 _MAX_COMPLETION_IDLE_SECONDS = 75.0
 _MAX_COMPLETION_RESPONSE_BYTES = 512_000
+# SSE repeats JSON framing for every token, and a buffered response may include
+# unused content alongside a short tool call. Bound the wire separately from
+# the tool data used by the court so a valid 6k-token completion has room.
+_MAX_COMPLETION_STREAM_BYTES = 2_000_000
 
 
 class IncompleteStreamError(ValueError):
@@ -1386,9 +1390,24 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
         body = bytearray()
         async for chunk in response.aiter_bytes():
             body.extend(chunk)
-            if len(body) > _MAX_COMPLETION_RESPONSE_BYTES:
+            if len(body) > _MAX_COMPLETION_STREAM_BYTES:
                 raise ValueError("adjudicator completion exceeded response bound")
-        return json.loads(body)
+        payload = json.loads(body)
+        if isinstance(payload, dict):
+            choices = payload.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                message = choices[0].get("message")
+                if isinstance(message, dict):
+                    buffered_calls = message.get("tool_calls")
+                    if (
+                        buffered_calls is not None
+                        and len(json.dumps(buffered_calls).encode("utf-8"))
+                        > _MAX_COMPLETION_RESPONSE_BYTES
+                    ):
+                        raise ValueError(
+                            "adjudicator completion exceeded response bound"
+                        )
+        return payload
 
     calls: dict[int, dict[str, object]] = {}
     usage: object = None
@@ -1396,10 +1415,11 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
     finish_reason: object = None
     data_lines: list[str] = []
     total_bytes = 0
+    retained_bytes = 0
     done = False
 
     def consume_event() -> bool:
-        nonlocal usage, model, finish_reason
+        nonlocal usage, model, finish_reason, retained_bytes
         if not data_lines:
             return False
         data = "\n".join(data_lines)
@@ -1433,6 +1453,13 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
             call = calls.setdefault(index, {"type": "function", "function": {}})
             for key in ("id", "type"):
                 if key in piece:
+                    if not isinstance(piece[key], str):
+                        raise ValueError("adjudicator stream tool field is invalid")
+                    retained_bytes += len(piece[key].encode("utf-8"))
+                    if retained_bytes > _MAX_COMPLETION_RESPONSE_BYTES:
+                        raise ValueError(
+                            "adjudicator completion exceeded response bound"
+                        )
                     call[key] = piece[key]
             fragment = piece.get("function") or {}
             if not isinstance(fragment, dict):
@@ -1445,12 +1472,17 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
                 if value is not None:
                     if not isinstance(value, str):
                         raise ValueError("adjudicator stream function field is invalid")
+                    retained_bytes += len(value.encode("utf-8"))
+                    if retained_bytes > _MAX_COMPLETION_RESPONSE_BYTES:
+                        raise ValueError(
+                            "adjudicator completion exceeded response bound"
+                        )
                     function[key] = str(function.get(key) or "") + value
         return False
 
     async for line in response.aiter_lines():
         total_bytes += len(line.encode("utf-8")) + 1
-        if total_bytes > _MAX_COMPLETION_RESPONSE_BYTES:
+        if total_bytes > _MAX_COMPLETION_STREAM_BYTES:
             raise ValueError("adjudicator completion exceeded response bound")
         if not line:
             if consume_event():
@@ -1513,6 +1545,10 @@ def _assistant_message(payload: object) -> dict[str, object]:
     message = choices[0].get("message")
     if not isinstance(message, dict):
         raise ValueError("adjudicator response has no message")
+    if message.get("tool_calls"):
+        # Buffered gateways may include unused text next to the tool call.
+        # Do not carry that text into the next request's conversation history.
+        return {**message, "content": None}
     return message
 
 
