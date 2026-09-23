@@ -15,6 +15,7 @@ SCREENER_ROOTLESS_UNIT="${SCREENER_ROOTLESS_UNIT:-ditto-screener-docker}"
 EXECUTOR_USER="${SCREENER_EXECUTOR_USER:-ditto-builder}"
 EXECUTOR_GROUP="${SCREENER_EXECUTOR_GROUP:-ditto-builder}"
 EXECUTOR_HOME="${SCREENER_EXECUTOR_HOME:-/var/lib/ditto-screener-docker}"
+CACHE_KEEP_STORAGE="${SCREENER_CACHE_KEEP_STORAGE:-40GB}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "install-rootless-docker.sh must run as root" >&2
@@ -32,6 +33,10 @@ if [[ "$EXECUTOR_HOME" != /var/lib/ditto-screener-docker ]]; then
 fi
 if [[ "$SCREENER_ROOT" != /opt/ditto/screener ]]; then
   echo "SCREENER_ROOT must be /opt/ditto/screener" >&2
+  exit 1
+fi
+if [[ ! "$CACHE_KEEP_STORAGE" =~ ^[1-9][0-9]*GB$ ]]; then
+  echo "SCREENER_CACHE_KEEP_STORAGE must be a positive whole number of GB" >&2
   exit 1
 fi
 
@@ -73,8 +78,18 @@ install -d -o "$EXECUTOR_USER" -g "$EXECUTOR_GROUP" -m 0700 \
   "$EXECUTOR_HOME"
 install -d -o "$EXECUTOR_USER" -g "$EXECUTOR_GROUP" -m 0750 \
   "$daemon_root" "$daemon_root/data"
+daemon_config="$(mktemp)"
+trap 'rm -f "$daemon_config"' EXIT
+python3 -c 'import json,sys; config=json.load(open(sys.argv[1])); config["builder"]["gc"]["defaultKeepStorage"]=sys.argv[2]; json.dump(config,open(sys.argv[3],"w"),indent=2); print(file=open(sys.argv[3],"a"))' \
+  "$(dirname "$0")/../deploy/rootless-daemon.json" "$CACHE_KEEP_STORAGE" "$daemon_config"
+daemon_config_changed=false
+if ! cmp -s "$daemon_config" "$daemon_root/daemon.json"; then
+  daemon_config_changed=true
+fi
 install -o "$EXECUTOR_USER" -g "$EXECUTOR_GROUP" -m 0640 \
-  "$(dirname "$0")/../deploy/rootless-daemon.json" "$daemon_root/daemon.json"
+  "$daemon_config" "$daemon_root/daemon.json"
+rm -f "$daemon_config"
+trap - EXIT
 
 user_unit_dir="$EXECUTOR_HOME/.config/systemd/user"
 unit_file="$user_unit_dir/${SCREENER_ROOTLESS_UNIT}.service"
@@ -150,7 +165,14 @@ user_systemctl=(
   systemctl --user
 )
 "${user_systemctl[@]}" daemon-reload
+daemon_was_active=false
+if "${user_systemctl[@]}" is-active --quiet "$SCREENER_ROOTLESS_UNIT"; then
+  daemon_was_active=true
+fi
 "${user_systemctl[@]}" enable --now "$SCREENER_ROOTLESS_UNIT"
+if [[ "$daemon_config_changed" == true && "$daemon_was_active" == true ]]; then
+  "${user_systemctl[@]}" restart "$SCREENER_ROOTLESS_UNIT"
+fi
 
 for _attempt in $(seq 1 30); do
   if runuser -u "$SCREENER_USER" -- env DOCKER_HOST="$docker_host" \

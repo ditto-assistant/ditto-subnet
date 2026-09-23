@@ -104,6 +104,14 @@
   gather_facts: false
   become: false
   tasks:
+    - name: Hetzner keeps the daemon and timer budgets aligned
+      ansible.builtin.assert:
+        that:
+          - hetzner_defaults.screener_fleet_cache_gc_keep_storage == "100GB"
+          - "'SCREENER_CACHE_KEEP_STORAGE:' in hetzner_tasks"
+      vars:
+        hetzner_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/hetzner_screener_fleet/defaults/main.yml') | from_yaml }}"
+        hetzner_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/hetzner_screener_fleet/tasks/main.yml') }}"
     - name: Active fleet cache timer
       ansible.builtin.include_role:
         name: "{{ playbook_dir }}/../roles/hetzner_screener_fleet"

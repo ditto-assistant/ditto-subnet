@@ -303,9 +303,10 @@ leaving the unit in `failed` state.
 
 On Hetzner, `screener_fleet_cache_gc_*` controls this same policy. It is enabled
 only when `screener_fleet_runtime_enabled` is true, so a disposable rehearsal
-host never starts the timer. The timer retains the existing 40GB daemon budget;
-it makes cleanup observable and regular, but a warm-cache speedup must be
-measured from actual full-worker build durations after converge.
+host never starts the timer. The persistent full workers use a 100GB budget in
+both the rootless daemon and the timer. A changed daemon budget restarts the
+rootless Docker service during converge, so drain builds first. A warm-cache
+speedup must be measured from actual full-worker build durations afterward.
 
 Inspect and operate manually (as an operator, against the rootless socket):
 

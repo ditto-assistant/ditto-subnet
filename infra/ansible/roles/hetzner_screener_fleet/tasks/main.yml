@@ -281,6 +281,7 @@
     SCREENER_EXECUTOR_USER: "{{ screener_fleet_executor_user }}"
     SCREENER_EXECUTOR_GROUP: "{{ screener_fleet_executor_group }}"
     SCREENER_EXECUTOR_HOME: "{{ screener_fleet_executor_home }}"
+    SCREENER_CACHE_KEEP_STORAGE: "{{ screener_fleet_cache_gc_keep_storage }}"
   changed_when: true
   notify: Restart screener fleet workers
   when: screener_fleet_runtime_enabled
