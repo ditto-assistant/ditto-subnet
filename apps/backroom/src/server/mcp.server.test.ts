@@ -153,6 +153,7 @@ describe('Backroom MCP tools', () => {
         'get_backroom_tool_help',
         'get_ath_review',
         'get_screening_decision_record',
+        'get_screening_verification_deadline',
         'list_screening_decisions',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
@@ -406,7 +407,6 @@ describe('Backroom MCP tools', () => {
     // the one-line bench v13 gate-evidence and dispute-kind notes on the score
     // and dispute tools land at 25_237, so it moves to 25_400. The short
     // L4 cohort diagnostic adds one catalog line without another tutorial.
-    // The infra-retry read summary lands at 25,990, so the bound moves to 26_200.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
       // Includes the V13 clock, independent replay, infra-retry, ordinary
       // source-review queue-age SLO, failure taxonomy route_basis,
@@ -1079,6 +1079,31 @@ describe('Backroom MCP tools', () => {
     expect(payload.guidance.length).toBeGreaterThan(3_000)
     expect(payload.guidance).toContain('APPLY QUEUE POLICY SETTINGS')
     expect(payload.guidance).toContain('deferred_source_review')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('keeps the verification-deadline read tool short in the catalog and full in help', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const catalog = await client.listTools()
+    const catalogEntry = catalog.tools.find(
+      (tool) => tool.name === 'get_screening_verification_deadline',
+    )
+    expect(catalogEntry?.description?.length).toBeLessThanOrEqual(300)
+    expect(catalogEntry?.annotations?.readOnlyHint).toBe(true)
+
+    const response = await client.callTool({
+      name: 'get_backroom_tool_help',
+      arguments: { tool: 'get_screening_verification_deadline' },
+    })
+    expect(response.isError).not.toBe(true)
+    const payload = readJsonResult(response) as { tool: string; guidance: string }
+    expect(payload.tool).toBe('get_screening_verification_deadline')
+    expect(payload.guidance).toContain('pending | ready | finalized | not_configured')
+    expect(payload.guidance).toContain('not_applicable_reason')
+    expect(payload.guidance.length).toBeGreaterThan(catalogEntry?.description?.length ?? 0)
 
     await client.close()
     await server.close()
@@ -5272,6 +5297,70 @@ describe('Backroom MCP tools', () => {
     })
     expect(String(fetchMock.mock.calls[1][0])).toContain(
       '/api/v1/admin/screening-decisions?limit=50&offset=0&outcome=review_timed_out',
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the effective v13 verification deadline and finalizer state for one agent', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '77777777-7777-4777-8777-777777777777'
+    const deadline = {
+      agent_id: agentId,
+      agent_status: 'quarantined',
+      artifact_sha256: 'ab'.repeat(32),
+      artifact_identity_verified: null,
+      has_active_quarantine: true,
+      is_operator_finding_hold: false,
+      quarantine_id: '88888888-8888-4888-8888-888888888888',
+      quarantine_status: 'active',
+      quarantine_resolution: null,
+      attempt_id: '99999999-9999-4999-8999-999999999999',
+      reason_code: 'source-review-inconclusive',
+      policy_version: 13,
+      policy_covered_by_finalizer: true,
+      policy_digest: 'aa'.repeat(32),
+      verification_profile_digest: null,
+      verification_window_start: '2026-09-21T13:10:20Z',
+      verification_deadline: '2026-09-22T13:10:20Z',
+      verification_deadline_provenance: 'shipped_default',
+      failure_domain: 'platform',
+      required_retries: 2,
+      recorded_retry_attempts: 1,
+      independent_worker_hotkeys: ['5Screener'],
+      independent_worker_count: 1,
+      independent_worker_requirement_met: false,
+      completed_checks: null,
+      failed_checks: null,
+      finalizer_mode: 'shadow',
+      finalizer_state: 'ready',
+      not_applicable_reason: null,
+      decision: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(deadline))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_screening_verification_deadline',
+      arguments: { agentId },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      agent_id: agentId,
+      finalizer_state: 'ready',
+      finalizer_mode: 'shadow',
+      not_applicable_reason: null,
+      has_active_quarantine: true,
+      is_operator_finding_hold: false,
+      policy_covered_by_finalizer: true,
+      required_retries: 2,
+      recorded_retry_attempts: 1,
+      independent_worker_hotkeys: ['5Screener'],
+    })
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-verification-deadline/${agentId}`,
     )
 
     await client.close()

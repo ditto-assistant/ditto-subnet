@@ -7511,6 +7511,76 @@ export const screeningDecisionListSchema = z.object({
 export type ScreeningDecisionRecord = z.infer<typeof screeningDecisionRecordSchema>
 export type ScreeningDecisionRecordResponse = z.infer<typeof screeningDecisionRecordResponseSchema>
 
+// Effective v13 verification deadline and finalizer state for one exact agent
+// (`GET /admin/screening-verification-deadline/{agent_id}`, issue #2100).
+// Answers a different question than the decision-record pair above: whether a
+// live artifact-level deadline governs a HELD submission that has not (yet)
+// reached a decision, and what finalizer state applies. `finalizer_state` is
+// exactly the four values the issue names; every case where the finalizer
+// simply does not apply to this row reads `not_configured` with
+// `not_applicable_reason` naming exactly why (mode off, no active quarantine,
+// an operator-finding hold, an uncovered policy version, or an uncovered
+// reason code), so the enum stays small while nothing is left ambiguous.
+
+export const screeningVerificationDeadlineNotApplicableReasonSchema = z.enum([
+  'finalizer_mode_off',
+  'no_active_quarantine',
+  'operator_finding_hold',
+  'policy_version_not_covered',
+  'reason_code_not_covered',
+])
+
+export const screeningVerificationDeadlineProvenanceSchema = z.enum([
+  'shipped_default',
+  'stored_revision',
+])
+
+export const screeningVerificationDeadlineFinalizerStateSchema = z.enum([
+  'not_configured',
+  'pending',
+  'ready',
+  'finalized',
+])
+
+export const getScreeningVerificationDeadlineInputSchema = z.object({
+  agentId: z.string().uuid(),
+})
+
+export const screeningVerificationDeadlineSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_status: z.string(),
+  artifact_sha256: z.string(),
+  artifact_identity_verified: z.boolean().nullable(),
+  has_active_quarantine: z.boolean(),
+  is_operator_finding_hold: z.boolean(),
+  quarantine_id: z.string().uuid().nullable(),
+  quarantine_status: z.enum(['active', 'resolved']).nullable(),
+  quarantine_resolution: z.string().nullable(),
+  attempt_id: z.string().uuid().nullable(),
+  reason_code: z.string().nullable(),
+  policy_version: z.number().int().nullable(),
+  policy_covered_by_finalizer: z.boolean(),
+  policy_digest: z.string().nullable(),
+  verification_profile_digest: z.string().nullable(),
+  verification_window_start: z.string().nullable(),
+  verification_deadline: z.string().nullable(),
+  verification_deadline_provenance: screeningVerificationDeadlineProvenanceSchema.nullable(),
+  failure_domain: screeningFailureDomainSchema.nullable(),
+  required_retries: z.number().int().nullable(),
+  recorded_retry_attempts: z.number().int().nullable(),
+  independent_worker_hotkeys: z.array(z.string()),
+  independent_worker_count: z.number().int().nonnegative(),
+  independent_worker_requirement_met: z.boolean().nullable(),
+  completed_checks: z.array(z.string()).nullable(),
+  failed_checks: z.array(z.string()).nullable(),
+  finalizer_mode: reviewTimeoutFinalizerModeSchema,
+  finalizer_state: screeningVerificationDeadlineFinalizerStateSchema,
+  not_applicable_reason: screeningVerificationDeadlineNotApplicableReasonSchema.nullable(),
+  decision: screeningDecisionRecordSchema.nullable(),
+})
+
+export type ScreeningVerificationDeadline = z.infer<typeof screeningVerificationDeadlineSchema>
+
 export const openAthReviewInputSchema = z.object({
   agentId: z.string().uuid(),
   expectedSha256: z.string().regex(/^[0-9a-f]{64}$/),

@@ -85,9 +85,11 @@ import {
   athPrecedentListSchema,
   getAthReviewInputSchema,
   getScreeningDecisionRecordInputSchema,
+  getScreeningVerificationDeadlineInputSchema,
   listScreeningDecisionsInputSchema,
   screeningDecisionListSchema,
   screeningDecisionRecordResponseSchema,
+  screeningVerificationDeadlineSchema,
   openAthReviewInputSchema,
   searchAthPrecedentsInputSchema,
   openAthReviewResponseSchema,
@@ -2094,6 +2096,14 @@ export async function fetchScreeningDecisions(
     `/api/v1/admin/screening-decisions?${query.toString()}`,
   )
   return screeningDecisionListSchema.parse(payload)
+}
+
+export async function fetchScreeningVerificationDeadline(rawInput: unknown) {
+  const input = getScreeningVerificationDeadlineInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-verification-deadline/${encodeURIComponent(input.agentId)}`,
+  )
+  return screeningVerificationDeadlineSchema.parse(payload)
 }
 
 export async function fetchAthReview(rawInput: unknown) {

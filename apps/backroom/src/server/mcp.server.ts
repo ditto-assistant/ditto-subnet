@@ -47,6 +47,7 @@ import {
   benchmarkContractRefreshLookupInputSchema,
   getAthReviewInputSchema,
   getScreeningDecisionRecordInputSchema,
+  getScreeningVerificationDeadlineInputSchema,
   listScreeningDecisionsInputSchema,
   openAthReviewInputSchema,
   previewAthRulingsBatchInputSchema,
@@ -152,6 +153,7 @@ import {
   fetchAthReview,
   fetchScreeningDecisionRecord,
   fetchScreeningDecisions,
+  fetchScreeningVerificationDeadline,
   fetchAthPrecedents,
   fetchQuarantineBaselineDiff,
   fetchQuarantineBaselineDiffFile,
@@ -622,6 +624,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read one agent\'s policy-v13 decision records (clear | reject | no-fault review_timed_out): reason_codes, violation_proven, failure_domain, retry evidence, identities, evidence_references, published timeout policy.',
   list_screening_decisions:
     'Page policy-v13 decision records with subnet-wide outcome counts; review_timed_out is the activation monitor.',
+  get_screening_verification_deadline:
+    'Read one agent\'s effective v13 artifact-level verification deadline and finalizer state (pending | ready | finalized | not_configured), retry/failure-domain evidence, and why the finalizer does or does not apply.',
   resolve_ath_review:
     'Clear or reject one ATH hold with a public reason. A clear requires file:line evidenceReferences (policy v13); rejecting bans. Writes a decision record. Requires backroom:write.',
   get_validator_weight_diagnostics:
@@ -1149,6 +1153,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           items: { pin: ['decision_id', 'agent_id', 'outcome'] },
         }),
       ),
+  )
+
+  registerTool(
+    'get_screening_verification_deadline',
+    {
+      title: 'Get screening verification deadline',
+      description:
+        'Read the effective v13 artifact-level verification deadline and deadline-finalizer state for one exact agent (issue #2100) -- distinct from the screening ATTEMPT lease deadline shown elsewhere, which is not a verification deadline. Returns the agent\'s live artifact_sha256 and artifact_identity_verified (against any bound finding or decision, null when nothing is bound yet); has_active_quarantine and is_operator_finding_hold (a finding is an operator decision, never a processing state the finalizer touches); the quarantine/attempt identity and reason_code; policy_version and policy_covered_by_finalizer (false for any version below the finalizer\'s floor); policy_digest and verification_profile_digest (from the live quarantine, or from the decision once one exists); verification_window_start/verification_deadline/verification_deadline_provenance (`shipped_default` today -- no per-activation revision of this window is ever persisted, so a null deadline is never inferred); failure_domain, required_retries (the published budget for that domain) versus recorded_retry_attempts, independent_worker_hotkeys/count and independent_worker_requirement_met; completed_checks/failed_checks (null pre-decision -- the platform tracks no per-check ledger before a decision record exists); finalizer_mode (off | shadow | enforce) and finalizer_state, which is exactly pending | ready | finalized | not_configured. `not_configured` covers every case the finalizer does not apply to this row (global mode off, no active quarantine, an operator-finding hold, an uncovered policy version, or an uncovered reason code) and `not_applicable_reason` names exactly which; `pending` is before the deadline and `ready` is past it with no decision yet (true in shadow, where it would silently keep proposing forever, and in enforce, where it is due on the next tick); `finalized` means a ScreeningDecisionRecord already exists for this exact hold, and every retry/failure-domain/check field then mirrors that record verbatim -- nothing is recomputed. No source, prompt, or private challenge data. Requires backroom:read and mutates nothing.',
+      inputSchema: getScreeningVerificationDeadlineInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchScreeningVerificationDeadline(input)),
   )
 
   registerTool(

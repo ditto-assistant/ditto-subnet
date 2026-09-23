@@ -113,6 +113,9 @@ from ditto.api_server.endpoints.admin_screening_decisions import (
 from ditto.api_server.endpoints.admin_screening_infra_retry import (
     router as admin_screening_infra_retry_router,
 )
+from ditto.api_server.endpoints.admin_screening_verification_deadline import (
+    router as admin_screening_verification_deadline_router,
+)
 from ditto.api_server.endpoints.admin_source_review_queue_slo import (
     router as admin_source_review_queue_slo_router,
 )
@@ -243,6 +246,7 @@ __all__ = [
     "admin_screener_policy_activation_router",
     "admin_source_review_queue_slo_router",
     "admin_screening_decisions_router",
+    "admin_screening_verification_deadline_router",
     "admin_v13_private_generation_router",
     "admin_submission_settings_router",
     "admin_submission_deposit_address_router",

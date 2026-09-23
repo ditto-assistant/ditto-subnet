@@ -43,7 +43,15 @@ def _strings(value: object) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
-def _view(row: ScreeningDecisionRecord) -> ScreeningDecisionRecordView:
+def screening_decision_record_view(
+    row: ScreeningDecisionRecord,
+) -> ScreeningDecisionRecordView:
+    """Render one decision record row exactly as recorded.
+
+    Public (not endpoint-local) so a sibling read surface -- e.g.
+    ``admin_screening_verification_deadline`` -- can surface an already
+    finalized decision verbatim instead of re-deriving its shape.
+    """
     identities = row.identities if isinstance(row.identities, dict) else {}
     return ScreeningDecisionRecordView(
         decision_id=row.decision_id,
@@ -134,7 +142,7 @@ async def list_screening_decisions(
     for key, value in outcome_rows:
         outcome_counts[str(key)] = int(value or 0)
     return AdminScreeningDecisionList(
-        items=[_view(row) for row in rows],
+        items=[screening_decision_record_view(row) for row in rows],
         count=int(count or 0),
         limit=limit,
         offset=offset,
@@ -165,7 +173,7 @@ async def get_screening_decision_record(
             )
         )
     )
-    decisions = [_view(row) for row in rows]
+    decisions = [screening_decision_record_view(row) for row in rows]
     return AdminScreeningDecisionRecordResponse(
         agent_id=agent_id,
         agent_status=agent.status.value if agent is not None else None,
