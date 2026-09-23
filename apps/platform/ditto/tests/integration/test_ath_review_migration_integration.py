@@ -181,9 +181,11 @@ async def test_conflicting_concurrent_resolution_has_one_winner() -> None:
                     AdminCopyReviewResolveRequest(
                         resolution=action,
                         reason=f"Operator chose {action}",
-                        # Policy v13 refuses an uncited clear before the
-                        # row lock is ever contended.
+                        # Policy v13 refuses an uncited clear or reject before
+                        # the row lock is ever contended, and an uncoded
+                        # reject the same way.
                         evidence_references=["src/baseline.rs:1"],
+                        reason_codes=["I5.benchmark_semantic_compiler"],
                     ),
                     None,
                     session,
