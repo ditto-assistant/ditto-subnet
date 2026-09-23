@@ -26,7 +26,7 @@ own signed policy revision.
 | Who holds it? | An on-chain 2-of-3 multisig of named custodians, separate from the owner and deposit keys. |
 | Who decides? | Named keys. Reviewers judge work, custodians execute, and every decision is a signed ledger entry. |
 | What can move funds? | Only a signed approval that traces to accepted work at an exact commit or evidence hash. Never a GitHub issue, label, comment, merge, or Discord message. |
-| How is it checked? | A public, append-only, hash-chained ledger, reconciled weekly against the chain. A mismatch pauses the treasury. |
+| How is it checked? | A public, append-only, hash-chained ledger, reconciled weekly against the chain. A mismatch, or any data that cannot be read, closes a spending gate that every signer checks independently. |
 | How does it start? | Shadow first (full ledger, zero funds), then a small reversible cap. |
 
 ## Principles
@@ -46,9 +46,10 @@ own signed policy revision.
 4. **No unfunded promises.** The board never advertises more reward than the
    treasury holds in alpha.
 5. **Failures stop spending, not work.** Missing data, a failed reconciliation,
-   or an unreadable ledger pauses the treasury (see
-   [Emergency pause](#emergency-pause)). Contributors keep working, and
-   approved awards stay owed.
+   or an unreadable ledger closes the [spending gate](#spending-gate). The gate
+   fails closed and every signer evaluates it independently, so stopping
+   payouts never waits for a signature or a writable ledger. Contributors keep
+   working, and approved awards stay owed.
 6. **Platform verifies, people sign.** The Platform records and verifies. It
    never holds a key that can move treasury funds or authorize a decision.
 
@@ -56,7 +57,7 @@ own signed policy revision.
 
 | Role | Holds | May | May not |
 |---|---|---|---|
-| **Owner** | The SN118 owner coldkey | Execute sweeps from the deposit address, co-sign policy revisions, pause, approve owner-tier awards | Spend treasury funds or change policy alone |
+| **Owner** | The SN118 owner coldkey, and the owner reviewer key it enrolls | Execute sweeps from the deposit address, co-sign policy revisions, pause, approve owner-tier awards with the [owner reviewer key](#approval) | Spend treasury funds or change policy alone; sign approvals with the owner coldkey |
 | **Custodian** (3) | One signatory coldkey of the treasury multisig | Execute payouts, conversions, restakes, and rotations that match signed ledger entries; pause; co-sign policy revisions | Sign an extrinsic without a matching entry; approve work without a second, non-custodian reviewer |
 | **Reviewer** (at least 3) | An sr25519 key in the policy's reviewer roster | Publish bounties, accept or reject work, approve awards within their tier, revoke claims and cancel bounties with a reason, decide appeals they took no part in | Act on a claim in which they have a conflict (see [Conflicts](#conflicts)) |
 | **Contributor** | A key that signs claims | Claim, submit, renew, hand off, withdraw, appeal | Redirect payment through a GitHub account or any unsigned channel |
@@ -71,6 +72,10 @@ Every decision is a ledger entry signed by the keys below. The Platform's admin
 API token is shared, and the actor on an admin request is self-declared. So the
 token may carry a signed entry to the Platform but never authorizes one.
 
+The [spending gate](#spending-gate) is not a decision. Nobody signs it closed:
+it closes on its own when a condition fails or cannot be checked. Signatures
+are needed only to record what happened and to reopen it.
+
 | Action | Signed by | Takes effect |
 |---|---|---|
 | Publish a bounty, set its reward range, earmark its maximum | One reviewer | Immediately |
@@ -78,8 +83,10 @@ token may carry a signed entry to the Platform but never authorizes one.
 | Approve an award | Reviewers for its [tier](#approval) | Immediately |
 | Revoke a claim or cancel a bounty | One reviewer, with a reason | Immediately |
 | Decide an appeal | A reviewer who took no part in the decision | Immediately |
-| Pause | The owner or any one custodian | Immediately |
-| Unpause | Two different people among the owner and the custodians | Immediately |
+| Pause | The owner or any one custodian | Immediately, from whatever channel it is first seen; appended to the ledger once it accepts writes ([Manual pause](#manual-pause)) |
+| Close the spending gate on a failed or unreadable condition | Nobody: the [spending gate](#spending-gate) closes itself | Immediately |
+| Record an incident or its resolution | The owner or any one custodian | When appended. Neither reopens the gate. |
+| Unpause | Two different people among the owner and the custodians | Only when every gate condition holds; after a trip or an incident, only through [Unpause after repair](#unpause-after-repair) |
 | Protective change: lower the cap or fee share, return to an earlier phase, remove a reviewer, replace a staking hotkey that breached policy | The owner and one custodian who is not the owner | Immediately. It never affects existing claims, earmarks, or commitments. |
 | Emergency custody rotation | Two custodians | Immediately |
 | Any other policy change, including adopting a new revision of this document | The owner and one custodian who is not the owner | After `policy_notice_days` |
@@ -229,14 +236,20 @@ Custody is not spending authority. A custodian signs an extrinsic only when:
 1. the ledger holds a matching signed entry: an approval for a payout, a sweep
    for a conversion, or a policy revision for a restake or rotation;
 2. the destination and amount equal that entry exactly;
-3. the treasury is not paused, unless the transfer is a recorded custody
-   change; and
+3. the [spending gate](#spending-gate), evaluated by the custodian's own
+   signing tool, is open, unless the transfer is a custody change; and
 4. for a payout, the [5% ceiling](#size-the-5-ceiling) and the activation cap
    hold.
 
 A second custodian independently checks the same conditions before
 co-signing. A movement the ledger cannot explain is an incident (see
 [Incidents](#incidents)).
+
+An emergency custody rotation may execute while the ledger cannot accept
+writes, because a compromised key must be removable during exactly that kind
+of failure. The two custodians sign its `custody_change` entry when they sign
+the transfer, and it is appended as soon as the ledger accepts writes, so
+reconciliation can explain the movement.
 
 ### Rotation and recovery
 
@@ -369,11 +382,27 @@ instead.
 |---|---|---|
 | Standard | up to `single_review_max_alpha` | 1 reviewer |
 | Large | above `single_review_max_alpha`, below `owner_review_min_alpha` | 2 distinct reviewers |
-| Owner | `owner_review_min_alpha` or more | 2 distinct reviewers, one of them the owner |
+| Owner | `owner_review_min_alpha` or more | 2 distinct reviewers, one of them the owner reviewer key |
 
 The tier applies to the bounty's total: every share of a shared award, plus any
 amount an appeal adds. No bounty's total may exceed `per_award_max_alpha`.
 Larger work is split into separately scoped bounties.
+
+**The owner approves through the roster.** The owner never signs an approval
+with the SN118 owner coldkey, which stays offline. Every policy revision that
+enables the owner tier enrolls one sr25519 **owner reviewer key** in the
+reviewer roster and marks it `owner`. The owner coldkey co-signs that revision
+(see [Authority](#authority)), which binds the key to the owner; replacing the
+key is a policy change. An owner-tier approval is verified exactly like any
+other approval: the same roster lookup, the same signed no-conflict statement,
+and the same [Conflicts](#conflicts) checks. The only additional check is that
+one of its signers is the key marked `owner`. There is no separate owner
+verifier, so a roster of non-owner reviewers cannot satisfy the owner tier and
+the owner cannot bypass the conflict rules.
+
+If the owner is conflicted on an owner-tier bounty, the owner reviewer key
+cannot sign it. That award instead needs three distinct reviewers, none of them
+conflicted and at least one of them not a custodian.
 
 ### Partial, shared, and cancelled awards
 
@@ -443,14 +472,15 @@ receipt). Entry types:
   `policy_revision`, `custody_change`, `pause`, `unpause`,
   `bounty_published`, `earmark`, `acceptance`, `rejection`, `approval`,
   `commitment`, `revocation`, `cancellation`, `release`, `appeal_decision`,
-  `dispute_finding`, `reconciliation_resolution`, `unpaid`.
+  `dispute_finding`, `reconciliation_resolution`, `incident`,
+  `incident_resolution`, `unpaid`.
 - **Contributor actions**, signed by the contributor's key: `claim`,
   `claim_renewal`, `handoff`, `withdrawal`, `submission`, `appeal`.
 - **Chain facts**, carrying the receipt or chain state that proves them:
   `inflow` (sweep), `external_receipt`, `conversion`, `yield`, `restake`,
   `payout`, `anchor`.
-- **Automatic records**: `expiry` and `reconciliation`, which anyone can
-  recompute from earlier entries and the chain.
+- **Automatic records**: `expiry`, `reconciliation`, and `gate_trip`, which
+  anyone can recompute from earlier entries and the chain.
 
 An entry that is neither signed nor backed by a receipt, and is not one of
 these automatic records, is invalid.
@@ -516,33 +546,149 @@ It also checks that:
 - the ledger's hash chain verifies from genesis through the last anchor.
 
 Receipts count only from finalized blocks (`ChainClient.get_finalized_block_hash`).
-A failed reconciliation pauses the treasury until a signed
-`reconciliation_resolution` explains the difference.
+A failed reconciliation trips the [spending gate](#spending-gate). A signed
+`reconciliation_resolution` that explains the difference is one step of
+[Unpause after repair](#unpause-after-repair); on its own it reopens nothing.
 
 ## Pause and incidents
 
-### Emergency pause
+### Spending gate
 
-This is the only definition of "paused" in this contract. While the treasury is
-paused:
+The treasury is **paused** whenever its spending gate is closed. This is the
+only definition of "paused" in this contract.
 
-- no earmarks, approvals, conversions, or payouts are recorded or executed;
+The gate is a deterministic check, `spending_gate(ledger, chain, fee_rows,
+block)`, over data anyone can read. It is **open only when it positively
+establishes every condition below as of a finalized block**. Anything it cannot
+read, parse, or verify leaves it closed. Its state is computed, never stored:
+no signature, flag, or ledger write can open it, and none is needed to close
+it.
+
+| # | Condition | Established from |
+|---|---|---|
+| G1 | No [manual pause](#manual-pause) is in force. | Signed `pause` and `unpause` entries, and any signed pause seen outside the ledger |
+| G2 | The ledger is readable, its hash chain verifies from genesis to its head, and the head extends both the last on-chain anchor and the head this evaluator last verified. | The ledger and the `System.remark_with_event` anchors |
+| G3 | The latest reconciliation passed, or its failure has a signed `reconciliation_resolution`, and it ran within `reconciliation_max_age_days`. | `reconciliation` entries |
+| G4 | Every sweep window whose deadline has passed has its full sweep. | `inflow` entries and the published fee rows |
+| G5 | The treasury's finalized balances, held TAO and alpha staked on the staking hotkey, are no lower than the balances the ledger explains at that block. | A finalized chain read and the ledger |
+| G6 | Every `gate_trip` and every `incident` has a later `unpause` that references its `incident_resolution`. | `gate_trip`, `incident`, `incident_resolution`, and `unpause` entries |
+
+G5 is checked at every evaluation, so an unexplained decrease closes the gate
+at once instead of waiting for the weekly reconciliation.
+
+A closed gate is either waiting or tripped:
+
+- **Waiting.** An input cannot be read or verified: the Platform, the ledger
+  export, the fee rows, or the chain endpoint is unavailable, or the latest
+  reconciliation is merely overdue. The gate reopens on its own once every
+  condition is established again. This is not an incident and needs no
+  signature. It is the same rule as the [ceiling](#size-the-5-ceiling): data
+  that cannot be read makes spending wait.
+- **Tripped.** A condition is affirmatively violated: a failed reconciliation,
+  a missed sweep deadline, an unexplained decrease, or a ledger that can be
+  read but fails G2 (a broken chain, or a head that does not extend an anchored
+  or previously verified head). A trip latches: the gate stays closed after the
+  violation clears, until [Unpause after repair](#unpause-after-repair).
+
+**Independent enforcement.** No single component holds the gate. Each party
+below evaluates it for itself, from primary sources, before acting:
+
+- **The Platform's ledger append path** evaluates the gate inside the append
+  transaction, under the ledger lock. It refuses `earmark`, `approval`, and
+  `commitment` entries while the gate is closed, and when it finds a new trip
+  it appends the `gate_trip` record first.
+- **Each custodian's signing tool** evaluates the gate from the public ledger
+  export and its own finalized chain read, never from a Platform "paused"
+  field. It pins the last ledger head it verified, and refuses to sign any
+  extrinsic other than a custody change while the gate is closed. The chain
+  requires two signatures, so every payout and conversion passes two
+  independent evaluations. A Platform that is down, wrong, or compromised
+  cannot open the gate for a custodian.
+- **The payout verifier and every reconciliation** recompute the gate at the
+  block of each payout and conversion. One executed while the gate was closed
+  is recorded as a breach and trips the gate.
+- **The public board and Backroom** show the gate state and every condition
+  holding it closed, computed by the same function.
+
+While the gate is closed:
+
+- no earmarks, approvals, or commitments are recorded, and no conversion or
+  payout is executed;
+- chain facts are still recorded: a transfer that lands is entered with its
+  receipt, so the ledger can always explain the chain;
 - custody-change transfers are still allowed, so a compromised key can be
   rotated out;
 - claims, submissions, reviews, acceptances, rejections, and appeals continue;
 - earmarks and commitments stay in place unless a final decision releases
   them, and approved awards stay owed.
 
-Who can pause and unpause is set in [Authority](#authority). The treasury
-pauses automatically on a failed reconciliation, an unexplained chain movement,
-a missing sweep, or an unreadable ledger.
+### Manual pause
+
+The owner or any one custodian may close the gate at their discretion with a
+signed `pause`. A restriction may arrive by any channel; a relaxation needs the
+ledger.
+
+- A signed `pause` takes effect wherever it is first seen. Custodian signing
+  tools and the Platform honor a valid pause signature from any channel, and it
+  is appended to the ledger, with its original signing time, as soon as the
+  ledger accepts writes.
+- An `unpause` takes effect only as a ledger entry.
+- An unreadable ledger needs no pause: it already holds the gate closed under
+  G2.
+
+A manual pause reopens with a two-person `unpause`. A pause called for an
+incident, such as a suspected key compromise, reopens only through
+[Unpause after repair](#unpause-after-repair).
+
+### Unpause after repair
+
+A tripped gate, or a pause called for an incident, reopens only after these
+steps, in order:
+
+1. **Trip record.** A `gate_trip` automatic record names the violated
+   condition, the first finalized block at which it held, and the entries or
+   chain figures that establish it, so anyone can recompute it. The append path
+   writes it when it detects the trip. If the ledger could not accept writes
+   then, it is appended as soon as the ledger does, before any other decision.
+   An incident with no automatic trip, such as a suspected key compromise, is
+   recorded from step 2.
+2. **Incident record.** The owner or any one custodian appends a signed
+   `incident` that references the `gate_trip`, or the `pause`, that closed the
+   gate. It is due within
+   `incident_record_hours` of the trip becoming visible, or first once the
+   ledger accepts writes. It classifies the cause (reconciliation mismatch,
+   missed sweep, unexplained movement, ledger integrity, key compromise, or
+   breach) and lists the affected entries and receipts. A late or missing
+   incident record never opens the gate; it keeps it closed longer.
+3. **Verified repair.** The cause is repaired and every gate condition is
+   established again from primary sources. The repair is itself recorded: a
+   late sweep as its `inflow`, an accounting difference as a
+   `reconciliation_resolution`, a rotation as a `custody_change`. A restored
+   ledger must extend every on-chain anchor; if it cannot extend a head a
+   custodian had verified, the resolution names the lost entries and the new
+   head, and custodians re-pin only after the unpause. A new reconciliation run
+   after the repair must pass. An assertion that the problem is fixed is not
+   enough.
+4. **Resolution.** The owner or any one custodian appends a signed
+   `incident_resolution`: the cause, the repair, the passing reconciliation it
+   relies on, and what changed to prevent a repeat. This is the written
+   post-incident record.
+5. **Unpause.** Two different people among the owner and the custodians sign an
+   `unpause` that references the `incident_resolution`. The append path refuses
+   an `unpause` while any gate condition fails, and custodian tools ignore one
+   that does not reference a resolution for every open trip and incident.
+
+A waiting gate needs none of this. It reopens when its inputs can be read
+again.
 
 ### Incidents
 
-An unexplained movement of treasury funds, a suspected key compromise, or a
-reconciliation that cannot be resolved triggers, in order: pause, rotation of
-the affected keys, a public incident entry, and a written post-incident
-record before unpausing.
+An unexplained movement of treasury funds, a suspected key compromise, a breach
+of the gate, or a reconciliation that cannot be resolved is an incident. The
+gate is already closed, by the trip or by a manual pause. The affected keys are
+rotated (see [Rotation and recovery](#rotation-and-recovery)), and the incident
+follows [Unpause after repair](#unpause-after-repair) from its record to a
+two-person unpause.
 
 ## Policy revisions
 
@@ -576,11 +722,13 @@ the activation revision. The relative defaults avoid depending on price.
 | `per_award_max_alpha` | 50% of `activation_cap_alpha` |
 | `max_staking_take_bps` | owner sets |
 | Custodians / threshold | 3 / 2 |
-| Reviewer roster | at least 3 keys |
+| Reviewer roster | at least 3 keys besides the owner reviewer key |
 | `claim_ttl_days` | 14, renewable (#2045) |
 | `appeal_window_days` | 14 |
 | `policy_notice_days` | 7 |
 | Reconciliation and anchor | weekly |
+| `reconciliation_max_age_days` | 8: one weekly cycle plus a day of slack before the gate waits |
+| `incident_record_hours` | 24 |
 
 ## Rollout
 
@@ -618,7 +766,10 @@ ledger stays public.
 
 | Threat | Mitigation |
 |---|---|
-| A custodian key is stolen | 2-of-3 multisig on chain; offline keys, no proxies; pause by any one custodian; rotation allowed while paused |
+| A custodian key is stolen | 2-of-3 multisig on chain; offline keys, no proxies; pause by any one custodian from any channel; rotation allowed while paused, even before the ledger accepts writes |
+| A mismatch happens while the ledger or Platform is unreadable | The spending gate is closed whenever a condition cannot be verified; each custodian evaluates it from the public ledger and the chain, so stopping payouts needs no signature and no writable ledger |
+| The Platform reports "not paused" while broken or compromised | Custodian signing tools compute the gate themselves and never trust a Platform flag; two independent evaluations precede every payout |
+| A tripped gate is reopened quietly | Trips latch; reopening needs a trip record, a signed incident, a repair verified by a new passing reconciliation, a signed resolution, and a two-person unpause that the append path refuses early |
 | One insider pays themselves or a friend | Reviewer approval separate from custody; conflict rules; tiered approvals on bounty totals; public ledger with receipts |
 | The shared Platform admin token is used to fake a decision | Every decision entry is signed by an authorized key; the token only carries entries |
 | One person unpauses or changes policy alone | Unpause and policy changes need two different people |
@@ -631,12 +782,14 @@ ledger stays public.
 | A reorg or non-final block is counted as payment | Only finalized receipts count |
 | A payout is timed against the alpha price | Awards fixed in alpha at approval; conversion batched ahead of need |
 | Someone sends dust to the treasury to force a pause | Unexplained increases are recorded as treasury money; only unexplained decreases are incidents |
-| Fee revenue is withheld from the treasury | Mandatory per-window sweeps with a deadline; a missing sweep pauses the treasury publicly |
+| Fee revenue is withheld from the treasury | Mandatory per-window sweeps with a deadline; a missed sweep deadline trips the spending gate publicly |
 | The staking hotkey raises its take or loses its permit | Take limit in policy; immediate protective restake |
 | Ledger history is rewritten | Signed entries; triggers blocking `UPDATE`, `DELETE`, and `TRUNCATE`; fork-safe chaining; weekly on-chain anchors |
 | The treasury grows into an opaque fund | Sweeps recomputable from published fee rows; 5% ceiling; activation cap; weekly reconciliation |
 | The owner raises fees to grow the treasury | Fee changes governed separately, announced, and stated as the reason |
 | Reviewers self-deal through anonymous coldkeys | Signed no-conflict statement; second reviewer above the standard tier; roster removal on discovery |
+| Routine approvals expose the owner coldkey | The owner approves with a roster key bound by an owner-signed policy revision; the coldkey signs only policy revisions and sweeps |
+| The owner approves an owner-tier award to their own work | The owner reviewer key passes the same conflict checks as any reviewer; a conflicted owner-tier award needs three non-conflicted reviewers instead |
 | Operators cannot see treasury state during an incident | Backroom read tools for the policy, rosters, balances, ledger, and reconciliation |
 
 ## Implementation obligations
@@ -663,6 +816,18 @@ What the other epic issues must build to satisfy this contract:
   - the ceiling check from `IncentiveAlphaEmittedToMiners` totals;
   - the ledger construction above, and per-asset reconciliation including
     yield;
+  - one shared `spending_gate` implementation, used by the ledger append path,
+    the custodian signing tool, the payout verifier, and the board, with test
+    vectors for every condition: an unreadable ledger, an overdue
+    reconciliation, a failed reconciliation, a missed sweep, an unexplained
+    decrease, and a head that does not extend a pinned one;
+  - a custodian signing tool that evaluates the gate from the public ledger and
+    its own chain read, pins the last verified head, and honors a signed pause
+    from any channel;
+  - the `gate_trip`, `incident`, and `incident_resolution` entries, and the
+    append path's refusal of an `unpause` before every gate condition holds;
+  - owner-tier verification through the same roster verifier plus the `owner`
+    mark, including the three-reviewer rule when the owner is conflicted;
   - tests for replay, partial awards, key rotation, expiry, and failed
     transactions.
 - **#2047 board:**
@@ -672,9 +837,10 @@ What the other epic issues must build to satisfy this contract:
     `issue_comment` or `pull_request_target`, which the workflow security check
     bans (`.github/scripts/check_workflow_security.py`).
 - **Backroom:** `backroom:read` tools for the treasury policy, rosters,
-  balances, ledger, reconciliation status, and the submission deposit address,
-  which Backroom MCP cannot read today. Operators need all of these to diagnose
-  an incident.
+  balances, ledger, reconciliation status, spending-gate state with every
+  condition holding it closed, open incidents, and the submission deposit
+  address, which Backroom MCP cannot read today. Operators need all of these to
+  diagnose an incident.
 
 ## Acceptance criteria for #2044
 
@@ -684,4 +850,4 @@ What the other epic issues must build to satisfy this contract:
 | Every inflow, reservation, payout, cancellation, and policy change is attributable | [Principles](#principles) 3, [Authority](#authority), [Funds accounting](#funds-accounting), [Ledger](#ledger) |
 | No GitHub issue or Discord promise alone can move funds | [Principles](#principles) 1, [Authority](#authority), [Spending authority](#spending-authority) |
 | Chain receipts reconcile to accepted work | [Double payment](#double-payment), [Reconciliation](#reconciliation) |
-| Activation begins with a reversible cap | [Parameters](#parameters) (`activation_cap_alpha`), [Rollout](#rollout) phase 3, [Emergency pause](#emergency-pause) |
+| Activation begins with a reversible cap | [Parameters](#parameters) (`activation_cap_alpha`), [Rollout](#rollout) phase 3, [Spending gate](#spending-gate) |
