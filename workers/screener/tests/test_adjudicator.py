@@ -360,6 +360,124 @@ async def test_streamed_tool_call_is_assembled_before_verdict(tmp_path: Path) ->
     ]
 
 
+async def test_active_stream_without_tool_progress_retries_then_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_FIRST_TOOL_SECONDS", 0.08)
+    requests = 0
+
+    class NonToolStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for _ in range(4):
+                yield (
+                    b'data: {"provider":"Together","choices":'
+                    b'[{"delta":{"content":"private reasoning"}}]}\n\n'
+                )
+                await asyncio.sleep(0.03)
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=NonToolStream(),
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN])
+    assert requests == 2
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "stream-no-tool-progress"
+    assert result.run_diagnostic.upstream == "together"
+    assert result.run_diagnostic.request_count == 2
+    assert all(
+        attempt.event_count > 1 for attempt in result.run_diagnostic.request_attempts
+    )
+    assert "private reasoning" not in result.run_diagnostic.model_dump_json()
+
+
+async def test_tool_call_arriving_within_progress_budget_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_FIRST_TOOL_SECONDS", 0.2)
+    arguments = json.dumps(
+        {"decision": "clear", "reason": "Bounded evidence.", "citations": []}
+    )
+
+    class LateToolStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'data: {"choices":[{"delta":{"content":"thinking"}}]}\n\n'
+            await asyncio.sleep(0.025)
+            yield (
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                '"id":"verdict-1","type":"function","function":'
+                '{"name":"submit_adjudication","arguments":'
+                + json.dumps(arguments)
+                + "}}]}}]}\n\n"
+            ).encode()
+            yield b"data: [DONE]\n\n"
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=LateToolStream(),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        message = await _adjudicator(
+            _key(tmp_path), httpx.MockTransport(handler)
+        )._completion_message(client, "sk-test", [], timeout=1)
+    assert message["tool_calls"] == [
+        _call("submit_adjudication", json.loads(arguments)) | {"id": "verdict-1"}
+    ]
+
+
+async def test_partial_tool_arguments_still_require_complete_stream(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_FIRST_TOOL_SECONDS", 0.08)
+
+    class PartialToolStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (
+                b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,'
+                b'"id":"verdict-1","function":{"name":"submit_adjudication",'
+                b'"arguments":"{\\"decision\\":"}}]}}]}\n\n'
+            )
+            for _ in range(5):
+                await asyncio.sleep(0.015)
+                yield b'data: {"choices":[{"delta":{"content":"still thinking"}}]}\n\n'
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=PartialToolStream(),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(
+            (TimeoutError, adjudicator_module.IncompleteStreamError)
+        ) as caught:
+            await _adjudicator(
+                _key(tmp_path), httpx.MockTransport(handler)
+            )._completion_message(client, "sk-test", [], timeout=0.05)
+    assert not isinstance(caught.value, adjudicator_module.NoToolProgressError)
+
+
 @pytest.mark.parametrize("streamed", [False, True])
 async def test_truncated_completion_cannot_settle_a_verdict(
     tmp_path: Path, streamed: bool

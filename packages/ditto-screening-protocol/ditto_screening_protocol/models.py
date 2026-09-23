@@ -1250,6 +1250,7 @@ class AdjudicationRunDiagnostic(BaseModel):
             "transport-error",
             "stream-incomplete",
             "stream-no-tool-call",
+            "stream-no-tool-progress",
             "stream-invalid",
             "response-too-large",
             "response-json-invalid",
