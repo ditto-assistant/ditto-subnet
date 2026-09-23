@@ -974,6 +974,21 @@ describe('screening submission admin service', () => {
         headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
       }),
     )
+    const withPrivatePackage = {
+      ...payload,
+      private_package: {
+        registration_status: 'registered_unverified',
+        prerequisites: [
+          { code: 'target_artifact_commitment', status: 'mechanically_verified' },
+          { code: 'protected_blueprint_bank', status: 'not_observed' },
+        ],
+        clear_authorized: false,
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(withPrivatePackage)))
+    await expect(
+      fetchScreeningVerificationReadiness({ agentId, attemptId }, 'peyton@omniaura.ai'),
+    ).resolves.toEqual(withPrivatePackage)
   })
 
   it('passes the payment coldkey through on a submission read', async () => {
