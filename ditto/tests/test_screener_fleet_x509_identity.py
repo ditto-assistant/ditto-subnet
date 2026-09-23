@@ -150,7 +150,14 @@ def test_infra_workflow_preserves_live_x509_identity() -> None:
     prod_intent = (
         ROOT / "infra/terraform/stacks/gcp-platform/prod.auto.tfvars"
     ).read_text()
-    assert "enable_screener_fleet_x509_identity = true" in prod_intent
+    assert re.search(
+        r"^enable_screener_fleet_x509_identity\s*=\s*true$", prod_intent, re.MULTILINE
+    )
+    assert re.search(
+        r"^enable_screener_fleet_x509_node2_identity\s*=\s*false$",
+        prod_intent,
+        re.MULTILINE,
+    )
     text = INFRA_WORKFLOW.read_text()
     assert "SCREENER_FLEET_X509_CA_CERTIFICATE_PEM" in text
     assert "enable_screener_fleet_x509_identity" in text
