@@ -109,8 +109,15 @@ The report records decisions, sanitized citations, invariant or clear clause,
 token/cost metadata, route, latency, incomplete coverage, and the number of
 fully paired cases. It separately flags exact invariant and label-citation
 matches; a different candidate finding needs source-level human adjudication
-and is not automatically wrong or "better." Escalations are neither false
-negatives nor true negatives;
+and is not automatically wrong or "better." Each arm also records bounded,
+text-free `run_diagnostic` request attempts on an escalation (stage, timings,
+status, SSE event and byte counts,
+and observed upstream when available), or the `completion_receipt` on a
+completed court tool call (including first-tool timing, observed upstream,
+and final-request event and byte counts). Missing observations remain null.
+These are diagnostic measurements, not proof of a policy-complete review;
+the report never stores model output, prompts, source excerpts, or tool
+arguments. Escalations are neither false negatives nor true negatives;
 they remain incomplete. Compare only fully paired, independently labeled
 cases, and inspect every disagreement against the cited source. This study
 does not assess I1-I8 discovery recall, S1-S3, deterministic runtime/private

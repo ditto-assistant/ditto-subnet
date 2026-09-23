@@ -10,6 +10,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from ditto_screening_protocol.models import (
+    AdjudicationCompletionReceipt,
+    AdjudicationRequestAttemptDiagnostic,
+    AdjudicationRunDiagnostic,
+)
 from scripts import run_l4_verdict_calibration as replay
 from scripts.run_l4_verdict_calibration import (
     _execute,
@@ -240,8 +245,122 @@ async def test_timeout_arm_is_recorded_before_paired_arm(
     assert first["error_code"] == "call-timeout"
     assert first["reported_cost_lower_bound"] is True
     assert second["complete"] is True
+    assert first["run_diagnostic"] is None
+    assert second["completion_receipt"] is None
     assert report["summary"]["fully_paired_cases"] == 0
     assert "private provider text" not in results_file.read_text()
+
+
+async def test_report_preserves_bounded_escalation_and_completion_telemetry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path, root = _manifest(tmp_path)
+    manifest, cases = _load_manifest(manifest_path, root)
+    key = tmp_path / "dedicated-key"
+    key.write_text("test-only")
+    results_dir = tmp_path / "private-results"
+    results_dir.mkdir(mode=0o700)
+    results_dir.chmod(0o700)
+    results_file = results_dir / "results.json"
+
+    class FakeCourt:
+        def __init__(self, **kwargs: object) -> None:
+            self.model = str(kwargs["model"])
+            self.observe = kwargs["completion_observer"]
+
+        async def adjudicate(self, *_args: object, **_kwargs: object) -> object:
+            if self.model == replay.MODELS[0]:
+                return SimpleNamespace(
+                    decision="escalate",
+                    reject_invariant=None,
+                    clear_clause=None,
+                    citations=[],
+                    reason="private model text must not be persisted",
+                    escalation_code="adjudicator-failed",
+                    run_diagnostic=AdjudicationRunDiagnostic(
+                        error_class="TimeoutError",
+                        failure_code="stream-no-tool-progress",
+                        elapsed_ms=180_000,
+                        model=self.model,
+                        provider="openrouter",
+                        request_count=1,
+                        request_attempts=[
+                            AdjudicationRequestAttemptDiagnostic(
+                                ordinal=1,
+                                started_ms=0,
+                                elapsed_ms=180_000,
+                                stage="event",
+                                stream_requested=True,
+                                prompt_bytes=1234,
+                                http_status=200,
+                                first_byte_ms=200,
+                                first_event_ms=250,
+                                event_count=14,
+                                wire_bytes=4096,
+                                upstream="provider-a",
+                            )
+                        ],
+                    ),
+                    completion_receipt=None,
+                )
+            self.observe(
+                {
+                    "model": self.model,
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "cost_usd": 0.01,
+                    "upstream": "provider-b",
+                }
+            )
+            return SimpleNamespace(
+                decision="clear",
+                reject_invariant=None,
+                clear_clause=SimpleNamespace(value="genuine_model_result"),
+                citations=[],
+                reason="private successful verdict text",
+                escalation_code=None,
+                run_diagnostic=None,
+                completion_receipt=AdjudicationCompletionReceipt(
+                    elapsed_ms=9_000,
+                    first_tool_call_ms=8_000,
+                    first_tool_observation="stream_delta",
+                    observed_model=self.model,
+                    gateway_provider="openrouter",
+                    observed_upstream="provider-b",
+                    request_count=2,
+                    final_request_prompt_bytes=2222,
+                    final_request_wire_bytes=3333,
+                    final_request_event_count=4,
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                ),
+            )
+
+    monkeypatch.setattr(replay, "SourceReviewAdjudicator", FakeCourt)
+    args = argparse.Namespace(
+        api_key_file=key,
+        base_url="https://openrouter.ai/api/v1",
+        max_reported_cost_usd=1.0,
+        external_route_cap_usd=2.0,
+        results_file=results_file,
+    )
+    report = await _execute(args, manifest, cases)
+    failed, completed = report["items"]
+    assert failed["complete"] is False
+    assert failed["run_diagnostic"]["request_attempts"][0]["wire_bytes"] == 4096
+    assert failed["run_diagnostic"]["request_attempts"][0]["event_count"] == 14
+    assert failed["run_diagnostic"]["request_attempts"][0]["upstream"] == "provider-a"
+    assert failed["completion_receipt"] is None
+    assert completed["complete"] is True
+    assert completed["run_diagnostic"] is None
+    assert completed["completion_receipt"]["first_tool_call_ms"] == 8_000
+    assert completed["completion_receipt"]["observed_upstream"] == "provider-b"
+    assert completed["completion_receipt"]["final_request_wire_bytes"] == 3333
+    assert completed["completion_receipt"]["final_request_event_count"] == 4
+    saved = results_file.read_text()
+    assert json.loads(saved)["items"] == report["items"]
+    assert "private model text" not in saved
+    assert "private successful verdict text" not in saved
 
 
 async def test_route_mismatch_persists_then_stops(

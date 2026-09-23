@@ -27,7 +27,12 @@ from ditto_screener.adjudicator import (
     SourceReviewAdjudicator,
 )
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
-from ditto_screening_protocol.models import SourceReviewFinding, SourceReviewInvariant
+from ditto_screening_protocol.models import (
+    AdjudicationCompletionReceipt,
+    AdjudicationRunDiagnostic,
+    SourceReviewFinding,
+    SourceReviewInvariant,
+)
 
 MODELS = ("z-ai/glm-5.3-flash", "openai/gpt-5.6-sol")
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -574,6 +579,7 @@ async def _execute(
             citations = verdict.citations if verdict is not None else []
             cited_locations = {f"{cite.path}:{cite.line}" for cite in citations}
             diagnostic = verdict.run_diagnostic if verdict is not None else None
+            receipt = getattr(verdict, "completion_receipt", None)
             error_class = (
                 type(call_error).__name__
                 if call_error is not None
@@ -692,6 +698,19 @@ async def _execute(
                 "completion_tokens": meter.tokens_out,
                 "upstreams": sorted(meter.upstreams),
                 "meter_error": meter.error,
+                # Only validated, bounded court telemetry belongs in this
+                # private report. Neither model text nor tool arguments are
+                # part of these protocol models.
+                "run_diagnostic": (
+                    diagnostic.model_dump(mode="json")
+                    if isinstance(diagnostic, AdjudicationRunDiagnostic)
+                    else None
+                ),
+                "completion_receipt": (
+                    receipt.model_dump(mode="json")
+                    if isinstance(receipt, AdjudicationCompletionReceipt)
+                    else None
+                ),
                 "reported_cost_lower_bound": not complete,
             }
             rows.append(row)
