@@ -128,9 +128,18 @@ class TestUnsetThreshold:
 
 
 class TestRetryAndSupersession:
-    async def test_retry_clock_reflects_current_attempt_not_sum_of_attempts(
+    async def test_retry_does_not_reset_the_stable_queue_age_clock(
         self, session: AsyncSession
     ) -> None:
+        """A fresh retry must not hide a long-overdue backlog item.
+
+        Peyton's review on #2042: keying age_seconds on the latest attempt's
+        own started_at let a 5-hour-old, repeatedly-retried submission report
+        an age of a few seconds on every fresh claim. age_seconds is now the
+        agent's own created_at (stable across retries);
+        current_attempt_age_seconds separately answers "how long has the
+        CURRENT attempt itself been going".
+        """
         now = datetime.now(UTC)
         agent_id = uuid4()
         old_attempt_id = uuid4()
@@ -143,9 +152,8 @@ class TestRetryAndSupersession:
                     agent_id=agent_id,
                 )
             )
-            # A superseded attempt from hours ago: if the clock summed
-            # attempts instead of using only the current one, the reported
-            # age would be roughly 5 hours instead of ~30 seconds.
+            # A superseded attempt from hours ago, then a fresh retry ~30s
+            # ago. Neither attempt's own started_at should drive age_seconds.
             session.add(
                 _attempt(
                     agent_id=agent_id,
@@ -168,15 +176,20 @@ class TestRetryAndSupersession:
         assert snapshot.backlog_count == 1
         assert snapshot.active_work_count == 1
         assert snapshot.infrastructure_backoff_count == 0
-        # The reported oldest age must reflect the CURRENT attempt (~30s),
-        # not the sum of both attempts (~5h = 18_000s).
+        # The stable queue-entry clock stays overdue at ~5h (~18_000s):
+        # neither the superseded attempt's start nor the fresh retry's start
+        # is allowed to reset it.
         assert snapshot.oldest_age_seconds is not None
-        assert snapshot.oldest_age_seconds < 120
+        assert abs(snapshot.oldest_age_seconds - 5 * 3600) < 120
 
         agent_state = await load_agent_ordinary_review_state(session, agent_id=agent_id)
         assert agent_state is not None
         assert agent_state.reason == "active_work"
-        assert agent_state.age_seconds < 120
+        assert abs(agent_state.age_seconds - 5 * 3600) < 120
+        # But the CURRENT attempt really has only been running ~30s -- that
+        # is real, separate information the retry-clock fix must not erase.
+        assert agent_state.current_attempt_age_seconds is not None
+        assert agent_state.current_attempt_age_seconds < 120
 
     async def test_superseded_attempt_is_not_double_counted(
         self, session: AsyncSession
@@ -342,6 +355,219 @@ class TestGhostReconciliation:
         assert agent_state is not None
         assert agent_state.reason == "escalation"
 
+    async def test_active_quarantine_is_escalation_even_after_a_failed_rescreen(
+        self, session: AsyncSession
+    ) -> None:
+        """An active quarantine outranks whatever the latest attempt says.
+
+        Peyton's review on #2042: the admin snapshot classified quarantined
+        agents through the LATEST attempt's own status, while the public
+        projection always classified an active quarantine as escalation --
+        so a rescreen that failed or expired while the hold was still open
+        read as infrastructure_backoff here and escalation there. Both must
+        agree: an active quarantine is a human judgment call over the
+        artifact, independent of what technical state the underlying attempt
+        happens to report.
+        """
+        now = datetime.now(UTC)
+        agent_id = uuid4()
+        attempt_id = uuid4()
+        async with session.begin():
+            session.add(
+                _agent(
+                    status=AgentStatus.QUARANTINED,
+                    created_at=now - timedelta(hours=2),
+                    agent_id=agent_id,
+                )
+            )
+            # The latest attempt reports 'failed', not 'quarantined' -- yet
+            # the quarantine itself is still active.
+            session.add(
+                _attempt(
+                    agent_id=agent_id,
+                    status="failed",
+                    started_at=now - timedelta(hours=1),
+                    finished_at=now - timedelta(minutes=45),
+                    attempt_id=attempt_id,
+                )
+            )
+            session.add(_quarantine(agent_id=agent_id, attempt_id=attempt_id))
+
+        snapshot = await load_source_review_queue_slo_snapshot(session)
+        assert snapshot.backlog_count == 1
+        assert snapshot.escalation_count == 1
+        assert snapshot.infrastructure_backoff_count == 0
+        assert snapshot.ghost_count == 0
+
+        agent_state = await load_agent_ordinary_review_state(session, agent_id=agent_id)
+        assert agent_state is not None
+        assert agent_state.reason == "escalation"
+
+    async def test_terminal_attempt_status_on_a_non_quarantined_agent_is_a_drift_ghost(
+        self, session: AsyncSession
+    ) -> None:
+        """A latest-attempt status the reason CASE cannot cover is never a
+        silent backlog_count inflator.
+
+        Peyton's review on #2042: a terminal 'passed'/'rejected' verdict
+        recorded against an agent whose own status never advanced past
+        screening produced a NULL reason that still counted toward
+        backlog_count while summing to none of the reason buckets. It must
+        instead surface as its own visible reconciliation ghost.
+        """
+        now = datetime.now(UTC)
+        agent_id = uuid4()
+        async with session.begin():
+            session.add(
+                _agent(
+                    status=AgentStatus.SCREENING_FAILED,
+                    created_at=now - timedelta(hours=1),
+                    agent_id=agent_id,
+                )
+            )
+            session.add(
+                _attempt(
+                    agent_id=agent_id,
+                    status="passed",
+                    started_at=now - timedelta(hours=1),
+                    finished_at=now - timedelta(minutes=30),
+                )
+            )
+
+        snapshot = await load_source_review_queue_slo_snapshot(session)
+        assert snapshot.backlog_count == 0
+        assert snapshot.active_work_count == 0
+        assert snapshot.capacity_wait_count == 0
+        assert snapshot.infrastructure_backoff_count == 0
+        assert snapshot.escalation_count == 0
+        assert snapshot.attempt_status_drift_ghost_count == 1
+        assert snapshot.stale_running_ghost_count == 0
+        assert snapshot.resolved_quarantine_ghost_count == 0
+        assert snapshot.ghost_count == 1
+
+        # Never surfaced to the miner as an active review either.
+        agent_state = await load_agent_ordinary_review_state(session, agent_id=agent_id)
+        assert agent_state is None
+
+    async def test_reason_buckets_always_sum_to_the_actionable_backlog(
+        self, session: AsyncSession
+    ) -> None:
+        """A drift/retry-heavy mixed queue must never let any row hide.
+
+        Every actionable row lands in exactly one reason bucket, and every
+        reconciliation ghost is counted but excluded from backlog_count --
+        so the bucket counts must sum to backlog_count exactly, on a queue
+        that exercises retries, an escalation surviving a failed rescreen,
+        and a drifted terminal-attempt row all at once.
+        """
+        now = datetime.now(UTC)
+        async with session.begin():
+            # capacity_wait.
+            session.add(
+                _agent(
+                    status=AgentStatus.UPLOADED,
+                    created_at=now - timedelta(seconds=5),
+                    agent_id=uuid4(),
+                )
+            )
+            # active_work, after a retry (the stable clock keeps this
+            # overdue even though the current attempt just started).
+            retried_id = uuid4()
+            session.add(
+                _agent(
+                    status=AgentStatus.SCREENING,
+                    created_at=now - timedelta(hours=6),
+                    agent_id=retried_id,
+                )
+            )
+            session.add(
+                _attempt(
+                    agent_id=retried_id,
+                    status="failed",
+                    started_at=now - timedelta(hours=6),
+                    finished_at=now - timedelta(hours=5),
+                )
+            )
+            session.add(
+                _attempt(
+                    agent_id=retried_id,
+                    status="running",
+                    started_at=now - timedelta(seconds=20),
+                )
+            )
+            # infrastructure_backoff.
+            failed_attempt_agent = uuid4()
+            session.add(
+                _agent(
+                    status=AgentStatus.SCREENING_FAILED,
+                    created_at=now - timedelta(hours=1),
+                    agent_id=failed_attempt_agent,
+                )
+            )
+            session.add(
+                _attempt(
+                    agent_id=failed_attempt_agent,
+                    status="failed",
+                    started_at=now - timedelta(hours=1),
+                    finished_at=now - timedelta(minutes=50),
+                )
+            )
+            # escalation surviving a failed rescreen (order-consistency fix).
+            escalated_id = uuid4()
+            escalated_attempt_id = uuid4()
+            session.add(
+                _agent(
+                    status=AgentStatus.QUARANTINED,
+                    created_at=now - timedelta(hours=2),
+                    agent_id=escalated_id,
+                )
+            )
+            session.add(
+                _attempt(
+                    agent_id=escalated_id,
+                    status="failed",
+                    started_at=now - timedelta(hours=1),
+                    finished_at=now - timedelta(minutes=45),
+                    attempt_id=escalated_attempt_id,
+                )
+            )
+            session.add(
+                _quarantine(agent_id=escalated_id, attempt_id=escalated_attempt_id)
+            )
+            # drift ghost: terminal attempt status, agent never advanced.
+            drifted_id = uuid4()
+            session.add(
+                _agent(
+                    status=AgentStatus.UPLOADED,
+                    created_at=now - timedelta(minutes=40),
+                    agent_id=drifted_id,
+                )
+            )
+            session.add(
+                _attempt(
+                    agent_id=drifted_id,
+                    status="rejected",
+                    started_at=now - timedelta(minutes=40),
+                    finished_at=now - timedelta(minutes=35),
+                )
+            )
+
+        snapshot = await load_source_review_queue_slo_snapshot(session)
+        bucket_sum = (
+            snapshot.active_work_count
+            + snapshot.capacity_wait_count
+            + snapshot.infrastructure_backoff_count
+            + snapshot.escalation_count
+        )
+        assert bucket_sum == snapshot.backlog_count
+        assert snapshot.backlog_count == 4
+        assert snapshot.capacity_wait_count == 1
+        assert snapshot.active_work_count == 1
+        assert snapshot.infrastructure_backoff_count == 1
+        assert snapshot.escalation_count == 1
+        assert snapshot.attempt_status_drift_ghost_count == 1
+        assert snapshot.ghost_count == 1
+
 
 class TestMixedQueue:
     async def test_healthy_overdue_and_ghost_rows_coexist_and_each_reports_correctly(
@@ -483,10 +709,14 @@ class TestDistributionCorrectness:
         async with session.begin():
             for age in ages_seconds:
                 agent_id = uuid4()
+                # age_seconds is the stable created_at clock now, so the
+                # fixture's created_at drives the ages directly; the attempt
+                # started 60s after creation (a claim delay) is irrelevant to
+                # it and exercised only for realism.
                 session.add(
                     _agent(
                         status=AgentStatus.SCREENING,
-                        created_at=now - timedelta(seconds=age + 60),
+                        created_at=now - timedelta(seconds=age),
                         agent_id=agent_id,
                     )
                 )
@@ -625,9 +855,13 @@ class TestPublicProjectionSafety:
 
         state = await load_agent_ordinary_review_state(session, agent_id=agent_id)
         assert state is not None
-        # Exactly two public-safe fields -- no reason_code, no evidence, no
+        # Exactly three public-safe fields -- no reason_code, no evidence, no
         # finding, no cross-agent data.
-        assert set(vars(state)) == {"reason", "age_seconds"}
+        assert set(vars(state)) == {
+            "reason",
+            "age_seconds",
+            "current_attempt_age_seconds",
+        }
         assert state.reason == "escalation"
 
 

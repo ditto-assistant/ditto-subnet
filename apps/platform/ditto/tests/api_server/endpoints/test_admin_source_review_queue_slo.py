@@ -102,6 +102,7 @@ class TestReadsTheQueue:
             "throughput_per_hour",
             "stale_running_ghost_count",
             "resolved_quarantine_ghost_count",
+            "attempt_status_drift_ghost_count",
             "ghost_count",
             "max_actionable_age_threshold_seconds",
             "overdue_count",

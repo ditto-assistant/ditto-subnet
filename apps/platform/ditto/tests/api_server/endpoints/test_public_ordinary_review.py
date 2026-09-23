@@ -116,8 +116,12 @@ async def test_claimed_agent_reports_active_work(
     review = response.json()["ordinary_review"]
     assert review is not None
     assert review["reason"] == "active_work"
-    # Reflects the current attempt (~20s), not the agent's full 1h age.
-    assert review["age_seconds"] < 120
+    # age_seconds is the stable queue-entry clock: it reflects the agent's
+    # full 1h age, not reset by the retry that started this current attempt
+    # ~20s ago (Peyton's review on #2042). current_attempt_age_seconds is
+    # the separate, short answer for "how long has THIS attempt been going".
+    assert review["age_seconds"] >= 3500
+    assert review["current_attempt_age_seconds"] < 120
 
 
 async def test_failed_agent_reports_infrastructure_backoff(
@@ -197,11 +201,12 @@ async def test_quarantined_agent_reports_escalation_with_no_operator_detail(
     review = body["ordinary_review"]
     assert review is not None
     assert review["reason"] == "escalation"
-    # Exactly the four source-safe fields -- no reason_code, no finding, no
+    # Exactly the five source-safe fields -- no reason_code, no finding, no
     # evidence, no other miner's data anywhere in this projection.
     assert set(review) == {
         "reason",
         "age_seconds",
+        "current_attempt_age_seconds",
         "typical_p50_seconds",
         "typical_p95_seconds",
     }

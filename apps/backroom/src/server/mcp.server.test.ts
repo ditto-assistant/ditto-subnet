@@ -3283,6 +3283,7 @@ describe('Backroom MCP tools', () => {
         throughput_per_hour: 0.5,
         stale_running_ghost_count: 1,
         resolved_quarantine_ghost_count: 0,
+        attempt_status_drift_ghost_count: 0,
         ghost_count: 1,
         max_actionable_age_threshold_seconds: null,
         overdue_count: null,

@@ -62,6 +62,7 @@ async def get_source_review_queue_slo(
         throughput_per_hour=snapshot.throughput_per_hour,
         stale_running_ghost_count=snapshot.stale_running_ghost_count,
         resolved_quarantine_ghost_count=snapshot.resolved_quarantine_ghost_count,
+        attempt_status_drift_ghost_count=snapshot.attempt_status_drift_ghost_count,
         ghost_count=snapshot.ghost_count,
         max_actionable_age_threshold_seconds=(
             snapshot.max_actionable_age_threshold_seconds

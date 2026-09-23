@@ -95,8 +95,22 @@ class SourceReviewQueueSlo(BaseModel):
             ),
         ),
     ]
+    attempt_status_drift_ghost_count: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Agents whose latest screening attempt reports a status this "
+                "endpoint's reason classification does not cover (e.g. a "
+                "terminal passed/rejected verdict on an agent whose own "
+                "status never advanced past screening) -- the same kind of "
+                "attempts/agents drift as the two counts above, never folded "
+                "into backlog_count."
+            ),
+        ),
+    ]
     ghost_count: Annotated[
-        int, Field(ge=0, description="Sum of the two reconciliation counts above.")
+        int, Field(ge=0, description="Sum of the three reconciliation counts above.")
     ]
 
     max_actionable_age_threshold_seconds: Annotated[

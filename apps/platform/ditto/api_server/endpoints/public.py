@@ -7004,7 +7004,6 @@ async def agent_pipeline(
             ]
             | None
         ) = None
-        clock_started_at: datetime | None = None
         if agent.status == AgentStatus.QUARANTINED:
             active_quarantine = next(
                 (
@@ -7020,29 +7019,30 @@ async def agent_pipeline(
             # operator snapshot; do not show a miner a guess here either.
             if active_quarantine is not None:
                 ordinary_reason = "escalation"
-                clock_started_at = (
-                    latest_attempt.started_at
-                    if latest_attempt is not None
-                    else agent.created_at
-                )
         elif latest_attempt is None:
             ordinary_reason = "capacity_wait"
-            clock_started_at = agent.created_at
         elif latest_attempt.status == "running":
             ordinary_reason = "active_work"
-            clock_started_at = latest_attempt.started_at
         elif latest_attempt.status in ("failed", "expired"):
             ordinary_reason = "infrastructure_backoff"
-            clock_started_at = latest_attempt.started_at
-        if ordinary_reason is not None and clock_started_at is not None:
+        if ordinary_reason is not None:
             # Subnet-wide typical durations, not per-agent: cheap relative to
             # the rest of this handler and bounded by the 10s response cache
             # above; revisit with a short-TTL cache (see
             # ``QueuePolicySettingsResolver``) if this shows up as hot.
             typical = await load_source_review_queue_slo_snapshot(session)
+            # Stable clock: the agent's own created_at, which a retry (a new
+            # screening_attempts row) cannot reset -- see the query module's
+            # docstring. current_attempt_age_seconds separately answers "how
+            # long has the CURRENT attempt been going".
             ordinary_review = PublicOrdinaryReview(
                 reason=ordinary_reason,
-                age_seconds=max(0.0, (now - clock_started_at).total_seconds()),
+                age_seconds=max(0.0, (now - agent.created_at).total_seconds()),
+                current_attempt_age_seconds=(
+                    max(0.0, (now - latest_attempt.started_at).total_seconds())
+                    if latest_attempt is not None
+                    else None
+                ),
                 typical_p50_seconds=typical.p50_age_seconds,
                 typical_p95_seconds=typical.p95_age_seconds,
             )

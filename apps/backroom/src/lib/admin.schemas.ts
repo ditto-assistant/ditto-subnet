@@ -8611,6 +8611,7 @@ export const sourceReviewQueueSloSchema = z.object({
   throughput_per_hour: z.number().nonnegative(),
   stale_running_ghost_count: z.number().int().nonnegative(),
   resolved_quarantine_ghost_count: z.number().int().nonnegative(),
+  attempt_status_drift_ghost_count: z.number().int().nonnegative(),
   ghost_count: z.number().int().nonnegative(),
   max_actionable_age_threshold_seconds: z.number().int().positive().nullable(),
   overdue_count: z.number().int().nonnegative().nullable(),

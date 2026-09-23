@@ -24284,8 +24284,16 @@ export interface components {
          *     ordinary review (covers both "never entered it" and "already resolved").
          */
         PublicOrdinaryReview: {
-            /** Age Seconds */
+            /**
+             * Age Seconds
+             * @description Time since this submission entered ordinary review (its own created_at). Stable across retries: a rescreen does not reset it.
+             */
             age_seconds: number;
+            /**
+             * Current Attempt Age Seconds
+             * @description Time since the CURRENT screening attempt started, separate from age_seconds above. Null when there is no attempt yet (capacity_wait).
+             */
+            current_attempt_age_seconds?: number | null;
             /**
              * Reason
              * @enum {string}
@@ -29051,6 +29059,11 @@ export interface components {
             /** Active Work Count */
             active_work_count: number;
             /**
+             * Attempt Status Drift Ghost Count
+             * @description Agents whose latest screening attempt reports a status this endpoint's reason classification does not cover (e.g. a terminal passed/rejected verdict on an agent whose own status never advanced past screening) -- the same kind of attempts/agents drift as the two counts above, never folded into backlog_count.
+             */
+            attempt_status_drift_ghost_count: number;
+            /**
              * Backlog Count
              * @description Current, non-superseded, non-terminal, non-progressed-past-screening items counted below. Terminal ghosts are excluded here and reported separately.
              */
@@ -29066,7 +29079,7 @@ export interface components {
             generated_at: string;
             /**
              * Ghost Count
-             * @description Sum of the two reconciliation counts above.
+             * @description Sum of the three reconciliation counts above.
              */
             ghost_count: number;
             /** Infrastructure Backoff Count */

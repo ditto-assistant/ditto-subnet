@@ -3387,7 +3387,29 @@ class PublicOrdinaryReview(BaseModel):
     reason: Literal[
         "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
     ]
-    age_seconds: Annotated[float, Field(ge=0)]
+    age_seconds: Annotated[
+        float,
+        Field(
+            ge=0,
+            description=(
+                "Time since this submission entered ordinary review (its own "
+                "created_at). Stable across retries: a rescreen does not "
+                "reset it."
+            ),
+        ),
+    ]
+    current_attempt_age_seconds: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Time since the CURRENT screening attempt started, separate "
+                "from age_seconds above. Null when there is no attempt yet "
+                "(capacity_wait)."
+            ),
+        ),
+    ]
     typical_p50_seconds: Annotated[float | None, Field(default=None, ge=0)]
     typical_p95_seconds: Annotated[float | None, Field(default=None, ge=0)]
 
