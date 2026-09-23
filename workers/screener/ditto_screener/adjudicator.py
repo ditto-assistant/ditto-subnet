@@ -939,7 +939,7 @@ def _finding_brief(finding: Mapping[str, object] | None) -> str:
 def _preload_ledger_evidence(
     repository: TarSourceRepository,
     notes: Sequence[Mapping[str, object]],
-) -> tuple[str, set[tuple[str, int]]]:
+) -> tuple[str, set[tuple[str, int]], bool]:
     """Return bounded source excerpts for the L4 decision-only path.
 
     L1/L2/L3's ledger gives exact leads. Asking L4 to rediscover an archive
@@ -953,6 +953,7 @@ def _preload_ledger_evidence(
     read_locations: set[tuple[str, int]] = set()
     requested: set[tuple[str, int]] = set()
     config_gates: set[tuple[str, str]] = set()
+    incomplete_image_context = False
     for note in notes:
         path = note.get("path")
         line = note.get("line")
@@ -1026,6 +1027,11 @@ def _preload_ledger_evidence(
                 outputs.append(output)
                 break
         if repository.has_member("Dockerfile"):
+            # A later ENV, ARG, CMD, or ENTRYPOINT can enable a branch whose
+            # default is off. Do not let a one-turn court decide from a
+            # truncated image definition; its tools cannot fetch the tail.
+            dockerfile_lines = repository.line_count("Dockerfile")
+            incomplete_image_context = dockerfile_lines is None or dockerfile_lines > 40
             output = _execute_tool(
                 repository,
                 "read_file",
@@ -1033,7 +1039,7 @@ def _preload_ledger_evidence(
             )
             _record_reads(output, read_locations)
             outputs.append(output)
-    return "\n".join(outputs), read_locations
+    return "\n".join(outputs), read_locations, incomplete_image_context
 
 
 def _has_unreviewed_lead(
@@ -1167,9 +1173,21 @@ class SourceReviewAdjudicator:
                 policy_version=policy_version,
             )
         if decision_only:
-            preloaded_evidence, preloaded_reads = _preload_ledger_evidence(
-                repository, notes
-            )
+            (
+                preloaded_evidence,
+                preloaded_reads,
+                incomplete_image_context,
+            ) = _preload_ledger_evidence(repository, notes)
+            if incomplete_image_context:
+                return _escalate(
+                    "adjudicator-evidence-incomplete",
+                    "Automated adjudication could not inspect the full image "
+                    "configuration for a feature-gated concern; held for "
+                    "operator review",
+                    model=self._model,
+                    notes=note_count,
+                    policy_version=policy_version,
+                )
             # The ledger can retain 48 notes but the one-turn court preloads
             # only 16 distinct locations. A later concern must not disappear
             # behind that bound while an earlier excerpt supports a CLEAR.
