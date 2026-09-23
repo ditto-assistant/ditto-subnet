@@ -140,13 +140,17 @@ def test_disposable_guest_base_survives_libvirt_ownership_changes() -> None:
     assert 'mode: "0644"' in tasks
 
 
-def test_infra_workflow_keeps_x509_identity_opt_in() -> None:
+def test_infra_workflow_preserves_live_x509_identity() -> None:
     workflow = yaml.safe_load(INFRA_WORKFLOW.read_text())
     input_config = workflow[True]["workflow_dispatch"]["inputs"][
         "screener_fleet_x509_identity_enabled"
     ]
 
-    assert input_config["default"] is False
+    assert input_config["default"] is True
+    prod_intent = (
+        ROOT / "infra/terraform/stacks/gcp-platform/prod.auto.tfvars"
+    ).read_text()
+    assert "enable_screener_fleet_x509_identity = true" in prod_intent
     text = INFRA_WORKFLOW.read_text()
     assert "SCREENER_FLEET_X509_CA_CERTIFICATE_PEM" in text
     assert "enable_screener_fleet_x509_identity" in text
