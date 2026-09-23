@@ -31,9 +31,9 @@ on:
         default: false
         type: boolean
       screener_fleet_x509_identity_enabled:
-        description: Create subnet-screener-1 X.509 federation and one-secret service account
+        description: Retain subnet-screener-1 X.509 federation and one-secret service account
         required: true
-        default: false
+        default: true
         type: boolean
       validator_hotkey_admin_phase:
         description: Disposable GCP hotkey generator phase (gcp-platform plans only)
