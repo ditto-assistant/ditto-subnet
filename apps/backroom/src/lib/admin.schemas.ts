@@ -7336,6 +7336,48 @@ export const agentScoresLookupInputSchema = z
     }
   })
 
+export const continualRetestDiagnosticInputSchema = z.object({
+  agentId: z.string().uuid(),
+})
+
+export const continualRetestDiagnosticSchema = z.object({
+  generated_at: z.string(),
+  agent_id: z.string().uuid(),
+  agent_status: z.string(),
+  active_bench_version: z.number().int().positive(),
+  canonical_composite: z.number().min(0).max(1).nullable(),
+  official_composite: z.number().min(0).nullable(),
+  owner_representative_id: z.string().uuid().nullable(),
+  family: z.array(z.object({
+    agent_id: z.string().uuid(),
+    canonical_composite: z.number().min(0).max(1),
+    official_composite: z.number().min(0),
+    representative: z.boolean(),
+  })),
+  // int63 seeds must remain decimal strings across the JSON/JavaScript boundary.
+  raw_confirmation_seeds: z.array(z.string().regex(/^(0|[1-9][0-9]*)$/)),
+  folded_confirmation_seeds: z.array(z.string().regex(/^(0|[1-9][0-9]*)$/)),
+  in_raw_wave: z.boolean(),
+  in_emission_set: z.boolean(),
+  in_retest_cohort: z.boolean(),
+  is_same_owner_challenger: z.boolean(),
+  cohort_position: z.number().int().positive().nullable(),
+  cohort_size: z.number().int().nonnegative(),
+  configured_cohort_size: z.number().int().positive(),
+  eligibility_mode: z.enum(['fixed', 'statistical']),
+  eligibility_z: z.number().nonnegative(),
+  configured_max_size: z.number().int().positive(),
+  ticket_status_counts: z.record(z.string(), z.number().int().nonnegative()),
+  active_ticket_count: z.number().int().nonnegative(),
+  seed_anchor_champion_id: z.string().uuid().nullable(),
+  seed_anchor_block: z.number().int().nonnegative().nullable(),
+  seed_anchor_pinned: z.boolean().nullable(),
+  admission_reason: z.enum([
+    'in_cohort', 'same_owner_challenger', 'owner_suppressed',
+    'outside_cohort', 'not_current_finalized_ledger',
+  ]),
+})
+
 export const scoreLeaderboardInputSchema = z.object({
   benchVersion: z.number().int().positive().optional(),
   status: z.enum(['all', 'finalized', 'provisional']).default('all'),

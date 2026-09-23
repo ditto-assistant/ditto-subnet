@@ -146,6 +146,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/continual-retest-diagnostic": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Continual Retest Diagnostic
+         * @description Explain one UUID's current admission with the scheduler's own fold.
+         *
+         *     This reads accepted score evidence and current policy. It cannot issue a
+         *     ticket, override an exclusion, or change the leaderboard.
+         */
+        get: operations["continual_retest_diagnostic_api_v1_admin_agents__agent_id__continual_retest_diagnostic_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/core-qualification": {
         parameters: {
             query?: never;
@@ -7802,6 +7825,78 @@ export interface components {
             pinned_count: number;
             /** Waiting Count */
             waiting_count: number;
+        };
+        /**
+         * AdminContinualRetestDiagnostic
+         * @description A snapshot, not a ticket or permission to force a retest.
+         */
+        AdminContinualRetestDiagnostic: {
+            /** Active Bench Version */
+            active_bench_version: number;
+            /** Active Ticket Count */
+            active_ticket_count: number;
+            /**
+             * Admission Reason
+             * @enum {string}
+             */
+            admission_reason: "in_cohort" | "same_owner_challenger" | "owner_suppressed" | "outside_cohort" | "not_current_finalized_ledger";
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Canonical Composite */
+            canonical_composite: number | null;
+            /** Cohort Position */
+            cohort_position: number | null;
+            /** Cohort Size */
+            cohort_size: number;
+            /** Configured Cohort Size */
+            configured_cohort_size: number;
+            /** Configured Max Size */
+            configured_max_size: number;
+            /**
+             * Eligibility Mode
+             * @enum {string}
+             */
+            eligibility_mode: "fixed" | "statistical";
+            /** Eligibility Z */
+            eligibility_z: number;
+            /** Family */
+            family: components["schemas"]["RetestFamilyMember"][];
+            /** Folded Confirmation Seeds */
+            folded_confirmation_seeds: string[];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** In Emission Set */
+            in_emission_set: boolean;
+            /** In Raw Wave */
+            in_raw_wave: boolean;
+            /** In Retest Cohort */
+            in_retest_cohort: boolean;
+            /** Is Same Owner Challenger */
+            is_same_owner_challenger: boolean;
+            /** Official Composite */
+            official_composite: number | null;
+            /** Owner Representative Id */
+            owner_representative_id: string | null;
+            /** Raw Confirmation Seeds */
+            raw_confirmation_seeds: string[];
+            /** Seed Anchor Block */
+            seed_anchor_block: number | null;
+            /** Seed Anchor Champion Id */
+            seed_anchor_champion_id: string | null;
+            /** Seed Anchor Pinned */
+            seed_anchor_pinned: boolean | null;
+            /** Ticket Status Counts */
+            ticket_status_counts: {
+                [key: string]: number;
+            };
         };
         /** AdminContinualRetestSettingsRequest */
         AdminContinualRetestSettingsRequest: {
@@ -24800,6 +24895,20 @@ export interface components {
             /** Score Count */
             score_count: number;
         };
+        /** RetestFamilyMember */
+        RetestFamilyMember: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Canonical Composite */
+            canonical_composite: number;
+            /** Official Composite */
+            official_composite: number;
+            /** Representative */
+            representative: boolean;
+        };
         /**
          * RouteCalibrationRequest
          * @description Exact reviewed manifest decision for one immutable route profile.
@@ -30164,6 +30273,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentCodingShadowEvaluationStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    continual_retest_diagnostic_api_v1_admin_agents__agent_id__continual_retest_diagnostic_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminContinualRetestDiagnostic"];
                 };
             };
             /** @description Validation Error */

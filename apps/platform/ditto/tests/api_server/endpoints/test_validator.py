@@ -11903,7 +11903,7 @@ class TestTop5ConfirmationLane:
             settings = settings_from_row(
                 await latest_continual_retest_settings_revision(session)
             )
-            emission, wave_members, cohort = await _current_retest_cohort(
+            emission, wave_members, cohort, _challengers = await _current_retest_cohort(
                 session, canonical_version=_BENCH_VERSION, settings=settings
             )
 
@@ -11967,7 +11967,7 @@ class TestTop5ConfirmationLane:
             settings = settings_from_row(
                 await latest_continual_retest_settings_revision(session)
             )
-            emission, wave_members, cohort = await _current_retest_cohort(
+            emission, wave_members, cohort, _challengers = await _current_retest_cohort(
                 session, canonical_version=_BENCH_VERSION, settings=settings
             )
 
@@ -11980,6 +11980,175 @@ class TestTop5ConfirmationLane:
         assert folded_entrant not in wave_ids
         assert {raw_cutoff, folded_entrant} <= cohort_ids
         assert len(cohort) == 6
+
+    @pytest.mark.parametrize("bench_version", [_BENCH_VERSION, 13])
+    async def test_stronger_same_owner_generation_can_catch_up_outside_raw_top_five(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        bench_version: int,
+    ) -> None:
+        """A retested incumbent must not strand its better canonical successor.
+
+        The incumbent is outside the canonical top five but inside the official
+        top five after shared-seed scoring. Its newer generation is also outside
+        the canonical top five, so neither existing cohort admission path sees
+        it. It can earn the same evidence without taking a second owner slot.
+        """
+        from ditto.api_server.continual_retest_settings import settings_from_row
+        from ditto.api_server.crn import champion_anchored_seeds
+        from ditto.api_server.endpoints.validator import _current_retest_cohort
+        from ditto.db.queries.continual_retest_settings import (
+            latest_continual_retest_settings_revision,
+        )
+
+        pool = await _seed_top5_emission_set(
+            session_maker,
+            bench_version=bench_version,
+            composites=[0.90, 0.88, 0.86, 0.84, 0.82, 0.48],
+        )
+        if bench_version >= 13:
+            # The fixture's v7 calibration requires v7 in the advertised
+            # support list even when the active scoring era is v13.
+            for keypair in _KEYPAIRS:
+                capabilities = _scorer_capable_capabilities(
+                    now=datetime.now(UTC), versions=(7, bench_version)
+                )
+                scorer = capabilities["scorer_benchmarks"]
+                assert isinstance(scorer, dict)
+                scorer["deterministic_v13_datasets"] = True
+                await _seed_validator_heartbeat(
+                    session_maker,
+                    keypair=keypair,
+                    protocol_version=13,
+                    capabilities=capabilities,
+                    stack=_V7_STACK,
+                )
+        champion, *_, incumbent = pool
+        seeds = champion_anchored_seeds(champion, version=bench_version, max_seeds=16)[
+            :15
+        ]
+        async with session_maker() as session, session.begin():
+            incumbent_row = await session.get(Agent, incumbent)
+            assert incumbent_row is not None
+            owner_hotkey = incumbent_row.miner_hotkey
+            for agent_id in pool:
+                for seed in seeds:
+                    session.add(
+                        ConfirmationScore(
+                            agent_id=agent_id,
+                            validator_hotkey=_VALIDATOR_HOTKEY,
+                            bench_version=bench_version,
+                            seed=seed,
+                            composite=0.99 if agent_id == incumbent else 0.20,
+                            run_id=f"owner-catchup-{agent_id}-{seed}",
+                            signature=None,
+                        )
+                    )
+        challenger = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            name="same-owner-v11",
+            miner_hotkey=owner_hotkey,
+            sha256="ab" * 32,
+            created_at=datetime.now(UTC),
+        )
+        weaker_sibling = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            name="same-owner-v12-lower-canonical",
+            miner_hotkey=owner_hotkey,
+            sha256="ac" * 32,
+            created_at=datetime.now(UTC) + timedelta(seconds=1),
+        )
+        async with session_maker() as session, session.begin():
+            for candidate, composite in ((challenger, 0.54), (weaker_sibling, 0.52)):
+                for index, keypair in enumerate(_KEYPAIRS):
+                    session.add(
+                        Score(
+                            agent_id=candidate,
+                            bench_version=bench_version,
+                            validator_hotkey=keypair.ss58_address,
+                            run_id=f"challenger-{candidate}-{index}",
+                            signature=None,
+                            seed=index,
+                            composite=composite,
+                            tool_mean=composite,
+                            memory_mean=composite,
+                            median_ms=100,
+                            n=114,
+                            details={"bench_version": bench_version},
+                            generated_at=datetime.now(UTC),
+                        )
+                    )
+        await _set_retest_cohort_size(session_maker, 5, idle_retests_enabled=False)
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        app.state.continual_retest_settings.invalidate()
+        _install_chain_with_block(app, block_number=1)
+
+        async with session_maker() as session:
+            settings = settings_from_row(
+                await latest_continual_retest_settings_revision(session)
+            )
+            emission, wave_members, cohort, challengers = await _current_retest_cohort(
+                session, canonical_version=bench_version, settings=settings
+            )
+        assert incumbent in {entry.agent_id for entry in emission}
+        assert challenger not in {entry.agent_id for entry in emission}
+        assert challenger not in {entry.agent_id for entry in wave_members}
+        assert challenger in {entry.agent_id for entry in cohort}
+        assert weaker_sibling not in {entry.agent_id for entry in cohort}
+        assert challengers == {challenger}
+        assert len(emission) == 5
+
+        async with session_maker() as session:
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            assert heartbeat.protocol_version >= 13
+            assert heartbeat.capabilities is not None
+            assert heartbeat.capabilities.get("ticket_inference") is True
+
+        response = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_top5_job_payload(champion, challenger),
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["agent_id"] == str(challenger)
+        assert response.json()["confirmation_datasets"][0]["seed"] in seeds
+
+        # Once the same anchored seeds are present, the official comparison may
+        # choose the successor. Admission itself did not promote it early.
+        async with session_maker() as session, session.begin():
+            for seed in seeds:
+                session.add(
+                    ConfirmationScore(
+                        agent_id=challenger,
+                        validator_hotkey=_VALIDATOR_HOTKEY,
+                        bench_version=bench_version,
+                        seed=seed,
+                        composite=0.99,
+                        run_id=f"challenger-catchup-{seed}",
+                        signature=None,
+                    )
+                )
+        async with session_maker() as session:
+            (
+                emission_after,
+                wave_after,
+                _cohort_after,
+                _challengers_after,
+            ) = await _current_retest_cohort(
+                session, canonical_version=bench_version, settings=settings
+            )
+        assert challenger in {entry.agent_id for entry in emission_after}
+        assert incumbent not in {entry.agent_id for entry in emission_after}
+        assert {entry.agent_id for entry in wave_after} == {
+            entry.agent_id for entry in wave_members
+        }
+        assert len(emission_after) == 5
 
     async def test_folded_top_five_entrant_preempts_raw_member_for_catchup(
         self,

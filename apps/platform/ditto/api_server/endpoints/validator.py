@@ -4271,6 +4271,14 @@ class _KothLaneSnapshot:
 
     folded_entries: list[KothEntry]
     raw_emission: tuple[KothEntry, ...]
+    all_entries: tuple[KothEntry, ...]
+    official_scores: dict[UUID, float]
+    canonical_scores: dict[UUID, float]
+    owner_representatives: dict[str, UUID]
+    owner_by_agent: dict[UUID, str]
+    folded_seeds_by_agent: dict[UUID, tuple[int, ...]]
+    # (official owner representative, newer canonical-best generation).
+    owner_challengers: tuple[tuple[UUID, KothEntry], ...]
 
 
 async def _current_koth_entries(
@@ -4488,9 +4496,44 @@ async def _current_koth_entries(
         for entry in entries
         if entry.agent_id in selected_by_id
     ]
+    raw_entries_by_id = {entry.agent_id: entry for entry in raw_entries}
+    raw_rows_by_owner = {
+        row.emission_owner_root or f"agent:{row.agent_id}": row for row in raw_rows
+    }
+    owner_challengers = tuple(
+        (row.agent_id, raw_entries_by_id[raw_row.agent_id])
+        for row in selected_rows
+        if (
+            (
+                raw_row := raw_rows_by_owner.get(
+                    row.emission_owner_root or f"agent:{row.agent_id}"
+                )
+            )
+            is not None
+            and raw_row.agent_id != row.agent_id
+            and raw_row.first_seen > row.first_seen
+            and raw_scores[raw_row.agent_id] > raw_scores[row.agent_id]
+        )
+    )
     return _KothLaneSnapshot(
         folded_entries=folded_entries,
         raw_emission=raw_members,
+        all_entries=tuple(entries),
+        official_scores=entry_scores,
+        canonical_scores=raw_scores,
+        owner_representatives={
+            row.emission_owner_root or f"agent:{row.agent_id}": row.agent_id
+            for row in selected_rows
+        },
+        owner_by_agent={
+            row.agent_id: row.emission_owner_root or f"agent:{row.agent_id}"
+            for row in rows
+        },
+        folded_seeds_by_agent={
+            row.agent_id: tuple(sorted(eligible_seeds.get(row.agent_id, ())))
+            for row in rows
+        },
+        owner_challengers=owner_challengers,
     )
 
 
@@ -4521,8 +4564,14 @@ async def _current_retest_cohort(
     settings: ContinualRetestSettings,
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
-) -> tuple[tuple[KothEntry, ...], tuple[KothEntry, ...], tuple[KothEntry, ...]]:
-    """Return ``(emission_set, wave_members, retest_cohort)`` from one read.
+    snapshot: _KothLaneSnapshot | None = None,
+) -> tuple[
+    tuple[KothEntry, ...],
+    tuple[KothEntry, ...],
+    tuple[KothEntry, ...],
+    frozenset[UUID],
+]:
+    """Return emission, wave, cohort, and same-owner challenger IDs from one read.
 
     Both are returned because the lane needs them for different jobs: the
     public-board ``wave_members`` are the seed-family anchor, the folded
@@ -4547,17 +4596,19 @@ async def _current_retest_cohort(
     retesting the folded top five while the fold waits for somebody it will
     never schedule.
 
-    The returned retest cohort is therefore the configured folded cohort plus
-    every raw wave member, in that order. This may add at most five gate
-    catch-up members; it changes neither emissions nor score arithmetic.
+    The returned retest cohort is the configured folded cohort, every raw wave
+    member, and at most one stronger canonical successor for each folded
+    emission owner. The successor can earn comparable evidence without taking
+    a second emission slot or changing the seed-family completion gate.
     """
-    snapshot = await _current_koth_entries(
-        session,
-        canonical_version=canonical_version,
-        wave_membership=settings.wave_membership,
-        efficiency_config=efficiency_config,
-        now=now,
-    )
+    if snapshot is None:
+        snapshot = await _current_koth_entries(
+            session,
+            canonical_version=canonical_version,
+            wave_membership=settings.wave_membership,
+            efficiency_config=efficiency_config,
+            now=now,
+        )
     entries = snapshot.folded_entries
     projection = project_koth(entries)
     # Public-board top five, owner-deduped on canonical scores. Stripping
@@ -4574,11 +4625,28 @@ async def _current_retest_cohort(
         tolerance_z=settings.retest_eligibility_z if statistical else 0.0,
     )
     seen = {member.agent_id for member in configured_cohort}
+    emission_ids = {member.agent_id for member in emission_members}
+    wave_ids = {member.agent_id for member in wave_members}
+    challengers = tuple(
+        challenger
+        for incumbent_id, challenger in snapshot.owner_challengers
+        if incumbent_id in emission_ids
+    )
     combined_cohort = (
         *configured_cohort,
         *(member for member in wave_members if member.agent_id not in seen),
+        *(
+            member
+            for member in challengers
+            if member.agent_id not in seen and member.agent_id not in wave_ids
+        ),
     )
-    return emission_members, wave_members, combined_cohort
+    return (
+        emission_members,
+        wave_members,
+        combined_cohort,
+        frozenset(member.agent_id for member in challengers),
+    )
 
 
 def _revealed_weighted_hotkeys(app_state: Any) -> set[str] | None:
@@ -4894,18 +4962,24 @@ async def _unserved_catchup_members(
     session: AsyncSession,
     *,
     champion_agent_id: UUID,
+    wave_member_ids: Sequence[UUID] = (),
     emission_member_ids: Sequence[UUID],
+    challenger_member_ids: Sequence[UUID] = (),
     canonical_version: int,
     now: datetime,
 ) -> frozenset[UUID]:
-    """Emission members owing backlog seeds that no live lease is covering.
+    """Emission members and bounded owner challengers with unserved backlog.
 
     "Unserved" rather than merely "behind": a member whose whole backlog is
     already leased out is converging as fast as it can, and letting it keep
     blocking extended-cohort work would idle capacity for nothing.
     """
-    members = tuple(dict.fromkeys(emission_member_ids))
-    if len(members) < 2:
+    wave_members = tuple(dict.fromkeys(wave_member_ids or emission_member_ids))
+    catchup_members = tuple(
+        dict.fromkeys((*emission_member_ids, *challenger_member_ids))
+    )
+    members = tuple(dict.fromkeys((*wave_members, *catchup_members)))
+    if len(wave_members) < 2:
         return frozenset()
     history = await confirmation_composites_by_seed(
         session, agent_ids=members, bench_version=canonical_version
@@ -4916,7 +4990,9 @@ async def _unserved_catchup_members(
     target_seeds = bounded_continual_seed_set(
         champion_agent_id,
         version=canonical_version,
-        composites_by_agent=history,
+        composites_by_agent={
+            member_id: history.get(member_id, {}) for member_id in wave_members
+        },
         block_hash=block_hash,
         allow_fresh_seeds=allow_fresh_seeds,
     )
@@ -4928,10 +5004,10 @@ async def _unserved_catchup_members(
         now=now,
     )
     unserved: list[UUID] = []
-    for member_id in members:
+    for member_id in catchup_members:
         catchup = confirmation_catchup_seeds(
             member_id=member_id,
-            peer_ids=members,
+            peer_ids=catchup_members,
             anchored_seeds=target_seeds,
             seeds_by_agent=seeds_by_agent,
         )
@@ -5362,7 +5438,12 @@ async def request_top5_confirmation_job(
                         "is required"
                     ),
                 )
-        emission_members, wave_members, members = await _current_retest_cohort(
+        (
+            emission_members,
+            wave_members,
+            members,
+            challenger_member_ids,
+        ) = await _current_retest_cohort(
             session,
             canonical_version=canonical_version,
             settings=continual_settings,
@@ -5518,7 +5599,9 @@ async def request_top5_confirmation_job(
         catchup_member_ids = await _unserved_catchup_members(
             session,
             champion_agent_id=champion_agent_id,
+            wave_member_ids=wave_member_ids,
             emission_member_ids=tuple(member.agent_id for member in emission_members),
+            challenger_member_ids=tuple(challenger_member_ids),
             canonical_version=canonical_version,
             now=now,
         )

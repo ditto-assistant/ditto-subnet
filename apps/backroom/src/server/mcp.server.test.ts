@@ -159,6 +159,7 @@ describe('Backroom MCP tools', () => {
         'get_copy_court_settings',
         'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
+        'get_continual_retest_diagnostic',
         'get_continual_retest_settings',
         'get_core_qualification_policy',
         'get_confirmation_bundle_settings',
@@ -339,7 +340,8 @@ describe('Backroom MCP tools', () => {
     // measured catalog is 133,733 bytes. Descriptions remain short summaries.
     // One bounded conversation observation tool adds ~900 bytes.
     // The audited retry adds exact report/artifact digests; measured 136,355 bytes.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(136_500)
+    // Exact-agent continual retest diagnosis adds one bounded read schema.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(137_200)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -358,7 +360,7 @@ describe('Backroom MCP tools', () => {
     // the one-line bench v13 gate-evidence and dispute-kind notes on the score
     // and dispute tools land at 25_237, so it moves to 25_400.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      25_500, // One concise audited-retry summary adds 77 characters.
+      25_700, // Includes the exact-agent continual retest read summary.
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

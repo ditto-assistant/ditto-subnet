@@ -271,6 +271,8 @@ import {
   updateSubmissionSettingsInputSchema,
   agentScoresLookupInputSchema,
   agentScoresDetailSchema,
+  continualRetestDiagnosticInputSchema,
+  continualRetestDiagnosticSchema,
   agentScoreHistorySchema,
   ownerFootprintLookupInputSchema,
   ownerFootprintSchema,
@@ -2978,6 +2980,14 @@ export async function fetchAgentScores(rawInput: unknown) {
     desired_bench_version: board.desired_bench_version,
     leaderboard: entry,
   })
+}
+
+export async function fetchContinualRetestDiagnostic(rawInput: unknown) {
+  const { agentId } = continualRetestDiagnosticInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/agents/${encodeURIComponent(agentId)}/continual-retest-diagnostic`,
+  )
+  return continualRetestDiagnosticSchema.parse(payload)
 }
 
 /**

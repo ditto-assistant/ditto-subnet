@@ -62,6 +62,7 @@ import {
   fetchValidatorFleet,
   fetchValidatorFleetObservability,
   fetchAgentScores,
+  fetchContinualRetestDiagnostic,
   fetchAgentScoreHistory,
   fetchScoreLeaderboard,
   fetchOwnerFootprint,
@@ -3457,6 +3458,51 @@ describe('production score reads', () => {
   const topAgentId = '11111111-1111-4111-8111-111111111111'
   const provisionalAgentId = '22222222-2222-4222-8222-222222222222'
   const supersededAgentId = '33333333-3333-4333-8333-333333333333'
+
+  it('reads exact retest admission and preserves int63 seed strings', async () => {
+    const seed = '9223372036854775001'
+    const payload = {
+      generated_at: '2026-09-22T23:00:00Z',
+      agent_id: provisionalAgentId,
+      agent_status: 'scored',
+      active_bench_version: 13,
+      canonical_composite: 0.93,
+      official_composite: 0.93,
+      owner_representative_id: topAgentId,
+      family: [
+        { agent_id: provisionalAgentId, canonical_composite: 0.93, official_composite: 0.93, representative: false },
+        { agent_id: topAgentId, canonical_composite: 0.91, official_composite: 0.94, representative: true },
+      ],
+      raw_confirmation_seeds: [seed],
+      folded_confirmation_seeds: [],
+      in_raw_wave: true,
+      in_emission_set: false,
+      in_retest_cohort: true,
+      is_same_owner_challenger: true,
+      cohort_position: 2,
+      cohort_size: 6,
+      configured_cohort_size: 5,
+      eligibility_mode: 'fixed',
+      eligibility_z: 1.64,
+      configured_max_size: 25,
+      ticket_status_counts: { issued: 1, scored: 2 },
+      active_ticket_count: 1,
+      seed_anchor_champion_id: topAgentId,
+      seed_anchor_block: 123456,
+      seed_anchor_pinned: true,
+      admission_reason: 'same_owner_challenger',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result).toEqual(payload)
+    expect(result.raw_confirmation_seeds).toEqual([seed])
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/agents/${provisionalAgentId}/continual-retest-diagnostic`,
+      expect.anything(),
+    )
+  })
 
   const breakdown = {
     formula:

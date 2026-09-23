@@ -172,7 +172,7 @@ async def _resolved_cohort_size(
     from ditto.api_server.endpoints.validator import _current_retest_cohort
 
     try:
-        _emission, _wave_members, cohort = await _current_retest_cohort(
+        _emission, _wave_members, cohort, _challengers = await _current_retest_cohort(
             session,
             canonical_version=await active_bench_version(session),
             settings=settings,
