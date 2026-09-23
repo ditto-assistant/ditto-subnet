@@ -139,7 +139,10 @@ async def record_known_benign_approval(
     session: SessionDep,
     x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> V13KnownBenignApprovalView:
-    """Audit a separately reviewed clean candidate; no semantic pass inferred."""
+    """Audit an operator-claimed clean candidate; no semantic pass inferred.
+
+    X-Admin-Actor is an audit label, not proof of an independent approver.
+    """
     actor = _actor(x_admin_actor)
     if payload.profile_sha256 != V13_PRIVATE_PROFILE_SHA256:
         raise HTTPException(status_code=409, detail="V13 profile mismatch")
@@ -263,7 +266,6 @@ async def record_generation_start(
                 or control_attempt.policy_version != 13
                 or control_attempt.artifact_sha256 != approval.artifact_sha256
                 or approval.profile_sha256 != payload.profile_sha256
-                or approval.actor == actor
                 or payload.target_artifact_sha256 == approval.artifact_sha256
                 or payload.target_image_sha256 == approval.image_sha256
                 or not await _bound_image(

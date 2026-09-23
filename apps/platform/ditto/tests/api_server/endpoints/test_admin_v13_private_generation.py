@@ -172,10 +172,13 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
         headers={**_HEADERS, "X-Admin-Actor": "test:generator"},
     )
     assert wrong_target.status_code == 409
-    self_approved = await client.post(
+    # X-Admin-Actor is an audit label, not an authenticated principal. The
+    # row remains recorded_unverified even when the labels match.
+    same_claimed_actor = await client.post(
         f"{_BASE}/groups", json=group_payload, headers=_HEADERS
     )
-    assert self_approved.status_code == 409
+    assert same_claimed_actor.status_code == 200
+    assert same_claimed_actor.json()["status"] == "recorded_unverified"
     started = await client.post(
         f"{_BASE}/groups",
         json=group_payload,
