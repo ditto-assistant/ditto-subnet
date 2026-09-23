@@ -26,7 +26,7 @@ def upgrade() -> None:
         sa.Column("policy_document_digest", sa.Text(), nullable=True),
     )
     op.create_check_constraint(
-        "srda_document_digest_check",
+        op.f("srda_document_digest_check"),
         "screening_review_deadline_activations",
         "policy_document_digest IS NULL OR length(policy_document_digest) = 64",
     )
@@ -34,6 +34,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_constraint(
-        "srda_document_digest_check", "screening_review_deadline_activations"
+        op.f("srda_document_digest_check"),
+        "screening_review_deadline_activations",
     )
     op.drop_column("screening_review_deadline_activations", "policy_document_digest")
