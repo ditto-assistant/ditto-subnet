@@ -49,6 +49,9 @@ screener_router = APIRouter(prefix="/screener/verification-replays", tags=["scre
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 LEASE = timedelta(minutes=30)
+MAX_REPLAY_LEASE = timedelta(hours=4)
+MAX_REPLAY_RENEWALS = 8
+RENEW_WINDOW = timedelta(minutes=10)
 URL_TTL_SECONDS = 300
 
 
@@ -103,6 +106,8 @@ def _state(
         status=cast(Literal["queued", "running", "reported", "failed"], row.status),
         worker_hotkey=row.worker_hotkey,
         lease_deadline=row.lease_deadline,
+        lease_started_at=row.lease_started_at,
+        lease_renewals=row.lease_renewals,
         created_at=row.created_at,
         finished_at=row.finished_at,
         failure_code=row.failure_code,
@@ -446,11 +451,41 @@ async def claim_replay(
             continue
         row.status = "running"
         row.worker_hotkey = worker
+        row.lease_started_at = now
         row.lease_deadline = now + LEASE
         await session.commit()
         return _state(row)
     await session.commit()
     return None
+
+
+@screener_router.post("/{replay_id}/renew", response_model=VerificationReplayState)
+async def renew_replay(
+    replay_id: UUID, request: Request, worker: ScreenerDep, session: SessionDep
+) -> VerificationReplayState:
+    """Renew one exact active lease within an absolute four-hour worker budget.
+
+    Renewal repeats the enrolled-node and source-binding checks and cannot
+    resurrect an expired, settled, or rebound source hold. A capped renewal
+    prevents a worker from keeping a quarantine pinned indefinitely.
+    """
+    await _require_enrolled_replay_worker(request, worker, session)
+    row = await _active_claim(session, replay_id, worker)
+    now = datetime.now(UTC)
+    if row.lease_started_at is None:
+        raise HTTPException(409, "replay lease start is unavailable")
+    if row.lease_renewals >= MAX_REPLAY_RENEWALS:
+        raise HTTPException(409, "replay renewal budget exhausted")
+    if row.lease_deadline is None or row.lease_deadline - now > RENEW_WINDOW:
+        raise HTTPException(409, "replay lease is not in renewal window")
+    max_deadline = row.lease_started_at + MAX_REPLAY_LEASE
+    deadline = min(now + LEASE, max_deadline)
+    if deadline <= row.lease_deadline:
+        raise HTTPException(409, "replay absolute deadline reached")
+    row.lease_deadline = deadline
+    row.lease_renewals += 1
+    await session.commit()
+    return _state(row)
 
 
 @screener_router.get("/{replay_id}/inputs", response_model=VerificationReplayInputs)

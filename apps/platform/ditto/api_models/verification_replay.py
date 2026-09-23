@@ -67,6 +67,8 @@ class VerificationReplayState(BaseModel):
     policy_verification_complete: Literal[False] = False
     worker_hotkey: str | None
     lease_deadline: datetime | None
+    lease_started_at: datetime | None = None
+    lease_renewals: int = 0
     created_at: datetime
     finished_at: datetime | None
     failure_code: str | None

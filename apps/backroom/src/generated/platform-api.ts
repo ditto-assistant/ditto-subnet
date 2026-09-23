@@ -5882,6 +5882,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/verification-replays/{replay_id}/renew": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Renew Replay
+         * @description Renew one exact active lease within an absolute four-hour worker budget.
+         *
+         *     Renewal repeats the enrolled-node and source-binding checks and cannot
+         *     resurrect an expired, settled, or rebound source hold. A capped renewal
+         *     prevents a worker from keeping a quarantine pinned indefinitely.
+         */
+        post: operations["renew_replay_api_v1_screener_verification_replays__replay_id__renew_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/upload/agent": {
         parameters: {
             query?: never;
@@ -30986,6 +31010,13 @@ export interface components {
             /** Lease Deadline */
             lease_deadline: string | null;
             /**
+             * Lease Renewals
+             * @default 0
+             */
+            lease_renewals: number;
+            /** Lease Started At */
+            lease_started_at?: string | null;
+            /**
              * Policy Verification Complete
              * @default false
              * @constant
@@ -41791,6 +41822,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayReceiptState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    renew_replay_api_v1_screener_verification_replays__replay_id__renew_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayState"];
                 };
             };
             /** @description Validation Error */

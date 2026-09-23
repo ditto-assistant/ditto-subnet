@@ -798,6 +798,12 @@ class ScreeningVerificationReplay(Base):
     lease_deadline: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    lease_started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    lease_renewals: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -847,6 +853,9 @@ class ScreeningVerificationReplay(Base):
         CheckConstraint(
             "status IN ('queued', 'running', 'reported', 'failed')",
             name="svrp_status_check",
+        ),
+        CheckConstraint(
+            "lease_renewals BETWEEN 0 AND 8", name="svrp_lease_renewals_check"
         ),
         Index(
             "svrp_one_active_source_idx",

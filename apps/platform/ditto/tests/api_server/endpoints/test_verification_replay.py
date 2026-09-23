@@ -26,6 +26,7 @@ from ditto.api_server.endpoints.verification_replay import (
     get_replay_claimability,
     get_replay_inputs,
     mint_replay_build_upload,
+    renew_replay,
     verify_replay_build,
 )
 from ditto.db.models import (
@@ -35,6 +36,7 @@ from ditto.db.models import (
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningVerificationReceipt,
+    ScreeningVerificationReplay,
     ScreeningVerificationReplayReceipt,
 )
 
@@ -165,6 +167,53 @@ def _payload(attempt_id, quarantine_id, image_id, **changes):
     }
     values.update(changes)
     return VerificationReplayCreate(**values)
+
+
+@pytest.mark.asyncio
+async def test_replay_renewal_is_bounded_and_rechecks_exact_source(session):
+    agent_id, attempt_id, quarantine_id, image_id = await _seed(session)
+    created = await create_replay(
+        agent_id, _payload(attempt_id, quarantine_id, image_id), None, session
+    )
+    await _enroll(session, replay_capacity=1)
+    claimed = await claim_replay(_request(), SECOND_WORKER, session)
+    assert claimed is not None and claimed.replay_id == created.replay_id
+    assert claimed.lease_started_at is not None
+    assert claimed.lease_renewals == 0
+    with pytest.raises(HTTPException) as too_early:
+        await renew_replay(created.replay_id, _request(), SECOND_WORKER, session)
+    assert too_early.value.status_code == 409
+
+    row = await session.get(ScreeningVerificationReplay, created.replay_id)
+    assert row is not None
+    row.lease_deadline = datetime.now(UTC) + timedelta(minutes=5)
+    await session.commit()
+    renewed = await renew_replay(created.replay_id, _request(), SECOND_WORKER, session)
+    assert renewed.lease_renewals == 1
+    assert renewed.lease_deadline is not None
+    assert renewed.lease_started_at is not None
+    assert renewed.lease_deadline <= renewed.lease_started_at + timedelta(hours=4)
+    with pytest.raises(HTTPException) as wrong_worker:
+        await renew_replay(created.replay_id, _request(), FIRST_WORKER, session)
+    assert wrong_worker.value.status_code == 403
+
+    row = await session.get(ScreeningVerificationReplay, created.replay_id)
+    assert row is not None
+    row.lease_renewals = 8
+    row.lease_deadline = datetime.now(UTC) + timedelta(minutes=5)
+    await session.commit()
+    with pytest.raises(HTTPException) as budget:
+        await renew_replay(created.replay_id, _request(), SECOND_WORKER, session)
+    assert budget.value.status_code == 409
+
+    row.lease_renewals = 1
+    agent = await session.get(Agent, agent_id)
+    assert agent is not None
+    agent.status = "scored"
+    await session.commit()
+    with pytest.raises(HTTPException) as stale:
+        await renew_replay(created.replay_id, _request(), SECOND_WORKER, session)
+    assert stale.value.status_code == 409
 
 
 @pytest.mark.asyncio
