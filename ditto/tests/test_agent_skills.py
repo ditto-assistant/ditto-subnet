@@ -63,6 +63,12 @@ def test_context_index_paths_exist() -> None:
     )
 
 
+def test_discord_sweep_routes_to_browser_triage() -> None:
+    topic = lookup("overnight Discord miner DM triage")[0]
+    assert topic["id"] == "discord-miner-triage"
+    assert topic_list(topic, "skills") == ["discord-miner-triage"]
+
+
 def test_native_reserved_recovery_routes_to_operator_command() -> None:
     topic = lookup("native evidence recovery")[0]
     assert topic["id"] == "coding-evidence-recovery"
