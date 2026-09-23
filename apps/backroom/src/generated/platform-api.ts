@@ -2203,11 +2203,11 @@ export interface paths {
         };
         /**
          * Get Screening Verification Readiness
-         * @description Read exact-artifact verification receipts without implying completion.
+         * @description Read exact-artifact receipts with narrow mechanical verification status.
          *
-         *     This first read foundation has no writer. Absence means no matching
-         *     Platform receipt, not proof that an external check never ran. Existing
-         *     screening/oracle results never synthesize mandatory-v13 receipts.
+         *     Absence means no matching Platform receipt, not proof that an external
+         *     check never ran. The two mechanically verified checks never imply full
+         *     policy-v13 completion; runtime/private observations remain unverified.
          */
         get: operations["get_screening_verification_readiness_api_v1_admin_screening_submissions__agent_id__attempts__attempt_id__verification_readiness_get"];
         put?: never;
@@ -4806,10 +4806,12 @@ export interface paths {
         put?: never;
         /**
          * Record Screening Verification Receipt
-         * @description Append one mechanical-check digest under the active v13 lease.
+         * @description Append one check digest under the active v13 lease.
          *
          *     Only the authenticated owner of a running, unexpired attempt may write.
-         *     The row is intentionally evidence presence, not a check-pass or CLEAR.
+         *     Platform recomputes mechanical digests from the committed artifact and
+         *     verified image upload. Runtime rows remain observation-only. Neither kind
+         *     is a complete policy-v13 check pass or CLEAR authorization.
          *     A deterministic receipt ID makes an uncertain HTTP retry idempotent.
          */
         post: operations["record_screening_verification_receipt_api_v1_screener_agent__agent_id__verification_receipts_post"];

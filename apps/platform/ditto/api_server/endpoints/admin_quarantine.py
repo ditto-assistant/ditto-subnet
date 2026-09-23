@@ -1975,6 +1975,8 @@ async def get_screening_verification_readiness(
     for row in rows:
         if (
             row.check_code not in {"archive_sha", "build_image_digest"}
+            or attempt.artifact_sha256 is None
+            or attempt.artifact_sha256.lower() != agent.sha256.lower()
             or row.profile_sha256 != MECHANICAL_PROFILE_SHA256
             or row.worker_hotkey != attempt.screener_hotkey
             or (

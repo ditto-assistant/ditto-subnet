@@ -596,6 +596,7 @@ async def record_screening_verification_receipt(
         deadline = attempt.deadline
         if deadline.tzinfo is None:
             deadline = deadline.replace(tzinfo=UTC)
+        mechanical = payload.check_code in {"archive_sha", "build_image_digest"}
         if (
             attempt.screener_hotkey != screener_hotkey
             or attempt.policy_version != payload.policy_version
@@ -603,14 +604,16 @@ async def record_screening_verification_receipt(
             or now >= deadline
             or agent.sha256.lower() != payload.artifact_sha256
             or (
-                attempt.artifact_sha256 is not None
-                and attempt.artifact_sha256.lower() != payload.artifact_sha256
+                (mechanical or attempt.artifact_sha256 is not None)
+                and (
+                    attempt.artifact_sha256 is None
+                    or attempt.artifact_sha256.lower() != payload.artifact_sha256
+                )
             )
         ):
             raise HTTPException(
                 status_code=409, detail="verification receipt lease is stale"
             )
-        mechanical = payload.check_code in {"archive_sha", "build_image_digest"}
         if mechanical and payload.evidence_sha256 != mechanical_evidence_sha256(
             check_code=payload.check_code,
             artifact_sha256=agent.sha256.lower(),

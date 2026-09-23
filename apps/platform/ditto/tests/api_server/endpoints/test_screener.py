@@ -942,6 +942,7 @@ async def test_v13_mechanical_receipt_is_exact_lease_bound_and_idempotent(
             ScreeningAttempt(
                 attempt_id=attempt_id,
                 agent_id=agent_id,
+                artifact_sha256=_SHA256,
                 screener_hotkey=_SCREENER_HOTKEY,
                 policy_version=13,
                 status="running",
@@ -1095,10 +1096,111 @@ async def test_v13_receipt_refuses_mismatched_pinned_attempt_artifact(
             "artifact_sha256": _SHA256,
             "policy_version": 13,
             "check_code": "archive_sha",
-            "evidence_sha256": "ab" * 32,
+            "evidence_sha256": mechanical_evidence_sha256(
+                check_code="archive_sha", artifact_sha256=_SHA256
+            ),
         },
     )
     assert response.status_code == 409
+
+
+async def test_v13_mechanical_receipt_refuses_legacy_null_attempt_artifact(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    now = datetime.now(UTC)
+    attempt_id = uuid4()
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                artifact_sha256=None,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=13,
+                status="running",
+                started_at=now - timedelta(minutes=1),
+                deadline=now + timedelta(minutes=9),
+            )
+        )
+    _install_db(app, session_maker)
+    response = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/verification-receipts",
+        json={
+            "attempt_id": str(attempt_id),
+            "artifact_sha256": _SHA256,
+            "policy_version": 13,
+            "check_code": "archive_sha",
+            "evidence_sha256": mechanical_evidence_sha256(
+                check_code="archive_sha", artifact_sha256=_SHA256
+            ),
+        },
+    )
+    assert response.status_code == 409
+
+
+async def test_v13_mechanical_readiness_requires_matching_attempt_artifact(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.QUARANTINED)
+    now = datetime.now(UTC)
+    attempt_ids = [uuid4(), uuid4()]
+    async with session_maker() as session, session.begin():
+        for attempt_id, attempt_sha in zip(attempt_ids, (None, "cd" * 32), strict=True):
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=attempt_sha,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=13,
+                    status="quarantined",
+                    started_at=now - timedelta(minutes=2),
+                    deadline=now + timedelta(minutes=8),
+                    finished_at=now,
+                )
+            )
+            session.add(
+                ScreeningVerificationReceipt(
+                    receipt_id=uuid4(),
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    artifact_sha256=_SHA256,
+                    policy_version=13,
+                    check_code="archive_sha",
+                    evidence_sha256=mechanical_evidence_sha256(
+                        check_code="archive_sha", artifact_sha256=_SHA256
+                    ),
+                    image_sha256=None,
+                    profile_sha256=MECHANICAL_PROFILE_SHA256,
+                    challenge_manifest_sha256=None,
+                    worker_hotkey=_SCREENER_HOTKEY,
+                )
+            )
+    _install_db(app, session_maker)
+    app.state.config = replace(
+        app.state.config, admin_api_token="test-admin-token-at-least-32-characters"
+    )
+    headers = {
+        "Authorization": "Bearer test-admin-token-at-least-32-characters",
+        "X-Admin-Actor": "backroom:verification-reviewer",
+    }
+    for attempt_id in attempt_ids:
+        readiness = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}/attempts/"
+            f"{attempt_id}/verification-readiness",
+            headers=headers,
+        )
+        assert readiness.status_code == 200, readiness.text
+        checks = {
+            entry["check_code"]: entry["record_status"]
+            for entry in readiness.json()["checks"]
+        }
+        assert checks["archive_sha"] == "recorded_unverified"
 
 
 async def test_v13_receipt_refuses_expired_running_attempt(
@@ -1148,6 +1250,7 @@ async def test_v13_build_receipt_requires_verified_image_upload(
             ScreeningAttempt(
                 attempt_id=attempt_id,
                 agent_id=agent_id,
+                artifact_sha256=_SHA256,
                 screener_hotkey=_SCREENER_HOTKEY,
                 policy_version=13,
                 status="running",
