@@ -135,7 +135,7 @@ class AdminCopyReviewItem(BaseModel):
     opened_at: datetime
     resolved_at: datetime | None = None
     resolved_by: str | None = None
-    resolution: Literal["clear", "reject"] | None = None
+    resolution: Literal["clear", "reject", "withdraw"] | None = None
     resolution_reason: str | None = None
     original: AdminCopyReviewEvidence
     # Populated only when the list is requested with
@@ -165,7 +165,7 @@ class AdminCopyReviewList(BaseModel):
 
 
 class AdminCopyReviewAction(BaseModel):
-    action: Literal["reopen", "clear", "reject"]
+    action: Literal["reopen", "clear", "reject", "withdraw"]
     reason: str
     actor: str
     created_at: datetime

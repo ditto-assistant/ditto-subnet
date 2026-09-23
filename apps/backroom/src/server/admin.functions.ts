@@ -7,7 +7,10 @@ import {
   selectActiveBenchmarkInputSchema,
   quarantineContextInputSchema,
   ownerAttestationLookupInputSchema,
+  executeAthHoldWithdrawalInputSchema,
+  getAthReviewInputSchema,
   openAthReviewInputSchema,
+  previewAthHoldWithdrawalInputSchema,
   listCopyReviewsInputSchema,
   releaseValidatorAssignmentInputSchema,
   retryValidationInputSchema,
@@ -92,7 +95,10 @@ import {
   fetchScreeningArtifact,
   fetchValidatorAssignments,
   executeScreeningQuarantineBatch,
+  executeAthHoldWithdrawal,
+  fetchAthReview,
   openAthReview as openAthReviewService,
+  previewAthHoldWithdrawal,
   previewScreeningQuarantineBatch,
   resolveCopyReview,
   resolveScreeningQuarantine,
@@ -693,6 +699,33 @@ export const openAthReview = createServerFn({ method: 'POST' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return openAthReviewService(data, context.session.email)
+  })
+
+export const getAthReview = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(getAthReviewInputSchema)
+  .handler(({ data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchAthReview(data)
+  })
+
+export const previewAthHoldWithdrawalFn = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(previewAthHoldWithdrawalInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return previewAthHoldWithdrawal(data, context.session.email)
+  })
+
+export const executeAthHoldWithdrawalFn = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(executeAthHoldWithdrawalInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return executeAthHoldWithdrawal(data, context.session.email)
   })
 
 export const listScreeningSubmissions = createServerFn({ method: 'GET' })

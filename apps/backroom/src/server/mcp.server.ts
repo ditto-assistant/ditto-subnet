@@ -36,7 +36,9 @@ import {
   benchmarkContractMigrationLookupInputSchema,
   benchmarkContractRefreshLookupInputSchema,
   getAthReviewInputSchema,
+  executeAthHoldWithdrawalInputSchema,
   openAthReviewInputSchema,
+  previewAthHoldWithdrawalInputSchema,
   previewAthRulingsBatchInputSchema,
   executeAthRulingsBatchInputSchema,
   searchAthPrecedentsInputSchema,
@@ -150,7 +152,9 @@ import {
   fetchOwnerAttestations,
   executeScreeningQuarantineBatch,
   previewScreeningQuarantineBatch,
+  executeAthHoldWithdrawal,
   openAthReview,
+  previewAthHoldWithdrawal,
   resolveCopyReview,
   createAthRulingsUpload,
   previewAthRulingsBatch,
@@ -302,6 +306,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'reject_screening_submission',
   'open_ath_review',
   'resolve_ath_review',
+  'withdraw_ath_hold',
   'create_ath_rulings_upload',
   'execute_ath_rulings_batch',
   'execute_screening_quarantine_batch',
@@ -1017,6 +1022,32 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => resolveCopyReview(input, props.session.email)),
+  )
+
+  registerTool(
+    'preview_ath_hold_withdrawal',
+    {
+      title: 'Preview precautionary ATH hold withdrawal',
+      description:
+        'Dry-run one manual precautionary ATH withdrawal. Returns the crown, emission effect, and preview token. Requires backroom:read.',
+      inputSchema: previewAthHoldWithdrawalInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      result(await previewAthHoldWithdrawal(input, props.session.email)),
+  )
+
+  registerTool(
+    'withdraw_ath_hold',
+    {
+      title: 'Withdraw precautionary ATH hold',
+      description:
+        'Withdraw one previewed manual ATH hold. confirmation must be "WITHDRAW ATH HOLD". Restores rank without granting emissions. Requires backroom:write.',
+      inputSchema: executeAthHoldWithdrawalInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => executeAthHoldWithdrawal(input, props.session.email)),
   )
 
   registerTool(

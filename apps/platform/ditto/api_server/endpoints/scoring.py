@@ -48,6 +48,10 @@ from ditto.api_models.validator import (
     V9BaseEvidence,
     V9ConfirmationReceipt,
 )
+from ditto.api_server.ath_hold_withdrawal import (
+    emission_withheld_agent_ids,
+    without_emission_withheld,
+)
 from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.confirmation_seed_anchor import list_reign_seed_anchors
 from ditto.api_server.continual_retest_settings import (
@@ -607,6 +611,13 @@ async def materialize_ledger_snapshot(
             "confirmation_seeds",
         ),
         dedupe_owners=False,
+    )
+    # A withdrawn precautionary hold is back on the public score board, but it
+    # is not a CLEAR. Keep it out of the weight pool until #2041's gate says
+    # this exact artifact is reward-eligible.
+    rows = without_emission_withheld(
+        rows,
+        await emission_withheld_agent_ids(session, [row.agent_id for row in rows]),
     )
     v9_confirmation_mode: Literal["enforce"] | None = (
         "enforce" if await v9_confirmation_enforcement_active(session) else None

@@ -201,6 +201,10 @@ from ditto.api_models.validator_capabilities import (
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 from ditto.api_server.artifact_audit import client_ip, request_detail
+from ditto.api_server.ath_hold_withdrawal import (
+    emission_withheld_agent_ids,
+    without_emission_withheld,
+)
 from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retired
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
@@ -2310,6 +2314,7 @@ def _public_entry(
     coding_shadow: PublicCodingShadowScore | None = None,
     router_shadow_by_hotkey: Mapping[str, float] | None = None,
     router_shadow_queued: bool = False,
+    reward_withheld: bool = False,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -2406,7 +2411,11 @@ def _public_entry(
         miner_uid=miner_uid,
         registered=registered,
         emission_eligible=(
-            finalized and r.eligible and registered if registered is not None else None
+            False
+            if reward_withheld
+            else finalized and r.eligible and registered
+            if registered is not None
+            else None
         ),
         composite=r.composite,
         official_composite=(
@@ -3405,6 +3414,14 @@ async def build_public_leaderboard(
         if registered_uids is None
         else [row for row in finalized_rows if row.miner_hotkey in registered_uids]
     )
+    # Rank presentation includes a withdrawn precautionary hold. The emission
+    # projection does not, until the terminal exact-artifact gate marks that
+    # exact artifact reward-eligible.
+    withheld_reward_ids = await emission_withheld_agent_ids(
+        session,
+        [row.agent_id for row in finalized_rows],
+    )
+    emission_rows = without_emission_withheld(emission_rows, withheld_reward_ids)
     # The factor-adjusted finalized board is now one row per owner, so the
     # provisional overlay suppresses and dedupes on that same owner graph.
     provisional_candidates = (
@@ -3740,6 +3757,7 @@ async def build_public_leaderboard(
                 v9_confirmation=v9_confirmations.get(row.agent_id),
                 router_shadow_by_hotkey=router_shadow_by_hotkey,
                 router_shadow_queued=bool(router_shadow_by_hotkey),
+                reward_withheld=row.agent_id in withheld_reward_ids,
             )
         )
     for row, count in provisional_rows:
@@ -3794,6 +3812,7 @@ async def build_public_leaderboard(
                 v9_confirmation=v9_confirmations.get(row.agent_id),
                 router_shadow_by_hotkey=router_shadow_by_hotkey,
                 router_shadow_queued=bool(router_shadow_by_hotkey),
+                reward_withheld=row.agent_id in withheld_reward_ids,
             )
         )
     return PublicLeaderboardResponse(
@@ -5875,7 +5894,7 @@ async def _duplicate_submission_metadata(
 class _PublicAthReviewSnapshot:
     """Public-safe projection of the latest durable ATH lifecycle event."""
 
-    event: Literal["opened", "reopened", "cleared", "rejected"]
+    event: Literal["opened", "reopened", "cleared", "rejected", "withdrawn"]
     reason: str
     event_at: datetime
     opened_at: datetime
@@ -5941,7 +5960,9 @@ async def _ath_review_public_snapshot(
         latest = latest_actions.get(review.review_id)
         if review.status == "pending":
             if latest is not None and latest.action == "reopen":
-                event: Literal["opened", "reopened", "cleared", "rejected"] = "reopened"
+                event: Literal[
+                    "opened", "reopened", "cleared", "rejected", "withdrawn"
+                ] = "reopened"
                 reason = latest.reason
                 event_at = latest.created_at
             else:
@@ -5951,7 +5972,13 @@ async def _ath_review_public_snapshot(
             opened_at = review.reopened_at or review.opened_at
         else:
             resolution = review.resolution or (latest.action if latest else None)
-            event = "rejected" if resolution == "reject" else "cleared"
+            event = (
+                "rejected"
+                if resolution == "reject"
+                else "withdrawn"
+                if resolution == "withdraw"
+                else "cleared"
+            )
             reason = (
                 review.resolution_reason
                 or (latest.reason if latest is not None else None)

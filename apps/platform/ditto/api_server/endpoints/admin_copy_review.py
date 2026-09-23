@@ -225,7 +225,9 @@ def _audit(
         opened_by=opened_by,
         action_history=[
             AdminCopyReviewAction(
-                action=cast(Literal["reopen", "clear", "reject"], action.action),
+                action=cast(
+                    Literal["reopen", "clear", "reject", "withdraw"], action.action
+                ),
                 reason=action.reason,
                 actor=action.actor,
                 created_at=action.created_at,
@@ -616,7 +618,15 @@ async def search_copy_review_precedents(
     where: list[ColumnElement[bool]] = []
     if status != "all":
         where.append(AthReview.status == status)
-    if resolution != "all":
+    if resolution == "all":
+        # A withdrawal is a correction, not a holding later reviews can cite.
+        where.append(
+            or_(
+                AthReview.resolution.is_(None),
+                AthReview.resolution.in_(("clear", "reject")),
+            )
+        )
+    else:
         where.append(AthReview.resolution == resolution)
     if review_kind is not None:
         where.append(_review_kind_filter(review_kind))

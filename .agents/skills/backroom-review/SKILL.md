@@ -177,7 +177,12 @@ published policy or transfer a finding to another artifact.
    row mixed because I4 or I7 passed while I3 or I5 still fails.
 5. Re-fetch `get_screening_submission` immediately before writing.
 6. `open_ath_review` with the exact SHA-256 and score count, then
-   `resolve_ath_review` `clear` or `reject`.
+   `resolve_ath_review` `clear` or `reject`. Withdrawing an unsupported
+   precautionary manual hold is neither of those: `preview_ath_hold_withdrawal`
+   then `withdraw_ath_hold` with confirmation `WITHDRAW ATH HOLD`. That
+   restores score and rank presentation and records `resolution=withdraw`.
+   It does not certify the artifact, and it does not grant emissions while
+   the terminal exact-artifact review gate is unavailable.
 7. Write a specific miner-visible reason: pattern, file:line, which limb or
    engine test failed or passed, and the cited precedent.
 8. Re-read the agent. A timeout is ambiguous; verify before retrying.

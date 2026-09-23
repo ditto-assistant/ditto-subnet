@@ -1092,7 +1092,7 @@ CREATE TABLE public.ath_review_actions (
     actor text NOT NULL,
     evidence jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT ath_review_actions_action_check CHECK ((action = ANY (ARRAY['reopen'::text, 'clear'::text, 'reject'::text]))),
+    CONSTRAINT ath_review_actions_action_check CHECK ((action = ANY (ARRAY['reopen'::text, 'clear'::text, 'reject'::text, 'withdraw'::text]))),
     CONSTRAINT ath_review_actions_actor_check CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT ath_review_actions_reason_check CHECK ((length(TRIM(BOTH FROM reason)) >= 3))
 );
@@ -1117,8 +1117,8 @@ CREATE TABLE public.ath_reviews (
     original_evidence jsonb NOT NULL,
     algorithm_provenance jsonb NOT NULL,
     reopened_at timestamp with time zone,
-    CONSTRAINT ath_reviews_lifecycle_check CHECK ((((status = 'pending'::text) AND (resolved_at IS NULL) AND (resolved_by IS NULL) AND (resolution IS NULL) AND (resolution_reason IS NULL)) OR ((status = 'resolved'::text) AND (resolved_at IS NOT NULL) AND (resolved_by IS NOT NULL) AND ((length(TRIM(BOTH FROM resolved_by)) >= 1) AND (length(TRIM(BOTH FROM resolved_by)) <= 120)) AND (resolution IS NOT NULL) AND (resolution = ANY (ARRAY['clear'::text, 'reject'::text])) AND (resolution_reason IS NOT NULL) AND (length(TRIM(BOTH FROM resolution_reason)) >= 3)))),
-    CONSTRAINT ath_reviews_resolution_check CHECK (((resolution IS NULL) OR (resolution = ANY (ARRAY['clear'::text, 'reject'::text])))),
+    CONSTRAINT ath_reviews_lifecycle_check CHECK ((((status = 'pending'::text) AND (resolved_at IS NULL) AND (resolved_by IS NULL) AND (resolution IS NULL) AND (resolution_reason IS NULL)) OR ((status = 'resolved'::text) AND (resolved_at IS NOT NULL) AND (resolved_by IS NOT NULL) AND ((length(TRIM(BOTH FROM resolved_by)) >= 1) AND (length(TRIM(BOTH FROM resolved_by)) <= 120)) AND (resolution IS NOT NULL) AND (resolution = ANY (ARRAY['clear'::text, 'reject'::text, 'withdraw'::text])) AND (resolution_reason IS NOT NULL) AND (length(TRIM(BOTH FROM resolution_reason)) >= 3)))),
+    CONSTRAINT ath_reviews_resolution_check CHECK (((resolution IS NULL) OR (resolution = ANY (ARRAY['clear'::text, 'reject'::text, 'withdraw'::text])))),
     CONSTRAINT ath_reviews_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'resolved'::text])))
 );
 

@@ -260,7 +260,9 @@ describe('Backroom MCP tools', () => {
         'cancel_benchmark_canary',
         'resolve_screening_quarantine',
         'resolve_screening_dispute',
+        'preview_ath_hold_withdrawal',
         'resolve_ath_review',
+        'withdraw_ath_hold',
         'create_ath_rulings_upload',
         'preview_ath_rulings_batch',
         'execute_ath_rulings_batch',
@@ -344,7 +346,9 @@ describe('Backroom MCP tools', () => {
     // Exact-agent continual retest diagnosis adds one bounded read schema.
     // The optional L4 completion cap and exact-attempt v13 receipt inventory
     // add small bounded schemas without expanding tool descriptions.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(138_300)
+    // preview_ath_hold_withdrawal and withdraw_ath_hold add two bounded
+    // guard schemas; measured catalog is 141,016 bytes.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(141_500)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -363,7 +367,7 @@ describe('Backroom MCP tools', () => {
     // the one-line bench v13 gate-evidence and dispute-kind notes on the score
     // and dispute tools land at 25_237, so it moves to 25_400.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      25_700, // Includes the exact-agent continual retest read summary.
+      26_000, // Includes the two one-line precautionary ATH withdrawal tools.
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

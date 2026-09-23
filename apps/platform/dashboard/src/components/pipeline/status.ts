@@ -138,6 +138,7 @@ export function reviewEventLabel(entry: ReviewEventFields): string {
     reopened: "Review reopened",
     cleared: "Review cleared",
     rejected: "Review rejected",
+    withdrawn: "Hold withdrawn",
   };
   return (entry.review_event != null && labels[entry.review_event]) || "Operator review";
 }

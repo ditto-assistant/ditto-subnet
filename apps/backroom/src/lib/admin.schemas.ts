@@ -6744,7 +6744,7 @@ export const copyReviewItemSchema = z.object({
   opened_at: z.string(),
   resolved_at: z.string().nullable(),
   resolved_by: z.string().nullable(),
-  resolution: copyReviewResolutionSchema.nullable(),
+  resolution: z.enum(['clear', 'reject', 'withdraw']).nullable(),
   resolution_reason: z.string().nullable(),
   original: copyReviewOriginalSchema,
   // Embedded by platforms with #163 when the list is requested with
@@ -6869,7 +6869,7 @@ export const athReviewAuditSchema = z.object({
   previous_status: z.string().nullable(),
   opened_by: z.string().nullable(),
   action_history: z.array(z.object({
-    action: z.enum(['reopen', 'clear', 'reject']),
+    action: z.enum(['reopen', 'clear', 'reject', 'withdraw']),
     reason: z.string(),
     actor: z.string(),
     created_at: z.string(),
@@ -6892,6 +6892,61 @@ export const openAthReviewResponseSchema = z.object({
   idempotent: z.boolean(),
   // Defaults false while the platform API rollout catches up.
   reopened: z.boolean().default(false),
+})
+
+export const ATH_HOLD_WITHDRAWAL_CONFIRMATION = 'WITHDRAW ATH HOLD'
+
+export const previewAthHoldWithdrawalInputSchema = z.object({
+  agentId: z.string().uuid(),
+  reviewId: z.string().uuid(),
+  expectedSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedScoreCount: z.number().int().nonnegative(),
+  expectedAgentStatus: z.string().trim().min(1).max(64),
+  reason: auditReasonSchema(3),
+})
+
+export const athHoldWithdrawalBoardSchema = z.object({
+  bench_version: z.number().int().positive(),
+  read_at: z.string(),
+  ranked_count: z.number().int().nonnegative(),
+  champion_agent_id: z.string().uuid().nullable(),
+  champion_hotkey: z.string().nullable(),
+  champion_score: z.number().nullable(),
+  raw_leader_agent_id: z.string().uuid().nullable(),
+  raw_leader_score: z.number().nullable(),
+  fingerprint: z.string(),
+})
+
+export const previewAthHoldWithdrawalResponseSchema = z.object({
+  agent_id: z.string().uuid(),
+  review_id: z.string().uuid(),
+  artifact_sha256: z.string(),
+  score_count: z.number().int().nonnegative(),
+  agent_status: z.string(),
+  restored_status: z.enum(['scored', 'live']),
+  board_before: athHoldWithdrawalBoardSchema,
+  board_after: athHoldWithdrawalBoardSchema,
+  would_change_crown: z.boolean(),
+  emission_reward_eligible: z.boolean(),
+  emission_gate: z.literal('unavailable'),
+  would_change_emission_crown: z.boolean(),
+  emission_reason: z.string(),
+  preview_token: z.string().min(20),
+  expires_at: z.string(),
+})
+
+export const executeAthHoldWithdrawalInputSchema = previewAthHoldWithdrawalInputSchema.extend({
+  previewToken: z.string().trim().min(20),
+  confirmation: z.literal(ATH_HOLD_WITHDRAWAL_CONFIRMATION),
+})
+
+export const executeAthHoldWithdrawalResponseSchema = z.object({
+  review: copyReviewItemSchema,
+  agent_status: z.string(),
+  restored_status: z.enum(['scored', 'live']),
+  emission_reward_eligible: z.boolean(),
+  emission_gate: z.literal('unavailable'),
+  emission_reason: z.string(),
 })
 
 // Batched ATH rulings: presigned upload -> dry-run preview -> guarded execute.

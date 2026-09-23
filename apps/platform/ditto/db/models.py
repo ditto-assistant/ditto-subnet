@@ -728,7 +728,7 @@ class AthReview(Base):
             "status IN ('pending', 'resolved')", name="ath_reviews_status_check"
         ),
         CheckConstraint(
-            "resolution IS NULL OR resolution IN ('clear', 'reject')",
+            "resolution IS NULL OR resolution IN ('clear', 'reject', 'withdraw')",
             name="ath_reviews_resolution_check",
         ),
         CheckConstraint(
@@ -738,7 +738,7 @@ class AthReview(Base):
             "AND resolved_by IS NOT NULL "
             "AND length(trim(resolved_by)) BETWEEN 1 AND 120 "
             "AND resolution IS NOT NULL "
-            "AND resolution IN ('clear', 'reject') "
+            "AND resolution IN ('clear', 'reject', 'withdraw') "
             "AND resolution_reason IS NOT NULL "
             "AND length(trim(resolution_reason)) >= 3)",
             name="ath_reviews_lifecycle_check",
@@ -767,7 +767,7 @@ class AthReviewAction(Base):
             ["review_id"], ["ath_reviews.review_id"], ondelete="CASCADE"
         ),
         CheckConstraint(
-            "action IN ('reopen', 'clear', 'reject')",
+            "action IN ('reopen', 'clear', 'reject', 'withdraw')",
             name="ath_review_actions_action_check",
         ),
         CheckConstraint(
