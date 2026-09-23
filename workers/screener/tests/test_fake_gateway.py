@@ -12,7 +12,73 @@ import httpx
 
 from ditto_screener.fake_gateway import FakeModelGateway, tool_capability
 from ditto_screener.gate import _write_openrouter_shim_certs
-from ditto_screener.runtime_semantics import judge_tool_run
+from ditto_screener.runtime_semantics import (
+    judge_memory_run,
+    judge_ordinary_run,
+    judge_tool_run,
+)
+
+
+async def test_ordinary_probe_requires_challenge_forwarded_to_model(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "semantic-probe.json"
+    events = tmp_path / "semantic-events"
+    config.write_text(
+        json.dumps(
+            {
+                "kind": "ordinary",
+                "probe_id": "ordinary-1",
+                "challenge_token": "bound-question-1",
+            }
+        )
+    )
+    async with FakeModelGateway(
+        semantic_config_file=str(config), semantic_events_file=str(events)
+    ) as gateway:
+        url = gateway.gateway_url.replace("host.docker.internal", "127.0.0.1")
+        async with httpx.AsyncClient() as client:
+            decoy = await client.post(
+                f"{url}/v1/chat/completions",
+                json={
+                    "model": "acme/reasoner",
+                    "messages": [{"role": "user", "content": "unrelated question"}],
+                    "metadata": {"label": "bound-question-1"},
+                },
+            )
+            assert decoy.status_code == 200
+            assert (not events.exists()) or events.read_text() == ""
+            assert (
+                judge_ordinary_run(
+                    {"answer": gateway.response_text},
+                    gateway_tokens=(gateway.response_text, "unused"),
+                    model_calls=1,
+                    events=[],
+                ).status
+                == "inconclusive"
+            )
+            forwarded = await client.post(
+                f"{url}/v1/chat/completions",
+                json={
+                    "model": "acme/reasoner",
+                    "messages": [
+                        {"role": "user", "content": "answer bound-question-1"}
+                    ],
+                },
+            )
+    assert forwarded.status_code == 200
+    assert [json.loads(line)["event"] for line in events.read_text().splitlines()] == [
+        "challenge_seen"
+    ]
+    assert (
+        judge_ordinary_run(
+            {"answer": gateway.response_text},
+            gateway_tokens=(gateway.response_text, "unused"),
+            model_calls=1,
+            events=["challenge_seen"],
+        ).status
+        == "pass"
+    )
 
 
 async def test_semantic_tool_probe_requires_model_emission_and_one_execution(
@@ -28,6 +94,7 @@ async def test_semantic_tool_probe_requires_model_emission_and_one_execution(
             {
                 "kind": "tool",
                 "probe_id": probe_id,
+                "challenge_token": "challenge-bound-token",
                 "case_id": case_id,
                 "user_id": user_id,
                 "name": "search_web",
@@ -64,11 +131,32 @@ async def test_semantic_tool_probe_requires_model_emission_and_one_execution(
         async with httpx.AsyncClient() as client:
             before_model = await client.post(endpoint, params=params, json=call)
             assert before_model.status_code == 409
+            decoy = await client.post(
+                f"{model_url}/v1/chat/completions",
+                json={
+                    "model": "acme/reasoner-v3",
+                    "messages": [{"role": "user", "content": "unrelated request"}],
+                    "metadata": {"label": "challenge-bound-token"},
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {"name": "search_web", "parameters": {}},
+                        }
+                    ],
+                },
+            )
+            assert "tool_calls" not in decoy.json()["choices"][0]["message"]
+            assert (not events.exists()) or events.read_text() == ""
             first = await client.post(
                 f"{model_url}/v1/chat/completions",
                 json={
                     "model": "acme/reasoner-v3",
-                    "messages": [{"role": "user", "content": "look this up"}],
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "look this up challenge-bound-token",
+                        }
+                    ],
                     "tools": [
                         {
                             "type": "function",
@@ -110,7 +198,7 @@ async def test_semantic_tool_probe_requires_model_emission_and_one_execution(
         observed_events = [
             json.loads(line)["event"] for line in events.read_text().splitlines()
         ]
-        assert observed_events == ["emitted", "executed"]
+        assert observed_events == ["challenge_seen", "emitted", "executed"]
         assert (
             judge_tool_run(
                 {"answer": "private-result-token"},
@@ -126,11 +214,40 @@ async def test_semantic_memory_gateway_reveals_only_values_supplied_by_harness(
     tmp_path: Path,
 ) -> None:
     config = tmp_path / "semantic-probe.json"
+    events = tmp_path / "semantic-events"
     config.write_text(
-        json.dumps({"kind": "memory", "markers": ["amber-12", "cobalt-34"]})
+        json.dumps(
+            {
+                "kind": "memory",
+                "markers": ["amber-12", "cobalt-34"],
+                "challenges": [
+                    {
+                        "probe_id": "memory-a",
+                        "challenge_token": "question-a",
+                        "case_id": "case-a",
+                        "user_id": "user-a",
+                        "forbidden": "cobalt-34",
+                    }
+                ],
+            }
+        )
     )
-    async with FakeModelGateway(semantic_config_file=str(config)) as gateway:
+    route = "aBc123_-aBc123_-aBc123_-"
+    key = bytes(range(32))
+    async with (
+        FakeModelGateway(
+            semantic_config_file=str(config), semantic_events_file=str(events)
+        ) as gateway,
+        FakeModelGateway(
+            surface="tool",
+            tool_route=route,
+            tool_key=key,
+            semantic_config_file=str(config),
+            semantic_events_file=str(events),
+        ) as tool_gateway,
+    ):
         url = gateway.gateway_url.replace("host.docker.internal", "127.0.0.1")
+        tool_url = tool_gateway.gateway_url.replace("host.docker.internal", "127.0.0.1")
         async with httpx.AsyncClient() as client:
             absent = await client.post(
                 f"{url}/v1/chat/completions",
@@ -146,8 +263,50 @@ async def test_semantic_memory_gateway_reveals_only_values_supplied_by_harness(
                     "messages": [{"role": "user", "content": "My value is cobalt-34"}],
                 },
             )
+            leaked_context = await client.post(
+                f"{url}/v1/chat/completions",
+                json={
+                    "model": "acme/reasoner",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": "retrieved cobalt-34 from the other user",
+                        }
+                    ],
+                },
+            )
+            leaked_tool = await client.post(
+                f"{tool_url}/v1/tools/{route}/tool",
+                params={
+                    "cap": tool_capability(key, "case-a", "user-a"),
+                    "case_id": "case-a",
+                    "user_id": "user-a",
+                },
+                json={
+                    "case_id": "case-a",
+                    "user_id": "user-a",
+                    "name": "search_web",
+                    "args": {"query": "cobalt-34"},
+                },
+            )
     assert absent.json()["choices"][0]["message"]["content"] == gateway.response_text
     assert present.json()["choices"][0]["message"]["content"] == "cobalt-34"
+    assert leaked_context.status_code == 200
+    assert leaked_tool.status_code == 200
+    observed_events = [
+        json.loads(line)["event"] for line in events.read_text().splitlines()
+    ]
+    assert observed_events == ["cross_user_context"] * 3
+    assert (
+        judge_memory_run(
+            {"answer": "amber-12"},
+            expected="amber-12",
+            forbidden="cobalt-34",
+            model_calls=1,
+            events=observed_events,
+        ).reason
+        == "cross_user_context_disclosed"
+    )
 
 
 async def test_semantic_tool_probe_supports_responses_api(tmp_path: Path) -> None:
@@ -158,6 +317,7 @@ async def test_semantic_tool_probe_supports_responses_api(tmp_path: Path) -> Non
             {
                 "kind": "tool",
                 "probe_id": "probe-1",
+                "challenge_token": "responses-challenge",
                 "case_id": "case-1",
                 "user_id": "user-1",
                 "name": "search_web",
@@ -175,7 +335,7 @@ async def test_semantic_tool_probe_supports_responses_api(tmp_path: Path) -> Non
                 f"{url}/v1/responses",
                 json={
                     "model": "acme/reasoner",
-                    "input": "look this up",
+                    "input": "look this up responses-challenge",
                     "tools": [{"type": "function", "name": "search_web"}],
                 },
             )

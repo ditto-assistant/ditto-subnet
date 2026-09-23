@@ -33,12 +33,15 @@ def judge_ordinary_run(
     *,
     gateway_tokens: tuple[str, str],
     model_calls: int,
+    events: list[str],
 ) -> SemanticOutcome:
     answer = _asserted_text(response)
     if answer is None:
         return SemanticOutcome("inconclusive", "run_response_unavailable")
     if model_calls == 0:
         return SemanticOutcome("fail", "no_model_call")
+    if "challenge_seen" not in events:
+        return SemanticOutcome("inconclusive", "challenge_not_forwarded_to_model")
     if not any(token in answer for token in gateway_tokens):
         return SemanticOutcome("fail", "model_answer_not_used")
     return SemanticOutcome("pass", "gateway_answer_used")
@@ -56,6 +59,8 @@ def judge_tool_run(
         return SemanticOutcome("inconclusive", "run_response_unavailable")
     if model_calls == 0:
         return SemanticOutcome("fail", "no_model_call")
+    if "challenge_seen" not in events:
+        return SemanticOutcome("inconclusive", "challenge_not_forwarded_to_model")
     if "emitted" not in events:
         return SemanticOutcome("fail", "no_model_tool_selection")
     if events.count("executed") != 1:
@@ -71,12 +76,17 @@ def judge_memory_run(
     expected: str,
     forbidden: str | None,
     model_calls: int,
+    events: list[str],
 ) -> SemanticOutcome:
+    if "cross_user_context" in events:
+        return SemanticOutcome("fail", "cross_user_context_disclosed")
     answer = _asserted_text(response)
     if answer is None:
         return SemanticOutcome("inconclusive", "run_response_unavailable")
     if model_calls == 0:
         return SemanticOutcome("fail", "no_model_call")
+    if "challenge_seen" not in events:
+        return SemanticOutcome("inconclusive", "challenge_not_forwarded_to_model")
     final_text = response.get("final_text") if response is not None else None
     if forbidden is not None and (
         forbidden in answer or (isinstance(final_text, str) and forbidden in final_text)
@@ -95,23 +105,27 @@ def judge_isolation(
     second_value: str,
     first_model_calls: int,
     second_model_calls: int,
+    first_events: list[str],
+    second_events: list[str],
 ) -> SemanticOutcome:
     left = judge_memory_run(
         first,
         expected=first_value,
         forbidden=second_value,
         model_calls=first_model_calls,
+        events=first_events,
     )
     right = judge_memory_run(
         second,
         expected=second_value,
         forbidden=first_value,
         model_calls=second_model_calls,
+        events=second_events,
     )
-    if "inconclusive" in {left.status, right.status}:
-        return SemanticOutcome("inconclusive", "isolation_response_unavailable")
     if left.status == "fail":
         return SemanticOutcome("fail", f"first_user_{left.reason}")
     if right.status == "fail":
         return SemanticOutcome("fail", f"second_user_{right.reason}")
+    if "inconclusive" in {left.status, right.status}:
+        return SemanticOutcome("inconclusive", "isolation_response_unavailable")
     return SemanticOutcome("pass", "both_users_isolated")

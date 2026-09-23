@@ -3465,6 +3465,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             )
 
         ordinary_token = secrets.token_hex(12)
+        ordinary_probe_id = secrets.token_hex(12)
         tool_token = secrets.token_hex(12)
         memory_a = secrets.token_hex(12)
         user_a = f"u-{secrets.token_hex(12)}"
@@ -3485,6 +3486,14 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 "bench_version": bench_version,
             }
 
+        _set_semantic_probe(
+            audit_runtime.gateway_state_file,
+            {
+                "kind": "ordinary",
+                "probe_id": ordinary_probe_id,
+                "challenge_token": ordinary_token,
+            },
+        )
         ordinary = await post(
             "/run",
             run_request(user_a, f"Explain this ordinary request: {ordinary_token}"),
@@ -3498,6 +3507,9 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 audit_runtime.oracle_answer,
             ),
             model_calls=ordinary[2] if ordinary is not None else 0,
+            events=_semantic_events(
+                audit_runtime.gateway_state_file, ordinary_probe_id
+            ),
         )
         log_outcome("ordinary_model_run", ordinary_outcome)
 
@@ -3536,6 +3548,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 {
                     "kind": "tool",
                     "probe_id": tool_probe_id,
+                    "challenge_token": tool_token,
                     "case_id": tool_case,
                     "user_id": user_a,
                     "name": tool_name,
@@ -3589,13 +3602,29 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             )
             return
         memory_b = secrets.token_hex(12)
+        memory_probe_id = secrets.token_hex(12)
+        memory_challenge_token = secrets.token_hex(12)
+        memory_request_a = run_request(
+            user_a,
+            f"What is my reference marker? {memory_challenge_token}",
+        )
         memory_configured = _set_semantic_probe(
             audit_runtime.gateway_state_file,
-            {"kind": "memory", "markers": [memory_a, memory_b]},
+            {
+                "kind": "memory",
+                "markers": [memory_a, memory_b],
+                "challenges": [
+                    {
+                        "probe_id": memory_probe_id,
+                        "challenge_token": memory_challenge_token,
+                        "case_id": memory_request_a["case_id"],
+                        "user_id": user_a,
+                        "forbidden": memory_b,
+                    }
+                ],
+            },
         )
-        memory_run_a = await post(
-            "/run", run_request(user_a, "What is my reference marker?")
-        )
+        memory_run_a = await post("/run", memory_request_a)
         if memory_run_a is None:
             log_outcome(
                 "seed_memory_run",
@@ -3614,6 +3643,9 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 expected=memory_a,
                 forbidden=None,
                 model_calls=memory_run_a[2],
+                events=_semantic_events(
+                    audit_runtime.gateway_state_file, memory_probe_id
+                ),
             )
             log_outcome("seed_memory_run", outcome)
         else:
@@ -3633,12 +3665,60 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 SemanticOutcome("inconclusive", "second_seed_ack_unavailable"),
             )
             return
-        isolation_a = await post(
-            "/run", run_request(user_a, "Repeat only my own reference marker.")
+        isolation_a_id = secrets.token_hex(12)
+        isolation_b_id = secrets.token_hex(12)
+        isolation_a_token = secrets.token_hex(12)
+        isolation_b_token = secrets.token_hex(12)
+        isolation_request_a = run_request(
+            user_a, f"Repeat only my own reference marker. {isolation_a_token}"
         )
-        isolation_b = await post(
-            "/run", run_request(user_b, "Repeat only my own reference marker.")
+        isolation_request_b = run_request(
+            user_b, f"Repeat only my own reference marker. {isolation_b_token}"
         )
+
+        def configure_isolation(
+            probe_id: str,
+            challenge_token: str,
+            request: Mapping[str, object],
+            user_id: str,
+            forbidden: str,
+        ) -> bool:
+            # Only one /run is active at a time. Every observable model/tool
+            # request during that window is scanned for the other user's value,
+            # even if the harness omitted the challenge from that request.
+            return _set_semantic_probe(
+                audit_runtime.gateway_state_file,
+                {
+                    "kind": "memory",
+                    "markers": [memory_a, memory_b],
+                    "challenges": [
+                        {
+                            "probe_id": probe_id,
+                            "challenge_token": challenge_token,
+                            "case_id": request["case_id"],
+                            "user_id": user_id,
+                            "forbidden": forbidden,
+                        }
+                    ],
+                },
+            )
+
+        isolation_a_configured = configure_isolation(
+            isolation_a_id,
+            isolation_a_token,
+            isolation_request_a,
+            user_a,
+            memory_b,
+        )
+        isolation_a = await post("/run", isolation_request_a)
+        isolation_b_configured = configure_isolation(
+            isolation_b_id,
+            isolation_b_token,
+            isolation_request_b,
+            user_b,
+            memory_a,
+        )
+        isolation_b = await post("/run", isolation_request_b)
         if isolation_a is not None and isolation_b is not None:
             await emit(
                 "two_user_isolation",
@@ -3646,7 +3726,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 [seeded_a[1], seeded_b[1], isolation_a[1], isolation_b[1]],
                 sum(item[2] for item in (seeded_a, seeded_b, isolation_a, isolation_b)),
             )
-            if memory_configured:
+            if isolation_a_configured and isolation_b_configured:
                 outcome = judge_isolation(
                     isolation_a[3],
                     isolation_b[3],
@@ -3654,6 +3734,12 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                     second_value=memory_b,
                     first_model_calls=isolation_a[2],
                     second_model_calls=isolation_b[2],
+                    first_events=_semantic_events(
+                        audit_runtime.gateway_state_file, isolation_a_id
+                    ),
+                    second_events=_semantic_events(
+                        audit_runtime.gateway_state_file, isolation_b_id
+                    ),
                 )
                 log_outcome("two_user_isolation", outcome)
             else:

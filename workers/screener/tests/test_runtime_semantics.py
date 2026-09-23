@@ -12,7 +12,10 @@ def test_tool_requires_model_emission_execution_and_returned_result() -> None:
     response = {"answer": "needle-strong"}
     assert (
         judge_tool_run(
-            response, expected_result="needle-strong", model_calls=1, events=[]
+            response,
+            expected_result="needle-strong",
+            model_calls=1,
+            events=["challenge_seen"],
         ).reason
         == "no_model_tool_selection"
     )
@@ -21,7 +24,7 @@ def test_tool_requires_model_emission_execution_and_returned_result() -> None:
             response,
             expected_result="needle-strong",
             model_calls=1,
-            events=["emitted"],
+            events=["challenge_seen", "emitted"],
         ).reason
         == "no_unique_observed_execution"
     )
@@ -30,7 +33,7 @@ def test_tool_requires_model_emission_execution_and_returned_result() -> None:
             response,
             expected_result="needle-strong",
             model_calls=1,
-            events=["emitted", "executed"],
+            events=["challenge_seen", "emitted", "executed"],
         ).status
         == "pass"
     )
@@ -39,19 +42,31 @@ def test_tool_requires_model_emission_execution_and_returned_result() -> None:
 def test_memory_requires_answer_and_model_call() -> None:
     assert (
         judge_memory_run(
-            {"answer": "amber-12"}, expected="amber-12", forbidden=None, model_calls=0
+            {"answer": "amber-12"},
+            expected="amber-12",
+            forbidden=None,
+            model_calls=0,
+            events=["challenge_seen"],
         ).reason
         == "no_model_call"
     )
     assert (
         judge_memory_run(
-            {"answer": "wrong"}, expected="amber-12", forbidden=None, model_calls=1
+            {"answer": "wrong"},
+            expected="amber-12",
+            forbidden=None,
+            model_calls=1,
+            events=["challenge_seen"],
         ).reason
         == "seeded_value_not_recalled"
     )
     assert (
         judge_memory_run(
-            {"answer": "amber-12"}, expected="amber-12", forbidden=None, model_calls=1
+            {"answer": "amber-12"},
+            expected="amber-12",
+            forbidden=None,
+            model_calls=1,
+            events=["challenge_seen"],
         ).status
         == "pass"
     )
@@ -65,9 +80,22 @@ def test_isolation_rejects_cross_user_disclosure_even_with_correct_value() -> No
         second_value="cobalt-34",
         first_model_calls=1,
         second_model_calls=1,
+        first_events=["challenge_seen"],
+        second_events=["challenge_seen"],
     )
     assert outcome.status == "fail"
     assert outcome.reason == "first_user_cross_user_value_disclosed"
+    prompt_only_leak = judge_isolation(
+        {"answer": "amber-12"},
+        None,
+        first_value="amber-12",
+        second_value="cobalt-34",
+        first_model_calls=1,
+        second_model_calls=0,
+        first_events=["cross_user_context", "challenge_seen"],
+        second_events=[],
+    )
+    assert prompt_only_leak.reason == "first_user_cross_user_context_disclosed"
     assert (
         judge_isolation(
             {"answer": "amber-12"},
@@ -76,6 +104,8 @@ def test_isolation_rejects_cross_user_disclosure_even_with_correct_value() -> No
             second_value="cobalt-34",
             first_model_calls=1,
             second_model_calls=1,
+            first_events=["challenge_seen"],
+            second_events=["challenge_seen"],
         ).status
         == "pass"
     )
@@ -87,13 +117,25 @@ def test_missing_response_is_inconclusive_and_ordinary_requires_gateway_token() 
             None,
             expected_result="needle",
             model_calls=1,
-            events=["emitted", "executed"],
+            events=["challenge_seen", "emitted", "executed"],
         ).status
         == "inconclusive"
     )
     assert (
         judge_ordinary_run(
-            {"final_text": "static"}, gateway_tokens=("first", "second"), model_calls=1
+            {"final_text": "static"},
+            gateway_tokens=("first", "second"),
+            model_calls=1,
+            events=["challenge_seen"],
         ).reason
         == "model_answer_not_used"
+    )
+    assert (
+        judge_ordinary_run(
+            {"final_text": "first"},
+            gateway_tokens=("first", "second"),
+            model_calls=1,
+            events=[],
+        ).reason
+        == "challenge_not_forwarded_to_model"
     )

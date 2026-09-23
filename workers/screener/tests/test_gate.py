@@ -205,10 +205,38 @@ async def test_v13_shadow_semantics_require_tool_and_user_specific_memory(
             memories[str(payload["user_id"])] = str(pairs[0]["response"])
             return 0, '{"pairs":1,"subjects":0,"links":0}'
         calls += 1
-        if payload.get("tools"):
-            config = json.loads((tmp_path / "semantic-probe.json").read_text())
-            events_file = tmp_path / "semantic-events"
+        config = json.loads((tmp_path / "semantic-probe.json").read_text())
+        events_file = tmp_path / "semantic-events"
+        if config["kind"] == "ordinary":
+            assert config["challenge_token"] in str(payload["user_input"])
             with events_file.open("a") as stream:
+                stream.write(
+                    json.dumps(
+                        {"event": "challenge_seen", "probe_id": config["probe_id"]}
+                    )
+                    + "\n"
+                )
+        if config["kind"] == "memory":
+            with events_file.open("a") as stream:
+                for challenge in config["challenges"]:
+                    if challenge["challenge_token"] in str(payload["user_input"]):
+                        stream.write(
+                            json.dumps(
+                                {
+                                    "event": "challenge_seen",
+                                    "probe_id": challenge["probe_id"],
+                                }
+                            )
+                            + "\n"
+                        )
+        if payload.get("tools"):
+            with events_file.open("a") as stream:
+                stream.write(
+                    json.dumps(
+                        {"event": "challenge_seen", "probe_id": config["probe_id"]}
+                    )
+                    + "\n"
+                )
                 stream.write(
                     json.dumps({"event": "emitted", "probe_id": config["probe_id"]})
                     + "\n"

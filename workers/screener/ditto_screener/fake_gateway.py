@@ -222,6 +222,11 @@ class FakeModelGateway:
         probe = self._semantic_probe()
         if probe is None or probe.get("kind") != "tool":
             return None
+        challenge_token = probe.get("challenge_token")
+        if not isinstance(
+            challenge_token, str
+        ) or challenge_token not in _user_prompt_text(body):
+            return None
         result = probe.get("result")
         if isinstance(result, str) and result in _as_text(body):
             return None
@@ -253,6 +258,7 @@ class FakeModelGateway:
         )
         if not offered:
             return None
+        self._semantic_event("challenge_seen", probe_id)
         _SEMANTIC_TOOL_EMISSIONS[probe_id] = (
             _SEMANTIC_TOOL_EMISSIONS.get(probe_id, 0) + 1
         )
@@ -265,6 +271,38 @@ class FakeModelGateway:
                 "arguments": json.dumps(args, separators=(",", ":")),
             },
         }
+
+    def _observe_semantic_context(self, body: bytes) -> None:
+        probe = self._semantic_probe()
+        if probe is None:
+            return
+        text = _as_text(body)
+        user_prompt = _user_prompt_text(body)
+        if probe.get("kind") == "ordinary":
+            probe_id = probe.get("probe_id")
+            token = probe.get("challenge_token")
+            if (
+                isinstance(probe_id, str)
+                and isinstance(token, str)
+                and token in user_prompt
+            ):
+                self._semantic_event("challenge_seen", probe_id)
+        elif probe.get("kind") == "memory":
+            challenges = probe.get("challenges")
+            if not isinstance(challenges, list):
+                return
+            for challenge in challenges:
+                if not isinstance(challenge, dict):
+                    continue
+                probe_id = challenge.get("probe_id")
+                token = challenge.get("challenge_token")
+                forbidden = challenge.get("forbidden")
+                if not isinstance(probe_id, str) or not isinstance(token, str):
+                    continue
+                if isinstance(forbidden, str) and forbidden in text:
+                    self._semantic_event("cross_user_context", probe_id)
+                if token in user_prompt:
+                    self._semantic_event("challenge_seen", probe_id)
 
     def _chat_message(self, body: bytes) -> dict[str, object]:
         """Build the assistant message for one chat-completions turn.
@@ -358,6 +396,7 @@ class FakeModelGateway:
                 and path in _CHAT_ROUTES
             ):
                 self._record_model_call()
+                self._observe_semantic_context(body)
                 await self._simulate_latency()
                 message = self._chat_message(body)
                 payload = {
@@ -384,6 +423,7 @@ class FakeModelGateway:
                 self._surface == "all" and method == "POST" and path in _RESPONSE_ROUTES
             ):
                 self._record_model_call()
+                self._observe_semantic_context(body)
                 await self._simulate_latency()
                 content = self._response_content(body)
                 tool_call = self._semantic_tool_call(body)
@@ -522,6 +562,19 @@ class FakeModelGateway:
         if call.get("case_id") != case_id or call.get("user_id") != user_id:
             return "401 Unauthorized", {"error": "tool route unavailable"}
         probe = self._semantic_probe()
+        if probe is not None and probe.get("kind") == "memory":
+            challenges = probe.get("challenges")
+            if isinstance(challenges, list):
+                for challenge in challenges:
+                    if isinstance(challenge, dict):
+                        probe_id = challenge.get("probe_id")
+                        forbidden = challenge.get("forbidden")
+                        if (
+                            isinstance(probe_id, str)
+                            and isinstance(forbidden, str)
+                            and forbidden in _as_text(body)
+                        ):
+                            self._semantic_event("cross_user_context", probe_id)
         if probe is not None and probe.get("kind") == "tool":
             probe_id = probe.get("probe_id")
             if (
@@ -596,6 +649,47 @@ def _route_path(path: str) -> str:
 def _as_text(body: bytes) -> str:
     """Decode a request body loosely for substring checks; never raises."""
     return body.decode("utf-8", "replace")
+
+
+def _user_prompt_text(body: bytes) -> str:
+    """Read user-facing model input, never tool schema or metadata fields."""
+    try:
+        request = json.loads(body)
+    except (ValueError, UnicodeError):
+        return ""
+    if not isinstance(request, dict):
+        return ""
+
+    def content_text(content: object) -> str:
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for part in content:
+            if isinstance(part, str):
+                parts.append(part)
+            elif isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+        return " ".join(parts)
+
+    messages = request.get("messages")
+    if isinstance(messages, list):
+        return " ".join(
+            content_text(item.get("content"))
+            for item in messages
+            if isinstance(item, dict) and item.get("role") == "user"
+        )
+    response_input = request.get("input")
+    if isinstance(response_input, str):
+        return response_input
+    if isinstance(response_input, list):
+        return " ".join(
+            content_text(item.get("content"))
+            for item in response_input
+            if isinstance(item, dict) and item.get("role") == "user"
+        )
+    return ""
 
 
 def _sidecar_latency_range() -> tuple[float, float]:
