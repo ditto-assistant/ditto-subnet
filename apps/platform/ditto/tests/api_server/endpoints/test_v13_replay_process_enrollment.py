@@ -9,10 +9,11 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from ditto.api_server.endpoints import verification_replay
+from ditto.api_server.endpoints import admin_screener_capacity, verification_replay
 from ditto.api_server.endpoints.verification_replay import (
     ReplayProcessKeyRevoke,
     ReplayProcessKeyWrite,
+    get_replay_process_readiness,
     register_replay_process_key,
     revoke_replay_process_key,
     verify_replay_process_request,
@@ -136,6 +137,83 @@ async def test_emergency_key_revocation_remains_available_at_capacity_one(sessio
     await session.commit()
     key = await session.get(ScreenerReplayProcessKey, key_sha)
     assert key is not None and key.status == "revoked"
+
+
+@pytest.mark.asyncio
+async def test_readiness_requires_exact_fresh_signed_worker_and_release(
+    session, monkeypatch
+):
+    await _node(session)
+    empty = await get_replay_process_readiness(NODE, None, session)
+    assert not empty.ready_for_capacity_one
+    assert "active_process_key" in empty.missing
+    await session.commit()
+    _, public_hex, key_sha = _key()
+    await register_replay_process_key(
+        NODE, _write(public_hex, key_sha), None, session, "operator-test"
+    )
+    now = datetime.now(UTC)
+    session.add(
+        ScreenerHeartbeat(
+            screener_hotkey=HOTKEY,
+            instance_id=INSTANCE,
+            software_version="0.21.2",
+            protocol_version=7,
+            policy_version=13,
+            state="polling",
+            system_metrics={
+                "replay_process": {"key_sha256": key_sha},
+                "release": {
+                    "builtin_policy_version": 13,
+                    "revision": "a" * 40,
+                    "version": "0.301.0",
+                    "activated_at": int(now.timestamp()) - 60,
+                },
+            },
+            reported_at=now,
+            seen_at=now,
+            signature="a" * 128,
+        )
+    )
+    await session.commit()
+    monkeypatch.setattr(
+        verification_replay, "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE", (0, 301, 0)
+    )
+    monkeypatch.setattr(
+        admin_screener_capacity, "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE", (0, 301, 0)
+    )
+    ready = await get_replay_process_readiness(NODE, None, session)
+    assert ready.ready_for_capacity_one and ready.active_key_sha256 == key_sha
+    assert ready.signed_heartbeat_fresh and ready.release_qualified
+    session.add(
+        ScreenerHeartbeat(
+            screener_hotkey=HOTKEY,
+            instance_id=f"{NODE}-worker-2",
+            software_version="0.21.2",
+            protocol_version=7,
+            policy_version=13,
+            state="polling",
+            system_metrics={},
+            reported_at=now,
+            seen_at=now,
+            signature="b" * 128,
+        )
+    )
+    await session.commit()
+    sibling = await get_replay_process_readiness(NODE, None, session)
+    assert not sibling.ready_for_capacity_one
+    assert "capacity_admission_gate" in sibling.missing
+    sibling_row = await session.get(ScreenerHeartbeat, (HOTKEY, f"{NODE}-worker-2"))
+    assert sibling_row is not None
+    sibling_row.seen_at = now - timedelta(minutes=6)
+    await session.commit()
+    heartbeat = await session.get(ScreenerHeartbeat, (HOTKEY, INSTANCE))
+    assert heartbeat is not None
+    heartbeat.seen_at = now - timedelta(minutes=6)
+    await session.commit()
+    stale = await get_replay_process_readiness(NODE, None, session)
+    assert not stale.ready_for_capacity_one
+    assert "signed_worker_heartbeat_current" in stale.missing
 
 
 class _Request:

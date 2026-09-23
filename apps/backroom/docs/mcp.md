@@ -192,6 +192,25 @@ manifest an operator reads to decide *what exists* — today
 than a page, because a row silently missing from page one is evidence the
 reviewer never learns to ask for. `mcp.server.test.ts` pins each tool's bound.
 
+## Independent V13 replay process identity
+
+`get_screener_replay_process_readiness` reads the exact node-2 public-key
+fingerprint, signed worker-1 heartbeat, minimum runner release, and missing
+admission checks from Platform. A healthy ordinary screener heartbeat is not a
+signed replay-process heartbeat. This read does not prove physical host
+isolation or activate replay.
+
+`register_screener_replay_process_key` accepts only a host-generated Ed25519
+**public** key for `subnet-screener-2-worker-1`. Platform requires the enrolled
+node's expected hotkey, replay capacity zero, an audit reason, and the exact
+confirmation containing the SHA-256 of the 32-byte public key. Never send the
+private key to Backroom. `revoke_screener_replay_process_key` binds the active
+key fingerprint and expected hotkey; it remains available during a live canary
+so a compromised or stale process can be stopped. Both writes require
+`backroom:write` and forward the signed-in operator email as `X-Admin-Actor`.
+No key registration, capacity change, or live host enrollment is performed by
+these tools merely becoming available.
+
 ## The review queue
 
 `get_screening_review_queue` is the operator queue: unresolved `ath_reviews`

@@ -180,6 +180,9 @@ describe('Backroom MCP tools', () => {
         'set_screener_provider_settings',
         'set_screener_node_channel_settings',
         'set_screener_node_replay_capacity',
+        'get_screener_replay_process_readiness',
+        'register_screener_replay_process_key',
+        'revoke_screener_replay_process_key',
         'create_screener_bootstrap_grant',
         'get_screener_review_settings',
         'get_screener_fanout_shadow',
@@ -370,9 +373,9 @@ describe('Backroom MCP tools', () => {
     // get_ath_review: which of `hold.reason` / `superseded_*` is the CURRENT
     // reason and which is withdrawn history. That is a correctness rule for
     // anything that quotes a reason back to a miner, not a tutorial.
-    // Eight digest-only V13 provenance/analysis tools add about 6 KB of
-    // input schemas; the catalog still excludes private case bytes and tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(155_000)
+    // Eight digest-only V13 provenance/analysis tools and three process-key
+    // tools add bounded entries. Detailed procedures remain in tool help.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(158_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -2585,6 +2588,100 @@ describe('Backroom MCP tools', () => {
       expected_hotkey: hotkey, expected_status: 'active', expected_capacity: 0,
       capacity: 1, reason: 'Start one independent report-only replay canary',
     })
+    await client.close()
+    await server.close()
+  })
+
+  it('reads exact signed-worker readiness and keeps process-key writes scoped', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const key = 'a'.repeat(64)
+    const readiness = {
+      node_id: 'subnet-screener-2', node_status: 'active', provider: 'hetzner',
+      provider_resource_id: 'host-2', screener_hotkey: '5Independent',
+      replay_capacity: 0, instance_id: 'subnet-screener-2-worker-1',
+      active_key_sha256: key, active_key_revision: 1,
+      key_registered_at: '2026-09-23T00:00:00Z', heartbeat_seen_at: null,
+      heartbeat_key_sha256: null, heartbeat_policy_version: null,
+      heartbeat_release: null, minimum_runner_release: null,
+      signed_heartbeat_fresh: false, release_qualified: false,
+      ready_for_capacity_one: false, missing: ['signed_worker_heartbeat_current'],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(readiness))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const read = await client.callTool({ name: 'get_screener_replay_process_readiness' })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({ ready_for_capacity_one: false, active_key_sha256: key })
+    const args = {
+      expectedHotkey: '5Independent', publicKeyHex: 'b'.repeat(64),
+      reason: 'Register one isolated canary process',
+      confirmation: `REGISTER V13 REPLAY PROCESS subnet-screener-2/subnet-screener-2-worker-1/${key}`,
+    }
+    for (const [name, input] of [
+      ['register_screener_replay_process_key', args],
+      ['revoke_screener_replay_process_key', {
+        expectedHotkey: '5Independent', expectedKeySha256: key,
+        reason: 'Emergency revoke isolated process',
+        confirmation: `REVOKE V13 REPLAY PROCESS subnet-screener-2/${key}`,
+      }],
+    ] as const) {
+      const denied = await client.callTool({ name, arguments: input })
+      expect(denied.isError).toBe(true)
+      expect(readTextResult(denied)).toContain('read-only')
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await client.close()
+    await server.close()
+  })
+
+  it('forwards guarded process-key registration and revocation with the operator identity', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const key = '4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6'
+    const readiness = {
+      node_id: 'subnet-screener-2', node_status: 'active', provider: 'hetzner',
+      provider_resource_id: 'host-2', screener_hotkey: '5Independent',
+      replay_capacity: 0, instance_id: 'subnet-screener-2-worker-1',
+      active_key_sha256: key, active_key_revision: 1,
+      key_registered_at: '2026-09-23T00:00:00Z', heartbeat_seen_at: null,
+      heartbeat_key_sha256: null, heartbeat_policy_version: null,
+      heartbeat_release: null, minimum_runner_release: null,
+      signed_heartbeat_fresh: false, release_qualified: false,
+      ready_for_capacity_one: false, missing: ['signed_worker_heartbeat_current'],
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json(readiness))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json({ ...readiness, active_key_sha256: null, active_key_revision: null, key_registered_at: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const register = await client.callTool({
+      name: 'register_screener_replay_process_key', arguments: {
+        expectedHotkey: '5Independent', publicKeyHex: 'b'.repeat(64),
+        reason: 'Register one isolated canary process',
+        confirmation: `REGISTER V13 REPLAY PROCESS subnet-screener-2/subnet-screener-2-worker-1/${key}`,
+      },
+    })
+    expect(register.isError).not.toBe(true)
+    const [registerUrl, registerInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(registerUrl).toBe('https://platform-api.heyditto.ai/api/v1/admin/screening-verification-replays/process-keys/subnet-screener-2')
+    expect(registerInit.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+    expect(JSON.parse(String(registerInit.body))).toMatchObject({
+      expected_hotkey: '5Independent', instance_id: 'subnet-screener-2-worker-1',
+      public_key_hex: 'b'.repeat(64),
+    })
+    const revoke = await client.callTool({
+      name: 'revoke_screener_replay_process_key', arguments: {
+        expectedHotkey: '5Independent', expectedKeySha256: key,
+        reason: 'Emergency revoke isolated process',
+        confirmation: `REVOKE V13 REPLAY PROCESS subnet-screener-2/${key}`,
+      },
+    })
+    expect(revoke.isError).not.toBe(true)
+    const [revokeUrl, revokeInit] = fetchMock.mock.calls[2] as [string, RequestInit]
+    expect(revokeUrl).toBe(`${registerUrl}/revoke`)
+    expect(revokeInit.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+    expect(JSON.parse(String(revokeInit.body))).toMatchObject({ expected_key_sha256: key })
     await client.close()
     await server.close()
   })

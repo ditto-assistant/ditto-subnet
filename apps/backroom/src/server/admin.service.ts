@@ -293,6 +293,9 @@ import {
   setScreenerProviderSettingsInputSchema,
   setScreenerNodeChannelSettingsInputSchema,
   setScreenerNodeReplayCapacityInputSchema,
+  replayProcessReadinessSchema,
+  registerReplayProcessKeyInputSchema,
+  revokeReplayProcessKeyInputSchema,
   screenerNodeChannelSettingsControlSchema,
   retryTrustedImageBuildInputSchema,
   trustedImageBuildSchema,
@@ -762,6 +765,42 @@ export async function updateScreenerNodeReplayCapacity(actor: string, rawInput: 
     },
   )
   return fetchScreenerCapacity()
+}
+
+const REPLAY_PROCESS_PATH =
+  '/api/v1/admin/screening-verification-replays/process-keys/subnet-screener-2'
+
+export async function fetchReplayProcessReadiness() {
+  return replayProcessReadinessSchema.parse(await platformAdminRequest(REPLAY_PROCESS_PATH))
+}
+
+export async function registerReplayProcessKey(actor: string, rawInput: unknown) {
+  const input = registerReplayProcessKeyInputSchema.parse(rawInput)
+  await platformAdminRequest(REPLAY_PROCESS_PATH, {
+    method: 'POST', actor,
+    body: {
+      expected_hotkey: input.expectedHotkey,
+      instance_id: 'subnet-screener-2-worker-1',
+      public_key_hex: input.publicKeyHex,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchReplayProcessReadiness()
+}
+
+export async function revokeReplayProcessKey(actor: string, rawInput: unknown) {
+  const input = revokeReplayProcessKeyInputSchema.parse(rawInput)
+  await platformAdminRequest(`${REPLAY_PROCESS_PATH}/revoke`, {
+    method: 'POST', actor,
+    body: {
+      expected_hotkey: input.expectedHotkey,
+      expected_key_sha256: input.expectedKeySha256,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchReplayProcessReadiness()
 }
 
 export async function fetchArtifactReleaseControl() {

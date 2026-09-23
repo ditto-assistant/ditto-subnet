@@ -134,6 +134,8 @@ import {
   setScreenerProviderSettingsInputSchema,
   setScreenerNodeChannelSettingsInputSchema,
   setScreenerNodeReplayCapacityInputSchema,
+  registerReplayProcessKeyInputSchema,
+  revokeReplayProcessKeyInputSchema,
   setConfirmationBundleSettingsInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
   retryTrustedImageBuildInputSchema,
@@ -258,6 +260,9 @@ import {
   updateScreenerProviderSettings,
   updateScreenerNodeChannelSettings,
   updateScreenerNodeReplayCapacity,
+  fetchReplayProcessReadiness,
+  registerReplayProcessKey,
+  revokeReplayProcessKey,
   fetchScreenerReviewControl,
   fetchScreenerFanoutShadow,
   fetchCopyCourtControl,
@@ -337,6 +342,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_screener_provider_settings',
   'set_screener_node_channel_settings',
   'set_screener_node_replay_capacity',
+  'register_screener_replay_process_key',
+  'revoke_screener_replay_process_key',
   'register_coding_catalog_release',
   'supersede_coding_catalog_release',
   'retire_coding_catalog_release',
@@ -611,6 +618,12 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Apply complete revisioned concurrency limits for one enrolled screener node after reading get_screener_capacity.',
   set_screener_node_replay_capacity:
     'Set report-only replay capacity to zero or one on the independently enrolled second screener, with exact hotkey, status, capacity, confirmation and audit guards. Read get_screener_capacity first.',
+  get_screener_replay_process_readiness:
+    'Read exact node-2 process-key, signed worker heartbeat, release gate and missing readiness checks. No credentials or private key.',
+  register_screener_replay_process_key:
+    'Pin one node-2 worker public key only while replay capacity is zero. Exact confirmation and operator audit required.',
+  revoke_screener_replay_process_key:
+    'Revoke one exact node-2 process key, including during an active canary. Exact fingerprint, confirmation and audit required.',
   get_coding_catalog_releases:
     'Read signed shadow catalog commitments, retirement, and exposure counts.',
   get_coding_private_v2_releases:
@@ -2237,6 +2250,43 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => updateScreenerNodeReplayCapacity(props.session.email, input)),
+  )
+
+  registerTool(
+    'get_screener_replay_process_readiness',
+    {
+      title: 'Get independent replay process readiness',
+      description:
+        'Read the exact node-2 active public-key fingerprint, fresh signed worker-1 heartbeat, minimum release and missing checks. It does not attest physical isolation or enable replay. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchReplayProcessReadiness()),
+  )
+
+  registerTool(
+    'register_screener_replay_process_key',
+    {
+      title: 'Register independent replay process key',
+      description:
+        'Register one host-generated Ed25519 public key for subnet-screener-2-worker-1 while replay capacity is zero. Supply exact hotkey and confirmation "REGISTER V13 REPLAY PROCESS subnet-screener-2/subnet-screener-2-worker-1/<sha256-of-32-byte-public-key>". Never send a private key. Requires backroom:write.',
+      inputSchema: registerReplayProcessKeyInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => registerReplayProcessKey(props.session.email, input)),
+  )
+
+  registerTool(
+    'revoke_screener_replay_process_key',
+    {
+      title: 'Revoke independent replay process key',
+      description:
+        'Revoke the exact active key fingerprint for subnet-screener-2, even during a live canary. Supply current hotkey and confirmation "REVOKE V13 REPLAY PROCESS subnet-screener-2/<key_sha256>". This stops lease API access; it does not change replay capacity. Requires backroom:write.',
+      inputSchema: revokeReplayProcessKeyInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => revokeReplayProcessKey(props.session.email, input)),
   )
 
   registerTool(
