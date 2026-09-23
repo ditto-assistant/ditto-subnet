@@ -165,6 +165,7 @@ def test_inactive_fanout_checksum_keeps_the_pre_fanout_wire_shape() -> None:
     for field in FANOUT_SHADOW_SETTINGS_FIELDS:
         legacy.pop(field)
     legacy.pop("l2_always_escalate")
+    legacy.pop("adjudicator_max_completion_tokens")
     expected = hashlib.sha256(
         json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -179,11 +180,21 @@ def test_always_escalate_is_bound_into_the_checksum_only_when_enabled() -> None:
     shape = escalating.model_dump(mode="json")
     for field in FANOUT_SHADOW_SETTINGS_FIELDS:
         shape.pop(field)
+    shape.pop("adjudicator_max_completion_tokens")
     expected = hashlib.sha256(
         json.dumps(shape, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     assert _review_settings_checksum(escalating) == expected
     assert _review_settings_checksum(escalating) != _review_settings_checksum(normal)
+
+
+def test_explicit_l4_cap_changes_checksum_without_changing_l2() -> None:
+    inherited = ScreenerReviewSettings(max_completion_tokens=16_000)
+    bounded = inherited.model_copy(
+        update={"adjudicator_max_completion_tokens": 4_000}
+    )
+    assert inherited.max_completion_tokens == bounded.max_completion_tokens
+    assert _review_settings_checksum(inherited) != _review_settings_checksum(bounded)
 
 
 def test_enabled_fanout_checksum_binds_every_fanout_field() -> None:

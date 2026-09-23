@@ -2052,7 +2052,9 @@ def test_the_court_is_only_built_when_an_operator_turns_it_on(
     assert (built is None) == (mode == "off")
 
 
-def test_the_court_uses_the_audited_deep_review_completion_budget(make_config) -> None:
+def test_the_court_inherits_l2_completion_budget_without_an_override(
+    make_config,
+) -> None:
     built = build_adjudicator(
         make_config(
             adjudicator_mode="enforce",
@@ -2062,3 +2064,16 @@ def test_the_court_uses_the_audited_deep_review_completion_budget(make_config) -
 
     assert built is not None
     assert built._max_completion_tokens == 16_384
+
+
+def test_the_court_uses_its_own_cap_without_changing_l2(make_config) -> None:
+    config = make_config(
+        adjudicator_mode="enforce",
+        l2_max_completion_tokens=16_384,
+        adjudicator_max_completion_tokens=4_096,
+    )
+    built = build_adjudicator(config)
+
+    assert built is not None
+    assert built._max_completion_tokens == 4_096
+    assert config.l2_max_completion_tokens == 16_384

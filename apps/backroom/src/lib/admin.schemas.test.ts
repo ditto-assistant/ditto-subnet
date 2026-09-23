@@ -2019,6 +2019,7 @@ describe('screener review settings schemas', () => {
     expect(parsed.source_review_model).toBe('openai/gpt-5.6-luna')
     expect(parsed.source_review_timeout_seconds).toBe(1_800)
     expect(parsed.adjudicator_max_steps).toBe(128)
+    expect(parsed.adjudicator_max_completion_tokens).toBeNull()
   })
 
   it('accepts Platform L2 budgets and preserves the upper bounds', () => {
@@ -2046,6 +2047,18 @@ describe('screener review settings schemas', () => {
     expect(() => screenerReviewSettingsSchema.parse({
       ...settings,
       adjudicator_max_steps: 1025,
+    })).toThrow()
+  })
+
+  it('separates the L4 completion cap from L2 and bounds it by output budget', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings, max_completion_tokens: 16_000,
+      adjudicator_max_completion_tokens: 4_000,
+    })
+    expect(parsed.max_completion_tokens).toBe(16_000)
+    expect(parsed.adjudicator_max_completion_tokens).toBe(4_000)
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, adjudicator_max_completion_tokens: 20_001,
     })).toThrow()
   })
 

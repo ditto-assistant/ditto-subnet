@@ -54,6 +54,7 @@ const settings = {
   max_input_tokens: 425_000,
   max_output_tokens: 20_000,
   max_completion_tokens: 2_400,
+  adjudicator_max_completion_tokens: null,
   max_cost_usd: 2,
   critic_reasoning_effort: 'medium' as const,
   cache_ttl_seconds: 604_800,

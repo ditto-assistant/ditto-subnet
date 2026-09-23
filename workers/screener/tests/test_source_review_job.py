@@ -36,6 +36,25 @@ def test_build_reviewer_runs_l1_l2_l3_in_process(
     assert reviewer._adjudicator._max_completion_tokens == 16_384
 
 
+def test_one_shot_job_uses_l4_cap_without_lowering_l2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key_path = tmp_path / "source-review-key"
+    key_path.write_text("provider-key\n")
+    monkeypatch.setenv("SCREENER_NODE_CREDENTIAL_FILE", str(tmp_path / "node.json"))
+    monkeypatch.setenv("SCREENER_ADJUDICATOR_MODE", "enforce")
+    monkeypatch.setenv("SCREENER_L2_MAX_COMPLETION_TOKENS", "16000")
+    monkeypatch.setenv("SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS", "4000")
+
+    reviewer = source_review_job._build_reviewer(
+        key_file=str(key_path), timeout_seconds=60
+    )
+
+    assert reviewer._adjudicator is not None
+    assert reviewer._adjudicator._max_completion_tokens == 4_000
+    assert reviewer._l2._max_completion_tokens == 16_000
+
+
 def test_stage_source_review_secret_copies_group_readable_mount(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

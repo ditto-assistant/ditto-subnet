@@ -2042,11 +2042,10 @@ def build_adjudicator(config: object) -> SourceReviewAdjudicator | None:
         model=str(getattr(config, "adjudicator_model", _DEFAULT_MODEL)),
         timeout_seconds=float(getattr(config, "adjudicator_timeout_seconds", 600.0)),
         max_steps=int(getattr(config, "adjudicator_max_steps", _MAX_STEPS)),
-        # Review settings expose a single, audited completion ceiling for the
-        # paid deep-review path.  The court used to ignore it and silently
-        # retain its 6k constructor default, even when the canary explicitly
-        # granted 16k.  L4 is a consumer of that same bounded budget.
+        # Existing revisions inherit L2's cap. An explicit operator revision
+        # may bound L4 separately without changing L2's reasoning budget.
         max_completion_tokens=int(
-            getattr(config, "l2_max_completion_tokens", _MAX_COMPLETION_TOKENS)
+            getattr(config, "adjudicator_max_completion_tokens", None)
+            or getattr(config, "l2_max_completion_tokens", _MAX_COMPLETION_TOKENS)
         ),
     )

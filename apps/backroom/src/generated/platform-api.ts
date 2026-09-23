@@ -26899,6 +26899,8 @@ export interface components {
          * @description Strict, secret-free settings applied between screening leases.
          */
         ScreenerReviewSettings: {
+            /** Adjudicator Max Completion Tokens */
+            adjudicator_max_completion_tokens?: number | null;
             /**
              * Adjudicator Max Steps
              * @default 128

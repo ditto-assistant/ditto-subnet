@@ -99,7 +99,7 @@ def _source_review_layer_env(
     settings: ScreenerReviewSettings,
 ) -> tuple[tuple[str, str], ...]:
     """Pin L1/L2/L3 knobs on the one-shot rental so GCE is not required."""
-    return (
+    base_env = (
         (
             "SCREENER_L2_REVIEW_MODE",
             settings.mode if settings.mode != "inherit" else "off",
@@ -151,6 +151,14 @@ def _source_review_layer_env(
         (
             "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS",
             str(int(settings.adjudicator_timeout_seconds)),
+        ),
+    )
+    if settings.adjudicator_max_completion_tokens is None:
+        return base_env
+    return base_env + (
+        (
+            "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS",
+            str(settings.adjudicator_max_completion_tokens),
         ),
     )
 

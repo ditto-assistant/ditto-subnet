@@ -248,7 +248,8 @@ def _build_reviewer(
             ),
             max_steps=int(os.environ.get("SCREENER_ADJUDICATOR_MAX_STEPS", "128")),
             max_completion_tokens=int(
-                os.environ.get("SCREENER_L2_MAX_COMPLETION_TOKENS", "6000")
+                os.environ.get("SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS")
+                or os.environ.get("SCREENER_L2_MAX_COMPLETION_TOKENS", "6000")
             ),
         )
     )

@@ -215,6 +215,8 @@ class ScreenerConfig:
     Seeded from ``SCREENER_L2_ALWAYS_ESCALATE``; a bound reviewer revision can
     only turn it on for one posture (the integrity double-check), never off.
     """
+    adjudicator_max_completion_tokens: int | None = None
+    """L4-only output cap; None inherits the existing L2 completion cap."""
     remote_build_mode: str = "off"
     """How the gate uses a prebuilt image archive.
 
@@ -265,6 +267,11 @@ def _parse_int(name: str, default: str) -> int:
         return int(raw)
     except ValueError as e:
         raise ScreenerConfigError(f"{name} must be an integer, got {raw!r}") from e
+
+
+def _parse_optional_int(name: str) -> int | None:
+    raw = os.environ.get(name)
+    return None if raw is None or not raw.strip() else _parse_int(name, raw)
 
 
 def _parse_bool(name: str, default: bool) -> bool:
@@ -478,6 +485,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         .strip()
         .lower()
         in {"1", "true", "yes", "on"},
+        adjudicator_max_completion_tokens=_parse_optional_int(
+            "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS"
+        ),
         remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off"),
         remote_build_timeout_seconds=_parse_float(
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1500"
@@ -534,6 +544,15 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if not 60 <= config.adjudicator_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
             "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS must be between 60 and 3600"
+        )
+    if config.adjudicator_max_completion_tokens is not None and not (
+        1_000
+        <= config.adjudicator_max_completion_tokens
+        <= min(128_000, config.l2_max_output_tokens)
+    ):
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS must be between 1000 "
+            "and the L2 output budget"
         )
     if not 1 <= config.review_concern_hold_count <= 16:
         raise ScreenerConfigError(

@@ -128,6 +128,10 @@ class ScreenerReviewSettings(BaseModel):
     adjudicator_model: AdjudicatorModel = "z-ai/glm-5.3-flash"
     adjudicator_max_steps: Annotated[int, Field(ge=1, le=1_024)] = 128
     adjudicator_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 600
+    # None preserves existing revisions: L4 inherits the L2 completion cap.
+    adjudicator_max_completion_tokens: Annotated[
+        int | None, Field(ge=1_000, le=128_000)
+    ] = None
     # Independent report-only source-review experiment.  ``off`` is the code
     # and rolling-deploy default; ``shadow`` may only create observations and
     # cannot participate in the signed screening verdict.
@@ -193,6 +197,13 @@ class ScreenerReviewSettings(BaseModel):
         if self.max_completion_tokens > self.max_output_tokens:
             raise ValueError("completion budget must not exceed output budget")
         if (
+            self.adjudicator_max_completion_tokens is not None
+            and self.adjudicator_max_completion_tokens > self.max_output_tokens
+        ):
+            raise ValueError(
+                "adjudicator completion budget must not exceed output budget"
+            )
+        if (
             self.fanout_shadow_mode == "shadow"
             and self.fanout_shadow_image_source_sha == "0" * 40
         ):
@@ -209,6 +220,9 @@ def review_settings_checksum(settings: ScreenerReviewSettings) -> str:
     if not settings.l2_always_escalate:
         # Workers that predate the control cannot hash a key they drop.
         value.pop("l2_always_escalate")
+    if settings.adjudicator_max_completion_tokens is None:
+        # Keep the checksums of already-persisted revisions unchanged.
+        value.pop("adjudicator_max_completion_tokens")
     encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(encoded).hexdigest()
 

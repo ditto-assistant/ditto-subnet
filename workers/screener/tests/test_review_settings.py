@@ -163,8 +163,9 @@ def _legacy_payload(config, dropped: tuple[str, ...]) -> dict:
     baseline = bootstrap_review_settings(config)
     payload = baseline.model_dump()
     legacy = baseline.settings.model_dump(mode="json")
+    legacy.pop("adjudicator_max_completion_tokens", None)
     for name in dropped:
-        legacy.pop(name)
+        legacy.pop(name, None)
     payload["checksum"] = hashlib.sha256(
         json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -246,6 +247,8 @@ def _platform_shaped_payload(config, **updates: object) -> dict:
     payload = baseline.model_dump(mode="json")
     payload["settings"].update(updates)
     hashed = dict(payload["settings"])
+    if hashed["adjudicator_max_completion_tokens"] is None:
+        hashed.pop("adjudicator_max_completion_tokens")
     if hashed["fanout_shadow_mode"] == "off":
         for name in _POST_CHECKSUM_FIELDS[
             _POST_CHECKSUM_FIELDS.index(

@@ -307,6 +307,7 @@ export const screenerReviewSettingsSchema = z
     adjudicator_model: z.literal('z-ai/glm-5.3-flash').default('z-ai/glm-5.3-flash'),
     adjudicator_max_steps: z.number().int().min(1).max(1024).default(128),
     adjudicator_timeout_seconds: z.number().int().min(60).max(3_600).default(600),
+    adjudicator_max_completion_tokens: z.number().int().min(1_000).max(128_000).nullable().default(null),
     fanout_shadow_mode: z.enum(['off', 'shadow']).default('off'),
     fanout_shadow_image_source_sha: z.string().regex(/^[0-9a-f]{40}$/).default('0'.repeat(40)),
     fanout_shadow_model: z.literal('z-ai/glm-5.3-flash').default('z-ai/glm-5.3-flash'),
@@ -341,6 +342,13 @@ export const screenerReviewSettingsSchema = z
         code: 'custom',
         message: 'Completion budget cannot exceed output budget',
         path: ['max_completion_tokens'],
+      })
+    }
+    if (value.adjudicator_max_completion_tokens !== null && value.adjudicator_max_completion_tokens > value.max_output_tokens) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Adjudicator completion budget cannot exceed output budget',
+        path: ['adjudicator_max_completion_tokens'],
       })
     }
     if (

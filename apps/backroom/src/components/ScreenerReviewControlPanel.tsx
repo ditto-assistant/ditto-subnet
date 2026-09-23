@@ -31,6 +31,7 @@ const defaults: ScreenerReviewSettings = {
   adjudicator_model: 'z-ai/glm-5.3-flash' as const,
   adjudicator_max_steps: 128,
   adjudicator_timeout_seconds: 600,
+  adjudicator_max_completion_tokens: null,
   fanout_shadow_mode: 'off',
   fanout_shadow_image_source_sha: '0'.repeat(40),
   fanout_shadow_model: 'z-ai/glm-5.3-flash',
@@ -683,6 +684,23 @@ export function ScreenerReviewControlPanel({
               </label>
               <NumericField label="Adjudicator steps" value={settings.adjudicator_max_steps} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_max_steps: value }))} />
               <NumericField label="Adjudicator timeout (s)" value={settings.adjudicator_timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_timeout_seconds: value }))} />
+              <label className="block text-xs text-[var(--muted)]">
+                Adjudicator completion budget (L4)
+                <select
+                  value={settings.adjudicator_max_completion_tokens === null ? 'inherit' : 'custom'}
+                  onChange={(event) => setSettings((current) => ({
+                    ...current,
+                    adjudicator_max_completion_tokens: event.target.value === 'inherit' ? null : current.max_completion_tokens,
+                  }))}
+                  className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
+                >
+                  <option value="inherit">Inherit L2 cap ({settings.max_completion_tokens.toLocaleString()} tokens)</option>
+                  <option value="custom">Set L4 cap separately</option>
+                </select>
+              </label>
+              {settings.adjudicator_max_completion_tokens !== null && (
+                <NumericField label="L4 completion tokens" value={settings.adjudicator_max_completion_tokens} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_max_completion_tokens: value }))} />
+              )}
               <label className="block text-xs text-[var(--muted)]">
                 L1 Luna reasoning
                 <select
