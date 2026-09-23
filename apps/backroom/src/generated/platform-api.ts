@@ -12175,9 +12175,9 @@ export interface components {
          *     * ``exhausted`` — no ticket can advance without an operator. Read
          *       ``recommended_action``: ``retry`` is a verified-infrastructure grant;
          *       ``withdraw`` is an agent-attributable dead end that should leave this
-         *       list via queue withdrawal, not another lease. ``None`` with
-         *       ``provider_outage_slot_count`` above zero while the response's
-         *       ``provider_outage_active`` is true means wait for the provider.
+         *       list via queue withdrawal, not another lease. ``None`` on a recoverable
+         *       row while the response's ``provider_outage_active`` is true means wait
+         *       for the provider, not a dead end.
          *     * ``queued`` — below quorum with slots that have simply never been leased
          *       yet; it will advance on its own.
          */
