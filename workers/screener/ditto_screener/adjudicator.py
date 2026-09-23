@@ -954,6 +954,7 @@ def _finding_brief(finding: Mapping[str, object] | None) -> str:
 def _preload_ledger_evidence(
     repository: TarSourceRepository,
     notes: Sequence[Mapping[str, object]],
+    finding: Mapping[str, object] | None = None,
 ) -> tuple[str, set[tuple[str, int]], bool]:
     """Return bounded source excerpts for the L4 decision-only path.
 
@@ -969,7 +970,17 @@ def _preload_ledger_evidence(
     requested: set[tuple[str, int]] = set()
     config_gates: set[tuple[str, str]] = set()
     incomplete_image_context = False
-    for note in notes:
+    # The ledger contains both cleared observations and concerns, often with
+    # many distinct clear locations before a late concern.  Give every lead
+    # first refusal on the bounded source window; otherwise the host must
+    # refuse a CLEAR even when there was room to show that lead to the court.
+    leads = [note for note in notes if note.get("kind") == "concern"]
+    if isinstance(finding, Mapping):
+        evidence = finding.get("evidence")
+        if isinstance(evidence, list):
+            leads.extend(item for item in evidence if isinstance(item, Mapping))
+    ordered_notes = [*leads, *notes]
+    for note in ordered_notes:
         path = note.get("path")
         line = note.get("line")
         if (
@@ -1005,7 +1016,7 @@ def _preload_ledger_evidence(
             # defaults for simple config.FLAG gates in the one-turn court;
             # otherwise the court sees the branch but cannot refute its
             # reachability without discovery tools.
-            if note.get("kind") == "concern":
+            if note in leads:
                 for symbol in _CONFIG_GATE_RE.findall(output):
                     if len(config_gates) < _MAX_PRELOADED_CONFIG_GATES:
                         config_gates.add((location[0], symbol))
@@ -1192,7 +1203,7 @@ class SourceReviewAdjudicator:
                 preloaded_evidence,
                 preloaded_reads,
                 incomplete_image_context,
-            ) = _preload_ledger_evidence(repository, notes)
+            ) = _preload_ledger_evidence(repository, notes, finding)
             if incomplete_image_context:
                 return _escalate(
                     "adjudicator-evidence-incomplete",
