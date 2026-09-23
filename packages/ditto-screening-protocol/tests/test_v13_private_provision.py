@@ -232,7 +232,7 @@ def test_private_runner_requires_model_authority_and_rechecks_payload() -> None:
         )
     first = prepared.manifest.pairs[0]
     publisher.blobs[first.control_sha256] = b"tampered after preflight"
-    with pytest.raises(PrivateExecutionUnavailable, match="case commitment"):
+    with pytest.raises(PrivateExecutionUnavailable, match="unavailable"):
         asyncio.run(
             execute_v13_private_pairs(
                 prepared=prepared,
@@ -241,3 +241,64 @@ def test_private_runner_requires_model_authority_and_rechecks_payload() -> None:
                 runner_hotkey="trusted-test-runner",
             )
         )
+
+
+def test_private_runner_rechecks_manifest_and_prepared_inventory() -> None:
+    commitment = _commitment()
+    publisher = MemoryPublisher()
+    asyncio.run(
+        provision_v13_private_package(
+            commitment=commitment,
+            bank=SyntheticBank(),
+            publisher=publisher,
+            registrar_id="trusted-test-registrar",
+            tool_catalog_applicable=False,
+        )
+    )
+    prepared = asyncio.run(
+        prepare_sealed_v13_package(
+            store=publisher, commitment=commitment, registry=publisher
+        )
+    )
+    forged_manifest = prepared.manifest.model_copy(
+        update={"pairs": tuple(reversed(prepared.manifest.pairs))}
+    )
+    executor = SyntheticFreshExecutor()
+    with pytest.raises(PrivateExecutionUnavailable, match="prepared package"):
+        asyncio.run(
+            execute_v13_private_pairs(
+                prepared=prepared.model_copy(update={"manifest": forged_manifest}),
+                store=publisher,
+                executor=executor,
+                runner_hotkey="trusted-test-runner",
+            )
+        )
+    assert executor.calls == 0
+
+    stale_registration = prepared.registration.model_copy(
+        update={"image_sha256": "f" * 64}
+    )
+    with pytest.raises(PrivateExecutionUnavailable, match="unavailable"):
+        asyncio.run(
+            execute_v13_private_pairs(
+                prepared=prepared.model_copy(
+                    update={"registration": stale_registration}
+                ),
+                store=publisher,
+                executor=executor,
+                runner_hotkey="trusted-test-runner",
+            )
+        )
+    assert executor.calls == 0
+
+    publisher.blobs[prepared.registration.manifest_sha256] = b"replaced manifest"
+    with pytest.raises(PrivateExecutionUnavailable, match="unavailable"):
+        asyncio.run(
+            execute_v13_private_pairs(
+                prepared=prepared,
+                store=publisher,
+                executor=executor,
+                runner_hotkey="trusted-test-runner",
+            )
+        )
+    assert executor.calls == 0

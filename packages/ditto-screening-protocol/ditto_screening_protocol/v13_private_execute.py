@@ -21,6 +21,7 @@ from ditto_screening_protocol.v13_private_package import (
     PreparedV13PrivatePackage,
     SealedPackageStore,
     V13PrivateRunSummary,
+    _prepare_registered_package,
 )
 
 _SHA_PATTERN = r"^[0-9a-f]{64}$"
@@ -134,6 +135,18 @@ async def execute_v13_private_pairs(
     """
     try:
         async with asyncio.timeout(7200):
+            # Preflight is only a handoff. Re-read the sealed manifest and every
+            # payload at the execution boundary so a stale or forged prepared
+            # inventory cannot choose which cases the runner executes.
+            current = await _prepare_registered_package(
+                store=store,
+                commitment=prepared.commitment,
+                registration=prepared.registration,
+            )
+            if current != prepared:
+                raise PrivateExecutionUnavailable(
+                    "private prepared package commitment mismatch"
+                )
             counts: Counter[tuple[str, str, str]] = Counter()
             evidence = hashlib.sha256()
             for pair in prepared.manifest.pairs:
