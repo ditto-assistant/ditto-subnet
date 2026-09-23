@@ -26,6 +26,7 @@ improving the best artifact, not for serving live inference.
 - [Claim a public handle](#claim-a-public-handle)
 - [Set a profile picture](#set-a-profile-picture)
 - [Sign in to the public miner console](#sign-in-to-the-public-miner-console)
+- [Maintenance bounties](#maintenance-bounties)
 - [Common questions](#common-questions)
 
 ## Build and practice locally
@@ -747,6 +748,15 @@ hotkey signs in on its own. The link is identity plumbing only: it lets
 DittoBench attribute Router inference to your consenting Ditto account and
 credit Feedback Track contributions to it. It moves no TAO, changes no
 weights, and unlinking stops attribution for that hotkey only.
+
+## Maintenance bounties
+
+Miners and subnet engineers can contribute to core infrastructure, tooling, screening harnesses, and benchmarks through the SN118 Maintenance Bounty program funded under parent epic #2054.
+
+- **Canonical Board**: Find and track open, claimed, and accepted tasks on the [public GitHub bounty board](https://github.com/ditto-assistant/ditto-subnet/issues?q=is%3Aissue+label%3Abounty).
+- **Contributor Guide**: Read [CONTRIBUTING_BOUNTIES.md](CONTRIBUTING_BOUNTIES.md) for claiming workflows, the 7-day reservation window, hotkey-signed claims (`ditto-bounty-claim:v1`), and local verification standards.
+- **Discord and Ingress**: The `#bounties` channel on Discord serves for scoping questions and technical coordination. All official claims, technical reviews, deliverable submissions, and payout receipts occur publicly on GitHub.
+- **Payment Decoupling**: Pull request merge does not authorize payment. Acceptance and treasury payouts are independently verified and settled on-chain.
 
 ## Common questions
 

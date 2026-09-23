@@ -1,0 +1,40 @@
+name: Bounty lifecycle verification
+
+on:
+  pull_request:
+    paths:
+      - "docs/CONTRIBUTING_BOUNTIES.md"
+      - ".github/ISSUE_TEMPLATE/bounty.md"
+      - "ditto/bounty/**"
+      - "ditto/tests/test_bounty_board.py"
+      - "scripts/sync_bounty_labels.py"
+      - ".github/workflows/bounty-lifecycle.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify bounty board integrity
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Verify bounty board rules and label contracts
+        run: |
+          # Security Invariant: State labels mirror issue lifecycle for visibility. They NEVER trigger or authorize treasury payments.
+          uv sync --locked --group dev
+          uv run pytest ditto/tests/test_bounty_board.py
+          uv run python scripts/sync_bounty_labels.py --dry-run
