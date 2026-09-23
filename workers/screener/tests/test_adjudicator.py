@@ -287,7 +287,6 @@ async def test_request_uses_provider_supported_completion_parameter(
     assert requests[0]["stream"] is True
     assert requests[0]["provider"] == {
         "allow_fallbacks": True,
-        "sort": "throughput",
         "data_collection": "deny",
         "require_parameters": True,
     }

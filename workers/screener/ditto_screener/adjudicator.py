@@ -1645,13 +1645,11 @@ class SourceReviewAdjudicator:
             # router returns a misleading 404.
             "max_tokens": self._max_completion_tokens,
             "provider": {
-                # Preserve the same model and strict privacy/tool contract,
-                # while allowing the router to fail over between compatible
-                # healthy providers instead of timing out behind one endpoint.
+                # Preserve the strict privacy/tool contract and allow fallback.
+                # Do not force throughput sorting: this is a required-tool
+                # request, so the router's tool-call-quality ordering matters
+                # more than raw output speed.
                 "allow_fallbacks": True,
-                # The default is price-weighted. L4 has a short, finite lease;
-                # rank eligible endpoints by output speed before fallback.
-                "sort": "throughput",
                 "data_collection": "deny",
                 "require_parameters": True,
             },
