@@ -4309,6 +4309,24 @@ export const screeningAttemptSchema = z.object({
   duplicate_version: z.number().int().positive().nullish().default(null),
 })
 
+export const adjudicationRequestAttemptDiagnosticSchema = z.object({
+  ordinal: z.number().int().min(1).max(1_024),
+  started_ms: z.number().int().min(0).max(3_600_000),
+  elapsed_ms: z.number().int().min(0).max(3_600_000),
+  stage: z.enum(['request', 'headers', 'bytes', 'event', 'complete']),
+  stream_requested: z.boolean(),
+  prompt_bytes: z.number().int().min(0).max(20_000_000),
+  http_status: z.number().int().min(100).max(599).nullish(),
+  headers_ms: z.number().int().min(0).max(3_600_000).nullish(),
+  first_byte_ms: z.number().int().min(0).max(3_600_000).nullish(),
+  last_byte_ms: z.number().int().min(0).max(3_600_000).nullish(),
+  first_event_ms: z.number().int().min(0).max(3_600_000).nullish(),
+  last_event_ms: z.number().int().min(0).max(3_600_000).nullish(),
+  event_count: z.number().int().min(0).max(100_000),
+  wire_bytes: z.number().int().min(0).max(20_000_000),
+  upstream: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/).nullish(),
+})
+
 export const adjudicationRunDiagnosticSchema = z.object({
   error_class: z
     .string()
@@ -4349,6 +4367,9 @@ export const adjudicationRunDiagnosticSchema = z.object({
     .string()
     .regex(/^[a-z0-9][a-z0-9._-]{0,63}$/)
     .nullish(),
+  /** Bounded per-request timeline; contains counts and times, never prompt or response text. */
+  request_count: z.number().int().min(0).max(1_024).optional(),
+  request_attempts: z.array(adjudicationRequestAttemptDiagnosticSchema).max(32).optional(),
 })
 
 export const screeningFailureDiagnosticSchema = z.object({

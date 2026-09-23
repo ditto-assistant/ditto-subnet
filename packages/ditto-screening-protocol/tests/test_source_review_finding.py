@@ -764,6 +764,27 @@ def test_run_diagnostic_stays_out_of_the_signed_adjudication() -> None:
         final_tool_call_returned=False,
         model="z-ai/glm-5.3-flash",
         provider="openrouter",
+        request_count=1,
+        request_attempts=[
+            {
+                "ordinal": 1,
+                "started_ms": 4,
+                "elapsed_ms": 38,
+                "stage": "event",
+                "stream_requested": True,
+                "prompt_bytes": 923,
+                "http_status": 200,
+                "headers_ms": 8,
+                "first_byte_ms": 11,
+                "last_byte_ms": 30,
+                "first_event_ms": 13,
+                "last_event_ms": 30,
+                "event_count": 2,
+                "wire_bytes": 650,
+                "upstream": "together",
+                "prompt": "source text ignored by schema",
+            }
+        ],
     )
     plain = SourceReviewAdjudication(**base)
     diagnosed = SourceReviewAdjudication(**base, run_diagnostic=diagnostic)
@@ -776,6 +797,7 @@ def test_run_diagnostic_stays_out_of_the_signed_adjudication() -> None:
         }
     )
     assert "exception" not in restored.model_dump(mode="json")
+    assert "prompt" not in restored.model_dump(mode="json")["request_attempts"][0]
     with pytest.raises(ValidationError):
         AdjudicationRunDiagnostic(
             elapsed_ms=1,

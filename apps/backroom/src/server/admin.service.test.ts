@@ -844,6 +844,24 @@ describe('screening submission admin service', () => {
       final_tool_call_returned: true,
       model: 'z-ai/glm-5.3-flash',
       provider: 'openrouter',
+      request_count: 1,
+      request_attempts: [{
+        ordinal: 1,
+        started_ms: 4,
+        elapsed_ms: 38,
+        stage: 'event',
+        stream_requested: true,
+        prompt_bytes: 923,
+        http_status: 200,
+        headers_ms: 8,
+        first_byte_ms: 11,
+        last_byte_ms: 30,
+        first_event_ms: 13,
+        last_event_ms: 30,
+        event_count: 2,
+        wire_bytes: 650,
+        upstream: 'together',
+      }],
     }
     const diagnostic = {
       agent_id: agentId,
@@ -862,6 +880,10 @@ describe('screening submission admin service', () => {
       court_diagnostic: {
         ...court,
         exception: 'prompt text that must not be stored',
+        request_attempts: court.request_attempts.map((attempt) => ({
+          ...attempt,
+          prompt: 'source text that must not be stored',
+        })),
       },
     }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(diagnostic)))

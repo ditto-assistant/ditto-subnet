@@ -38,10 +38,10 @@ import copy
 import json
 import logging
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import httpx
 from pydantic import ValidationError
@@ -58,6 +58,7 @@ from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     AdjudicationClearClause,
+    AdjudicationRequestAttemptDiagnostic,
     AdjudicationRunDiagnostic,
     SourceReviewAdjudication,
     SourceReviewCitation,
@@ -104,6 +105,9 @@ def _observe_upstream(payload: object) -> None:
     upstream = _upstream_slug(payload.get("provider"))
     if upstream is not None:
         trace.upstream = upstream
+        attempt = _current_request_trace()
+        if attempt is not None:
+            attempt.upstream = upstream
 
 
 def _upstream_slug(value: object) -> str | None:
@@ -123,6 +127,88 @@ def _upstream_slug(value: object) -> str | None:
 
 _MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")
 _RunStage = Literal["completion", "lease", "step-budget", "unavailable", "response"]
+_RequestStage = Literal["request", "headers", "bytes", "event", "complete"]
+
+
+def _elapsed_ms(started: float) -> int:
+    elapsed = int((asyncio.get_running_loop().time() - started) * 1000)
+    return min(max(elapsed, 0), 3_600_000)
+
+
+@dataclass
+class _RequestTrace:
+    """Only counts, durations, status and normalized upstream; never model data."""
+
+    ordinal: int
+    started: float
+    started_ms: int
+    stream_requested: bool
+    prompt_bytes: int
+    stage: _RequestStage = "request"
+    elapsed_ms: int = 0
+    http_status: int | None = None
+    headers_ms: int | None = None
+    first_byte_ms: int | None = None
+    last_byte_ms: int | None = None
+    first_event_ms: int | None = None
+    last_event_ms: int | None = None
+    event_count: int = 0
+    wire_bytes: int = 0
+    upstream: str | None = None
+
+    def observe_bytes(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        now = _elapsed_ms(self.started)
+        if self.first_byte_ms is None:
+            self.first_byte_ms = now
+        self.last_byte_ms = now
+        self.wire_bytes = min(self.wire_bytes + len(chunk), 20_000_000)
+        if self.stage in {"request", "headers", "bytes"}:
+            self.stage = "bytes"
+
+    def observe_event(self) -> None:
+        now = _elapsed_ms(self.started)
+        if self.first_event_ms is None:
+            self.first_event_ms = now
+        self.last_event_ms = now
+        self.event_count = min(self.event_count + 1, 100_000)
+        self.stage = "event"
+
+    def diagnostic(self) -> AdjudicationRequestAttemptDiagnostic:
+        return AdjudicationRequestAttemptDiagnostic(
+            ordinal=self.ordinal,
+            started_ms=self.started_ms,
+            elapsed_ms=self.elapsed_ms,
+            stage=self.stage,
+            stream_requested=self.stream_requested,
+            prompt_bytes=self.prompt_bytes,
+            http_status=self.http_status,
+            headers_ms=self.headers_ms,
+            first_byte_ms=self.first_byte_ms,
+            last_byte_ms=self.last_byte_ms,
+            first_event_ms=self.first_event_ms,
+            last_event_ms=self.last_event_ms,
+            event_count=self.event_count,
+            wire_bytes=self.wire_bytes,
+            upstream=self.upstream,
+        )
+
+
+class _ObservedByteStream(httpx.AsyncByteStream):
+    """Observe raw response chunks without changing SSE parsing or payloads."""
+
+    def __init__(self, source: httpx.AsyncByteStream, attempt: _RequestTrace) -> None:
+        self._source = source
+        self._attempt = attempt
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        async for chunk in self._source:
+            self._attempt.observe_bytes(chunk)
+            yield chunk
+
+    async def aclose(self) -> None:
+        await self._source.aclose()
 
 
 @dataclass
@@ -135,12 +221,20 @@ class _RunTrace:
     final_tool_call_returned: bool | None = None
     http_status: int | None = None
     upstream: str | None = None
+    request_count: int = 0
+    request_attempts: list[_RequestTrace] = field(default_factory=list)
 
 
 _run_trace: contextvars.ContextVar[_RunTrace | None] = contextvars.ContextVar(
     "adjudicator_run_trace",
     default=None,
 )
+
+
+def _current_request_trace() -> _RequestTrace | None:
+    trace = _run_trace.get()
+    return trace.request_attempts[-1] if trace and trace.request_attempts else None
+
 
 _SUPPORTED_POLICY_VERSIONS = tuple(
     range(SCREENING_FLOOR_POLICY_VERSION, SCREENING_POLICY_VERSION + 1)
@@ -1152,6 +1246,10 @@ class SourceReviewAdjudicator:
                 model=model,
                 provider=provider,
                 upstream=trace.upstream,
+                request_count=min(trace.request_count, 1_024),
+                request_attempts=[
+                    attempt.diagnostic() for attempt in trace.request_attempts[-32:]
+                ],
                 response_bound_kind=(
                     "wire"
                     if isinstance(error, CompletionWireTooLarge)
@@ -1489,6 +1587,22 @@ class SourceReviewAdjudicator:
         )
         for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
             _clear_request_trace()
+            trace = _run_trace.get()
+            request_trace = None
+            if trace is not None:
+                trace.request_count += 1
+                request_trace = _RequestTrace(
+                    ordinal=min(trace.request_count, 1_024),
+                    started=asyncio.get_running_loop().time(),
+                    started_ms=_elapsed_ms(trace.started),
+                    stream_requested=bool(request["stream"]),
+                    prompt_bytes=min(
+                        len(json.dumps(messages, ensure_ascii=False).encode("utf-8")),
+                        20_000_000,
+                    ),
+                )
+                trace.request_attempts.append(request_trace)
+                del trace.request_attempts[:-32]
             try:
                 async with asyncio.timeout(effective_timeout):
                     async with client.stream(
@@ -1504,6 +1618,12 @@ class SourceReviewAdjudicator:
                             read=min(effective_timeout, _MAX_COMPLETION_IDLE_SECONDS),
                         ),
                     ) as response:
+                        if request_trace is not None:
+                            request_trace.headers_ms = _elapsed_ms(
+                                request_trace.started
+                            )
+                            request_trace.http_status = response.status_code
+                            request_trace.stage = "headers"
                         # Older OpenAI-compatible gateways may reject SSE
                         # outright. Preserve the previously working buffered
                         # path once, without interpreting any response body as
@@ -1520,7 +1640,14 @@ class SourceReviewAdjudicator:
                             if trace is not None and 100 <= response.status_code <= 599:
                                 trace.http_status = response.status_code
                             response.raise_for_status()
+                        if request_trace is not None:
+                            response.stream = _ObservedByteStream(
+                                cast(httpx.AsyncByteStream, response.stream),
+                                request_trace,
+                            )
                         payload = await _completion_stream_payload(response)
+                        if request_trace is not None:
+                            request_trace.stage = "complete"
                         _observe_upstream(payload)
                         if _retryable_model_error_type(payload) is not None:
                             raise ProviderBodyError(
@@ -1540,6 +1667,9 @@ class SourceReviewAdjudicator:
                     self._model,
                 )
                 continue
+            finally:
+                if request_trace is not None:
+                    request_trace.elapsed_ms = _elapsed_ms(request_trace.started)
             break
         return _assistant_message(payload)
 
@@ -1596,6 +1726,9 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
         event = json.loads(data)
         if not isinstance(event, dict):
             raise ValueError("adjudicator stream event is not an object")
+        request_trace = _current_request_trace()
+        if request_trace is not None:
+            request_trace.observe_event()
         _observe_upstream(event)
         if event.get("error"):
             raise ProviderStreamError("adjudicator stream returned a provider error")

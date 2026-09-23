@@ -618,11 +618,95 @@ async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> Non
     assert result.run_diagnostic.final_tool_call_returned is None
     assert result.run_diagnostic.model == "z-ai/glm-5.3-flash"
     assert result.run_diagnostic.provider == "openrouter"
+    assert result.run_diagnostic.request_count == 1
+    request = result.run_diagnostic.request_attempts[0]
+    assert request.stage == "request"
+    assert request.prompt_bytes > 0
+    assert request.headers_ms is None
+    assert request.first_byte_ms is None
     assert (
         result.canonical_digest()
         == result.model_copy(update={"run_diagnostic": None}).canonical_digest()
     )
     assert requests == 1
+
+
+async def test_partial_sse_timeout_records_progress_without_model_text(
+    tmp_path: Path,
+) -> None:
+    secret = "private model text must not be stored"
+
+    class StalledStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (
+                'data: {"provider":"Together","choices":[{"delta":{"content":"'
+                + secret
+                + '"}}]}\n\n'
+            ).encode()
+            await asyncio.sleep(0.2)
+
+        async def aclose(self) -> None:
+            return None
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=StalledStream(),
+        )
+
+    deadline = asyncio.get_running_loop().time() + 0.04
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], deadline=deadline)
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.request_count == 1
+    request = result.run_diagnostic.request_attempts[0]
+    assert request.stage == "event"
+    assert request.headers_ms is not None
+    assert request.first_byte_ms is not None
+    assert request.last_byte_ms is not None
+    assert request.first_event_ms is not None
+    assert request.last_event_ms is not None
+    assert request.event_count == 1
+    assert request.wire_bytes > 0
+    assert request.upstream == "together"
+    assert secret not in result.run_diagnostic.model_dump_json()
+
+
+async def test_incomplete_stream_then_timeout_keeps_both_request_timelines(
+    tmp_path: Path,
+) -> None:
+    requests = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        if requests == 1:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=b'data: {"provider":"Together","choices":[]}\n\n',
+            )
+        await asyncio.sleep(0.2)
+        return httpx.Response(200, json={})
+
+    deadline = asyncio.get_running_loop().time() + 0.04
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], deadline=deadline)
+    assert result.decision == "escalate"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.request_count == 2
+    first, second = result.run_diagnostic.request_attempts
+    assert first.ordinal == 1
+    assert first.stage == "event"
+    assert first.upstream == "together"
+    assert second.ordinal == 2
+    assert second.stage == "request"
+    assert second.upstream is None
+    assert result.run_diagnostic.upstream is None
 
 
 def test_tool_call_rejects_parsed_object_arguments() -> None:

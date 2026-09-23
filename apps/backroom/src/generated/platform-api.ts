@@ -6746,6 +6746,51 @@ export interface components {
          */
         AdjudicationClearClause: "retrieval_ranking_not_family_engine" | "content_complete_memoization_cache" | "standard_broker_inference_client" | "unreported_tool_calls_executed" | "local_practice_harness_stub" | "intent_routing_or_precursor_pass" | "bench_version_branching_alone" | "single_success_duplicate_suppression" | "plain_answer_normalization" | "prior_pattern_removed" | "model_authors_graded_slot" | "no_proven_breach_before_deadline";
         /**
+         * AdjudicationRequestAttemptDiagnostic
+         * @description Bounded, text-free timing for one automated-court model request.
+         */
+        AdjudicationRequestAttemptDiagnostic: {
+            /** Elapsed Ms */
+            elapsed_ms: number;
+            /**
+             * Event Count
+             * @default 0
+             */
+            event_count: number;
+            /** First Byte Ms */
+            first_byte_ms?: number | null;
+            /** First Event Ms */
+            first_event_ms?: number | null;
+            /** Headers Ms */
+            headers_ms?: number | null;
+            /** Http Status */
+            http_status?: number | null;
+            /** Last Byte Ms */
+            last_byte_ms?: number | null;
+            /** Last Event Ms */
+            last_event_ms?: number | null;
+            /** Ordinal */
+            ordinal: number;
+            /** Prompt Bytes */
+            prompt_bytes: number;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "request" | "headers" | "bytes" | "event" | "complete";
+            /** Started Ms */
+            started_ms: number;
+            /** Stream Requested */
+            stream_requested: boolean;
+            /** Upstream */
+            upstream?: string | null;
+            /**
+             * Wire Bytes
+             * @default 0
+             */
+            wire_bytes: number;
+        };
+        /**
          * AdjudicationRunDiagnostic
          * @description Sanitized trace of one automated-court run that did not finish.
          *
@@ -6774,6 +6819,13 @@ export interface components {
             prompt_tokens?: number | null;
             /** Provider */
             provider?: string | null;
+            /** Request Attempts */
+            request_attempts?: components["schemas"]["AdjudicationRequestAttemptDiagnostic"][];
+            /**
+             * Request Count
+             * @default 0
+             */
+            request_count: number;
             /** Response Bound Kind */
             response_bound_kind?: ("wire" | "tool") | null;
             /** Timeout Stage */
