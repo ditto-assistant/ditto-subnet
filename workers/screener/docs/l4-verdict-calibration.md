@@ -9,6 +9,15 @@ The script has no Platform or Backroom client and cannot release or reject a
 submission. Without `--execute`, it only validates the private manifest and
 artifact digests.
 
+`--two-layer` is a separate report-only arm: it takes a frozen Sol-investigator
+handoff for the **same exact case**, then runs only the model-diverse GLM final
+court over that handoff's notes/finding/error code. It does not infer a final
+decision from the investigator's risk label. The current #2022 result JSON
+does **not** yet export its bounded canonical finding or all exact attempt
+identity fields; a private SHA-bound exporter is required before real #2022
+results can populate this handoff. Do not substitute its finding digest for
+the actual finding or borrow L1-L3 notes.
+
 The private manifest has `revision`, `policy_version: 13`, and a nonempty
 `cases` array. Each case requires:
 
@@ -32,6 +41,25 @@ provenance; this offline script cannot authenticate them against live Backroom.
 Export the exact attempt from Backroom immediately before freezing the case.
 Keep the manifest and artifacts private. Do not substitute a later attempt,
 same-hotkey relative, or a new archive for the pinned row.
+
+For `--two-layer`, each case may include `sol_investigator` with matching
+`agent_id`, `attempt_id`, `artifact_sha256`, `policy_version`,
+`manifest_digest`, and `review_settings_revision`; exact Sol model and prompt
+revision; 0-48 frozen notes and their payload SHA; full canonical `finding`
+and its digest (or both null); `error_code`; compaction count; elapsed
+milliseconds; and metered investigator cost. An absent handoff, empty notes,
+or unmetered investigator is an incomplete arm with no verifier call.
+
+The same case may include `mandatory_host_evidence` references bound to its
+UUID/SHA/attempt: `image_identity_digest`, `runtime_receipt_digest`,
+`private_verification_or_nonapplicability_digest`, and
+`i1_i8_s1_s3_sweep_digest`. Missing references cause an explicit
+`mandatory-host-evidence-missing` incomplete result **before** any model call.
+The replay validates only field presence, digest shape, and exact identity;
+it cannot authenticate the receipts or certify their policy sufficiency.
+Even with all references supplied, the report says
+`references_supplied_unverified` and `policy_ready: false`. Only the actual
+V13 host verification path may certify CLEAR or REJECT.
 
 Before any paid run, assemble independently reviewed v13 cases covering
 confirmed violations across I1-I8, legitimate safe harbors, difficult
@@ -72,6 +100,10 @@ uv run --project workers/screener python \
 Only after the route and cap have been verified, add `--execute`,
 `--api-key-file`, `--max-reported-cost-usd`, and `--external-route-cap-usd`.
 The latter is an operator attestation, not proof that the upstream cap exists.
+Add `--two-layer` only with a private frozen Sol handoff and mandatory host
+evidence references. The local spend cap applies to new verifier calls; the
+investigator's already-incurred metered cost is separately recorded and added
+to the report's end-to-end per-case cost.
 
 The report records decisions, sanitized citations, invariant or clear clause,
 token/cost metadata, route, latency, incomplete coverage, and the number of

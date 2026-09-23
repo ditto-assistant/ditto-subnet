@@ -27,12 +27,21 @@ from ditto_screener.adjudicator import (
     SourceReviewAdjudicator,
 )
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
-from ditto_screening_protocol.models import SourceReviewInvariant
+from ditto_screening_protocol.models import SourceReviewFinding, SourceReviewInvariant
 
 MODELS = ("z-ai/glm-5.3-flash", "openai/gpt-5.6-sol")
 SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
 RELEASE_RE = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+\Z")
 BASELINE_LAYERS = ("l1", "l2", "l3", "l4")
+HOST_EVIDENCE_FIELDS = (
+    "agent_id",
+    "attempt_id",
+    "artifact_sha256",
+    "image_identity_digest",
+    "runtime_receipt_digest",
+    "private_verification_or_nonapplicability_digest",
+    "i1_i8_s1_s3_sweep_digest",
+)
 MAX_STEPS = 128
 MAX_COMPLETION_TOKENS = 16_000
 TIMEOUT_SECONDS = 600.0
@@ -46,6 +55,11 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--api-key-file", type=Path)
     parser.add_argument("--base-url", default="https://openrouter.ai/api/v1")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--two-layer",
+        action="store_true",
+        help="replay frozen Sol investigator handoffs through a GLM verifier",
+    )
     parser.add_argument("--max-reported-cost-usd", type=float)
     parser.add_argument("--external-route-cap-usd", type=float)
     return parser.parse_args()
@@ -97,6 +111,109 @@ def _sha(value: object, field: str) -> str:
 def _json_sha256(value: object) -> str:
     canonical = json.dumps(value, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _sol_handoff(
+    raw: object, identity: Mapping[str, object]
+) -> dict[str, object] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("sol_investigator must be an object")
+    for field in (
+        "agent_id",
+        "attempt_id",
+        "artifact_sha256",
+        "policy_version",
+        "manifest_digest",
+        "review_settings_revision",
+    ):
+        if raw.get(field) != identity[field]:
+            raise ValueError(f"sol_investigator {field} differs from exact case")
+    if raw.get("model") != "openai/gpt-5.6-sol":
+        raise ValueError("sol_investigator model must be exact Sol")
+    prompt_revision = raw.get("prompt_revision")
+    if not isinstance(prompt_revision, str) or not prompt_revision:
+        raise ValueError("sol_investigator needs a prompt revision")
+    notes = raw.get("notes")
+    if (
+        not isinstance(notes, list)
+        or len(notes) > 48
+        or not all(isinstance(note, dict) for note in notes)
+    ):
+        raise ValueError("sol_investigator notes must be 0-48 objects")
+    notes_sha = _sha(raw.get("notes_payload_sha256"), "sol notes_payload_sha256")
+    if _json_sha256(notes) != notes_sha:
+        raise ValueError("sol_investigator notes digest mismatch")
+    finding = raw.get("finding")
+    finding_digest = raw.get("finding_digest")
+    if finding is None:
+        if finding_digest is not None:
+            raise ValueError("sol_investigator finding digest without finding")
+    else:
+        if not isinstance(finding, dict):
+            raise ValueError("sol_investigator finding must be an object")
+        try:
+            parsed_finding = SourceReviewFinding.model_validate(finding)
+        except ValueError as error:
+            raise ValueError("sol_investigator finding is invalid") from error
+        if parsed_finding.canonical_digest() != _sha(
+            finding_digest, "sol finding_digest"
+        ):
+            raise ValueError("sol_investigator finding digest mismatch")
+    error_code = raw.get("error_code")
+    if error_code is not None and not isinstance(error_code, str):
+        raise ValueError("sol_investigator error_code must be a string or null")
+    latency_ms = raw.get("latency_ms")
+    if (
+        not isinstance(latency_ms, int)
+        or isinstance(latency_ms, bool)
+        or latency_ms < 0
+    ):
+        raise ValueError("sol_investigator needs nonnegative latency_ms")
+    cost = raw.get("reported_cost_usd")
+    if cost is not None and (
+        not isinstance(cost, (int, float))
+        or isinstance(cost, bool)
+        or not math.isfinite(cost)
+        or cost < 0
+    ):
+        raise ValueError("sol_investigator cost must be nonnegative or null")
+    compactions = raw.get("compactions")
+    if (
+        not isinstance(compactions, int)
+        or isinstance(compactions, bool)
+        or compactions < 0
+    ):
+        raise ValueError("sol_investigator needs nonnegative compactions")
+    return {
+        "model": raw["model"],
+        "prompt_revision": prompt_revision,
+        "notes": notes,
+        "notes_payload_sha256": notes_sha,
+        "finding": finding,
+        "finding_digest": finding_digest,
+        "error_code": error_code,
+        "latency_ms": latency_ms,
+        "reported_cost_usd": cost,
+        "compactions": compactions,
+    }
+
+
+def _host_evidence(
+    raw: object, identity: Mapping[str, object]
+) -> dict[str, object] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("mandatory_host_evidence must be an object")
+    for field in ("agent_id", "attempt_id", "artifact_sha256"):
+        if field in raw and raw[field] != identity[field]:
+            raise ValueError(f"mandatory host {field} differs from exact case")
+    for field in HOST_EVIDENCE_FIELDS[3:]:
+        if field in raw and raw[field] is not None:
+            _sha(raw[field], f"mandatory host {field}")
+    return dict(raw)
 
 
 def _case(raw: object, root: Path, policy_version: int) -> dict[str, object]:
@@ -180,6 +297,14 @@ def _case(raw: object, root: Path, policy_version: int) -> dict[str, object]:
     cohort = raw.get("cohort")
     if not isinstance(cohort, str) or not cohort:
         raise ValueError("case needs a named cohort")
+    identity = {
+        "agent_id": agent_id,
+        "attempt_id": attempt_id,
+        "artifact_sha256": artifact_sha,
+        "policy_version": policy_version,
+        "manifest_digest": manifest_digest,
+        "review_settings_revision": settings_revision,
+    }
     return {
         "agent_id": agent_id,
         "attempt_id": attempt_id,
@@ -196,6 +321,10 @@ def _case(raw: object, root: Path, policy_version: int) -> dict[str, object]:
         "error_code": error_code,
         "label": label,
         "cohort": cohort,
+        "sol_investigator": _sol_handoff(raw.get("sol_investigator"), identity),
+        "mandatory_host_evidence": _host_evidence(
+            raw.get("mandatory_host_evidence"), identity
+        ),
     }
 
 
@@ -220,9 +349,11 @@ def _load_manifest(
     return manifest, cases
 
 
-def _summary(rows: list[dict[str, object]]) -> dict[str, object]:
+def _summary(
+    rows: list[dict[str, object]], models: tuple[str, ...] = MODELS
+) -> dict[str, object]:
     by_model: dict[str, dict[str, object]] = {}
-    for model in MODELS:
+    for model in models:
         subset = [row for row in rows if row["requested_model"] == model]
         complete = [row for row in subset if row["complete"]]
         by_model[model] = {
@@ -253,9 +384,13 @@ def _summary(rows: list[dict[str, object]]) -> dict[str, object]:
         key = (str(row["agent_id"]), str(row["attempt_id"]))
         by_case.setdefault(key, {})[str(row["requested_model"])] = row
     for pair in by_case.values():
-        if len(pair) != len(MODELS) or not all(pair[m]["complete"] for m in MODELS):
+        if (
+            len(models) != 2
+            or len(pair) != 2
+            or not all(pair[m]["complete"] for m in models)
+        ):
             continue
-        paired.append(pair[MODELS[1]])
+        paired.append(pair[models[1]])
     baseline_releases = sorted({str(row["baseline_worker_release"]) for row in rows})
     baseline_prompt_sets = {
         json.dumps(row["baseline_prompt_revisions"], sort_keys=True) for row in rows
@@ -302,8 +437,15 @@ class _Meter:
         if (
             metadata.get("model") != self.model
             or not isinstance(cost, (int, float))
+            or isinstance(cost, bool)
+            or not math.isfinite(cost)
+            or cost < 0
             or not isinstance(prompt, int)
+            or isinstance(prompt, bool)
+            or prompt < 0
             or not isinstance(completion, int)
+            or isinstance(completion, bool)
+            or completion < 0
         ):
             self.error = "unmetered-or-route-mismatch"
             raise ValueError("calibration response lacked exact metering or model")
@@ -343,13 +485,18 @@ async def _execute(
     if args.max_reported_cost_usd > args.external_route_cap_usd:
         raise ValueError("reported cap cannot exceed external route cap")
     _ensure_private_result_directory(args.results_file)
+    two_layer = bool(getattr(args, "two_layer", False))
+    models = (MODELS[0],) if two_layer else MODELS
     rows: list[dict[str, object]] = []
     spent = [0.0]
     metadata = {
         "manifest_revision": manifest["revision"],
         "policy_version": SCREENING_POLICY_VERSION,
         "prompt_revision": ADJUDICATOR_PROMPT_REVISION,
-        "models": MODELS,
+        "models": models,
+        "arm": "sol-investigator-glm-verifier"
+        if two_layer
+        else "frozen-ledger-l4-pair",
         "base_url": args.base_url,
         "max_steps": MAX_STEPS,
         "max_completion_tokens": MAX_COMPLETION_TOKENS,
@@ -359,36 +506,62 @@ async def _execute(
         "external_route_cap_attested_not_verified": True,
     }
     for case in cases:
-        for model in MODELS:
+        handoff = case["sol_investigator"] if two_layer else None
+        host_evidence = case["mandatory_host_evidence"] if two_layer else None
+        missing_host_fields = (
+            [
+                field
+                for field in HOST_EVIDENCE_FIELDS
+                if not isinstance(host_evidence, dict)
+                or host_evidence.get(field) is None
+            ]
+            if two_layer
+            else []
+        )
+        skip_code = None
+        if two_layer:
+            if handoff is None:
+                skip_code = "investigator-handoff-missing"
+            elif missing_host_fields:
+                skip_code = "mandatory-host-evidence-missing"
+            elif not handoff["notes"]:
+                skip_code = "investigator-no-evidence"
+            elif handoff["reported_cost_usd"] is None:
+                skip_code = "investigator-unmetered"
+        for model in models:
             if spent[0] >= args.max_reported_cost_usd:
                 raise ValueError("reported cost cap reached before all cases")
             meter = _Meter(model, args.max_reported_cost_usd, spent)
-            court = SourceReviewAdjudicator(
-                api_key_file=str(args.api_key_file),
-                base_url=args.base_url,
-                model=model,
-                timeout_seconds=TIMEOUT_SECONDS,
-                max_steps=MAX_STEPS,
-                max_completion_tokens=MAX_COMPLETION_TOKENS,
-                completion_observer=meter.observe,
-            )
             started = time.monotonic()
             verdict = None
             call_error: Exception | None = None
-            try:
-                verdict = await court.adjudicate(
-                    str(case["archive"]),
-                    notes=case["notes"],
-                    finding=case["finding"],
-                    error_code=case["error_code"],
-                    deadline=asyncio.get_running_loop().time() + TIMEOUT_SECONDS,
-                    policy_version=SCREENING_POLICY_VERSION,
-                    ledger_final=True,
+            if skip_code is None:
+                court = SourceReviewAdjudicator(
+                    api_key_file=str(args.api_key_file),
+                    base_url=args.base_url,
+                    model=model,
+                    timeout_seconds=TIMEOUT_SECONDS,
+                    max_steps=MAX_STEPS,
+                    max_completion_tokens=MAX_COMPLETION_TOKENS,
+                    completion_observer=meter.observe,
                 )
-            except Exception as error:
-                # A failed model arm is a coverage result, not a reason to
-                # silently omit it. Cancellation/SystemExit still propagate.
-                call_error = error
+                try:
+                    verdict = await court.adjudicate(
+                        str(case["archive"]),
+                        notes=handoff["notes"] if two_layer else case["notes"],
+                        finding=handoff["finding"] if two_layer else case["finding"],
+                        error_code=(
+                            handoff["error_code"] if two_layer else case["error_code"]
+                        ),
+                        deadline=asyncio.get_running_loop().time() + TIMEOUT_SECONDS,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        ledger_final=True,
+                    )
+                except Exception as error:
+                    # A failed model arm is a coverage result, not a reason to
+                    # silently omit it. Cancellation/SystemExit still propagate.
+                    call_error = error
+            verifier_latency_ms = round((time.monotonic() - started) * 1_000)
             decision = verdict.decision if verdict is not None else None
             complete = decision in {"clear", "reject"} and meter.error is None
             label = case["label"]
@@ -412,13 +585,22 @@ async def _execute(
                 else None
             )
             error_code = (
-                _exception_code(call_error)
+                skip_code
+                if skip_code is not None
+                else _exception_code(call_error)
                 if call_error is not None
                 else diagnostic.failure_code
                 if diagnostic is not None
                 else None
             )
+            investigator_cost = (
+                float(handoff["reported_cost_usd"])
+                if handoff is not None and handoff["reported_cost_usd"] is not None
+                else 0.0
+            )
+            investigator_latency = int(handoff["latency_ms"]) if handoff else 0
             row: dict[str, object] = {
+                "arm": metadata["arm"],
                 "agent_id": case["agent_id"],
                 "attempt_id": case["attempt_id"],
                 "artifact_sha256": case["artifact_sha256"],
@@ -427,7 +609,37 @@ async def _execute(
                 "baseline_worker_release": case["baseline_worker_release"],
                 "baseline_prompt_revisions": case["baseline_prompt_revisions"],
                 "review_notes_digest": case["review_notes_digest"],
-                "notes_payload_sha256": case["notes_payload_sha256"],
+                "baseline_notes_payload_sha256": case["notes_payload_sha256"],
+                "notes_payload_sha256": (
+                    handoff["notes_payload_sha256"]
+                    if handoff
+                    else case["notes_payload_sha256"]
+                ),
+                "investigator_prompt_revision": (
+                    handoff["prompt_revision"] if handoff else None
+                ),
+                "investigator_finding_digest": (
+                    handoff["finding_digest"] if handoff else None
+                ),
+                "investigator_compactions": handoff["compactions"] if handoff else None,
+                "host_evidence_status": (
+                    "references_supplied_unverified"
+                    if two_layer and not missing_host_fields
+                    else "missing"
+                    if two_layer
+                    else "not_evaluated"
+                ),
+                "missing_host_evidence_fields": missing_host_fields,
+                "host_evidence_reference_digests": (
+                    {
+                        field: host_evidence.get(field)
+                        for field in HOST_EVIDENCE_FIELDS[3:]
+                        if host_evidence.get(field) is not None
+                    }
+                    if isinstance(host_evidence, dict)
+                    else None
+                ),
+                "policy_ready": False,
                 "cohort": case["cohort"],
                 "requested_model": model,
                 "decision": decision,
@@ -437,7 +649,7 @@ async def _execute(
                 "escalation_code": (
                     verdict.escalation_code
                     if verdict is not None
-                    else "calibration-call-failed"
+                    else skip_code or "calibration-call-failed"
                 ),
                 "error_class": error_class,
                 "error_code": error_code,
@@ -467,9 +679,15 @@ async def _execute(
                     if verdict is not None
                     else None
                 ),
-                "latency_ms": round((time.monotonic() - started) * 1_000),
+                "latency_ms": investigator_latency + verifier_latency_ms,
+                "investigator_latency_ms": investigator_latency if two_layer else None,
+                "verifier_latency_ms": verifier_latency_ms,
                 "responses": meter.responses,
-                "reported_cost_usd": round(meter.cost, 6),
+                "reported_cost_usd": round(investigator_cost + meter.cost, 6),
+                "investigator_reported_cost_usd": (
+                    round(investigator_cost, 6) if two_layer and handoff else None
+                ),
+                "verifier_reported_cost_usd": round(meter.cost, 6),
                 "prompt_tokens": meter.tokens_in,
                 "completion_tokens": meter.tokens_out,
                 "upstreams": sorted(meter.upstreams),
@@ -479,11 +697,11 @@ async def _execute(
             rows.append(row)
             _write_private_json(
                 args.results_file,
-                {"run": metadata, "summary": _summary(rows), "items": rows},
+                {"run": metadata, "summary": _summary(rows, models), "items": rows},
             )
             if meter.error is not None:
                 raise ValueError(f"stopped after {meter.error}; partial report saved")
-    return {"run": metadata, "summary": _summary(rows), "items": rows}
+    return {"run": metadata, "summary": _summary(rows, models), "items": rows}
 
 
 async def _main() -> None:
@@ -491,7 +709,37 @@ async def _main() -> None:
     root = args.artifact_root.resolve()
     manifest, cases = _load_manifest(args.manifest, root)
     if not args.execute:
-        print(json.dumps({"validated_cases": len(cases), "models": MODELS}))
+        models = (MODELS[0],) if args.two_layer else MODELS
+        print(
+            json.dumps(
+                {
+                    "validated_cases": len(cases),
+                    "models": models,
+                    "arm": (
+                        "sol-investigator-glm-verifier"
+                        if args.two_layer
+                        else "frozen-ledger-l4-pair"
+                    ),
+                    "sol_handoffs_present": (
+                        sum(case["sol_investigator"] is not None for case in cases)
+                        if args.two_layer
+                        else None
+                    ),
+                    "mandatory_host_evidence_references_complete": (
+                        sum(
+                            isinstance(case["mandatory_host_evidence"], dict)
+                            and all(
+                                case["mandatory_host_evidence"].get(field) is not None
+                                for field in HOST_EVIDENCE_FIELDS
+                            )
+                            for case in cases
+                        )
+                        if args.two_layer
+                        else None
+                    ),
+                }
+            )
+        )
         return
     report = await _execute(args, manifest, cases)
     print(

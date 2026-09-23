@@ -120,6 +120,16 @@ def test_meter_stops_on_missing_cost_or_wrong_model() -> None:
                 "cost_usd": 0.1,
             }
         )
+    negative = _Meter("openai/gpt-5.6-sol", 1.0, spent)
+    with pytest.raises(ValueError, match="exact metering"):
+        negative.observe(
+            {
+                "model": "openai/gpt-5.6-sol",
+                "prompt_tokens": 10,
+                "completion_tokens": 2,
+                "cost_usd": -0.1,
+            }
+        )
 
 
 def test_summary_excludes_incomplete_cases_from_accuracy() -> None:
@@ -278,3 +288,137 @@ async def test_route_mismatch_persists_then_stops(
     report = json.loads(results_file.read_text())
     assert report["items"][0]["complete"] is False
     assert report["items"][0]["meter_error"] == "unmetered-or-route-mismatch"
+
+
+def _add_sol_handoff(path: Path, *, host_evidence: bool) -> None:
+    manifest = json.loads(path.read_text())
+    case = manifest["cases"][0]
+    notes = [{"kind": "concern", "path": "src/sol.rs", "line": 9}]
+    case["sol_investigator"] = {
+        "agent_id": case["agent_id"],
+        "attempt_id": case["attempt_id"],
+        "artifact_sha256": case["artifact_sha256"],
+        "policy_version": case["policy_version"],
+        "manifest_digest": case["manifest_digest"],
+        "review_settings_revision": case["review_settings_revision"],
+        "model": "openai/gpt-5.6-sol",
+        "prompt_revision": "single-sol-v1-policy-v13",
+        "notes": notes,
+        "notes_payload_sha256": hashlib.sha256(
+            json.dumps(notes, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "finding": None,
+        "finding_digest": None,
+        "error_code": "source-review-inconclusive",
+        "latency_ms": 100,
+        "reported_cost_usd": 0.02,
+        "compactions": 1,
+    }
+    if host_evidence:
+        case["mandatory_host_evidence"] = {
+            "agent_id": case["agent_id"],
+            "attempt_id": case["attempt_id"],
+            "artifact_sha256": case["artifact_sha256"],
+            "image_identity_digest": "c" * 64,
+            "runtime_receipt_digest": "d" * 64,
+            "private_verification_or_nonapplicability_digest": "e" * 64,
+            "i1_i8_s1_s3_sweep_digest": "f" * 64,
+        }
+    path.write_text(json.dumps(manifest))
+
+
+async def test_two_layer_missing_host_evidence_is_incomplete_without_model_call(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path, root = _manifest(tmp_path)
+    _add_sol_handoff(manifest_path, host_evidence=False)
+    manifest, cases = _load_manifest(manifest_path, root)
+    key = tmp_path / "dedicated-key"
+    key.write_text("test-only")
+    results_dir = tmp_path / "private-results"
+    results_dir.mkdir(mode=0o700)
+    results_dir.chmod(0o700)
+
+    def unexpected_court(**_kwargs: object) -> object:
+        pytest.fail("missing mandatory host evidence must not spend model tokens")
+
+    monkeypatch.setattr(replay, "SourceReviewAdjudicator", unexpected_court)
+    args = argparse.Namespace(
+        api_key_file=key,
+        base_url="https://openrouter.ai/api/v1",
+        max_reported_cost_usd=1.0,
+        external_route_cap_usd=2.0,
+        results_file=results_dir / "results.json",
+        two_layer=True,
+    )
+    report = await _execute(args, manifest, cases)
+    assert len(report["items"]) == 1
+    row = report["items"][0]
+    assert row["complete"] is False
+    assert row["error_code"] == "mandatory-host-evidence-missing"
+    assert "runtime_receipt_digest" in row["missing_host_evidence_fields"]
+    assert row["policy_ready"] is False
+
+
+async def test_two_layer_uses_sol_handoff_for_model_diverse_verifier(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path, root = _manifest(tmp_path)
+    _add_sol_handoff(manifest_path, host_evidence=True)
+    manifest, cases = _load_manifest(manifest_path, root)
+    key = tmp_path / "dedicated-key"
+    key.write_text("test-only")
+    results_dir = tmp_path / "private-results"
+    results_dir.mkdir(mode=0o700)
+    results_dir.chmod(0o700)
+    seen: list[object] = []
+
+    class FakeCourt:
+        def __init__(self, **kwargs: object) -> None:
+            assert kwargs["model"] == "z-ai/glm-5.3-flash"
+            self.observe = kwargs["completion_observer"]
+
+        async def adjudicate(self, _archive: str, **kwargs: object) -> object:
+            seen.append(kwargs["notes"])
+            assert kwargs["finding"] is None
+            assert kwargs["error_code"] == "source-review-inconclusive"
+            assert kwargs["ledger_final"] is True
+            self.observe(
+                {
+                    "model": "z-ai/glm-5.3-flash",
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "cost_usd": 0.01,
+                }
+            )
+            return SimpleNamespace(
+                decision="clear",
+                reject_invariant=None,
+                clear_clause=SimpleNamespace(value="genuine_model_result"),
+                citations=[],
+                reason="safe",
+                escalation_code=None,
+                run_diagnostic=None,
+            )
+
+    monkeypatch.setattr(replay, "SourceReviewAdjudicator", FakeCourt)
+    args = argparse.Namespace(
+        api_key_file=key,
+        base_url="https://openrouter.ai/api/v1",
+        max_reported_cost_usd=1.0,
+        external_route_cap_usd=2.0,
+        results_file=results_dir / "results.json",
+        two_layer=True,
+    )
+    report = await _execute(args, manifest, cases)
+    assert seen == [cases[0]["sol_investigator"]["notes"]]
+    row = report["items"][0]
+    assert row["complete"] is True
+    assert row["host_evidence_status"] == "references_supplied_unverified"
+    assert row["host_evidence_reference_digests"]["runtime_receipt_digest"] == (
+        "d" * 64
+    )
+    assert row["policy_ready"] is False
+    assert row["investigator_compactions"] == 1
+    assert row["latency_ms"] >= 100
+    assert row["reported_cost_usd"] == 0.03
