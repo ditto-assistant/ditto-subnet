@@ -8104,6 +8104,25 @@ class TestQuarantineAdmin:
         assert legacy.json()["deadline_state"] == "not_configured"
         assert legacy.json()["deadline_at"] is None
 
+        prescreen_id = await _seed_agent(
+            session_maker, status=AgentStatus.UPLOADED, name="deadline-prescreen"
+        )
+        async with session_maker() as session, session.begin():
+            prescreen_agent = await session.get(Agent, prescreen_id)
+            assert prescreen_agent is not None
+            prescreen_agent.screening_policy_version = 0
+        prescreen = await client.get(
+            f"/api/v1/admin/screening-submissions/{prescreen_id}/review-deadline",
+            headers=headers,
+        )
+        assert prescreen.status_code == 200, prescreen.text
+        assert prescreen.json()["policy_version"] == 0
+        assert prescreen.json()["quarantine_id"] is None
+        assert prescreen.json()["manifest_digest"] is None
+        assert prescreen.json()["deadline_state"] == "not_configured"
+        assert prescreen.json()["deadline_at"] is None
+        assert prescreen.json()["recorded_attempts"] == []
+
     async def test_screening_failure_summary_groups_live_pipeline_by_reason_code(
         self,
         app: FastAPI,

@@ -4500,7 +4500,7 @@ export const screeningReviewDeadlineDiagnosticSchema = z.object({
   agent_id: z.string().uuid(),
   artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   agent_status: z.string(),
-  policy_version: z.number().int().positive(),
+  policy_version: z.number().int().nonnegative(),
   quarantine_id: z.string().uuid().nullable(),
   quarantine_status: z.string().nullable(),
   quarantine_resolution: z.string().nullable(),

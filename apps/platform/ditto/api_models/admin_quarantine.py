@@ -342,7 +342,7 @@ class AdminScreeningReviewDeadlineDiagnostic(BaseModel):
     agent_id: UUID
     artifact_sha256: str
     agent_status: str
-    policy_version: int
+    policy_version: int = Field(ge=0)
     quarantine_id: UUID | None
     quarantine_status: str | None
     quarantine_resolution: str | None
