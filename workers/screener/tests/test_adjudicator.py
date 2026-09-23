@@ -370,11 +370,12 @@ async def test_active_stream_without_tool_progress_retries_then_holds(
         async def __aiter__(self):
             for index in range(4):
                 if index == 1:
-                    # An indexed shell without an ID/name/argument fragment
-                    # must not disable the first-tool progress bound.
+                    # An indexed, ID-only shell must not disable the
+                    # first-tool progress bound.
                     yield (
                         b'data: {"provider":"Together","choices":'
-                        b'[{"delta":{"tool_calls":[{"index":0}]}}]}\n\n'
+                        b'[{"delta":{"tool_calls":'
+                        b'[{"index":0,"id":"verdict-1"}]}}]}\n\n'
                     )
                 else:
                     yield (

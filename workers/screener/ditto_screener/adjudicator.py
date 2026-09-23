@@ -1865,9 +1865,12 @@ async def _completion_stream_payload(
             fragment = piece.get("function") or {}
             if not isinstance(fragment, dict):
                 raise ValueError("adjudicator stream function is invalid")
-            if piece.get("id") or fragment.get("name") or fragment.get("arguments"):
-                # An index-only shell is not evidence that the model started
-                # an actual call; keep the no-tool budget active for it.
+            if any(
+                isinstance(fragment.get(key), str) and fragment[key].strip()
+                for key in ("name", "arguments")
+            ):
+                # An index or ID-only shell is not evidence that the model
+                # started a function call; keep the budget active for it.
                 saw_tool_piece = True
             call = calls.setdefault(index, {"type": "function", "function": {}})
             for key in ("id", "type"):
