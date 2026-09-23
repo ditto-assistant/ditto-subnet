@@ -12117,7 +12117,29 @@ class TestTop5ConfirmationLane:
         )
         assert response.status_code == 200, response.text
         assert response.json()["agent_id"] == str(challenger)
-        assert response.json()["confirmation_datasets"][0]["seed"] in seeds
+        first_seed = response.json()["confirmation_datasets"][0]["seed"]
+        assert first_seed in seeds
+
+        # The validator cannot spend another slot while its lease is live.
+        # Ordinary v2 polling on a different validator still finds this
+        # challenger without an explicit member request.
+        repeated = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_top5_job_payload(champion, challenger),
+        )
+        assert repeated.status_code == 409, repeated.text
+        assert "no idle slot" in repeated.json()["message"]
+
+        auto = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_top5_auth_header(_KEYPAIRS[1]),
+            json=_auto_top5_job_payload("slot-0", keypair=_KEYPAIRS[1]),
+        )
+        assert auto.status_code == 200, auto.text
+        assert auto.json()["agent_id"] == str(challenger)
+        assert auto.json()["confirmation_datasets"][0]["seed"] in seeds
+        assert auto.json()["confirmation_datasets"][0]["seed"] != first_seed
 
         # Once the same anchored seeds are present, the official comparison may
         # choose the successor. Admission itself did not promote it early.
