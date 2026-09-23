@@ -1538,6 +1538,13 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
                 if key in piece:
                     if not isinstance(piece[key], str):
                         raise ValueError("adjudicator stream tool field is invalid")
+                    # These are replacement fields, unlike function argument
+                    # fragments below. Some compatible gateways repeat the
+                    # call ID in every delta. Bound stored tool data, not the
+                    # sum of IDs that were overwritten and discarded.
+                    previous = call.get(key)
+                    if isinstance(previous, str):
+                        retained_bytes -= len(previous.encode("utf-8"))
                     retained_bytes += len(piece[key].encode("utf-8"))
                     if retained_bytes > _MAX_COMPLETION_RESPONSE_BYTES:
                         raise CompletionToolTooLarge(

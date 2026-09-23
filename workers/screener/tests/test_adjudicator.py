@@ -417,6 +417,57 @@ async def test_valid_token_framing_over_old_wire_ceiling_keeps_verdict(
     assert message["tool_calls"] == [call]
 
 
+async def test_repeated_stream_call_id_counts_only_retained_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_COMPLETION_RESPONSE_BYTES", 300)
+    call_id = "call-" + "x" * 30
+    repeated = json.dumps(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [{"index": 0, "id": call_id, "type": "function"}]
+                    }
+                }
+            ]
+        }
+    )
+    final = json.dumps(
+        {
+            "choices": [
+                {
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "function": {
+                                    "name": "submit_adjudication",
+                                    "arguments": json.dumps(
+                                        {"decision": "clear", "reason": "valid"}
+                                    ),
+                                },
+                            }
+                        ]
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
+        }
+    )
+    body = (f"data: {repeated}\n\n" * 30) + f"data: {final}\n\ndata: [DONE]\n\n"
+    response = httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, text=body
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _request: response)
+    ) as client:
+        message = await _adjudicator(
+            _key(tmp_path), httpx.MockTransport(lambda _request: response)
+        )._completion_message(client, "sk-test", [], timeout=10)
+    assert message["tool_calls"][0]["id"] == call_id
+
+
 @pytest.mark.parametrize("streamed", [False, True])
 async def test_oversized_tool_arguments_still_fail_closed(
     tmp_path: Path, streamed: bool
