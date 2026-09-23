@@ -6891,6 +6891,27 @@ class TestQuarantineAdmin:
             "model": "z-ai/glm-5.3-flash",
             "provider": "openrouter",
             "upstream": "near-ai",
+            "request_count": 1,
+            "request_attempts": [
+                {
+                    "ordinal": 1,
+                    "started_ms": 2,
+                    "elapsed_ms": 598_000,
+                    "stage": "event",
+                    "stream_requested": True,
+                    "prompt_bytes": 8_000,
+                    "http_status": 200,
+                    "headers_ms": 100,
+                    "first_byte_ms": 300,
+                    "last_byte_ms": 597_000,
+                    "first_event_ms": 301,
+                    "last_event_ms": 597_000,
+                    "event_count": 17,
+                    "wire_bytes": 2_000,
+                    "upstream": "near-ai",
+                    "prompt": "prompt text that must not be stored",
+                }
+            ],
             "exception": "prompt text that must not be stored",
         }
         async with session_maker() as session, session.begin():
@@ -6968,6 +6989,26 @@ class TestQuarantineAdmin:
             # Reaches the operator surface, which is the only reason to record
             # it: a burst on one upstream is a fleet fact, not a miner fact.
             "upstream": "near-ai",
+            "request_count": 1,
+            "request_attempts": [
+                {
+                    "ordinal": 1,
+                    "started_ms": 2,
+                    "elapsed_ms": 598_000,
+                    "stage": "event",
+                    "stream_requested": True,
+                    "prompt_bytes": 8_000,
+                    "http_status": 200,
+                    "headers_ms": 100,
+                    "first_byte_ms": 300,
+                    "last_byte_ms": 597_000,
+                    "first_event_ms": 301,
+                    "last_event_ms": 597_000,
+                    "event_count": 17,
+                    "wire_bytes": 2_000,
+                    "upstream": "near-ai",
+                }
+            ],
         }
         assert "prompt text" not in diagnostic.text
         assert rejected.status_code == 200, rejected.text
