@@ -6955,6 +6955,7 @@ class TestQuarantineAdmin:
         assert body["court_diagnostic"] == {
             "error_class": "HTTPStatusError",
             "failure_code": "provider-http-error",
+            "response_bound_kind": None,
             "escalation_code": "adjudicator-failed",
             "timeout_stage": "response",
             "http_status": 503,
