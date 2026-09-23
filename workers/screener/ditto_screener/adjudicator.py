@@ -1646,6 +1646,12 @@ async def _completion_stream_payload(response: httpx.Response) -> object:
                 if value is not None:
                     if not isinstance(value, str):
                         raise ValueError("adjudicator stream function field is invalid")
+                    if key == "name" and function.get("name") == value:
+                        # Some compatible gateways repeat the full function
+                        # name in each delta rather than sending only new
+                        # characters. An exact repeat is not a name fragment
+                        # and does not add retained tool data.
+                        continue
                     retained_bytes += len(value.encode("utf-8"))
                     if retained_bytes > _MAX_COMPLETION_RESPONSE_BYTES:
                         raise CompletionToolTooLarge(

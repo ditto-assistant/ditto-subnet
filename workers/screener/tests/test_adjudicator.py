@@ -468,6 +468,74 @@ async def test_repeated_stream_call_id_counts_only_retained_bytes(
     assert message["tool_calls"][0]["id"] == call_id
 
 
+@pytest.mark.parametrize(
+    ("first_name", "second_name"),
+    [
+        ("submit_adjudication", "submit_adjudication"),
+        ("submit_", "adjudication"),
+    ],
+)
+async def test_stream_function_name_repeats_and_fragments_preserve_verdict(
+    tmp_path: Path,
+    first_name: str,
+    second_name: str,
+) -> None:
+    """Accept complete-name repeats without dropping real name fragments."""
+    arguments = json.dumps(
+        {
+            "decision": "clear",
+            "clear_clause": "model_authors_graded_slot",
+            "reason": "The model writes the answer",
+            "citations": [{"path": "src/main.rs", "line": 6}],
+        }
+    )
+    first = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": "verdict-1",
+                            "type": "function",
+                            "function": {"name": first_name},
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    second = {
+        "choices": [
+            {
+                "delta": {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "function": {
+                                "name": second_name,
+                                "arguments": arguments,
+                            },
+                        }
+                    ]
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    }
+    body = (
+        f"data: {json.dumps(first)}\n\ndata: {json.dumps(second)}\n\ndata: [DONE]\n\n"
+    )
+    response = httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, text=body
+    )
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(lambda _request: response)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+    assert result.decision == "clear"
+    assert result.escalation_code is None
+
+
 @pytest.mark.parametrize("streamed", [False, True])
 async def test_oversized_tool_arguments_still_fail_closed(
     tmp_path: Path, streamed: bool
