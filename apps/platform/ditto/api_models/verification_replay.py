@@ -23,6 +23,7 @@ PublicCheck = Literal[
 class VerificationReplayCreate(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
+    request_id: UUID
     quarantine_id: UUID
     source_attempt_id: UUID
     artifact_sha256: Sha256
@@ -31,7 +32,7 @@ class VerificationReplayCreate(BaseModel):
     image_sha256: Sha256 | None = None
     expected_agent_status: Literal["quarantined"]
     actor: Annotated[str, Field(min_length=1, max_length=120)]
-    reason: Annotated[str, Field(min_length=8, max_length=500)]
+    reason: Annotated[str, Field(min_length=8)]
 
     @model_validator(mode="after")
     def image_pair(self) -> VerificationReplayCreate:
@@ -44,6 +45,7 @@ class VerificationReplayCreate(BaseModel):
 
 class VerificationReplayState(BaseModel):
     replay_id: UUID
+    request_id: UUID
     agent_id: UUID
     quarantine_id: UUID
     source_attempt_id: UUID
@@ -52,7 +54,12 @@ class VerificationReplayState(BaseModel):
     image_upload_id: UUID | None
     image_sha256: str | None
     image_size_bytes: int | None
-    image_id: str | None
+    image_id: str | None = Field(
+        ...,
+        description=(
+            "Worker-claimed Docker image ID; not verified against the tar contents"
+        ),
+    )
     image_staging_id: UUID | None
     image_verified_at: datetime | None
     status: Literal["queued", "running", "completed", "failed"]
@@ -69,6 +76,15 @@ class VerificationReplayInputs(BaseModel):
     artifact_url: str
     image_url: str | None
     urls_expire_at: datetime
+
+
+class VerificationReplayClaimability(BaseModel):
+    replay_id: UUID
+    original_screener_hotkey: str
+    source_binding_current: bool
+    independent_enrolled_hotkeys: list[str]
+    independently_enrolled: bool
+    note: str
 
 
 class VerificationReplayReceiptRequest(BaseModel):

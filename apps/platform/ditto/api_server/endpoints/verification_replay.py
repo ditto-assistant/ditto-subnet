@@ -11,7 +11,7 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,7 @@ from ditto.api_models.verification_replay import (
     VerificationReplayBuildUpload,
     VerificationReplayBuildUploadRequest,
     VerificationReplayBuildVerifyRequest,
+    VerificationReplayClaimability,
     VerificationReplayCreate,
     VerificationReplayFinish,
     VerificationReplayInputs,
@@ -36,6 +37,7 @@ from ditto.api_server.endpoints.screener import (
 from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
+    ScreenerNode,
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningVerificationReplay,
@@ -58,11 +60,30 @@ def _replay_verified_image_key(replay_id: UUID) -> str:
     return f"verification-replays/{replay_id}/verified-image.tar"
 
 
+async def _require_enrolled_replay_worker(
+    request: Request, worker: str, session: AsyncSession
+) -> None:
+    """Legacy fleet tokens and non-prod nodes are not replay authority."""
+    node_id = getattr(request.state, "screener_node_id", None)
+    if node_id is None or request.state.screener_node_status != "active":
+        raise HTTPException(403, "independent enrolled screener node required")
+    node = await session.get(ScreenerNode, node_id, populate_existing=True)
+    if (
+        node is None
+        or node.status != "active"
+        or node.environment != "prod"
+        or node.screener_hotkey != worker
+        or node.token_expires_at <= datetime.now(UTC)
+    ):
+        raise HTTPException(403, "independent enrolled screener node required")
+
+
 def _state(
     row: ScreeningVerificationReplay, receipt_count: int = 0
 ) -> VerificationReplayState:
     return VerificationReplayState(
         replay_id=row.replay_id,
+        request_id=row.request_id,
         agent_id=row.agent_id,
         quarantine_id=row.quarantine_id,
         source_attempt_id=row.source_attempt_id,
@@ -84,17 +105,32 @@ def _state(
     )
 
 
-async def _binding_ok(session: AsyncSession, row: ScreeningVerificationReplay) -> bool:
-    agent = await session.get(Agent, row.agent_id, populate_existing=True)
-    quarantine = await session.get(
-        ScreeningQuarantine, row.quarantine_id, populate_existing=True
+async def _binding_ok(
+    session: AsyncSession, row: ScreeningVerificationReplay, *, lock: bool = False
+) -> bool:
+    # Lifecycle writers lock Agent first. Keep this order in every replay
+    # mutation so an operator resolution cannot race the evidence check.
+    agent = await session.get(
+        Agent, row.agent_id, populate_existing=True, with_for_update=lock
     )
     attempt = await session.get(
-        ScreeningAttempt, row.source_attempt_id, populate_existing=True
+        ScreeningAttempt,
+        row.source_attempt_id,
+        populate_existing=True,
+        with_for_update=lock,
+    )
+    quarantine = await session.get(
+        ScreeningQuarantine,
+        row.quarantine_id,
+        populate_existing=True,
+        with_for_update=lock,
     )
     image = (
         await session.get(
-            ScreenedImageUpload, row.image_upload_id, populate_existing=True
+            ScreenedImageUpload,
+            row.image_upload_id,
+            populate_existing=True,
+            with_for_update=lock,
         )
         if row.image_upload_id is not None
         else None
@@ -133,12 +169,15 @@ def _same_request(
     row: ScreeningVerificationReplay, payload: VerificationReplayCreate
 ) -> bool:
     return (
-        row.quarantine_id == payload.quarantine_id
+        row.request_id == payload.request_id
+        and row.quarantine_id == payload.quarantine_id
         and row.source_attempt_id == payload.source_attempt_id
         and row.artifact_sha256 == payload.artifact_sha256
         and row.policy_version == payload.policy_version
         and row.image_upload_id == payload.image_upload_id
         and row.image_sha256 == payload.image_sha256
+        and row.actor == payload.actor
+        and row.reason == payload.reason
     )
 
 
@@ -149,6 +188,15 @@ async def create_replay(
     _admin: AdminDep,
     session: SessionDep,
 ) -> VerificationReplayState:
+    prior = await session.scalar(
+        select(ScreeningVerificationReplay).where(
+            ScreeningVerificationReplay.request_id == payload.request_id
+        )
+    )
+    if prior is not None:
+        if prior.agent_id != agent_id or not _same_request(prior, payload):
+            raise HTTPException(409, "replay request ID belongs to another binding")
+        return _state(prior)
     # Lock the agent so a concurrent lifecycle/image change cannot pass guards
     # between the initial read and lease creation. The partial unique index is
     # the final guard against two administrators racing this request.
@@ -162,23 +210,9 @@ async def create_replay(
         or agent.sha256 != payload.artifact_sha256
     ):
         raise HTTPException(409, "agent status or artifact changed")
-    existing = await session.scalar(
-        select(ScreeningVerificationReplay)
-        .where(
-            ScreeningVerificationReplay.agent_id == agent_id,
-            ScreeningVerificationReplay.source_attempt_id == payload.source_attempt_id,
-            ScreeningVerificationReplay.status.in_(("queued", "running")),
-        )
-        .with_for_update()
-    )
-    if existing is not None:
-        if not _same_request(existing, payload):
-            raise HTTPException(409, "active replay has different evidence binding")
-        if not await _binding_ok(session, existing):
-            raise HTTPException(409, "active replay evidence binding changed")
-        return _state(existing)
     row = ScreeningVerificationReplay(
         replay_id=uuid4(),
+        request_id=payload.request_id,
         agent_id=agent_id,
         quarantine_id=payload.quarantine_id,
         source_attempt_id=payload.source_attempt_id,
@@ -198,15 +232,41 @@ async def create_replay(
         reason=payload.reason,
         created_at=datetime.now(UTC),
     )
-    if not await _binding_ok(session, row):
+    if not await _binding_ok(session, row, lock=True):
         raise HTTPException(
             409, "source quarantine, pinned attempt, or optional verified image changed"
         )
+    existing = await session.scalar(
+        select(ScreeningVerificationReplay)
+        .where(
+            ScreeningVerificationReplay.agent_id == agent_id,
+            ScreeningVerificationReplay.source_attempt_id == payload.source_attempt_id,
+            ScreeningVerificationReplay.status.in_(("queued", "running")),
+        )
+        .with_for_update()
+    )
+    if existing is not None:
+        if not _same_request(existing, payload):
+            raise HTTPException(409, "active replay has different evidence binding")
+        if not await _binding_ok(session, existing, lock=True):
+            raise HTTPException(409, "active replay evidence binding changed")
+        return _state(existing)
     session.add(row)
     try:
         await session.commit()
     except IntegrityError as exc:
         await session.rollback()
+        prior = await session.scalar(
+            select(ScreeningVerificationReplay).where(
+                ScreeningVerificationReplay.request_id == payload.request_id
+            )
+        )
+        if (
+            prior is not None
+            and prior.agent_id == agent_id
+            and _same_request(prior, payload)
+        ):
+            return _state(prior)
         raise HTTPException(409, "replay already active") from exc
     return _state(row)
 
@@ -226,15 +286,63 @@ async def get_replay(
     return _state(row, count or 0)
 
 
-async def _active_claim(
-    session: AsyncSession, replay_id: UUID, worker: str, *, lock: bool = False
-) -> ScreeningVerificationReplay:
-    query = select(ScreeningVerificationReplay).where(
-        ScreeningVerificationReplay.replay_id == replay_id
+@admin_router.get(
+    "/{agent_id}/{replay_id}/claimability",
+    response_model=VerificationReplayClaimability,
+)
+async def get_replay_claimability(
+    agent_id: UUID, replay_id: UUID, _admin: AdminDep, session: SessionDep
+) -> VerificationReplayClaimability:
+    """Show whether an independent enrolled identity exists, not worker readiness."""
+    row = await session.get(ScreeningVerificationReplay, replay_id)
+    if row is None or row.agent_id != agent_id:
+        raise HTTPException(404, "replay not found")
+    attempt = await session.get(ScreeningAttempt, row.source_attempt_id)
+    if attempt is None or not attempt.screener_hotkey:
+        raise HTTPException(409, "original screener identity unavailable")
+    now = datetime.now(UTC)
+    eligible = list(
+        (
+            await session.scalars(
+                select(ScreenerNode.screener_hotkey)
+                .where(
+                    ScreenerNode.status == "active",
+                    ScreenerNode.environment == "prod",
+                    ScreenerNode.token_expires_at > now,
+                    ScreenerNode.screener_hotkey != attempt.screener_hotkey,
+                )
+                .order_by(ScreenerNode.screener_hotkey)
+            )
+        ).all()
     )
-    if lock:
-        query = query.with_for_update()
-    row = await session.scalar(query)
+    bound = await _binding_ok(session, row)
+    return VerificationReplayClaimability(
+        replay_id=replay_id,
+        original_screener_hotkey=attempt.screener_hotkey,
+        source_binding_current=bound,
+        independent_enrolled_hotkeys=eligible,
+        independently_enrolled=bool(eligible),
+        note=(
+            "Enrollment alone does not prove a deployed or healthy worker; "
+            "this replay remains report-only and cannot clear a hold."
+        ),
+    )
+
+
+async def _active_claim(
+    session: AsyncSession, replay_id: UUID, worker: str
+) -> ScreeningVerificationReplay:
+    row = await session.get(ScreeningVerificationReplay, replay_id)
+    if row is None or row.worker_hotkey != worker:
+        raise HTTPException(403, "replay lease belongs to another worker")
+    if not await _binding_ok(session, row, lock=True):
+        raise HTTPException(409, "replay evidence binding changed")
+    row = await session.get(
+        ScreeningVerificationReplay,
+        replay_id,
+        with_for_update=True,
+        populate_existing=True,
+    )
     if row is None or row.worker_hotkey != worker:
         raise HTTPException(403, "replay lease belongs to another worker")
     now = datetime.now(UTC)
@@ -244,7 +352,7 @@ async def _active_claim(
         or row.lease_deadline <= now
     ):
         raise HTTPException(409, "replay lease is not active")
-    if not await _binding_ok(session, row):
+    if not await _binding_ok(session, row, lock=True):
         raise HTTPException(409, "replay evidence binding changed")
     return row
 
@@ -253,19 +361,38 @@ async def _active_claim(
 async def claim_replay(
     request: Request, worker: ScreenerDep, session: SessionDep
 ) -> VerificationReplayState | None:
-    if request.state.screener_node_status != "active":
-        return None
+    await _require_enrolled_replay_worker(request, worker, session)
     now = datetime.now(UTC)
-    # An expired lease never silently re-enters the queue. Operators must
-    # inspect its receipts and authorize a new exact-bound replay.
-    await session.execute(
-        update(ScreeningVerificationReplay)
-        .where(
-            ScreeningVerificationReplay.status == "running",
-            ScreeningVerificationReplay.lease_deadline <= now,
+    # An expired lease never silently re-enters the queue. Take the same
+    # source-first locks as every other replay writer before terminalizing it.
+    expired = (
+        await session.scalars(
+            select(ScreeningVerificationReplay)
+            .where(
+                ScreeningVerificationReplay.status == "running",
+                ScreeningVerificationReplay.lease_deadline <= now,
+            )
+            .order_by(ScreeningVerificationReplay.lease_deadline)
+            .limit(8)
         )
-        .values(status="failed", finished_at=now, failure_code="lease-expired")
-    )
+    ).all()
+    for candidate in expired:
+        await _binding_ok(session, candidate, lock=True)
+        current = await session.get(
+            ScreeningVerificationReplay,
+            candidate.replay_id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        if (
+            current is not None
+            and current.status == "running"
+            and current.lease_deadline is not None
+            and current.lease_deadline <= now
+        ):
+            current.status = "failed"
+            current.finished_at = now
+            current.failure_code = "lease-expired"
     rows = (
         await session.scalars(
             select(ScreeningVerificationReplay)
@@ -283,11 +410,19 @@ async def claim_replay(
                 ScreeningVerificationReplay.replay_id,
             )
             .limit(8)
-            .with_for_update(skip_locked=True)
         )
     ).all()
     for row in rows:
-        if not await _binding_ok(session, row):
+        binding_ok = await _binding_ok(session, row, lock=True)
+        row = await session.get(
+            ScreeningVerificationReplay,
+            row.replay_id,
+            with_for_update=True,
+            populate_existing=True,
+        )
+        if row is None or row.status != "queued":
+            continue
+        if not binding_ok or not await _binding_ok(session, row, lock=True):
             row.status = "failed"
             row.finished_at = now
             row.failure_code = "binding-stale"
@@ -305,8 +440,7 @@ async def claim_replay(
 async def get_replay_inputs(
     replay_id: UUID, request: Request, worker: ScreenerDep, session: SessionDep
 ) -> VerificationReplayInputs:
-    if request.state.screener_node_status != "active":
-        raise HTTPException(403, "worker is not active")
+    await _require_enrolled_replay_worker(request, worker, session)
     row = await _active_claim(session, replay_id, worker)
     storage = await get_storage_client(request)
     artifact_url = await storage.presigned_get_url(
@@ -322,12 +456,14 @@ async def get_replay_inputs(
         image_url = await storage.presigned_get_url(
             key=image_key, expires_in=URL_TTL_SECONDS
         )
-    return VerificationReplayInputs(
+    result = VerificationReplayInputs(
         replay=_state(row),
         artifact_url=artifact_url,
         image_url=image_url,
         urls_expire_at=datetime.now(UTC) + timedelta(seconds=URL_TTL_SECONDS),
     )
+    await session.commit()
+    return result
 
 
 @screener_router.post(
@@ -341,9 +477,8 @@ async def mint_replay_build_upload(
     session: SessionDep,
 ) -> VerificationReplayBuildUpload:
     """Mint a short-lived PUT for a new isolated build, never the Agent image key."""
-    if request.state.screener_node_status != "active":
-        raise HTTPException(403, "worker is not active")
-    row = await _active_claim(session, replay_id, worker, lock=True)
+    await _require_enrolled_replay_worker(request, worker, session)
+    row = await _active_claim(session, replay_id, worker)
     if payload.artifact_sha256 != row.artifact_sha256:
         raise HTTPException(409, "replay artifact changed")
     if row.image_upload_id is not None or row.image_verified_at is not None:
@@ -396,10 +531,14 @@ async def verify_replay_build(
     worker: ScreenerDep,
     session: SessionDep,
 ) -> VerificationReplayState:
-    """Verify staged bytes, copy to a key the worker cannot overwrite, verify again."""
-    if request.state.screener_node_status != "active":
-        raise HTTPException(403, "worker is not active")
-    row = await _active_claim(session, replay_id, worker, lock=True)
+    """Verify tar bytes, copy to a worker-unwritable key, and verify again.
+
+    This does not prove the worker-claimed image ID inside the tar. The future
+    isolated runner must load the image and compare its actual identity before
+    recording V13 runtime observations.
+    """
+    await _require_enrolled_replay_worker(request, worker, session)
+    row = await _active_claim(session, replay_id, worker)
     if (
         row.image_upload_id is not None
         or row.image_staging_id is None
@@ -419,6 +558,10 @@ async def verify_replay_build(
     }
     staging_key = _replay_staging_image_key(row.replay_id, row.image_staging_id)
     final_key = _replay_verified_image_key(row.replay_id)
+    # Hashing a multi-GB tar can take time. Do not hold the submission's
+    # lifecycle locks through object storage I/O; reacquire all source locks
+    # and recheck the exact binding before recording a verified image.
+    await session.commit()
     storage = await get_storage_client(request)
     try:
         staged = await storage.head_object(key=staging_key)
@@ -448,10 +591,18 @@ async def verify_replay_build(
         raise
     except Exception as exc:
         raise HTTPException(503, "replay image verification unavailable") from exc
-    if row.lease_deadline is None or row.lease_deadline <= datetime.now(UTC):
-        raise HTTPException(409, "replay lease expired during image verification")
-    if not await _binding_ok(session, row):
-        raise HTTPException(409, "replay binding changed during image verification")
+    row = await _active_claim(session, replay_id, worker)
+    if (
+        row.image_upload_id is not None
+        or row.image_staging_id is None
+        or row.image_sha256 != payload.image_sha256
+        or row.image_size_bytes != payload.size_bytes
+        or row.image_id != payload.image_id
+        or row.artifact_sha256 != payload.artifact_sha256
+    ):
+        raise HTTPException(409, "replay build binding changed during verification")
+    if row.image_verified_at is not None:
+        return _state(row)
     row.image_verified_at = datetime.now(UTC)
     await session.commit()
     return _state(row)
@@ -467,9 +618,8 @@ async def append_replay_receipt(
     worker: ScreenerDep,
     session: SessionDep,
 ) -> VerificationReplayReceiptState:
-    if request.state.screener_node_status != "active":
-        raise HTTPException(403, "worker is not active")
-    row = await _active_claim(session, replay_id, worker, lock=True)
+    await _require_enrolled_replay_worker(request, worker, session)
+    row = await _active_claim(session, replay_id, worker)
     if (
         payload.artifact_sha256 != row.artifact_sha256
         or payload.policy_version != row.policy_version
@@ -512,8 +662,7 @@ async def finish_replay(
     worker: ScreenerDep,
     session: SessionDep,
 ) -> VerificationReplayState:
-    if request.state.screener_node_status != "active":
-        raise HTTPException(403, "worker is not active")
+    await _require_enrolled_replay_worker(request, worker, session)
     existing = await session.get(ScreeningVerificationReplay, replay_id)
     if (
         existing is not None
@@ -524,7 +673,7 @@ async def finish_replay(
         and existing.image_sha256 == payload.image_sha256
     ):
         return _state(existing)
-    row = await _active_claim(session, replay_id, worker, lock=True)
+    row = await _active_claim(session, replay_id, worker)
     if (
         payload.artifact_sha256 != row.artifact_sha256
         or payload.image_sha256 != row.image_sha256

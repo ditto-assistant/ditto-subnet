@@ -22,6 +22,7 @@ from ditto.api_server.endpoints.verification_replay import (
     claim_replay,
     create_replay,
     finish_replay,
+    get_replay_claimability,
     get_replay_inputs,
     mint_replay_build_upload,
     verify_replay_build,
@@ -29,6 +30,7 @@ from ditto.api_server.endpoints.verification_replay import (
 from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
+    ScreenerNode,
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningVerificationReceipt,
@@ -39,13 +41,32 @@ ARTIFACT = "a" * 64
 IMAGE = "b" * 64
 FIRST_WORKER = "5OriginalScreener"
 SECOND_WORKER = "5IndependentScreener"
+SECOND_NODE = "replay-independent"
 
 
-def _request(storage=None):
+def _request(storage=None, *, node_id=SECOND_NODE):
     return SimpleNamespace(
-        state=SimpleNamespace(screener_node_status="active"),
+        state=SimpleNamespace(screener_node_status="active", screener_node_id=node_id),
         app=SimpleNamespace(state=SimpleNamespace(storage=storage)),
     )
+
+
+async def _enroll(
+    session, *, environment="prod", hotkey=SECOND_WORKER, node_id=SECOND_NODE
+):
+    session.add(
+        ScreenerNode(
+            environment=environment,
+            node_id=node_id,
+            provider="test",
+            provider_resource_id=f"isolated-replay-{node_id}",
+            screener_hotkey=hotkey,
+            token_hash="f" * 64,
+            token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+            status="active",
+        )
+    )
+    await session.commit()
 
 
 async def _seed(session):
@@ -119,6 +140,7 @@ async def _seed(session):
 
 def _payload(attempt_id, quarantine_id, image_id, **changes):
     values = {
+        "request_id": uuid4(),
         "quarantine_id": quarantine_id,
         "source_attempt_id": attempt_id,
         "artifact_sha256": ARTIFACT,
@@ -138,9 +160,37 @@ async def test_replay_exact_guards_independent_claim_and_report_only(session):
     agent_id, attempt_id, quarantine_id, image_id = await _seed(session)
     payload = _payload(attempt_id, quarantine_id, image_id)
     first = await create_replay(agent_id, payload, None, session)
+    availability = await get_replay_claimability(
+        agent_id, first.replay_id, None, session
+    )
+    assert availability.source_binding_current is True
+    assert availability.original_screener_hotkey == FIRST_WORKER
+    assert availability.independently_enrolled is False
+    assert availability.independent_enrolled_hotkeys == []
     again = await create_replay(agent_id, payload, None, session)
     assert first.replay_id == again.replay_id
-    assert await claim_replay(_request(), FIRST_WORKER, session) is None
+    with pytest.raises(HTTPException) as separate_request:
+        await create_replay(
+            agent_id,
+            payload.model_copy(update={"request_id": uuid4()}),
+            None,
+            session,
+        )
+    assert separate_request.value.status_code == 409
+    with pytest.raises(HTTPException) as legacy:
+        await claim_replay(_request(node_id=None), SECOND_WORKER, session)
+    assert legacy.value.status_code == 403
+    await _enroll(session)
+    availability = await get_replay_claimability(
+        agent_id, first.replay_id, None, session
+    )
+    assert availability.independently_enrolled is True
+    assert availability.independent_enrolled_hotkeys == [SECOND_WORKER]
+    await _enroll(session, hotkey=FIRST_WORKER, node_id="replay-original")
+    assert (
+        await claim_replay(_request(node_id="replay-original"), FIRST_WORKER, session)
+        is None
+    )
     claimed = await claim_replay(_request(), SECOND_WORKER, session)
     assert claimed is not None and claimed.replay_id == first.replay_id
 
@@ -208,6 +258,8 @@ async def test_replay_exact_guards_independent_claim_and_report_only(session):
         first.replay_id, result, _request(), SECOND_WORKER, session
     )
     assert finished.status == duplicate_finish.status == "completed"
+    after_finish_retry = await create_replay(agent_id, payload, None, session)
+    assert after_finish_retry.replay_id == first.replay_id
     assert (await session.get(Agent, agent_id)).status == "quarantined"
     assert (await session.get(ScreeningQuarantine, quarantine_id)).status == "active"
     assert (await session.get(ScreeningAttempt, attempt_id)).status == "quarantined"
@@ -260,6 +312,22 @@ async def test_replay_rejects_stale_image_and_missing_pinned_attempt(session):
 
 
 @pytest.mark.asyncio
+async def test_replay_refuses_nonproduction_enrollment(session):
+    agent_id, attempt_id, quarantine_id, image_id = await _seed(session)
+    created = await create_replay(
+        agent_id, _payload(attempt_id, quarantine_id, image_id), None, session
+    )
+    await _enroll(session, environment="test")
+    availability = await get_replay_claimability(
+        agent_id, created.replay_id, None, session
+    )
+    assert availability.independently_enrolled is False
+    with pytest.raises(HTTPException) as unauthorized:
+        await claim_replay(_request(), SECOND_WORKER, session)
+    assert unauthorized.value.status_code == 403
+
+
+@pytest.mark.asyncio
 async def test_prebuild_hold_gets_separate_verified_replay_image(session):
     agent_id, attempt_id, quarantine_id, image_id = await _seed(session)
     agent = await session.get(Agent, agent_id)
@@ -275,6 +343,7 @@ async def test_prebuild_hold_gets_separate_verified_replay_image(session):
     )
     created = await create_replay(agent_id, payload, None, session)
     assert created.image_sha256 is None
+    await _enroll(session)
     claimed = await claim_replay(_request(), SECOND_WORKER, session)
     assert claimed is not None and claimed.replay_id == created.replay_id
     with pytest.raises(HTTPException) as original_worker:

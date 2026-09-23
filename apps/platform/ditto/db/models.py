@@ -769,6 +769,7 @@ class ScreeningVerificationReplay(Base):
     __tablename__ = "screening_verification_replays"
 
     replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
     agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
     quarantine_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
     source_attempt_id: Mapped[UUID] = mapped_column(
@@ -807,6 +808,7 @@ class ScreeningVerificationReplay(Base):
     failure_code: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
+        UniqueConstraint("request_id", name="svrp_request_id_key"),
         ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
         ForeignKeyConstraint(
             ["quarantine_id"],

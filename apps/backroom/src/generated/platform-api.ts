@@ -2606,6 +2606,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-verification-replays/{agent_id}/{replay_id}/claimability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Replay Claimability
+         * @description Show whether an independent enrolled identity exists, not worker readiness.
+         */
+        get: operations["get_replay_claimability_api_v1_admin_screening_verification_replays__agent_id___replay_id__claimability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/submission-deposit-address": {
         parameters: {
             query?: never;
@@ -5774,7 +5794,11 @@ export interface paths {
         put?: never;
         /**
          * Verify Replay Build
-         * @description Verify staged bytes, copy to a key the worker cannot overwrite, verify again.
+         * @description Verify tar bytes, copy to a worker-unwritable key, and verify again.
+         *
+         *     This does not prove the worker-claimed image ID inside the tar. The future
+         *     isolated runner must load the image and compare its actual identity before
+         *     recording V13 runtime observations.
          */
         post: operations["verify_replay_build_api_v1_screener_verification_replays__replay_id__build_verify_post"];
         delete?: never;
@@ -30675,6 +30699,24 @@ export interface components {
             /** Size Bytes */
             size_bytes: number;
         };
+        /** VerificationReplayClaimability */
+        VerificationReplayClaimability: {
+            /** Independent Enrolled Hotkeys */
+            independent_enrolled_hotkeys: string[];
+            /** Independently Enrolled */
+            independently_enrolled: boolean;
+            /** Note */
+            note: string;
+            /** Original Screener Hotkey */
+            original_screener_hotkey: string;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            /** Source Binding Current */
+            source_binding_current: boolean;
+        };
         /** VerificationReplayCreate */
         VerificationReplayCreate: {
             /** Actor */
@@ -30702,6 +30744,11 @@ export interface components {
             quarantine_id: string;
             /** Reason */
             reason: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
             /**
              * Source Attempt Id
              * Format: uuid
@@ -30801,7 +30848,10 @@ export interface components {
             failure_code: string | null;
             /** Finished At */
             finished_at: string | null;
-            /** Image Id */
+            /**
+             * Image Id
+             * @description Worker-claimed Docker image ID; not verified against the tar contents
+             */
             image_id: string | null;
             /** Image Sha256 */
             image_sha256: string | null;
@@ -30832,6 +30882,11 @@ export interface components {
              * Format: uuid
              */
             replay_id: string;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
             /**
              * Source Attempt Id
              * Format: uuid
@@ -35923,6 +35978,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_replay_claimability_api_v1_admin_screening_verification_replays__agent_id___replay_id__claimability_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayClaimability"];
                 };
             };
             /** @description Validation Error */

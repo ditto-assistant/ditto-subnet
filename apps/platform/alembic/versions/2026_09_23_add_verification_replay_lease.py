@@ -22,6 +22,7 @@ def upgrade() -> None:
     op.create_table(
         "screening_verification_replays",
         sa.Column("replay_id", postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("request_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("agent_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("quarantine_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("source_attempt_id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -47,6 +48,7 @@ def upgrade() -> None:
         sa.Column("finished_at", sa.TIMESTAMP(timezone=True), nullable=True),
         sa.Column("failure_code", sa.Text(), nullable=True),
         sa.ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        sa.UniqueConstraint("request_id", name="svrp_request_id_key"),
         sa.ForeignKeyConstraint(
             ["quarantine_id"],
             ["screening_quarantines.quarantine_id"],
@@ -89,6 +91,28 @@ def upgrade() -> None:
     )
     op.create_index(
         "svrp_claim_idx", "screening_verification_replays", ["status", "created_at"]
+    )
+    op.execute(
+        """CREATE FUNCTION reject_verification_replay_binding_change()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+            IF (NEW.request_id, NEW.agent_id, NEW.quarantine_id,
+                NEW.source_attempt_id, NEW.artifact_sha256,
+                NEW.policy_version, NEW.image_upload_id)
+               IS DISTINCT FROM
+               (OLD.request_id, OLD.agent_id, OLD.quarantine_id,
+                OLD.source_attempt_id, OLD.artifact_sha256,
+                OLD.policy_version, OLD.image_upload_id) THEN
+                RAISE EXCEPTION 'verification replay source binding is immutable';
+            END IF;
+            RETURN NEW;
+        END;
+        $$"""
+    )
+    op.execute(
+        """CREATE TRIGGER verification_replay_binding_immutable
+        BEFORE UPDATE ON screening_verification_replays
+        FOR EACH ROW EXECUTE FUNCTION reject_verification_replay_binding_change()"""
     )
     op.create_table(
         "screening_verification_replay_receipts",
@@ -146,6 +170,11 @@ def downgrade() -> None:
         "svrr_replay_code_idx", table_name="screening_verification_replay_receipts"
     )
     op.drop_table("screening_verification_replay_receipts")
+    op.execute(
+        "DROP TRIGGER verification_replay_binding_immutable "
+        "ON screening_verification_replays"
+    )
+    op.execute("DROP FUNCTION reject_verification_replay_binding_change()")
     op.drop_index("svrp_claim_idx", table_name="screening_verification_replays")
     op.drop_index(
         "svrp_one_active_source_idx", table_name="screening_verification_replays"
