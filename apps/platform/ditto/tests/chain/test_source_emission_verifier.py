@@ -487,10 +487,19 @@ async def test_unavailable_historical_commit_proof_retries_archive(
         "ambiguous_commit",
     ],
 )
+@pytest.mark.parametrize(
+    "runtime",
+    [
+        "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e",
+        "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2",
+    ],
+    ids=["v466", "v467"],
+)
 async def test_payout_accepts_only_proven_initialization_order(
-    chain: tuple, failure: str | None
+    chain: tuple, failure: str | None, runtime: str
 ) -> None:
     substrate, state = chain
+    state["runtime"] = runtime
     state["step"] = 100
     payout = event("IncentiveAlphaEmittedToMiners", {"netuid": 118, "emissions": []})
     state["events"].append(payout)

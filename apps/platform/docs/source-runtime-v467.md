@@ -42,3 +42,34 @@ each payout; no static stake is assumed.
 The upgrade boundary is intentionally ineligible even for this known runtime.
 Tests cover the v466-to-v467 transition, stable-v467 successful reveal, and
 unknown-runtime rejection without weakening the existing provenance controls.
+
+## Read-only chain replay (2026-09-24 UTC)
+
+Both public archive providers (`archive.chain.opentensor.ai` and
+`bittensor-finney.api.onfinality.io`) returned v466/spec 466 at block 9095775
+and v467/spec 467 at block 9095776. The exact upgrade block is 9095776; the
+collector must reset provenance there rather than attribute a payout across it.
+Both providers also returned v467 at blocks 9095777 and 9095780.
+
+With the v467 fingerprint added only to the local read-only verifier process,
+block 9095776 reset with `runtime_changed` and 9095777 was a stable nonpayout
+block. At the first subsequent SN118 payout, block 9096109, three successful
+initialization reveals preceded the emission event, but one validator had two
+parent pending commitments. The verifier rejected same-block attribution as
+ambiguous, and the receipt reader rejected the payout with
+`weights changed during distribution block`. This is the intended fail-closed
+result, not evidence that the fingerprint alone can validate every payout.
+
+At payout block 9096469, the verifier found two initialization reveals before
+emission and proved their single parent commitments. The independent receipt
+reader returned a completed SN118 receipt: epoch 25203, five non-owner miner
+earnings totaling 147600823519 rao, and 12 consumed weight vectors. This
+proves the post-upgrade chain data can satisfy the existing receipt contract;
+it does not identify an eligible local submission or prove production recovery.
+The second archive provider rate-limited historical payout queries, so payout
+replay was completed against `archive.chain.opentensor.ai` only.
+
+After deployment, verify the exact Platform revision and use Backroom's source
+release policy to confirm the cursor passes 9095775, payout backlog reconciles,
+and only qualifying exact submissions gain `emission_confirmed_at`. This
+read-only audit made no production writes.
