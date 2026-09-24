@@ -30,7 +30,8 @@ def test_sweep_posts_only_new_or_changed_statuses(tmp_path: Path) -> None:
                 if "--head" in args:
                     print("mainhead")
                     sys.exit(0)
-                if any(ref in args for ref in ("refs/pr/101", "refs/pr/103")):
+                failed_refs = ("refs/pr/101", "refs/pr/103", "refs/pr/104")
+                if any(ref in args for ref in failed_refs):
                     print("two Alembic heads")
                     sys.exit(1)
                 print("one Alembic head")
@@ -46,17 +47,37 @@ def test_sweep_posts_only_new_or_changed_statuses(tmp_path: Path) -> None:
             endpoint = next(arg for arg in args if arg.startswith("repos/"))
             if endpoint.endswith("pulls?state=open&per_page=100"):
                 print(json.dumps([[{"number": number, "head": {"sha": f"sha{number}"}}
-                    for number in (714, 100, 101, 102, 103)]]))
+                    for number in (714, 100, 101, 102, 103, 104)]]))
             elif "/files?" in endpoint:
                 number = int(endpoint.split("/pulls/")[1].split("/")[0])
                 path = ("apps/platform/alembic/versions/new.py" if number in
-                    (100, 101, 103) else "README.md")
+                    (100, 101, 103, 104) else "README.md")
                 print(json.dumps([[{"filename": path}]]))
             elif endpoint.endswith("/status"):
                 number = int(endpoint.split("/commits/sha")[1].split("/")[0])
-                state = {714: "success", 100: "success", 101: "success",
-                    103: "failure"}.get(number)
-                print(state or "")  # gh api --jq applies the context filter.
+                states = {
+                    714: (
+                        "success",
+                        "Adds no migration; cannot fork the Alembic chain.",
+                    ),
+                    100: (
+                        "success",
+                        "Merging into main leaves exactly one Alembic head.",
+                    ),
+                    101: (
+                        "success",
+                        "Merging into main leaves exactly one Alembic head.",
+                    ),
+                    103: (
+                        "failure",
+                        "Merging into main (oldhead) leaves multiple Alembic heads.",
+                    ),
+                    104: (
+                        "failure",
+                        "Merging into main (mainhead) leaves multiple Alembic heads.",
+                    ),
+                }
+                print("\\t".join(states[number]) if number in states else "")
             else:
                 raise SystemExit(f"unexpected gh endpoint: {endpoint}")
             """
@@ -92,9 +113,13 @@ def test_sweep_posts_only_new_or_changed_statuses(tmp_path: Path) -> None:
             "endpoint": "repos/ditto-assistant/ditto-subnet/statuses/sha102",
             "state": "success",
         },
+        {
+            "endpoint": "repos/ditto-assistant/ditto-subnet/statuses/sha103",
+            "state": "failure",
+        },
     ]
     assert "PR #714: success status unchanged" in result.stdout
     assert "PR #100: success status unchanged" in result.stdout
-    assert "PR #103: failure status unchanged" in result.stdout
+    assert "PR #104: failure status unchanged" in result.stdout
     assert "#101" in summary.read_text()
     assert "#103" in summary.read_text()

@@ -72,16 +72,18 @@ while IFS=$'\t' read -r number sha; do
     echo "PR #${number}: ok"
   else
     state=failure
-    description="Merging into main would leave more than one Alembic head."
+    # Include the current main head so a new conflict after main advances
+    # refreshes the PR's required status and its diagnostic run link.
+    description="Merging into main (${head_revision}) leaves multiple Alembic heads."
     stale+=("${number}")
     echo "::warning title=PR #${number} would now leave multiple Alembic heads::${output}"
   fi
   # The combined-status endpoint returns the latest status for each context.
   # A required context stays valid until this PR's head SHA changes, so avoid
   # consuming another of GitHub's 1000 statuses for an unchanged result.
-  current_state=$(gh api "repos/${REPO}/commits/${sha}/status" \
-    --jq ".statuses[] | select(.context == \"${CONTEXT}\") | .state")
-  if [[ "$current_state" == "$state" ]]; then
+  current_status=$(gh api "repos/${REPO}/commits/${sha}/status" \
+    --jq "[.statuses[] | select(.context == \"${CONTEXT}\") | .state + \"\\t\" + (.description // \"\")] | first // \"\"")
+  if [[ "$current_status" == "${state}"$'\t'"${description}" ]]; then
     echo "PR #${number}: ${state} status unchanged"
     continue
   fi
