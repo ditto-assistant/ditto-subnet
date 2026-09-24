@@ -94,9 +94,9 @@ describe("the Up next badge (#458)", () => {
     );
     const card = container.querySelector("#pipeline-admission .pipeline-item");
     expect(card).not.toBeNull();
-    expect(card?.textContent).toContain("Screening incomplete · operator follow-up");
+    expect(card?.textContent).toContain("Screening incomplete");
     expect(card?.getAttribute("data-admission")).toBe("waiting");
-    expect(card?.getAttribute("aria-label")).toContain("operator follow-up");
+    expect(card?.getAttribute("aria-label")).toContain("Screening incomplete");
     expect(card?.textContent).not.toContain("Building image & admission");
     expect(card?.textContent).not.toContain("Historical");
     expect(container.textContent).toContain("0 in progress · 0 queued · 1 incomplete");

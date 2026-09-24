@@ -62,7 +62,7 @@ export const ACTIVITY_FILTER_LABELS: Record<string, string> = {
 
 /** Screening failures may be infrastructure, reviewer-budget, or other
  * operator-owned outcomes. The public status alone does not identify which. */
-export const SCREENING_INCOMPLETE_LABEL = "Screening incomplete · operator follow-up";
+export const SCREENING_INCOMPLETE_LABEL = "Screening incomplete";
 
 /**
  * Stage pill per status (activityStage 6832–6850). Terminal states for a
