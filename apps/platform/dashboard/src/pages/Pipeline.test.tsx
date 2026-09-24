@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { refreshAllEndpoints } from "../data/useEndpoint";
 import { syncFromLocation } from "../stores/routeStore";
-import { SOURCE_REVIEW_INCOMPLETE_NOTE } from "../components/pipeline/status";
 import { installFixtureFetch, loadFixture } from "../test-fixtures";
 import { PipelinePage } from "./PipelinePage";
 
@@ -155,12 +154,18 @@ describe("weekend drift: board reshape and refresh resilience", () => {
   it("marks a review-budget hold on the branch card as no finding (#562)", async () => {
     const ops = loadFixture<{ activity: { entries: Record<string, unknown>[] } }>("operations");
     const base = ops.activity.entries[0] as Record<string, unknown>;
-    const held = (screening_reason: string, agent_id: string) => ({
+    const held = (
+      review_conclusion: string,
+      deferred_review_triggers: string[],
+      agent_id: string,
+    ) => ({
       ...base,
       agent_id,
       status: "under_review",
       review_reason: "Score qualified this submission for deferred source review",
-      screening_reason,
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers,
+      review_conclusion,
     });
     const inner = globalThis.fetch;
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
@@ -173,11 +178,8 @@ describe("weekend drift: board reshape and refresh resilience", () => {
         activity: {
           ...ops.activity,
           entries: [
-            held(
-              "Bounded source review was inconclusive; held for review",
-              "11111111-1111-4111-8111-111111111111",
-            ),
-            held("Submission held for anti-cheat review", "22222222-2222-4222-8222-222222222222"),
+            held("no_finding", ["top_five"], "11111111-1111-4111-8111-111111111111"),
+            held("adverse_signal", ["anomaly"], "22222222-2222-4222-8222-222222222222"),
           ],
         },
       };
@@ -189,8 +191,13 @@ describe("weekend drift: board reshape and refresh resilience", () => {
         expect(container.querySelectorAll("#pipeline-review-items .pipeline-item").length).toBe(2),
       );
       const cards = Array.from(container.querySelectorAll("#pipeline-review-items .pipeline-item"));
-      expect(cards[0]?.textContent).toContain(SOURCE_REVIEW_INCOMPLETE_NOTE);
-      expect(cards[1]?.textContent).not.toContain(SOURCE_REVIEW_INCOMPLETE_NOTE);
+      expect(cards[0]?.querySelector(".deferred-review-summary")?.textContent).toBe(
+        "Score qualified (top 5) \u00b7 automated review incomplete \u2014 no finding",
+      );
+      expect(cards[1]?.querySelector(".deferred-review-summary")?.textContent).toBe(
+        "Anomaly hold \u00b7 automated review raised a concern",
+      );
+      expect(cards[1]?.textContent).not.toContain("no finding");
     } finally {
       globalThis.fetch = inner;
     }

@@ -18,10 +18,6 @@ import { ScreeningReview } from "../components/evidence/ScreeningReview";
 import { screeningPolicySummary, validationAttemptView } from "../components/evidence/labels";
 import { reviewPacket } from "../components/evidence/review-packet";
 import { createActivityStore } from "../components/pipeline/activity-store";
-import {
-  SOURCE_REVIEW_INCOMPLETE_NOTE,
-  SOURCE_REVIEW_INCONCLUSIVE_REASON,
-} from "../components/pipeline/status";
 import { syncFromLocation } from "../stores/routeStore";
 import { FIXTURE_TOP_AGENT_ID, installFixtureFetch, loadFixture } from "../test-fixtures";
 import type { ActivityPayload, AgentSummaryPayload } from "../types/pipeline";
@@ -1193,10 +1189,10 @@ describe("async agent evidence", () => {
 
 // ── #562: a review-budget hold must not read as a finding ────────────────────
 describe("deferred source review chip (#562)", () => {
-  async function renderHeld(screening_reason: string): Promise<HTMLElement> {
+  async function renderHeld(fields: Record<string, unknown>): Promise<HTMLElement> {
     const base = (activity.entries ?? [])[0] as Record<string, unknown>;
     stubActivityFetch(() => ({
-      entries: [{ ...base, status: "under_review", screening_reason }],
+      entries: [{ ...base, status: "under_review", ...fields }],
       status_counts: { under_review: 1 },
       page: 1,
       total_pages: 1,
@@ -1207,21 +1203,33 @@ describe("deferred source review chip (#562)", () => {
     return document.querySelector(".stage-cell") as HTMLElement;
   }
 
-  it("keeps an inconclusive-review hold neutral and says no finding was made", async () => {
-    const cell = await renderHeld(SOURCE_REVIEW_INCONCLUSIVE_REASON);
+  it("shows a top-five budget hold as neutral with its trigger and no finding", async () => {
+    const cell = await renderHeld({
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers: ["top_five"],
+      review_conclusion: "no_finding",
+    });
     const chip = cell.querySelector(".stage") as HTMLElement;
     expect(chip.textContent).toBe("Deferred source review");
     expect(chip.classList.contains("warn")).toBe(false);
-    const notes = Array.from(cell.querySelectorAll(".stage-note"), (n) => n.textContent);
-    expect(notes).toContain(SOURCE_REVIEW_INCOMPLETE_NOTE);
+    expect(cell.querySelector(".deferred-review-summary")?.textContent).toBe(
+      "Score qualified (top 5) \u00b7 automated review incomplete \u2014 no finding",
+    );
   });
 
-  it("keeps the warn chip and shows no such note for an anti-cheat hold", async () => {
-    const cell = await renderHeld("Submission held for anti-cheat review");
+  it("keeps the warn chip for an adverse signal and names the anomaly trigger", async () => {
+    const cell = await renderHeld({
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers: ["anomaly"],
+      review_conclusion: "adverse_signal",
+    });
     const chip = cell.querySelector(".stage") as HTMLElement;
     expect(chip.textContent).toBe("Deferred source review");
     expect(chip.classList.contains("warn")).toBe(true);
-    expect(cell.textContent).not.toContain(SOURCE_REVIEW_INCOMPLETE_NOTE);
+    expect(cell.querySelector(".deferred-review-summary")?.textContent).toBe(
+      "Anomaly hold \u00b7 automated review raised a concern",
+    );
+    expect(cell.textContent).not.toContain("no finding");
   });
 });
 

@@ -9,8 +9,8 @@ import {
   ACTIVITY_FILTERS,
   ACTIVITY_STATUSES,
   activityStage,
+  deferredReviewSummary,
   isSourceReviewIncomplete,
-  SOURCE_REVIEW_INCONCLUSIVE_REASON,
   duplicateComparisonLabel,
   policyScreeningLabel,
   reviewEventLabel,
@@ -69,19 +69,51 @@ describe("status vocabulary (row 10)", () => {
     expect(activityStage("nonsense")).toEqual(["Pending", ""]);
   });
 
-  it("keeps a review-budget hold neutral and states no finding was made", () => {
+  it("keeps a review-budget hold neutral and states no finding was made (#562)", () => {
     const held = {
       status: "under_review",
-      screening_reason: "Bounded source review was inconclusive; held for review",
+      deferred_review_triggers: ["top_five"] as const,
+      review_conclusion: "no_finding" as const,
     };
     expect(isSourceReviewIncomplete(held)).toBe(true);
     expect(activityStage("under_review", held)).toEqual(["Deferred source review", ""]);
-    const tripwire = {
+    expect(deferredReviewSummary(held)).toBe(
+      "Score qualified (top 5) \u00b7 automated review incomplete \u2014 no finding",
+    );
+    const adverse = {
       status: "under_review",
-      screening_reason: "Submission held for anti-cheat review",
+      deferred_review_triggers: ["anomaly"] as const,
+      review_conclusion: "adverse_signal" as const,
     };
-    expect(isSourceReviewIncomplete(tripwire)).toBe(false);
-    expect(activityStage("under_review", tripwire)).toEqual(["Deferred source review", "warn"]);
+    expect(isSourceReviewIncomplete(adverse)).toBe(false);
+    expect(activityStage("under_review", adverse)).toEqual(["Deferred source review", "warn"]);
+    expect(deferredReviewSummary(adverse)).toBe(
+      "Anomaly hold \u00b7 automated review raised a concern",
+    );
+    const pending = {
+      status: "under_review",
+      deferred_review_triggers: ["top_five", "anomaly"] as const,
+      review_conclusion: "pending" as const,
+    };
+    expect(activityStage("under_review", pending)).toEqual(["Deferred source review", "progress"]);
+    expect(deferredReviewSummary(pending)).toBe(
+      "Score qualified (top 5) \u00b7 Anomaly hold \u00b7 automated review pending",
+    );
+    // A hold without an automated conclusion (copy review, older API) keeps
+    // the previous warn chip and adds no summary line.
+    expect(activityStage("under_review", { status: "under_review" })).toEqual([
+      "Deferred source review",
+      "warn",
+    ]);
+    expect(deferredReviewSummary({ status: "under_review" })).toBe("");
+    // The public reason text alone no longer decides the tone.
+    expect(
+      isSourceReviewIncomplete({
+        status: "under_review",
+        screening_reason: "Bounded source review was inconclusive; held for review",
+      } as { status: string }),
+    ).toBe(false);
+    expect(deferredReviewSummary({ ...held, status: "scored" })).toBe("");
   });
 
   it("names the quick filters with the deferred-review vocabulary", () => {
@@ -97,10 +129,17 @@ describe("status vocabulary (row 10)", () => {
   });
 
   it("says no finding only when the automated review merely ran out of budget", () => {
-    const detail = (screening_reason: string) =>
-      validationDetail({ status: "under_review", screening_reason });
-    expect(detail(SOURCE_REVIEW_INCONCLUSIVE_REASON)).toContain("which is not a finding");
-    expect(detail("Submission held for anti-cheat review")).not.toContain("not a finding");
+    const detail = (review_conclusion: "no_finding" | "adverse_signal" | "pending") =>
+      validationDetail({
+        status: "under_review",
+        deferred_review_triggers: ["top_five"],
+        review_conclusion,
+      });
+    expect(detail("no_finding")).toContain("which is not a finding");
+    expect(detail("no_finding")).toContain("its score placed it in the top five");
+    expect(detail("adverse_signal")).not.toContain("ran out of budget");
+    expect(detail("adverse_signal")).toContain("raised a concern");
+    expect(detail("pending")).toContain("has not reported yet");
   });
 
   it("labels previous-generation and closed-generation rows (#458/#462)", () => {

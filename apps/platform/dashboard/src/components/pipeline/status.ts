@@ -9,7 +9,12 @@
 // global search.
 import type { ChipState } from "../ui/StatusChip";
 import { agentLabel, fx } from "../../lib/format";
-import type { ActivityEntry, ValidationAttempt } from "../../types/pipeline";
+import type {
+  ActivityEntry,
+  DeferredReviewTrigger,
+  ReviewConclusion,
+  ValidationAttempt,
+} from "../../types/pipeline";
 
 /** One page of the paged activity table (monolith 3123). */
 export const ACTIVITY_PAGE_SIZE = 10;
@@ -74,7 +79,7 @@ export const SCREENING_INCOMPLETE_LABEL = "Screening incomplete";
  */
 export function activityStage(
   status: string | null | undefined,
-  entry?: { screening_reason?: string | null },
+  entry?: DeferredReviewFields,
 ): ChipState {
   const stages: Record<string, ChipState> = {
     uploaded: ["Waiting for admission", "progress"],
@@ -92,34 +97,58 @@ export function activityStage(
     under_review: ["Deferred source review", "warn"],
     rejected: ["Rejected", "bad"],
   };
-  // A budget outcome is not an adverse signal: keep the chip neutral.
-  if (status === "under_review" && entry && isSourceReviewIncomplete({ status, ...entry })) {
-    return ["Deferred source review", ""];
+  // #562: entering the branch is not a finding. Only an adverse automated
+  // signal (or a hold with no automated conclusion, e.g. a copy review) keeps
+  // "warn"; a review that ended without a finding is neutral, and one that
+  // has not reported yet is in progress.
+  if (status === "under_review") {
+    if (entry?.review_conclusion === "no_finding") return ["Deferred source review", ""];
+    if (entry?.review_conclusion === "pending") return ["Deferred source review", "progress"];
   }
   return (status != null && stages[status]) || ["Pending", ""];
 }
 
-/**
- * The public reason Platform writes when the bounded automated source review
- * ran out of budget without a finding (targon_screening.py, reason code
- * `source-review-inconclusive`). The pipeline payload carries the reason text
- * but not the code, so this is the one exact string the dashboard can key on.
- */
-export const SOURCE_REVIEW_INCONCLUSIVE_REASON =
-  "Bounded source review was inconclusive; held for review";
+/** Public deferred-review fields Platform projects onto a held row (#562). */
+export interface DeferredReviewFields {
+  status?: string | null;
+  deferred_review_triggers?: readonly DeferredReviewTrigger[] | null;
+  review_conclusion?: ReviewConclusion | null;
+}
 
-/** Shown next to a held submission whose automated review did not finish. */
-export const SOURCE_REVIEW_INCOMPLETE_NOTE =
-  "Automated review incomplete \u00b7 no finding. Awaiting operator review.";
+/** Why a submission entered the deferred branch, in the miner's words. */
+export const DEFERRED_REVIEW_TRIGGER_LABELS: Record<DeferredReviewTrigger, string> = {
+  top_five: "Score qualified (top 5)",
+  anomaly: "Anomaly hold",
+};
+
+/** What the automated source review concluded, as a short clause. */
+export const REVIEW_CONCLUSION_LABELS: Record<ReviewConclusion, string> = {
+  pending: "automated review pending",
+  no_finding: "automated review incomplete \u2014 no finding",
+  adverse_signal: "automated review raised a concern",
+};
 
 /** True when the hold is a review-budget outcome, not an adverse signal. */
-export function isSourceReviewIncomplete(entry: {
-  status?: string | null;
-  screening_reason?: string | null;
-}): boolean {
-  return (
-    entry.status === "under_review" && entry.screening_reason === SOURCE_REVIEW_INCONCLUSIVE_REASON
-  );
+export function isSourceReviewIncomplete(entry: DeferredReviewFields): boolean {
+  return entry.status === "under_review" && entry.review_conclusion === "no_finding";
+}
+
+/**
+ * The trigger and automated conclusion shown beside the chip without opening
+ * the drawer (#562), e.g. "Score qualified (top 5) · automated review
+ * incomplete — no finding". Empty for rows that are not held or that carry
+ * neither field (older API, copy holds).
+ */
+export function deferredReviewSummary(entry: DeferredReviewFields): string {
+  if (entry.status !== "under_review") return "";
+  const parts = (entry.deferred_review_triggers ?? [])
+    .map((trigger) => DEFERRED_REVIEW_TRIGGER_LABELS[trigger])
+    .filter(Boolean);
+  const conclusion = entry.review_conclusion
+    ? REVIEW_CONCLUSION_LABELS[entry.review_conclusion]
+    : undefined;
+  if (conclusion) parts.push(conclusion);
+  return parts.join(" \u00b7 ");
 }
 
 // ── Review-event evidence (#622/#636; monolith 6852–6881) ───────────────────
@@ -366,11 +395,39 @@ export function validationDetail(e: ActivityStatusEntry): string {
   if (e.status === "under_review") {
     const held =
       "This submission is held for deferred source review. Existing scores do not clear the hold. ";
-    return isSourceReviewIncomplete(e)
-      ? held +
-          "The automated review ran out of budget before finishing, which is not a finding; an operator decision is pending."
-      : held +
-          "The screening history below shows whether a deep review is running or an operator decision is pending.";
+    const why = e.deferred_review_triggers?.length
+      ? "It entered review because " +
+        e.deferred_review_triggers
+          .map((trigger) =>
+            trigger === "top_five"
+              ? "its score placed it in the top five"
+              : "a score anomaly check fired",
+          )
+          .join(" and ") +
+        "; entering review is not a finding. "
+      : "";
+    if (e.review_conclusion === "no_finding") {
+      return (
+        held +
+        why +
+        "The automated review ran out of budget before finishing, which is not a finding; an operator decision is pending."
+      );
+    }
+    if (e.review_conclusion === "pending") {
+      return held + why + "The automated deep review has not reported yet.";
+    }
+    if (e.review_conclusion === "adverse_signal") {
+      return (
+        held +
+        why +
+        "The automated review raised a concern that an operator must adjudicate; an operator decision is pending."
+      );
+    }
+    return (
+      held +
+      why +
+      "The screening history below shows whether a deep review is running or an operator decision is pending."
+    );
   }
   if (e.status === "rejected")
     return "Screening or source review rejected this submission. Existing scores remain as history; see the review result for the policy version and reason.";
