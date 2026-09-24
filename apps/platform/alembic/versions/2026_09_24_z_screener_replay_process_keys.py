@@ -1,7 +1,7 @@
 """Operator-pinned replay process keys and durable one-use nonces.
 
 Revision ID: b87d2e4f10a9
-Revises: 1bc9d8a6207e
+Revises: d7b4f150ae2c
 Create Date: 2026-09-23
 """
 
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b87d2e4f10a9"
-down_revision: str | Sequence[str] | None = "9d8c2e4a7f10"
+down_revision: str | Sequence[str] | None = "d7b4f150ae2c"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
