@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -114,3 +115,45 @@ async def test_protected_bank_rejects_readable_payload(tmp_path: Path) -> None:
     payload.chmod(0o644)
     with pytest.raises(PrivateProvisioningUnavailable):
         await FileProtectedBlueprintBank(root).load()
+
+
+@pytest.mark.asyncio
+async def test_protected_bank_checks_permissions_on_opened_payload_fd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "bank"
+    _write_bank(root)
+    payload = next((root / "payloads").iterdir())
+    original_open = os.open
+
+    def chmod_after_open(path, flags, *args, **kwargs):
+        fd = original_open(path, flags, *args, **kwargs)
+        if path == payload.name:
+            payload.chmod(0o644)
+        return fd
+
+    monkeypatch.setattr(os, "open", chmod_after_open)
+    with pytest.raises(PrivateProvisioningUnavailable):
+        await FileProtectedBlueprintBank(root).load()
+
+
+@pytest.mark.asyncio
+async def test_protected_bank_reads_opened_file_after_path_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "bank"
+    _write_bank(root)
+    original_open = os.open
+
+    def swap_after_open(path, flags, *args, **kwargs):
+        fd = original_open(path, flags, *args, **kwargs)
+        if path == "bank.json":
+            (root / "bank.json").rename(root / "original.json")
+            replacement = root / "bank.json"
+            replacement.write_text("{}")
+            replacement.chmod(0o644)
+        return fd
+
+    monkeypatch.setattr(os, "open", swap_after_open)
+    pairs = await FileProtectedBlueprintBank(root).load()
+    assert len(pairs) == 1
