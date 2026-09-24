@@ -13,6 +13,7 @@ from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -63,6 +64,11 @@ from ditto.db.models import (
     V13ReplayGroupPackageRegistration,
     V13ReplayPrivateGenerationGroup,
 )
+from ditto_screening_protocol.models import (
+    ScreenReviewAudit,
+    SourceReviewNote,
+    source_review_notes_digest,
+)
 from ditto_screening_protocol.v13_private_receipt import (
     V13ReplayPrivateReceipt,
     authentic_replay_private_receipt,
@@ -85,6 +91,15 @@ MAX_REPLAY_LEASE = timedelta(hours=4)
 MAX_REPLAY_RENEWALS = 8
 RENEW_WINDOW = timedelta(minutes=10)
 URL_TTL_SECONDS = 300
+REPLAYABLE_BUDGET_FAILURES = frozenset(
+    {
+        "l2-model-total-budget",
+        "l2-model-tool-budget",
+        "l2-model-step-budget",
+        "l3-critic-model-tool-budget",
+        "l3-violation-adjudicator-model-step-budget",
+    }
+)
 
 
 def _replay_staging_image_key(replay_id: UUID, staging_id: UUID) -> str:
@@ -177,18 +192,70 @@ async def _binding_ok(
         if row.image_upload_id is not None
         else None
     )
-    return bool(
+    held_quarantine = bool(
         agent is not None
         and agent.status == "quarantined"
+        and attempt is not None
+        and attempt.status == "quarantined"
+        and quarantine is not None
+        and quarantine.status == "active"
+    )
+    held_budget_failure = bool(
+        agent is not None
+        and agent.status == "screening_failed"
+        and attempt is not None
+        and attempt.status == "expired"
+        and attempt.finished_at is not None
+        and attempt.reason_code in REPLAYABLE_BUDGET_FAILURES
+        and quarantine is not None
+        and quarantine.status == "resolved"
+        and quarantine.resolution == "rescreen"
+        and quarantine.reason_code == attempt.reason_code
+        and quarantine.screener_hotkey == attempt.screener_hotkey
+        and row.image_upload_id is None
+    )
+    if held_budget_failure:
+        # A failed source review has no candidate image. Its signed verdict
+        # retained bounded notes even before L2 budget audits were introduced.
+        # Verify those notes again before independent, report-only replay.
+        raw_notes = quarantine.review_notes if quarantine is not None else None
+        if (
+            not isinstance(raw_notes, list)
+            or not 1 <= len(raw_notes) <= 48
+            or quarantine.review_notes_digest is None
+        ):
+            return False
+        try:
+            notes = [SourceReviewNote.model_validate(note) for note in raw_notes]
+            if source_review_notes_digest(notes) != quarantine.review_notes_digest:
+                return False
+            if quarantine.review_audit is not None:
+                audit = ScreenReviewAudit.model_validate(quarantine.review_audit)
+                if audit.canonical_digest() != quarantine.review_audit_digest:
+                    return False
+        except ValidationError:
+            return False
+        latest_attempt_id = await session.scalar(
+            select(ScreeningAttempt.attempt_id)
+            .where(ScreeningAttempt.agent_id == row.agent_id)
+            .order_by(
+                ScreeningAttempt.started_at.desc(),
+                ScreeningAttempt.attempt_id.desc(),
+            )
+            .limit(1)
+        )
+        if latest_attempt_id != row.source_attempt_id:
+            return False
+    return bool(
+        agent is not None
         and agent.sha256 == row.artifact_sha256
         and quarantine is not None
         and quarantine.agent_id == row.agent_id
         and quarantine.attempt_id == row.source_attempt_id
         and quarantine.policy_version == row.policy_version
-        and quarantine.status == "active"
         and attempt is not None
         and attempt.agent_id == row.agent_id
-        and attempt.status == "quarantined"
+        and (held_quarantine or held_budget_failure)
         and attempt.policy_version == row.policy_version
         and attempt.artifact_sha256 == row.artifact_sha256
         and (

@@ -32702,9 +32702,9 @@ export interface components {
             artifact_sha256: string;
             /**
              * Expected Agent Status
-             * @constant
+             * @enum {string}
              */
-            expected_agent_status: "quarantined";
+            expected_agent_status: "quarantined" | "screening_failed";
             /** Image Sha256 */
             image_sha256?: string | null;
             /** Image Upload Id */

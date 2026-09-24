@@ -39,7 +39,7 @@ class VerificationReplayCreate(BaseModel):
     policy_version: Literal[13]
     image_upload_id: UUID | None = None
     image_sha256: Sha256 | None = None
-    expected_agent_status: Literal["quarantined"]
+    expected_agent_status: Literal["quarantined", "screening_failed"]
     actor: Annotated[str, Field(min_length=1, max_length=120)]
     reason: Annotated[str, Field(min_length=8)]
 

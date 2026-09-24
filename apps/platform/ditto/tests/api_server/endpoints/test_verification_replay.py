@@ -42,6 +42,7 @@ from ditto.db.models import (
     ScreeningVerificationReplayReceipt,
     ScreeningVerificationReplaySignedObservation,
 )
+from ditto_screening_protocol.models import SourceReviewNote, source_review_notes_digest
 from ditto_screening_protocol.v13_replay_observation import (
     V13ReplayBinding,
     V13ReplayObservation,
@@ -211,6 +212,156 @@ def _payload(attempt_id, quarantine_id, image_id, **changes):
     }
     values.update(changes)
     return VerificationReplayCreate(**values)
+
+
+async def _seed_budget_failure(session, reason_code="l2-model-total-budget"):
+    agent_id, attempt_id, quarantine_id, _image_id = await _seed(session)
+    agent = await session.get(Agent, agent_id)
+    attempt = await session.get(ScreeningAttempt, attempt_id)
+    quarantine = await session.get(ScreeningQuarantine, quarantine_id)
+    assert agent is not None and attempt is not None and quarantine is not None
+    agent.status = "screening_failed"
+    agent.screened_image_sha256 = None
+    agent.screened_image_size_bytes = None
+    agent.screened_image_id = None
+    agent.screened_image_ref = None
+    agent.screened_image_upload_id = None
+    agent.screened_image_verified_at = None
+    attempt.status = "expired"
+    attempt.reason_code = reason_code
+    quarantine.status = "resolved"
+    quarantine.resolution = "rescreen"
+    quarantine.resolved_at = datetime.now(UTC)
+    quarantine.reason_code = reason_code
+    notes = [
+        SourceReviewNote(
+            kind="observation", path="src/main.py", line=1, summary="Budget hold"
+        )
+    ]
+    quarantine.review_notes = [note.model_dump(mode="json") for note in notes]
+    quarantine.review_notes_digest = source_review_notes_digest(notes)
+    await session.commit()
+    return agent_id, attempt_id, quarantine_id
+
+
+@pytest.mark.asyncio
+async def test_budget_failed_attempt_can_enter_independent_replay_without_release(
+    session,
+):
+    agent_id, attempt_id, quarantine_id = await _seed_budget_failure(session)
+    payload = _payload(
+        attempt_id,
+        quarantine_id,
+        None,
+        image_sha256=None,
+        expected_agent_status="screening_failed",
+    )
+    replay = await create_replay(agent_id, payload, None, session)
+    await _enroll(session, replay_capacity=1)
+    claimed = await claim_replay(_request(), SECOND_WORKER, session)
+    assert claimed is not None and claimed.replay_id == replay.replay_id
+    assert claimed.image_sha256 is None
+    storage = SimpleNamespace(
+        presigned_get_url=AsyncMock(return_value="source-url"),
+        presigned_put_url=AsyncMock(return_value="staging-put-url"),
+        head_object=AsyncMock(),
+        verify_object_sha256=AsyncMock(),
+        copy_object=AsyncMock(),
+    )
+    inputs = await get_replay_inputs(
+        replay.replay_id, _request(storage), SECOND_WORKER, session
+    )
+    assert inputs.image_url is None
+    upload = VerificationReplayBuildUploadRequest(
+        artifact_sha256=ARTIFACT,
+        image_sha256=IMAGE,
+        size_bytes=123,
+        image_id="sha256:" + "c" * 64,
+    )
+    minted = await mint_replay_build_upload(
+        replay.replay_id, upload, _request(storage), SECOND_WORKER, session
+    )
+    assert minted.upload_url == "staging-put-url"
+    metadata = storage.presigned_put_url.call_args.kwargs["metadata"]
+    storage.head_object.return_value = SimpleNamespace(
+        size_bytes=123, metadata=metadata
+    )
+    storage.verify_object_sha256.return_value = SimpleNamespace(
+        size_bytes=123, sha256=IMAGE
+    )
+    built = await verify_replay_build(
+        replay.replay_id,
+        VerificationReplayBuildVerifyRequest(**upload.model_dump()),
+        _request(storage),
+        SECOND_WORKER,
+        session,
+    )
+    assert built.image_verified_at is not None
+    assert built.image_upload_id is None
+    agent = await session.get(Agent, agent_id)
+    attempt = await session.get(ScreeningAttempt, attempt_id)
+    assert agent is not None and agent.status == "screening_failed"
+    assert agent.screened_image_upload_id is None
+    assert attempt is not None and attempt.status == "expired"
+
+
+@pytest.mark.asyncio
+async def test_budget_replay_rejects_stale_or_unverified_source_evidence(session):
+    agent_id, attempt_id, quarantine_id = await _seed_budget_failure(session)
+    payload = _payload(
+        attempt_id,
+        quarantine_id,
+        None,
+        image_sha256=None,
+        expected_agent_status="screening_failed",
+    )
+    quarantine = await session.get(ScreeningQuarantine, quarantine_id)
+    assert quarantine is not None
+    quarantine.review_notes_digest = "f" * 64
+    await session.commit()
+    with pytest.raises(HTTPException) as tampered:
+        await create_replay(agent_id, payload, None, session)
+    assert tampered.value.status_code == 409
+
+    notes = [SourceReviewNote.model_validate(note) for note in quarantine.review_notes]
+    quarantine.review_notes_digest = source_review_notes_digest(notes)
+    await session.commit()
+    replay = await create_replay(agent_id, payload, None, session)
+    assert replay.replay_id is not None
+    session.add(
+        ScreeningAttempt(
+            attempt_id=uuid4(),
+            agent_id=agent_id,
+            artifact_sha256=ARTIFACT,
+            screener_hotkey=FIRST_WORKER,
+            policy_version=13,
+            status="running",
+            started_at=datetime.now(UTC),
+            deadline=datetime.now(UTC) + timedelta(minutes=30),
+        )
+    )
+    await session.commit()
+    availability = await get_replay_claimability(
+        agent_id, replay.replay_id, None, session
+    )
+    assert availability.source_binding_current is False
+
+
+@pytest.mark.asyncio
+async def test_failed_nonbudget_screening_cannot_enter_replay(session):
+    agent_id, attempt_id, quarantine_id = await _seed_budget_failure(
+        session, reason_code="l2-model-inconclusive"
+    )
+    payload = _payload(
+        attempt_id,
+        quarantine_id,
+        None,
+        image_sha256=None,
+        expected_agent_status="screening_failed",
+    )
+    with pytest.raises(HTTPException) as rejected:
+        await create_replay(agent_id, payload, None, session)
+    assert rejected.value.status_code == 409
 
 
 @pytest.mark.asyncio
