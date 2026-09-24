@@ -672,7 +672,10 @@ async def record_replay_generation_start(
                     raise HTTPException(409, "replay generation conflicts")
                 return _replay_group_view(existing)
             started_at = await _database_now(session)
-            if started_at <= max(approval.approved_at, replay.image_verified_at):
+            verified_at = replay.image_verified_at
+            if verified_at is None or started_at <= max(
+                approval.approved_at, verified_at
+            ):
                 raise HTTPException(
                     409, "approval or image verification not prior to start"
                 )
