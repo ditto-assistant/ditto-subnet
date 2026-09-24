@@ -189,6 +189,15 @@ Required values are supplied through the production host's protected
   `ditto-screener-l2-analyzer:active` image.
 - `SCREENER_L2_CACHE_DIR` and `SCREENER_L2_AUDIT_JOURNAL_FILE`: protected
   sanitized cache/audit locations. Raw source and transcripts are never stored.
+- `SCREENER_SCORER_CAPABILITIES_URL` and `SCREENER_EXPECTED_SCORER_REVISION`:
+  optional paired V13 L2 evidence gate. Point the URL at a trusted HTTPS
+  scorer's exact `/v1/capabilities` endpoint and pin the compiled 40-character
+  scorer release revision. L2 fetches a fresh, digest-bound list of variables
+  injected into its V13 sandbox before using a cached review or calling a
+  model. A missing, stale, env-asserted, or mismatched packet holds the review
+  as inconclusive. The packet does not cover image ENV, source defaults, or
+  other validator deployments; those need independent source and runtime
+  checks before any CLEAR or emissions decision.
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
   computes the reachability-and-causality v2 candidate for comparison.

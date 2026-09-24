@@ -1068,6 +1068,8 @@ class BuildGate:
             l3_enabled=config.l3_review_enabled,
             critic_model=config.l3_review_model,
             critic_provider=config.l3_review_provider,
+            scorer_capabilities_url=config.scorer_capabilities_url,
+            expected_scorer_revision=config.expected_scorer_revision,
         )
         self._source_reviewer = LayeredSourceReviewAgent(
             l1=l1_reviewer,

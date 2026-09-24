@@ -10,6 +10,7 @@ the DB.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 
 from ditto_screener.errors import ScreenerConfigError
@@ -217,6 +218,8 @@ class ScreenerConfig:
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
     l2_always_escalate: bool = False
+    scorer_capabilities_url: str | None = None
+    expected_scorer_revision: str | None = None
     """Send every L1 result through L2/L3, even a certified low-risk clear.
 
     Seeded from ``SCREENER_L2_ALWAYS_ESCALATE``; a bound reviewer revision can
@@ -495,6 +498,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         .strip()
         .lower()
         in {"1", "true", "yes", "on"},
+        scorer_capabilities_url=os.environ.get("SCREENER_SCORER_CAPABILITIES_URL")
+        or None,
+        expected_scorer_revision=os.environ.get("SCREENER_EXPECTED_SCORER_REVISION")
+        or None,
         adjudicator_max_completion_tokens=_parse_optional_int(
             "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS"
         ),
@@ -617,6 +624,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_ANALYZER_IMAGE must be ditto-screener-l2-analyzer:active"
         )
+    if config.scorer_capabilities_url or config.expected_scorer_revision:
+        if not config.scorer_capabilities_url or not config.expected_scorer_revision:
+            raise ScreenerConfigError(
+                "scorer runtime evidence requires URL and revision"
+            )
+        if not re.fullmatch(r"[0-9a-f]{40}", config.expected_scorer_revision):
+            raise ScreenerConfigError("SCREENER_EXPECTED_SCORER_REVISION must be a SHA")
     if config.l2_workspace_root is not None and not os.path.isabs(
         config.l2_workspace_root
     ):

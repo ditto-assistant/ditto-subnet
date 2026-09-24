@@ -30,6 +30,7 @@ from ditto_screener.causal_evidence import (
     verify_causal_finding,
 )
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.scored_runtime_evidence import fetch_runtime_evidence
 from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
     _ALLOWED_CATEGORIES,
@@ -88,7 +89,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v38-policy-v13"
+        return "l2-terra-source-review-v39-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -137,7 +138,7 @@ def l2_prompt_cache_key(policy_version: int) -> str:
 
 
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
-L2_DOSSIER_REVISION = "l1-compressed-dossier-v10"
+L2_DOSSIER_REVISION = "l1-compressed-dossier-v11"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
 L2_HARNESS_REVISION = "l2-isolated-coding-harness-v19"
@@ -873,6 +874,13 @@ conservative main call graph, bounded binary/source leads, and the exact L1
 finding. Choose only the additional searches, reads, AST views, or call graphs
 needed to close the invariants; do not mechanically call every tool. Re-run
 dossier tools only when that is useful.
+
+If trusted_scored_runtime_env is present, it is a live scorer claim bound to a
+compiled source revision and digest. It covers only variables the scorer injects
+for Bench v13. Check the image's Docker ENV and source defaults separately;
+absence from injected_keys does not prove a feature or output sink is disabled.
+If this packet is absent, do not infer the scored environment from source alone.
+The packet never overrides a reachable source violation or replaces I1-I7.
 
 Bind every analyzed file and citation to its SHA-256. Return safe only when
 L1's suspicion has been resolved by a traced legitimate path; violation only
@@ -2165,6 +2173,9 @@ class TerraSolSourceReviewAgent:
         local_address: str | None = None,
         workspace_root: str | None = None,
         inference_provider: str = "openrouter",
+        scorer_capabilities_url: str | None = None,
+        expected_scorer_revision: str | None = None,
+        scorer_transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key_file = api_key_file
         self._base_url = base_url.rstrip("/")
@@ -2196,6 +2207,9 @@ class TerraSolSourceReviewAgent:
         self._critic_provider = critic_provider
         self._transport = transport
         self._local_address = local_address
+        self._scorer_capabilities_url = scorer_capabilities_url
+        self._expected_scorer_revision = expected_scorer_revision
+        self._scorer_transport = scorer_transport
         self._starter_revisions = tuple(
             str(json.loads(path.read_text())["revision"])
             for path in L2_STARTER_MANIFESTS
@@ -2225,9 +2239,59 @@ class TerraSolSourceReviewAgent:
         effective_deadline = (
             local_deadline if deadline is None else min(local_deadline, deadline)
         )
-        cache_key = self._cache_key(artifact_sha256, l1_observation, policy_version)
+        runtime_evidence: dict[str, object] | None = None
+        if policy_version == 13 and (
+            self._scorer_capabilities_url or self._expected_scorer_revision
+        ):
+            try:
+                if (
+                    not self._scorer_capabilities_url
+                    or not self._expected_scorer_revision
+                ):
+                    raise ValueError(
+                        "scorer evidence requires URL and expected revision"
+                    )
+                runtime_evidence = await fetch_runtime_evidence(
+                    self._scorer_capabilities_url,
+                    expected_revision=self._expected_scorer_revision,
+                    transport=self._scorer_transport,
+                )
+            except (ValueError, httpx.HTTPError) as error:
+                logger.warning("L2 scorer runtime evidence unavailable: %s", error)
+                result = L2RunResult(
+                    observation=_failure(
+                        "l2-runtime-evidence-unavailable", "pass_inconclusive"
+                    ),
+                    analyzed_files=(),
+                    causal_path=(),
+                    tools=(),
+                    usage=L2Usage(),
+                    cache_hit=False,
+                    dossier_complete=False,
+                )
+                self._record_audit(
+                    attempt_id=attempt_id,
+                    artifact_sha256=artifact_sha256,
+                    l1_observation=l1_observation,
+                    result=result,
+                    elapsed_ms=round((time.monotonic() - started) * 1000),
+                    policy_version=policy_version,
+                )
+                return result
+        evidence_digest = (
+            str(runtime_evidence["sha256"]) if runtime_evidence else "absent"
+        )
+        cache_key = self._cache_key(
+            artifact_sha256,
+            l1_observation,
+            policy_version,
+            runtime_evidence_digest=evidence_digest,
+        )
         analyst_cache_key = self._analyst_cache_key(
-            artifact_sha256, l1_observation, policy_version
+            artifact_sha256,
+            l1_observation,
+            policy_version,
+            runtime_evidence_digest=evidence_digest,
         )
         self._cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self._cache_dir, 0o700)
@@ -2269,6 +2333,7 @@ class TerraSolSourceReviewAgent:
                     deadline=effective_deadline,
                     policy_version=policy_version,
                     on_l3_start=on_l3_start,
+                    runtime_evidence=runtime_evidence,
                 )
             if asyncio.get_running_loop().time() >= effective_deadline:
                 result = L2RunResult(
@@ -2327,6 +2392,7 @@ class TerraSolSourceReviewAgent:
                 result=result,
                 elapsed_ms=round((time.monotonic() - started) * 1000),
                 policy_version=policy_version,
+                runtime_evidence=runtime_evidence,
             )
             return result
         finally:
@@ -2343,6 +2409,7 @@ class TerraSolSourceReviewAgent:
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
         on_l3_start: Callable[[], None] | None = None,
+        runtime_evidence: Mapping[str, object] | None = None,
     ) -> L2RunResult:
         if self._workspace_root is not None:
             # A rootless analyzer daemon lives outside the worker service's
@@ -2369,6 +2436,7 @@ class TerraSolSourceReviewAgent:
                 deadline=deadline,
                 policy_version=policy_version,
                 on_l3_start=on_l3_start,
+                runtime_evidence=runtime_evidence,
             )
         except L2TrajectoryError as error:
             logger.warning("L2 model trajectory failed safely: %s", error.code)
@@ -2472,6 +2540,7 @@ class TerraSolSourceReviewAgent:
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
         on_l3_start: Callable[[], None] | None = None,
+        runtime_evidence: Mapping[str, object] | None = None,
     ) -> L2RunResult:
         api_key = _read_key(self._api_key_file)
         (
@@ -2485,6 +2554,7 @@ class TerraSolSourceReviewAgent:
             artifact_sha256=artifact_sha256,
             l1_observation=l1_observation,
             deadline=deadline,
+            runtime_evidence=runtime_evidence,
         )
         analyst_cache_hit = False
         analyst = self._load_cache(f"{analyst_cache_key}.analyst")
@@ -3391,6 +3461,7 @@ class TerraSolSourceReviewAgent:
         artifact_sha256: str,
         l1_observation: SourceReviewObservation,
         deadline: float | None,
+        runtime_evidence: Mapping[str, object] | None = None,
     ) -> tuple[dict[str, object], tuple[str, ...], bool, bool]:
         deterministic: dict[str, object] = {}
         tools: list[str] = []
@@ -3436,6 +3507,7 @@ class TerraSolSourceReviewAgent:
                 "dossier_revision": L2_DOSSIER_REVISION,
                 "artifact_sha256": artifact_sha256,
                 "benchmark_contract": _BENCHMARK_CONTRACT_CAPSULE,
+                "trusted_scored_runtime_env": runtime_evidence,
                 "starter_revision": selected_starter_revision,
                 "supported_starter_revisions": list(self._starter_revisions),
                 "l1": {
@@ -3888,8 +3960,15 @@ class TerraSolSourceReviewAgent:
         artifact_sha256: str,
         l1_observation: SourceReviewObservation,
         policy_version: int = SCREENING_POLICY_VERSION,
+        *,
+        runtime_evidence_digest: str = "absent",
     ) -> str:
-        value = self._cache_key_value(artifact_sha256, l1_observation, policy_version)
+        value = self._cache_key_value(
+            artifact_sha256,
+            l1_observation,
+            policy_version,
+            runtime_evidence_digest=runtime_evidence_digest,
+        )
         value["cause_prompt_revision"] = l2_cause_prompt_revision(policy_version)
         value["cause_tiebreaker_prompt_revision"] = l2_cause_tiebreaker_prompt_revision(
             policy_version
@@ -3903,9 +3982,16 @@ class TerraSolSourceReviewAgent:
         artifact_sha256: str,
         l1_observation: SourceReviewObservation,
         policy_version: int = SCREENING_POLICY_VERSION,
+        *,
+        runtime_evidence_digest: str = "absent",
     ) -> str:
         """Keep cause-only retries from rerunning Terra or the critic."""
-        value = self._cache_key_value(artifact_sha256, l1_observation, policy_version)
+        value = self._cache_key_value(
+            artifact_sha256,
+            l1_observation,
+            policy_version,
+            runtime_evidence_digest=runtime_evidence_digest,
+        )
         # Preserve the pre-split stage key so already verified Terra/critic
         # trajectories remain reusable when only adjudication changes.
         value["reasoning_efforts"] = {
@@ -3932,6 +4018,8 @@ class TerraSolSourceReviewAgent:
         artifact_sha256: str,
         l1_observation: SourceReviewObservation,
         policy_version: int = SCREENING_POLICY_VERSION,
+        *,
+        runtime_evidence_digest: str = "absent",
     ) -> dict[str, object]:
         value: dict[str, object] = {
             "artifact_sha256": artifact_sha256,
@@ -3945,6 +4033,7 @@ class TerraSolSourceReviewAgent:
             "safety_prompt_revision": l2_safety_prompt_revision(policy_version),
             "static_hold_revision": L2_STATIC_HOLD_REVISION,
             "dossier_revision": L2_DOSSIER_REVISION,
+            "runtime_evidence_digest": runtime_evidence_digest,
             "cause_tiebreaker_prompt_revision": (
                 l2_cause_tiebreaker_prompt_revision(policy_version)
             ),
@@ -4077,6 +4166,7 @@ class TerraSolSourceReviewAgent:
         result: L2RunResult,
         elapsed_ms: int,
         policy_version: int = SCREENING_POLICY_VERSION,
+        runtime_evidence: Mapping[str, object] | None = None,
     ) -> None:
         observation = result.observation
         disposition = (
@@ -4091,6 +4181,14 @@ class TerraSolSourceReviewAgent:
                 "recorded_at": time.time(),
                 "attempt_id": str(attempt_id),
                 "artifact_sha256": artifact_sha256,
+                "scored_runtime_evidence_sha256": (
+                    runtime_evidence.get("sha256") if runtime_evidence else None
+                ),
+                "scored_runtime_source_revision": (
+                    runtime_evidence.get("source_revision")
+                    if runtime_evidence
+                    else None
+                ),
                 "l1_finding_digest": l1_observation.finding_digest,
                 "finding_digest": observation.finding_digest,
                 "review_audit": observation.review_audit,

@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -433,6 +434,31 @@ type capabilitiesResponse struct {
 	SourceRevisionMismatch bool `json:"source_revision_mismatch"`
 	// SoftwareVersionOrigin mirrors SourceRevisionOrigin for software_version.
 	SoftwareVersionOrigin release.Origin `json:"software_version_origin,omitempty"`
+	// Only keys injected by this binary into a Bench v13 sandbox are covered.
+	ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
+}
+
+type scoredRuntimeEnvEvidence struct {
+	BenchVersion   int      `json:"bench_version"`
+	Scope          string   `json:"scope"`
+	SourceRevision string   `json:"source_revision"`
+	InjectedKeys   []string `json:"injected_keys"`
+	SHA256         string   `json:"sha256"`
+}
+
+func (s *server) scoredRuntimeEnvEvidence() *scoredRuntimeEnvEvidence {
+	if s.sourceRevisionOrigin != release.OriginBinary || s.sourceRevisionMismatch || !canonicalSourceRevision(s.sourceRevision) {
+		return nil
+	}
+	const version = protocol.BenchVersionV13
+	keys := make([]string, 0)
+	for key := range harnessSandboxEnv(nil, version) {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	material := "scored-runtime-env-v1\n13\n" + s.sourceRevision + "\n" + strings.Join(keys, "\n")
+	digest := sha256.Sum256([]byte(material))
+	return &scoredRuntimeEnvEvidence{version, "scorer-injected-env-only", s.sourceRevision, keys, hex.EncodeToString(digest[:])}
 }
 
 // advertisedMinBenchVersion / advertisedMaxBenchVersion bound the capability
@@ -538,6 +564,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		SourceRevisionOrigin:   s.sourceRevisionOrigin,
 		SourceRevisionMismatch: s.sourceRevisionMismatch,
 		SoftwareVersionOrigin:  s.softwareVersionOrigin,
+		ScoredRuntimeEnv:       s.scoredRuntimeEnvEvidence(),
 	})
 }
 

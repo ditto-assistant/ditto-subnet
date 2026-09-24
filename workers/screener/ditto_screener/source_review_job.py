@@ -233,6 +233,10 @@ def _build_reviewer(
         critic_provider=os.environ.get(
             "SCREENER_L3_REVIEW_PROVIDER", inference_provider
         ),
+        scorer_capabilities_url=os.environ.get("SCREENER_SCORER_CAPABILITIES_URL")
+        or None,
+        expected_scorer_revision=os.environ.get("SCREENER_EXPECTED_SCORER_REVISION")
+        or None,
     )
     adjudicator_mode = os.environ.get("SCREENER_ADJUDICATOR_MODE", "off")
     adjudicator = (
