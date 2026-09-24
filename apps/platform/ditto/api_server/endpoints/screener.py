@@ -6173,6 +6173,17 @@ async def submit_result(
         raise ScreenerAuthError(
             f"verdict signature did not verify for hotkey {payload.screener_hotkey}"
         )
+    if (
+        payload.policy_version >= 13
+        and payload.adjudication is not None
+        and payload.adjudication.decision in {"clear", "reject"}
+        and payload.outcome != ScreenResultOutcome.QUARANTINE
+    ):
+        # A rolling-upgrade worker may still report a v13 source-only CLEAR as
+        # PASS. Do not admit it before the private/runtime receipt gate exists.
+        raise AgentNotScreenableError(
+            "v13 source adjudication requires quarantine transport"
+        )
 
     # A legacy worker may still report a failure during a rolling deploy, but it
     # can never promote a submission without attesting the required policy —
@@ -6639,6 +6650,7 @@ async def submit_result(
                 payload.adjudication is not None
                 and payload.adjudication.decision == "reject"
                 and effective_settings.adjudicator_mode == "enforce"
+                and payload.policy_version < 13
             ):
                 # The worker transports a reject as a quarantine because a
                 # policy module cannot ban a miner. Platform owns the final

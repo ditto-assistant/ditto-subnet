@@ -160,3 +160,31 @@ independent source review, while Gryffindor's mandatory verification remains
 incomplete. Do not merge, deploy, enable L4, or rescreen held submissions
 through this reviewer on these results. All production source-review holds
 remain unchanged.
+
+## Six-read report-only comparison
+
+The next candidate changes only the on-demand source-read allowance from three
+to six exact windows. The court still has at most four model turns, retains the
+same split verdict tools and host citation checks, and holds on an invalid or
+incomplete response. Four SHA-verified archives were replayed with one capped
+OpenRouter key and no Backroom or miner-state writes. The independently reviewed
+labels are source-review labels; Gryffindor's CLEAR is limited to its retained
+critic concern and does not certify the complete policy-v13 runtime.
+
+| Exact SHA prefix | Source-review label | Host-certified result | Cited lines | Provider requests | Elapsed |
+| --- | --- | --- | ---: | ---: | ---: |
+| `13e30145` | REJECT I3 | REJECT I3 | 6 | 2 | 18.0 s |
+| `c845249d` | CLEAR | CLEAR | 8 | 2 | 13.3 s |
+| `7d8c41db` | REJECT I5 | REJECT I5 | 8 | 2 | 16.6 s |
+| `bac8c60f` | CLEAR on retained critic concern | CLEAR | 8 | 4 | 26.5 s |
+
+The Gryffindor verdict cites the served entrypoint, live catalog, critic branch,
+its authorize and dissent tools, host response assembly, and final model-authored
+answer writer. The cited branch's `tool_choice: required` constrains the critic
+protocol, while the critic can reject the unexecuted proposal and supply the
+final answer. The host validated all eight cited source locations in the exact
+archive. This closes the source-review four-case comparison on this cohort; it
+does **not** authorize full V13 CLEAR or a production rescreen. The required
+runtime/private verification receipts, sealed package, and trusted replay
+runner remain absent. Keep this candidate draft and run a receipt-bound,
+exact-held-submission canary before any audited rescreen wave.

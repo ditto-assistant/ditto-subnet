@@ -614,6 +614,27 @@ class AgenticSourceReviewModule(_BaseModule):
                     "final source-review adjudication completed",
                 ),
             )
+            if (
+                context.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                and decision in {"clear", "reject"}
+            ):
+                # Source citations alone do not certify v13 runtime/private
+                # verification. Retain the court result for operator review
+                # without granting it terminal admission or rejection authority.
+                return ModuleResult(
+                    ModuleDisposition.QUARANTINE,
+                    (
+                        *evidence,
+                        PolicyEvidence(
+                            self.module_id,
+                            "source-review-awaiting-v13-verification",
+                            "source adjudication held pending v13 verification",
+                        ),
+                    ),
+                    finding=observation.finding,
+                    adjudication=adjudication,
+                    review_notes=review_notes,
+                )
             if decision == "clear":
                 return ModuleResult(
                     ModuleDisposition.CLEAR,
@@ -1385,6 +1406,26 @@ class PolicyEngine:
                     "final source-review adjudication completed",
                 ),
             )
+            if (
+                policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                and court_decision in {"clear", "reject"}
+            ):
+                return self._decision(
+                    ScreeningOutcome.QUARANTINE,
+                    (
+                        *evidence,
+                        PolicyEvidence(
+                            "agentic-preexecution-review",
+                            "source-review-awaiting-v13-verification",
+                            "source adjudication held pending v13 verification",
+                        ),
+                    ),
+                    observation.finding,
+                    review_audit=observation.review_audit,
+                    adjudication=adjudication,
+                    review_notes=observation.notes,
+                    policy_version=policy_version,
+                )
             if court_decision not in {"clear", "reject"}:
                 evidence = (
                     *evidence,

@@ -1792,7 +1792,7 @@ async def test_bounded_court_settles_when_read_budget_is_spent(tmp_path: Path) -
         _call(
             "read_file", {"path": "src/main.rs", "start_line": line, "end_line": line}
         )
-        for line in (4, 5, 6)
+        for line in (4, 5, 6, 4, 5, 6)
     ]
     for index, call in enumerate(read_calls):
         call["id"] = f"read-{index}"

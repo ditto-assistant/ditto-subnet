@@ -1376,10 +1376,10 @@ async def test_l3_cleared_static_lead_can_continue_to_build(
     assert any(call[0] == "build" for call in calls)
 
 
-async def test_l4_cleared_static_lead_builds_before_it_passes(
+async def test_v13_l4_cleared_static_lead_holds_before_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    """A terminal L4 clear admits only after the full image contract passes."""
+    """A source-only L4 clear cannot authorize v13 build or admission."""
     tarball = _valid_tar(
         **{
             "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
@@ -1397,12 +1397,12 @@ async def test_l4_cleared_static_lead_builds_before_it_passes(
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
-    assert result.outcome == ScreeningOutcome.PASS
+    assert result.outcome == ScreeningOutcome.QUARANTINE
     assert result.adjudication is not None
     assert result.adjudication["decision"] == "clear"
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
-    assert any(call[0] == "build" for call in calls)
+    assert not any(call[0] == "build" for call in calls)
 
 
 async def test_reports_only_coarse_pipeline_stages(
