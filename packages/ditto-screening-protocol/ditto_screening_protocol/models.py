@@ -11,6 +11,7 @@ from uuid import UUID
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     model_validator,
@@ -281,6 +282,46 @@ class ScreenerReviewSettingsOverride(BaseModel):
     checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
+class ScoredRuntimeEvidenceLease(BaseModel):
+    """Platform-bound scorer evidence for one exact V13 screening attempt."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    policy_version: Literal[13]
+    bench_version: Literal[13]
+    scorer_source_revision: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+    release_descriptor_digest: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    scorer_image_digest: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    scorer_env_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    injected_keys: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]*$", max_length=128)], ...],
+        BeforeValidator(
+            lambda value: tuple(value) if isinstance(value, list) else value
+        ),
+    ]
+    validator_count: Annotated[int, Field(ge=1, le=1_000)]
+    observed_at: Annotated[int, Field(ge=0)]
+
+    @model_validator(mode="after")
+    def bound_digest(self) -> ScoredRuntimeEvidenceLease:
+        if (
+            not self.injected_keys
+            or tuple(sorted(set(self.injected_keys))) != self.injected_keys
+        ):
+            raise ValueError("scorer runtime keys must be nonempty, sorted, and unique")
+        material = (
+            "scored-runtime-env-v1\n13\n"
+            + self.scorer_source_revision
+            + "\n"
+            + "\n".join(self.injected_keys)
+        )
+        if hashlib.sha256(material.encode()).hexdigest() != self.scorer_env_sha256:
+            raise ValueError("scorer runtime evidence digest mismatch")
+        return self
+
+
 class ScreenerQueueItem(BaseModel):
     """One agent awaiting screening."""
 
@@ -335,6 +376,7 @@ class ScreenerQueueItem(BaseModel):
             ),
         ),
     ] = None
+    scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None
     precheck_reason_code: Annotated[
         str | None,
         Field(

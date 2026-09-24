@@ -36,6 +36,7 @@ from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    ScoredRuntimeEvidenceLease,
     SourceReviewAdjudication,
     SourceReviewNote,
     SourceReviewObservationPayload,
@@ -237,6 +238,9 @@ def _build_reviewer(
         or None,
         expected_scorer_revision=os.environ.get("SCREENER_EXPECTED_SCORER_REVISION")
         or None,
+        require_signed_runtime_lease=_parse_bool(
+            "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", "false"
+        ),
     )
     adjudicator_mode = os.environ.get("SCREENER_ADJUDICATOR_MODE", "off")
     adjudicator = (
@@ -328,6 +332,13 @@ async def _amain() -> int:
                 attempt_id=attempt_id,
                 deadline=asyncio.get_running_loop().time() + timeout_seconds,
                 policy_version=policy_version,
+                scored_runtime_evidence=(
+                    ScoredRuntimeEvidenceLease.model_validate(
+                        source["scored_runtime_evidence"]
+                    )
+                    if source.get("scored_runtime_evidence") is not None
+                    else None
+                ),
             )
             payload = SourceReviewObservationPayload(
                 ok=observation.ok,

@@ -805,6 +805,44 @@ async def test_binary_derived_revision_matching_the_pin_is_verified() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verified_v13_scorer_packet_enters_signed_capability() -> None:
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    material = "scored-runtime-env-v1\n13\n" + _REVISION + "\n" + "\n".join(keys)
+    packet = {
+        "bench_version": 13,
+        "scope": "scorer-injected-env-only",
+        "source_revision": _REVISION,
+        "injected_keys": keys,
+        "sha256": hashlib.sha256(material.encode()).hexdigest(),
+    }
+    client, http = _capability_client(
+        {
+            **_STAMPED,
+            "supported_bench_versions": [13],
+            "features": ["v13-deterministic-enterprise-v1"],
+            "scored_runtime_env": packet,
+        }
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+    assert observed.status == "fresh_verified"
+    assert observed.scored_runtime_env is not None
+    assert observed.scored_runtime_env.sha256 == packet["sha256"]
+    assert (
+        observed.model_dump(mode="json")["scored_runtime_env"]["injected_keys"] == keys
+    )
+
+    bad = {**packet, "sha256": "0" * 64}
+    client, http = _capability_client(
+        {**_STAMPED, "supported_bench_versions": [13], "scored_runtime_env": bad}
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+    assert observed.status == "fresh_verified"
+    assert observed.scored_runtime_env is None
+
+
+@pytest.mark.asyncio
 async def test_a_pin_that_cannot_stamp_keeps_the_previous_behaviour() -> None:
     """The requirement is committed beside the pin and must move with it.
 

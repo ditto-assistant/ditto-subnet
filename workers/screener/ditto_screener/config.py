@@ -220,6 +220,7 @@ class ScreenerConfig:
     l2_always_escalate: bool = False
     scorer_capabilities_url: str | None = None
     expected_scorer_revision: str | None = None
+    require_signed_runtime_lease: bool = False
     """Send every L1 result through L2/L3, even a certified low-risk clear.
 
     Seeded from ``SCREENER_L2_ALWAYS_ESCALATE``; a bound reviewer revision can
@@ -502,6 +503,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         or None,
         expected_scorer_revision=os.environ.get("SCREENER_EXPECTED_SCORER_REVISION")
         or None,
+        require_signed_runtime_lease=_parse_bool(
+            "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", False
+        ),
         adjudicator_max_completion_tokens=_parse_optional_int(
             "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS"
         ),

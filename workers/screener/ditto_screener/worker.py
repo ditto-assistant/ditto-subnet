@@ -813,6 +813,7 @@ class ScreenerWorker:
                         policy_only=item.policy_only,
                         deferred_source_review=item.deferred_source_review,
                         policy_version=policy_version,
+                        scored_runtime_evidence=item.scored_runtime_evidence,
                     )
             if result.policy_version != policy_version:
                 raise PlatformError(

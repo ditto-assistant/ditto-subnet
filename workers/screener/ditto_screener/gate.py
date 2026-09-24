@@ -122,6 +122,7 @@ from ditto_screener.source_review import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ScoredRuntimeEvidenceLease,
 )
 
 if TYPE_CHECKING:
@@ -1070,6 +1071,7 @@ class BuildGate:
             critic_provider=config.l3_review_provider,
             scorer_capabilities_url=config.scorer_capabilities_url,
             expected_scorer_revision=config.expected_scorer_revision,
+            require_signed_runtime_lease=config.require_signed_runtime_lease,
         )
         self._source_reviewer = LayeredSourceReviewAgent(
             l1=l1_reviewer,
@@ -1135,6 +1137,7 @@ class BuildGate:
         policy_only: bool = False,
         deferred_source_review: bool = False,
         policy_version: int = SCREENING_POLICY_VERSION,
+        scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
 
@@ -1331,6 +1334,7 @@ class BuildGate:
                         ),
                         deadline=deadline,
                         policy_version=policy_version,
+                        scored_runtime_evidence=scored_runtime_evidence,
                     )
                     if resolved_preflight.ok and resolved_preflight.risk_level == "low":
                         preflight_clearance = resolved_preflight
@@ -1400,6 +1404,8 @@ class BuildGate:
                                     attempt_id=attempt_id,
                                     progress=report_review_progress,
                                     deadline=deadline,
+                                    policy_version=policy_version,
+                                    scored_runtime_evidence=scored_runtime_evidence,
                                 )
                             except Exception:  # noqa: BLE001 - terminal provider failure
                                 logger.warning(
@@ -1433,6 +1439,7 @@ class BuildGate:
                             progress=report_review_progress,
                             deadline=deadline,
                             policy_version=policy_version,
+                            scored_runtime_evidence=scored_runtime_evidence,
                         )
 
                     review_factory = review_with_selected_provider
