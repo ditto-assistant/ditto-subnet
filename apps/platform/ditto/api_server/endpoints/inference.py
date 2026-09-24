@@ -92,6 +92,9 @@ from ditto.db.queries.inference import (
     begin_inference_request,
     finish_inference_request,
 )
+from ditto.db.queries.inference_admission import (
+    record_inference_admission_rejection,
+)
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
@@ -1935,6 +1938,39 @@ async def exchange_inference_grant(
     )
 
 
+async def _remember_admission_rejection(
+    request: Request,
+    *,
+    lane: str,
+    http_status: int,
+    admission_code: str,
+    grant_id: UUID | None,
+    request_bytes: int,
+    byte_limit: int | None,
+) -> None:
+    """Best-effort sanitized row. A telemetry failure must not change the 4xx."""
+    session_maker = getattr(request.app.state, "session_maker", None)
+    if session_maker is None:
+        return
+    import ditto
+
+    try:
+        async with session_maker() as session, session.begin():
+            await record_inference_admission_rejection(
+                session,
+                lane=lane,
+                http_status=http_status,
+                admission_code=admission_code,
+                grant_id=grant_id,
+                validator_hotkey=None,
+                request_bytes=request_bytes,
+                byte_limit=byte_limit,
+                platform_revision=ditto.__version__,
+            )
+    except Exception:
+        logger.exception("inference admission rejection was not recorded")
+
+
 @router.post("/chat/completions")
 async def proxy_chat_completions(
     request: Request,
@@ -1968,23 +2004,81 @@ async def proxy_chat_completions(
         raise HTTPException(status_code=401, detail="invalid inference proof")
     body = await request.body()
     if len(body) > config.request_body_bytes:
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=413,
+            admission_code="request_too_large",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=config.request_body_bytes,
+        )
         raise HTTPException(status_code=413, detail="inference request is too large")
     if abs(datetime.now(UTC) - x_ditto_requested_at.astimezone(UTC)) > _PROXY_MAX_AGE:
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=409,
+            admission_code="stale_session",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=409, detail="inference request is stale")
     try:
         payload = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=400,
+            admission_code="invalid_json",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=400, detail="invalid JSON request") from error
     if not isinstance(payload, dict):
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=400,
+            admission_code="invalid_schema",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(
             status_code=400, detail="inference request must be a JSON object"
         )
     # Every field-level decision, including the streaming refusal, lives in one
     # function now. It used to be split across here and the schema check, which
     # is how the two most common refusals ended up with two different wordings.
-    _validate_request_schema(payload)
+    try:
+        _validate_request_schema(payload)
+    except HTTPException as error:
+        if error.status_code == 400:
+            await _remember_admission_rejection(
+                request,
+                lane="inference",
+                http_status=400,
+                admission_code="invalid_schema",
+                grant_id=x_ditto_grant,
+                request_bytes=len(body),
+                byte_limit=None,
+            )
+        raise
     requested_model = payload.get("model")
     if not isinstance(requested_model, str):
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=403,
+            admission_code="model_not_allowed",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=403, detail="model is not permitted")
     max_tokens = _output_token_limit(payload, config.max_output_tokens)
 
@@ -2191,12 +2285,39 @@ async def proxy_embeddings(
         raise HTTPException(status_code=401, detail="invalid inference proof")
     body = await request.body()
     if len(body) > config.embedding_request_body_bytes:
+        await _remember_admission_rejection(
+            request,
+            lane="embedding",
+            http_status=413,
+            admission_code="request_too_large",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=config.embedding_request_body_bytes,
+        )
         raise HTTPException(status_code=413, detail="embedding request is too large")
     if abs(datetime.now(UTC) - x_ditto_requested_at.astimezone(UTC)) > _PROXY_MAX_AGE:
+        await _remember_admission_rejection(
+            request,
+            lane="embedding",
+            http_status=409,
+            admission_code="stale_session",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=409, detail="embedding request is stale")
     try:
         payload = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        await _remember_admission_rejection(
+            request,
+            lane="embedding",
+            http_status=400,
+            admission_code="invalid_json",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=400, detail="invalid JSON request") from error
     inputs = _validated_embedding_payload(
         payload, model=config.embedding_model, dimensions=config.embedding_dimensions

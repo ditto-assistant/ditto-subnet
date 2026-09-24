@@ -1264,6 +1264,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/inference-admission-rejections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Admission Rejections
+         * @description Counts and recent rows. Bodies, prompts, and credentials are not stored.
+         */
+        get: operations["list_admission_rejections_api_v1_admin_inference_admission_rejections_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/inference-concurrency-settings": {
         parameters: {
             query?: never;
@@ -18971,6 +18991,54 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** InferenceAdmissionRejectionRow */
+        InferenceAdmissionRejectionRow: {
+            /** Admission Code */
+            admission_code: string;
+            /** Byte Limit */
+            byte_limit: number | null;
+            /**
+             * Correlation Id
+             * Format: uuid
+             */
+            correlation_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Grant Id */
+            grant_id: string | null;
+            /** Http Status */
+            http_status: number;
+            /** Lane */
+            lane: string;
+            /** Platform Revision */
+            platform_revision: string;
+            /**
+             * Rejection Id
+             * Format: uuid
+             */
+            rejection_id: string;
+            /** Request Bytes */
+            request_bytes: number;
+            /** Validator Hotkey */
+            validator_hotkey: string | null;
+        };
+        /** InferenceAdmissionRejectionSummary */
+        InferenceAdmissionRejectionSummary: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Rows */
+            rows: components["schemas"]["InferenceAdmissionRejectionRow"][];
+        };
         /** InferenceCalibrationRoute */
         InferenceCalibrationRoute: {
             /** Model */
@@ -34772,6 +34840,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminHotkeyUnbanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_admission_rejections_api_v1_admin_inference_admission_rejections_get: {
+        parameters: {
+            query: {
+                grant_id: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceAdmissionRejectionSummary"];
                 };
             };
             /** @description Validation Error */

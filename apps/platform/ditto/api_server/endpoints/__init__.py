@@ -62,6 +62,9 @@ from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
 from ditto.api_server.endpoints.admin_hotkey_bans import (
     router as admin_hotkey_bans_router,
 )
+from ditto.api_server.endpoints.admin_inference_admission import (
+    router as admin_inference_admission_router,
+)
 from ditto.api_server.endpoints.admin_inference_concurrency_settings import (
     router as admin_inference_concurrency_settings_router,
 )
@@ -195,6 +198,7 @@ __all__ = [
     "admin_attestation_router",
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
+    "admin_inference_admission_router",
     "admin_inference_concurrency_settings_router",
     "admin_inference_observability_router",
     "admin_traces_router",
