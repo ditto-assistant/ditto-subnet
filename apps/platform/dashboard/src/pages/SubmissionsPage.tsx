@@ -7,6 +7,7 @@ import { onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { ActivityBoard } from "../components/pipeline/ActivityBoard";
+import { SubmissionFee } from "../components/pipeline/SubmissionFee";
 import { createActivityStore } from "../components/pipeline/activity-store";
 import { agentCardOpen, hydrateOnAgentCardClose } from "../data/useEndpoint";
 import { REFRESH_MS } from "../lib/config";
@@ -83,6 +84,7 @@ export function SubmissionsPage(): JSX.Element {
 
   return (
     <section class="page active" data-page="submissions">
+      <SubmissionFee />
       <ActivityBoard store={store} />
     </section>
   );

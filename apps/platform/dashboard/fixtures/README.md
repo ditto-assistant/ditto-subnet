@@ -16,6 +16,7 @@ every other payload is verbatim.
 | `leaderboard-v6.json` | `/public/leaderboard?bench_version=6` (entries[:12]) |
 | `weights.json` | `/public/weights` |
 | `ledger-epochs.json` | `/public/ledger-epochs?limit=24` (pin history; synthetic-shaped until the endpoint ships, keyed to the leaderboard fixture's champion and raw leader) |
+| `submission-fee.json` | `/public/submission-fee` (synthetic-shaped: fee values follow the documented public history, revision numbers and times are illustrative) |
 | `validator-names.json` | `/public/validator-names` |
 | `screeners.json` | `/public/screeners` |
 | `bench-glossary.json` | `/public/bench/glossary` |
