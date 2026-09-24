@@ -4429,6 +4429,7 @@ CREATE TABLE public.screening_review_events (
     actor text NOT NULL,
     reviewer_model text,
     outcome text NOT NULL,
+    effective_decision text NOT NULL,
     reason_code text,
     reason text,
     prior_agent_status text NOT NULL,
@@ -4436,6 +4437,7 @@ CREATE TABLE public.screening_review_events (
     evidence jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_screening_review_events_sre_actor_check CHECK ((length(TRIM(BOTH FROM actor)) > 0)),
+    CONSTRAINT ck_screening_review_events_sre_decision_check CHECK ((effective_decision = ANY (ARRAY['reject'::text, 'hold'::text, 'pass'::text, 'provisional_admission'::text, 'no_change'::text, 'release'::text, 'rescreen'::text]))),
     CONSTRAINT ck_screening_review_events_sre_kind_check CHECK ((event_kind = ANY (ARRAY['automated'::text, 'manual'::text]))),
     CONSTRAINT ck_screening_review_events_sre_policy_check CHECK ((policy_version > 0)),
     CONSTRAINT ck_screening_review_events_sre_sha_check CHECK ((length(artifact_sha256) = 64))

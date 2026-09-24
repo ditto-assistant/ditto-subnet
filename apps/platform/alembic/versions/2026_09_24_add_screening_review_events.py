@@ -32,6 +32,7 @@ def upgrade() -> None:
         sa.Column("actor", sa.Text(), nullable=False),
         sa.Column("reviewer_model", sa.Text()),
         sa.Column("outcome", sa.Text(), nullable=False),
+        sa.Column("effective_decision", sa.Text(), nullable=False),
         sa.Column("reason_code", sa.Text()),
         sa.Column("reason", sa.Text()),
         sa.Column("prior_agent_status", sa.Text(), nullable=False),
@@ -54,6 +55,11 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint("length(artifact_sha256) = 64", name="sre_sha_check"),
         sa.CheckConstraint("policy_version > 0", name="sre_policy_check"),
+        sa.CheckConstraint(
+            "effective_decision IN ('reject', 'hold', 'pass', "
+            "'provisional_admission', 'no_change', 'release', 'rescreen')",
+            name="sre_decision_check",
+        ),
         sa.CheckConstraint("length(trim(actor)) > 0", name="sre_actor_check"),
         sa.UniqueConstraint("resolution_id", name="sre_resolution_key"),
     )

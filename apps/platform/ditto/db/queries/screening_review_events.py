@@ -67,6 +67,7 @@ async def append_automated_review_event(
     payload: ScreenResultRequest,
     prior_agent_status: object,
     next_agent_status: object,
+    effective_decision: str,
     reason_code: str | None,
     reason: str | None,
 ) -> ScreeningReviewEvent:
@@ -87,6 +88,7 @@ async def append_automated_review_event(
         outcome=payload.outcome.value
         if payload.outcome
         else ("pass" if payload.passed else "failed"),
+        effective_decision=effective_decision,
         reason_code=reason_code,
         reason=reason,
         prior_agent_status=_status(prior_agent_status),
@@ -123,6 +125,47 @@ async def append_automated_review_event(
     return event
 
 
+async def append_platform_hold_event(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    attempt: ScreeningAttempt,
+    quarantine: ScreeningQuarantine,
+    prior_agent_status: object,
+    reason_code: str,
+    reason: str,
+    created_at: datetime,
+) -> ScreeningReviewEvent:
+    """Record an infrastructure park with no signed artifact-bound verdict."""
+    event = ScreeningReviewEvent(
+        event_id=uuid4(),
+        agent_id=agent.agent_id,
+        attempt_id=attempt.attempt_id,
+        quarantine_id=quarantine.quarantine_id,
+        resolution_id=None,
+        previous_event_id=await _previous_event_id(session, agent.agent_id),
+        event_kind="automated",
+        artifact_sha256=agent.sha256,
+        policy_version=attempt.policy_version,
+        actor="platform:lease-expiry-park",
+        reviewer_model=None,
+        outcome="synthetic_hold",
+        effective_decision="hold",
+        reason_code=reason_code,
+        reason=reason,
+        prior_agent_status=_status(prior_agent_status),
+        next_agent_status=_status(agent.status),
+        evidence={
+            "signed_artifact_bound_verdict": None,
+            "synthetic_attempt_artifact_sha256": attempt.artifact_sha256,
+            "verification_receipts": [],
+        },
+        created_at=created_at,
+    )
+    session.add(event)
+    return event
+
+
 async def append_manual_review_event(
     session: AsyncSession,
     *,
@@ -153,6 +196,7 @@ async def append_manual_review_event(
         actor=actor,
         reviewer_model=None,
         outcome=resolution,
+        effective_decision=resolution,
         reason_code=quarantine.reason_code,
         reason=reason,
         prior_agent_status=_status(prior_agent_status),

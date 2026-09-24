@@ -119,6 +119,7 @@ class AdminScreeningReviewEvent(BaseModel):
     actor: str
     reviewer_model: str | None
     outcome: str
+    effective_decision: str
     reason_code: str | None
     reason: str | None
     prior_agent_status: str

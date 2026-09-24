@@ -1501,6 +1501,7 @@ class ScreeningReviewEvent(Base):
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     reviewer_model: Mapped[str | None] = mapped_column(Text)
     outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    effective_decision: Mapped[str] = mapped_column(Text, nullable=False)
     reason_code: Mapped[str | None] = mapped_column(Text)
     reason: Mapped[str | None] = mapped_column(Text)
     prior_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1520,6 +1521,11 @@ class ScreeningReviewEvent(Base):
         CheckConstraint("event_kind IN ('automated', 'manual')", name="sre_kind_check"),
         CheckConstraint("length(artifact_sha256) = 64", name="sre_sha_check"),
         CheckConstraint("policy_version > 0", name="sre_policy_check"),
+        CheckConstraint(
+            "effective_decision IN ('reject', 'hold', 'pass', "
+            "'provisional_admission', 'no_change', 'release', 'rescreen')",
+            name="sre_decision_check",
+        ),
         CheckConstraint("length(trim(actor)) > 0", name="sre_actor_check"),
         Index(
             "sre_automated_attempt_key",

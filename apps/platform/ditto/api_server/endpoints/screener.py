@@ -7136,6 +7136,9 @@ async def submit_result(
         if attempt is not None and (
             records_review_evidence
             or (
+                deferred_deep_attempt and agent.status == AgentStatus.ATH_PENDING_REVIEW
+            )
+            or (
                 outcome_value == "pass"
                 and not attempt.build_only
                 and not payload.policy_only
@@ -7154,6 +7157,22 @@ async def submit_result(
                 payload=payload,
                 prior_agent_status=prior_review_agent_status,
                 next_agent_status=agent.status,
+                effective_decision=(
+                    "no_change"
+                    if late_deferred_result
+                    else "reject"
+                    if agent.status == AgentStatus.REJECTED
+                    else "hold"
+                    if agent.status
+                    in {
+                        AgentStatus.QUARANTINED,
+                        AgentStatus.ATH_PENDING_REVIEW,
+                        AgentStatus.SCREENING_FAILED,
+                    }
+                    else "provisional_admission"
+                    if outcome_value == "pass_inconclusive"
+                    else "pass"
+                ),
                 reason_code=stored_reason_code,
                 reason=public_reason,
             )

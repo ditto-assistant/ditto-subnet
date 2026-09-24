@@ -5393,6 +5393,15 @@ class TestClaim:
             assert retained.court_completion_receipt is not None
             assert retained.court_completion_receipt["observed_upstream"] == "together"
             assert retained.court_completion_receipt["first_tool_call_ms"] == 2000
+            event = await session.scalar(
+                select(ScreeningReviewEvent).where(
+                    ScreeningReviewEvent.attempt_id == attempt_id
+                )
+            )
+            assert event is not None
+            assert event.outcome == "quarantine"
+            assert event.effective_decision == "reject"
+            assert event.next_agent_status == AgentStatus.REJECTED
 
     async def test_completed_court_refusal_retains_signed_telemetry_without_release(
         self,
@@ -6110,11 +6119,33 @@ class TestClaim:
                 "Late deep-review evidence retained after operator action"
             )
 
+    @pytest.mark.parametrize(
+        ("outcome", "reason_code", "detail", "expected_reason"),
+        [
+            (
+                "deterministic_reject",
+                "health-contract",
+                "serve check failed: /health never healthy within 90s",
+                "Deferred source review runtime verification was interrupted; "
+                "manual retry required",
+            ),
+            (
+                "retryable_infra",
+                "source-review-unavailable",
+                "source review provider unavailable",
+                "Deferred source review was interrupted; manual retry required",
+            ),
+        ],
+    )
     async def test_deferred_review_health_miss_parks_the_hold(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        outcome: str,
+        reason_code: str,
+        detail: str,
+        expected_reason: str,
     ) -> None:
         agent_id = await _seed_agent(
             session_maker,
@@ -6161,9 +6192,9 @@ class TestClaim:
             agent_id,
             passed=False,
             attempt_id=attempt_id,
-            outcome="deterministic_reject",
-            reason_code="health-contract",
-            detail="serve check failed: /health never healthy within 90s",
+            outcome=outcome,
+            reason_code=reason_code,
+            detail=detail,
         )
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
@@ -6182,14 +6213,20 @@ class TestClaim:
             )
             assert agent is not None
             assert agent.status == AgentStatus.ATH_PENDING_REVIEW
-            assert agent.screening_reason == (
-                "Deferred source review runtime verification was interrupted; "
-                "manual retry required"
-            )
-            assert agent.screening_reason_code == "health-contract"
+            assert agent.screening_reason == expected_reason
+            assert agent.screening_reason_code == reason_code
             assert attempt is not None and attempt.status == "failed"
             assert review is not None and review.status == "pending"
             assert review.resolution is None
+            event = await session.scalar(
+                select(ScreeningReviewEvent).where(
+                    ScreeningReviewEvent.attempt_id == attempt_id
+                )
+            )
+            assert event is not None
+            assert event.outcome == outcome
+            assert event.effective_decision == "hold"
+            assert event.next_agent_status == AgentStatus.ATH_PENDING_REVIEW
         parked = await client.post(_CLAIM_URL)
         assert parked.status_code == 200
         assert parked.json()["items"] == []
@@ -6623,6 +6660,7 @@ class TestQuarantineAdmin:
         assert automated["artifact_sha256"] == item["artifact_sha256"]
         assert automated["policy_version"] == item["policy_version"]
         assert automated["outcome"] == "quarantine"
+        assert automated["effective_decision"] == "hold"
         assert automated["prior_agent_status"] == AgentStatus.SCREENING
         assert automated["next_agent_status"] == AgentStatus.QUARANTINED
         assert automated["evidence"]["manifest_digest"] == "56" * 32
@@ -6631,6 +6669,7 @@ class TestQuarantineAdmin:
         assert manual["previous_event_id"] == automated["event_id"]
         assert manual["actor"] == "backroom:test-user"
         assert manual["outcome"] == resolution
+        assert manual["effective_decision"] == resolution
         assert manual["reason"] == detailed_reason
         assert manual["prior_agent_status"] == AgentStatus.QUARANTINED
         assert manual["next_agent_status"] == expected_status
@@ -10629,6 +10668,7 @@ class TestSubmitResult:
             ).all()
             assert len(events) == 1
             assert events[0].outcome == "pass"
+            assert events[0].effective_decision == "pass"
             assert events[0].policy_version > 0
 
     async def test_pass_pins_dataset_when_enabled(

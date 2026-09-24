@@ -11271,6 +11271,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Effective Decision */
+            effective_decision: string;
             /**
              * Event Id
              * Format: uuid

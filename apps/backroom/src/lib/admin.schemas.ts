@@ -4418,6 +4418,7 @@ export const screeningReviewEventListSchema = z.object({
     actor: z.string(),
     reviewer_model: z.string().nullable(),
     outcome: z.string(),
+    effective_decision: z.string(),
     reason_code: z.string().nullable(),
     reason: z.string().nullable(),
     prior_agent_status: z.string(),
