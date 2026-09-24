@@ -5,13 +5,12 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -301,15 +300,12 @@ async def test_replay_generation_uses_independent_verified_image(
         clean_agent_row.screened_image_size_bytes = clean_image.size_bytes
         clean_agent_row.screened_image_id = clean_image.image_id
         clean_agent_row.screened_image_verified_at = clean_image.verified_at
-    storage = SimpleNamespace(
-        presigned_get_url=AsyncMock(side_effect=["target-url", "control-url"])
-    )
-    private_request = SimpleNamespace(
-        state=SimpleNamespace(
-            screener_node_id="private-replay-node", screener_node_status="active"
-        ),
-        app=SimpleNamespace(state=SimpleNamespace(storage=storage)),
-    )
+    storage = Mock()
+    storage.presigned_get_url = AsyncMock(side_effect=["target-url", "control-url"])
+    app.state.storage = storage
+    private_request = Request({"type": "http", "app": app})
+    private_request.state.screener_node_id = "private-replay-node"
+    private_request.state.screener_node_status = "active"
     async with session_maker() as session:
         inputs = await get_replay_private_inputs(
             replay_id, private_request, "independent-worker", session
