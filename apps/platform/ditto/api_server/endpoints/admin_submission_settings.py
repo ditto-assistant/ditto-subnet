@@ -42,6 +42,7 @@ from ditto.db.queries.submission_settings import (
     UPLOAD_ADMISSION_TTL,
     in_flight_quotes,
     latest_submission_settings,
+    require_supported_fee_denomination,
     submission_settings_history,
 )
 
@@ -63,7 +64,9 @@ def _revision(
         cooldown_seconds=row.cooldown_seconds,
         fee_amount_rao=row.fee_amount_rao,
         fee_amount_tao=format_rao_as_tao(row.fee_amount_rao),
-        fee_denomination=SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
+        # Project the stored denomination; an unreviewed one fails closed (503)
+        # rather than being relabelled as fixed TAO.
+        fee_denomination=require_supported_fee_denomination(row),
         previous_fee_amount_rao=(
             previous.fee_amount_rao if previous is not None else None
         ),

@@ -10,7 +10,10 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
-from ditto.api_models.submission_settings import SUBMISSION_FEE_DENOMINATION_FIXED_TAO
+from ditto.api_models.submission_settings import (
+    SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
+    SubmissionFeeDenomination,
+)
 from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
 from ditto.db.models import SubmissionSettingsRevision, UploadAdmissionReservation
 from ditto.db.queries.agents import SubmissionCooldownError, get_submission_retry_at
@@ -57,7 +60,9 @@ async def latest_submission_settings(
     )
 
 
-def require_supported_fee_denomination(row: SubmissionSettingsRevision) -> None:
+def require_supported_fee_denomination(
+    row: SubmissionSettingsRevision,
+) -> SubmissionFeeDenomination:
     """Refuse to quote from a revision whose denomination this build cannot price.
 
     ``fixed_tao`` is the only reviewed mode: ``fee_amount_rao`` is the exact
@@ -70,6 +75,7 @@ def require_supported_fee_denomination(row: SubmissionSettingsRevision) -> None:
             f"{row.fee_denomination!r}; only "
             f"{SUBMISSION_FEE_DENOMINATION_FIXED_TAO!r} can be quoted"
         )
+    return SUBMISSION_FEE_DENOMINATION_FIXED_TAO
 
 
 async def effective_submission_settings(

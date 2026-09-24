@@ -701,3 +701,51 @@ async def test_public_fee_reflects_a_change_without_a_deploy(
     public = (await client.get(_PUBLIC)).json()
     assert before["amount_rao"] == _GENESIS_FEE
     assert after["amount_rao"] == 37_271_710 == public["fee_amount_rao"]
+
+
+# --- Fail closed on an unreviewed denomination ------------------------------
+
+
+@pytest.mark.parametrize("path", [_PUBLIC, _SETTINGS, "/api/v1/upload/eval-pricing"])
+async def test_unreviewed_denomination_is_refused_not_relabelled(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+) -> None:
+    """A USD target must never be published or quoted as a fixed TAO fee."""
+    _install(app, session_maker)
+    usd = SubmissionSettingsRevision(
+        revision=2,
+        parent_revision=1,
+        cooldown_seconds=3600,
+        fee_amount_rao=5_000_000,
+        fee_denomination="usd_indexed",
+        reason="five dollar target from a newer writer",
+        actor="future-platform",
+        created_at=datetime.now(UTC),
+    )
+
+    async def _history(
+        _session: AsyncSession, **_kwargs: object
+    ) -> list[tuple[SubmissionSettingsRevision, None]]:
+        return [(usd, None)]
+
+    async def _latest(_session: AsyncSession) -> SubmissionSettingsRevision:
+        return usd
+
+    for module in (
+        "ditto.api_server.endpoints.public_submission_fee",
+        "ditto.api_server.endpoints.admin_submission_settings",
+    ):
+        monkeypatch.setattr(f"{module}.submission_settings_history", _history)
+    monkeypatch.setattr(
+        "ditto.db.queries.submission_settings.latest_submission_settings", _latest
+    )
+
+    response = await client.get(path, headers=_HEADERS)
+
+    assert response.status_code == 503, response.text
+    assert response.json()["error_code"] == 3100
+    assert "5000000" not in response.text

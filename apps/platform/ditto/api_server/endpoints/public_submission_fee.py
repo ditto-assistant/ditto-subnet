@@ -41,7 +41,7 @@ def _fee_change(
 ) -> PublicSubmissionFeeRevision:
     return PublicSubmissionFeeRevision(
         revision=row.revision,
-        fee_denomination=SUBMISSION_FEE_DENOMINATION_FIXED_TAO,
+        fee_denomination=require_supported_fee_denomination(row),
         fee_amount_rao=row.fee_amount_rao,
         fee_amount_tao=format_rao_as_tao(row.fee_amount_rao),
         previous_fee_amount_rao=(
