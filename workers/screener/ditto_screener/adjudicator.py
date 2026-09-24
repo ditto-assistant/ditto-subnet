@@ -271,7 +271,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v9-policy-v13"
+        return "adjudicator-v10-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 
@@ -740,6 +740,41 @@ _DECISION_ONLY_TOOLS = [_TOOLS[1], _TOOLS[-1]]
 _DECISION_ONLY_MAX_STEPS = 4
 
 
+def _bounded_verdict_tool(
+    name: str, basis: str, basis_values: list[str]
+) -> dict[str, object]:
+    """Keep mutually exclusive verdict bases out of the model's schema."""
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "Record a final decision with cited source.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "maxLength": 8000},
+                    basis: {"type": "string", "enum": basis_values},
+                    "citations": {
+                        "type": "array",
+                        "maxItems": _MAX_CITATIONS,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string"},
+                                "line": {"type": "integer", "minimum": 1},
+                            },
+                            "required": ["path", "line"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["reason", basis, "citations"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
 def _advertised_tool_name(tool: Mapping[str, object]) -> str | None:
     function = tool.get("function")
     if not isinstance(function, Mapping):
@@ -770,9 +805,29 @@ def _adjudicator_tools_for_policy(
 ) -> list[dict[str, object]]:
     """Return a court schema restricted to the exact policy generation."""
 
-    tools = copy.deepcopy(_DECISION_ONLY_TOOLS if decision_only else _TOOLS)
+    if decision_only and policy_version >= 13:
+        tools = [
+            copy.deepcopy(_TOOLS[1]),
+            _bounded_verdict_tool(
+                "submit_clear",
+                "clear_clause",
+                [item.value for item in AdjudicationClearClause],
+            ),
+            _bounded_verdict_tool(
+                "submit_reject",
+                "reject_invariant",
+                [
+                    item.value
+                    for item in source_review_invariants_for_policy(policy_version)
+                ],
+            ),
+        ]
+    else:
+        tools = copy.deepcopy(_DECISION_ONLY_TOOLS if decision_only else _TOOLS)
     if policy_version >= 13:
         tools.append(copy.deepcopy(_OPERATOR_REVIEW_TOOL))
+    if decision_only and policy_version >= 13:
+        return tools
     submit = None
     for tool in tools:
         function = tool.get("function")
@@ -875,7 +930,7 @@ def _failure_code(error: BaseException) -> str:
         if message.startswith("adjudicator exceeded step budget"):
             return "step-budget"
         if message.startswith("adjudicator decision ") or message.startswith(
-            "adjudicator reason "
+            ("adjudicator reason ", "adjudicator split verdict ")
         ):
             return "verdict-invalid"
         if message.startswith("adjudicator arguments ") or message.startswith(
@@ -885,6 +940,8 @@ def _failure_code(error: BaseException) -> str:
         if message == "adjudicator terminal decision must be the sole call in its turn":
             return "tool-call-invalid"
         if message == "bounded adjudicator requested unadvertised discovery":
+            return "tool-call-invalid"
+        if message == "adjudicator requested unadvertised verdict tool":
             return "tool-call-invalid"
     return "response-invalid"
 
@@ -1184,10 +1241,26 @@ def _decision_packet(
     exact preloaded source line stays in the packet. Its digest binds the case
     to the artifact bytes rather than a reusable miner name or path.
     """
+    verdict_tools = (
+        "submit_clear, submit_reject, or request_operator_review"
+        if policy_version >= 13
+        else "submit_adjudication"
+    )
     with open(archive_path, "rb") as archive:
         artifact_sha256 = hashlib.file_digest(archive, "sha256").hexdigest()
     return [
-        {"role": "system", "content": _system_prompt(policy_version)},
+        {
+            "role": "system",
+            "content": _system_prompt(policy_version)
+            + (
+                "\n\nFor this bounded court, settle with submit_clear or "
+                "submit_reject. Each tool requires only its own basis. "
+                "Use request_operator_review when mandatory verification "
+                "is incomplete. Do not call the legacy submit_adjudication tool."
+                if policy_version >= 13
+                else ""
+            ),
+        },
         {
             "role": "user",
             "content": (
@@ -1203,7 +1276,7 @@ def _decision_packet(
                 "A disabled default does not establish whether an external "
                 "runtime override exists. You may read at most three additional "
                 "exact source windows with read_file. The final turn permits "
-                "only submit_adjudication or request_operator_review. Cite "
+                f"only {verdict_tools}. Cite "
                 "only lines actually served by the host."
             ),
         },
@@ -1676,12 +1749,18 @@ class SourceReviewAdjudicator:
         preloaded_reads: set[tuple[str, int]] | None = None,
         decision_packet: list[dict[str, object]] | None = None,
     ) -> tuple[_Verdict, set[tuple[str, int]]]:
+        verdict_tools = (
+            "submit_clear, submit_reject, or request_operator_review"
+            if policy_version >= 13
+            else "submit_adjudication"
+        )
         decision_only_instruction = (
             "\nThe host preloaded the exact source excerpts for the retained "
             "ledger, plus bounded configuration evidence for simple feature "
             "gates. A disabled default does not establish whether an external "
             "runtime override exists. You may read at most three exact source "
-            "windows with read_file before settling. Cite only served lines."
+            "windows with read_file before settling. Call "
+            f"{verdict_tools}. Cite only served lines."
             if decision_only
             else ""
         )
@@ -1729,10 +1808,9 @@ class SourceReviewAdjudicator:
                             "role": "user",
                             "content": (
                                 "This is the final allowed court turn. Call "
-                                "submit_adjudication with cited source for a "
-                                "complete CLEAR or REJECT, or call "
-                                "request_operator_review with the missing "
-                                "evidence reason. No further reads are allowed."
+                                f"{verdict_tools} with cited source for a "
+                                "complete decision, or request operator review "
+                                "if evidence is missing. No further reads are allowed."
                             ),
                         }
                     )
@@ -1775,8 +1853,7 @@ class SourceReviewAdjudicator:
                                 "Your completed turn omitted the required tool "
                                 "call. Continue this same review by calling "
                                 "read_file for a missing source window, or "
-                                "settle with submit_adjudication or "
-                                "request_operator_review."
+                                f"settle with {verdict_tools}."
                             ),
                         }
                     )
@@ -1796,7 +1873,7 @@ class SourceReviewAdjudicator:
                                 "content": (
                                     "Your completed turn omitted the required "
                                     "tool call. Read exact source or settle with "
-                                    "submit_adjudication or request_operator_review."
+                                    f"{verdict_tools}."
                                 ),
                             }
                         )
@@ -1820,7 +1897,12 @@ class SourceReviewAdjudicator:
                     isinstance(call, dict)
                     and isinstance(call.get("function"), dict)
                     and call["function"].get("name")
-                    in {"submit_adjudication", "request_operator_review"}
+                    in {
+                        "submit_adjudication",
+                        "submit_clear",
+                        "submit_reject",
+                        "request_operator_review",
+                    }
                     for call in tool_calls
                 ):
                     raise ValueError(
@@ -1843,6 +1925,22 @@ class SourceReviewAdjudicator:
                     if call_id in batch_ids:
                         raise ValueError("adjudicator duplicate tool call ID")
                     batch_ids.add(call_id)
+                    if name in {"submit_clear", "submit_reject"}:
+                        if not decision_only or policy_version < 13:
+                            raise ValueError(
+                                "adjudicator requested unadvertised verdict tool"
+                            )
+                        if "decision" in arguments or (
+                            "reject_invariant" in arguments
+                            if name == "submit_clear"
+                            else "clear_clause" in arguments
+                        ):
+                            raise ValueError(
+                                "adjudicator split verdict was self-inconsistent"
+                            )
+                        return _verdict_from(
+                            {**arguments, "decision": name.removeprefix("submit_")}
+                        ), read_locations
                     if name == "submit_adjudication":
                         return _verdict_from(arguments), read_locations
                     if name == "request_operator_review" and policy_version >= 13:

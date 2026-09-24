@@ -81,8 +81,10 @@ CLEAR in a prior calibration and needs an independent certification gate.
 
 ## Bounded on-demand read prototype
 
-The draft court now advertises only `read_file`, `submit_adjudication`, and
-policy-v13 `request_operator_review` after its complete initial packet. It
+The draft court now advertises `read_file`, separate `submit_clear` and
+`submit_reject` tools, and policy-v13 `request_operator_review` after its
+complete initial packet. The separate verdict schemas require the applicable
+clear clause or reject invariant and omit the contradictory basis. It
 allows at most three additional source windows over four model turns, removes
 `read_file` on the final turn, and certifies citations against the exact lines
 actually served. A terminal verdict cannot share a turn with a read. One
@@ -105,3 +107,19 @@ ability and deterministic terminal HOLD behavior are verified locally, but no
 live model in this sample produced a certified CLEAR or REJECT. Broader
 rescreening remains blocked on independent exact-artifact accuracy and citation
 evidence.
+
+## Split-verdict report-only check
+
+The independently CLEAR `c845249d` artifact first returned a self-inconsistent
+`submit_adjudication`: CLEAR plus `reject_invariant`. The host held that result.
+After splitting the tool schemas, the same SHA-bound case used one batch of
+three exact reads and then `submit_clear`. The host certified the CLEAR and
+citations in two model requests. This is one positive model-control result,
+not a four-case accuracy gate. The independently REJECT `13e30145` control
+was not retried: the local spend guard stopped it before any provider request
+when delayed key accounting showed less than $0.30 remaining. The key remains
+below its $2 total cap, including BYOK. No Backroom state changed.
+
+Keep this PR draft and all source-review holds intact until the REJECT control
+and other CLEAR controls pass exact-artifact report-only replay, then stage a
+guarded production canary before any wider wave.

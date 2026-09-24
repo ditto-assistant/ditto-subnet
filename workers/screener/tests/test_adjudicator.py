@@ -1563,9 +1563,8 @@ async def test_evidence_bearing_ledger_can_settle_from_preloaded_source(
                             "content": None,
                             "tool_calls": [
                                 _call(
-                                    "submit_adjudication",
+                                    "submit_clear",
                                     {
-                                        "decision": "clear",
                                         "clear_clause": "model_authors_graded_slot",
                                         "reason": "the served model writes the reply",
                                         "citations": [
@@ -1610,10 +1609,37 @@ async def test_evidence_bearing_ledger_can_settle_from_preloaded_source(
     assert len(requests) == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
         "read_file",
-        "submit_adjudication",
+        "submit_clear",
+        "submit_reject",
         "request_operator_review",
     ]
     assert "Preloaded source evidence" in str(requests[0]["messages"])
+
+
+async def test_split_clear_refuses_a_reject_basis(tmp_path: Path) -> None:
+    result = await _adjudicator(
+        _key(tmp_path),
+        _transport(
+            [
+                [
+                    _call(
+                        "submit_clear",
+                        {
+                            "reason": "conflicting model verdict",
+                            "clear_clause": "model_authors_graded_slot",
+                            "reject_invariant": "i5_production_engine",
+                            "citations": [{"path": "src/main.rs", "line": 6}],
+                        },
+                    )
+                ]
+            ]
+        ),
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.failure_code == "verdict-invalid"
 
 
 async def test_bounded_court_reads_missing_lead_then_certifies_clear(
@@ -2011,8 +2037,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v9-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v9-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v10-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v10-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -2048,7 +2074,7 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     assert "null compact score" in policy_v13
 
     legacy_submit = _adjudicator_tools_for_policy(12, decision_only=True)[1]
-    current_submit = _adjudicator_tools_for_policy(13, decision_only=True)[1]
+    current_submit = _adjudicator_tools_for_policy(13, decision_only=True)[2]
     legacy_invariants = legacy_submit["function"]["parameters"]["properties"][
         "reject_invariant"
     ]["enum"]
@@ -2057,10 +2083,18 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     ]["enum"]
     assert "i8_evaluation_independence" not in legacy_invariants
     assert "i8_evaluation_independence" in current_invariants
+    clear_parameters = _adjudicator_tools_for_policy(13, decision_only=True)[1][
+        "function"
+    ]["parameters"]
+    reject_parameters = current_submit["function"]["parameters"]
+    assert "reject_invariant" not in clear_parameters["properties"]
+    assert "clear_clause" not in reject_parameters["properties"]
+    assert "clear_clause" in clear_parameters["required"]
+    assert "reject_invariant" in reject_parameters["required"]
     assert [
         tool["function"]["name"]
         for tool in _adjudicator_tools_for_policy(13, decision_only=True)
-    ] == ["read_file", "submit_adjudication", "request_operator_review"]
+    ] == ["read_file", "submit_clear", "submit_reject", "request_operator_review"]
     assert [
         tool["function"]["name"]
         for tool in _adjudicator_tools_for_policy(12, decision_only=True)
@@ -2110,7 +2144,8 @@ async def test_policy_v13_can_keep_incomplete_mandatory_review_held(
     assert result.completion_receipt.request_count == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
         "read_file",
-        "submit_adjudication",
+        "submit_clear",
+        "submit_reject",
         "request_operator_review",
     ]
 
