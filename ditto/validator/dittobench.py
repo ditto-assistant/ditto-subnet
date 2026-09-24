@@ -297,6 +297,45 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
 # ``validator_infrastructure`` AND ``retryable is True`` before it even looks at
 # the code. So the agent codes are excluded three independent ways. The test
 # ``test_agent_attributable_inference_failures_stay_the_agents`` pins all three.
+_ADMISSION_CODES = frozenset(
+    {
+        "request_too_large",
+        "invalid_json",
+        "invalid_schema",
+        "stale_session",
+        "model_not_allowed",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    }
+)
+
+
+def _admission_suffix(payload: dict[str, object]) -> str | None:
+    """The dominant sanitized admission code, if the scorer counted one."""
+    failure = payload.get("failure")
+    if not isinstance(failure, dict):
+        return None
+    diagnostics = failure.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    taxonomy = diagnostics.get("admission_taxonomy")
+    if not isinstance(taxonomy, dict) or not taxonomy:
+        return None
+    best_code: str | None = None
+    best_count = -1
+    for code, bucket in taxonomy.items():
+        if not isinstance(code, str) or code not in _ADMISSION_CODES:
+            continue
+        count = bucket.get("count") if isinstance(bucket, dict) else None
+        if not isinstance(count, int) or count <= best_count:
+            continue
+        best_code = code
+        best_count = count
+    return best_code
+
+
 _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
     {
         "inference_allowance_exhausted",
@@ -1564,9 +1603,19 @@ class DittobenchClient:
                         if agent_failure_code == "model_inference_required":
                             message = f"run {run_id} made no authoritative model call"
                         elif agent_failure_code == "inference_request_rejected":
+                            admission = _admission_suffix(data)
+                            if admission is not None:
+                                agent_failure_code = (
+                                    f"inference_request_rejected:{admission}"
+                                )
                             message = (
                                 f"run {run_id} had an inference request rejected "
-                                "before reservation"
+                                f"before reservation ({admission or 'unclassified'})"
+                            )
+                            logger.info(
+                                "inference admission taxonomy run=%s code=%s",
+                                run_id,
+                                admission or "unclassified",
                             )
                         else:
                             message = f"run {run_id} exhausted its inference allowance"

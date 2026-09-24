@@ -2289,7 +2289,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			tokenUsage,
 			relayExecution,
 		); err != nil {
-			s.failRelayUnavailable(runID, err)
+			s.failRelayUnavailableWithAdmission(runID, err, relayExecution.Admission)
 			return
 		}
 	}

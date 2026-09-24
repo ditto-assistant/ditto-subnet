@@ -51,6 +51,29 @@ AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
         "model_inference_required",
     }
 )
+_ADMISSION_DETAIL_PREFIX = "inference_request_rejected:"
+_ADMISSION_DETAIL_CODES = frozenset(
+    {
+        "request_too_large",
+        "invalid_json",
+        "invalid_schema",
+        "stale_session",
+        "model_not_allowed",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    }
+)
+
+
+def is_agent_attributable_failure_detail(detail: str | None) -> bool:
+    """True for a spent allowance or a classified pre-reservation refusal."""
+    if detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS:
+        return True
+    if not isinstance(detail, str) or not detail.startswith(_ADMISSION_DETAIL_PREFIX):
+        return False
+    return detail.removeprefix(_ADMISSION_DETAIL_PREFIX) in _ADMISSION_DETAIL_CODES
 AGENT_ATTRIBUTABLE_WITHDRAW_REASON = (
     "exhausted on agent-attributable failures; withdraw rather than retry"
 )
@@ -176,7 +199,7 @@ def is_agent_attributable_exhaustion(
         return False
     details = [current_failure_detail(ticket) for ticket in remaining]
     return bool(details) and all(
-        detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS for detail in details
+        is_agent_attributable_failure_detail(detail) for detail in details
     )
 
 
@@ -191,7 +214,7 @@ def dominant_agent_failure_detail(
     if len(details) != 1:
         return None
     detail = next(iter(details))
-    return detail if detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS else None
+    return detail if is_agent_attributable_failure_detail(detail) else None
 
 
 def recommended_retry_action(

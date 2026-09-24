@@ -203,6 +203,15 @@ export interface ValidationAttempt {
     | "provider_recovery_exhausted"
     | "grant_decline_evidence_mismatch"
     | "budget_evidence_absent"
+    | "request_too_large"
+    | "invalid_json"
+    | "invalid_schema"
+    | "stale_session"
+    | "model_not_allowed"
+    | "grant_not_servable"
+    | "grant_rate_denied"
+    | "platform_capacity"
+    | "provider_failure"
     | null;
   deadline?: string | null;
   benchmark_progress?: BenchmarkProgress | null;

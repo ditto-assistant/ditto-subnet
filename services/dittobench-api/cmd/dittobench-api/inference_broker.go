@@ -316,6 +316,7 @@ type brokerSession struct {
 	// already fail the run through usageUnavailable; this counter exists so
 	// finalize can name a rejected request instead of a spent grant.
 	agentRequestRejections uint64
+	admission              map[string]admissionBucket
 	// capacityExhaustions counts calls that used up their whole bounded
 	// backpressure wait budget and gave up. Deliberately its own counter AND
 	// deliberately still infrastructure: a saturated lane is a platform
@@ -1197,6 +1198,36 @@ const platformRejectionMessageLimit = 400
 // and the agent-fault attribution above are all untouched, and the response
 // shape stays `{"error": ...}` -- only the human-readable value differs. A body
 // this cannot parse falls back to the old wording rather than failing.
+func cloneAdmission(in map[string]admissionBucket) map[string]admissionBucket {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]admissionBucket, len(in))
+	for code, bucket := range in {
+		out[code] = bucket
+	}
+	return out
+}
+
+func (session *brokerSession) noteAdmissionLocked(status int, detail string) {
+	code := admissionCode(status, detail)
+	if code == "" {
+		return
+	}
+	if session.admission == nil {
+		session.admission = map[string]admissionBucket{}
+	}
+	bucket := session.admission[code]
+	bucket.Count++
+	bucket.HTTPStatus = status
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if bucket.First == "" {
+		bucket.First = stamp
+	}
+	bucket.Last = stamp
+	session.admission[code] = bucket
+}
+
 func platformRejectionMessage(body []byte) string {
 	if len(body) == 0 || len(body) > 64<<10 {
 		return ""
@@ -3844,6 +3875,7 @@ func (b *inferenceBroker) health(w http.ResponseWriter, session *brokerSession) 
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
+		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,
 		RecoveryWaits:             session.recoveryWaits,
 		RecoveryExhaustions:       session.recoveryExhaustions,
@@ -4122,6 +4154,7 @@ func (b *inferenceBroker) proxy(
 		if atCapacity {
 			session.mu.Lock()
 			session.capacityExhaustions++
+			session.noteAdmissionLocked(responseStatus, "")
 			session.mu.Unlock()
 			return
 		}
@@ -4160,6 +4193,7 @@ func (b *inferenceBroker) proxy(
 		session.usageUnavailable++
 		if agentAttributedRejection {
 			session.agentRequestRejections++
+			session.noteAdmissionLocked(responseStatus, platformRejectionMessage(responseBody))
 			if confirmationCase && preReservationReaderRejection {
 				snapshot := session.caseSnapshots[caseGeneration]
 				snapshot.ReaderAgentRejections++
@@ -4182,8 +4216,8 @@ func (b *inferenceBroker) proxy(
 		}
 		if agentAttributedRejection {
 			log.Printf(
-				"run %s: platform rejected the harness's inference request with %d before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
-				runID, responseStatus, rejections, detail,
+				"run %s: platform rejected the harness's inference request with %d (%s) before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
+				runID, responseStatus, admissionCode(responseStatus, detail), rejections, detail,
 			)
 		} else {
 			log.Printf(
@@ -4402,6 +4436,7 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
+		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,
 		RecoveryWaits:             session.recoveryWaits,
 		RecoveryExhaustions:       session.recoveryExhaustions,

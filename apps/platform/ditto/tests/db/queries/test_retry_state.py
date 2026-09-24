@@ -49,6 +49,17 @@ def _agent() -> Agent:
     )
 
 
+def test_classified_request_rejection_is_still_not_retried() -> None:
+    tickets = [
+        _ticket(
+            validator_hotkey=f"validator-{index}",
+            failure_detail="inference_request_rejected:request_too_large",
+        )
+        for index in range(3)
+    ]
+    assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is True
+
+
 def test_named_agent_failures_are_withdraw_not_retry() -> None:
     tickets = [_ticket(validator_hotkey=f"validator-{index}") for index in range(3)]
     assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is True

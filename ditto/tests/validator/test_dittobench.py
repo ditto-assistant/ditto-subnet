@@ -1873,6 +1873,44 @@ async def test_agent_attributable_inference_failures_stay_the_agents(
             assert "exhausted" not in str(raised.value)
 
 
+@pytest.mark.asyncio
+async def test_pre_reservation_413_is_request_too_large() -> None:
+    failure = {
+        "kind": "sandbox_failure",
+        "code": "inference_request_rejected",
+        "retryable": False,
+        "diagnostics": {
+            "admission_taxonomy": {
+                "request_too_large": {
+                    "count": 2,
+                    "http_status": 413,
+                    "first": "2026-09-24T00:00:00Z",
+                    "last": "2026-09-24T00:00:02Z",
+                }
+            }
+        },
+    }
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "harness inference request rejected",
+                "failure": failure,
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(DittobenchError) as raised:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+    assert raised.value.code == "inference_request_rejected:request_too_large"
+    assert failure_detail(raised.value) == raised.value.code
+    assert "exhausted" not in str(raised.value)
+
+
 def test_agent_inference_codes_are_never_no_fault() -> None:
     """Pinned as a set property, not only through the poll path.
 
