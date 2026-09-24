@@ -1647,10 +1647,21 @@ async def resolve_screening_dispute(
     existing = await session.get(ScreeningDispute, dispute_id)
     existing_kind = existing.kind if existing is not None else None
     existing_quarantine_id = existing.quarantine_id if existing is not None else None
+    existing_agent_status = (
+        await session.scalar(
+            select(Agent.status).where(Agent.agent_id == existing.agent_id)
+        )
+        if existing is not None
+        else None
+    )
     await session.rollback()
     if existing is None:
         raise HTTPException(status_code=404, detail="dispute not found")
-    if payload.resolution == "release" and existing_kind == "screening":
+    if (
+        payload.resolution == "release"
+        and existing_kind == "screening"
+        and existing_agent_status == AgentStatus.REJECTED
+    ):
         if existing_quarantine_id is None:
             raise HTTPException(status_code=404, detail="dispute not found")
         new_dataset = await _prepare_release_dataset(
@@ -1681,7 +1692,6 @@ async def resolve_screening_dispute(
             raise HTTPException(status_code=409, detail="dispute is already resolved")
         if dispute.kind == "screening" and (
             quarantine is None
-            or agent.status != AgentStatus.REJECTED
             or quarantine.status != "resolved"
             or quarantine.resolution != "reject"
         ):
@@ -1689,13 +1699,57 @@ async def resolve_screening_dispute(
                 status_code=409,
                 detail="the disputed rejection is no longer current",
             )
+        already_restored = False
+        if dispute.kind == "screening" and agent.status != AgentStatus.REJECTED:
+            # A later, exact-artifact pass can restore the submission while its
+            # earlier rejection appeal remains pending. Record the appeal's
+            # release verdict without changing that scored submission or the
+            # original quarantine history.
+            latest_attempt = await session.scalar(
+                select(ScreeningAttempt)
+                .where(ScreeningAttempt.agent_id == agent.agent_id)
+                .order_by(
+                    ScreeningAttempt.started_at.desc(),
+                    ScreeningAttempt.attempt_id.desc(),
+                )
+                .limit(1)
+            )
+            already_restored = (
+                payload.resolution == "release"
+                and agent.status == AgentStatus.SCORED
+                and latest_attempt is not None
+                and latest_attempt.status == "passed"
+                and latest_attempt.finished_at is not None
+                and quarantine is not None
+                and quarantine.resolved_at is not None
+                and latest_attempt.finished_at > quarantine.resolved_at
+                and latest_attempt.artifact_sha256 is not None
+                and latest_attempt.artifact_sha256.lower() == agent.sha256.lower()
+            )
+            if not already_restored:
+                raise HTTPException(
+                    status_code=409,
+                    detail="the disputed rejection is no longer current",
+                )
+        if (
+            dispute.kind == "screening"
+            and agent.status == AgentStatus.REJECTED
+            and existing_agent_status != AgentStatus.REJECTED
+        ):
+            raise HTTPException(
+                status_code=409, detail="submission changed during resolution"
+            )
 
         now = datetime.now(UTC)
         # A gate-notes dispute appeals shadow evidence on a scored submission:
         # either resolution records the operator's verdict on the cited notes
         # and NEVER releases, re-evaluates or re-scores the agent. Only a
         # screening release moves the agent.
-        if payload.resolution == "release" and dispute.kind == "screening":
+        if (
+            payload.resolution == "release"
+            and dispute.kind == "screening"
+            and not already_restored
+        ):
             assert quarantine is not None
             prior_agent_status = agent.status
             agent.status = AgentStatus.EVALUATING

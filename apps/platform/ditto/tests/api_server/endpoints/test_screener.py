@@ -7299,6 +7299,127 @@ class TestQuarantineAdmin:
         assert upheld.json()["agent_status"] == AgentStatus.REJECTED
         assert upheld.json()["dispute"]["resolution"] == "uphold"
 
+    async def test_release_acknowledges_later_exact_artifact_pass_without_rescoring(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCORED)
+        quarantine_id, dispute_id, rejected_attempt_id = uuid4(), uuid4(), uuid4()
+        rejected_at = datetime.now(UTC) - timedelta(days=1)
+        history_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add_all(
+                [
+                    ScreeningAttempt(
+                        attempt_id=rejected_attempt_id,
+                        agent_id=agent_id,
+                        artifact_sha256=_SHA256,
+                        screener_hotkey=_SCREENER_HOTKEY,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="quarantined",
+                        started_at=rejected_at - timedelta(minutes=10),
+                        deadline=rejected_at + timedelta(minutes=10),
+                        finished_at=rejected_at,
+                    ),
+                    ScreeningAttempt(
+                        attempt_id=uuid4(),
+                        agent_id=agent_id,
+                        artifact_sha256=_SHA256,
+                        screener_hotkey=_SCREENER_HOTKEY,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="passed",
+                        started_at=rejected_at + timedelta(hours=1),
+                        deadline=rejected_at + timedelta(hours=2),
+                        finished_at=rejected_at + timedelta(hours=1, minutes=5),
+                    ),
+                ]
+            )
+            await session.flush()
+            session.add(
+                ScreeningQuarantine(
+                    quarantine_id=quarantine_id,
+                    agent_id=agent_id,
+                    attempt_id=rejected_attempt_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    manifest_digest="56" * 32,
+                    finding_digest="78" * 32,
+                    reason_code="agentic-source-review-tripwire",
+                    status="resolved",
+                    created_at=rejected_at - timedelta(minutes=10),
+                    resolved_at=rejected_at,
+                    resolved_by="backroom:first-reviewer",
+                    resolution="reject",
+                    resolution_reason="Original rejection",
+                )
+            )
+            await session.flush()
+            session.add_all(
+                [
+                    ScreeningQuarantineResolution(
+                        resolution_id=history_id,
+                        quarantine_id=quarantine_id,
+                        resolution="reject",
+                        reason="Original rejection",
+                        actor="backroom:first-reviewer",
+                        created_at=rejected_at,
+                    ),
+                    ScreeningDispute(
+                        dispute_id=dispute_id,
+                        agent_id=agent_id,
+                        quarantine_id=quarantine_id,
+                        miner_hotkey=_MINER_HOTKEY,
+                        message="The rejection was resolved by a later clean pass.",
+                        status="pending",
+                        created_at=rejected_at + timedelta(minutes=1),
+                    ),
+                ]
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        headers = {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+            "X-Admin-Actor": "backroom:appeals-reviewer",
+        }
+        url = f"/api/v1/admin/screening-disputes/{dispute_id}/resolve"
+        stale_uphold = await client.post(
+            url,
+            headers=headers,
+            json={"resolution": "uphold", "reason": "Still rejected"},
+        )
+        assert stale_uphold.status_code == 409
+        acknowledged = await client.post(
+            url,
+            headers=headers,
+            json={
+                "resolution": "release",
+                "reason": "Later exact-artifact pass restored the agent",
+            },
+        )
+        assert acknowledged.status_code == 200
+        assert acknowledged.json()["agent_status"] == AgentStatus.SCORED
+        assert acknowledged.json()["dispute"]["resolution"] == "release"
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            quarantine = await session.get(ScreeningQuarantine, quarantine_id)
+            dispute = await session.get(ScreeningDispute, dispute_id)
+            resolutions = (
+                await session.scalars(select(ScreeningQuarantineResolution))
+            ).all()
+            assert agent is not None and agent.status == AgentStatus.SCORED
+            assert quarantine is not None and quarantine.resolution == "reject"
+            assert (
+                dispute is not None
+                and dispute.resolved_by == "backroom:appeals-reviewer"
+            )
+            assert len(resolutions) == 1 and resolutions[0].resolution_id == history_id
+
     async def test_lists_all_screening_outcomes_and_issues_audited_artifact_url(
         self,
         app: FastAPI,
