@@ -30,7 +30,9 @@ def test_sweep_posts_only_new_or_changed_statuses(tmp_path: Path) -> None:
                 if "--head" in args:
                     print("mainhead")
                     sys.exit(0)
-                failed_refs = ("refs/pr/101", "refs/pr/103", "refs/pr/104")
+                failed_refs = (
+                    "refs/pr/101", "refs/pr/103", "refs/pr/104", "refs/pr/660"
+                )
                 if any(ref in args for ref in failed_refs):
                     print("two Alembic heads")
                     sys.exit(1)
@@ -39,6 +41,13 @@ def test_sweep_posts_only_new_or_changed_statuses(tmp_path: Path) -> None:
             if "--method" in args:
                 endpoint = next(arg for arg in args if arg.startswith("repos/"))
                 state = next(arg[6:] for arg in args if arg.startswith("state="))
+                if endpoint.endswith("/statuses/sha660"):
+                    print(
+                        "gh: Validation failed: This SHA and context has reached "
+                        "the maximum number of statuses.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
                 with open(os.environ["MOCK_POSTS"], "a") as output:
                     record = {"endpoint": endpoint, "state": state}
                     output.write(json.dumps(record) + "\\n")
@@ -47,11 +56,11 @@ def test_sweep_posts_only_new_or_changed_statuses(tmp_path: Path) -> None:
             endpoint = next(arg for arg in args if arg.startswith("repos/"))
             if endpoint.endswith("pulls?state=open&per_page=100"):
                 print(json.dumps([[{"number": number, "head": {"sha": f"sha{number}"}}
-                    for number in (714, 100, 101, 102, 103, 104)]]))
+                    for number in (714, 100, 101, 102, 103, 104, 660)]]))
             elif "/files?" in endpoint:
                 number = int(endpoint.split("/pulls/")[1].split("/")[0])
                 path = ("apps/platform/alembic/versions/new.py" if number in
-                    (100, 101, 103, 104) else "README.md")
+                    (100, 101, 103, 104, 660) else "README.md")
                 print(json.dumps([[{"filename": path}]]))
             elif endpoint.endswith("/status"):
                 number = int(endpoint.split("/commits/sha")[1].split("/")[0])
@@ -75,6 +84,10 @@ def test_sweep_posts_only_new_or_changed_statuses(tmp_path: Path) -> None:
                     104: (
                         "failure",
                         "Merging into main (mainhead) leaves multiple Alembic heads.",
+                    ),
+                    660: (
+                        os.environ.get("MOCK_660_STATUS_STATE", "failure"),
+                        "Merging into main would leave more than one Alembic head.",
                     ),
                 }
                 print("\\t".join(states[number]) if number in states else "")
@@ -121,5 +134,25 @@ def test_sweep_posts_only_new_or_changed_statuses(tmp_path: Path) -> None:
     assert "PR #714: success status unchanged" in result.stdout
     assert "PR #100: success status unchanged" in result.stdout
     assert "PR #104: failure status unchanged" in result.stdout
+    assert "PR #660 status capped" in result.stdout
     assert "#101" in summary.read_text()
     assert "#103" in summary.read_text()
+    assert "#660" in summary.read_text()
+
+    # A capped success cannot be left in place when the computed result is red.
+    stale_status = subprocess.run(
+        ["bash", str(SCRIPT)],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "MOCK_POSTS": str(posts),
+            "MOCK_660_STATUS_STATE": "success",
+            "GITHUB_STEP_SUMMARY": str(summary),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert stale_status.returncode == 1
+    assert "maximum number of statuses" in stale_status.stderr

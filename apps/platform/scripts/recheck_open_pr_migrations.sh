@@ -87,11 +87,23 @@ while IFS=$'\t' read -r number sha; do
     echo "PR #${number}: ${state} status unchanged"
     continue
   fi
-  gh api --method POST "repos/${REPO}/statuses/${sha}" \
+  if ! post_output=$(gh api --method POST "repos/${REPO}/statuses/${sha}" \
     -f state="${state}" \
     -f context="${CONTEXT}" \
     -f description="${description}" \
-    -f target_url="${RUN_URL}" </dev/null >/dev/null
+    -f target_url="${RUN_URL}" </dev/null 2>&1); then
+    # Older PRs may have exhausted GitHub's per-SHA/context limit before we
+    # began deduplicating. A capped failure can keep its existing red status;
+    # an absent or different state must fail closed because the required check
+    # would otherwise lie about the merge result.
+    if [[ "$post_output" == *"This SHA and context has reached the maximum number of statuses"* &&
+          "$current_status" == "${state}"$'\t'* ]]; then
+      echo "::warning title=PR #${number} status capped::The required ${state} status is already present, but GitHub rejected updated diagnostics. Rebase the PR to refresh its status."
+      continue
+    fi
+    echo "$post_output" >&2
+    exit 1
+  fi
 done <<<"${open_prs}"
 
 # The finding belongs on the PRs, which now carry a red status. Failing this
