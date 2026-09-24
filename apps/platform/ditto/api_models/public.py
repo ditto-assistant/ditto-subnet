@@ -4168,6 +4168,16 @@ class PublicAuditResponse(BaseModel):
         str | None,
         Field(default=None, description="entry_hash of the last entry in this page."),
     ]
+    moderation_signer_public_keys: Annotated[
+        list[str],
+        Field(
+            default_factory=list,
+            description=(
+                "Ed25519 role public keys (hex) trusted to sign moderation "
+                "events on this chain. The current key is first."
+            ),
+        ),
+    ]
     entries: Annotated[
         list[PublicAuditEntry],
         Field(default_factory=list, description="Entries with seq > since_seq."),

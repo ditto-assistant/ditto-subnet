@@ -5165,6 +5165,8 @@ export const screeningQuarantineBatchPreviewItemSchema = z.object({
   reason: z.string(),
   disposition: z.enum(['ready', 'already_applied', 'conflict', 'not_found']),
   resulting_agent_status: z.string().nullable().default(null),
+  public_reason_code: z.string().nullable().default(null),
+  public_record_hash: z.string().nullable().default(null),
   message: z.string(),
 })
 

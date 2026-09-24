@@ -363,6 +363,7 @@ from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
 from ditto.db.queries.ledger_epochs import latest_pin, list_pins
 from ditto.db.queries.miner_avatars import get_miner_avatar, list_miner_avatars
+from ditto.db.queries.moderation_audit import published_signer_public_keys
 from ditto.db.queries.orphaned_leases import OrphanedLease, list_orphaned_leases
 from ditto.db.queries.queue_order import (
     QueueGate,
@@ -8028,6 +8029,7 @@ async def audit(
         count=len(entries),
         genesis_hash=GENESIS_HASH,
         head_hash=entries[-1].entry_hash if entries else None,
+        moderation_signer_public_keys=published_signer_public_keys(),
         entries=[
             PublicAuditEntry(
                 seq=e.seq,

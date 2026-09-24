@@ -486,6 +486,8 @@ describe('ScreeningQuarantinePanel', () => {
         reason: 'Re-run both artifacts against the current screening policy',
         disposition: 'ready' as const,
         resulting_agent_status: 'screening_failed',
+        public_reason_code: 'operator_rescreen',
+        public_record_hash: 'ab'.repeat(32),
         message: 'will set submission status to screening_failed',
       })),
     })
@@ -523,6 +525,7 @@ describe('ScreeningQuarantinePanel', () => {
     expect(executeScreeningQuarantineDecisions).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog')).toBeTruthy()
     expect(screen.getByText(/Preview only/)).toBeTruthy()
+    expect(screen.getAllByText(/Public audit operator_rescreen/).length).toBe(2)
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Confirm and execute reviewed decisions' }),

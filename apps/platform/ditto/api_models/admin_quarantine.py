@@ -1059,6 +1059,8 @@ class AdminQuarantineBatchPreviewItem(BaseModel):
     reason: str
     disposition: Literal["ready", "already_applied", "conflict", "not_found"]
     resulting_agent_status: str | None = None
+    public_reason_code: str | None = None
+    public_record_hash: str | None = None
     message: str
 
 
