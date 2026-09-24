@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"sync"
 
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -970,7 +972,7 @@ func BuildPlanForVersion(seed int64, opts Opts, benchVersion int) (*Plan, error)
 		roll := r.Float64()
 		switch {
 		case roll < pSometimesSelf:
-			v := pick(r, s.pool)
+			v := pick(r, answerPoolForVersion(s.attr, s.pool, benchVersion))
 			p.Facts = append(p.Facts, Fact{
 				ID:        "f-" + s.attr,
 				Kind:      KindScalar,
@@ -987,7 +989,7 @@ func BuildPlanForVersion(seed int64, opts Opts, benchVersion int) (*Plan, error)
 		case roll < pSometimesDecoy:
 			who := pick(r, firstNames)
 			rel := relations[d%len(relations)]
-			v := pick(r, s.pool)
+			v := pick(r, answerPoolForVersion(s.attr, s.pool, benchVersion))
 			p.Facts = append(p.Facts, Fact{
 				ID:        "f-fp-" + s.attr,
 				Kind:      KindDistractor,
@@ -1272,11 +1274,41 @@ func answerPoolForVersion(attr string, pool []string, benchVersion int) []string
 		return v8Colors
 	case "primary_language":
 		return v8SoftwareLanguages
+	case "eye_color":
+		return v8EyeColors
+	case "star_sign":
+		return v8StarSigns
 	case "middle_name":
-		return v8HumanGivenNames
+		return v8MiddleNames()
 	default:
 		return pool
 	}
+}
+
+var (
+	v8MiddleNamesOnce sync.Once
+	v8MiddleNamesList []string
+)
+
+func v8MiddleNames() []string {
+	v8MiddleNamesOnce.Do(func() {
+		for _, name := range v8HumanGivenNames {
+			if v8NameHitsIncidentalProse(name) {
+				continue
+			}
+			v8MiddleNamesList = append(v8MiddleNamesList, name)
+		}
+	})
+	return v8MiddleNamesList
+}
+
+func v8NameHitsIncidentalProse(name string) bool {
+	for _, sentence := range v8IncidentalProse {
+		if grade.Hit(name, sentence) {
+			return true
+		}
+	}
+	return false
 }
 
 // nextSeqFor returns a Seq after every existing fact's Seq (the negated
