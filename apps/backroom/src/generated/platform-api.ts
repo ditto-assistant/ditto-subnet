@@ -3011,6 +3011,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/transcript-mirror-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_v1_admin_transcript_mirror_settings_get"];
+        put?: never;
+        /**
+         * Create Settings Revision
+         * @description Append one audited revision. The mirror stays off until this says otherwise.
+         */
+        post: operations["create_settings_revision_api_v1_admin_transcript_mirror_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/trusted-image-builds": {
         parameters: {
             query?: never;
@@ -6758,8 +6779,9 @@ export interface paths {
          *     graded per-case inputs whose digest the validator declared under
          *     ``details["transcript_sha256"]`` and bound into its score signature. The
          *     platform accepts the bytes only when their SHA-256 equals that declared
-         *     digest, then stores them content-addressed in authoritative storage and
-         *     mirrors them publicly when configured. Because the binding is *content*
+         *     digest, then stores them content-addressed in authoritative storage.
+         *     The anonymous public mirror is a separate audited setting and, when
+         *     enabled, runs only from quorum finalization. Because the binding is *content*
          *     equality against an already-signed digest, a
          *     caller spoofing another validator's hotkey can only ever upload the exact
          *     bytes that validator attested — so the header + permit check is sufficient
@@ -12360,6 +12382,28 @@ export interface components {
             replacement_commitment: components["schemas"]["CodingCatalogCommitment"];
             /** Replacement Signature */
             replacement_signature: string;
+        };
+        /** AdminTranscriptMirrorSettingsRequest */
+        AdminTranscriptMirrorSettingsRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Enabled */
+            enabled: boolean;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminTranscriptMirrorSettingsResponse */
+        AdminTranscriptMirrorSettingsResponse: {
+            current: components["schemas"]["TranscriptMirrorSettingsRevision"];
+            /** History */
+            history: components["schemas"]["TranscriptMirrorSettingsRevision"][];
         };
         /** AdminTransitionCodingPrivateV2ReleaseRequest */
         AdminTransitionCodingPrivateV2ReleaseRequest: {
@@ -31174,6 +31218,21 @@ export interface components {
             /** Validator Hotkey */
             validator_hotkey?: string | null;
         };
+        /** TranscriptMirrorSettingsRevision */
+        TranscriptMirrorSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Created At */
+            created_at: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+        };
         /** TrustedImageBuildClaimRequest */
         TrustedImageBuildClaimRequest: {
             /** Controller Epoch */
@@ -39606,6 +39665,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TracePeekResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_settings_api_v1_admin_transcript_mirror_settings_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTranscriptMirrorSettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_settings_revision_api_v1_admin_transcript_mirror_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminTranscriptMirrorSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TranscriptMirrorSettingsRevision"];
                 };
             };
             /** @description Validation Error */

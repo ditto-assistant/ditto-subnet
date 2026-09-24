@@ -106,6 +106,7 @@ from ditto.api_server.endpoints import (
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
     admin_traces_router,
+    admin_transcript_mirror_settings_router,
     admin_v13_private_generation_router,
     admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
@@ -738,6 +739,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(scoring_router, prefix="/api/v1")
     app.include_router(public_router, prefix="/api/v1")
     app.include_router(admin_artifact_release_settings_router, prefix="/api/v1")
+    app.include_router(admin_transcript_mirror_settings_router, prefix="/api/v1")
     app.include_router(admin_attestation_router, prefix="/api/v1")
     app.include_router(admin_benchmark_rollout_router, prefix="/api/v1")
     app.include_router(admin_benchmark_canary_router, prefix="/api/v1")

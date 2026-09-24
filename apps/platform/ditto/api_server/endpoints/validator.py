@@ -355,6 +355,7 @@ from ditto.db.queries.tickets import (
     list_validator_live_leases,
     mark_ticket_scored,
 )
+from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enabled
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
@@ -7152,6 +7153,7 @@ async def submit_score(
                 scores=replacement_scores,
                 median=replacement_median,
                 dataset=replacement_dataset,
+                mirror_transcripts=await transcript_mirror_enabled(session),
             )
         # Persist the crate's structural (AST) fingerprint from the report, so it
         # is available for the gate here and for future cross-miner comparison.
@@ -7573,6 +7575,7 @@ async def submit_score(
                     scores=agent_scores,
                     median=median_composite,
                     dataset=finalized_dataset,
+                    mirror_transcripts=await transcript_mirror_enabled(session),
                 )
         elif existing_score is None and agent.status in {
             AgentStatus.SCORED,
@@ -7637,6 +7640,7 @@ async def submit_score(
                     scores=migrated_scores,
                     median=migrated_median,
                     dataset=migrated_dataset,
+                    mirror_transcripts=await transcript_mirror_enabled(session),
                 )
         # Consume the ticket (one ticket, one score); the slot stays occupied.
         await mark_ticket_scored(
@@ -7799,6 +7803,7 @@ async def _publish_finalized_run(
     scores: Sequence[Score],
     median: float,
     dataset: BenchmarkDataset | None = None,
+    mirror_transcripts: bool = False,
 ) -> None:
     """Mirror a finalized run to version-addressed and current public keys.
 
@@ -7900,6 +7905,35 @@ async def _publish_finalized_run(
                 agent.agent_id,
                 key,
             )
+    if mirror_transcripts:
+        await _mirror_quorum_transcripts(storage, scores)
+
+
+async def _mirror_quorum_transcripts(
+    storage: S3StorageClient, scores: Sequence[Score]
+) -> None:
+    """Copy already-stored transcript bytes after quorum, never during the PUT."""
+    if storage.public_bucket is None:
+        return
+    for score in scores:
+        digest = _score_transcript_sha256(score)
+        if digest is None:
+            continue
+        key = transcript_object_key(digest)
+        try:
+            if await storage.object_exists(key=key, bucket=storage.public_bucket):
+                continue
+            if not await storage.object_exists(key=key):
+                continue
+            body = await storage.get_object(key=key, max_bytes=_TRANSCRIPT_MAX_BYTES)
+            await storage.put_object(
+                key=key,
+                body=body,
+                content_type="application/json",
+                bucket=storage.public_bucket,
+            )
+        except Exception:  # noqa: BLE001 - additive mirror, never fail finalization
+            logger.exception("public transcript mirror failed for %s", digest)
 
 
 # Transcript artifacts are content-addressed in the public bucket so a record
@@ -7946,8 +7980,9 @@ async def submit_transcript(
     graded per-case inputs whose digest the validator declared under
     ``details["transcript_sha256"]`` and bound into its score signature. The
     platform accepts the bytes only when their SHA-256 equals that declared
-    digest, then stores them content-addressed in authoritative storage and
-    mirrors them publicly when configured. Because the binding is *content*
+    digest, then stores them content-addressed in authoritative storage.
+    The anonymous public mirror is a separate audited setting and, when
+    enabled, runs only from quorum finalization. Because the binding is *content*
     equality against an already-signed digest, a
     caller spoofing another validator's hotkey can only ever upload the exact
     bytes that validator attested — so the header + permit check is sufficient
@@ -8007,39 +8042,6 @@ async def submit_transcript(
             digest,
             len(body),
         )
-    # Preserve the optional anonymous mirror for offline auditors. A mirror
-    # outage must not discard the authoritative transcript after score
-    # acceptance.
-    dataset_sha = (
-        score.details.get("dataset_sha256") if isinstance(score.details, dict) else None
-    )
-    private_dataset = (
-        await session.scalar(
-            select(PrivateBenchmarkDataset.dataset_id)
-            .where(PrivateBenchmarkDataset.dataset_sha256 == dataset_sha)
-            .limit(1)
-        )
-        if dataset_sha
-        else None
-    )
-    # Private transcripts can expose answers while another CRN member still
-    # needs the dataset. Retain privately; a later explicit closure/reveal
-    # operation must establish that no future work can reuse this artifact.
-    if (
-        storage.public_bucket is not None
-        and private_dataset is None
-        and score.bench_version != 13
-    ):
-        try:
-            if not await storage.object_exists(key=key, bucket=storage.public_bucket):
-                await storage.put_object(
-                    key=key,
-                    body=body,
-                    content_type="application/json",
-                    bucket=storage.public_bucket,
-                )
-        except Exception:  # noqa: BLE001 - additive mirror, primary already stored
-            logger.exception("public transcript mirror failed for %s", digest)
     return SubmitTranscriptResponse(
         agent_id=agent_id, run_id=run_id, transcript_sha256=digest, stored=True
     )

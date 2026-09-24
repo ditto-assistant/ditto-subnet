@@ -11960,11 +11960,42 @@ class TestBenchConfig:
         assert body["public_mirror_url_template"] == (
             "https://storage.googleapis.com/ditto-platform-public-dev/scored/{agent_id}.json"
         )
-        assert body["public_transcript_url_template"] == (
-            "https://storage.googleapis.com/ditto-platform-public-dev/transcripts/{sha256}.json"
-        )
+        assert body["public_transcript_url_template"] is None
         assert body["public_transcript_telemetry_url_template"] == (
             "/api/v1/public/bench/transcript/{sha256}/telemetry"
+        )
+
+    async def test_transcript_template_requires_the_audited_setting(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch,
+    ) -> None:
+        from ditto.db.models import TranscriptMirrorSettingsRevision
+
+        _install_db(app, session_maker)
+        monkeypatch.setenv("STORAGE_PUBLIC_BUCKET", "ditto-platform-public-dev")
+        async with session_maker() as session, session.begin():
+            current = await session.scalar(
+                select(TranscriptMirrorSettingsRevision).order_by(
+                    TranscriptMirrorSettingsRevision.revision.desc()
+                )
+            )
+            assert current is not None
+            assert current.enabled is False
+            session.add(
+                TranscriptMirrorSettingsRevision(
+                    parent_revision=current.revision,
+                    enabled=True,
+                    reason="Operator enabled the quorum transcript mirror",
+                    actor="test",
+                )
+            )
+        body = (await client.get("/api/v1/public/bench/config")).json()
+        assert body["public_transcript_url_template"] == (
+            "https://storage.googleapis.com/ditto-platform-public-dev/"
+            "transcripts/{sha256}.json"
         )
 
     async def test_transcript_telemetry_is_verified_allowlisted_and_immutable(

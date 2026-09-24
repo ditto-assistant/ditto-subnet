@@ -9650,15 +9650,13 @@ class TestTranscriptPublication:
         assert body["stored"] is True
         assert body["transcript_sha256"] == self._digest
         key = f"transcripts/{self._digest}.json"
-        assert storage.put_object.await_args_list == [
-            call(key=key, body=self._TRANSCRIPT, content_type="application/json"),
-            call(
-                key=key,
-                body=self._TRANSCRIPT,
-                content_type="application/json",
-                bucket="ditto-public",
-            ),
-        ]
+        storage.put_object.assert_awaited_once_with(
+            key=key, body=self._TRANSCRIPT, content_type="application/json"
+        )
+        assert all(
+            call.kwargs.get("bucket") is None
+            for call in storage.put_object.await_args_list
+        )
 
         # Idempotent: a re-upload of an existing object writes nothing new.
         storage.object_exists = AsyncMock(return_value=True)
@@ -9668,7 +9666,7 @@ class TestTranscriptPublication:
             headers={"X-Validator-Hotkey": _VALIDATOR_HOTKEY},
         )
         assert response.status_code == 200
-        assert storage.put_object.await_count == 2  # still exactly two writes
+        assert storage.put_object.await_count == 1
 
     async def test_v13_transcript_is_private_even_without_dataset_metadata(
         self,
