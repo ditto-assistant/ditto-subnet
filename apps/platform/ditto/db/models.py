@@ -747,6 +747,46 @@ class V13KnownBenignControlApproval(Base):
     )
 
 
+class V13KnownBenignAttestation(Base):
+    """Append-only authenticated reviewer of one exact benign-control approval.
+
+    The shared admin token and ``X-Admin-Actor`` never create this row. A
+    missing row leaves the approval ``recorded_unverified``.
+    """
+
+    __tablename__ = "v13_known_benign_attestations"
+
+    attestation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    principal_sub: Mapped[str] = mapped_column(Text, nullable=False)
+    principal_email: Mapped[str] = mapped_column(Text, nullable=False)
+    review_evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    assertion_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    attested_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["approval_id"],
+            ["v13_known_benign_control_approvals.approval_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("approval_id", "principal_sub", name="v13ba_approval_sub_uq"),
+        UniqueConstraint(
+            "approval_id", "principal_email", name="v13ba_approval_email_uq"
+        ),
+        CheckConstraint("length(principal_sub) BETWEEN 1 AND 120", name="v13ba_sub"),
+        CheckConstraint(
+            "length(principal_email) BETWEEN 3 AND 254", name="v13ba_email"
+        ),
+        CheckConstraint("length(review_evidence_sha256) = 64", name="v13ba_evidence"),
+        CheckConstraint("length(assertion_sha256) = 64", name="v13ba_assertion"),
+        CheckConstraint("length(reason) >= 8", name="v13ba_reason"),
+    )
+
+
 class V13PrivateGenerationGroup(Base):
     """One pre-randomness DB-time event shared by target and clean roles."""
 

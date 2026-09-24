@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
+import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -10,7 +15,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -36,10 +41,43 @@ _HEADERS = {
 }
 
 
+_ATTESTATION_SECRET = "y" * 48
+
+
+def _assertion(
+    approval_id: str,
+    evidence_sha256: str,
+    *,
+    sub: str,
+    email: str,
+    action: str = "attest-known-benign",
+    secret: str = _ATTESTATION_SECRET,
+) -> str:
+    claims = {
+        "aud": "ditto-platform-v13-benign-approval",
+        "action": action,
+        "approval_id": approval_id,
+        "evidence_sha256": evidence_sha256,
+        "sub": sub,
+        "email": email,
+        "iat": int(time.time()),
+        "nonce": hashlib.sha256(f"{sub}:{action}:{approval_id}".encode()).hexdigest()[
+            :32
+        ],
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(claims, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
+    signed = f"v1.{encoded}"
+    digest = hmac.new(secret.encode(), signed.encode(), hashlib.sha256).hexdigest()
+    return f"{signed}.{digest}"
+
+
 def _install(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
     app.state.config = replace(
         app.state.config,
         admin_api_token="test-admin-token-at-least-32-characters",
+        v13_benign_attestation_secret=_ATTESTATION_SECRET,
     )
     app.state.session_maker = maker
 
@@ -309,6 +347,7 @@ async def test_generation_group_rows_are_immutable_in_postgres(
     assert "v13_private_generation_groups_immutable" in triggers
     assert "v13_known_benign_control_approvals_immutable" in triggers
     assert "v13_group_package_registrations_immutable" in triggers
+    assert "v13_known_benign_attestations_immutable" in triggers
 
 
 async def test_generation_role_digest_matches_protocol_fixed_vector() -> None:
@@ -332,3 +371,157 @@ async def test_generation_role_digest_matches_protocol_fixed_vector() -> None:
     assert generation_role_digest(group, "known_benign") == (
         "1575e4205e10e50c2f2b3d3c33e6c1a920aa1897fcdd3c0d3f398c809f304d87"
     )
+
+
+async def test_trusted_control_requires_two_reviewers_and_live_image(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, session_maker)
+    clean_agent, clean_attempt = uuid4(), uuid4()
+    await _seed_image(
+        session_maker,
+        agent_id=clean_agent,
+        attempt_id=clean_attempt,
+        artifact_sha256="c" * 64,
+        image_sha256="d" * 64,
+        status=AgentStatus.SCORED,
+    )
+    approval_payload = {
+        "agent_id": str(clean_agent),
+        "attempt_id": str(clean_attempt),
+        "artifact_sha256": "c" * 64,
+        "image_sha256": "d" * 64,
+        "profile_sha256": V13_PRIVATE_PROFILE_SHA256,
+        "review_evidence_sha256": "e" * 64,
+        "reason": "independent benign source and behavior review",
+    }
+    approved = await client.post(
+        f"{_BASE}/known-benign-approvals",
+        json=approval_payload,
+        headers={**_HEADERS, "X-Admin-Actor": "forged:not-a-principal"},
+    )
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "recorded_unverified"
+    approval_id = approved.json()["approval_id"]
+    trusted_path = f"{_BASE}/known-benign-approvals/{approval_id}/trusted"
+    legacy = await client.get(
+        trusted_path,
+        headers={**_HEADERS, "X-Admin-Actor": "forged:not-a-principal"},
+    )
+    assert legacy.status_code == 409
+    assert "benign control provenance unavailable" in legacy.text
+    shared = await client.post(
+        f"{_BASE}/known-benign-approvals/{approval_id}/attest",
+        json={"reason": "shared token is not a reviewer"},
+        headers=_HEADERS,
+    )
+    assert shared.status_code == 422
+    other_approval = str(uuid4())
+    reused = await client.post(
+        f"{_BASE}/known-benign-approvals/{approval_id}/attest",
+        json={
+            "assertion": _assertion(
+                other_approval, "e" * 64, sub="google:one", email="one@example.com"
+            ),
+            "reason": "assertion bound to another approval",
+        },
+        headers=_HEADERS,
+    )
+    assert reused.status_code == 401
+    first = _assertion(
+        approval_id, "e" * 64, sub="google:one", email="one@example.com"
+    )
+    forged = await client.post(
+        f"{_BASE}/known-benign-approvals/{approval_id}/attest",
+        json={"assertion": first[:-8] + "00000000", "reason": "forged signature"},
+        headers=_HEADERS,
+    )
+    assert forged.status_code == 401
+    attested = await client.post(
+        f"{_BASE}/known-benign-approvals/{approval_id}/attest",
+        json={"assertion": first, "reason": "reviewed benign source and behavior"},
+        headers=_HEADERS,
+    )
+    assert attested.status_code == 200, attested.text
+    assert attested.json()["status"] == "recorded_unverified"
+    still_one = await client.get(trusted_path, headers=_HEADERS)
+    assert still_one.status_code == 409
+    second = _assertion(
+        approval_id, "e" * 64, sub="google:two", email="two@example.com"
+    )
+    assert (
+        await client.post(
+            f"{_BASE}/known-benign-approvals/{approval_id}/attest",
+            json={"assertion": second, "reason": "independent served-behavior review"},
+            headers=_HEADERS,
+        )
+    ).status_code == 200
+    trusted = await client.get(trusted_path, headers=_HEADERS)
+    assert trusted.status_code == 200, trusted.text
+    body = trusted.json()
+    assert body["provenance_status"] == "two_person_authenticated"
+    assert body["authenticated_reviewers"] == 2
+    assert body["artifact_sha256"] == "c" * 64
+    assert body["image_sha256"] == "d" * 64
+    assert "actor" not in body
+    assert "challenge" not in trusted.text
+    same_person = await client.post(
+        f"{_BASE}/known-benign-approvals/{approval_id}/authorize-generation",
+        json={
+            "assertion": _assertion(
+                approval_id,
+                "e" * 64,
+                sub="google:one",
+                email="one@example.com",
+                action="authorize-generation",
+            ),
+            "reason": "reviewer cannot also generate",
+        },
+        headers=_HEADERS,
+    )
+    assert same_person.status_code == 409
+    assert "generation principal also approved" in same_person.text
+    authorized = await client.post(
+        f"{_BASE}/known-benign-approvals/{approval_id}/authorize-generation",
+        json={
+            "assertion": _assertion(
+                approval_id,
+                "e" * 64,
+                sub="google:three",
+                email="three@example.com",
+                action="authorize-generation",
+            ),
+            "reason": "separate generation principal",
+        },
+        headers=_HEADERS,
+    )
+    assert authorized.status_code == 200, authorized.text
+
+    async with session_maker() as session, session.begin():
+        image = await session.scalar(
+            select(ScreenedImageUpload).where(
+                ScreenedImageUpload.attempt_id == clean_attempt
+            )
+        )
+        assert image is not None
+        image.status = "initiated"
+    stale_image = await client.get(trusted_path, headers=_HEADERS)
+    assert stale_image.status_code == 409
+    assert "stale control image" in stale_image.text
+
+    async with session_maker() as session, session.begin():
+        image = await session.scalar(
+            select(ScreenedImageUpload).where(
+                ScreenedImageUpload.attempt_id == clean_attempt
+            )
+        )
+        assert image is not None
+        image.status = "verified"
+        attempt = await session.get(ScreeningAttempt, clean_attempt)
+        assert attempt is not None
+        attempt.policy_version = 12
+    stale_attempt = await client.get(trusted_path, headers=_HEADERS)
+    assert stale_attempt.status_code == 409
+    assert "stale control attempt" in stale_attempt.text
