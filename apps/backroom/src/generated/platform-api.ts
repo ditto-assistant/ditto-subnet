@@ -2777,6 +2777,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-verification-replays/{replay_id}/private-statistics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Replay Private Statistics
+         * @description Recompute a conservative signal; it never certifies policy or a verdict.
+         */
+        get: operations["get_replay_private_statistics_api_v1_admin_screening_verification_replays__replay_id__private_statistics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/source-review-queue-slo": {
         parameters: {
             query?: never;
@@ -31241,6 +31261,29 @@ export interface components {
             /** Target Manifest Sha256 */
             target_manifest_sha256: string;
         };
+        /** V13PrivateClassSignal */
+        V13PrivateClassSignal: {
+            /** Clean Degradation Bps */
+            clean_degradation_bps: number;
+            /** Clean Seed Criterion Met */
+            clean_seed_criterion_met: boolean;
+            /** Criterion Met */
+            criterion_met: boolean;
+            /** Hoeffding P Upper Bound */
+            hoeffding_p_upper_bound: number;
+            /** Holm Alpha */
+            holm_alpha: number;
+            /** Lower Confidence Bound Bps */
+            lower_confidence_bound_bps: number;
+            /** Pairs */
+            pairs: number;
+            /** Replicated Direction */
+            replicated_direction: boolean;
+            /** Target Degradation Bps */
+            target_degradation_bps: number;
+            /** Transformation Class */
+            transformation_class: string;
+        };
         /**
          * V13PrivateRunSummary
          * @description Sanitized runner output; this alone is never a V13 policy decision.
@@ -31275,6 +31318,34 @@ export interface components {
              * @enum {string}
              */
             status: "completed" | "failed" | "inconclusive";
+        };
+        /** V13PrivateStatisticalReport */
+        V13PrivateStatisticalReport: {
+            /** Classes */
+            classes: components["schemas"]["V13PrivateClassSignal"][];
+            /**
+             * Policy Verification Complete
+             * @default false
+             * @constant
+             */
+            policy_verification_complete: false;
+            /**
+             * Revision
+             * @default v13-private-paired-hoeffding-holm-report-v1
+             * @constant
+             */
+            revision: "v13-private-paired-hoeffding-holm-report-v1";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "signal" | "inconclusive";
+            /**
+             * Terminal Eligible
+             * @default false
+             * @constant
+             */
+            terminal_eligible: false;
         };
         /**
          * V13ReplayBinding
@@ -32778,6 +32849,31 @@ export interface components {
              * @constant
              */
             status: "recorded_unverified";
+        };
+        /** VerificationReplayPrivateStatisticsState */
+        VerificationReplayPrivateStatisticsState: {
+            /**
+             * Policy Verification Complete
+             * @default false
+             * @constant
+             */
+            policy_verification_complete: false;
+            /** Receipt Sha256 */
+            receipt_sha256: string;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            report: components["schemas"]["V13PrivateStatisticalReport"];
+            /** Source Binding Current */
+            source_binding_current: boolean;
+            /**
+             * Terminal Eligible
+             * @default false
+             * @constant
+             */
+            terminal_eligible: false;
         };
         /** VerificationReplayReceiptRequest */
         VerificationReplayReceiptRequest: {
@@ -38329,6 +38425,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayPrivateReceiptState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_replay_private_statistics_api_v1_admin_screening_verification_replays__replay_id__private_statistics_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayPrivateStatisticsState"];
                 };
             };
             /** @description Validation Error */

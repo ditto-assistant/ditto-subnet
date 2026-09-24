@@ -21,6 +21,9 @@ from ditto_screening_protocol.v13_private_receipt import (
     V13ReplayPrivateReceipt,
     authentic_replay_private_receipt,
 )
+from ditto_screening_protocol.v13_private_statistics import (
+    analyze_v13_private_receipt,
+)
 from ditto_screening_protocol.v13_replay_observation import V13ReplayBinding
 
 
@@ -145,3 +148,52 @@ def test_private_receipt_rejects_spliced_control_identity() -> None:
     payload["known_benign"]["summary"]["image_sha256"] = "f" * 64
     with pytest.raises(ValidationError, match="private receipt identity mismatch"):
         V13ReplayPrivateReceipt.model_validate(payload)
+
+
+def test_conservative_paired_statistics_are_report_only() -> None:
+    moderate = _receipt().model_dump(mode="json")
+    for item in moderate["target"]["aggregates"]:
+        item["variant_correct"] = 8 if item["seed_commitment"] == "1" * 64 else 9
+        item["control_only_correct"] = 2 if item["seed_commitment"] == "1" * 64 else 1
+    for item in moderate["known_benign"]["aggregates"]:
+        item["variant_correct"] = 10
+        item["control_only_correct"] = 0
+    moderate_report = analyze_v13_private_receipt(
+        V13ReplayPrivateReceipt.model_validate(moderate)
+    )
+    assert moderate_report.status == "inconclusive"
+    assert moderate_report.terminal_eligible is False
+    assert all(
+        item.target_degradation_bps == 1500 and item.lower_confidence_bound_bps < 500
+        for item in moderate_report.classes
+    )
+
+    extreme = _receipt().model_dump(mode="json")
+    for item in extreme["target"]["aggregates"]:
+        item["variant_correct"] = 0
+        item["control_only_correct"] = 10
+    for item in extreme["known_benign"]["aggregates"]:
+        item["variant_correct"] = 10
+        item["control_only_correct"] = 0
+    report = analyze_v13_private_receipt(
+        V13ReplayPrivateReceipt.model_validate(extreme)
+    )
+    assert report.status == "signal"
+    assert report.policy_verification_complete is False
+    assert report.terminal_eligible is False
+    assert all(item.criterion_met for item in report.classes)
+
+    weak_seed = extreme.copy()
+    weak_seed["target"] = {
+        **extreme["target"],
+        "aggregates": [dict(item) for item in extreme["target"]["aggregates"]],
+    }
+    for item in weak_seed["target"]["aggregates"]:
+        if item["seed_commitment"] == "2" * 64:
+            item["variant_correct"] = 10
+            item["control_only_correct"] = 0
+    weak_report = analyze_v13_private_receipt(
+        V13ReplayPrivateReceipt.model_validate(weak_seed)
+    )
+    assert weak_report.status == "inconclusive"
+    assert all(not item.replicated_direction for item in weak_report.classes)

@@ -13,6 +13,9 @@ from ditto.api_models.v13_private_generation import (
     V13ReplayGenerationGroupView,
     V13ReplayGroupPackageView,
 )
+from ditto_screening_protocol.v13_private_statistics import (
+    V13PrivateStatisticalReport,
+)
 
 Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 PublicCheck = Literal[
@@ -144,6 +147,15 @@ class VerificationReplayPrivateReceiptState(BaseModel):
     created_at: datetime
     status: Literal["recorded_unverified"] = "recorded_unverified"
     policy_verification_complete: Literal[False] = False
+
+
+class VerificationReplayPrivateStatisticsState(BaseModel):
+    replay_id: UUID
+    receipt_sha256: Sha256
+    source_binding_current: bool
+    report: V13PrivateStatisticalReport
+    policy_verification_complete: Literal[False] = False
+    terminal_eligible: Literal[False] = False
 
 
 class VerificationReplayPrivateImageInput(BaseModel):

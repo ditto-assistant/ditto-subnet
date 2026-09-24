@@ -34,6 +34,7 @@ from ditto.api_models.verification_replay import (
     VerificationReplayPrivateImageInput,
     VerificationReplayPrivateInputs,
     VerificationReplayPrivateReceiptState,
+    VerificationReplayPrivateStatisticsState,
     VerificationReplayReceiptRequest,
     VerificationReplayReceiptState,
     VerificationReplaySignedObservationState,
@@ -65,6 +66,9 @@ from ditto.db.models import (
 from ditto_screening_protocol.v13_private_receipt import (
     V13ReplayPrivateReceipt,
     authentic_replay_private_receipt,
+)
+from ditto_screening_protocol.v13_private_statistics import (
+    analyze_v13_private_receipt,
 )
 from ditto_screening_protocol.v13_replay_observation import (
     V13ReplayBinding,
@@ -1114,6 +1118,48 @@ async def get_replay_private_receipt(
         raise HTTPException(404, "private receipt not found")
     return VerificationReplayPrivateReceiptState.model_validate(
         row, from_attributes=True
+    )
+
+
+@admin_router.get(
+    "/{replay_id}/private-statistics",
+    response_model=VerificationReplayPrivateStatisticsState,
+)
+async def get_replay_private_statistics(
+    replay_id: UUID, _admin: AdminDep, session: SessionDep
+) -> VerificationReplayPrivateStatisticsState:
+    """Recompute a conservative signal; it never certifies policy or a verdict."""
+    row = await session.get(ScreeningVerificationReplayPrivateReceipt, replay_id)
+    replay = await session.get(ScreeningVerificationReplay, replay_id)
+    if row is None or replay is None:
+        raise HTTPException(404, "private receipt not found")
+    try:
+        receipt = V13ReplayPrivateReceipt.model_validate(row.report)
+        digest = hashlib.sha256(
+            json.dumps(
+                receipt.model_dump(mode="json"),
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
+        if (
+            digest != row.receipt_sha256
+            or receipt.binding.replay_id != replay_id
+            or receipt.runner_hotkey != row.runner_hotkey
+            or receipt.signature != row.signature
+            or not _verify_signature(
+                row.runner_hotkey, receipt.signing_message(), row.signature
+            )
+        ):
+            raise ValueError("private receipt identity invalid")
+        report = analyze_v13_private_receipt(receipt)
+    except Exception:
+        raise HTTPException(409, "private receipt analysis unavailable") from None
+    return VerificationReplayPrivateStatisticsState(
+        replay_id=replay_id,
+        receipt_sha256=row.receipt_sha256,
+        source_binding_current=await _binding_ok(session, replay),
+        report=report,
     )
 
 

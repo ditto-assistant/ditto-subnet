@@ -23,6 +23,7 @@ from ditto.api_server.endpoints.admin_v13_private_generation import (
 from ditto.api_server.endpoints.verification_replay import (
     append_replay_private_receipt,
     get_replay_private_inputs,
+    get_replay_private_statistics,
 )
 from ditto.db.models import (
     Agent,
@@ -400,6 +401,10 @@ async def test_replay_generation_uses_independent_verified_image(
             replay_id, receipt, request, "independent-worker", session
         )
         assert again.receipt_sha256 == accepted.receipt_sha256
+        statistics = await get_replay_private_statistics(replay_id, None, session)
+        assert statistics.report.status == "inconclusive"
+        assert statistics.source_binding_current is True
+        assert statistics.terminal_eligible is False
         changed = receipt.model_copy(
             update={
                 "matched": receipt.matched.model_copy(

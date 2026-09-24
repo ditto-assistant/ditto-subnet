@@ -86,7 +86,8 @@ class V13ReplayPrivateReceipt(BaseModel):
                 )
                 or any(
                     not (
-                        0
+                        item.pairs > 0
+                        and 0
                         <= item.control_only_correct
                         <= item.control_correct
                         <= item.pairs
