@@ -235,6 +235,28 @@ def test_policy_v13_inconclusive_preserves_signed_review_audit() -> None:
     assert request.review_audit == audit
 
 
+def test_source_review_audit_accepts_configured_l1_step_budget() -> None:
+    audit = _review_audit().model_copy(update={"max_steps": 160, "steps_used": 159})
+    parsed = ScreenReviewAudit.model_validate(audit.model_dump(mode="json"))
+    request = _request(
+        outcome=ScreenResultOutcome.INCONCLUSIVE,
+        review_audit=parsed,
+        review_audit_digest=parsed.canonical_digest(),
+    )
+    assert request.review_audit is not None
+    assert request.review_audit.max_steps == 160
+    assert request.review_audit.steps_used == 159
+
+    with pytest.raises(ValidationError, match="less than or equal to 240"):
+        ScreenReviewAudit.model_validate(
+            {**audit.model_dump(mode="json"), "max_steps": 241}
+        )
+    with pytest.raises(ValidationError, match="review steps used exceed"):
+        ScreenReviewAudit.model_validate(
+            {**audit.model_dump(mode="json"), "steps_used": 161}
+        )
+
+
 def test_legacy_outcome_rejects_image_metadata() -> None:
     with pytest.raises(ValidationError, match="legacy result cannot carry"):
         _request(

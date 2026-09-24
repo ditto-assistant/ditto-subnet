@@ -1090,8 +1090,9 @@ class ScreenReviewAudit(BaseModel):
     reason_code: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
     prompt_revision: Annotated[str, Field(min_length=1, max_length=64)]
     harness_revision: Annotated[str | None, Field(min_length=1, max_length=64)] = None
-    max_steps: Annotated[int, Field(ge=1, le=100)]
-    steps_used: Annotated[int, Field(ge=0, le=100)]
+    # L1 source review can be configured up to 240 steps by Platform and worker.
+    max_steps: Annotated[int, Field(ge=1, le=240)]
+    steps_used: Annotated[int, Field(ge=0, le=240)]
     max_read_bytes: Annotated[int | None, Field(ge=1, le=256 * 1024**2)] = None
     read_bytes_used: Annotated[int | None, Field(ge=0, le=256 * 1024**2)] = None
     max_input_tokens: Annotated[int | None, Field(ge=1, le=2_000_000)] = None
