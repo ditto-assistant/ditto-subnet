@@ -110,6 +110,7 @@ class _FakeGate:
         agent_id: UUID,
         deadline: float | None = None,
         publish_image: Any = None,
+        publish_held_image: Any = None,
         record_archive_verification: Any = None,
         build_only: bool = False,
         policy_only: bool = False,
@@ -143,6 +144,23 @@ class _FakeGate:
             await publish_image(
                 BuiltImageArtifact(
                     path="/tmp/fake-screened-image.tar",
+                    sha256="12" * 32,
+                    size_bytes=123,
+                    image_id="sha256:" + "34" * 32,
+                    image_ref=f"ditto-screen/{agent_id}:latest",
+                )
+            )
+        if (
+            self.result.outcome == ScreeningOutcome.QUARANTINE
+            and publish_held_image is not None
+            and any(
+                item.code == "adjudicated-source-review-escalate"
+                for item in self.result.evidence
+            )
+        ):
+            await publish_held_image(
+                BuiltImageArtifact(
+                    path="/tmp/fake-held-image.tar",
                     sha256="12" * 32,
                     size_bytes=123,
                     image_id="sha256:" + "34" * 32,
@@ -608,6 +626,38 @@ async def test_default_item_screens_full_pipeline(
     await worker._screen_one(_item(agent), policy_version=SCREENING_POLICY_VERSION)
     assert gate.build_only_calls == [False]
     assert platform.verdicts[0]["build_only"] is False
+
+
+async def test_v13_source_hold_uploads_image_evidence_without_passing(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    agent = uuid4()
+    platform = _FakePlatform([])
+    decision = ScreeningDecision(
+        outcome=ScreeningOutcome.QUARANTINE,
+        detail="source review incomplete",
+        manifest_digest="ab" * 32,
+        evidence=(
+            PolicyEvidence(
+                "adjudication", "adjudicated-source-review-escalate", "held"
+            ),
+        ),
+        policy_version=13,
+    )
+    worker = _worker(make_config(), platform, _FakeGate(decision))
+
+    await worker._screen_one(_item(agent), policy_version=13)
+
+    assert len(platform.image_uploads) == 1
+    assert [r["check_code"] for r in platform.verification_receipts] == [
+        "archive_sha",
+        "build_image_digest",
+    ]
+    verdict = platform.verdicts[0]
+    assert verdict["outcome"] == ScreenResultOutcome.QUARANTINE
+    assert verdict["passed"] is False
+    assert verdict["image_sha256"] is None
+    assert verdict["image_upload_id"] is None
 
 
 async def test_policy_only_item_reuses_image_without_upload(

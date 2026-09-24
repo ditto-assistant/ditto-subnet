@@ -698,6 +698,23 @@ class ScreenerWorker:
                     "build_image_digest", image_sha256=image.sha256.lower()
                 )
 
+            async def publish_held_image(image: BuiltImageArtifact) -> None:
+                # Keep the verified artifact available for exact-attempt private
+                # checks while the source decision remains quarantined. Never
+                # attach it to the agent or the non-passing verdict.
+                await self._platform.upload_screened_image(
+                    agent_id,
+                    attempt_id=attempt_id,
+                    path=image.path,
+                    sha256=image.sha256,
+                    size_bytes=image.size_bytes,
+                    image_id=image.image_id,
+                    image_ref=image.image_ref,
+                )
+                await record_mechanical_verification(
+                    "build_image_digest", image_sha256=image.sha256.lower()
+                )
+
             async def record_archive_verification() -> None:
                 await record_mechanical_verification("archive_sha")
 
@@ -837,6 +854,7 @@ class ScreenerWorker:
                         progress=self._set_progress,
                         deadline=screen_deadline,
                         publish_image=publish_image,
+                        publish_held_image=publish_held_image,
                         record_archive_verification=record_archive_verification,
                         record_runtime_verification=record_runtime_verification,
                         remote_build=remote_build,
