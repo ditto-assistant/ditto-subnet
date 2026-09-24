@@ -47,6 +47,7 @@ from ditto_screener.source_review import (
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    ScoredRuntimeEvidenceLease,
     ScreenReviewAudit,
     SourceReviewAuthorityTransition,
     SourceReviewCausalEvidence,
@@ -2144,6 +2145,25 @@ class L2AuditJournal:
             os.close(fd)
 
 
+def _signed_runtime_lease_matches(
+    lease: ScoredRuntimeEvidenceLease | None,
+    *,
+    attempt_id: UUID,
+    artifact_sha256: str,
+    policy_version: int,
+    required: bool,
+) -> bool:
+    if lease is None:
+        return not (policy_version == 13 and required)
+    return (
+        policy_version == 13
+        and lease.attempt_id == attempt_id
+        and lease.artifact_sha256 == artifact_sha256
+        and lease.policy_version == policy_version
+        and abs(int(time.time()) - lease.observed_at) <= 300
+    )
+
+
 class TerraSolSourceReviewAgent:
     """Terra analyst plus independent SOL critic/adjudicator trajectories."""
 
@@ -2176,6 +2196,7 @@ class TerraSolSourceReviewAgent:
         scorer_capabilities_url: str | None = None,
         expected_scorer_revision: str | None = None,
         scorer_transport: httpx.AsyncBaseTransport | None = None,
+        require_signed_runtime_lease: bool = False,
     ) -> None:
         self._api_key_file = api_key_file
         self._base_url = base_url.rstrip("/")
@@ -2210,6 +2231,7 @@ class TerraSolSourceReviewAgent:
         self._scorer_capabilities_url = scorer_capabilities_url
         self._expected_scorer_revision = expected_scorer_revision
         self._scorer_transport = scorer_transport
+        self._require_signed_runtime_lease = require_signed_runtime_lease
         self._starter_revisions = tuple(
             str(json.loads(path.read_text())["revision"])
             for path in L2_STARTER_MANIFESTS
@@ -2233,6 +2255,7 @@ class TerraSolSourceReviewAgent:
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
         on_l3_start: Callable[[], None] | None = None,
+        scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> L2RunResult:
         started = time.monotonic()
         local_deadline = asyncio.get_running_loop().time() + self._timeout_seconds
@@ -2240,7 +2263,53 @@ class TerraSolSourceReviewAgent:
             local_deadline if deadline is None else min(local_deadline, deadline)
         )
         runtime_evidence: dict[str, object] | None = None
-        if policy_version == 13 and (
+        if not _signed_runtime_lease_matches(
+            scored_runtime_evidence,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=policy_version,
+            required=self._require_signed_runtime_lease,
+        ):
+            result = L2RunResult(
+                observation=_failure(
+                    "l2-runtime-evidence-unavailable", "pass_inconclusive"
+                ),
+                analyzed_files=(),
+                causal_path=(),
+                tools=(),
+                usage=L2Usage(),
+                cache_hit=False,
+                dossier_complete=False,
+            )
+            self._record_audit(
+                attempt_id=attempt_id,
+                artifact_sha256=artifact_sha256,
+                l1_observation=l1_observation,
+                result=result,
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+                policy_version=policy_version,
+            )
+            return result
+        if scored_runtime_evidence is not None:
+            runtime_evidence = {
+                "bench_version": 13,
+                "scope": "scorer-injected-env-only",
+                "source_revision": scored_runtime_evidence.scorer_source_revision,
+                "release_descriptor_digest": (
+                    scored_runtime_evidence.release_descriptor_digest
+                ),
+                "scorer_image_digest": scored_runtime_evidence.scorer_image_digest,
+                "injected_keys": list(scored_runtime_evidence.injected_keys),
+                "sha256": scored_runtime_evidence.scorer_env_sha256,
+                "validator_count": scored_runtime_evidence.validator_count,
+                "limits": (
+                    "This describes the eligible scorer cohort at the signed "
+                    "heartbeat observation time, not a selected future scorer. "
+                    "Only scorer-injected variables are covered. Check image ENV, "
+                    "source defaults, runtime writes, and I1-I7 independently."
+                ),
+            }
+        elif policy_version == 13 and (
             self._scorer_capabilities_url or self._expected_scorer_revision
         ):
             try:
@@ -2279,7 +2348,13 @@ class TerraSolSourceReviewAgent:
                 )
                 return result
         evidence_digest = (
-            str(runtime_evidence["sha256"]) if runtime_evidence else "absent"
+            hashlib.sha256(
+                json.dumps(
+                    runtime_evidence, sort_keys=True, separators=(",", ":")
+                ).encode()
+            ).hexdigest()
+            if runtime_evidence
+            else "absent"
         )
         cache_key = self._cache_key(
             artifact_sha256,
@@ -4189,6 +4264,21 @@ class TerraSolSourceReviewAgent:
                     if runtime_evidence
                     else None
                 ),
+                "scored_runtime_release_descriptor_digest": (
+                    runtime_evidence.get("release_descriptor_digest")
+                    if runtime_evidence
+                    else None
+                ),
+                "scored_runtime_scorer_image_digest": (
+                    runtime_evidence.get("scorer_image_digest")
+                    if runtime_evidence
+                    else None
+                ),
+                "scored_runtime_validator_count": (
+                    runtime_evidence.get("validator_count")
+                    if runtime_evidence
+                    else None
+                ),
                 "l1_finding_digest": l1_observation.finding_digest,
                 "finding_digest": observation.finding_digest,
                 "review_audit": observation.review_audit,
@@ -4418,7 +4508,21 @@ class LayeredSourceReviewAgent:
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> SourceReviewObservation:
+        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False)
+        lease_matches = _signed_runtime_lease_matches(
+            scored_runtime_evidence,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=policy_version,
+            required=requires_lease,
+        )
+        if (not lease_matches and not (requires_lease and self._mode == "shadow")) or (
+            policy_version == 13 and requires_lease and self._mode == "off"
+        ):
+            return _failure("l2-runtime-evidence-unavailable", "pass_inconclusive")
+
         def report_l1(completed: int, total: int) -> None:
             if progress is not None:
                 progress(completed, total * 2)
@@ -4445,6 +4549,7 @@ class LayeredSourceReviewAgent:
             deadline=deadline,
             review_deadline=review_deadline,
             policy_version=policy_version,
+            scored_runtime_evidence=scored_runtime_evidence,
         )
 
     async def resolve_lead(
@@ -4458,15 +4563,31 @@ class LayeredSourceReviewAgent:
         deadline: float | None = None,
         review_deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
+        requires_lease = getattr(self._l2, "_require_signed_runtime_lease", False)
+        lease_matches = _signed_runtime_lease_matches(
+            scored_runtime_evidence,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=policy_version,
+            required=requires_lease,
+        )
+        if (not lease_matches and not (requires_lease and self._mode == "shadow")) or (
+            policy_version == 13 and requires_lease and self._mode == "off"
+        ):
+            return _failure("l2-runtime-evidence-unavailable", "pass_inconclusive")
         l1 = l1_observation
         if review_deadline is None and deadline is not None and self._adjudicator:
             review_deadline = self._exploration_deadline(deadline)
         court_deadline = self._court_deadline(deadline, review_deadline)
-        always_escalate = self._always_escalate or os.environ.get(
-            "SCREENER_L2_ALWAYS_ESCALATE", ""
-        ).strip().lower() in {"1", "true", "yes", "on"}
+        always_escalate = (
+            (policy_version == 13 and requires_lease)
+            or self._always_escalate
+            or os.environ.get("SCREENER_L2_ALWAYS_ESCALATE", "").strip().lower()
+            in {"1", "true", "yes", "on"}
+        )
         should_escalate = (
             always_escalate
             or l1.risk_level in {"medium", "high"}
@@ -4509,6 +4630,7 @@ class LayeredSourceReviewAgent:
             deadline=review_deadline,
             policy_version=policy_version,
             on_l3_start=lambda: report(8),
+            scored_runtime_evidence=scored_runtime_evidence,
         )
         report(9)
         if self._mode == "shadow":

@@ -27153,6 +27153,65 @@ export interface components {
             target_policy_version: number | null;
         };
         /**
+         * ScoredRuntimeEnvEvidence
+         * @description Keys reported by a descriptor-verified scorer for its V13 sandbox.
+         */
+        ScoredRuntimeEnvEvidence: {
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 13;
+            /** Injected Keys */
+            injected_keys: string[];
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "scorer-injected-env-only";
+            /** Sha256 */
+            sha256: string;
+            /** Source Revision */
+            source_revision: string;
+        };
+        /**
+         * ScoredRuntimeEvidenceLease
+         * @description Platform-bound scorer evidence for one exact V13 screening attempt.
+         */
+        ScoredRuntimeEvidenceLease: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 13;
+            /** Injected Keys */
+            injected_keys: string[];
+            /** Observed At */
+            observed_at: number;
+            /**
+             * Policy Version
+             * @constant
+             */
+            policy_version: 13;
+            /** Release Descriptor Digest */
+            release_descriptor_digest: string;
+            /** Scorer Env Sha256 */
+            scorer_env_sha256: string;
+            /** Scorer Image Digest */
+            scorer_image_digest: string;
+            /** Scorer Source Revision */
+            scorer_source_revision: string;
+            /** Validator Count */
+            validator_count: number;
+        };
+        /**
          * ScorerBenchmarkCapability
          * @description Identity-bound benchmark support observed from the scorer sidecar.
          */
@@ -27170,6 +27229,7 @@ export interface components {
              */
             private_datasets: boolean;
             probe?: components["schemas"]["ScorerLivenessProbe"] | null;
+            scored_runtime_env?: components["schemas"]["ScoredRuntimeEnvEvidence"] | null;
             /** Software Version */
             software_version?: string | null;
             /** Source Revision */
@@ -28635,6 +28695,7 @@ export interface components {
             precheck_reason_code?: string | null;
             /** @description Immutable review posture selected only for this claimed operator canary. Null uses the worker's normal effective review settings. */
             review_settings_override?: components["schemas"]["ScreenerReviewSettingsOverride"] | null;
+            scored_runtime_evidence?: components["schemas"]["ScoredRuntimeEvidenceLease"] | null;
             /**
              * Sha256
              * @description SHA-256 of the uploaded tarball, lowercase hex.
@@ -30001,6 +30062,7 @@ export interface components {
             artifact_sha256: string;
             /** Policy Version */
             policy_version: number;
+            scored_runtime_evidence?: components["schemas"]["ScoredRuntimeEvidenceLease"] | null;
             /** Source Url B64 */
             source_url_b64: string;
         };

@@ -28,6 +28,7 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_BUILD_MEMORY",
         "SCREENER_IMAGE_BUILD_MEMORY",
         "SCREENER_V13_RUNTIME_RECEIPTS_MODE",
+        "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE",
         "NETUID",
     ):
         monkeypatch.delenv(k, raising=False)
@@ -73,6 +74,15 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.l2_max_cost_usd == 2.0
     assert cfg.l2_analyst_reasoning_effort == "model_default"
     assert cfg.l2_critic_reasoning_effort == "medium"
+    assert cfg.require_signed_runtime_lease is False
+
+
+def test_signed_runtime_lease_requires_explicit_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", "true")
+    assert parse_screener_config_from_env().require_signed_runtime_lease is True
 
 
 def test_image_build_memory_additively_replaces_legacy_name(

@@ -164,6 +164,7 @@ from ditto.api_server.endpoints.validator import (
 )
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
+from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
 from ditto.api_server.screener_policy_activation import (
     EffectiveScreenerPolicy,
@@ -3491,6 +3492,19 @@ async def get_submission_source_review_source(
         agent_id = row.agent_id
         artifact_sha256 = row.artifact_sha256
         policy_version = attempt.policy_version
+        agent = await session.get(Agent, agent_id)
+        if agent is None:
+            raise HTTPException(
+                status_code=409, detail="source-review agent is unavailable"
+            )
+        bench_version = await arrival_bench_version(session, agent=agent)
+        scored_runtime_evidence = await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt.attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=policy_version,
+            bench_version=bench_version,
+        )
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
@@ -3499,6 +3513,7 @@ async def get_submission_source_review_source(
         source_url_b64=base64.b64encode(url.encode()).decode(),
         artifact_sha256=artifact_sha256,
         policy_version=policy_version,
+        scored_runtime_evidence=scored_runtime_evidence,
     )
 
 
@@ -5006,6 +5021,16 @@ async def claim(
         agent.agent_id: await arrival_bench_version(session, agent=agent)
         for agent, _, _ in claimed
     }
+    runtime_leases = {
+        attempt.attempt_id: await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt.attempt_id,
+            artifact_sha256=agent.sha256,
+            policy_version=attempt.policy_version,
+            bench_version=bench_versions[agent.agent_id],
+        )
+        for agent, attempt, _ in claimed
+    }
     items = [
         ScreenerQueueItem(
             agent_id=agent.agent_id,
@@ -5018,6 +5043,7 @@ async def claim(
             attempt_id=attempt.attempt_id,
             lease_deadline=attempt.deadline,
             policy_version=attempt.policy_version,
+            scored_runtime_evidence=runtime_leases[attempt.attempt_id],
             # ``precheck_reason_code`` is the exact-duplicate channel and the
             # signed queue contract requires it to be paired with
             # ``duplicate_of``. Mechanical deferred admission has its own

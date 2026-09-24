@@ -198,6 +198,11 @@ Required values are supplied through the production host's protected
   as inconclusive. The packet does not cover image ENV, source defaults, or
   other validator deployments; those need independent source and runtime
   checks before any CLEAR or emissions decision.
+- `SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE=true`: V13 canary gate that holds L2
+  inconclusive before any model call unless Platform supplied a fresh signed
+  cohort lease for the exact attempt and artifact. Set on the Platform process
+  (which forwards it to Targon source-review rentals) and on local screeners.
+  Leave it off for legacy screening; never treat an absent lease as CLEAR.
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
   computes the reachability-and-causality v2 candidate for comparison.
