@@ -3944,6 +3944,43 @@ CREATE TABLE public.screener_heartbeats (
 
 
 --
+-- Name: screener_l2_report_canaries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_l2_report_canaries (
+    canary_id uuid NOT NULL,
+    request_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    source_attempt_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    policy_version integer NOT NULL,
+    bench_version integer NOT NULL,
+    target_node_id text NOT NULL,
+    expected_agent_status text NOT NULL,
+    expected_score_count integer NOT NULL,
+    review_label text NOT NULL,
+    status text DEFAULT 'queued'::text NOT NULL,
+    claimed_instance_id text,
+    settings_revision integer,
+    settings_checksum text,
+    runtime_evidence_sha256 text,
+    lease_token_hash text,
+    lease_expires_at timestamp with time zone,
+    report jsonb,
+    error_code text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_label_check CHECK ((review_label = ANY (ARRAY['candidate_clear'::text, 'known_reject'::text]))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_runtime_check CHECK (((runtime_evidence_sha256 IS NULL) OR (runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_scores_check CHECK ((expected_score_count >= 0)),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_sha_check CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'succeeded'::text, 'incomplete'::text, 'expired'::text]))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_token_check CHECK (((lease_token_hash IS NULL) OR (lease_token_hash ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_v13_check CHECK (((policy_version = 13) AND (bench_version = 13)))
+);
+
+
+--
 -- Name: screener_node_bootstrap_grants; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7084,6 +7121,14 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 
 --
+-- Name: screener_l2_report_canaries pk_screener_l2_report_canaries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT pk_screener_l2_report_canaries PRIMARY KEY (canary_id);
+
+
+--
 -- Name: screener_node_bootstrap_grants pk_screener_node_bootstrap_grants; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7513,6 +7558,14 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 ALTER TABLE ONLY public.screener_heartbeats
     ADD CONSTRAINT screener_heartbeats_pkey PRIMARY KEY (screener_hotkey, instance_id);
+
+
+--
+-- Name: screener_l2_report_canaries screener_l2_canary_request_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT screener_l2_canary_request_key UNIQUE (request_id);
 
 
 --
@@ -8672,6 +8725,20 @@ CREATE INDEX screener_heartbeats_active_agent_idx ON public.screener_heartbeats 
 --
 
 CREATE INDEX screener_heartbeats_seen_at_idx ON public.screener_heartbeats USING btree (seen_at);
+
+
+--
+-- Name: screener_l2_canary_one_active_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX screener_l2_canary_one_active_source_idx ON public.screener_l2_report_canaries USING btree (source_attempt_id) WHERE (status = ANY (ARRAY['queued'::text, 'leased'::text]));
+
+
+--
+-- Name: screener_l2_canary_queue_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screener_l2_canary_queue_idx ON public.screener_l2_report_canaries USING btree (target_node_id, status, created_at);
 
 
 --
@@ -10125,6 +10192,30 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 ALTER TABLE ONLY public.screener_fanout_shadow_reviews
     ADD CONSTRAINT fk_screener_fanout_shadow_reviews_settings_revision_scr_a1a2 FOREIGN KEY (settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: screener_l2_report_canaries fk_screener_l2_report_canaries_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT fk_screener_l2_report_canaries_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: screener_l2_report_canaries fk_screener_l2_report_canaries_source_attempt_id_screen_d13e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT fk_screener_l2_report_canaries_source_attempt_id_screen_d13e FOREIGN KEY (source_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: screener_l2_report_canaries fk_screener_l2_report_canaries_target_node_id_screener_nodes; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT fk_screener_l2_report_canaries_target_node_id_screener_nodes FOREIGN KEY (target_node_id) REFERENCES public.screener_nodes(node_id);
 
 
 --
