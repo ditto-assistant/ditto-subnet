@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -107,6 +111,7 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install(app, session_maker)
     target_agent, target_attempt = uuid4(), uuid4()
@@ -279,6 +284,41 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
     assert (
         await client.get(control_path, headers=_HEADERS)
     ).json() == control_registered.json()
+    ticket_path = f"{_BASE}/groups/{body['group_id']}/private-case-tickets/target"
+    ticket_request = {"session_id": str(uuid4()), "case_id": str(uuid4())}
+    assert (
+        await client.post(ticket_path, json=ticket_request, headers=_HEADERS)
+    ).status_code == 503
+    synthetic_material = "x" * 40
+    monkeypatch.setenv("PLATFORM_V13_PRIVATE_TICKET_KEY", synthetic_material)
+    assert (await client.post(ticket_path, json=ticket_request)).status_code == 401
+    issued = await client.post(ticket_path, json=ticket_request, headers=_HEADERS)
+    assert issued.status_code == 200, issued.text
+    token = issued.json()
+    raw = base64.urlsafe_b64decode(token["body"] + "=" * (-len(token["body"]) % 4))
+    claims = json.loads(raw)
+    assert claims["group_id"] == body["group_id"]
+    assert claims["attempt_id"] == str(target_attempt)
+    assert claims["image_sha256"] == "b" * 64
+    assert claims["manifest_sha256"] == "1" * 64
+    assert hmac.compare_digest(
+        token["mac_sha256"],
+        hmac.new(
+            synthetic_material.encode(),
+            b"ditto-v13-private-case-ticket-v1\0" + raw,
+            hashlib.sha256,
+        ).hexdigest(),
+    )
+    control_ticket = await client.post(
+        f"{_BASE}/groups/{body['group_id']}/private-case-tickets/known_benign",
+        json={"session_id": str(uuid4()), "case_id": str(uuid4())},
+        headers=_HEADERS,
+    )
+    assert control_ticket.status_code == 200, control_ticket.text
+    control_raw = base64.urlsafe_b64decode(
+        control_ticket.json()["body"] + "=" * (-len(control_ticket.json()["body"]) % 4)
+    )
+    assert json.loads(control_raw)["manifest_sha256"] == "2" * 64
     with pytest.raises(DBAPIError):
         async with session_maker() as session, session.begin():
             await session.execute(
@@ -288,6 +328,28 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
                 ),
                 {"sha": "5" * 64, "group_id": UUID(body["group_id"])},
             )
+    # A newer screening attempt invalidates this group's old exact identity.
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=uuid4(),
+                agent_id=target_agent,
+                artifact_sha256="a" * 64,
+                screener_hotkey=f"screener-{target_agent}",
+                policy_version=13,
+                status="quarantined",
+                started_at=datetime.now(UTC) + timedelta(minutes=1),
+                deadline=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+    stale_ticket = await client.post(ticket_path, json=ticket_request, headers=_HEADERS)
+    assert stale_ticket.status_code == 409
+    stale_pair_ticket = await client.post(
+        f"{_BASE}/groups/{body['group_id']}/private-case-tickets/known_benign",
+        json={"session_id": str(uuid4()), "case_id": str(uuid4())},
+        headers=_HEADERS,
+    )
+    assert stale_pair_ticket.status_code == 409
 
 
 async def test_generation_group_rows_are_immutable_in_postgres(

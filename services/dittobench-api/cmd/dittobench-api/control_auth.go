@@ -44,6 +44,12 @@ func (s *server) newControlPlaneMux() *http.ServeMux {
 	mux.HandleFunc("GET /v1/confirmation/readiness", s.handleConfirmationReadiness)
 	mux.HandleFunc("GET /v1/confirmation/progress", s.handleConfirmationProgress)
 	mux.HandleFunc("POST /v1/confirmation/execute", s.handleConfirmationExecute)
+	mux.HandleFunc("POST /v1/private-verifier/admit", func(w http.ResponseWriter, r *http.Request) {
+		s.privateCaseAdmission.admit(w, r)
+	})
+	mux.HandleFunc("POST /v1/private-verifier/ledger", func(w http.ResponseWriter, r *http.Request) {
+		s.privateCaseAdmission.ledger(w, r)
+	})
 	mux.HandleFunc("POST /v1/coding/supervisor/{operation}", s.handleCodingSupervisor)
 	mux.HandleFunc("POST /v1/coding/publications/{operation}", s.handleCodingPublication)
 	mux.HandleFunc("POST /v1/coding/certifier/canary", s.handleCodingCanary)
@@ -73,6 +79,8 @@ var controlPlaneRoutes = []string{
 	"GET /v1/confirmation/readiness",
 	"GET /v1/confirmation/progress",
 	"POST /v1/confirmation/execute",
+	"POST /v1/private-verifier/admit",
+	"POST /v1/private-verifier/ledger",
 	"POST /v1/coding/supervisor/{operation}",
 	"POST /v1/coding/publications/{operation}",
 	"POST /v1/coding/certifier/canary",
