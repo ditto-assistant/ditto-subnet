@@ -1,8 +1,8 @@
-# Separate state prefix. Values and bank objects are never written through
-# Terraform. A protected apply identity is required before any creation.
+# This bucket is created in the dedicated project by the bootstrap root.
+# Never initialize this root against the shared ditto-app-dev state bucket.
 terraform {
   backend "gcs" {
-    bucket = "ditto-app-dev-tfstate"
-    prefix = "gcp-v13-private-verifier"
+    bucket = "ditto-v13-private-verifier-tfstate"
+    prefix = "verifier"
   }
 }

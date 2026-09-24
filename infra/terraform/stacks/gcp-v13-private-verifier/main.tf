@@ -17,29 +17,16 @@ locals {
   ])
 }
 
-resource "google_project" "verifier" {
-  count               = local.count
-  project_id          = var.project_id
-  name                = "Ditto V13 private verifier"
-  org_id              = var.organization_id
-  billing_account     = var.billing_account_id
-  auto_create_network = false
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
 resource "google_project_service" "required" {
   for_each           = var.enable_v13_private_project ? local.services : toset([])
-  project            = google_project.verifier[0].project_id
+  project            = var.project_id
   service            = each.value
   disable_on_destroy = false
 }
 
 resource "google_compute_network" "verifier" {
   count                   = local.count
-  project                 = google_project.verifier[0].project_id
+  project                 = var.project_id
   name                    = "ditto-v13-private-net"
   auto_create_subnetworks = false
   routing_mode            = "REGIONAL"
@@ -48,7 +35,7 @@ resource "google_compute_network" "verifier" {
 
 resource "google_compute_subnetwork" "verifier" {
   count                    = local.count
-  project                  = google_project.verifier[0].project_id
+  project                  = var.project_id
   name                     = "ditto-v13-private-${var.region}"
   region                   = var.region
   network                  = google_compute_network.verifier[0].id
@@ -58,7 +45,7 @@ resource "google_compute_subnetwork" "verifier" {
 
 resource "google_compute_router" "verifier" {
   count   = local.count
-  project = google_project.verifier[0].project_id
+  project = var.project_id
   name    = "ditto-v13-private-router"
   region  = var.region
   network = google_compute_network.verifier[0].id
@@ -66,7 +53,7 @@ resource "google_compute_router" "verifier" {
 
 resource "google_compute_router_nat" "verifier" {
   count                              = local.count
-  project                            = google_project.verifier[0].project_id
+  project                            = var.project_id
   name                               = "ditto-v13-private-nat"
   router                             = google_compute_router.verifier[0].name
   region                             = var.region
@@ -76,7 +63,7 @@ resource "google_compute_router_nat" "verifier" {
 
 resource "google_compute_firewall" "iap_ssh" {
   count         = local.count
-  project       = google_project.verifier[0].project_id
+  project       = var.project_id
   name          = "ditto-v13-private-allow-iap-ssh"
   network       = google_compute_network.verifier[0].id
   direction     = "INGRESS"
@@ -90,7 +77,7 @@ resource "google_compute_firewall" "iap_ssh" {
 
 resource "google_compute_firewall" "deny_private_egress" {
   count              = local.count
-  project            = google_project.verifier[0].project_id
+  project            = var.project_id
   name               = "ditto-v13-private-deny-rfc1918"
   network            = google_compute_network.verifier[0].id
   direction          = "EGRESS"
@@ -104,7 +91,7 @@ resource "google_compute_firewall" "deny_private_egress" {
 
 resource "google_service_account" "verifier" {
   count        = local.count
-  project      = google_project.verifier[0].project_id
+  project      = var.project_id
   account_id   = "ditto-v13-verifier"
   display_name = "Ditto V13 protected verifier runtime"
   depends_on   = [google_project_service.required]
@@ -115,7 +102,7 @@ resource "google_project_iam_member" "observability" {
     "roles/logging.logWriter",
     "roles/monitoring.metricWriter",
   ]) : toset([])
-  project = google_project.verifier[0].project_id
+  project = var.project_id
   role    = each.value
   member  = "serviceAccount:${google_service_account.verifier[0].email}"
 }
@@ -123,7 +110,7 @@ resource "google_project_iam_member" "observability" {
 module "verifier_vm" {
   source   = "../../modules/compute/gcp"
   count    = local.count
-  project  = google_project.verifier[0].project_id
+  project  = var.project_id
   name     = "ditto-v13-private-verifier-prod"
   size     = "validator"
   image    = "debian-13"
@@ -147,7 +134,7 @@ module "verifier_vm" {
 
 resource "google_storage_bucket" "bank" {
   count                       = local.count
-  project                     = google_project.verifier[0].project_id
+  project                     = var.project_id
   name                        = "${var.project_id}-bank"
   location                    = var.region
   storage_class               = "STANDARD"
@@ -173,7 +160,7 @@ resource "google_storage_bucket_iam_member" "bank_read" {
 # Empty containers only. An approved operator installs versions separately.
 resource "google_secret_manager_secret" "ticket_key" {
   count     = local.count
-  project   = google_project.verifier[0].project_id
+  project   = var.project_id
   secret_id = "v13-private-ticket-key"
   replication {
     auto {}
@@ -186,7 +173,7 @@ resource "google_secret_manager_secret" "ticket_key" {
 
 resource "google_secret_manager_secret_iam_member" "ticket_platform_read" {
   count     = local.count
-  project   = google_project.verifier[0].project_id
+  project   = var.project_id
   secret_id = google_secret_manager_secret.ticket_key[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${var.platform_api_service_account}"
@@ -194,7 +181,7 @@ resource "google_secret_manager_secret_iam_member" "ticket_platform_read" {
 
 resource "google_secret_manager_secret_iam_member" "ticket_verifier_read" {
   count     = local.count
-  project   = google_project.verifier[0].project_id
+  project   = var.project_id
   secret_id = google_secret_manager_secret.ticket_key[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.verifier[0].email}"
@@ -202,7 +189,7 @@ resource "google_secret_manager_secret_iam_member" "ticket_verifier_read" {
 
 resource "google_secret_manager_secret" "provider_key" {
   count     = local.count
-  project   = google_project.verifier[0].project_id
+  project   = var.project_id
   secret_id = "v13-private-provider-key"
   replication {
     auto {}
@@ -215,7 +202,7 @@ resource "google_secret_manager_secret" "provider_key" {
 
 resource "google_secret_manager_secret_iam_member" "provider_platform_read" {
   count     = local.count
-  project   = google_project.verifier[0].project_id
+  project   = var.project_id
   secret_id = google_secret_manager_secret.provider_key[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${var.platform_api_service_account}"
@@ -223,7 +210,7 @@ resource "google_secret_manager_secret_iam_member" "provider_platform_read" {
 
 resource "google_compute_instance_iam_member" "operator_osadmin" {
   for_each      = var.enable_v13_private_project ? var.operators : toset([])
-  project       = google_project.verifier[0].project_id
+  project       = var.project_id
   zone          = var.zone
   instance_name = module.verifier_vm[0].hostname
   role          = "roles/compute.osAdminLogin"
@@ -232,7 +219,7 @@ resource "google_compute_instance_iam_member" "operator_osadmin" {
 
 resource "google_project_iam_member" "operator_iap" {
   for_each = var.enable_v13_private_project ? var.operators : toset([])
-  project  = google_project.verifier[0].project_id
+  project  = var.project_id
   role     = "roles/iap.tunnelResourceAccessor"
   member   = each.value
   condition {
@@ -244,7 +231,7 @@ resource "google_project_iam_member" "operator_iap" {
 
 resource "google_project_iam_member" "operator_compute_viewer" {
   for_each = var.enable_v13_private_project ? var.operators : toset([])
-  project  = google_project.verifier[0].project_id
+  project  = var.project_id
   role     = "roles/compute.viewer"
   member   = each.value
 }
@@ -257,7 +244,7 @@ resource "google_service_account_iam_member" "operator_actas" {
 }
 
 output "project_id" {
-  value = var.enable_v13_private_project ? google_project.verifier[0].project_id : ""
+  value = var.enable_v13_private_project ? var.project_id : ""
 }
 
 output "verifier_vm_name" {

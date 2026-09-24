@@ -10,17 +10,6 @@ variable "project_id" {
   default     = "ditto-v13-private-verifier"
 }
 
-variable "organization_id" {
-  description = "Parent organization ID. Supply from the reviewed project hierarchy."
-  type        = string
-}
-
-variable "billing_account_id" {
-  description = "Billing account ID supplied only through a protected plan/apply environment."
-  type        = string
-  sensitive   = true
-}
-
 variable "region" {
   type    = string
   default = "us-central1"
