@@ -3216,6 +3216,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/v13-scorer-cohort/preflight": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Preflight
+         * @description Read the exact current packet and drain state for activation planning.
+         */
+        get: operations["get_preflight_api_v1_admin_v13_scorer_cohort_preflight_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v9-contract-retests": {
         parameters: {
             query?: never;
@@ -32100,6 +32120,34 @@ export interface components {
             /** Source Revision */
             source_revision: string;
         };
+        /** V13ScorerPreflight */
+        V13ScorerPreflight: {
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Slot Settings Checksum */
+            slot_settings_checksum: string | null;
+            /** Slot Settings Revision */
+            slot_settings_revision: number | null;
+            /** Validators */
+            validators: components["schemas"]["V13ScorerPreflightValidator"][];
+        };
+        /** V13ScorerPreflightValidator */
+        V13ScorerPreflightValidator: {
+            /** Accepting */
+            accepting: boolean;
+            /** Capable */
+            capable: boolean;
+            /** Hotkey */
+            hotkey: string;
+            /** Live V13 Tickets */
+            live_v13_tickets: number;
+            packet: components["schemas"]["V13ScorerPacket"] | null;
+            /** Paused */
+            paused: boolean;
+        };
         /** V7InferenceCalibration */
         V7InferenceCalibration: {
             /** Manifest Sha256 */
@@ -39937,6 +39985,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["V13ScorerCohortView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_preflight_api_v1_admin_v13_scorer_cohort_preflight_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13ScorerPreflight"];
                 };
             };
             /** @description Validation Error */

@@ -1578,6 +1578,10 @@ export async function fetchV13ScorerCohort() {
   return platformAdminRequest(V13_SCORER_COHORT_PATH)
 }
 
+export async function fetchV13ScorerCohortPreflight() {
+  return platformAdminRequest(`${V13_SCORER_COHORT_PATH}/preflight`)
+}
+
 export async function activateV13ScorerCohort(input: {
   hotkeys: [string, string, string]
   packet: {

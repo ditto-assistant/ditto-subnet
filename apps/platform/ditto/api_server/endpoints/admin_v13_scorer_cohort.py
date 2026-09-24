@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.ticket_status import TicketStatus
@@ -73,9 +73,86 @@ class V13ScorerCohortView(BaseModel):
     created_at: datetime
 
 
+class V13ScorerPreflightValidator(BaseModel):
+    hotkey: str
+    capable: bool
+    packet: V13ScorerPacket | None
+    accepting: bool
+    paused: bool
+    live_v13_tickets: int
+
+
+class V13ScorerPreflight(BaseModel):
+    observed_at: datetime
+    slot_settings_revision: int | None
+    slot_settings_checksum: str | None
+    validators: list[V13ScorerPreflightValidator]
+
+
 @router.get("", response_model=V13ScorerCohortView | None)
 async def get_pin(_admin: AdminDep, session: SessionDep) -> V13ScorerCohortPin | None:
     return await current_pin(session)
+
+
+@router.get("/preflight", response_model=V13ScorerPreflight)
+async def get_preflight(_admin: AdminDep, session: SessionDep) -> V13ScorerPreflight:
+    """Read the exact current packet and drain state for activation planning."""
+    from ditto.api_models.benchmark_capacity import BenchmarkCapacity
+    from ditto.db.queries.benchmark_rollout import heartbeat_supports_version
+
+    now = datetime.now(UTC)
+    settings = await latest_validator_slot_settings_revision(session)
+    paused = set()
+    if settings is not None:
+        paused = set(
+            ValidatorSlotSettings.model_validate(
+                settings.settings
+            ).paused_validator_hotkeys
+        )
+    live_rows = (
+        await session.execute(
+            select(ValidatorTicket.validator_hotkey, func.count())
+            .where(
+                ValidatorTicket.bench_version == 13,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.deadline > now,
+            )
+            .group_by(ValidatorTicket.validator_hotkey)
+        )
+    ).all()
+    live_counts: dict[str, int] = {row[0]: int(row[1]) for row in live_rows}
+    heartbeats = (await session.scalars(select(ValidatorHeartbeat))).all()
+    validators: list[V13ScorerPreflightValidator] = []
+    for heartbeat in heartbeats:
+        capable = heartbeat_supports_version(heartbeat, now=now, version=13)
+        packet = packet_for_heartbeat(heartbeat, now=now) if capable else None
+        accepting = False
+        if capable:
+            try:
+                capacity = BenchmarkCapacity.model_validate(
+                    heartbeat.benchmark_capacity
+                )
+                accepting = capacity.admission == "accepting" and bool(
+                    capacity.healthy_slots
+                )
+            except ValueError:
+                pass
+        validators.append(
+            V13ScorerPreflightValidator(
+                hotkey=heartbeat.validator_hotkey,
+                capable=capable,
+                packet=packet,
+                accepting=accepting,
+                paused=heartbeat.validator_hotkey in paused,
+                live_v13_tickets=live_counts.get(heartbeat.validator_hotkey, 0),
+            )
+        )
+    return V13ScorerPreflight(
+        observed_at=now,
+        slot_settings_revision=settings.revision if settings is not None else None,
+        slot_settings_checksum=settings.checksum if settings is not None else None,
+        validators=sorted(validators, key=lambda item: item.hotkey),
+    )
 
 
 @router.post("", response_model=V13ScorerCohortView)

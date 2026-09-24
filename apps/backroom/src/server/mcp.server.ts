@@ -9,7 +9,7 @@ import {
   v13ReplayPackageWriteInputSchema,
 } from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
-import { fetchV13ScorerCohort, activateV13ScorerCohort } from './admin.service'
+import { fetchV13ScorerCohort, fetchV13ScorerCohortPreflight, activateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
@@ -678,6 +678,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read one exact-attempt non-authoritative L2 canary report and lease outcome.',
   get_v13_scorer_cohort:
     'Read the immutable three-validator V13 scorer pin, including exact signed runtime packet.',
+  get_v13_scorer_cohort_preflight:
+    'Read fresh V13 validator packets, admission, pause state, and live-ticket drain before pinning.',
   activate_v13_scorer_cohort:
     'Pin three exact managed V13 validators after nonmembers are paused and live tickets drain. One-way activation.',
   schedule_l2_report_canary:
@@ -2792,6 +2794,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchV13ScorerCohort()),
+  )
+
+  registerTool(
+    'get_v13_scorer_cohort_preflight',
+    {
+      title: 'Get V13 scorer cohort preflight',
+      description: 'Read current signed packets, accepting capacity, issuance pauses, and live V13 ticket counts for exact activation. Requires backroom:read.',
+      inputSchema: z.object({}),
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchV13ScorerCohortPreflight()),
   )
 
   registerTool(

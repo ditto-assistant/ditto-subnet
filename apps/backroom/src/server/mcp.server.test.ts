@@ -226,6 +226,7 @@ describe('Backroom MCP tools', () => {
         'get_v13_replay_private_receipt',
         'get_v13_replay_private_statistics',
         'get_v13_scorer_cohort',
+        'get_v13_scorer_cohort_preflight',
         'get_screening_submission',
         'get_source_release_policy',
         'get_owner_attestations',
@@ -404,8 +405,8 @@ describe('Backroom MCP tools', () => {
       // Includes the V13 clock, independent replay, infra-retry, ordinary
       // source-review queue-age SLO, failure taxonomy route_basis,
       // reopened-hold reason, three process-key summaries, and current V13
-      // provenance reads plus the two scorer pin controls; measured at 28,634.
-      28_700,
+      // provenance reads plus three scorer pin controls; measured at 28,729.
+      28_850,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

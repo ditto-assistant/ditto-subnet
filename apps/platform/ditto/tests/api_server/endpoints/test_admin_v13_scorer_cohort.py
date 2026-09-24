@@ -21,6 +21,7 @@ from ditto.api_server.endpoints.admin_v13_scorer_cohort import (
     ActivateV13ScorerCohortRequest,
     activate_pin,
     get_pin,
+    get_preflight,
     router,
 )
 from ditto.api_server.endpoints.admin_validator_slot_settings import _checksum
@@ -96,6 +97,13 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
                 reason="test initial settings",
                 actor="test",
             )
+        )
+    async with session_maker() as session:
+        preflight = await get_preflight(None, session)
+        assert preflight.slot_settings_revision == 1
+        assert sum(item.packet is not None for item in preflight.validators) == 3
+        assert any(
+            item.hotkey == _OUTSIDER and item.capable for item in preflight.validators
         )
     async with session_maker() as session:
         with pytest.raises(
