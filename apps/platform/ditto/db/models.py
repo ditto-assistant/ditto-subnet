@@ -7076,6 +7076,31 @@ class ScreenerL2ReportCanary(Base):
     )
 
 
+class V13ScorerCohortPin(Base):
+    """Immutable, operator-audited V13 scorer and runtime packet admission."""
+
+    __tablename__ = "v13_scorer_cohort_pins"
+
+    bench_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    hotkeys: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    packet: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    slot_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    slot_settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
+        CheckConstraint(
+            "length(slot_settings_checksum) = 64",
+            name="v13_scorer_pin_settings_checksum_check",
+        ),
+    )
+
+
 class ValidatorTicket(Base):
     """One validator's evaluation ticket for one agent (a k=3 scoring grant).
 

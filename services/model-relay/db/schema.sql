@@ -282,6 +282,27 @@ CREATE FUNCTION public.coding_hosted_private_task_guard() RETURNS trigger
 
 
 --
+-- Name: enforce_v13_ticket_cohort(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.enforce_v13_ticket_cohort() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ DECLARE pinned jsonb; BEGIN
+          IF NEW.bench_version = 13 AND NEW.status = 'issued' THEN
+            PERFORM pg_advisory_xact_lock(
+              hashtextextended('ditto:validator-rollout-dispatch:v1', 0)
+            );
+            SELECT hotkeys INTO pinned FROM v13_scorer_cohort_pins
+              WHERE bench_version = 13;
+            IF pinned IS NOT NULL AND NOT (pinned ? NEW.validator_hotkey) THEN
+              RAISE EXCEPTION 'V13 ticket validator is outside pinned scorer cohort';
+            END IF;
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
 -- Name: guard_coding_catalog_append_only(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -916,6 +937,17 @@ CREATE FUNCTION public.reject_v13_private_generation_mutation() RETURNS trigger
             RAISE EXCEPTION 'V13 private generation records are append-only';
         END;
         $$;
+
+
+--
+-- Name: reject_v13_scorer_pin_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_v13_scorer_pin_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          RAISE EXCEPTION 'v13 scorer cohort pins are immutable';
+        END $$;
 
 
 --
@@ -5126,6 +5158,45 @@ CREATE TABLE public.v13_replay_private_generation_groups (
 
 
 --
+-- Name: v13_scorer_cohort_pins; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_scorer_cohort_pins (
+    bench_version integer NOT NULL,
+    hotkeys jsonb NOT NULL,
+    packet jsonb NOT NULL,
+    slot_settings_revision integer NOT NULL,
+    slot_settings_checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_settings_check_4272 CHECK ((length(slot_settings_checksum) = 64)),
+    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_three_hotkeys_check CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND (jsonb_array_length(hotkeys) = 3))),
+    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_version_check CHECK ((bench_version = 13))
+);
+
+
+--
+-- Name: v13_scorer_cohort_pins_bench_version_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.v13_scorer_cohort_pins_bench_version_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: v13_scorer_cohort_pins_bench_version_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.v13_scorer_cohort_pins_bench_version_seq OWNED BY public.v13_scorer_cohort_pins.bench_version;
+
+
+--
 -- Name: validator_heartbeats; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5575,6 +5646,13 @@ ALTER TABLE ONLY public.submission_deposit_address_revisions ALTER COLUMN revisi
 --
 
 ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.submission_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: v13_scorer_cohort_pins bench_version; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_scorer_cohort_pins ALTER COLUMN bench_version SET DEFAULT nextval('public.v13_scorer_cohort_pins_bench_version_seq'::regclass);
 
 
 --
@@ -7398,6 +7476,14 @@ ALTER TABLE ONLY public.v13_replay_group_package_registrations
 
 ALTER TABLE ONLY public.v13_replay_private_generation_groups
     ADD CONSTRAINT pk_v13_replay_private_generation_groups PRIMARY KEY (group_id);
+
+
+--
+-- Name: v13_scorer_cohort_pins pk_v13_scorer_cohort_pins; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_scorer_cohort_pins
+    ADD CONSTRAINT pk_v13_scorer_cohort_pins PRIMARY KEY (bench_version);
 
 
 --
@@ -9460,6 +9546,20 @@ CREATE TRIGGER v13_replay_group_package_registrations_immutable BEFORE DELETE OR
 --
 
 CREATE TRIGGER v13_replay_private_generation_groups_immutable BEFORE DELETE OR UPDATE ON public.v13_replay_private_generation_groups FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: v13_scorer_cohort_pins v13_scorer_pin_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_scorer_pin_immutable BEFORE DELETE OR UPDATE ON public.v13_scorer_cohort_pins FOR EACH ROW EXECUTE FUNCTION public.reject_v13_scorer_pin_mutation();
+
+
+--
+-- Name: validator_tickets v13_ticket_cohort_gate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_ticket_cohort_gate BEFORE INSERT OR UPDATE ON public.validator_tickets FOR EACH ROW EXECUTE FUNCTION public.enforce_v13_ticket_cohort();
 
 
 --

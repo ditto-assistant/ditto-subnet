@@ -498,6 +498,13 @@ async def issue_ticket(
         return None
     if bench_version is None:
         raise ValueError("benchmark version is required for ticket issuance")
+    if bench_version == 13:
+        from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+
+        if not await pinned_validator_allowed(
+            session, hotkey=validator_hotkey, now=now
+        ):
+            return None
     activated_rollout = await activated_rollout_for_version(
         session, bench_version=bench_version
     )

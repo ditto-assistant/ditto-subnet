@@ -144,6 +144,7 @@ describe('Backroom MCP tools', () => {
 
     expect(response.tools.map((tool) => tool.name).sort()).toEqual(
       [
+        'activate_v13_scorer_cohort',
         'advance_scored_policy_rescreen',
         'execute_screening_quarantine_batch',
         'expand_benchmark_rollout_cohort',
@@ -224,6 +225,7 @@ describe('Backroom MCP tools', () => {
         'get_v13_replay_private_group',
         'get_v13_replay_private_receipt',
         'get_v13_replay_private_statistics',
+        'get_v13_scorer_cohort',
         'get_screening_submission',
         'get_source_release_policy',
         'get_owner_attestations',
@@ -377,7 +379,8 @@ describe('Backroom MCP tools', () => {
     // anything that quotes a reason back to a miner, not a tutorial.
     // Eight digest-only V13 provenance/analysis tools and three process-key
     // tools add bounded entries. Detailed procedures remain in tool help.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(158_000)
+    // The two scorer-pin controls add one bounded read and one audited write.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(160_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -401,8 +404,8 @@ describe('Backroom MCP tools', () => {
       // Includes the V13 clock, independent replay, infra-retry, ordinary
       // source-review queue-age SLO, failure taxonomy route_basis,
       // reopened-hold reason, three process-key summaries, and current V13
-      // provenance reads; measured at 28,253 characters.
-      28_500,
+      // provenance reads plus the two scorer pin controls; measured at 28,634.
+      28_700,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

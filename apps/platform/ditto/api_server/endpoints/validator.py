@@ -216,6 +216,7 @@ from ditto.api_server.scoring_gate import (
     evaluate_rejected_resubmission,
 )
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
 from ditto.api_server.validator_slot_settings import (
     DEFAULT_SETTINGS as SLOT_SETTINGS_DEFAULT,
 )
@@ -3477,6 +3478,15 @@ async def request_job(
         target_version = (
             rollout.desired_version if rollout is not None else canonical_version
         )
+        if target_version == 13 and not await pinned_validator_allowed(
+            session, hotkey=payload.validator_hotkey, now=now
+        ):
+            _record_dispatch_decline(
+                "v13_scorer_cohort_pin",
+                validator_hotkey=payload.validator_hotkey,
+                slot_id=payload.slot_id or "slot-0",
+            )
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
         inference_required = (
             request.app.state.config.inference_proxy.required or target_version >= 7
         )
@@ -6746,6 +6756,14 @@ async def submit_score(
             (agent_id, report_version, payload.validator_hotkey),
             with_for_update=True,
         )
+        # Exact retries below remain idempotent; no new V13 score or canary
+        # completion may enter from outside the immutable scorer cohort.
+        if report_version == 13 and (
+            prior_ticket is None or prior_ticket.status != TicketStatus.SCORED
+        ) and not await pinned_validator_allowed(
+            session, hotkey=payload.validator_hotkey, now=datetime.now(UTC)
+        ):
+            raise HTTPException(409, "V13 scorer cohort pin excludes this validator")
         canary = await canary_for_lease(
             session,
             agent_id=agent_id,

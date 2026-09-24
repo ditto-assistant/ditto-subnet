@@ -1572,6 +1572,40 @@ export async function setInferenceConcurrencySettings(rawInput: unknown, actor: 
 
 const VALIDATOR_SLOT_SETTINGS_PATH = '/api/v1/admin/validator-slot-settings'
 
+const V13_SCORER_COHORT_PATH = '/api/v1/admin/v13-scorer-cohort'
+
+export async function fetchV13ScorerCohort() {
+  return platformAdminRequest(V13_SCORER_COHORT_PATH)
+}
+
+export async function activateV13ScorerCohort(input: {
+  hotkeys: [string, string, string]
+  packet: {
+    source_revision: string
+    release_descriptor_digest: string
+    scorer_image_digest: string
+    scorer_env_sha256: string
+    injected_keys: string[]
+  }
+  expectedSlotSettingsRevision: number
+  expectedSlotSettingsChecksum: string
+  reason: string
+  confirmation: string
+}, actor: string) {
+  return platformAdminRequest(V13_SCORER_COHORT_PATH, {
+    method: 'POST', actor,
+    body: {
+      hotkeys: input.hotkeys,
+      packet: input.packet,
+      expected_slot_settings_revision: input.expectedSlotSettingsRevision,
+      expected_slot_settings_checksum: input.expectedSlotSettingsChecksum,
+      reason: input.reason,
+      confirmation: input.confirmation,
+      actor,
+    },
+  })
+}
+
 export async function fetchValidatorSlotSettings() {
   const payload = await platformAdminRequest(VALIDATOR_SLOT_SETTINGS_PATH)
   return validatorSlotSettingsControlSchema.parse(payload)

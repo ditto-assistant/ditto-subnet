@@ -9,6 +9,7 @@ import {
   v13ReplayPackageWriteInputSchema,
 } from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
+import { fetchV13ScorerCohort, activateV13ScorerCohort } from './admin.service'
 import '@tanstack/react-start/server-only'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
@@ -394,6 +395,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'schedule_v13_review_clock',
   'restore_scored_screening_snapshot',
   'set_validator_slot_settings',
+  'activate_v13_scorer_cohort',
   'apply_copy_court_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
@@ -674,6 +676,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
   get_l2_report_canary:
     'Read one exact-attempt non-authoritative L2 canary report and lease outcome.',
+  get_v13_scorer_cohort:
+    'Read the immutable three-validator V13 scorer pin, including exact signed runtime packet.',
+  activate_v13_scorer_cohort:
+    'Pin three exact managed V13 validators after nonmembers are paused and live tickets drain. One-way activation.',
   schedule_l2_report_canary:
     'Queue one isolated L2 report on an enrolled Hetzner node; never changes screening, scoring, or quarantine.',
   get_copy_court_settings:
@@ -2775,6 +2781,41 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         ),
       )
     },
+  )
+
+  registerTool(
+    'get_v13_scorer_cohort',
+    {
+      title: 'Get V13 scorer cohort pin',
+      description: 'Read the exact immutable three-validator scorer pin and signed runtime packet. Null means no pin and no signed L2 lease. Requires backroom:read.',
+      inputSchema: z.object({}),
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchV13ScorerCohort()),
+  )
+
+  registerTool(
+    'activate_v13_scorer_cohort',
+    {
+      title: 'Activate V13 scorer cohort pin',
+      description: 'One-way pin of three sorted exact managed validator hotkeys and their signed scorer packet. The Platform refuses unless all other fresh V13 validators are issuance-paused and all nonmember V13 tickets have drained. Requires current validator slot settings revision/checksum and confirmation PIN V13 SCORER COHORT. Requires backroom:write.',
+      inputSchema: z.object({
+        hotkeys: z.tuple([z.string(), z.string(), z.string()]),
+        packet: z.object({
+          source_revision: z.string().regex(/^[0-9a-f]{40}$/),
+          release_descriptor_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+          scorer_image_digest: z.string().regex(/^sha256:[0-9a-f]{64}$/),
+          scorer_env_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+          injected_keys: z.array(z.string()).min(1),
+        }),
+        expectedSlotSettingsRevision: z.number().int().min(1),
+        expectedSlotSettingsChecksum: z.string().regex(/^[0-9a-f]{64}$/),
+        reason: z.string().min(8),
+        confirmation: z.literal('PIN V13 SCORER COHORT'),
+      }),
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => activateV13ScorerCohort(input, props.session.email)),
   )
 
   registerTool(
