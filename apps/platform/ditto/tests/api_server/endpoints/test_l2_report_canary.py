@@ -168,6 +168,18 @@ async def test_l2_canary_lease_duplicate_late_and_authority_isolation(
         lease_token=claim.lease_token, status="succeeded", report=report
     )
     async with session_maker() as session:
+        with pytest.raises(HTTPException) as bad_identity:
+            await endpoints.complete_l2_report_canary(
+                canary_id,
+                body.model_copy(
+                    update={"report": {**report, "authority": "screening"}}
+                ),
+                request,
+                "hotkey",
+                session,
+            )
+    assert bad_identity.value.status_code == 409
+    async with session_maker() as session:
         await endpoints.complete_l2_report_canary(
             canary_id, body, request, "hotkey", session
         )

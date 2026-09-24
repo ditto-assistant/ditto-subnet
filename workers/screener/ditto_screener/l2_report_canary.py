@@ -122,10 +122,29 @@ async def consume(
     claim = L2CanaryClaim.model_validate_json(json.dumps(payload))
     if claim.policy_version != 13 or claim.bench_version != 13:
         logger.error("report-only L2 claim is not v13: %s", claim.canary_id)
-        return False
-    if claim.scored_runtime_evidence.attempt_id != claim.source_attempt_id:
+        await platform.complete_l2_report_canary(
+            claim.canary_id,
+            lease_token=claim.lease_token,
+            status="incomplete",
+            report=_identity_report(claim, settings),
+            error_code="unsupported-policy-version",
+        )
+        return True
+    if (
+        claim.scored_runtime_evidence.attempt_id != claim.source_attempt_id
+        or claim.scored_runtime_evidence.artifact_sha256 != claim.artifact_sha256
+        or claim.scored_runtime_evidence.policy_version != claim.policy_version
+        or claim.scored_runtime_evidence.bench_version != claim.bench_version
+    ):
         logger.error("report-only L2 claim has mismatched runtime packet")
-        return False
+        await platform.complete_l2_report_canary(
+            claim.canary_id,
+            lease_token=claim.lease_token,
+            status="incomplete",
+            report=_identity_report(claim, settings),
+            error_code="runtime-packet-mismatch",
+        )
+        return True
     remaining = (claim.lease_expires_at - datetime.now(UTC)).total_seconds()
     if remaining <= 60:
         await platform.complete_l2_report_canary(

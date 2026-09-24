@@ -141,6 +141,9 @@ async def schedule_l2_report_canary(
                 or existing.artifact_sha256 != payload.artifact_sha256
                 or existing.target_node_id != payload.target_node_id
                 or existing.review_label != payload.review_label
+                or existing.policy_version != payload.policy_version
+                or existing.expected_agent_status != payload.expected_agent_status
+                or existing.expected_score_count != payload.expected_score_count
             ):
                 raise HTTPException(
                     status_code=409, detail="canary already scheduled differently"
@@ -150,6 +153,23 @@ async def schedule_l2_report_canary(
         if node is None or node.status != "active" or node.provider != "hetzner":
             raise HTTPException(
                 status_code=409, detail="target is not an active Hetzner screener node"
+            )
+        # Serialize two distinct request ids for the same source attempt before
+        # the partial unique index supplies its final database backstop.
+        await session.scalar(
+            select(ScreeningAttempt)
+            .where(ScreeningAttempt.attempt_id == payload.source_attempt_id)
+            .with_for_update()
+        )
+        active = await session.scalar(
+            select(ScreenerL2ReportCanary.canary_id).where(
+                ScreenerL2ReportCanary.source_attempt_id == payload.source_attempt_id,
+                ScreenerL2ReportCanary.status.in_(("queued", "leased")),
+            )
+        )
+        if active is not None:
+            raise HTTPException(
+                status_code=409, detail="source already has an active canary"
             )
         row = ScreenerL2ReportCanary(
             canary_id=uuid4(),
