@@ -2299,6 +2299,30 @@ class TerraSolSourceReviewAgent:
                 or result.observation.failure_disposition == "inconclusive"
             ):
                 self._store_cache(cache_key, result)
+            if result.observation.error_code == "l2-model-inconclusive":
+                # The model's bounded disposition is operational evidence, not
+                # a policy verdict. Carry only fixed labels and observed counts
+                # over the signed review channel; source and prompts stay local.
+                audit = ScreenReviewAudit(
+                    stage="l2",
+                    reason_code="l2-model-inconclusive",
+                    prompt_revision=l2_prompt_revision(policy_version),
+                    harness_revision=L2_HARNESS_REVISION,
+                    max_steps=self._max_steps,
+                    steps_used=min(len(result.response_models), self._max_steps),
+                    model_disposition="inconclusive",
+                    resolution_basis="insufficient_static_evidence",
+                    model_steps_observed=len(result.response_models),
+                    tool_calls_observed=len(result.tools),
+                    budget_stop_reason="none",
+                )
+                result = replace(
+                    result,
+                    observation=replace(
+                        result.observation,
+                        review_audit=audit.model_dump(mode="json"),
+                    ),
+                )
             self._record_audit(
                 attempt_id=attempt_id,
                 artifact_sha256=artifact_sha256,
@@ -2376,6 +2400,13 @@ class TerraSolSourceReviewAgent:
                         if error.usage.reported_cost_usd is not None
                         else error.usage.estimated_cost_usd
                     ),
+                    model_steps_observed=error.steps_used,
+                    tool_calls_observed=len(error.tools),
+                    budget_stop_reason={
+                        "model-total-budget": "aggregate",
+                        "model-tool-budget": "tool",
+                        "model-step-budget": "step",
+                    }[error.code],
                 )
                 if budget_exhausted
                 else None

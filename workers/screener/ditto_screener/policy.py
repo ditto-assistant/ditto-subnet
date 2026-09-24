@@ -713,6 +713,7 @@ class AgenticSourceReviewModule(_BaseModule):
                         "private source review did not produce a usable result",
                     ),
                 ),
+                review_audit=observation.review_audit,
                 review_notes=review_notes,
             )
         if observation.risk_level == "low" and set(observation.categories) <= (

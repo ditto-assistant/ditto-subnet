@@ -2506,9 +2506,39 @@ async def get_screening_failure_diagnostic(
         reason_code=attempt.reason_code,
         private_failure_detail=attempt.private_failure_detail,
         private_failure_log_tail=attempt.private_failure_log_tail,
+        l2_review_diagnostic=await _l2_review_diagnostic(session, agent_id, attempt_id),
         court_diagnostic=await _court_diagnostic(session, attempt_id),
         court_completion_receipt=await _court_completion_receipt(session, attempt_id),
     )
+
+
+async def _l2_review_diagnostic(
+    session: AsyncSession, agent_id: UUID, attempt_id: UUID
+) -> ScreenReviewAudit | None:
+    """Return only an exact-attempt, digest-verified L2 audit."""
+    quarantine = await session.scalar(
+        select(ScreeningQuarantine).where(
+            ScreeningQuarantine.attempt_id == attempt_id,
+            ScreeningQuarantine.agent_id == agent_id,
+        )
+    )
+    if (
+        quarantine is None
+        or not isinstance(quarantine.review_audit, dict)
+        or quarantine.review_audit_digest is None
+    ):
+        return None
+    try:
+        audit = ScreenReviewAudit.model_validate(quarantine.review_audit)
+    except ValidationError:
+        logger.warning("screening L2 diagnostic rejected attempt_id=%s", attempt_id)
+        return None
+    if (
+        audit.stage != "l2"
+        or audit.canonical_digest() != quarantine.review_audit_digest
+    ):
+        return None
+    return audit
 
 
 async def _court_diagnostic(

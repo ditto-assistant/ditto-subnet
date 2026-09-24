@@ -71,6 +71,7 @@ from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.source_review import TarSourceRepository
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
+    ScreenReviewAudit,
     SourceReviewAdjudication,
     SourceReviewCitation,
 )
@@ -2016,6 +2017,60 @@ def _sol_agent(
         cache_ttl_seconds=86_400,
         transport=httpx.MockTransport(handler),
     )
+
+
+def test_l2_audit_accepts_aggregate_input_usage_across_roles() -> None:
+    audit = ScreenReviewAudit(
+        stage="l2",
+        reason_code="l2-model-total-budget",
+        prompt_revision="l2-v13",
+        max_steps=160,
+        steps_used=159,
+        max_input_tokens=1_000_000,
+        input_tokens_used=2_615_742,
+    )
+    assert ScreenReviewAudit.model_validate(audit.model_dump()).input_tokens_used == (
+        2_615_742
+    )
+    with pytest.raises(ValueError):
+        ScreenReviewAudit.model_validate(
+            {**audit.model_dump(), "input_tokens_used": 20_000_001}
+        )
+
+
+async def test_terminal_l2_model_inconclusive_carries_bounded_signed_audit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+
+    async def review_uncached(*_args: object, **_kwargs: object) -> L2RunResult:
+        return L2RunResult(
+            observation=l2_review._failure("l2-model-inconclusive", "inconclusive"),
+            analyzed_files=(),
+            causal_path=(),
+            tools=("read_file", "search", "submit_review"),
+            usage=L2Usage(input_tokens=120, output_tokens=40),
+            cache_hit=False,
+            response_models=("reviewer", "reviewer"),
+            resolution_basis="insufficient_static_evidence",
+        )
+
+    monkeypatch.setattr(agent, "_review_uncached", review_uncached)
+    result = await agent.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+    )
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.reason_code == "l2-model-inconclusive"
+    assert audit.model_disposition == "inconclusive"
+    assert audit.resolution_basis == "insufficient_static_evidence"
+    assert audit.model_steps_observed == 2
+    assert audit.tool_calls_observed == 3
+    assert audit.budget_stop_reason == "none"
+    assert "read_file" not in json.dumps(audit.model_dump(mode="json"))
 
 
 async def test_local_address_uses_a_fresh_owned_transport_per_client(

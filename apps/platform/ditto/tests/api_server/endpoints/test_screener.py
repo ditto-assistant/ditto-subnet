@@ -7489,6 +7489,18 @@ class TestQuarantineAdmin:
         )
         attempt_id = uuid4()
         other_attempt_id = uuid4()
+        l2_audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-v13",
+            max_steps=160,
+            steps_used=2,
+            model_disposition="inconclusive",
+            resolution_basis="insufficient_static_evidence",
+            model_steps_observed=2,
+            tool_calls_observed=7,
+            budget_stop_reason="none",
+        )
         now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
             for owner_id, owner_attempt_id in (
@@ -7517,6 +7529,20 @@ class TestQuarantineAdmin:
                         ),
                     )
                 )
+            session.add(
+                ScreeningQuarantine(
+                    quarantine_id=uuid4(),
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    manifest_digest=_SHA256,
+                    reason_code="l2-model-inconclusive",
+                    review_audit_digest=l2_audit.canonical_digest(),
+                    review_audit=l2_audit.model_dump(mode="json"),
+                    status="active",
+                )
+            )
         _install_db(app, session_maker)
         headers = {
             "Authorization": "Bearer test-admin-token-at-least-32-characters",
@@ -7563,6 +7589,7 @@ class TestQuarantineAdmin:
             "private_failure_log_tail": (
                 "source_review: ValidationError: malformed finding"
             ),
+            "l2_review_diagnostic": l2_audit.model_dump(mode="json"),
             "court_diagnostic": None,
             "court_completion_receipt": None,
         }

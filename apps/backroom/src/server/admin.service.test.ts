@@ -817,6 +817,7 @@ describe('screening submission admin service', () => {
       ),
     ).resolves.toEqual({
       ...diagnostic,
+      l2_review_diagnostic: null,
       court_diagnostic: null,
       court_completion_receipt: null,
     })
@@ -940,6 +941,7 @@ describe('screening submission admin service', () => {
       ),
     ).resolves.toEqual({
       ...diagnostic,
+      l2_review_diagnostic: null,
       court_diagnostic: court,
       court_completion_receipt: null,
     })
@@ -988,6 +990,7 @@ describe('screening submission admin service', () => {
       fetchScreeningFailureDiagnostic({ agentId, attemptId }, 'reviewer@example.com'),
     ).resolves.toEqual({
       ...response,
+      l2_review_diagnostic: null,
       court_completion_receipt: receipt,
     })
   })

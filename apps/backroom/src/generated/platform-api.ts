@@ -10945,6 +10945,7 @@ export interface components {
             deadline: string;
             /** Finished At */
             finished_at: string | null;
+            l2_review_diagnostic?: components["schemas"]["ScreenReviewAudit"] | null;
             /** Policy Version */
             policy_version: number;
             /** Private Failure Detail */
@@ -27212,6 +27213,8 @@ export interface components {
          * @description Public-safe accounting for a bounded review that could not conclude.
          */
         ScreenReviewAudit: {
+            /** Budget Stop Reason */
+            budget_stop_reason?: ("none" | "step" | "tool" | "aggregate" | "token" | "cost" | "time") | null;
             /** Cost Usd Used */
             cost_usd_used?: number | null;
             /** Harness Revision */
@@ -27228,6 +27231,10 @@ export interface components {
             max_read_bytes?: number | null;
             /** Max Steps */
             max_steps: number;
+            /** Model Disposition */
+            model_disposition?: "inconclusive" | null;
+            /** Model Steps Observed */
+            model_steps_observed?: number | null;
             /** Output Tokens Used */
             output_tokens_used?: number | null;
             /** Prompt Revision */
@@ -27236,6 +27243,8 @@ export interface components {
             read_bytes_used?: number | null;
             /** Reason Code */
             reason_code: string;
+            /** Resolution Basis */
+            resolution_basis?: "insufficient_static_evidence" | null;
             /**
              * Stage
              * @enum {string}
@@ -27243,6 +27252,8 @@ export interface components {
             stage: "l1" | "l2";
             /** Steps Used */
             steps_used: number;
+            /** Tool Calls Observed */
+            tool_calls_observed?: number | null;
         };
         /**
          * ScreenedImageCompletedPart

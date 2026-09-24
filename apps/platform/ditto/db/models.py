@@ -1424,7 +1424,9 @@ class ScreeningQuarantine(Base):
         ),
         CheckConstraint(
             "review_audit IS NULL OR reason_code IN "
-            "('source-review-inconclusive', 'agentic-source-review-tripwire')",
+            "('source-review-inconclusive', 'agentic-source-review-tripwire', "
+            "'l2-model-inconclusive', 'l2-model-total-budget', "
+            "'l2-model-tool-budget', 'l2-model-step-budget')",
             name="screening_quarantines_review_audit_reason_check",
         ),
         CheckConstraint(

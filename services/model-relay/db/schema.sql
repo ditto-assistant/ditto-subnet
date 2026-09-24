@@ -4331,7 +4331,7 @@ CREATE TABLE public.screening_quarantines (
     review_notes jsonb,
     court_diagnostic jsonb,
     court_completion_receipt jsonb,
-    CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_099b CHECK (((review_audit IS NULL) OR (reason_code = ANY (ARRAY['source-review-inconclusive'::text, 'agentic-source-review-tripwire'::text])))),
+    CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_099b CHECK (((review_audit IS NULL) OR (reason_code = ANY (ARRAY['source-review-inconclusive'::text, 'agentic-source-review-tripwire'::text, 'l2-model-inconclusive'::text, 'l2-model-total-budget'::text, 'l2-model-tool-budget'::text, 'l2-model-step-budget'::text])))),
     CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_93b8 CHECK (((review_audit IS NULL) = (review_audit_digest IS NULL))),
     CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_b69b CHECK (((review_audit_digest IS NULL) OR (review_audit_digest ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_screening_quarantines_screening_quarantines_review_n_a86e CHECK (((review_notes IS NULL) = (review_notes_digest IS NULL))),

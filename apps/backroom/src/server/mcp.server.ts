@@ -685,7 +685,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   summarize_screening_failures:
     'Group active-benchmark screening / screening_failed agents by reason_code. Pass generation=all only for a cross-benchmark audit. Use get_screening_submission for one row.',
   get_screening_failure_diagnostic:
-    'Private exact-attempt failure diagnostic; artifact scope.',
+    'Private exact-attempt failure diagnostic, including digest-verified fixed-label L2 accounting when recorded. Null on older attempts. Artifact scope.',
   get_screening_verification_readiness:
     'Read V13 receipt presence; no pass or CLEAR. Artifact scope.',
   get_v13_private_generation_group:
@@ -1262,7 +1262,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening failure diagnostic',
       description:
-        'Read one exact attempt with private failure text and sanitized L4 failure trace, when recorded. No source or model text. Requires backroom:artifact:read; read get_backroom_tool_help for field semantics.',
+        'Read one exact attempt with private failure text, digest-verified fixed-label L2 accounting, and sanitized L4 failure trace when recorded. No source or model text. Requires backroom:artifact:read; read get_backroom_tool_help for field semantics.',
       inputSchema: screeningFailureDiagnosticInputSchema,
       annotations: toolAnnotations('read'),
     },

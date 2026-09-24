@@ -5632,6 +5632,7 @@ describe('Backroom MCP tools', () => {
     expect(allowed.isError).not.toBe(true)
     expect(readJsonResult(allowed)).toEqual({
       ...diagnostic,
+      l2_review_diagnostic: null,
       court_diagnostic: null,
       court_completion_receipt: null,
     })

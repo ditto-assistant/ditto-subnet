@@ -95,6 +95,46 @@ def _model_binding_engine(tmp_path: Path) -> PolicyEngine:
     return PolicyEngine(manifest, (selector, challenge))
 
 
+async def test_v13_terminal_l2_inconclusive_preserves_bounded_audit() -> None:
+    audit = {
+        "stage": "l2",
+        "reason_code": "l2-model-inconclusive",
+        "prompt_revision": "l2-v13",
+        "max_steps": 12,
+        "steps_used": 2,
+        "model_disposition": "inconclusive",
+        "resolution_basis": "insufficient_static_evidence",
+        "model_steps_observed": 2,
+        "tool_calls_observed": 3,
+        "budget_stop_reason": "none",
+    }
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l2-model-inconclusive",
+            failure_disposition="inconclusive",
+            review_audit=audit,
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        raise AssertionError("inconclusive source review must stop before challenge")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="l2-inconclusive-audit",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+    decision = await engine.evaluate(_context(challenge, review))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert decision.review_audit == audit
+
+
 async def test_core_only_pass_never_calls_run() -> None:
     calls = 0
 

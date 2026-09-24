@@ -1096,11 +1096,22 @@ class ScreenReviewAudit(BaseModel):
     max_read_bytes: Annotated[int | None, Field(ge=1, le=256 * 1024**2)] = None
     read_bytes_used: Annotated[int | None, Field(ge=0, le=256 * 1024**2)] = None
     max_input_tokens: Annotated[int | None, Field(ge=1, le=2_000_000)] = None
-    input_tokens_used: Annotated[int | None, Field(ge=0, le=2_000_000)] = None
+    # Aggregate usage can exceed the configured per-trajectory input budget
+    # across L2 reviewer roles; the old 2M wire cap rejected a 2.6M audit.
+    input_tokens_used: Annotated[int | None, Field(ge=0, le=20_000_000)] = None
     max_output_tokens: Annotated[int | None, Field(ge=1, le=256_000)] = None
     output_tokens_used: Annotated[int | None, Field(ge=0, le=256_000)] = None
     max_cost_usd: Annotated[float | None, Field(gt=0, le=100)] = None
     cost_usd_used: Annotated[float | None, Field(ge=0, le=100)] = None
+    # Optional V13 L2 diagnostics contain only fixed labels and counts. Keep
+    # absent fields out of the digest so older signed audits still validate.
+    model_disposition: Literal["inconclusive"] | None = None
+    resolution_basis: Literal["insufficient_static_evidence"] | None = None
+    model_steps_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
+    tool_calls_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
+    budget_stop_reason: (
+        Literal["none", "step", "tool", "aggregate", "token", "cost", "time"] | None
+    ) = None
 
     @model_validator(mode="after")
     def validate_pairs_and_usage(self) -> ScreenReviewAudit:
@@ -1117,8 +1128,20 @@ class ScreenReviewAudit(BaseModel):
         return self
 
     def canonical_digest(self) -> str:
+        diagnostic_fields = {
+            "model_disposition",
+            "resolution_basis",
+            "model_steps_observed",
+            "tool_calls_observed",
+            "budget_stop_reason",
+        }
+        absent_diagnostics = {
+            field for field in diagnostic_fields if getattr(self, field) is None
+        }
         canonical = json.dumps(
-            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            self.model_dump(mode="json", exclude=absent_diagnostics),
+            sort_keys=True,
+            separators=(",", ":"),
         )
         return hashlib.sha256(canonical.encode()).hexdigest()
 

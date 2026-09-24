@@ -4584,6 +4584,7 @@ export const screeningFailureDiagnosticSchema = z.object({
   reason_code: z.string().nullable(),
   private_failure_detail: z.string().max(4_000).nullable(),
   private_failure_log_tail: z.string().max(16_000).nullable(),
+  l2_review_diagnostic: z.lazy(() => screenReviewAuditSchema).nullish().default(null),
   // Null for attempts screened before the court trace existed, and for
   // failures that were not an automated-court run. Older Platform responses
   // omit the key; treat that the same as an absent trace.
@@ -6977,16 +6978,21 @@ export const screenReviewAuditSchema = z.object({
   reason_code: z.string(),
   prompt_revision: z.string(),
   harness_revision: z.string().nullish().default(null),
-  max_steps: z.number().int().positive(),
-  steps_used: z.number().int().nonnegative(),
+  max_steps: z.number().int().min(1).max(240),
+  steps_used: z.number().int().min(0).max(240),
   max_read_bytes: z.number().int().positive().nullish().default(null),
   read_bytes_used: z.number().int().nonnegative().nullish().default(null),
   max_input_tokens: z.number().int().positive().nullish().default(null),
-  input_tokens_used: z.number().int().nonnegative().nullish().default(null),
+  input_tokens_used: z.number().int().min(0).max(20_000_000).nullish().default(null),
   max_output_tokens: z.number().int().positive().nullish().default(null),
   output_tokens_used: z.number().int().nonnegative().nullish().default(null),
   max_cost_usd: z.number().positive().nullish().default(null),
   cost_usd_used: z.number().nonnegative().nullish().default(null),
+  model_disposition: z.enum(['inconclusive']).nullish().default(null),
+  resolution_basis: z.enum(['insufficient_static_evidence']).nullish().default(null),
+  model_steps_observed: z.number().int().min(0).max(10_000).nullish().default(null),
+  tool_calls_observed: z.number().int().min(0).max(10_000).nullish().default(null),
+  budget_stop_reason: z.enum(['none', 'step', 'tool', 'aggregate', 'token', 'cost', 'time']).nullish().default(null),
 })
 
 export const deferredReviewEvidenceSchema = z.object({

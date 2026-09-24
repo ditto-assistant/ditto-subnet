@@ -228,6 +228,8 @@ class AdminScreeningFailureDiagnostic(BaseModel):
     reason_code: str | None
     private_failure_detail: Annotated[str | None, Field(max_length=4_000)] = None
     private_failure_log_tail: Annotated[str | None, Field(max_length=16_000)] = None
+    l2_review_diagnostic: ScreenReviewAudit | None = None
+    """Digest-verified, fixed-label L2 accounting for this exact attempt."""
     court_diagnostic: AdjudicationRunDiagnostic | None = None
     """Sanitized automated-court trace for this attempt. Null when the attempt
     has no such trace, including rows screened before the field existed."""
