@@ -6976,6 +6976,14 @@ class TestPublicActivity:
             "finding_digest": private_digest,
             "review_audit": None,
         }
+        interrupted_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "retryable_infra",
+            "reason_code": "docker-build-infrastructure",
+            "finding_digest": None,
+            "review_notes": [{"summary": private_note}],
+        }
+        quarantine_digest = "ee" * 32
         cases: dict[str, tuple[AgentStatus, str | None, dict[str, object] | None]] = {
             "budget-top5": (
                 AgentStatus.ATH_PENDING_REVIEW,
@@ -7000,6 +7008,16 @@ class TestPublicActivity:
             "quarantine-tripwire": (
                 AgentStatus.QUARANTINED,
                 "agentic-source-review-tripwire",
+                None,
+            ),
+            "interrupted-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], interrupted_result),
+            ),
+            "quarantine-finding": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
                 None,
             ),
             "copy-hold": (AgentStatus.ATH_PENDING_REVIEW, None, None),
@@ -7042,6 +7060,39 @@ class TestPublicActivity:
                         },
                     )
                 )
+        # A pre-score quarantine whose code alone reads "inconclusive" but whose
+        # active quarantine recorded a finding must never be softened.
+        quarantine_attempt = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=quarantine_attempt,
+                    agent_id=ids["quarantine-finding"],
+                    screener_hotkey=_MINER_B,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="quarantined",
+                    started_at=opened_at,
+                    deadline=opened_at + timedelta(minutes=30),
+                    finished_at=opened_at + timedelta(minutes=5),
+                    public_reason="Bounded source review was inconclusive",
+                )
+            )
+            await session.flush()
+            session.add(
+                ScreeningQuarantine(
+                    quarantine_id=uuid4(),
+                    agent_id=ids["quarantine-finding"],
+                    attempt_id=quarantine_attempt,
+                    screener_hotkey=_MINER_B,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    manifest_digest="ab" * 32,
+                    finding_digest=quarantine_digest,
+                    reason_code="source-review-inconclusive",
+                    evidence=[],
+                    finding={"risk": "high", "summary": private_note},
+                    status="active",
+                )
+            )
         await _activate_era(session_maker)
         _install_db(app, session_maker)
 
@@ -7061,6 +7112,8 @@ class TestPublicActivity:
             "adverse-anomaly": (["anomaly"], "adverse_signal"),
             "quarantine-budget": ([], "no_finding"),
             "quarantine-tripwire": ([], "adverse_signal"),
+            "interrupted-deep": (["top_five"], "pending"),
+            "quarantine-finding": ([], "adverse_signal"),
             "copy-hold": ([], None),
         }
 
@@ -7068,8 +7121,13 @@ class TestPublicActivity:
         assert summary.status_code == 200
         assert summary.json()["deferred_review_triggers"] == ["top_five"]
         assert summary.json()["review_conclusion"] == "no_finding"
+        quarantine_summary = await client.get(
+            f"/api/v1/public/agent/{ids['quarantine-finding']}/summary"
+        )
+        assert quarantine_summary.status_code == 200
+        assert quarantine_summary.json()["review_conclusion"] == "adverse_signal"
 
-        for body in (response.text, summary.text):
+        for body in (response.text, summary.text, quarantine_summary.text):
             for private_value in (
                 "source-review-inconclusive",
                 "read-budget-exhausted",
@@ -7077,6 +7135,8 @@ class TestPublicActivity:
                 "source-safety-malicious-risk",
                 "agentic-source-review-tripwire",
                 "deferred-mechanical-admission",
+                "docker-build-infrastructure",
+                quarantine_digest,
                 "tool_anomaly",
                 "composite_anomaly",
                 "338278",

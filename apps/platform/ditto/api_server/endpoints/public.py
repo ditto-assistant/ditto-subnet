@@ -5558,6 +5558,7 @@ def _public_activity_response(
     duplicate_metadata: dict[UUID, _DuplicateSubmissionMetadata] | None = None,
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] | None = None,
     ath_review_composite: dict[UUID, float] | None = None,
+    quarantine_findings: dict[UUID, _QuarantineFinding] | None = None,
     retired_agent_ids: set[UUID] | None = None,
     ath_only: bool = False,
     terminal_history_limit: int | None = None,
@@ -5740,7 +5741,10 @@ def _public_activity_response(
 
     review_projections = {
         row.agent.agent_id: _public_review_projection(
-            row_status=row_status, agent=row.agent, review=_review(row)
+            row_status=row_status,
+            agent=row.agent,
+            review=_review(row),
+            quarantine=(quarantine_findings or {}).get(row.agent.agent_id),
         )
         for row, row_status in page_rows
     }
@@ -5973,11 +5977,52 @@ class _PublicAthReviewSnapshot:
     deferred_evidence: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _QuarantineFinding:
+    """Internal only: an active quarantine's finding, never serialized."""
+
+    finding_digest: str | None
+    finding: dict[str, Any] | None
+
+
+async def _active_quarantine_findings(
+    session: AsyncSession, rows: list[Any]
+) -> dict[UUID, _QuarantineFinding]:
+    """Active quarantine findings for the quarantined rows on this page.
+
+    At most one quarantine per agent is active
+    (``screening_quarantines_one_active_agent_idx``), and the lookup is
+    limited to rows whose agent is currently quarantined.
+    """
+    agent_ids = {
+        row.agent.agent_id
+        for row in rows
+        if row.agent.status == AgentStatus.QUARANTINED
+    }
+    if not agent_ids:
+        return {}
+    result = await session.execute(
+        select(
+            ScreeningQuarantine.agent_id,
+            ScreeningQuarantine.finding_digest,
+            ScreeningQuarantine.finding,
+        ).where(
+            ScreeningQuarantine.agent_id.in_(agent_ids),
+            ScreeningQuarantine.status == "active",
+        )
+    )
+    return {
+        agent_id: _QuarantineFinding(finding_digest=digest, finding=finding)
+        for agent_id, digest, finding in result.tuples()
+    }
+
+
 def _public_review_projection(
     *,
     row_status: str,
     agent: Agent,
     review: _PublicAthReviewSnapshot | None,
+    quarantine: _QuarantineFinding | None,
 ) -> tuple[list[PublicDeferredReviewTrigger], PublicReviewConclusion | None]:
     """Public trigger kinds and automated-review conclusion for one row (#562)."""
     if row_status != "under_review":
@@ -5990,6 +6035,10 @@ def _public_review_projection(
             deferred_evidence=evidence,
             quarantined=agent.status == AgentStatus.QUARANTINED,
             screening_reason_code=agent.screening_reason_code,
+            quarantine_finding_digest=(
+                quarantine.finding_digest if quarantine is not None else None
+            ),
+            quarantine_finding=(quarantine.finding if quarantine is not None else None),
         ),
     )
 
@@ -6234,6 +6283,7 @@ async def activity(
         policy=release_policy,
     )
     ath_reviews, ath_composite = await _ath_review_public_snapshot(session, rows)
+    quarantine_findings = await _active_quarantine_findings(session, rows)
     queue_preview = await queue_preview_for_rows(
         session,
         rows=rows,
@@ -6272,6 +6322,7 @@ async def activity(
         duplicate_metadata=await _duplicate_submission_metadata(session, rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
+        quarantine_findings=quarantine_findings,
         precomputed_statuses=statuses,
         precomputed_status_counts=activity_page.status_counts,
         precomputed_downloadable_count=activity_page.downloadable_count,
@@ -6498,6 +6549,7 @@ async def operations(
     ath_reviews, ath_composite = await _ath_review_public_snapshot(
         session, activity_rows
     )
+    quarantine_findings = await _active_quarantine_findings(session, activity_rows)
     # Operations keeps stored agents.name; handle annotations still travel so
     # the operator board can mark a reserved or stricken stem.
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
@@ -6542,6 +6594,7 @@ async def operations(
         duplicate_metadata=await _duplicate_submission_metadata(session, activity_rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
+        quarantine_findings=quarantine_findings,
         precomputed_statuses=activity_statuses,
         precomputed_status_counts=activity_page.status_counts,
         precomputed_downloadable_count=activity_page.downloadable_count,
@@ -6867,7 +6920,10 @@ async def agent_summary(
     )
     review = ath_reviews.get(agent_id)
     review_projection = _public_review_projection(
-        row_status=status, agent=row.agent, review=review
+        row_status=status,
+        agent=row.agent,
+        review=review,
+        quarantine=(await _active_quarantine_findings(session, [row])).get(agent_id),
     )
     show_similarity_evidence = not _supersedes_public_similarity_evidence(review)
     duplicate = (

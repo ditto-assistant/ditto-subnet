@@ -922,7 +922,12 @@ def test_public_deferred_review_triggers_are_coarse(
         ("source-review-read-budget-exhausted", True),
         ("source-review-step-budget-exhausted", True),
         ("source-review-lease-budget-exhausted", True),
-        ("model-budget-exhausted", True),
+        ("l2-lease-budget-exhausted", True),
+        ("l2-model-budget-exhausted", True),
+        ("lease-budget-exhausted", True),
+        # Exact set, not a suffix: an unknown budget code fails closed.
+        ("source-review-finding-budget-exhausted", False),
+        ("l3-critic-model-budget-exhausted", False),
         ("source-safety-malicious-risk", False),
         ("agentic-source-review-tripwire", False),
         ("adjudicated-source-review-escalate", False),
@@ -930,49 +935,108 @@ def test_public_deferred_review_triggers_are_coarse(
         (None, False),
     ],
 )
-def test_no_finding_codes_are_an_allowlist(code: str | None, expected: bool) -> None:
+def test_no_finding_codes_are_an_exact_allowlist(
+    code: str | None, expected: bool
+) -> None:
     assert is_no_finding_reason_code(code) is expected
 
 
-def test_public_review_conclusion_prefers_the_deep_review_result() -> None:
-    def conclude(
-        *,
-        active: bool,
-        evidence: object,
-        quarantined: bool = False,
-        code: str | None = None,
-    ) -> object:
-        return public_review_conclusion(
-            deferred_review_active=active,
-            deferred_evidence=evidence,
-            quarantined=quarantined,
-            screening_reason_code=code,
-        )
+def _conclude(
+    *,
+    active: bool,
+    evidence: object,
+    quarantined: bool = False,
+    code: str | None = None,
+    quarantine_digest: str | None = None,
+    quarantine_finding: object = None,
+) -> object:
+    return public_review_conclusion(
+        deferred_review_active=active,
+        deferred_evidence=evidence,
+        quarantined=quarantined,
+        screening_reason_code=code,
+        quarantine_finding_digest=quarantine_digest,
+        quarantine_finding=quarantine_finding,
+    )
 
-    budget = {"reason_code": "source-review-inconclusive", "finding_digest": None}
-    assert conclude(active=True, evidence={"deep_review_result": budget}) == (
-        "no_finding"
-    )
-    # A recorded finding digest is never softened, whatever the code says.
-    assert (
-        conclude(
-            active=True,
-            evidence={"deep_review_result": {**budget, "finding_digest": "ab" * 32}},
-        )
-        == "adverse_signal"
-    )
-    assert (
-        conclude(
-            active=True,
-            evidence={
-                "deep_review_result": {"reason_code": "source-safety-malicious-risk"}
+
+def _deep(**result: object) -> dict[str, object]:
+    return {"deep_review_result": result}
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        (
+            {"outcome": "inconclusive", "reason_code": "source-review-inconclusive"},
+            "no_finding",
+        ),
+        (
+            {
+                "outcome": "pass_inconclusive",
+                "reason_code": "source-review-read-budget-exhausted",
             },
-        )
-        == "adverse_signal"
-    )
+            "no_finding",
+        ),
+        # A recorded finding is never softened, whatever the code says.
+        (
+            {
+                "outcome": "inconclusive",
+                "reason_code": "source-review-inconclusive",
+                "finding_digest": "ab" * 32,
+            },
+            "adverse_signal",
+        ),
+        (
+            {"outcome": "quarantine", "reason_code": "source-safety-malicious-risk"},
+            "adverse_signal",
+        ),
+        # Interrupted attempts have no conclusion yet.
+        (
+            {
+                "outcome": "retryable_infra",
+                "reason_code": "docker-build-infrastructure",
+            },
+            "pending",
+        ),
+        (
+            {"outcome": "retryable_infra", "reason_code": "l2-http-503-provider"},
+            "pending",
+        ),
+        (
+            {"outcome": "deterministic_reject", "reason_code": "health-contract"},
+            "pending",
+        ),
+        # ...unless the interrupted attempt still carries a finding.
+        (
+            {
+                "outcome": "retryable_infra",
+                "reason_code": "docker-build-infrastructure",
+                "finding_digest": "ab" * 32,
+            },
+            "adverse_signal",
+        ),
+        # Any other deterministic reject, unknown outcomes and unknown codes
+        # fail closed.
+        (
+            {"outcome": "deterministic_reject", "reason_code": "archive-invalid"},
+            "adverse_signal",
+        ),
+        (
+            {"outcome": "future-outcome", "reason_code": "some-future-code"},
+            "adverse_signal",
+        ),
+        ({"outcome": "inconclusive"}, "adverse_signal"),
+    ],
+)
+def test_deep_review_conclusion(result: dict[str, object], expected: str) -> None:
+    assert _conclude(active=True, evidence=_deep(**result)) == expected
+
+
+def test_public_review_conclusion_without_a_deep_result() -> None:
     # The admission-time code on the deferred snapshot is not a deep result.
     assert (
-        conclude(
+        _conclude(
             active=True,
             evidence={
                 "deferred_review": {
@@ -983,7 +1047,7 @@ def test_public_review_conclusion_prefers_the_deep_review_result() -> None:
         == "pending"
     )
     assert (
-        conclude(
+        _conclude(
             active=True,
             evidence={},
             quarantined=True,
@@ -992,10 +1056,42 @@ def test_public_review_conclusion_prefers_the_deep_review_result() -> None:
         == "no_finding"
     )
     assert (
-        conclude(active=False, evidence=None, quarantined=True, code="tripwire")
+        _conclude(active=False, evidence=None, quarantined=True, code="tripwire")
         == "adverse_signal"
     )
-    assert conclude(active=False, evidence=None, quarantined=True) is None
+    assert _conclude(active=False, evidence=None, quarantined=True) is None
     assert (
-        conclude(active=False, evidence=None, code="source-review-inconclusive") is None
+        _conclude(active=False, evidence=None, code="source-review-inconclusive")
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("digest", "finding"),
+    [("cd" * 32, None), (None, {"risk": "high"}), ("cd" * 32, {"risk": "high"})],
+)
+def test_quarantine_finding_is_never_softened(digest: object, finding: object) -> None:
+    for code in ("source-review-inconclusive", "l2-model-budget-exhausted", None):
+        assert (
+            _conclude(
+                active=False,
+                evidence=None,
+                quarantined=True,
+                code=code,
+                quarantine_digest=digest if isinstance(digest, str) else None,
+                quarantine_finding=finding,
+            )
+            == "adverse_signal"
+        )
+
+
+def test_unknown_budget_code_on_quarantine_is_adverse() -> None:
+    assert (
+        _conclude(
+            active=False,
+            evidence=None,
+            quarantined=True,
+            code="source-review-finding-budget-exhausted",
+        )
+        == "adverse_signal"
     )

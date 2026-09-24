@@ -212,18 +212,43 @@ def public_deferred_review_triggers(
     return triggers
 
 
+# Exact budget-exhaustion codes a screener can report today: the source
+# reviewer's ``source-review-*`` codes (workers/screener source_review.py), the
+# L2 reviewer's ``l2-*`` codes (l2_review.py ``_error_code("l2", ...)``), and the
+# bare lease code from gate.py/worker.py. An exact set, not a suffix match, so a
+# future ``*-budget-exhausted`` code that can carry a finding is never softened.
+BUDGET_EXHAUSTED_REASON_CODES = frozenset(
+    {
+        "source-review-read-budget-exhausted",
+        "source-review-step-budget-exhausted",
+        "source-review-lease-budget-exhausted",
+        "l2-lease-budget-exhausted",
+        "l2-model-budget-exhausted",
+        "lease-budget-exhausted",
+    }
+)
+# A deep attempt that stopped before any verdict: provider or platform outage,
+# or the runtime health re-check interrupted on a different screener host
+# (endpoints/screener.py keeps the hold and parks it for a manual retry).
+_INTERRUPTED_OUTCOME = "retryable_infra"
+_INTERRUPTED_REJECT = ("deterministic_reject", "health-contract")
+
+
 def is_no_finding_reason_code(reason_code: str | None) -> bool:
     """True for automated-review outcomes that ended without any finding.
 
-    An inconclusive review and any exhausted review budget (read, step, lease,
-    model) stopped before reaching a verdict. Every other code, including
-    unknown ones, is treated as an adverse signal so a new finding code can
-    never be softened by omission.
+    An inconclusive review and a known exhausted review budget stopped before
+    reaching a verdict. Every other code, including unknown ones, is treated as
+    an adverse signal so a new finding code can never be softened by omission.
     """
     return reason_code is not None and (
         reason_code == INCONCLUSIVE_REASON_CODE
-        or reason_code.endswith("-budget-exhausted")
+        or reason_code in BUDGET_EXHAUSTED_REASON_CODES
     )
+
+
+def _carries_finding(finding_digest: object, finding: object) -> bool:
+    return finding_digest is not None or finding is not None
 
 
 def public_review_conclusion(
@@ -232,13 +257,21 @@ def public_review_conclusion(
     deferred_evidence: object,
     quarantined: bool,
     screening_reason_code: str | None,
+    quarantine_finding_digest: str | None,
+    quarantine_finding: object,
 ) -> PublicReviewConclusion | None:
     """What the automated review concluded for a held submission.
 
-    For an active deferred review, the post-score deep attempt's result decides;
-    until one is recorded the review is ``pending``. For a pre-score quarantine
-    the agent's screening reason code decides. Every other hold (copy review,
-    operator hold) has no automated-review conclusion to report.
+    Precedence, identical on both paths: a recorded finding (digest or payload)
+    is always ``adverse_signal``; an interrupted attempt has no conclusion yet
+    (``pending``); otherwise a known no-finding reason code is ``no_finding``
+    and anything else, including unknown codes, is ``adverse_signal``.
+
+    For an active deferred review the post-score deep attempt's result decides,
+    and the review is ``pending`` until one is recorded. For a pre-score
+    quarantine the agent's screening reason code and the active quarantine's
+    finding decide. Every other hold (copy review, operator hold) has no
+    automated-review conclusion to report.
     """
     result = (
         deferred_evidence.get("deep_review_result")
@@ -246,18 +279,24 @@ def public_review_conclusion(
         else None
     )
     if isinstance(result, dict):
+        if _carries_finding(result.get("finding_digest"), result.get("finding")):
+            return "adverse_signal"
+        outcome = result.get("outcome")
         code = result.get("reason_code")
+        if outcome == _INTERRUPTED_OUTCOME or (outcome, code) == _INTERRUPTED_REJECT:
+            return "pending"
         return (
             "no_finding"
-            if isinstance(code, str)
-            and is_no_finding_reason_code(code)
-            and result.get("finding_digest") is None
+            if isinstance(code, str) and is_no_finding_reason_code(code)
             else "adverse_signal"
         )
-    if quarantined and screening_reason_code is not None:
-        return (
-            "no_finding"
-            if is_no_finding_reason_code(screening_reason_code)
-            else "adverse_signal"
-        )
+    if quarantined:
+        if _carries_finding(quarantine_finding_digest, quarantine_finding):
+            return "adverse_signal"
+        if screening_reason_code is not None:
+            return (
+                "no_finding"
+                if is_no_finding_reason_code(screening_reason_code)
+                else "adverse_signal"
+            )
     return "pending" if deferred_review_active else None
