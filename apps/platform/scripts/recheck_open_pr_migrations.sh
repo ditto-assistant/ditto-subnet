@@ -11,8 +11,9 @@
 # GitHub re-runs a PR's checks when the PR moves, not when its base does, and
 # "require branches to be up to date before merging" is off on this repo. So
 # nothing else closes this window. This runs on every push to `main` and
-# posts a commit status on each open PR that adds a migration, which is what
-# makes a newly-stale PR say so on the PR itself.
+# posts a commit status when an open PR's result changes, which is what makes
+# a newly-stale PR say so on the PR itself. Reposting an unchanged result on
+# every main push eventually exhausts GitHub's per-SHA/context status limit.
 set -euo pipefail
 
 REPO="${GITHUB_REPOSITORY:-ditto-assistant/ditto-subnet}"
@@ -37,9 +38,8 @@ echo "${BASE_REF} resolves to a single head: ${head_revision}"
 
 # Every open PR, with a count of the migrations it adds -- not just the ones
 # that add migrations. A PR that adds none cannot fork the chain and is
-# reported green without being fetched, which keeps the status present on
-# every PR (so the context is safe to require) and stops a stale red from
-# outliving the migration that caused it.
+# reported green without being fetched. A first status is still posted so the
+# context is safe to require; subsequent unchanged results need no new status.
 open_prs=$(gh api --paginate --slurp \
   "repos/${REPO}/pulls?state=open&per_page=100" |
   jq -r 'add[] | "\(.number)\t\(.head.sha)"')
@@ -75,6 +75,15 @@ while IFS=$'\t' read -r number sha; do
     description="Merging into main would leave more than one Alembic head."
     stale+=("${number}")
     echo "::warning title=PR #${number} would now leave multiple Alembic heads::${output}"
+  fi
+  # The combined-status endpoint returns the latest status for each context.
+  # A required context stays valid until this PR's head SHA changes, so avoid
+  # consuming another of GitHub's 1000 statuses for an unchanged result.
+  current_state=$(gh api "repos/${REPO}/commits/${sha}/status" \
+    --jq ".statuses[] | select(.context == \"${CONTEXT}\") | .state")
+  if [[ "$current_state" == "$state" ]]; then
+    echo "PR #${number}: ${state} status unchanged"
+    continue
   fi
   gh api --method POST "repos/${REPO}/statuses/${sha}" \
     -f state="${state}" \
