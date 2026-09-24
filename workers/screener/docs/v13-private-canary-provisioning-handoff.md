@@ -91,26 +91,30 @@ syntactic difference alone does not prove semantic equivalence.
    ```bash
    python3 workers/screener/scripts/run_v13_private_replay.py \
      --replay-id "$REPLAY_ID" --group-id "$GROUP_ID" \
-     --bank-root "$BANK_ROOT" --provider-key-file "$PROVIDER_KEY_FILE"
+     --bank-root "$BANK_ROOT" --provider-key-file "$PROVIDER_KEY_FILE" \
+     --max-cost-usd 20
    ```
 
    This command is **not runnable today** without the protected bank,
-   registered packages, enrolled independent lease, deployed stack, and
-   budget guard. It prints only the replay ID, receipt digest, status, and
+   registered packages, enrolled independent lease, and deployed stack. The
+   runner now partitions the dollar ceiling across all planned fresh cases;
+   each sidecar rejects a dispatch that exceeds its slice. It prints only the
+   replay ID, receipt digest, status, and
    `policy_verification_complete=false`.
 
 ## One labeled report-only canary
 
 1. Before any paid call, record the expected label, exact target/control
    identities, independent reviewers, bank-review digest, profile SHA-256,
-   expected case count, and a **proposed $5 maximum total provider spend for
-   this one canary**. Use a dedicated credential with a verified external $5 hard cap
-   or add an enforced in-run dollar cap first. The current private relay caps
-   requests per fresh case but has no aggregate dollar cap; the existing
-   source-review `$5` setting does not govern this runner. A 60-pair package
+   expected case count, and a **proposed $20 maximum total provider spend for
+   this one canary**. The in-run dollar cap partitions the amount across all
+   planned sessions and rejects over-budget dispatches before the provider
+   call. Use a dedicated credential with an external cap as an additional
+   limit. The existing source-review `$5` setting does not govern this runner.
+   A 60-pair package
    opens 240 fresh case sessions across two sides and two images (320 for an
    80-pair catalog package), so its per-case request cap is not a total spend
-   cap. If the dollar cap cannot be verified, do not start the run. Exhaustion
+   cap. If the aggregate cap cannot be verified, do not start the run. Exhaustion
    is inconclusive.
 2. Confirm current Backroom `adjudicator_mode=off`, the source-only terminal
    fence, one exact quarantined target, control still SCORED/LIVE, and an
@@ -150,6 +154,6 @@ syntactic difference alone does not prove semantic equivalence.
   contingency, not a step in the normal canary.
 
 The terminal gate stays closed until the private bank/control are independently
-reviewed, the provisioning workflow and aggregate spend guard exist, the
+reviewed, the provisioning workflow and aggregate spend guard are verified, the
 other V13 checks are independently verified, and both CLEAR and REJECT labeled
 canaries match their predeclared expectations under the same reviewed method.

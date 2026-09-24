@@ -59,6 +59,17 @@ def provider(monkeypatch, body):
     return calls
 
 
+def test_private_slice_rejects_paid_dispatch_before_provider_call(
+    tmp_path, monkeypatch
+):
+    calls = provider(monkeypatch, {"usage": {"cost": 0}})
+    relay = Relay("secret", tmp_path / "usage.json", budget_microusd=1)
+    with pytest.raises(RelayError, match="inference_budget_unavailable"):
+        relay.post("/v1/chat/completions", chat())
+    assert calls == []
+    assert relay.requests == 0 and relay.spent == 0
+
+
 @pytest.mark.parametrize(
     "route,body,field",
     [

@@ -25,6 +25,8 @@ from ditto_screener.v13_private_adapter import (
     SettledCaseLedger,
 )
 
+MAX_PRIVATE_REPLAY_COST_MICROUSD = 20_000_000
+
 
 @dataclass(frozen=True)
 class TrustedPrivateImage:
@@ -188,10 +190,41 @@ class ConversationPrivateCaseSessionFactory:
         config: ScreenerConfig,
         provider_key: str,
         resolver: TrustedPrivateImageResolver | None,
+        max_cost_microusd: int,
     ) -> None:
+        if (
+            type(max_cost_microusd) is not int
+            or not 0 < max_cost_microusd <= MAX_PRIVATE_REPLAY_COST_MICROUSD
+        ):
+            raise PrivateExecutionUnavailable("private aggregate budget invalid")
         self.config = config
         self.provider_key = provider_key
         self.resolver = resolver
+        self.max_cost_microusd = max_cost_microusd
+        self._case_budget_microusd: int | None = None
+        self._max_cases = 0
+        self._cases_started = 0
+
+    def configure_budget(self, pair_count: int) -> None:
+        """Partition the hard total cap before any fresh sidecar can dispatch.
+
+        Two sides on each of two pinned images open exactly four sessions per
+        pair. Every sidecar enforces its slice before provider dispatch, so even
+        cancellation, failed usage reads, and unspent slices cannot exceed the
+        total cap. A second configuration or extra case fails closed.
+        """
+        if (
+            self._case_budget_microusd is not None
+            or type(pair_count) is not int
+            or not 60 <= pair_count <= 512
+        ):
+            raise PrivateExecutionUnavailable("private aggregate budget unavailable")
+        max_cases = 4 * pair_count
+        case_budget = self.max_cost_microusd // max_cases
+        if case_budget < 1:
+            raise PrivateExecutionUnavailable("private aggregate budget unavailable")
+        self._max_cases = max_cases
+        self._case_budget_microusd = case_budget
 
     async def open_case(
         self,
@@ -204,8 +237,16 @@ class ConversationPrivateCaseSessionFactory:
         session_id: str,
         case_id: str,
     ) -> FreshCaseSession:
-        if self.resolver is None or not self.provider_key:
+        if (
+            self.resolver is None
+            or not self.provider_key
+            or self._case_budget_microusd is None
+            or self._cases_started >= self._max_cases
+        ):
             raise PrivateExecutionUnavailable("trusted private route unavailable")
+        # Burn a slice before any await. A failed setup never grants a second
+        # chance to spend the same slice against another sidecar.
+        self._cases_started += 1
         image = await self.resolver.resolve(
             role=role,
             agent_id=agent_id,
@@ -235,6 +276,7 @@ class ConversationPrivateCaseSessionFactory:
             ),
             self.provider_key,
             private_case=True,
+            private_budget_microusd=self._case_budget_microusd,
         )
         try:
             await runtime.start()

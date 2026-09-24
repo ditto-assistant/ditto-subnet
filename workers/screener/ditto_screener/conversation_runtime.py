@@ -55,9 +55,16 @@ class ConversationRuntime:
         provider_key: str,
         *,
         private_case: bool = False,
+        private_budget_microusd: int | None = None,
     ):
+        if private_case and (
+            type(private_budget_microusd) is not int
+            or not 0 < private_budget_microusd <= 5_000_000
+        ):
+            raise AssessmentFailure("private_budget_unavailable")
         self.config, self.launch, self.provider_key = config, launch, provider_key
         self.private_case = private_case
+        self.private_budget_microusd = private_budget_microusd
         suffix = launch.assessment_id.hex
         self.network = "ditto-conversation-" + suffix
         self.relay = self.network + "-relay"
@@ -187,6 +194,12 @@ class ConversationRuntime:
         relay_args = ["--env", "OPENROUTER_API_KEY"]
         if self.private_case:
             relay_args.extend(("--env", "DITTO_PRIVATE_CASE=1"))
+            relay_args.extend(
+                (
+                    "--env",
+                    f"DITTO_PRIVATE_BUDGET_MICROUSD={self.private_budget_microusd}",
+                )
+            )
         await self.docker(
             "create",
             "--name",

@@ -77,6 +77,7 @@ async def run_registered_replay_private_group(
     bank_root: Path,
     config: ScreenerConfig,
     provider_key: str,
+    max_cost_microusd: int,
     platform: PlatformClient,
     keypair: Any,
 ) -> dict[str, Any]:
@@ -95,6 +96,7 @@ async def run_registered_replay_private_group(
         config=config,
         provider_key=provider_key,
         resolver=registry,
+        max_cost_microusd=max_cost_microusd,
     )
     running = asyncio.current_task()
     if running is None:
@@ -219,6 +221,7 @@ async def execute_replay_private_group(
             )
             if matched.pair_inventory_sha256 != expected_pair_inventory_sha256:
                 raise PrivateExecutionUnavailable("private registry inventory mismatch")
+            sessions.configure_budget(matched.pair_count)
             target_registration = await packages.get_group_registration(
                 group_id, "target"
             )

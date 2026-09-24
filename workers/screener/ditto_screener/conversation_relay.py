@@ -42,9 +42,12 @@ class DrainingHTTPServer(ThreadingHTTPServer):
 
 
 class Relay:
-    def __init__(self, key: str, state_file: Path):
+    def __init__(self, key: str, state_file: Path, *, budget_microusd: int = BUDGET):
+        if type(budget_microusd) is not int or not 0 < budget_microusd <= BUDGET:
+            raise RelayError("invalid_inference_budget")
         self.key = key
         self.state_file = state_file
+        self.budget_microusd = budget_microusd
         self.lock = threading.Lock()
         self.spent = 0
         self.requests = 0
@@ -292,7 +295,7 @@ class Relay:
             if (
                 self.failed
                 or self.requests >= MAX_REQUESTS
-                or self.spent + reservation > BUDGET
+                or self.spent + reservation > self.budget_microusd
             ):
                 raise RelayError("inference_budget_unavailable")
             self.spent += reservation
@@ -532,6 +535,15 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["harness"]:
         harness_stdio()
     elif not sys.argv[1:]:
-        serve(Relay(os.environ["OPENROUTER_API_KEY"], Path("/state/usage.json")))
+        private_budget = os.environ.get("DITTO_PRIVATE_BUDGET_MICROUSD")
+        serve(
+            Relay(
+                os.environ["OPENROUTER_API_KEY"],
+                Path("/state/usage.json"),
+                budget_microusd=(
+                    int(private_budget) if private_budget is not None else BUDGET
+                ),
+            )
+        )
     else:
         raise SystemExit("unsupported relay mode")
