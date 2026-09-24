@@ -1,7 +1,7 @@
 """Make the miner submission fee denomination explicit on every revision.
 
 Revision ID: 47cca3c5d880
-Revises: d7b4f150ae2c
+Revises: b87d2e4f10a9
 
 Every existing revision already prices uploads in exact rao: the quote and the
 verified payment are ``fee_amount_rao``, and TAO/USD is reporting metadata
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "47cca3c5d880"
-down_revision: str | Sequence[str] | None = "d7b4f150ae2c"
+down_revision: str | Sequence[str] | None = "b87d2e4f10a9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
