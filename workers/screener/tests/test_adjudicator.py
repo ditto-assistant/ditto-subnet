@@ -2148,9 +2148,8 @@ async def test_v13_certifies_visible_endpoint_present_i6_violation(
             [
                 [
                     _call(
-                        "submit_adjudication",
+                        "submit_reject",
                         {
-                            "decision": "reject",
                             "reject_invariant": "i6_tool_execution_fidelity",
                             "reason": (
                                 "On the scored endpoint-present path, the host "
@@ -2232,7 +2231,7 @@ async def test_v13_ambiguous_endpoint_absence_remains_operator_hold(
         ledger_final=True,
     )
     assert result.decision == "escalate"
-    assert result.escalation_code == "adjudicator-evidence-incomplete"
+    assert result.escalation_code == "adjudicator-operator-requested"
     assert result.reject_invariant is None
 
 
