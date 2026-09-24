@@ -2077,6 +2077,9 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     assert "scorer-visible observed trajectory" in policy_v13
     assert "endpoint-present scored path that skips the required POST" in policy_v13
     assert "An optional field in the request schema proves neither" in policy_v13
+    assert "contract guarantees endpoint presence" in policy_v13
+    assert "only for that exact attempt" in policy_v13
+    assert "do not infer artifact-wide unreachability" in policy_v13
     assert "An optional field in the request schema proves neither" not in policy_v12
     assert "a stub that only fires when no tool_endpoint is" in policy_v12
     assert (
