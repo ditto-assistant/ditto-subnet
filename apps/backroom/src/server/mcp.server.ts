@@ -1,5 +1,13 @@
 import { conversationAssessmentInputSchema, conversationSettingsInputSchema, conversationRetryInputSchema } from '../lib/conversation.schemas'
 import { scheduleV13ReviewClockInputSchema } from '../lib/review-clock.schemas'
+import {
+  listV13BenignApprovalsInputSchema,
+  v13BenignApprovalLookupInputSchema,
+  v13BenignApprovalWriteInputSchema,
+  v13ReplayPrivateLookupInputSchema,
+  v13ReplayGroupWriteInputSchema,
+  v13ReplayPackageWriteInputSchema,
+} from '../lib/v13-private.schemas'
 import { fetchConversationAssessments, setConversationSettings, authorizeConversationRetry } from './admin.service'
 import '@tanstack/react-start/server-only'
 
@@ -151,6 +159,14 @@ import {
   fetchAdjudicationAttempts,
   fetchScreeningVerificationReadiness,
   fetchV13GenerationGroup,
+  listV13BenignApprovals,
+  fetchV13BenignApproval,
+  recordV13BenignApproval,
+  fetchV13ReplayPrivateGroup,
+  recordV13ReplayPrivateGroup,
+  registerV13ReplayPrivatePackage,
+  fetchV13ReplayPrivateReceipt,
+  fetchV13ReplayPrivateStatistics,
   fetchScreeningReviewDeadline,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
@@ -1314,6 +1330,94 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchV13GenerationGroup(input)),
+  )
+
+  registerTool(
+    'list_v13_benign_approvals',
+    {
+      title: 'List V13 known benign approvals',
+      description: 'Read immutable digest-only known benign control approvals. Recorded evidence is unverified and grants no terminal decision.',
+      inputSchema: listV13BenignApprovalsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await listV13BenignApprovals(input)),
+  )
+
+  registerTool(
+    'get_v13_benign_approval',
+    {
+      title: 'Get V13 known benign approval',
+      description: 'Read one exact known benign control approval by ID; no private bank contents or verdict.',
+      inputSchema: v13BenignApprovalLookupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchV13BenignApproval(input)),
+  )
+
+  registerTool(
+    'record_v13_benign_approval',
+    {
+      title: 'Record V13 known benign approval',
+      description: 'Append an exact control artifact and image approval with review evidence digest. Records provenance only; it cannot clear or reject an agent.',
+      inputSchema: v13BenignApprovalWriteInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => recordV13BenignApproval(props.session.email, input)),
+  )
+
+  registerTool(
+    'get_v13_replay_private_group',
+    {
+      title: 'Get V13 replay private group',
+      description: 'Read the exact replay-bound group or role package digests. Recorded unverified; no private case bytes or verdict.',
+      inputSchema: v13ReplayPrivateLookupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchV13ReplayPrivateGroup(input)),
+  )
+
+  registerTool(
+    'record_v13_replay_private_group',
+    {
+      title: 'Record V13 replay private group',
+      description: 'Append replay-bound target and known benign commitments before private generation. No case generation or terminal decision is performed.',
+      inputSchema: v13ReplayGroupWriteInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => recordV13ReplayPrivateGroup(props.session.email, input)),
+  )
+
+  registerTool(
+    'register_v13_replay_private_package',
+    {
+      title: 'Register V13 replay private package',
+      description: 'Append a role-specific sealed package digest for one replay. Registration is recorded unverified and does not clear a hold.',
+      inputSchema: v13ReplayPackageWriteInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => registerV13ReplayPrivatePackage(props.session.email, input)),
+  )
+
+  registerTool(
+    'get_v13_replay_private_receipt',
+    {
+      title: 'Get V13 replay private receipt',
+      description: 'Read a signed replay receipt digest and identity. Recorded unverified; policy verification remains incomplete.',
+      inputSchema: v13ReplayPrivateLookupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchV13ReplayPrivateReceipt(input)),
+  )
+
+  registerTool(
+    'get_v13_replay_private_statistics',
+    {
+      title: 'Get V13 replay private statistics',
+      description: 'Read conservative paired statistics and source-binding status. Signal is not a policy pass or terminal verdict.',
+      inputSchema: v13ReplayPrivateLookupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchV13ReplayPrivateStatistics(input)),
   )
 
 

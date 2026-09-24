@@ -208,6 +208,24 @@ async def test_replay_generation_uses_independent_verified_image(
         headers=_HEADERS,
     )
     assert approval.status_code == 200, approval.text
+    listed = await client.get(
+        f"{_BASE}/known-benign-approvals?limit=1", headers=_HEADERS
+    )
+    assert listed.status_code == 200
+    assert [row["approval_id"] for row in listed.json()] == [
+        approval.json()["approval_id"]
+    ]
+    later_page = await client.get(
+        f"{_BASE}/known-benign-approvals?limit=1&offset=1", headers=_HEADERS
+    )
+    assert later_page.status_code == 200
+    assert later_page.json() == []
+    fetched = await client.get(
+        f"{_BASE}/known-benign-approvals/{approval.json()['approval_id']}",
+        headers=_HEADERS,
+    )
+    assert fetched.status_code == 200
+    assert fetched.json() == approval.json()
     payload = {
         "target_agent_id": str(target_agent),
         "target_attempt_id": str(target_attempt),

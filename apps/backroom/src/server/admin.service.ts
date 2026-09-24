@@ -1,6 +1,20 @@
 import '@tanstack/react-start/server-only'
 
 import {
+  listV13BenignApprovalsInputSchema,
+  v13BenignApprovalLookupInputSchema,
+  v13BenignApprovalSchema,
+  v13BenignApprovalWriteInputSchema,
+  v13PrivateStatisticsSchema,
+  v13ReplayGroupSchema,
+  v13ReplayGroupWriteInputSchema,
+  v13ReplayPackageSchema,
+  v13ReplayPackageWriteInputSchema,
+  v13ReplayPrivateLookupInputSchema,
+  v13ReplayPrivateReceiptSchema,
+} from '../lib/v13-private.schemas'
+
+import {
   scheduleV13ReviewClockInputSchema,
   v13ReviewClockScheduleSchema,
 } from '../lib/review-clock.schemas'
@@ -2047,6 +2061,107 @@ export async function fetchV13GenerationGroup(rawInput: unknown) {
   return input.role
     ? v13GroupPackageSchema.parse(payload)
     : v13GenerationGroupSchema.parse(payload)
+}
+
+export async function listV13BenignApprovals(rawInput: unknown) {
+  const input = listV13BenignApprovalsInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals?limit=${input.limit}&offset=${input.offset}`,
+  )
+  return v13BenignApprovalSchema.array().parse(payload)
+}
+
+export async function fetchV13BenignApproval(rawInput: unknown) {
+  const input = v13BenignApprovalLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/known-benign-approvals/${encodeURIComponent(input.approvalId)}`,
+  )
+  return v13BenignApprovalSchema.parse(payload)
+}
+
+export async function recordV13BenignApproval(actor: string, rawInput: unknown) {
+  const input = v13BenignApprovalWriteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    '/api/v1/admin/v13-private-generation/known-benign-approvals',
+    {
+      method: 'POST',
+      actor,
+      body: {
+        agent_id: input.agentId,
+        attempt_id: input.attemptId,
+        artifact_sha256: input.artifactSha256,
+        image_sha256: input.imageSha256,
+        profile_sha256: input.profileSha256,
+        review_evidence_sha256: input.reviewEvidenceSha256,
+        reason: input.reason,
+      },
+    },
+  )
+  return v13BenignApprovalSchema.parse(payload)
+}
+
+export async function fetchV13ReplayPrivateGroup(rawInput: unknown) {
+  const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
+  const base = `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}`
+  const payload = await platformAdminRequest(
+    input.role ? `${base}/packages/${encodeURIComponent(input.role)}` : `${base}/group`,
+  )
+  return input.role
+    ? v13ReplayPackageSchema.parse(payload)
+    : v13ReplayGroupSchema.parse(payload)
+}
+
+export async function recordV13ReplayPrivateGroup(actor: string, rawInput: unknown) {
+  const input = v13ReplayGroupWriteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}/group`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        target_agent_id: input.targetAgentId,
+        target_attempt_id: input.targetAttemptId,
+        target_artifact_sha256: input.targetArtifactSha256,
+        target_image_sha256: input.targetImageSha256,
+        approval_id: input.approvalId,
+        profile_sha256: input.profileSha256,
+      },
+    },
+  )
+  return v13ReplayGroupSchema.parse(payload)
+}
+
+export async function registerV13ReplayPrivatePackage(actor: string, rawInput: unknown) {
+  const input = v13ReplayPackageWriteInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/v13-private-generation/replays/${encodeURIComponent(input.replayId)}/packages/${encodeURIComponent(input.role)}`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        generation_receipt_sha256: input.generationReceiptSha256,
+        manifest_sha256: input.manifestSha256,
+        pair_inventory_sha256: input.pairInventorySha256,
+      },
+    },
+  )
+  return v13ReplayPackageSchema.parse(payload)
+}
+
+export async function fetchV13ReplayPrivateReceipt(rawInput: unknown) {
+  const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-verification-replays/${encodeURIComponent(input.replayId)}/private-receipt`,
+  )
+  return v13ReplayPrivateReceiptSchema.parse(payload)
+}
+
+export async function fetchV13ReplayPrivateStatistics(rawInput: unknown) {
+  const input = v13ReplayPrivateLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-verification-replays/${encodeURIComponent(input.replayId)}/private-statistics`,
+  )
+  return v13PrivateStatisticsSchema.parse(payload)
 }
 
 export async function fetchScreeningReviewDeadline(rawInput: unknown) {

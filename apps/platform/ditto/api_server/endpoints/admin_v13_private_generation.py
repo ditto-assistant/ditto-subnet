@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -129,6 +129,41 @@ def _approval_view(row: V13KnownBenignControlApproval) -> V13KnownBenignApproval
             if key != "status"
         }
     )
+
+
+@router.get("/known-benign-approvals", response_model=list[V13KnownBenignApprovalView])
+async def list_known_benign_approvals(
+    _admin: AdminDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[V13KnownBenignApprovalView]:
+    """List digest-only immutable approvals without private bank handles."""
+    rows = (
+        await session.scalars(
+            select(V13KnownBenignControlApproval)
+            .order_by(
+                V13KnownBenignControlApproval.approved_at.desc(),
+                V13KnownBenignControlApproval.approval_id.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+    ).all()
+    return [_approval_view(row) for row in rows]
+
+
+@router.get(
+    "/known-benign-approvals/{approval_id}",
+    response_model=V13KnownBenignApprovalView,
+)
+async def get_known_benign_approval(
+    approval_id: UUID, _admin: AdminDep, session: SessionDep
+) -> V13KnownBenignApprovalView:
+    row = await session.get(V13KnownBenignControlApproval, approval_id)
+    if row is None:
+        raise HTTPException(404, "known-benign approval not found")
+    return _approval_view(row)
 
 
 def _group_view(row: V13PrivateGenerationGroup) -> V13GenerationGroupView:

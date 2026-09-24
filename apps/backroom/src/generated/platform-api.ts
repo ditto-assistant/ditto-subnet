@@ -3039,7 +3039,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * List Known Benign Approvals
+         * @description List digest-only immutable approvals without private bank handles.
+         */
+        get: operations["list_known_benign_approvals_api_v1_admin_v13_private_generation_known_benign_approvals_get"];
         put?: never;
         /**
          * Record Known Benign Approval
@@ -3048,6 +3052,23 @@ export interface paths {
          *     X-Admin-Actor is an audit label, not proof of an independent approver.
          */
         post: operations["record_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/v13-private-generation/known-benign-approvals/{approval_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Known Benign Approval */
+        get: operations["get_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals__approval_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -38962,6 +38983,40 @@ export interface operations {
             };
         };
     };
+    list_known_benign_approvals_api_v1_admin_v13_private_generation_known_benign_approvals_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13KnownBenignApprovalView"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     record_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals_post: {
         parameters: {
             query?: never;
@@ -38977,6 +39032,39 @@ export interface operations {
                 "application/json": components["schemas"]["V13KnownBenignApprovalRequest"];
             };
         };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13KnownBenignApprovalView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_known_benign_approval_api_v1_admin_v13_private_generation_known_benign_approvals__approval_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                approval_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
             200: {

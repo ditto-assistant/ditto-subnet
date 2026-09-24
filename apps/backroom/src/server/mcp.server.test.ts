@@ -216,6 +216,10 @@ describe('Backroom MCP tools', () => {
         'list_screening_adjudication_attempts',
         'get_screening_verification_readiness',
         'get_v13_private_generation_group',
+        'get_v13_benign_approval',
+        'get_v13_replay_private_group',
+        'get_v13_replay_private_receipt',
+        'get_v13_replay_private_statistics',
         'get_screening_submission',
         'get_source_release_policy',
         'get_owner_attestations',
@@ -245,6 +249,7 @@ describe('Backroom MCP tools', () => {
         'get_screened_image_rebuild',
         'get_validator_score_replacement',
         'list_v9_contract_retests',
+        'list_v13_benign_approvals',
         'open_ath_review',
         'preview_screening_quarantine_batch',
         'list_screening_quarantines',
@@ -254,6 +259,8 @@ describe('Backroom MCP tools', () => {
         'list_screening_submissions',
         'summarize_screening_failures',
         'read_screening_source_file',
+        'record_v13_benign_approval',
+        'record_v13_replay_private_group',
         'search_screening_source',
         'rebuild_screened_image',
         'get_screening_artifact',
@@ -291,6 +298,7 @@ describe('Backroom MCP tools', () => {
         'unban_hotkey',
         'register_coding_catalog_release',
         'register_coding_private_v2_release',
+        'register_v13_replay_private_package',
         'supersede_coding_catalog_release',
         'retire_coding_catalog_release',
         'quarantine_coding_private_v2_release',
@@ -362,7 +370,9 @@ describe('Backroom MCP tools', () => {
     // get_ath_review: which of `hold.reason` / `superseded_*` is the CURRENT
     // reason and which is withdrawn history. That is a correctness rule for
     // anything that quotes a reason back to a miner, not a tutorial.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(147_000)
+    // Eight digest-only V13 provenance/analysis tools add about 6 KB of
+    // input schemas; the catalog still excludes private case bytes and tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(155_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
