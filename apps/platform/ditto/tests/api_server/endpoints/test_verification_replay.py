@@ -325,6 +325,16 @@ async def test_budget_replay_rejects_stale_or_unverified_source_evidence(session
 
     notes = [SourceReviewNote.model_validate(note) for note in quarantine.review_notes]
     quarantine.review_notes_digest = source_review_notes_digest(notes)
+    quarantine.review_audit_digest = "f" * 64
+    # The DB also rejects an orphan digest; disable autoflush here to prove
+    # the admission guard itself rejects it before any write.
+    with session.no_autoflush, pytest.raises(HTTPException) as orphan_audit:
+        await create_replay(agent_id, payload, None, session)
+    assert orphan_audit.value.status_code == 409
+    quarantine = await session.get(ScreeningQuarantine, quarantine_id)
+    assert quarantine is not None
+    quarantine.review_notes_digest = source_review_notes_digest(notes)
+    quarantine.review_audit_digest = None
     await session.commit()
     replay = await create_replay(agent_id, payload, None, session)
     assert replay.replay_id is not None

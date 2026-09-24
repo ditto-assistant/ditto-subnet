@@ -214,11 +214,11 @@ async def _binding_ok(
         and quarantine.screener_hotkey == attempt.screener_hotkey
         and row.image_upload_id is None
     )
-    if held_budget_failure:
+    if held_budget_failure and quarantine is not None:
         # A failed source review has no candidate image. Its signed verdict
         # retained bounded notes even before L2 budget audits were introduced.
         # Verify those notes again before independent, report-only replay.
-        raw_notes = quarantine.review_notes if quarantine is not None else None
+        raw_notes = quarantine.review_notes
         if (
             not isinstance(raw_notes, list)
             or not 1 <= len(raw_notes) <= 48
@@ -228,6 +228,10 @@ async def _binding_ok(
         try:
             notes = [SourceReviewNote.model_validate(note) for note in raw_notes]
             if source_review_notes_digest(notes) != quarantine.review_notes_digest:
+                return False
+            if (quarantine.review_audit is None) != (
+                quarantine.review_audit_digest is None
+            ):
                 return False
             if quarantine.review_audit is not None:
                 audit = ScreenReviewAudit.model_validate(quarantine.review_audit)
