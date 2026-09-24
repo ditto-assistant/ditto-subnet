@@ -82,8 +82,11 @@ ANSIBLE_ROLES_PATH=infra/ansible/roles ansible-playbook \
 ```
 
 An approved bootstrap requires a reviewed intent commit setting its flag true,
-then a read-only exact-head plan and separate apply approval. Disable the
-bootstrap apply identity after creating the isolated state bucket. The
+then a read-only exact-head plan and separate apply approval. The existing
+`gcp-platform` apply service account receives no new-project grant in this
+plan. If a temporary bootstrap principal is used, revoke its temporary roles
+after state-bucket creation; organization owners remain the reviewed root
+trust set. The
 verifier root needs a subsequent reviewed intent commit setting its flag true
 and an exact-head protected plan using its own backend. Keep both flags true
 on subsequent routine plans. Setting either false after creation proposes
