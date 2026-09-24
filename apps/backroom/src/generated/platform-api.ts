@@ -1158,6 +1158,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/copy-reviews/{agent_id}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Execute Ath Hold Withdrawal */
+        post: operations["execute_ath_hold_withdrawal_api_v1_admin_copy_reviews__agent_id__withdraw_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/copy-reviews/{agent_id}/withdraw/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Ath Hold Withdrawal */
+        post: operations["preview_ath_hold_withdrawal_api_v1_admin_copy_reviews__agent_id__withdraw_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/core-qualification/policy": {
         parameters: {
             query?: never;
@@ -7507,6 +7541,111 @@ export interface components {
             history: components["schemas"]["ArtifactReleaseSettingsRevision"][];
             release_gate: components["schemas"]["SourceReleaseGateStatus"];
         };
+        /** AdminAthHoldWithdrawalExecuteRequest */
+        AdminAthHoldWithdrawalExecuteRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Agent Status */
+            expected_agent_status: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Preview Token */
+            preview_token: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+        };
+        /** AdminAthHoldWithdrawalExecuteResponse */
+        AdminAthHoldWithdrawalExecuteResponse: {
+            /** Agent Status */
+            agent_status: string;
+            /**
+             * Emission Gate
+             * @constant
+             */
+            emission_gate: "unavailable";
+            /** Emission Reason */
+            emission_reason: string;
+            /** Emission Reward Eligible */
+            emission_reward_eligible: boolean;
+            /**
+             * Restored Status
+             * @enum {string}
+             */
+            restored_status: "scored" | "live";
+            review: components["schemas"]["AdminCopyReviewItem"];
+        };
+        /** AdminAthHoldWithdrawalPreviewRequest */
+        AdminAthHoldWithdrawalPreviewRequest: {
+            /** Expected Agent Status */
+            expected_agent_status: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+        };
+        /**
+         * AdminAthHoldWithdrawalPreviewResponse
+         * @description Dry-run of restoring rank without granting a policy clearance.
+         */
+        AdminAthHoldWithdrawalPreviewResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            board_after: components["schemas"]["AdminAthRulingsBoardProjection"];
+            board_before: components["schemas"]["AdminAthRulingsBoardProjection"];
+            /**
+             * Emission Gate
+             * @constant
+             */
+            emission_gate: "unavailable";
+            /** Emission Reason */
+            emission_reason: string;
+            /** Emission Reward Eligible */
+            emission_reward_eligible: boolean;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Preview Token */
+            preview_token: string;
+            /**
+             * Restored Status
+             * @enum {string}
+             */
+            restored_status: "scored" | "live";
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+            /** Score Count */
+            score_count: number;
+            /** Would Change Crown */
+            would_change_crown: boolean;
+            /** Would Change Emission Crown */
+            would_change_emission_crown: boolean;
+        };
         /**
          * AdminAthRuling
          * @description One guarded ruling: the same guards ``open_ath_review`` takes.
@@ -8645,7 +8784,7 @@ export interface components {
              * Action
              * @enum {string}
              */
-            action: "reopen" | "clear" | "reject";
+            action: "reopen" | "clear" | "reject" | "withdraw";
             /** Actor */
             actor: string;
             /** Artifact Sha256 */
@@ -8809,7 +8948,7 @@ export interface components {
             opened_at: string;
             original: components["schemas"]["AdminCopyReviewEvidence"];
             /** Resolution */
-            resolution?: ("clear" | "reject") | null;
+            resolution?: ("clear" | "reject" | "withdraw") | null;
             /** Resolution Reason */
             resolution_reason?: string | null;
             /** Resolved At */
@@ -21103,7 +21242,7 @@ export interface components {
              * Review Event
              * @description Latest public ATH lifecycle event. Null when the submission has no durable ATH review record.
              */
-            review_event?: ("opened" | "reopened" | "cleared" | "rejected") | null;
+            review_event?: ("opened" | "reopened" | "cleared" | "rejected" | "withdrawn") | null;
             /**
              * Review Event At
              * @description When the latest public ATH lifecycle event occurred (UTC).
@@ -21363,7 +21502,7 @@ export interface components {
             /** Quorum */
             quorum: number;
             /** Review Event */
-            review_event?: ("opened" | "reopened" | "cleared" | "rejected") | null;
+            review_event?: ("opened" | "reopened" | "cleared" | "rejected" | "withdrawn") | null;
             /** Review Event At */
             review_event_at?: string | null;
             /** Review Opened At */
@@ -33906,6 +34045,82 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminSourceDiffFileDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execute_ath_hold_withdrawal_api_v1_admin_copy_reviews__agent_id__withdraw_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthHoldWithdrawalExecuteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthHoldWithdrawalExecuteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_ath_hold_withdrawal_api_v1_admin_copy_reviews__agent_id__withdraw_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminAthHoldWithdrawalPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAthHoldWithdrawalPreviewResponse"];
                 };
             };
             /** @description Validation Error */
