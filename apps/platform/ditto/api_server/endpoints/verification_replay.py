@@ -25,6 +25,7 @@ from ditto.api_models.verification_replay import (
     VerificationReplayInputs,
     VerificationReplayReceiptRequest,
     VerificationReplayReceiptState,
+    VerificationReplaySignedObservationState,
     VerificationReplayState,
 )
 from ditto.api_server.dependencies import get_session, get_storage_client
@@ -35,6 +36,7 @@ from ditto.api_server.endpoints.screener import (
     _artifact_key,
     _screened_image_key,
 )
+from ditto.api_server.endpoints.validator import _verify_signature
 from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
@@ -43,6 +45,12 @@ from ditto.db.models import (
     ScreeningQuarantine,
     ScreeningVerificationReplay,
     ScreeningVerificationReplayReceipt,
+    ScreeningVerificationReplaySignedObservation,
+)
+from ditto_screening_protocol.v13_replay_observation import (
+    V13ReplayBinding,
+    V13ReplayObservation,
+    authentic_replay_observation,
 )
 
 admin_router = APIRouter(prefix="/admin/screening-verification-replays", tags=["admin"])
@@ -714,6 +722,90 @@ async def append_replay_receipt(
     session.add(receipt)
     await session.commit()
     return VerificationReplayReceiptState.model_validate(receipt, from_attributes=True)
+
+
+@screener_router.post(
+    "/{replay_id}/signed-observations",
+    response_model=VerificationReplaySignedObservationState,
+)
+async def append_signed_replay_observation(
+    replay_id: UUID,
+    payload: V13ReplayObservation,
+    request: Request,
+    worker: ScreenerDep,
+    session: SessionDep,
+) -> VerificationReplaySignedObservationState:
+    """Retain an authenticated independent claim without verifying check semantics.
+
+    Even a signed ``passed`` observation is report-only. This endpoint cannot
+    satisfy the mandatory V13 profile or change the source quarantine.
+    """
+    await _require_enrolled_replay_worker(request, worker, session)
+    row = await _active_claim(session, replay_id, worker)
+    attempt = await session.get(ScreeningAttempt, row.source_attempt_id)
+    if (
+        attempt is None
+        or attempt.screener_hotkey is None
+        or row.image_sha256 is None
+        or row.image_id is None
+        or row.image_verified_at is None
+        or row.lease_started_at is None
+        or row.lease_deadline is None
+    ):
+        raise HTTPException(409, "replay image or source identity unavailable")
+    expected = V13ReplayBinding(
+        replay_id=row.replay_id,
+        agent_id=row.agent_id,
+        attempt_id=row.source_attempt_id,
+        artifact_sha256=row.artifact_sha256,
+        policy_version=13,
+        image_sha256=row.image_sha256,
+        image_id=row.image_id,
+    )
+    if not authentic_replay_observation(
+        payload,
+        expected=expected,
+        enrolled_runner_hotkey=worker,
+        source_worker_hotkey=attempt.screener_hotkey,
+        lease_started_at=row.lease_started_at,
+        lease_deadline=row.lease_deadline,
+        verify_signature=_verify_signature,
+    ):
+        raise HTTPException(403, "signed replay observation identity invalid")
+    existing = await session.scalar(
+        select(ScreeningVerificationReplaySignedObservation).where(
+            ScreeningVerificationReplaySignedObservation.replay_id == replay_id,
+            ScreeningVerificationReplaySignedObservation.check_code
+            == payload.check_code,
+        )
+    )
+    if existing is not None:
+        if (
+            existing.status != payload.status
+            or existing.evidence_sha256 != payload.evidence_sha256
+            or existing.runner_hotkey != payload.runner_hotkey
+            or existing.observed_at != payload.observed_at
+            or existing.signature != payload.signature
+        ):
+            raise HTTPException(409, "check already has a different observation")
+        return VerificationReplaySignedObservationState.model_validate(
+            existing, from_attributes=True
+        )
+    observation = ScreeningVerificationReplaySignedObservation(
+        observation_id=uuid4(),
+        replay_id=replay_id,
+        check_code=payload.check_code,
+        status=payload.status,
+        evidence_sha256=payload.evidence_sha256,
+        runner_hotkey=worker,
+        observed_at=payload.observed_at,
+        signature=payload.signature,
+    )
+    session.add(observation)
+    await session.commit()
+    return VerificationReplaySignedObservationState.model_validate(
+        observation, from_attributes=True
+    )
 
 
 @screener_router.post("/{replay_id}/finish", response_model=VerificationReplayState)

@@ -1050,6 +1050,42 @@ class ScreeningVerificationReplayReceipt(Base):
     )
 
 
+class ScreeningVerificationReplaySignedObservation(Base):
+    """Authenticated replay claim, still unverified and report-only."""
+
+    __tablename__ = "screening_verification_replay_signed_observations"
+
+    observation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    check_code: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("length(check_code) BETWEEN 1 AND 64", name="svrso_check_code"),
+        CheckConstraint(
+            "status IN ('passed', 'failed', 'inconclusive')", name="svrso_status"
+        ),
+        CheckConstraint("length(evidence_sha256) = 64", name="svrso_evidence_sha"),
+        CheckConstraint("length(runner_hotkey) BETWEEN 1 AND 120", name="svrso_runner"),
+        CheckConstraint("length(signature) = 128", name="svrso_signature"),
+        Index("svrso_replay_check_idx", "replay_id", "check_code", unique=True),
+    )
+
+
 class AthReview(Base):
     """Durable, immutable-evidence audit record for an ATH copy hold."""
 

@@ -20,6 +20,7 @@ from ditto.api_models.verification_replay import (
 from ditto.api_server.endpoints.verification_replay import (
     _replay_verified_image_key,
     append_replay_receipt,
+    append_signed_replay_observation,
     claim_replay,
     create_replay,
     finish_replay,
@@ -39,6 +40,11 @@ from ditto.db.models import (
     ScreeningVerificationReceipt,
     ScreeningVerificationReplay,
     ScreeningVerificationReplayReceipt,
+    ScreeningVerificationReplaySignedObservation,
+)
+from ditto_screening_protocol.v13_replay_observation import (
+    V13ReplayBinding,
+    V13ReplayObservation,
 )
 
 ARTIFACT = "a" * 64
@@ -205,6 +211,92 @@ def _payload(attempt_id, quarantine_id, image_id, **changes):
     }
     values.update(changes)
     return VerificationReplayCreate(**values)
+
+
+@pytest.mark.asyncio
+async def test_signed_observation_remains_report_only_and_rejects_rebinding(
+    session, monkeypatch
+):
+    from ditto.api_server.endpoints import verification_replay
+
+    agent_id, attempt_id, quarantine_id, image_id = await _seed(session)
+    created = await create_replay(
+        agent_id, _payload(attempt_id, quarantine_id, image_id), None, session
+    )
+    await _enroll(session, replay_capacity=1)
+    claimed = await claim_replay(_request(), SECOND_WORKER, session)
+    assert claimed is not None and claimed.replay_id == created.replay_id
+    signed_messages = []
+    monkeypatch.setattr(
+        verification_replay,
+        "_verify_signature",
+        lambda hotkey, message, signature: (
+            signed_messages.append((hotkey, message, signature)) or True
+        ),
+    )
+    observation = V13ReplayObservation(
+        binding=V13ReplayBinding(
+            replay_id=created.replay_id,
+            agent_id=agent_id,
+            attempt_id=attempt_id,
+            artifact_sha256=ARTIFACT,
+            image_sha256=IMAGE,
+            image_id="sha256:" + "c" * 64,
+        ),
+        check_code="health",
+        status="passed",
+        evidence_sha256="e" * 64,
+        runner_hotkey=SECOND_WORKER,
+        observed_at=datetime.now(UTC),
+        signature="f" * 128,
+    )
+    accepted = await append_signed_replay_observation(
+        created.replay_id, observation, _request(), SECOND_WORKER, session
+    )
+    assert accepted.status == "passed"
+    assert accepted.policy_verification_complete is False
+    assert signed_messages == [
+        (SECOND_WORKER, observation.signing_message(), observation.signature)
+    ]
+    assert (
+        await session.scalar(
+            select(
+                func.count(ScreeningVerificationReplaySignedObservation.observation_id)
+            )
+        )
+    ) == 1
+    assert (
+        await append_signed_replay_observation(
+            created.replay_id, observation, _request(), SECOND_WORKER, session
+        )
+    ).observation_id == accepted.observation_id
+    for changed in (
+        observation.model_copy(
+            update={
+                "binding": observation.binding.model_copy(
+                    update={"attempt_id": uuid4()}
+                )
+            }
+        ),
+        observation.model_copy(
+            update={
+                "binding": observation.binding.model_copy(
+                    update={"image_sha256": "d" * 64}
+                )
+            }
+        ),
+        observation.model_copy(update={"runner_hotkey": FIRST_WORKER}),
+    ):
+        with pytest.raises(HTTPException):
+            await append_signed_replay_observation(
+                created.replay_id, changed, _request(), SECOND_WORKER, session
+            )
+    monkeypatch.setattr(verification_replay, "_verify_signature", lambda *_: False)
+    with pytest.raises(HTTPException) as bad_signature:
+        await append_signed_replay_observation(
+            created.replay_id, observation, _request(), SECOND_WORKER, session
+        )
+    assert bad_signature.value.status_code == 403
 
 
 @pytest.mark.asyncio

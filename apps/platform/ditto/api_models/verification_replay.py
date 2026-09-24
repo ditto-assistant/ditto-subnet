@@ -117,6 +117,18 @@ class VerificationReplayReceiptState(BaseModel):
     created_at: datetime
 
 
+class VerificationReplaySignedObservationState(BaseModel):
+    observation_id: UUID
+    replay_id: UUID
+    check_code: str
+    status: Literal["passed", "failed", "inconclusive"]
+    evidence_sha256: str
+    runner_hotkey: str
+    observed_at: datetime
+    created_at: datetime
+    policy_verification_complete: Literal[False] = False
+
+
 class VerificationReplayFinish(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
