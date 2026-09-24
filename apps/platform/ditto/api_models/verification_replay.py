@@ -86,6 +86,11 @@ class VerificationReplayState(BaseModel):
 
 class VerificationReplayInputs(BaseModel):
     replay: VerificationReplayState
+    bench_version: int = Field(
+        ge=7,
+        description="Arrival-era benchmark version resolved when inputs are fetched",
+    )
+    miner_hotkey: str
     artifact_url: str
     image_url: str | None
     urls_expire_at: datetime
