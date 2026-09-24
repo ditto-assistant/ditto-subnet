@@ -1934,6 +1934,12 @@ def test_static_preflight_v2_sanitized_regression_corpus(
     assert audit[0]["candidate_revision"] == "static-malicious-preflight-v2"
     expected = case["expected"]
     category = case["category"]
+    if "reachability" in case:
+        assert any(
+            proof["category"] == category
+            and proof["reachability_state"] == case["reachability"]
+            for proof in audit[0]["proofs"]
+        )
     if expected == "decisive":
         assert observation is not None
         assert observation.finding is not None
@@ -1942,6 +1948,11 @@ def test_static_preflight_v2_sanitized_regression_corpus(
         )
         assert category in observation.categories
         assert audit[0]["candidate_decisive"] is True
+    elif expected == "none":
+        assert observation is None
+        assert audit[0]["legacy_decisive"] is False
+        assert audit[0]["candidate_decisive"] is False
+        assert audit[0]["advisory_count"] == 0
     elif audit[0]["legacy_requires_serial_review"]:
         assert observation is not None
         assert observation.finding is not None
