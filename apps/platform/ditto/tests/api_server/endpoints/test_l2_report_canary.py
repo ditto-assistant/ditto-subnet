@@ -18,12 +18,36 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.l2_report_canary import (
     L2CanaryClaimRequest,
     L2CanaryCompleteRequest,
+    L2CanaryScheduleRequest,
 )
 from ditto.api_server.endpoints import l2_report_canary as endpoints
 from ditto.api_server.storage import S3StorageClient
 from ditto.db.models import ScreenerL2ReportCanary, ScreenerNode, ScreeningAttempt
 from ditto.tests.api_server.endpoints.test_screener import _seed_agent
 from ditto_screening_protocol import ScoredRuntimeEvidenceLease
+
+
+def test_l2_canary_schedule_accepts_uuid_strings_from_http_json() -> None:
+    request_id, agent_id, attempt_id = uuid4(), uuid4(), uuid4()
+    payload = L2CanaryScheduleRequest.model_validate(
+        {
+            "request_id": str(request_id),
+            "agent_id": str(agent_id),
+            "source_attempt_id": str(attempt_id),
+            "artifact_sha256": "a" * 64,
+            "policy_version": 13,
+            "expected_agent_status": "screening_failed",
+            "expected_score_count": 0,
+            "target_node_id": "subnet-screener-1",
+            "review_label": "candidate_clear",
+            "confirm_report_only": True,
+        }
+    )
+    assert (payload.request_id, payload.agent_id, payload.source_attempt_id) == (
+        request_id,
+        agent_id,
+        attempt_id,
+    )
 
 
 def _packet(attempt_id, sha: str) -> ScoredRuntimeEvidenceLease:

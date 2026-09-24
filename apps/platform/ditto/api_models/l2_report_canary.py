@@ -15,9 +15,11 @@ from ditto_screening_protocol import ScoredRuntimeEvidenceLease
 class L2CanaryScheduleRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
-    request_id: UUID
-    agent_id: UUID
-    source_attempt_id: UUID
+    # FastAPI parses JSON into Python strings before model validation. Keep the
+    # rest of this wire model strict while accepting canonical UUID strings.
+    request_id: Annotated[UUID, Field(strict=False)]
+    agent_id: Annotated[UUID, Field(strict=False)]
+    source_attempt_id: Annotated[UUID, Field(strict=False)]
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     policy_version: Literal[13]
     expected_agent_status: str
