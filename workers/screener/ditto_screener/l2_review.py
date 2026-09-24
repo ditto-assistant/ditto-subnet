@@ -5746,6 +5746,9 @@ def _served_generator_hold(
 # giving Platform/Backroom a cause instead of collapsing everything into
 # ``l2-valueerror``. Unmapped messages still degrade to the historical shape.
 _L2_FAILURE_CODES: Mapping[str, str] = {
+    "scorer evidence requires URL and expected revision": (
+        "runtime-evidence-config-invalid"
+    ),
     "L2 analyzer CPU limit must be between 0.25 and 2.0": "analyzer-cpu-limit",
     "L2 analyzer exceeded lease budget": "analyzer-lease-budget",
     "L2 analyzer exceeded output budget": "analyzer-output-budget",
