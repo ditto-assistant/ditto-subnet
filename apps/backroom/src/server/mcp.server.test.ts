@@ -355,8 +355,9 @@ describe('Backroom MCP tools', () => {
     // The two V13 clock tools and bounded, default-off replay control bring
     // the measured catalog just above 142 KB. The no-input infra-retry read
     // adds one more bounded catalog entry; measured 143,145 bytes together
-    // after #2180, bounded with ~1 KB headroom like the entries above.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(144_200)
+    // after #2180. The guarded ATH withdrawal adds two bounded operations;
+    // the measured catalog is 145,913 bytes with ~1 KB of headroom.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(147_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -377,9 +378,9 @@ describe('Backroom MCP tools', () => {
     // L4 cohort diagnostic adds one catalog line without another tutorial.
     // The infra-retry read summary lands at 25,990, so the bound moves to 26_200.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      // Includes the V13 clock, independent replay, and infra-retry read
-      // summaries; measured 26,431 characters together.
-      26_600,
+      // Includes the V13 clock, independent replay, infra-retry, and guarded
+      // ATH withdrawal summaries.
+      27_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
