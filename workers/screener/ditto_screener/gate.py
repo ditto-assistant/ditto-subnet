@@ -1917,9 +1917,16 @@ class BuildGate:
                 or held_source_review
             ) and image_publisher is not None:
                 report("submitting")
+                # A held image is supplemental evidence. Keep time to submit
+                # the authoritative quarantine even if export is slow.
+                image_deadline = (
+                    deadline - 30.0
+                    if held_source_review and deadline is not None
+                    else deadline
+                )
                 if (
                     exhausted := self._lease_exhausted(
-                        deadline, "image export", policy_version=policy_version
+                        image_deadline, "image export", policy_version=policy_version
                     )
                 ) is not None:
                     return decision if held_source_review else exhausted
@@ -1929,13 +1936,13 @@ class BuildGate:
                         image = await self._export_remote_archive(
                             remote_archive,
                             image_ref=image_ref,
-                            deadline=deadline,
+                            deadline=image_deadline,
                         )
                     else:
                         image = await self._export_image(
                             built_image_id,
                             image_ref=image_ref,
-                            deadline=deadline,
+                            deadline=image_deadline,
                         )
                 except _ScreenedImageTooLargeError as error:
                     if held_source_review:
@@ -1971,7 +1978,7 @@ class BuildGate:
                         detail=f"screener error: image export failed: {error}",
                     )
                 try:
-                    remaining = self._lease_remaining(deadline)
+                    remaining = self._lease_remaining(image_deadline)
                     if remaining is None:
                         await image_publisher(image)
                     elif remaining <= 0:
