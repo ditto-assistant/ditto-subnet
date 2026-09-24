@@ -672,7 +672,12 @@ async def test_reopened_queue_row_shows_the_reconsideration_not_the_withdrawn_re
     assert (
         await client.post(
             f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-            json={"resolution": "reject", "reason": reject_reason},
+            json={
+                "resolution": "reject",
+                "reason": reject_reason,
+                "evidence_references": ["src/main.rs:42"],
+                "reason_codes": ["I5.benchmark_semantic_compiler"],
+            },
             headers=_HEADERS,
         )
     ).status_code == 200
@@ -770,7 +775,12 @@ async def test_active_rejection_and_open_hold_keep_their_own_reason(
     reject_reason = "Reject under policy v13 for I5: transform-audited overfit"
     rejected = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "reject", "reason": reject_reason},
+        json={
+            "resolution": "reject",
+            "reason": reject_reason,
+            "evidence_references": ["src/main.rs:42"],
+            "reason_codes": ["I5.benchmark_semantic_compiler"],
+        },
         headers=_HEADERS,
     )
     assert rejected.status_code == 200
