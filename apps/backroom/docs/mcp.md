@@ -232,6 +232,19 @@ so a compromised or stale process can be stopped. Both writes require
 No key registration, capacity change, or live host enrollment is performed by
 these tools merely becoming available.
 
+## Finding a submission
+
+`search_submissions` resolves what an operator knows (an agent name or name
+prefix, a miner hotkey or payment coldkey, an artifact SHA-256, statuses, reason
+codes, a submitted window) to exact rows in one call. Platform applies the
+AND-combined filters server-side on `GET /admin/screening-submissions`, and
+`count` is the filtered total. The tool defaults to `generation=all`, because
+the row being looked for often predates the active benchmark, and to
+`detail=identity`, which returns only `agent_id`, name, version, status,
+`submitted_at`, and `artifact_sha256`. Paging `list_screening_submissions` and
+filtering client-side is the pattern it replaces: finding one name that way
+once took eight 200-row pages and about 1.4 MB of JSON.
+
 ## The review queue
 
 `get_screening_review_queue` is the operator queue: unresolved `ath_reviews`

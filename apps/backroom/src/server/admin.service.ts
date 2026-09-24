@@ -110,6 +110,7 @@ import {
   expireRunningScreeningResponseSchema,
   rejectScreeningSubmissionInputSchema,
   rejectScreeningSubmissionResponseSchema,
+  screeningSubmissionFiltersSchema,
   resolveScreeningQuarantineInputSchema,
   resolveScreeningQuarantineResponseSchema,
   resolveScreeningDisputeInputSchema,
@@ -2171,12 +2172,30 @@ export async function fetchScreeningSubmissions(
   limit = 200,
   offset = 0,
   generation: 'active' | 'all' = 'active',
+  rawFilters: unknown = {},
 ) {
+  const filters = screeningSubmissionFiltersSchema.parse(rawFilters)
   const query = new URLSearchParams({
     generation,
     limit: String(limit),
     offset: String(offset),
   })
+  const scalar: Array<[string, string | undefined]> = [
+    ['agent_name', filters.agentName],
+    ['agent_name_prefix', filters.agentNamePrefix],
+    ['miner_hotkey', filters.minerHotkey],
+    ['miner_coldkey', filters.minerColdkey],
+    ['artifact_sha256', filters.artifactSha256],
+    ['submitted_after', filters.submittedAfter],
+    ['submitted_before', filters.submittedBefore],
+  ]
+  for (const [key, value] of scalar) {
+    if (value !== undefined) query.set(key, value)
+  }
+  for (const status of filters.agentStatus ?? []) query.append('agent_status', status)
+  for (const code of filters.screeningReasonCode ?? []) {
+    query.append('screening_reason_code', code)
+  }
   const payload = await platformAdminRequest(
     `/api/v1/admin/screening-submissions?${query.toString()}`,
   )

@@ -8147,6 +8147,13 @@ CREATE INDEX agents_miner_hotkey_idx ON public.agents USING btree (miner_hotkey)
 
 
 --
+-- Name: agents_name_pattern_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX agents_name_pattern_idx ON public.agents USING btree (name text_pattern_ops);
+
+
+--
 -- Name: agents_normalized_source_hash_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8578,6 +8585,13 @@ CREATE INDEX efficiency_cohort_snapshots_board_idx ON public.efficiency_cohort_s
 --
 
 CREATE INDEX evaluation_payments_available_credit_idx ON public.evaluation_payments USING btree (miner_hotkey) WHERE (agent_id IS NULL);
+
+
+--
+-- Name: evaluation_payments_miner_coldkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX evaluation_payments_miner_coldkey_idx ON public.evaluation_payments USING btree (miner_coldkey);
 
 
 --

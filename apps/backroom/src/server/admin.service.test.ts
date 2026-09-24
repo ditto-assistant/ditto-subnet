@@ -756,6 +756,61 @@ describe('screening submission admin service', () => {
     )
   })
 
+  it('forwards every screening-submission search filter as Platform query params', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ items: [], count: 0, generation: 'all', active_bench_version: 12 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchScreeningSubmissions(10, 20, 'all', {
+      agentName: 'moonlight_v1',
+      agentNamePrefix: 'moon',
+      minerHotkey: '5Hot',
+      minerColdkey: '5Cold',
+      artifactSha256: 'AB'.repeat(32),
+      agentStatus: ['scored', 'banned'],
+      screeningReasonCode: ['docker-build', 'policy-network-egress'],
+      submittedAfter: '2026-07-01T00:00:00Z',
+      submittedBefore: '2026-08-01T00:00:00+00:00',
+    })
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?' +
+        [
+          'generation=all',
+          'limit=10',
+          'offset=20',
+          'agent_name=moonlight_v1',
+          'agent_name_prefix=moon',
+          'miner_hotkey=5Hot',
+          'miner_coldkey=5Cold',
+          `artifact_sha256=${'AB'.repeat(32)}`,
+          'submitted_after=2026-07-01T00%3A00%3A00Z',
+          'submitted_before=2026-08-01T00%3A00%3A00%2B00%3A00',
+          'agent_status=scored',
+          'agent_status=banned',
+          'screening_reason_code=docker-build',
+          'screening_reason_code=policy-network-egress',
+        ].join('&'),
+    )
+  })
+
+  it('rejects malformed screening-submission filters before calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      fetchScreeningSubmissions(10, 0, 'all', { artifactSha256: 'not-hex' }),
+    ).rejects.toThrow()
+    await expect(
+      fetchScreeningSubmissions(10, 0, 'all', { agentStatus: ['nope'] }),
+    ).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('gets one exact submission without requesting artifact data', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'

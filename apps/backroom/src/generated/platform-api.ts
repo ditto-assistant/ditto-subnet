@@ -2319,6 +2319,13 @@ export interface paths {
         /**
          * List Screening Submissions
          * @description Return current-benchmark screening rows unless history is requested.
+         *
+         *     Every filter is optional and AND-combined with the generation boundary, and
+         *     ``count`` is the filtered total so offsets page the match set. ``agent_name``
+         *     is exact, ``agent_name_prefix`` is a literal prefix, ``miner_coldkey`` is the
+         *     immutable payment-time owner, ``agent_status`` and ``screening_reason_code``
+         *     are repeatable any-of lists, and ``submitted_after`` (inclusive) /
+         *     ``submitted_before`` (exclusive) bound ``created_at``, the sort key.
          */
         get: operations["list_screening_submissions_api_v1_admin_screening_submissions_get"];
         put?: never;
@@ -38505,6 +38512,15 @@ export interface operations {
                 generation?: "active" | "all";
                 limit?: number;
                 offset?: number;
+                agent_name?: string | null;
+                agent_name_prefix?: string | null;
+                miner_hotkey?: string | null;
+                miner_coldkey?: string | null;
+                artifact_sha256?: string | null;
+                agent_status?: components["schemas"]["AgentStatus"][] | null;
+                screening_reason_code?: string[] | null;
+                submitted_after?: string | null;
+                submitted_before?: string | null;
             };
             header?: {
                 authorization?: string | null;

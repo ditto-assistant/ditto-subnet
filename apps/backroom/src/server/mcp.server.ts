@@ -36,6 +36,7 @@ import {
   compactScreeningQuarantines,
   compactScreeningSubmissions,
   compactStuckSubmissions,
+  SCREENING_SUBMISSION_DETAILS,
   compactValidatorAssignments,
   compactValidatorFleet,
 } from '../lib/mcp-payloads'
@@ -143,6 +144,8 @@ import {
   setConfirmationBundleSettingsInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
   retryTrustedImageBuildInputSchema,
+  hasScreeningSubmissionFilters,
+  screeningSubmissionFiltersSchema,
 } from '../lib/admin.schemas'
 import {
   fetchCopyReviewSourceDiff,
@@ -754,6 +757,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Page ended leases with operator_evicted and exact verdicts. Evidence is WHOLE AND UNTYPED validator_lease_audit context. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE.',
   list_stuck_submissions:
     'Page stuck-submission urgency order with ticket counts and silent_expiry_count. generation=all spans benchmarks; get_validation_retry includes infra_retry_grants.',
+  list_screening_submissions:
+    'Page submissions newest first; summary shows the latest attempt. To find a named agent, hotkey, coldkey, SHA-256, status, or reason code use search_submissions, never page and grep.',
+  search_submissions:
+    'Find submissions by exact/prefix name, hotkey, coldkey, SHA-256, status, reason code, or submitted window. Filtered count; identity rows by default; all generations.',
   summarize_screening_failures:
     'Group active-benchmark screening / screening_failed agents by reason_code. Pass generation=all only for a cross-benchmark audit. Use get_screening_submission for one row.',
   get_screening_failure_diagnostic:
@@ -1513,7 +1520,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List screening submissions',
       description:
-        'Page current-benchmark SN118 submissions newest first by submitted_at then agent_id. generation=active (default) uses the Platform benchmark-admission boundary, including current-era arrivals and explicitly adopted carryovers while excluding historical submissions; generation=all is the explicit cross-benchmark audit view. detail=summary (default) returns attempt_count and the latest attempt; detail=full returns complete attempt history. get_screening_submission is the exact one-row detail path.',
+        'Page current-benchmark SN118 submissions newest first by submitted_at then agent_id. generation=active (default) uses the Platform benchmark-admission boundary, including current-era arrivals and explicitly adopted carryovers while excluding historical submissions; generation=all is the explicit cross-benchmark audit view. detail=summary (default) returns attempt_count and the latest attempt; detail=full returns complete attempt history. get_screening_submission is the exact one-row detail path. To locate a submission by name, name prefix, miner hotkey or payment coldkey, artifact SHA-256, status, reason code, or submitted window, call search_submissions: Platform filters server-side and returns the filtered count, so never page this list and grep client-side.',
       inputSchema: {
         generation: z.enum(['active', 'all']).default('active'),
         detail: z.enum(['summary', 'full']).default('summary'),
@@ -1532,6 +1539,40 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           detail,
         ),
       ),
+  )
+
+  registerTool(
+    'search_submissions',
+    {
+      title: 'Search screening submissions',
+      description:
+        'Resolve what an operator knows (a name, a miner, an artifact, a status, a failure class) to exact SN118 submissions in one call. Filters are optional and AND-combined server-side on Platform: agentName exact; agentNamePrefix a literal prefix (% and _ match themselves), e.g. moonlight for every version and family; minerHotkey exact; minerColdkey the payment-time owner; artifactSha256 exact (any case); agentStatus and screeningReasonCode any-of lists; submittedAfter inclusive and submittedBefore exclusive, ISO-8601 with an offset. At least one filter is required; unfiltered paging is list_screening_submissions. Rows are newest first by submitted_at then agent_id and count is the filtered total, so offset pages the match set. generation defaults to all because the submission you are looking for may predate the active benchmark; pass active to scope to the current admission boundary. detail=identity (default) returns agent_id, agent_name, agent_version, agent_status, submitted_at, artifact_sha256; summary adds miner keys, reasons, and the latest attempt; full adds attempt history. Hand an agent_id to get_screening_submission for one row. Requires backroom:read; exposes no source or artifact URL.',
+      inputSchema: {
+        ...screeningSubmissionFiltersSchema.shape,
+        generation: z.enum(['active', 'all']).default('all'),
+        detail: z.enum(SCREENING_SUBMISSION_DETAILS).default('identity'),
+        limit: z.number().int().min(1).max(200).default(20),
+        offset: z.number().int().min(0).default(0),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ generation, detail, limit, offset, ...filters }) => {
+      if (!hasScreeningSubmissionFilters(filters)) {
+        return errorResult(
+          'search_submissions needs at least one filter. Use list_screening_submissions to page every submission.',
+        )
+      }
+      return result(
+        compactScreeningSubmissions(
+          withPagination(
+            await fetchScreeningSubmissions(limit, offset, generation, filters),
+            limit,
+            offset,
+          ),
+          detail,
+        ),
+      )
+    },
   )
 
   registerTool(

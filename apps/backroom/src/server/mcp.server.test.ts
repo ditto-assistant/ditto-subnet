@@ -269,6 +269,7 @@ describe('Backroom MCP tools', () => {
         'list_screening_disputes',
         'list_screening_source_files',
         'list_screening_submissions',
+        'search_submissions',
         'summarize_screening_failures',
         'read_screening_source_file',
         'record_v13_benign_approval',
@@ -391,7 +392,7 @@ describe('Backroom MCP tools', () => {
     // The no-input outlier-escalation read adds about 360 bytes; its bounds
     // live on the Platform endpoint. With later main tools the catalog measured
     // 164,066 bytes, so the bound keeps the same ~0.5 KB headroom as before.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(164_500)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(167_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1191,6 +1192,7 @@ describe('Backroom MCP tools', () => {
       list_screening_disputes: { maxLimit: 200, maxDefault: 50 },
       list_screening_source_files: { maxLimit: 512, maxDefault: 512 },
       list_screening_submissions: { maxLimit: 200, maxDefault: 50 },
+      search_submissions: { maxLimit: 200, maxDefault: 20 },
       search_screening_source: { maxLimit: 200, maxDefault: 50 },
       list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
@@ -1277,6 +1279,20 @@ describe('Backroom MCP tools', () => {
         })
       }
     }
+    // Search is for finding a named row, so it defaults to the narrow
+    // identity projection and to every generation.
+    const search = response.tools.find((candidate) => candidate.name === 'search_submissions')
+    const searchProperties = search?.inputSchema?.properties as
+      | Record<string, { default?: unknown; enum?: Array<string> }>
+      | undefined
+    expect(searchProperties?.detail).toMatchObject({
+      default: 'identity',
+      enum: ['identity', 'summary', 'full'],
+    })
+    expect(searchProperties?.generation).toMatchObject({
+      default: 'all',
+      enum: ['active', 'all'],
+    })
 
     await client.close()
     await server.close()
@@ -5753,6 +5769,112 @@ describe('Backroom MCP tools', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?generation=active&limit=17&offset=34',
       expect.any(Object),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('searches screening submissions server-side with the identity projection', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const row = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      miner_hotkey: '5Miner',
+      miner_coldkey: '5Cold',
+      agent_name: 'moonlight_v1',
+      agent_version: 2,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'scored',
+      screening_policy_version: 9,
+      screening_reason: null,
+      screening_reason_code: null,
+      submitted_at: '2026-07-19T12:00:00Z',
+      attempts: [
+        {
+          attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          policy_version: 9,
+          status: 'passed',
+          screener_hotkey: '5Screener',
+          started_at: '2026-07-19T12:01:00Z',
+          deadline: '2026-07-19T13:11:00Z',
+          finished_at: '2026-07-19T12:05:00Z',
+          reason: null,
+          reason_code: 'behavioral-oracle-passed',
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ items: [row], count: 1, generation: 'all', active_bench_version: 12 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'search_submissions',
+      arguments: {
+        agentNamePrefix: 'moon_light%',
+        minerColdkey: '5Cold',
+        agentStatus: ['scored', 'banned'],
+        screeningReasonCode: ['docker-build'],
+        submittedAfter: '2026-07-01T00:00:00Z',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual({
+      items: [
+        {
+          agent_id: row.agent_id,
+          agent_name: 'moonlight_v1',
+          agent_version: 2,
+          agent_status: 'scored',
+          submitted_at: '2026-07-19T12:00:00Z',
+          artifact_sha256: 'ab'.repeat(32),
+        },
+      ],
+      count: 1,
+      generation: 'all',
+      active_bench_version: 12,
+      detail: 'identity',
+      limit: 20,
+      offset: 0,
+    })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    const query = new URL(url).searchParams
+    expect(new URL(url).pathname).toBe('/api/v1/admin/screening-submissions')
+    expect(query.get('generation')).toBe('all')
+    expect(query.get('limit')).toBe('20')
+    // Metacharacters travel literally; Platform owns LIKE escaping.
+    expect(query.get('agent_name_prefix')).toBe('moon_light%')
+    expect(query.get('miner_coldkey')).toBe('5Cold')
+    expect(query.getAll('agent_status')).toEqual(['scored', 'banned'])
+    expect(query.getAll('screening_reason_code')).toEqual(['docker-build'])
+    expect(query.get('submitted_after')).toBe('2026-07-01T00:00:00Z')
+    expect(query.has('agent_name')).toBe(false)
+    expect(readTextResult(response)).not.toContain('attempts')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses an unfiltered or malformed submission search without calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const unfiltered = await client.callTool({ name: 'search_submissions', arguments: {} })
+    expect(unfiltered.isError).toBe(true)
+    expect(readTextResult(unfiltered)).toContain('list_screening_submissions')
+
+    for (const args of [
+      { artifactSha256: 'ab'.repeat(31) },
+      { agentStatus: ['not-a-status'] },
+      { agentName: 'x'.repeat(65) },
+      { submittedAfter: '2026-07-01T00:00:00' },
+    ]) {
+      const response = await client.callTool({ name: 'search_submissions', arguments: args })
+      expect(response.isError, JSON.stringify(args)).toBe(true)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
 
     await client.close()
     await server.close()

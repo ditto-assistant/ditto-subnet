@@ -15,7 +15,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import ValidationError
+from pydantic import AwareDatetime, StringConstraints, ValidationError
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -1936,6 +1936,31 @@ def _screening_submission(
     )
 
 
+# Operator search bounds for ``GET /screening-submissions``. Upload caps agent
+# names at 64 characters and SS58 keys are 48 alphanumerics, so these reject
+# only input that could never match; the repeatable filters are capped so a
+# query string cannot expand into an unbounded ``IN`` list.
+_SubmissionAgentName = Annotated[str, StringConstraints(min_length=1, max_length=64)]
+_SubmissionSs58Key = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9]{1,64}$")]
+_SubmissionSha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-fA-F]{64}$")]
+_SubmissionReasonCode = Annotated[
+    str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+]
+_MAX_SUBMISSION_REASON_CODES = 20
+
+
+def _like_prefix(value: str) -> str:
+    """Escape LIKE metacharacters so a name prefix matches literally.
+
+    Postgres treats backslash as the default LIKE escape, so escaping it first
+    and then ``%``/``_`` keeps ``moon_v1`` from matching ``moonXv1``; the
+    constant prefix before the trailing ``%`` still lets the planner use the
+    ``text_pattern_ops`` index on ``agents.name``.
+    """
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
+
+
 @router.get("/screening-submissions", response_model=AdminScreeningSubmissionList)
 async def list_screening_submissions(
     _admin: AdminDep,
@@ -1943,10 +1968,67 @@ async def list_screening_submissions(
     generation: Annotated[Literal["active", "all"], Query()] = "active",
     limit: Annotated[int, Query(ge=1, le=200)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
+    agent_name: Annotated[_SubmissionAgentName | None, Query()] = None,
+    agent_name_prefix: Annotated[_SubmissionAgentName | None, Query()] = None,
+    miner_hotkey: Annotated[_SubmissionSs58Key | None, Query()] = None,
+    miner_coldkey: Annotated[_SubmissionSs58Key | None, Query()] = None,
+    artifact_sha256: Annotated[_SubmissionSha256 | None, Query()] = None,
+    agent_status: Annotated[
+        list[AgentStatus] | None, Query(max_length=len(AgentStatus))
+    ] = None,
+    screening_reason_code: Annotated[
+        list[_SubmissionReasonCode] | None,
+        Query(max_length=_MAX_SUBMISSION_REASON_CODES),
+    ] = None,
+    submitted_after: Annotated[AwareDatetime | None, Query()] = None,
+    submitted_before: Annotated[AwareDatetime | None, Query()] = None,
 ) -> AdminScreeningSubmissionList:
-    """Return current-benchmark screening rows unless history is requested."""
+    """Return current-benchmark screening rows unless history is requested.
+
+    Every filter is optional and AND-combined with the generation boundary, and
+    ``count`` is the filtered total so offsets page the match set. ``agent_name``
+    is exact, ``agent_name_prefix`` is a literal prefix, ``miner_coldkey`` is the
+    immutable payment-time owner, ``agent_status`` and ``screening_reason_code``
+    are repeatable any-of lists, and ``submitted_after`` (inclusive) /
+    ``submitted_before`` (exclusive) bound ``created_at``, the sort key.
+    """
+    if (
+        submitted_after is not None
+        and submitted_before is not None
+        and submitted_after >= submitted_before
+    ):
+        raise HTTPException(
+            status_code=422, detail="submitted_after must be before submitted_before"
+        )
     active_version = await active_bench_version(session)
     where: list[ColumnElement[bool]] = []
+    if agent_name is not None:
+        where.append(Agent.name == agent_name)
+    if agent_name_prefix is not None:
+        where.append(Agent.name.like(_like_prefix(agent_name_prefix)))
+    if miner_hotkey is not None:
+        where.append(Agent.miner_hotkey == miner_hotkey)
+    if miner_coldkey is not None:
+        where.append(
+            Agent.agent_id.in_(
+                select(EvaluationPayment.agent_id).where(
+                    EvaluationPayment.miner_coldkey == miner_coldkey,
+                    EvaluationPayment.agent_id.is_not(None),
+                )
+            )
+        )
+    if artifact_sha256 is not None:
+        where.append(Agent.sha256 == artifact_sha256.lower())
+    if agent_status:
+        where.append(Agent.status.in_(sorted(set(agent_status))))
+    if screening_reason_code:
+        where.append(
+            Agent.screening_reason_code.in_(sorted(set(screening_reason_code)))
+        )
+    if submitted_after is not None:
+        where.append(Agent.created_at >= submitted_after)
+    if submitted_before is not None:
+        where.append(Agent.created_at < submitted_before)
     if generation == "active":
         rollout = await admission_rollout_for_active_version(
             session, bench_version=active_version
