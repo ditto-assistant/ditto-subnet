@@ -447,7 +447,9 @@ type scoredRuntimeEnvEvidence struct {
 }
 
 func (s *server) scoredRuntimeEnvEvidence() *scoredRuntimeEnvEvidence {
-	if s.sourceRevisionOrigin != release.OriginBinary || s.sourceRevisionMismatch || !canonicalSourceRevision(s.sourceRevision) {
+	// A practice-only scorer does not launch screened miner images and cannot
+	// attest to the scored container environment.
+	if !s.allowScreenedImages || s.sourceRevisionOrigin != release.OriginBinary || s.sourceRevisionMismatch || !canonicalSourceRevision(s.sourceRevision) {
 		return nil
 	}
 	const version = protocol.BenchVersionV13

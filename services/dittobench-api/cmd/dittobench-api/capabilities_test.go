@@ -81,6 +81,7 @@ func TestScoredRuntimeEnvEvidenceUsesRunningScorerContract(t *testing.T) {
 	s := &server{
 		softwareVersion: "0.308.0", sourceRevision: testSourceRevision,
 		sourceRevisionOrigin: release.OriginBinary,
+		allowScreenedImages:  true,
 	}
 	evidence := s.scoredRuntimeEnvEvidence()
 	if evidence == nil || evidence.BenchVersion != 13 || evidence.SourceRevision != testSourceRevision {
@@ -118,6 +119,11 @@ func TestScoredRuntimeEnvEvidenceUsesRunningScorerContract(t *testing.T) {
 	s.sourceRevisionOrigin = release.OriginEnv
 	if s.scoredRuntimeEnvEvidence() != nil {
 		t.Fatal("environment-asserted revision must not issue evidence")
+	}
+	s.sourceRevisionOrigin = release.OriginBinary
+	s.allowScreenedImages = false
+	if s.scoredRuntimeEnvEvidence() != nil {
+		t.Fatal("practice-only scorer must not attest to a scored sandbox")
 	}
 }
 
