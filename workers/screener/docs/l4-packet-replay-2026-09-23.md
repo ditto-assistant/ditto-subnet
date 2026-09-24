@@ -34,9 +34,9 @@ The two 48-note cases have concerns outside the existing preload selection.
 The host already refuses a CLEAR in that state. This replay leaves that
 selection unchanged because a separate evidence-ordering repair owns it.
 
-No provider key or report-only model endpoint was supplied to this checkout.
-Consequently this replay cannot measure verdict correctness, model citation
-coverage, model latency, token count, or cost. The historical timeout case
+At the time of this initial offline comparison, no provider key or report-only
+model endpoint was supplied to this checkout; the later model replay below
+measures verdict and latency separately. The historical timeout case
 records two 180-second streams of the same 79,264-byte prompt with 4,982 and
 5,499 SSE events; the new retry rule would stop after the first active stream.
 That is a control-flow bound, not a measured new-model outcome.
@@ -47,3 +47,34 @@ states, wall time, request counts, and token/cost use. A false CLEAR or REJECT,
 lost citation, or unexplained rise in `adjudicator-packet-too-large` or
 `adjudicator-evidence-incomplete` blocks enforcement. Keep the current
 operator holds unchanged until that gate is satisfied.
+
+## Model replay, 2026-09-24
+
+The four archives and active hold contexts were reread and SHA-verified before
+one-request-per-artifact, report-only calls through a disposable OpenRouter key.
+The key expires after one day and has a $2 total limit that includes BYOK usage.
+The independent source reviewer labeled `13e30145` REJECT for I3 and the three
+other exact artifacts CLEAR. No replay mutated Backroom or miner state.
+
+| Artifact SHA prefix | Independent label | GLM 5.3 Flash packet result | GPT-5.6 Sol packet result |
+| --- | --- | --- | --- |
+| `13e30145` | REJECT, I3 | `stream-no-tool-progress` after 122 s and 2,658 SSE events | `adjudicator-evidence-incomplete` after 9 s |
+| `c845249d` | CLEAR | `cited-unread-source` after 41 s | `adjudicator-evidence-incomplete` after 6 s |
+| `7d8c41db` | CLEAR | `adjudicator-evidence-incomplete` after 119 s | `adjudicator-evidence-incomplete` after 6 s |
+| `bac8c60f` | CLEAR | `stream-no-tool-progress` after 129 s and 3,178 SSE events | `adjudicator-evidence-incomplete` after 4 s |
+
+Each Sol packet call returned a tool call, but its verdict was an escalation.
+Neither model produced a certified REJECT or CLEAR on this four-case cohort.
+Smaller prompts and bounded retries therefore improve request control but do
+not satisfy the model-verdict gate. The packet change remains draft and must
+not be deployed on these results.
+
+A separate bounded single-Sol source-reading probe used the same archives,
+four requests per artifact, medium reasoning, and a four-step limit. It
+returned a validated high-risk finding on the independently rejected
+`13e30145` artifact in 35 s, but this small probe did not retain the finding's
+invariant/citations and cannot establish why the labels agree. On independently
+clear `c845249d`, it returned `source-review-inconsistent-verdict` after 39 s.
+This bounded probe does not validate the larger report-only single-Sol design
+in draft PR #2022. The existing fanout design also has an exact-SHA false
+CLEAR in a prior calibration and needs an independent certification gate.
