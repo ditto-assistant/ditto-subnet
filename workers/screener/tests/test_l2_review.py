@@ -2437,15 +2437,15 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     assert all(record["budgets"]["max_cost_usd"] == 1.5 for record in records)
     assert all(record["budgets"]["max_analyzer_calls"] == 24 for record in records)
     assert all(
-        record["budgets"]["cause_adjudicator_max_analyzer_calls"] == 16
+        record["budgets"]["cause_adjudicator_max_analyzer_calls"] == 24
         for record in records
     )
     assert all(
-        record["budgets"]["cause_tiebreaker_max_analyzer_calls"] == 12
+        record["budgets"]["cause_tiebreaker_max_analyzer_calls"] == 24
         for record in records
     )
     assert all(
-        record["budgets"]["safety_adjudicator_max_analyzer_calls"] == 12
+        record["budgets"]["safety_adjudicator_max_analyzer_calls"] == 24
         for record in records
     )
     assert all(record["elapsed_ms"] >= 0 for record in records)
@@ -2981,14 +2981,24 @@ async def test_violation_adjudicator_disagreement_cannot_clear(tmp_path: Path) -
         "causal_path": [],
         "summary": "sanitized",
     }
-    responses = (violation, safe)
     requests = 0
 
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal requests
-        response = responses[requests]
         requests += 1
-        return _response([_tool_call(str(requests), "submit_l2_review", response)])
+        if 2 <= requests <= 9:
+            return _response(
+                [_tool_call(str(requests), "read_file", {"path": "src/main.rs"})]
+            )
+        return _response(
+            [
+                _tool_call(
+                    str(requests),
+                    "submit_l2_review",
+                    violation if requests == 1 else safe,
+                )
+            ]
+        )
 
     result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
         str(archive),
@@ -2998,7 +3008,7 @@ async def test_violation_adjudicator_disagreement_cannot_clear(tmp_path: Path) -
         deadline=None,
     )
 
-    assert requests == 2
+    assert requests == 10, "the cause adjudicator may use the configured 12 steps"
     assert not result.observation.ok
     assert result.observation.failure_disposition == "inconclusive"
     assert result.adjudicator_disposition == "disagreement"

@@ -140,9 +140,6 @@ L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
 L2_DOSSIER_REVISION = "l1-compressed-dossier-v10"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
-L2_CAUSE_MAX_STEPS = 8
-L2_CAUSE_TIEBREAKER_MAX_STEPS = 6
-L2_SAFETY_ADJUDICATOR_MAX_STEPS = 6
 L2_HARNESS_REVISION = "l2-isolated-coding-harness-v19"
 L2_PRICING_REVISION = "openrouter-catalog-2026-08-31-terra-glm-5-2-sol-reported-cost-v3"
 L2_STARTER_MANIFESTS = tuple(
@@ -2603,7 +2600,7 @@ class TerraSolSourceReviewAgent:
                             deadline=deadline,
                             policy_version=policy_version,
                             dossier_complete=analyst.dossier_complete,
-                            max_steps=L2_CAUSE_MAX_STEPS,
+                            max_steps=self._max_steps,
                         )
                     except L2TrajectoryError as error:
                         logger.warning(
@@ -2773,7 +2770,7 @@ class TerraSolSourceReviewAgent:
                                 deadline=deadline,
                                 policy_version=policy_version,
                                 dossier_complete=adjudicator.dossier_complete,
-                                max_steps=L2_CAUSE_TIEBREAKER_MAX_STEPS,
+                                max_steps=self._max_steps,
                             )
                         except L2TrajectoryError as error:
                             logger.warning(
@@ -3167,7 +3164,7 @@ class TerraSolSourceReviewAgent:
                     deadline=deadline,
                     policy_version=policy_version,
                     dossier_complete=critic.dossier_complete,
-                    max_steps=L2_SAFETY_ADJUDICATOR_MAX_STEPS,
+                    max_steps=self._max_steps,
                 )
         except L2TrajectoryError as error:
             logger.warning("L3 adjudicator trajectory failed safely: %s", error.code)
@@ -3964,9 +3961,9 @@ class TerraSolSourceReviewAgent:
             "budgets": {
                 "steps": self._max_steps,
                 "analyzer_calls": self._max_steps * 2,
-                "cause_adjudicator_steps": L2_CAUSE_MAX_STEPS,
-                "cause_tiebreaker_steps": L2_CAUSE_TIEBREAKER_MAX_STEPS,
-                "safety_adjudicator_steps": L2_SAFETY_ADJUDICATOR_MAX_STEPS,
+                "cause_adjudicator_steps": self._max_steps,
+                "cause_tiebreaker_steps": self._max_steps,
+                "safety_adjudicator_steps": self._max_steps,
                 "input": self._max_input_tokens,
                 "output": self._max_output_tokens,
                 "completion": self._max_completion_tokens,
@@ -4148,16 +4145,12 @@ class TerraSolSourceReviewAgent:
                         in set(l1_observation.categories)
                         else L2_SAFETY_ADJUDICATOR_REASONING_EFFORT
                     ),
-                    "cause_adjudicator_max_steps": L2_CAUSE_MAX_STEPS,
-                    "cause_adjudicator_max_analyzer_calls": (L2_CAUSE_MAX_STEPS * 2),
-                    "cause_tiebreaker_max_steps": L2_CAUSE_TIEBREAKER_MAX_STEPS,
-                    "cause_tiebreaker_max_analyzer_calls": (
-                        L2_CAUSE_TIEBREAKER_MAX_STEPS * 2
-                    ),
-                    "safety_adjudicator_max_steps": (L2_SAFETY_ADJUDICATOR_MAX_STEPS),
-                    "safety_adjudicator_max_analyzer_calls": (
-                        L2_SAFETY_ADJUDICATOR_MAX_STEPS * 2
-                    ),
+                    "cause_adjudicator_max_steps": self._max_steps,
+                    "cause_adjudicator_max_analyzer_calls": (self._max_steps * 2),
+                    "cause_tiebreaker_max_steps": self._max_steps,
+                    "cause_tiebreaker_max_analyzer_calls": (self._max_steps * 2),
+                    "safety_adjudicator_max_steps": self._max_steps,
+                    "safety_adjudicator_max_analyzer_calls": (self._max_steps * 2),
                 },
                 "elapsed_ms": elapsed_ms,
                 "cache_hit": result.cache_hit,
