@@ -417,7 +417,7 @@ async def test_independent_replay_capacity_is_guarded_and_audited(
             path, headers=headers, json={**payload, "expected_hotkey": source_hotkey}
         )
     ).status_code == 409
-    # Enrolled identity alone cannot turn on replay: the runner has not shipped.
+    # Enrolled identity alone cannot turn on replay without its signed runner.
     assert (await client.post(path, headers=headers, json=payload)).status_code == 409
     monkeypatch.setattr(
         admin_screener_capacity,
