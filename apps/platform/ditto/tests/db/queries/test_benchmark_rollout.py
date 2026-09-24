@@ -2894,8 +2894,10 @@ async def test_scored_runtime_lease_requires_same_signed_fleet_packet(
     def managed(hotkey: str, packet_digest: str = digest) -> ValidatorHeartbeat:
         row = _heartbeat(hotkey, now, versions=[7, 13], protocol_version=18)
         row.benchmark_capacity = {
-            "configured_slots": 1, "healthy_slots": ["slot-0"],
-            "admission": "accepting", "active": [],
+            "configured_slots": 1,
+            "healthy_slots": ["slot-0"],
+            "admission": "accepting",
+            "active": [],
         }
         assert row.stack is not None and row.capabilities is not None
         row.stack["mode"] = "managed"
@@ -2918,33 +2920,47 @@ async def test_scored_runtime_lease_requires_same_signed_fleet_packet(
     assert verified_scorer_for_version(first, version=13) is not None
     assert heartbeat_supports_version(first, now=now, version=13)
     session.add_all((first, second, third))
-    session.add(ValidatorSlotSettingsRevision(
-        parent_revision=0, scope="*",
-        settings=ValidatorSlotSettings().model_dump(mode="json"),
-        checksum="f" * 64, reason="test routable settings", actor="test",
-    ))
+    session.add(
+        ValidatorSlotSettingsRevision(
+            parent_revision=0,
+            scope="*",
+            settings=ValidatorSlotSettings().model_dump(mode="json"),
+            checksum="f" * 64,
+            reason="test routable settings",
+            actor="test",
+        )
+    )
     await session.flush()
     # No signed L2 lease exists until the three exact scorer identities have
     # been operator-pinned, regardless of any number of capable heartbeats.
-    assert await scored_runtime_evidence_for_lease(
-        session, attempt_id=attempt_id, artifact_sha256=artifact_sha256,
-        policy_version=13, bench_version=13, now=now,
-    ) is None
-    session.add(V13ScorerCohortPin(
-        bench_version=13,
-        hotkeys=["first", "second", "third"],
-        packet={
-            "source_revision": revision,
-            "release_descriptor_digest": "sha256:" + "d" * 64,
-            "scorer_image_digest": "sha256:" + "e" * 64,
-            "scorer_env_sha256": digest,
-            "injected_keys": keys,
-        },
-        slot_settings_revision=1,
-        slot_settings_checksum="f" * 64,
-        reason="test signed cohort",
-        actor="test",
-    ))
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
+    )
+    session.add(
+        V13ScorerCohortPin(
+            bench_version=13,
+            hotkeys=["first", "second", "third"],
+            packet={
+                "source_revision": revision,
+                "release_descriptor_digest": "sha256:" + "d" * 64,
+                "scorer_image_digest": "sha256:" + "e" * 64,
+                "scorer_env_sha256": digest,
+                "injected_keys": keys,
+            },
+            slot_settings_revision=1,
+            slot_settings_checksum="f" * 64,
+            reason="test signed cohort",
+            actor="test",
+        )
+    )
     await session.flush()
     lease = await scored_runtime_evidence_for_lease(
         session,
@@ -2965,10 +2981,17 @@ async def test_scored_runtime_lease_requires_same_signed_fleet_packet(
     session.add(external)
     await session.flush()
     assert heartbeat_supports_version(external, now=now, version=13)
-    assert await scored_runtime_evidence_for_lease(
-        session, attempt_id=attempt_id, artifact_sha256=artifact_sha256,
-        policy_version=13, bench_version=13, now=now,
-    ) == lease
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        == lease
+    )
 
     first_capabilities = first.capabilities
     second_capabilities = second.capabilities

@@ -125,14 +125,14 @@ from ditto.api_server.endpoints.admin_traces import (
 from ditto.api_server.endpoints.admin_v13_private_generation import (
     router as admin_v13_private_generation_router,
 )
+from ditto.api_server.endpoints.admin_v13_scorer_cohort import (
+    router as admin_v13_scorer_cohort_router,
+)
 from ditto.api_server.endpoints.admin_validation_retry import (
     router as admin_validation_retry_router,
 )
 from ditto.api_server.endpoints.admin_validator_slot_settings import (
     router as admin_validator_slot_settings_router,
-)
-from ditto.api_server.endpoints.admin_v13_scorer_cohort import (
-    router as admin_v13_scorer_cohort_router,
 )
 from ditto.api_server.endpoints.admin_validator_weights import (
     router as admin_validator_weights_router,

@@ -103,7 +103,9 @@ async def pinned_cohort_packet(
         return None
     try:
         paused = set(
-            ValidatorSlotSettings.model_validate(settings.settings).paused_validator_hotkeys
+            ValidatorSlotSettings.model_validate(
+                settings.settings
+            ).paused_validator_hotkeys
         )
     except ValidationError:
         return None
@@ -128,12 +130,14 @@ async def pinned_cohort_packet(
     # A pin only certifies future work once all nonmembers have drained. Check
     # on each lease too, so a stray writer cannot silently widen authority.
     unpinned_live = await session.scalar(
-        select(ValidatorTicket.agent_id).where(
+        select(ValidatorTicket.agent_id)
+        .where(
             ValidatorTicket.bench_version == 13,
             ValidatorTicket.status == TicketStatus.ISSUED,
             ValidatorTicket.deadline > now,
             ValidatorTicket.validator_hotkey.not_in(pin.hotkeys),
-        ).limit(1)
+        )
+        .limit(1)
     )
     if unpinned_live is not None:
         return None

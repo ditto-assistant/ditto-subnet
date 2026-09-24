@@ -98,7 +98,9 @@ async def activate_pin(
         ):
             raise HTTPException(409, "validator slot settings changed; refresh first")
         paused = set(
-            ValidatorSlotSettings.model_validate(settings.settings).paused_validator_hotkeys
+            ValidatorSlotSettings.model_validate(
+                settings.settings
+            ).paused_validator_hotkeys
         )
         now = datetime.now(UTC)
         heartbeats = (await session.scalars(select(ValidatorHeartbeat))).all()
@@ -113,17 +115,19 @@ async def activate_pin(
             ):
                 raise HTTPException(409, "a nonmember V13 validator is not paused")
         for hotkey in payload.hotkeys:
-            heartbeat = await session.get(ValidatorHeartbeat, hotkey)
-            packet = packet_for_heartbeat(heartbeat, now=now)
+            member_heartbeat = await session.get(ValidatorHeartbeat, hotkey)
+            packet = packet_for_heartbeat(member_heartbeat, now=now)
             if packet is None or packet != payload.packet or hotkey in paused:
                 raise HTTPException(409, "pinned validator packet or admission changed")
         unpinned_live = await session.scalar(
-            select(ValidatorTicket.agent_id).where(
+            select(ValidatorTicket.agent_id)
+            .where(
                 ValidatorTicket.bench_version == 13,
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.deadline > now,
                 ValidatorTicket.validator_hotkey.not_in(payload.hotkeys),
-            ).limit(1)
+            )
+            .limit(1)
         )
         if unpinned_live is not None:
             raise HTTPException(409, "nonmember V13 tickets must drain before pinning")

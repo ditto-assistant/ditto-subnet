@@ -28,8 +28,10 @@ def upgrade() -> None:
         sa.Column("reason", sa.Text(), nullable=False),
         sa.Column("actor", sa.Text(), nullable=False),
         sa.Column(
-            "created_at", sa.TIMESTAMP(timezone=True),
-            nullable=False, server_default=sa.func.now(),
+            "created_at",
+            sa.TIMESTAMP(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
         ),
         sa.CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
         sa.CheckConstraint(

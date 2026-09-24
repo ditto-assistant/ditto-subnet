@@ -30,11 +30,15 @@ from ditto.db.models import ValidatorSlotSettingsRevision, ValidatorTicket
 from ditto.tests.api_server.endpoints.test_screener import _seed_agent
 from ditto.tests.db.queries.test_benchmark_rollout import _heartbeat
 
-_HOTKEYS = tuple(sorted((
-    "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
-    "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
-    "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
-)))
+_HOTKEYS = tuple(
+    sorted(
+        (
+            "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+            "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
+        )
+    )
+)
 _OUTSIDER = "5CqJAjSjv8fjF9uAQpDLyfN1hZEvBjwpFgcGeLbYpcbSaD1C"
 
 
@@ -59,8 +63,10 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
     def managed(hotkey: str):
         row = _heartbeat(hotkey, now, versions=[7, 13], protocol_version=18)
         row.benchmark_capacity = {
-            "configured_slots": 1, "healthy_slots": ["slot-0"],
-            "admission": "accepting", "active": [],
+            "configured_slots": 1,
+            "healthy_slots": ["slot-0"],
+            "admission": "accepting",
+            "active": [],
         }
         assert row.stack is not None and row.capabilities is not None
         row.stack["mode"] = "managed"
@@ -81,29 +87,48 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
     async with session_maker() as session, session.begin():
         session.add_all([managed(hotkey) for hotkey in _HOTKEYS])
         session.add(_heartbeat(_OUTSIDER, now, versions=[7, 13], protocol_version=18))
-        session.add(ValidatorSlotSettingsRevision(
-            parent_revision=0, scope="*", settings=empty.model_dump(mode="json"),
-            checksum=_checksum(empty), reason="test initial settings", actor="test",
-        ))
+        session.add(
+            ValidatorSlotSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=empty.model_dump(mode="json"),
+                checksum=_checksum(empty),
+                reason="test initial settings",
+                actor="test",
+            )
+        )
     async with session_maker() as session:
         with pytest.raises(
             HTTPException, match="nonmember V13 validator is not paused"
         ):
-            await activate_pin(ActivateV13ScorerCohortRequest(
-                hotkeys=_HOTKEYS, packet=packet,
-                expected_slot_settings_revision=1,
-                expected_slot_settings_checksum=_checksum(empty),
-                reason="test exact signed scorer cohort", actor="test",
-                confirmation="PIN V13 SCORER COHORT",
-            ), None, session)
+            await activate_pin(
+                ActivateV13ScorerCohortRequest.model_validate(
+                    {
+                        "hotkeys": list(_HOTKEYS),
+                        "packet": packet,
+                        "expected_slot_settings_revision": 1,
+                        "expected_slot_settings_checksum": _checksum(empty),
+                        "reason": "test exact signed scorer cohort",
+                        "actor": "test",
+                        "confirmation": "PIN V13 SCORER COHORT",
+                    }
+                ),
+                None,
+                session,
+            )
 
     paused = ValidatorSlotSettings(paused_validator_hotkeys=[_OUTSIDER])
     async with session_maker() as session, session.begin():
-        session.add(ValidatorSlotSettingsRevision(
-            parent_revision=1, scope="*", settings=paused.model_dump(mode="json"),
-            checksum=_checksum(paused),
-            reason="test source validator pause", actor="test",
-        ))
+        session.add(
+            ValidatorSlotSettingsRevision(
+                parent_revision=1,
+                scope="*",
+                settings=paused.model_dump(mode="json"),
+                checksum=_checksum(paused),
+                reason="test source validator pause",
+                actor="test",
+            )
+        )
     app = FastAPI()
     app.include_router(router)
 
@@ -116,13 +141,18 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
-        response = await client.post("/admin/v13-scorer-cohort", json={
-            "hotkeys": list(_HOTKEYS), "packet": packet,
-            "expected_slot_settings_revision": 2,
-            "expected_slot_settings_checksum": _checksum(paused),
-            "reason": "test exact signed scorer cohort", "actor": "test",
-            "confirmation": "PIN V13 SCORER COHORT",
-        })
+        response = await client.post(
+            "/admin/v13-scorer-cohort",
+            json={
+                "hotkeys": list(_HOTKEYS),
+                "packet": packet,
+                "expected_slot_settings_revision": 2,
+                "expected_slot_settings_checksum": _checksum(paused),
+                "reason": "test exact signed scorer cohort",
+                "actor": "test",
+                "confirmation": "PIN V13 SCORER COHORT",
+            },
+        )
     assert response.status_code == 200, response.text
     assert response.json()["hotkeys"] == list(_HOTKEYS)
     async with session_maker() as session:
@@ -130,18 +160,28 @@ async def test_v13_pin_requires_outsider_pause_then_routes_only_exact_members(
         assert await pinned_validator_allowed(session, hotkey=_HOTKEYS[0], now=now)
         assert not await pinned_validator_allowed(session, hotkey=_OUTSIDER, now=now)
         lease = await scored_runtime_evidence_for_lease(
-            session, attempt_id=uuid4(),
-            artifact_sha256="f" * 64, policy_version=13, bench_version=13, now=now,
+            session,
+            attempt_id=uuid4(),
+            artifact_sha256="f" * 64,
+            policy_version=13,
+            bench_version=13,
+            now=now,
         )
         assert lease is not None and lease.validator_count == 3
     agent_id = await _seed_agent(
         session_maker, status=AgentStatus.EVALUATING, sha256="f" * 64
     )
     async with session_maker() as session:
-        session.add(ValidatorTicket(
-            agent_id=agent_id, bench_version=13, validator_hotkey=_OUTSIDER,
-            slot_id="slot-0", status=TicketStatus.ISSUED,
-            issued_at=now, deadline=now + timedelta(minutes=30),
-        ))
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                bench_version=13,
+                validator_hotkey=_OUTSIDER,
+                slot_id="slot-0",
+                status=TicketStatus.ISSUED,
+                issued_at=now,
+                deadline=now + timedelta(minutes=30),
+            )
+        )
         with pytest.raises(DBAPIError, match="outside pinned scorer cohort"):
             await session.flush()

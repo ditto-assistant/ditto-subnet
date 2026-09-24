@@ -6758,10 +6758,12 @@ async def submit_score(
         )
         # Exact retries below remain idempotent; no new V13 score or canary
         # completion may enter from outside the immutable scorer cohort.
-        if report_version == 13 and (
-            prior_ticket is None or prior_ticket.status != TicketStatus.SCORED
-        ) and not await pinned_validator_allowed(
-            session, hotkey=payload.validator_hotkey, now=datetime.now(UTC)
+        if (
+            report_version == 13
+            and (prior_ticket is None or prior_ticket.status != TicketStatus.SCORED)
+            and not await pinned_validator_allowed(
+                session, hotkey=payload.validator_hotkey, now=datetime.now(UTC)
+            )
         ):
             raise HTTPException(409, "V13 scorer cohort pin excludes this validator")
         canary = await canary_for_lease(
