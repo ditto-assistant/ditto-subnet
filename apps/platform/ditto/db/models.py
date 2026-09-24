@@ -7095,6 +7095,10 @@ class V13ScorerCohortPin(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
         CheckConstraint(
+            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            name="v13_scorer_pin_three_hotkeys_check",
+        ),
+        CheckConstraint(
             "length(slot_settings_checksum) = 64",
             name="v13_scorer_pin_settings_checksum_check",
         ),
