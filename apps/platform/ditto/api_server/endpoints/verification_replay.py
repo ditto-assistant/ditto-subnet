@@ -61,6 +61,7 @@ from ditto.db.models import (
     ScreeningVerificationReplay,
     ScreeningVerificationReplayReceipt,
 )
+from ditto.db.queries.benchmark_rollout import arrival_bench_version
 from ditto_screening_protocol.v13_replay_process_identity import (
     ReplayPurpose,
     V13ReplayProcessProof,
@@ -984,8 +985,13 @@ async def get_replay_inputs(
         image_url = await storage.presigned_get_url(
             key=image_key, expires_in=URL_TTL_SECONDS
         )
+    agent = await session.get(Agent, row.agent_id)
+    if agent is None or agent.sha256 != row.artifact_sha256:
+        raise HTTPException(409, "replay source agent changed")
     result = VerificationReplayInputs(
         replay=_state(row),
+        bench_version=await arrival_bench_version(session, agent=agent),
+        miner_hotkey=agent.miner_hotkey,
         artifact_url=artifact_url,
         image_url=image_url,
         urls_expire_at=datetime.now(UTC) + timedelta(seconds=URL_TTL_SECONDS),

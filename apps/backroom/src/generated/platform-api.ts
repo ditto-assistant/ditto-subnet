@@ -32305,8 +32305,15 @@ export interface components {
         VerificationReplayInputs: {
             /** Artifact Url */
             artifact_url: string;
+            /**
+             * Bench Version
+             * @description Arrival-era benchmark version resolved when inputs are fetched
+             */
+            bench_version: number;
             /** Image Url */
             image_url: string | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
             replay: components["schemas"]["VerificationReplayState"];
             /**
              * Urls Expire At

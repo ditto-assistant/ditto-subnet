@@ -519,6 +519,8 @@ async def test_replay_exact_guards_independent_claim_and_report_only(session):
         first.replay_id, _request(storage), SECOND_WORKER, session
     )
     assert (inputs.artifact_url, inputs.image_url) == ("source-url", "image-url")
+    assert inputs.miner_hotkey == "5Miner"
+    assert inputs.bench_version >= 7
     assert [
         call.kwargs["key"] for call in storage.presigned_get_url.call_args_list
     ] == [

@@ -1130,6 +1130,7 @@ class BuildGate:
         remote_source_review: Callable[[], Awaitable[SourceReviewObservation | None]]
         | None = None,
         build_only: bool = False,
+        replay_runtime_probes: bool = False,
         policy_only: bool = False,
         deferred_source_review: bool = False,
         policy_version: int = SCREENING_POLICY_VERSION,
@@ -1165,6 +1166,8 @@ class BuildGate:
 
         if build_only and policy_only:
             raise ValueError("build-only and policy-only modes are mutually exclusive")
+        if replay_runtime_probes and (not build_only or policy_version != 13):
+            raise ValueError("replay runtime probes require v13 build-only mode")
 
         def core_decision(
             outcome: ScreeningOutcome,
@@ -1932,8 +1935,12 @@ class BuildGate:
                 and record_runtime_verification is not None
             ):
                 remaining = self._lease_remaining(deadline)
+                # An independent replay lease has room for the complete
+                # public probe set; ordinary screening keeps its 15s
+                # expendable shadow budget.
+                probe_cap = 180.0 if replay_runtime_probes else 15.0
                 shadow_budget = (
-                    15.0 if remaining is None else min(15.0, remaining - 30.0)
+                    probe_cap if remaining is None else min(probe_cap, remaining - 30.0)
                 )
                 if shadow_budget > 0:
                     try:
@@ -1947,7 +1954,7 @@ class BuildGate:
                                 bench_version=bench_version,
                                 deadline=deadline,
                                 record=record_runtime_verification,
-                                include_runs=not build_only,
+                                include_runs=not build_only or replay_runtime_probes,
                             )
                     except TimeoutError:
                         logger.info("v13 shadow runtime observation budget expired")
