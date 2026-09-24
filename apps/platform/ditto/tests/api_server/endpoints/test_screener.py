@@ -5270,11 +5270,13 @@ class TestClaim:
             assert attempt is not None and attempt.status == "quarantined"
             assert len(quarantines) == 1
 
-    async def test_local_adjudicated_reject_is_executed_from_bound_settings(
+    @pytest.mark.parametrize("policy_version", [10, 13])
+    async def test_local_adjudicated_reject_is_bound_and_v13_stays_held(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        policy_version: int,
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         settings = ScreenerReviewSettings(mode="enforce", adjudicator_mode="enforce")
@@ -5293,8 +5295,32 @@ class TestClaim:
             revision_id = revision.revision
         _install_db(app, session_maker)
         _install_chain(app)
-        claimed = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
-        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+        if policy_version == 10:
+            claimed = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+            attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+        else:
+            attempt_id = uuid4()
+            now = datetime.now(UTC)
+            async with session_maker() as session, session.begin():
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                agent.status = AgentStatus.SCREENING
+                session.add(
+                    ScreeningAttempt(
+                        attempt_id=attempt_id,
+                        agent_id=agent_id,
+                        artifact_sha256=_SHA256,
+                        screener_hotkey=_SCREENER_HOTKEY,
+                        policy_version=13,
+                        status="running",
+                        started_at=now - timedelta(minutes=1),
+                        deadline=now + timedelta(minutes=9),
+                        review_settings_revision=revision_id,
+                        review_settings_instance_id="ditto-screener-prod",
+                        review_settings_scope="*",
+                        review_settings_checksum=checksum,
+                    )
+                )
         adjudication = SourceReviewAdjudication(
             decision="reject",
             reason=(
@@ -5336,6 +5362,7 @@ class TestClaim:
         payload = _result_payload(
             agent_id,
             passed=False,
+            policy_version=policy_version,
             attempt_id=attempt_id,
             outcome="quarantine",
             manifest_digest="12" * 32,
@@ -5364,6 +5391,43 @@ class TestClaim:
             f"/api/v1/screener/agent/{agent_id}/result", json=tampered
         )
         assert rejected.status_code in {401, 403}, rejected.text
+        if policy_version == 13:
+            clear_data = adjudication.model_dump(mode="json")
+            clear_data.update(
+                decision="clear",
+                reject_invariant=None,
+                clear_clause="model_authors_graded_slot",
+            )
+            clear_adjudication = SourceReviewAdjudication.model_validate(clear_data)
+            assert clear_adjudication.completion_receipt is not None
+            clear_receipt_signature = _sign(
+                completion_receipt_signing_message(
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    artifact_sha256=_SHA256,
+                    adjudication_digest=clear_adjudication.canonical_digest(),
+                    receipt=clear_adjudication.completion_receipt,
+                )
+            )
+            legacy_pass = _result_payload(
+                agent_id,
+                passed=True,
+                policy_version=13,
+                attempt_id=attempt_id,
+                manifest_digest="12" * 32,
+                review_settings_revision=revision_id,
+                review_settings_instance_id="ditto-screener-prod",
+                review_settings_scope="*",
+                review_settings_checksum=checksum,
+                adjudication_digest=clear_adjudication.canonical_digest(),
+                adjudication=clear_adjudication.model_dump(mode="json"),
+                completion_receipt_signature=clear_receipt_signature,
+            )
+            refused_pass = await client.post(
+                f"/api/v1/screener/agent/{agent_id}/result", json=legacy_pass
+            )
+            assert refused_pass.status_code == 409, refused_pass.text
         response = await client.post(
             f"/api/v1/screener/agent/{agent_id}/result", json=payload
         )
@@ -5373,7 +5437,10 @@ class TestClaim:
 
         assert response.status_code == 200, response.text
         assert replay.status_code == 200, replay.text
-        assert response.json()["status"] == AgentStatus.REJECTED
+        expected_status = (
+            AgentStatus.QUARANTINED if policy_version == 13 else AgentStatus.REJECTED
+        )
+        assert response.json()["status"] == expected_status
         async with session_maker() as session:
             agent = await session.get(Agent, agent_id)
             attempt = await session.get(ScreeningAttempt, attempt_id)
@@ -5382,12 +5449,19 @@ class TestClaim:
                     ScreeningQuarantine.attempt_id == attempt_id
                 )
             )
-            assert agent is not None and agent.status == AgentStatus.REJECTED
-            assert agent.screening_reason == adjudication.reason
+            assert agent is not None and agent.status == expected_status
             assert len(adjudication.reason) > 600
-            assert attempt is not None and attempt.status == "rejected"
-            assert attempt.public_reason == adjudication.reason
-            assert retained is not None and retained.status == "resolved"
+            assert attempt is not None and attempt.status == (
+                "quarantined" if policy_version == 13 else "rejected"
+            )
+            assert attempt.public_reason == (
+                "Submission held for anti-cheat review"
+                if policy_version == 13
+                else adjudication.reason
+            )
+            assert retained is not None and retained.status == (
+                "active" if policy_version == 13 else "resolved"
+            )
             assert retained.evidence is not None
             assert retained.evidence[-1]["code"] == ("adjudicated-source-review-reject")
             assert retained.court_completion_receipt is not None
@@ -5400,8 +5474,10 @@ class TestClaim:
             )
             assert event is not None
             assert event.outcome == "quarantine"
-            assert event.effective_decision == "reject"
-            assert event.next_agent_status == AgentStatus.REJECTED
+            assert event.effective_decision == (
+                "hold" if policy_version == 13 else "reject"
+            )
+            assert event.next_agent_status == expected_status
 
     async def test_completed_court_refusal_retains_signed_telemetry_without_release(
         self,

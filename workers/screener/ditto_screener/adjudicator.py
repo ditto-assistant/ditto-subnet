@@ -738,6 +738,7 @@ _TOOLS: list[dict[str, object]] = [
 # needs only exact source windows in addition to its terminal tools.
 _DECISION_ONLY_TOOLS = [_TOOLS[1], _TOOLS[-1]]
 _DECISION_ONLY_MAX_STEPS = 4
+_DECISION_ONLY_MAX_READS = 6
 
 
 def _bounded_verdict_tool(
@@ -1274,7 +1275,8 @@ def _decision_packet(
                 "The host preloaded exact source excerpts for retained leads and "
                 "bounded configuration evidence for simple feature gates. "
                 "A disabled default does not establish whether an external "
-                "runtime override exists. You may read at most three additional "
+                "runtime override exists. You may read at most "
+                f"{_DECISION_ONLY_MAX_READS} additional "
                 "exact source windows with read_file. The final turn permits "
                 f"only {verdict_tools}. Cite "
                 "only lines actually served by the host."
@@ -1614,9 +1616,9 @@ class SourceReviewAdjudicator:
         """
         if verdict.decision == "escalate":
             return _escalate(
-                "adjudicator-evidence-incomplete",
-                "Automated adjudication could not complete mandatory verification; "
-                "held for operator review",
+                "adjudicator-operator-requested",
+                "Automated adjudication requested operator review because it "
+                "could not settle the retained evidence; held for review",
                 model=self._model,
                 notes=notes,
                 policy_version=policy_version,
@@ -1758,7 +1760,8 @@ class SourceReviewAdjudicator:
             "\nThe host preloaded the exact source excerpts for the retained "
             "ledger, plus bounded configuration evidence for simple feature "
             "gates. A disabled default does not establish whether an external "
-            "runtime override exists. You may read at most three exact source "
+            "runtime override exists. You may read at most "
+            f"{_DECISION_ONLY_MAX_READS} exact source "
             "windows with read_file before settling. Call "
             f"{verdict_tools}. Cite only served lines."
             if decision_only
@@ -1800,7 +1803,7 @@ class SourceReviewAdjudicator:
         ) as client:
             for _step in range(max_steps):
                 final_turn = decision_only and (
-                    _step + 1 == max_steps or decision_reads >= 3
+                    _step + 1 == max_steps or decision_reads >= _DECISION_ONLY_MAX_READS
                 )
                 if final_turn:
                     messages.append(
@@ -1916,7 +1919,7 @@ class SourceReviewAdjudicator:
                         and _advertised_tool_name(call) == "read_file"
                         for call in tool_calls
                     )
-                    and len(tool_calls) > 3 - decision_reads
+                    and len(tool_calls) > _DECISION_ONLY_MAX_READS - decision_reads
                 ):
                     raise ValueError("bounded adjudicator exceeded source read budget")
                 batch_ids: set[str] = set()

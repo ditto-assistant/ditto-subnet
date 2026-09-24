@@ -1426,6 +1426,7 @@ class SourceReviewAdjudication(BaseModel):
             # early host refusal must not be described as a completed call.
             model_completed_refusals = {
                 "adjudicator-evidence-incomplete",
+                "adjudicator-operator-requested",
                 "uncited-decision",
                 "cited-unknown-member",
                 "cited-unread-source",

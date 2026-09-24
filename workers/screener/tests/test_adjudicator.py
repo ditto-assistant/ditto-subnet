@@ -25,6 +25,7 @@ from ditto_screener.adjudicator import (
     build_adjudicator,
 )
 from ditto_screener.source_review import TarSourceRepository
+from ditto_screening_protocol import SourceReviewAdjudication
 
 
 def test_miner_reason_preserves_complete_explanation_and_paragraphs() -> None:
@@ -1731,7 +1732,7 @@ async def test_bounded_court_final_turn_removes_read_tool(tmp_path: Path) -> Non
         _key(tmp_path), httpx.MockTransport(handler)
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
     assert result.decision == "escalate"
-    assert result.escalation_code == "adjudicator-evidence-incomplete"
+    assert result.escalation_code == "adjudicator-operator-requested"
     assert len(requests) == 4
     assert "read_file" not in [
         tool["function"]["name"] for tool in requests[-1]["tools"]
@@ -1791,7 +1792,7 @@ async def test_bounded_court_settles_when_read_budget_is_spent(tmp_path: Path) -
         _call(
             "read_file", {"path": "src/main.rs", "start_line": line, "end_line": line}
         )
-        for line in (4, 5, 6)
+        for line in (4, 5, 6, 4, 5, 6)
     ]
     for index, call in enumerate(read_calls):
         call["id"] = f"read-{index}"
@@ -2136,11 +2137,17 @@ async def test_policy_v13_can_keep_incomplete_mandatory_review_held(
         _key(tmp_path), httpx.MockTransport(handler)
     ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
     assert result.decision == "escalate"
-    assert result.escalation_code == "adjudicator-evidence-incomplete"
+    assert result.escalation_code == "adjudicator-operator-requested"
     assert result.clear_clause is None
     assert result.reject_invariant is None
     assert result.run_diagnostic is None
     assert result.completion_receipt is not None
+    assert (
+        SourceReviewAdjudication.model_validate(
+            result.model_dump(mode="json")
+        ).completion_receipt
+        is not None
+    )
     assert result.completion_receipt.request_count == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
         "read_file",
