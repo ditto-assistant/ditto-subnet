@@ -239,6 +239,7 @@ import {
   restoreScoredScreeningSnapshot,
   createScreenerBootstrapGrant,
   fetchScreenerCapacity,
+  fetchScreeningInfraRetries,
   updateScreenerProviderSettings,
   updateScreenerNodeChannelSettings,
   updateScreenerNodeReplayCapacity,
@@ -283,6 +284,27 @@ export type McpGrantProps = {
   session: BackroomSession
   scopes: Array<string>
   clientName: string
+  /**
+   * The exact OAuth grant and client this access token belongs to. Stamped at
+   * token issuance so an operator can match a live connection to the grant
+   * listed (and revocable) on the Agent access page.
+   */
+  grant?: { id: string; clientId: string }
+}
+
+/**
+ * The scopes this connection can actually exercise right now: the token's
+ * granted scopes, further capped by the account's live Backroom level. A
+ * read-level account never exercises artifact or write scopes, whatever an
+ * older grant recorded.
+ */
+export function effectiveScopes(props: McpGrantProps) {
+  return props.scopes.filter(
+    (scope) =>
+      scope === BACKROOM_READ_SCOPE ||
+      ((scope === BACKROOM_ARTIFACT_SCOPE || scope === BACKROOM_WRITE_SCOPE) &&
+        props.session.accessLevel === 'write'),
+  )
 }
 
 export type BackroomEnv = {
@@ -567,6 +589,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Artifact-bound coding certifications; weight_eligible is always false. Requires backroom:read.',
   get_screener_capacity:
     'Read screener capacity, provider priorities, and recent build, runtime, and source-review jobs before manual retry.',
+  get_screening_infra_retries:
+    'Read infra-failure retry state: policy, per-state counts, parked agents (next retry, failure count), per-signature breakers. Derived at read time.',
   set_screener_provider_settings:
     'Apply complete revisioned screener routing and bounded GCE overflow settings after reading get_screener_capacity.',
   set_screener_node_channel_settings:
@@ -685,7 +709,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_scores:
     'Read accepted validator scores for one agent and benchmark version, with exact seeds and aggregates. Defaults to the current applicable benchmark.',
   get_continual_retest_diagnostic:
-    'Read one exact agent UUID current owner-family scoring and continual retest cohort reason, including raw and folded seed membership. Changes nothing.',
+    'Read one exact agent UUID current owner-family scoring, sample counts, cutoff and tie-band comparison, continual retest cohort reason, and whether a validator could claim it now. Changes nothing.',
   get_validator_slot_settings:
     'Read effective validator slot and disk policy plus optional newest-first revision history. A validator advertising more slots than the cap is not an underutilized host. historyLimit defaults to 0.',
   get_validator_fleet:
@@ -831,7 +855,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get Backroom access',
       description:
-        'Show the authenticated staff identity and the read, artifact-download, and write scopes granted to this MCP connection.',
+        "Show the staff identity, this connection's OAuth grant and client ids, and effective scopes (granted scopes capped by the live account level).",
       annotations: toolAnnotations('read'),
     },
     async () =>
@@ -842,7 +866,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           name: props.session.name,
         },
         clientName: props.clientName,
-        scopes: props.scopes,
+        grant: props.grant ?? null,
+        scopes: effectiveScopes(props),
+        grantedScopes: props.scopes,
         accessLevel: hasWriteAccess(props)
           ? hasArtifactAccess(props)
             ? 'full'
@@ -1821,7 +1847,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Explain exact agent continual retest admission',
       description:
-        'Read one exact submission UUID: canonical and official scores, owner generations, raw/folded seed IDs, cohort position and policy, ticket counts, seed anchor, and admission reason. This snapshot does not grant work. Seed IDs are exact decimal strings. Requires backroom:read.',
+        'Read one exact submission UUID: canonical and official composites with sample counts and completed-wave depth, the same-owner representative and the comparison that selected it, raw/folded seed IDs, membership in the raw wave, folded emission set and resolved cohort with the cutoff/tie-band comparison and exclusion reason, seed anchor, retest tickets with the latest result, and claimability (scheduled round, catch-up, spare capacity, idle gate). A negative cohort_cutoff.gap on an agent that is still out of the cohort means the exclusion is structural owner suppression, not a score it failed. Outstanding work is a count; no confirmation dataset, prompt, or answer key is returned. This snapshot does not grant work. Seed IDs are exact decimal strings. Requires backroom:read.',
       inputSchema: continualRetestDiagnosticInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2049,6 +2075,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerCapacity()),
+  )
+
+  registerTool(
+    'get_screening_infra_retries',
+    {
+      title: 'Get screening infrastructure retries',
+      description:
+        'Read how Platform is retrying screening attempts that failed on Ditto infrastructure (docker-build-infrastructure), and why an agent is or is not being retried. Returns the effective policy (backoff base/cap, jitter, max age, max consecutive failures, breaker threshold/window/open/probe durations, all in seconds); a summary with a count per state (backoff, breaker_held, probe_due, due, capped), not_admitted, aged_out_agents, open_breakers, half_open_breakers and breakers_total; the parked agents (agent id, latest attempt id, reason code, provider/lane, consecutive failure count, failed_at, backoff_until, next_retry_at, state, breaker_phase, admitted, claim_outlook), earliest next_retry_at first; and each signature\'s circuit breaker (phase, opened_at, open_until, last_probe_at, next_probe_at, parked agents). Everything is derived from screening attempt history at read time and nothing is stored, so it can lag a claim that lands a moment later. Agents in the capped state, and aged_out_agents (parked on an infrastructure failure older than the max age with no operator retry; counted, not listed individually), are never retried automatically and wait for an operator retry. The breaker is per signature (reason code, provider, lane), and a breaker with a known provider holds and probes only workers on that provider: a worker on another provider can still claim those agents by backoff alone (that run is not a probe), while a signature with no provider holds every worker. This view is computed with no particular claimant, so breaker_held and waiting_breaker mean held for workers on the signature\'s provider. Breaker phase is computed at read time: open while now < open_until, half_open after that until a probe recovers or the failures age out of the history window (probes are allowed, nothing is held for that lane), closed otherwise; a half_open breaker with no parked agents is history, not a live hold. parked_agents counts agents parked now, not historical failures. claim_outlook ready means admitted with the backoff and breaker hold elapsed; the claim may still skip it (one probe per signature per pass, ownership rules); not_admitted, needs_operator, waiting_backoff and waiting_breaker (held for workers on that provider) say why not. Rows are bounded (agents_limit, breakers_limit); the summary counts everything and *_truncated says when rows were cut. Carries no error text, source, or miner identity. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchScreeningInfraRetries()),
   )
 
   registerTool(

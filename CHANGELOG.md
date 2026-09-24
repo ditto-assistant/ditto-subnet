@@ -2,6 +2,69 @@
 
 <!-- version list -->
 
+## v0.305.0 (2026-09-24)
+
+### Bug Fixes
+
+- **screener**: Retry idempotent image upload initiation
+  ([#2199](https://github.com/ditto-assistant/ditto-subnet/pull/2199),
+  [`0ef06f3`](https://github.com/ditto-assistant/ditto-subnet/commit/0ef06f3245d66dae29c6d907eef9a99ac6302260))
+
+### Documentation
+
+- **governance**: Define signed bounty claims
+  ([#2070](https://github.com/ditto-assistant/ditto-subnet/pull/2070),
+  [`97ca7e2`](https://github.com/ditto-assistant/ditto-subnet/commit/97ca7e255a58993cd63431b6024eec9b5c2d016f))
+
+### Features
+
+- **platform,backroom**: Show infrastructure retry backoff and breaker state
+  ([#2084](https://github.com/ditto-assistant/ditto-subnet/pull/2084),
+  [`0512988`](https://github.com/ditto-assistant/ditto-subnet/commit/0512988f21d8c3033f038f8493f9e28513c155a1))
+
+
+## v0.304.1 (2026-09-24)
+
+### Bug Fixes
+
+- **platform**: Make screened image upload initiation idempotent
+  ([#2198](https://github.com/ditto-assistant/ditto-subnet/pull/2198),
+  [`c65f8a6`](https://github.com/ditto-assistant/ditto-subnet/commit/c65f8a6849e3db4da6d2d47a049575cfe54cf4b5))
+
+
+## v0.304.0 (2026-09-24)
+
+### Bug Fixes
+
+- **backroom**: Cap OAuth grants to requested and consented scopes
+  ([#2089](https://github.com/ditto-assistant/ditto-subnet/pull/2089),
+  [`75ac116`](https://github.com/ditto-assistant/ditto-subnet/commit/75ac116f61d704d5af3a3fdf3e8bd7e692db0022))
+
+- **dittobench-api**: Accept the empty attestation config BuildKit writes
+  ([#2065](https://github.com/ditto-assistant/ditto-subnet/pull/2065),
+  [`c41000b`](https://github.com/ditto-assistant/ditto-subnet/commit/c41000bbac01dec6cd22ceb0baf11ecb0fb7bc3d))
+
+- **dittobench-api**: Refuse private harness with screened images
+  ([#2061](https://github.com/ditto-assistant/ditto-subnet/pull/2061),
+  [`361e347`](https://github.com/ditto-assistant/ditto-subnet/commit/361e347b3b1c50552ca3b2a6396a97ec4e00a732))
+
+### Chores
+
+- **tests**: Stop the L2 review suite hanging on a root worker
+  ([#2067](https://github.com/ditto-assistant/ditto-subnet/pull/2067),
+  [`7bda2a5`](https://github.com/ditto-assistant/ditto-subnet/commit/7bda2a5ea522878cdf56a8b00d982f943b590184))
+
+### Features
+
+- **platform**: Expose owner retest admission decisions
+  ([#2110](https://github.com/ditto-assistant/ditto-subnet/pull/2110),
+  [`0916d22`](https://github.com/ditto-assistant/ditto-subnet/commit/0916d22509450b693d576dca356ae49b1638fdd6))
+
+- **platform**: Name scoring and emission bench versions apart
+  ([#2098](https://github.com/ditto-assistant/ditto-subnet/pull/2098),
+  [`2917ee0`](https://github.com/ditto-assistant/ditto-subnet/commit/2917ee0a14492bfc139fa77ee9f82c37aa663bf3))
+
+
 ## v0.303.1 (2026-09-23)
 
 ### Bug Fixes

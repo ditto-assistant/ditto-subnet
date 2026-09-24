@@ -202,7 +202,7 @@ describe('Backroom MCP OAuth consent', () => {
     )
   })
 
-  it('lets a write account grant write even when the client requested read only', async () => {
+  it('caps a write account to read when the client requested read only', async () => {
     const completeAuthorization = vi.fn().mockResolvedValue({
       redirectTo: 'http://127.0.0.1:8899/callback?code=issued',
     })
@@ -249,12 +249,17 @@ describe('Backroom MCP OAuth consent', () => {
       } as BackroomEnv & { OAUTH_PROVIDER: OAuthHelpers },
     )
 
+    // Issue #2080: consent can narrow a request but never widen it. A write
+    // account choosing "full" on a read-only request still receives read only.
     expect(completeAuthorization).toHaveBeenCalledWith(
       expect.objectContaining({
-        scope: [BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE],
-        props: expect.objectContaining({
-          scopes: [BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE, BACKROOM_WRITE_SCOPE],
+        scope: [BACKROOM_READ_SCOPE],
+        props: expect.objectContaining({ scopes: [BACKROOM_READ_SCOPE] }),
+        metadata: expect.objectContaining({
+          accessLevel: 'read-only',
+          requestedScopes: [BACKROOM_READ_SCOPE],
         }),
+        revokeExistingGrants: true,
       }),
     )
   })

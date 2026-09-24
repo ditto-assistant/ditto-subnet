@@ -187,6 +187,7 @@ from ditto.api_server.inference_concurrency_settings import resolved_proxy_confi
 from ditto.api_server.inference_routing import record_ticket_route_quality
 from ditto.api_server.koth import (
     KothEntry,
+    KothProjection,
     continual_composite,
     effective_composite,
     emission_set,
@@ -4557,6 +4558,42 @@ async def _current_emission_set(
     return emission_set(project_koth(snapshot.folded_entries))
 
 
+def _configured_retest_cohort(
+    entries: Sequence[KothEntry],
+    projection: KothProjection | None,
+    *,
+    settings: ContinualRetestSettings,
+) -> tuple[KothEntry, ...]:
+    """The operator-configured folded cohort, before any widening.
+
+    Split out so the read-only admission diagnostic resolves the cutoff with
+    the same call the lane admits on. An operator shown a separately derived
+    cutoff could be shown a cutoff that was never applied.
+    """
+    statistical = settings.retest_eligibility_mode == "statistical"
+    return retest_cohort(
+        entries,
+        projection,
+        size=settings.retest_cohort_size,
+        max_size=settings.retest_cohort_max_size if statistical else None,
+        tolerance_z=settings.retest_eligibility_z if statistical else 0.0,
+    )
+
+
+def _retest_cohort_cutoff(
+    configured_cohort: Sequence[KothEntry], *, settings: ContinualRetestSettings
+) -> KothEntry | None:
+    """The last member the FIXED rank admitted -- the tie band's anchor.
+
+    ``None`` when the cohort never reached the configured size, which is also
+    exactly when :func:`retest_cohort` never opened a band to measure against.
+    """
+    base_size = max(1, settings.retest_cohort_size)
+    if len(configured_cohort) < base_size:
+        return None
+    return configured_cohort[base_size - 1]
+
+
 async def _current_retest_cohort(
     session: AsyncSession,
     *,
@@ -4615,14 +4652,9 @@ async def _current_retest_cohort(
     # confirmation off the *folded* list cannot recover a newer UUID that
     # confirmation-enriched owner-dedupe already dropped (aceron_v23 vs v20).
     wave_members = snapshot.raw_emission
-    statistical = settings.retest_eligibility_mode == "statistical"
     emission_members = emission_set(projection)
-    configured_cohort = retest_cohort(
-        entries,
-        projection,
-        size=settings.retest_cohort_size,
-        max_size=settings.retest_cohort_max_size if statistical else None,
-        tolerance_z=settings.retest_eligibility_z if statistical else 0.0,
+    configured_cohort = _configured_retest_cohort(
+        entries, projection, settings=settings
     )
     seen = {member.agent_id for member in configured_cohort}
     emission_ids = {member.agent_id for member in emission_members}

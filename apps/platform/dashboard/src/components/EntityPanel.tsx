@@ -249,6 +249,10 @@ export interface EntityPanelProps {
   validatorNames: () => Record<string, string>;
   /** The settled/current bench version, for the miner bench chip. */
   currentBench: () => number | null;
+  /** The version the ledger pays on. Distinct from ``currentBench``, which
+   * follows the board's selected view and is a historical pin while one is
+   * chosen; only this one may be named as the emission authority. */
+  emissionBench?: () => number | null;
   /** Mid-rollout settled view (affects the displayed composite). */
   settledView?: () => boolean;
 }
@@ -700,6 +704,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
                   settled={settled()}
                   total={props.entries().filter(isEligible).length}
                   currentBench={props.currentBench()}
+                  emissionBench={props.emissionBench?.() ?? null}
                 />
               )}
             </Match>
@@ -804,9 +809,10 @@ function minerStandingChip(e: RankedEntry): { text: string; class: string; title
   };
 }
 
-function minerBenchChip(
+export function minerBenchChip(
   e: RankedEntry,
   currentBench: number | null,
+  emissionBench: number | null = null,
 ): { text: string; class: string; title: string } {
   if (e.bench_version == null) {
     return isFinalized(e)
@@ -826,8 +832,15 @@ function minerBenchChip(
   }
   const settledVersion = currentBench;
   const old = settledVersion !== null && e.bench_version < settledVersion;
+  // A run scored ahead of the paying version is mid-rollout work, not live
+  // earnings. Saying only "DittoBench v13" while the ledger still pays v12 is
+  // what read as an activated rollout in #118 on 2026-09-21. This reads the
+  // emission pin, never the board's selected version: a historical view pins
+  // an old version that pays nothing, and naming it as the authority would be
+  // a worse error than staying quiet.
+  const ahead = emissionBench !== null && e.bench_version > emissionBench;
   return {
-    text: "DittoBench v" + e.bench_version + (old ? " · old" : ""),
+    text: "DittoBench v" + e.bench_version + (old ? " · old" : ahead ? " · not paying yet" : ""),
     class: old ? "prev" : "",
     title: old
       ? "Scored on DittoBench v" +
@@ -835,7 +848,13 @@ function minerBenchChip(
         ", a previous benchmark. Not directly comparable to the settled v" +
         settledVersion +
         "."
-      : "Scored on DittoBench v" + e.bench_version + ".",
+      : ahead
+        ? "Scored on DittoBench v" +
+          e.bench_version +
+          ", which is still being collected. Emissions stay settled on v" +
+          emissionBench +
+          " until that rollout activates."
+        : "Scored on DittoBench v" + e.bench_version + ".",
   };
 }
 
@@ -1079,6 +1098,7 @@ function MinerSummary(props: {
   settled: boolean;
   total: number;
   currentBench: number | null;
+  emissionBench: number | null;
 }): JSX.Element {
   const e = () => props.entry;
   const agg = () => e() as RankedEntry & ContinualAggregate;
@@ -1086,7 +1106,7 @@ function MinerSummary(props: {
   const rolling = () => agg().aggregate_method === "continual_mean";
   const kind = () => unrankedKind(e());
   const calcRows = () => compositeCalculationRows(e());
-  const bench = () => minerBenchChip(e(), props.currentBench);
+  const bench = () => minerBenchChip(e(), props.currentBench, props.emissionBench);
   return (
     <>
       <div class="stat-cols">

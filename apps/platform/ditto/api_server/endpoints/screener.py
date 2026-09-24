@@ -5189,7 +5189,34 @@ async def screened_image_upload(
     if payload.image_ref != expected_ref:
         raise AgentNotScreenableError("screened image ref does not match agent")
     now = datetime.now(UTC)
+    image_upload_id = payload.image_upload_id or uuid4()
     required_policy = (await _required_policy(session)).required_policy_version
+
+    def existing_response(upload: ScreenedImageUpload) -> ScreenedImageUploadResponse:
+        expires_at = upload.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if (
+            upload.agent_id != agent_id
+            or upload.attempt_id != payload.attempt_id
+            or upload.screener_hotkey != screener_hotkey
+            or upload.sha256 != payload.sha256
+            or upload.size_bytes != payload.size_bytes
+            or upload.image_id != payload.image_id
+            or upload.image_ref != payload.image_ref
+            or upload.status != "initiated"
+            or datetime.now(UTC) > expires_at
+        ):
+            raise AgentNotScreenableError(
+                "screened image upload ID does not match an active initiation"
+            )
+        return ScreenedImageUploadResponse(
+            image_upload_id=upload.image_upload_id,
+            storage_upload_id=upload.storage_upload_id,
+            part_size_bytes=_SCREENED_IMAGE_PART_SIZE,
+            expires_at=upload.expires_at,
+        )
+
     async with session.begin():
         attempt = await get_screening_attempt(
             session, attempt_id=payload.attempt_id, for_update=True
@@ -5209,8 +5236,10 @@ async def screened_image_upload(
             deadline = deadline.replace(tzinfo=UTC)
         if now > deadline:
             raise AgentNotScreenableError("screened image upload lease has expired")
+        existing = await session.get(ScreenedImageUpload, image_upload_id)
+        if existing is not None:
+            return existing_response(existing)
 
-    image_upload_id = uuid4()
     expires_at = min(now + _SCREENED_IMAGE_UPLOAD_TTL, deadline)
     metadata = {
         "sha256": payload.sha256,
@@ -5224,6 +5253,7 @@ async def screened_image_upload(
         key=key,
         metadata=metadata,
     )
+    reused: ScreenedImageUploadResponse | None = None
     try:
         async with session.begin():
             attempt = await get_screening_attempt(
@@ -5239,24 +5269,41 @@ async def screened_image_upload(
                 raise AgentNotScreenableError(
                     "screened image upload lease changed during initiation"
                 )
-            session.add(
-                ScreenedImageUpload(
-                    image_upload_id=image_upload_id,
-                    agent_id=agent_id,
-                    attempt_id=payload.attempt_id,
-                    screener_hotkey=screener_hotkey,
-                    storage_upload_id=storage_upload_id,
-                    sha256=payload.sha256,
-                    size_bytes=payload.size_bytes,
-                    image_id=payload.image_id,
-                    image_ref=payload.image_ref,
-                    status="initiated",
-                    expires_at=expires_at,
+            deadline = attempt.deadline
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=UTC)
+            if datetime.now(UTC) > deadline:
+                raise AgentNotScreenableError(
+                    "screened image upload lease expired during initiation"
                 )
-            )
+            # Another request with the same ID may have completed while this
+            # one was creating the storage session. The attempt row lock
+            # serializes this decision without holding it across storage I/O.
+            existing = await session.get(ScreenedImageUpload, image_upload_id)
+            if existing is not None:
+                reused = existing_response(existing)
+            else:
+                session.add(
+                    ScreenedImageUpload(
+                        image_upload_id=image_upload_id,
+                        agent_id=agent_id,
+                        attempt_id=payload.attempt_id,
+                        screener_hotkey=screener_hotkey,
+                        storage_upload_id=storage_upload_id,
+                        sha256=payload.sha256,
+                        size_bytes=payload.size_bytes,
+                        image_id=payload.image_id,
+                        image_ref=payload.image_ref,
+                        status="initiated",
+                        expires_at=expires_at,
+                    )
+                )
     except Exception:
         await storage.abort_multipart_upload(key=key, upload_id=storage_upload_id)
         raise
+    if reused is not None:
+        await storage.abort_multipart_upload(key=key, upload_id=storage_upload_id)
+        return reused
     return ScreenedImageUploadResponse(
         image_upload_id=image_upload_id,
         storage_upload_id=storage_upload_id,

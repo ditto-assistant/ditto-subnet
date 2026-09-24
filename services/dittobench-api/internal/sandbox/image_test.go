@@ -73,6 +73,17 @@ func makeScreenedImageArchiveVariant(t *testing.T, repoTags []string, secondImag
 
 func makeOCIIndexArchive(t *testing.T, mutate func(*[]ociDescriptor)) ([]byte, string) {
 	t.Helper()
+	return makeOCIIndexArchiveWithConfig(t, mutate, nil)
+}
+
+// makeOCIIndexArchiveWithConfig builds the same archive with a chosen
+// attestation config blob. Current BuildKit points that descriptor at the OCI
+// empty descriptor rather than an unknown/unknown image config, so both shapes
+// have to be exercised.
+func makeOCIIndexArchiveWithConfig(
+	t *testing.T, mutate func(*[]ociDescriptor), emptyConfig []byte,
+) ([]byte, string) {
+	t.Helper()
 	config := []byte(`{"architecture":"amd64","os":"linux"}`)
 	configDigest := sha256.Sum256(config)
 	configName := "blobs/sha256/" + hex.EncodeToString(configDigest[:])
@@ -116,6 +127,11 @@ func makeOCIIndexArchive(t *testing.T, mutate func(*[]ociDescriptor)) ([]byte, s
 	if err != nil {
 		t.Fatal(err)
 	}
+	attestationConfigMediaType := ociImageConfigMediaType
+	if emptyConfig != nil {
+		attestationConfig = emptyConfig
+		attestationConfigMediaType = ociEmptyConfigMediaType
+	}
 	attestationConfigDigest := sha256.Sum256(attestationConfig)
 	attestationConfigID := "sha256:" + hex.EncodeToString(attestationConfigDigest[:])
 	predicateType := "https://slsa.dev/provenance/v1"
@@ -130,7 +146,7 @@ func makeOCIIndexArchive(t *testing.T, mutate func(*[]ociDescriptor)) ([]byte, s
 	statementID := "sha256:" + hex.EncodeToString(statementDigest[:])
 	attestationManifest, err := json.Marshal(map[string]any{
 		"schemaVersion": 2, "mediaType": ociImageManifestMediaType,
-		"config": map[string]any{"mediaType": ociImageConfigMediaType, "digest": attestationConfigID, "size": len(attestationConfig)},
+		"config": map[string]any{"mediaType": attestationConfigMediaType, "digest": attestationConfigID, "size": len(attestationConfig)},
 		"layers": []map[string]any{{
 			"mediaType": inTotoMediaType, "digest": statementID, "size": len(statement),
 			"annotations": map[string]string{"in-toto.io/predicate-type": predicateType},
@@ -460,6 +476,34 @@ func TestValidateDockerSaveArchiveAcceptsBoundedAttestations(t *testing.T) {
 				t.Fatal("untagged OCI index reported as tagged")
 			}
 		})
+	}
+}
+
+func TestValidateDockerSaveArchiveAcceptsTheEmptyAttestationConfig(t *testing.T) {
+	// Current BuildKit writes application/vnd.oci.empty.v1+json here. The
+	// unknown/unknown assertion the old config carried is already enforced on
+	// the index descriptor that points at this manifest, so the archive is no
+	// less bound than before.
+	archive, imageID := makeOCIIndexArchiveWithConfig(t, nil, []byte("{}"))
+
+	if _, err := validateDockerSaveArchive(writeArchive(t, archive), testScreenedImageRef, imageID); err != nil {
+		t.Fatalf("current BuildKit attestation rejected: %v", err)
+	}
+}
+
+func TestValidateDockerSaveArchiveRejectsANonEmptyEmptyAttestationConfig(t *testing.T) {
+	// Anything other than the canonical two-byte blob under that media type is
+	// an unvalidated config riding in on the relaxed branch.
+	for _, body := range [][]byte{
+		[]byte(`{"architecture":"amd64","os":"linux"}`),
+		[]byte(`{"a":1}`),
+		[]byte(` {}`),
+	} {
+		archive, imageID := makeOCIIndexArchiveWithConfig(t, nil, body)
+		_, err := validateDockerSaveArchive(writeArchive(t, archive), testScreenedImageRef, imageID)
+		if err == nil {
+			t.Fatalf("non-empty config accepted under the empty media type: %q", body)
+		}
 	}
 }
 

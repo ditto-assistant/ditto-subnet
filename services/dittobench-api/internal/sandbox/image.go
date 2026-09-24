@@ -29,6 +29,14 @@ const (
 	ociImageIndexMediaType    = "application/vnd.oci.image.index.v1+json"
 	ociImageManifestMediaType = "application/vnd.oci.image.manifest.v1+json"
 	ociImageConfigMediaType   = "application/vnd.oci.image.config.v1+json"
+	// Current BuildKit points an attestation manifest's config at the empty
+	// descriptor instead of writing an unknown/unknown image config. The
+	// platform assertion it used to carry is already enforced on the index
+	// descriptor that references the attestation, so accepting it costs no
+	// check: the blob itself is pinned to the canonical two-byte "{}" below.
+	ociEmptyConfigMediaType   = "application/vnd.oci.empty.v1+json"
+	ociEmptyConfigDigest      = "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+	ociEmptyConfigSize        = 2
 	ociLayerMediaType         = "application/vnd.oci.image.layer.v1.tar"
 	ociLayerGzipMediaType     = "application/vnd.oci.image.layer.v1.tar+gzip"
 	ociLayerZstdMediaType     = "application/vnd.oci.image.layer.v1.tar+zstd"
@@ -837,8 +845,16 @@ func validateAttestationManifest(descriptor ociDescriptor, runnableDigest string
 		Config        ociDescriptor   `json:"config"`
 		Layers        []ociDescriptor `json:"layers"`
 	}
-	if err := json.Unmarshal(manifestBytes, &manifest); err != nil || manifest.SchemaVersion != 2 ||
-		manifest.MediaType != ociImageManifestMediaType || manifest.Config.MediaType != ociImageConfigMediaType ||
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		return fmt.Errorf("attached manifest is not a bounded OCI attestation")
+	}
+	// Current BuildKit writes the empty descriptor here; older builds write an
+	// unknown/unknown image config. Both are accepted, and each is pinned to
+	// its own shape below.
+	configMediaTypeAccepted := manifest.Config.MediaType == ociImageConfigMediaType ||
+		manifest.Config.MediaType == ociEmptyConfigMediaType
+	if manifest.SchemaVersion != 2 ||
+		manifest.MediaType != ociImageManifestMediaType || !configMediaTypeAccepted ||
 		!canonicalSHA256Digest(manifest.Config.Digest) || manifest.Config.Size <= 0 || len(manifest.Layers) != 1 {
 		return fmt.Errorf("attached manifest is not a bounded OCI attestation")
 	}
@@ -852,12 +868,22 @@ func validateAttestationManifest(descriptor ociDescriptor, runnableDigest string
 	if int64(len(configBytes)) != manifest.Config.Size || int64(len(layerBytes)) != layer.Size {
 		return fmt.Errorf("attestation config or layer bytes are missing")
 	}
-	var config struct {
-		Architecture string `json:"architecture"`
-		OS           string `json:"os"`
-	}
-	if err := json.Unmarshal(configBytes, &config); err != nil || config.Architecture != "unknown" || config.OS != "unknown" {
-		return fmt.Errorf("attestation config is not unknown/unknown")
+	if manifest.Config.MediaType == ociEmptyConfigMediaType {
+		// The empty descriptor carries no platform to assert, so pin the blob
+		// itself: anything else under this media type is not the empty config.
+		if manifest.Config.Digest != ociEmptyConfigDigest ||
+			manifest.Config.Size != ociEmptyConfigSize ||
+			string(configBytes) != "{}" {
+			return fmt.Errorf("attestation empty config is not the canonical empty descriptor")
+		}
+	} else {
+		var config struct {
+			Architecture string `json:"architecture"`
+			OS           string `json:"os"`
+		}
+		if err := json.Unmarshal(configBytes, &config); err != nil || config.Architecture != "unknown" || config.OS != "unknown" {
+			return fmt.Errorf("attestation config is not unknown/unknown")
+		}
 	}
 	var statement struct {
 		Subject []struct {

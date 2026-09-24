@@ -47,6 +47,28 @@ A new champion starts a new seed family, so the crown often shows 1 seed
 while a tail that already sat in the set shows a larger count. That is the
 lane working, not stuck seeding.
 
+## "My newer version scores higher but the old one holds my slot"
+
+One owner gets one emission slot, and the representative is chosen on the
+**official continual composite** — the quorum median plus one score per
+fold-eligible shared seed — not on the three-validator median alone. A
+predecessor with a deep confirmation history can therefore out-rank a newer
+generation whose canonical median is higher and whose shared-seed depth is
+zero.
+
+Investigate before replying: `get_continual_retest_diagnostic` on the exact
+newer UUID returns both composites with their sample counts, the same-owner
+representative and the margin that selected it, whether the UUID is in the raw
+wave / folded emission set / resolved retest cohort, the cutoff and tie-band
+comparison, and whether a validator can claim it now (`claim.decision`,
+`claim.route_priority`).
+
+`admission_reason: same_owner_challenger` means the newer generation is
+admitted to the retest cohort for catch-up and is earning the shared seeds it
+needs — it is not taking a second slot. A **negative** `cohort_cutoff.gap` on a
+row that is still out of the cohort means the exclusion is owner suppression,
+not a score it failed to reach. Do not promise a promotion or a retest ETA.
+
 ## Owner-link vs new hotkey
 
 After attesting, do **not** tell the miner they must resubmit on another

@@ -77,6 +77,7 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
+_IMAGE_INIT_RETRY_DELAYS = (0.5, 1.0)
 _REMOTE_BUILD_POLL_SECONDS = 5.0
 _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS = 120.0
 
@@ -869,6 +870,7 @@ class PlatformClient:
             raise PlatformError("screened image changed before multipart upload")
         request = ScreenedImageUploadRequest(
             attempt_id=attempt_id,
+            image_upload_id=uuid4(),
             sha256=sha256,
             size_bytes=size_bytes,
             image_id=image_id,
@@ -883,8 +885,13 @@ class PlatformClient:
                 operation="image upload initiate",
                 json=request.model_dump(mode="json"),
                 headers=await self._auth_headers(),
+                transient_retry_delays=_IMAGE_INIT_RETRY_DELAYS,
             )
             upload = ScreenedImageUploadResponse.model_validate(response.json())
+            if upload.image_upload_id != request.image_upload_id:
+                raise PlatformError(
+                    "image upload initiate response did not honor the idempotency ID"
+                )
             completed: list[ScreenedImageCompletedPart] = []
             with archive.open("rb") as handle:
                 part_number = 1
@@ -975,23 +982,34 @@ class PlatformClient:
         *,
         operation: str,
         accepted: frozenset[int] = frozenset({200}),
+        transient_retry_delays: tuple[float, ...] = (),
         **kwargs: Any,
     ) -> httpx.Response:
-        """Issue exactly one image request; the operator retries parked work."""
-        try:
-            response = await self._client.request(
-                method,
-                url,
-                timeout=_IMAGE_REQUEST_TIMEOUT,
-                **kwargs,
+        """Retry only explicitly idempotent calls on transient failures."""
+        for attempt in range(len(transient_retry_delays) + 1):
+            try:
+                response = await self._client.request(
+                    method,
+                    url,
+                    timeout=_IMAGE_REQUEST_TIMEOUT,
+                    **kwargs,
+                )
+            except httpx.TransportError as error:
+                if attempt < len(transient_retry_delays):
+                    await asyncio.sleep(transient_retry_delays[attempt])
+                    continue
+                raise PlatformError(f"{operation} failed: {error}") from error
+            if response.status_code in accepted:
+                return response
+            if attempt < len(transient_retry_delays) and _is_transient_platform_status(
+                response.status_code
+            ):
+                await asyncio.sleep(transient_retry_delays[attempt])
+                continue
+            raise PlatformError(
+                f"{operation} rejected ({response.status_code}): {response.text[:200]}"
             )
-        except httpx.HTTPError as error:
-            raise PlatformError(f"{operation} failed: {error}") from error
-        if response.status_code in accepted:
-            return response
-        raise PlatformError(
-            f"{operation} rejected ({response.status_code}): {response.text[:200]}"
-        )
+        raise AssertionError("image request retry loop exhausted")
 
     async def _abort_screened_image_upload(
         self,

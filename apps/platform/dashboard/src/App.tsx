@@ -394,6 +394,7 @@ export default function App(): JSX.Element {
         operations={ops}
         validatorNames={names}
         currentBench={() => bench().current}
+        emissionBench={() => bench().active}
         settledView={settledView}
       />
     </>

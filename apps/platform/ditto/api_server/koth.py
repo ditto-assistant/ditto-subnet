@@ -425,6 +425,57 @@ def _distinct_ranked(entries: Sequence[KothEntry]) -> tuple[KothEntry, ...]:
     return tuple(distinct)
 
 
+@dataclass(frozen=True)
+class TieBandComparison:
+    """The arithmetic behind one tie-tolerant cohort admission decision.
+
+    Returned so a read-only operator view can show *why* an agent fell outside
+    the cutoff instead of only that it did: the score gap it has to close, the
+    band that would have forgiven it, and the resulting verdict.
+    """
+
+    gap: float
+    """``score(cutoff) - score(candidate)``; negative when already ahead."""
+
+    tolerance: float
+    """``z * sqrt(se_candidate^2 + se_cutoff^2)`` on the same score scale."""
+
+    indistinguishable: bool
+    """Whether the gap is inside the band (an exact tie or better counts)."""
+
+
+def tie_band_comparison(
+    candidate: KothEntry, cutoff: KothEntry, *, tolerance_z: float
+) -> TieBandComparison:
+    """Compare ``candidate`` against the ``cutoff`` agent's tie band.
+
+    The single expression of the band; :func:`indistinguishable_from` is the
+    boolean the fold and the cohort builder call, and this is the same
+    computation with its intermediate terms kept for diagnosis. Both must stay
+    one implementation: an operator read that derived the band separately could
+    explain an exclusion the lane did not actually make.
+    """
+    quality_primary = _quality_primary_efficiency_active((candidate, cutoff))
+    score = continual_composite if quality_primary else effective_composite
+    gap = score(cutoff) - score(candidate)
+    # Stderr lives on the pre-efficiency quality scale. Propagate it through
+    # the frozen score transform before deciding whether the cutoff is
+    # unsettled, matching both Platform's dethrone decision and the validator
+    # fold.
+    candidate_stderr = (_stderr(candidate) or 0.0) * (
+        1.0 if quality_primary else _efficiency_stderr_scale(candidate)
+    )
+    cutoff_stderr = (_stderr(cutoff) or 0.0) * (
+        1.0 if quality_primary else _efficiency_stderr_scale(cutoff)
+    )
+    tolerance = tolerance_z * math.sqrt(candidate_stderr**2 + cutoff_stderr**2)
+    return TieBandComparison(
+        gap=gap,
+        tolerance=tolerance,
+        indistinguishable=gap <= 0.0 or gap <= tolerance,
+    )
+
+
 def indistinguishable_from(
     candidate: KothEntry, cutoff: KothEntry, *, tolerance_z: float
 ) -> bool:
@@ -443,23 +494,9 @@ def indistinguishable_from(
     rank 11 holding the identical composite to rank 10 is not a ranking, it is a
     coin flip, and a fixed cutoff resolves it by arbitrary tiebreak.
     """
-    quality_primary = _quality_primary_efficiency_active((candidate, cutoff))
-    score = continual_composite if quality_primary else effective_composite
-    gap = score(cutoff) - score(candidate)
-    if gap <= 0.0:
-        return True
-    # Stderr lives on the pre-efficiency quality scale. Propagate it through
-    # the frozen score transform before deciding whether the cutoff is
-    # unsettled, matching both Platform's dethrone decision and the validator
-    # fold.
-    candidate_stderr = (_stderr(candidate) or 0.0) * (
-        1.0 if quality_primary else _efficiency_stderr_scale(candidate)
-    )
-    cutoff_stderr = (_stderr(cutoff) or 0.0) * (
-        1.0 if quality_primary else _efficiency_stderr_scale(cutoff)
-    )
-    tolerance = tolerance_z * math.sqrt(candidate_stderr**2 + cutoff_stderr**2)
-    return gap <= tolerance
+    return tie_band_comparison(
+        candidate, cutoff, tolerance_z=tolerance_z
+    ).indistinguishable
 
 
 def retest_cohort(

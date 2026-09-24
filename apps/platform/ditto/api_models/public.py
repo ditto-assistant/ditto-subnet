@@ -2105,15 +2105,48 @@ class PublicLeaderboardResponse(BaseModel):
         int,
         Field(
             description=(
-                "The latest DittoBench benchmark version. Entries whose "
-                "bench_version is below this were scored on a previous benchmark "
-                "and are not directly comparable; the UI marks them as such."
+                "Deprecated name for ``scoring_bench_version``, kept so existing "
+                "clients keep working. It is the version this board is scored "
+                "and ranked on, which during a rollout is the version being "
+                "collected rather than the one paying emissions. Read "
+                "``emission_bench_version`` for that."
+            )
+        ),
+    ]
+    scoring_bench_version: Annotated[
+        int,
+        Field(
+            description=(
+                "The benchmark version this board's ranking is computed on: the "
+                "version currently being collected, or the pinned version on a "
+                "historical board. Entries below it were scored on an earlier "
+                "benchmark and are not directly comparable. A submission scored "
+                "here is not yet earning on this version unless "
+                "``emission_bench_version`` equals it."
+            )
+        ),
+    ]
+    emission_bench_version: Annotated[
+        int,
+        Field(
+            description=(
+                "The benchmark version that controls emissions right now, taken "
+                "from the ledger pin. It changes only when a rollout activates, "
+                "so during a rollout it stays behind ``scoring_bench_version`` "
+                "while the new version is still being collected. Same value as "
+                "``active_bench_version``, named for what it decides."
             )
         ),
     ]
     active_bench_version: Annotated[
         int,
-        Field(description="Globally activated benchmark version."),
+        Field(
+            description=(
+                "Globally activated benchmark version: the one whose scores the "
+                "ledger pays on. Identical to ``emission_bench_version``, which "
+                "is the clearer name for the same pin."
+            )
+        ),
     ]
     desired_bench_version: Annotated[
         int,
@@ -3740,7 +3773,29 @@ class PublicSubmissionPipeline(BaseModel):
         ),
     )
     active_bench_version: Annotated[
-        int, Field(ge=1, description="Benchmark version currently being scored.")
+        int,
+        Field(
+            ge=1,
+            description=(
+                "The benchmark version that controls emissions: the ledger pin, "
+                "not the version this submission is being scored on. During a "
+                "rollout the fleet scores the version being collected while this "
+                "stays on the version that still pays, so the two differ until "
+                "the rollout activates. ``score_bench_version`` is the era this "
+                "submission's own scores belong to."
+            ),
+        ),
+    ]
+    emission_bench_version: Annotated[
+        int,
+        Field(
+            ge=1,
+            description=(
+                "Same pin as ``active_bench_version``, named for what it decides. "
+                "A submission finalized at a different ``score_bench_version`` is "
+                "not earning on this version's ledger."
+            ),
+        ),
     ]
     score_bench_version: Annotated[
         int,

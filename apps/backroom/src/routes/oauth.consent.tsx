@@ -41,11 +41,12 @@ function ConsentPage() {
   const [accessLevel, setAccessLevel] = useState<'read' | 'artifact' | 'write' | 'full'>('read')
   const [pending, setPending] = useState<'allow' | 'deny' | null>(null)
   const [error, setError] = useState('')
-  // The signed-in Backroom account's own access level is the only gate on which
-  // levels are offered — the human chooses what to grant, regardless of the
-  // narrower scope set the OAuth client happened to request.
-  const canGrantArtifact = user.accessLevel === 'write'
-  const canGrantWrite = user.accessLevel === 'write'
+  // A level is offered only when the OAuth client requested its scope AND the
+  // signed-in account is entitled to it. The server enforces the same
+  // intersection, so consent can narrow a request but never widen it.
+  const privilegedAccount = user.accessLevel === 'write'
+  const canGrantArtifact = privilegedAccount && details.canRequestArtifact
+  const canGrantWrite = privilegedAccount && details.canRequestWrite
   const canGrantFull = canGrantArtifact && canGrantWrite
 
   const decide = async (decision: 'allow' | 'deny') => {
@@ -175,7 +176,7 @@ function ConsentPage() {
               />
             ) : null}
 
-            {!canGrantArtifact && !canGrantWrite ? (
+            {!privilegedAccount ? (
               <div className="flex items-start gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
                 <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-[var(--muted)]" />
                 <p className="text-xs leading-5 text-[var(--muted)]">
@@ -183,7 +184,21 @@ function ConsentPage() {
                   access. Source downloads and production changes require a write-level account.
                 </p>
               </div>
+            ) : !canGrantArtifact || !canGrantWrite ? (
+              <div className="flex items-start gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
+                <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-[var(--muted)]" />
+                <p className="text-xs leading-5 text-[var(--muted)]">
+                  This client requested {details.requestedScopes.join(', ')}. Only levels within
+                  that request can be granted; a client that needs more must reconnect and ask for
+                  the broader scope.
+                </p>
+              </div>
             ) : null}
+
+            <p className="text-[11px] leading-5 text-[var(--muted)]">
+              Approving replaces any earlier grant this client holds. Review or revoke every agent
+              connection on the Agent access page.
+            </p>
 
             {error ? (
               <div className="rounded-lg border border-[var(--red)]/25 bg-[var(--red-dim)] px-4 py-3 text-sm text-[var(--red)]">
@@ -223,8 +238,8 @@ function ConsentPage() {
         </section>
 
         <p className="mt-5 flex items-center justify-center gap-2 text-center text-[11px] leading-5 text-[var(--muted)]">
-          <ShieldCheck className="h-3.5 w-3.5" /> OAuth 2.1 · PKCE S256 · access can be revoked by
-          reconnecting
+          <ShieldCheck className="h-3.5 w-3.5" /> OAuth 2.1 · PKCE S256 · revoke any time from
+          Agent access
         </p>
       </div>
     </main>

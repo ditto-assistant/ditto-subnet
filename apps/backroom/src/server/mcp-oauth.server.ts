@@ -1,6 +1,14 @@
 import '@tanstack/react-start/server-only'
 
-import type { AuthRequest, ClientInfo, OAuthHelpers } from '@cloudflare/workers-oauth-provider'
+import { OAuthError } from '@cloudflare/workers-oauth-provider'
+import type {
+  AuthRequest,
+  ClientInfo,
+  GrantSummary,
+  OAuthHelpers,
+  TokenExchangeCallbackOptions,
+  TokenExchangeCallbackResult,
+} from '@cloudflare/workers-oauth-provider'
 import { z } from 'zod'
 import {
   BACKROOM_ARTIFACT_SCOPE,
@@ -14,6 +22,10 @@ import { constantTimeEqual, randomToken, sealToken, unsealToken } from './crypto
 import { readSessionFromRequest } from './session.server'
 
 const PENDING_AUTH_MAX_AGE_MS = 10 * 60 * 1_000
+/** The access-token ceiling; `server.ts` configures the same value. */
+export const MAX_ACCESS_TOKEN_TTL_SECONDS = 50 * 60
+/** Workers KV rejects an `expirationTtl` below 60 seconds. */
+export const MIN_ACCESS_TOKEN_TTL_SECONDS = 60
 const SUPPORTED_SCOPES = new Set([
   BACKROOM_READ_SCOPE,
   BACKROOM_ARTIFACT_SCOPE,
@@ -48,6 +60,45 @@ function noStoreJson(value: unknown, status = 200) {
       Pragma: 'no-cache',
     },
   })
+}
+
+export function accessLevelForScopes(scopes: Array<string>) {
+  const artifact = scopes.includes(BACKROOM_ARTIFACT_SCOPE)
+  const write = scopes.includes(BACKROOM_WRITE_SCOPE)
+  return write ? (artifact ? 'full' : 'read-write') : artifact ? 'read-artifacts' : 'read-only'
+}
+
+/**
+ * The scopes a consent actually grants: the intersection of what the OAuth
+ * client requested, what the operator selected on the consent screen, and what
+ * the operator's live Backroom level entitles. Read is always the floor. A
+ * client that needs more must re-authorize with the broader scope (the MCP
+ * endpoint answers insufficient_scope with exactly that step-up challenge), so
+ * consent can never widen a read-only request into artifact or write access.
+ */
+export function grantedMcpScopes({
+  requested,
+  selected,
+  accountLevel,
+}: {
+  requested: Array<string>
+  selected: 'read' | 'artifact' | 'write' | 'full'
+  accountLevel: 'read' | 'write'
+}) {
+  const privileged = accountLevel === 'write'
+  const artifact =
+    privileged &&
+    requested.includes(BACKROOM_ARTIFACT_SCOPE) &&
+    (selected === 'artifact' || selected === 'full')
+  const write =
+    privileged &&
+    requested.includes(BACKROOM_WRITE_SCOPE) &&
+    (selected === 'write' || selected === 'full')
+  return [
+    BACKROOM_READ_SCOPE,
+    ...(artifact ? [BACKROOM_ARTIFACT_SCOPE] : []),
+    ...(write ? [BACKROOM_WRITE_SCOPE] : []),
+  ]
 }
 
 function normalizeScopes(scopes: Array<string>) {
@@ -198,19 +249,12 @@ export async function completeMcpAuthorization(
   }
   session = { ...session, accessLevel }
 
-  // The consenting staff member picks the level; the only hard limit is the
-  // account's own Backroom access, so a read-only account can never elevate a
-  // connection to source-download or write access.
-  const canGrantPrivileged = session.accessLevel === 'write'
-  const grantArtifact =
-    (input.accessLevel === 'artifact' || input.accessLevel === 'full') && canGrantPrivileged
-  const grantWrite =
-    (input.accessLevel === 'write' || input.accessLevel === 'full') && canGrantPrivileged
-  const scopes = [
-    BACKROOM_READ_SCOPE,
-    ...(grantArtifact ? [BACKROOM_ARTIFACT_SCOPE] : []),
-    ...(grantWrite ? [BACKROOM_WRITE_SCOPE] : []),
-  ]
+  const requestedScopes = normalizeScopes(pending.request.scope)
+  const scopes = grantedMcpScopes({
+    requested: requestedScopes,
+    selected: input.accessLevel,
+    accountLevel: session.accessLevel,
+  })
 
   const props: McpGrantProps = {
     session,
@@ -223,17 +267,159 @@ export async function completeMcpAuthorization(
     metadata: {
       clientName: props.clientName,
       email: session.email,
-      accessLevel: grantWrite
-        ? grantArtifact
-          ? 'full'
-          : 'read-write'
-        : grantArtifact
-          ? 'read-artifacts'
-          : 'read-only',
+      accessLevel: accessLevelForScopes(scopes),
+      requestedScopes,
       authorizedAt: new Date().toISOString(),
     },
     scope: scopes,
     props,
+    // Reconnecting the same client replaces its previous grant outright, so a
+    // read-only reconnect can never leave an earlier full grant (or its
+    // refresh token) usable under that client id.
+    revokeExistingGrants: true,
   })
   return noStoreJson({ redirectTo })
+}
+
+/**
+ * Token issuance for both the authorization-code and refresh grants. The token
+ * carries only scopes that the client asked for on this request AND that the
+ * grant's consent recorded, and it is stamped with the exact grant and client
+ * ids so `get_backroom_access` can name the grant an operator should revoke.
+ * The grant's own props are never rewritten, so a narrowed token request can
+ * neither widen nor permanently shrink the consented grant.
+ */
+export function mcpTokenExchange(
+  options: TokenExchangeCallbackOptions,
+  now = Date.now(),
+): TokenExchangeCallbackResult {
+  const props = options.props as McpGrantProps | undefined
+  // A grant is only ever as live as the operator session that authorized it.
+  // This deployment authenticates against Google plus BACKROOM_ADMIN_EMAILS and
+  // has no refresh path, so an expired staff session ends the connection rather
+  // than being silently renewed: the 7-day session bound documented in
+  // docs/oauth.md has to mean the same thing over MCP as it does in the console.
+  if (!props?.session) {
+    throw new OAuthError('invalid_grant', {
+      description: 'The Backroom staff session expired; authorize again',
+      statusCode: 400,
+    })
+  }
+  // The token can never outlive the session. Workers KV will not accept an
+  // expiration under MIN_ACCESS_TOKEN_TTL_SECONDS, so a session with less life
+  // than that cannot be represented by a token that dies with it: refuse the
+  // exchange instead of rounding the token's life up past the session's.
+  const remainingSeconds = Math.floor((props.session.expiresAt - now) / 1_000)
+  if (remainingSeconds < MIN_ACCESS_TOKEN_TTL_SECONDS) {
+    throw new OAuthError('invalid_grant', {
+      description: 'The Backroom staff session is about to expire; authorize again',
+      statusCode: 400,
+    })
+  }
+  const scopes = [
+    ...new Set(
+      options.requestedScope.filter(
+        (scope) => options.scope.includes(scope) && props.scopes.includes(scope),
+      ),
+    ),
+  ]
+  const accessTokenProps: McpGrantProps = {
+    session: props.session,
+    scopes,
+    clientName: props.clientName,
+    grant: { id: options.grantId, clientId: options.clientId },
+  }
+  return {
+    accessTokenProps,
+    accessTokenScope: scopes,
+    accessTokenTTL: Math.min(MAX_ACCESS_TOKEN_TTL_SECONDS, remainingSeconds),
+  }
+}
+
+export type McpGrantListing = {
+  id: string
+  clientId: string
+  clientName: string
+  scopes: Array<string>
+  requestedScopes: Array<string> | null
+  accessLevel: string
+  authorizedAt: string | null
+  createdAt: number
+  expiresAt: number | null
+}
+
+const GRANT_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/
+
+async function operatorSession(request: Request, env: BackroomEnv) {
+  const session = await readSessionFromRequest(request, env.SESSION_SECRET)
+  if (!session) return null
+  try {
+    accessLevelForEmail(session.email, env.BACKROOM_ADMIN_EMAILS, env.BACKROOM_BLOCKED_EMAILS)
+  } catch {
+    return null
+  }
+  return session
+}
+
+function grantListing(grant: GrantSummary): McpGrantListing {
+  const metadata = (grant.metadata ?? {}) as Record<string, unknown>
+  const requested = metadata.requestedScopes
+  return {
+    id: grant.id,
+    clientId: grant.clientId,
+    clientName: typeof metadata.clientName === 'string' ? metadata.clientName : 'MCP client',
+    scopes: grant.scope,
+    requestedScopes:
+      Array.isArray(requested) && requested.every((scope) => typeof scope === 'string')
+        ? (requested as Array<string>)
+        : null,
+    accessLevel: accessLevelForScopes(grant.scope),
+    authorizedAt: typeof metadata.authorizedAt === 'string' ? metadata.authorizedAt : null,
+    createdAt: grant.createdAt,
+    expiresAt: grant.expiresAt ?? null,
+  }
+}
+
+/** Lists the signed-in operator's own MCP grants, newest first. */
+export async function listMcpGrants(
+  request: Request,
+  env: BackroomEnv & { OAUTH_PROVIDER: OAuthHelpers },
+) {
+  const session = await operatorSession(request, env)
+  if (!session) return noStoreJson({ error: 'Your Backroom session expired' }, 401)
+  const grants: Array<McpGrantListing> = []
+  let cursor: string | undefined
+  do {
+    const page = await env.OAUTH_PROVIDER.listUserGrants(session.uid, { cursor, limit: 100 })
+    grants.push(...page.items.map(grantListing))
+    cursor = page.cursor
+  } while (cursor)
+  grants.sort((left, right) => right.createdAt - left.createdAt)
+  return noStoreJson({ grants })
+}
+
+/**
+ * Revokes one of the signed-in operator's own MCP grants and every access and
+ * refresh token issued under it. The grant key is namespaced by the session's
+ * uid, so an operator can only ever revoke their own connections.
+ */
+export async function revokeMcpGrant(
+  request: Request,
+  env: BackroomEnv & { OAUTH_PROVIDER: OAuthHelpers },
+) {
+  const origin = new URL(request.url).origin
+  if (request.headers.get('origin') !== origin) {
+    return noStoreJson({ error: 'Origin check failed' }, 403)
+  }
+  if (!request.headers.get('content-type')?.includes('application/json')) {
+    return noStoreJson({ error: 'Content-Type must be application/json' }, 415)
+  }
+  const session = await operatorSession(request, env)
+  if (!session) return noStoreJson({ error: 'Your Backroom session expired' }, 401)
+  const input = z
+    .object({ grantId: z.string().regex(GRANT_ID_PATTERN) })
+    .safeParse(await request.json().catch(() => null))
+  if (!input.success) return noStoreJson({ error: 'Invalid grant id' }, 400)
+  await env.OAUTH_PROVIDER.revokeGrant(input.data.grantId, session.uid)
+  return noStoreJson({ revoked: input.data.grantId })
 }

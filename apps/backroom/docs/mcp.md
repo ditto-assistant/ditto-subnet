@@ -114,10 +114,27 @@ is still live. `mcp-scope.server.ts` additionally challenges the request with a
 `WWW-Authenticate` scope hint before the tool runs, so an under-scoped client
 gets a 403 naming the scope it needs rather than a tool-level refusal.
 
-Access tokens never outlive the operator session: `tokenExchangeCallback`
-refuses an expired one and clamps the token TTL to the session's remaining life.
-There is no refresh path for the identity itself — when the session ends, the
-operator authorizes again.
+A grant is the intersection of the scopes the client requested, the level the
+operator selected on consent, and the account's live level. Consent can narrow
+a request but never widen it: a `scope=backroom:read` request yields a
+read-only grant whatever is selected, and a client that needs more must
+reconnect and request the broader scope (the step-up challenge above names it).
+Approving a client replaces every earlier grant that client id held, and a
+token request can only downscope within its grant. `get_backroom_access`
+reports the connection's exact `grant` id and client id, the token's
+`grantedScopes`, and the effective `scopes` after the live-level cap. Operators
+list and revoke their own grants (with every access and refresh token issued
+under them) on the Agent access page, backed by `GET /oauth/grants` and
+same-origin `POST /oauth/grants/revoke`.
+
+Access tokens never outlive the operator session. `mcpTokenExchange` clamps the
+token TTL to the session's exact remaining seconds (capped at 50 minutes) and
+answers `invalid_grant` when less than 60 seconds remain, because Workers KV
+cannot express an expiry under a minute and rounding it up would outlive the
+session. The MCP handler re-checks `session.expiresAt` on every request, exactly
+as it re-derives the live email level, so an expired session ends read, artifact,
+and write access at once. There is no refresh path for the identity itself — when
+the session ends, the operator authorizes again.
 
 ## Bindings
 

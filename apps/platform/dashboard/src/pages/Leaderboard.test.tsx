@@ -1337,6 +1337,52 @@ describe("dethrone floor + rollout strip (row 36)", () => {
     );
   });
 
+  it("names the scoring version and the paying version apart mid-rollout", async () => {
+    const collecting = (body: unknown): LeaderboardPayload => ({
+      ...(body as LeaderboardPayload),
+      selection_mode: "authoritative",
+      active_bench_version: 7,
+      desired_bench_version: 8,
+      current_bench_version: 8,
+      scoring_bench_version: 8,
+      emission_bench_version: 7,
+    });
+    renderPage({
+      patch: (name, body) => (name === "leaderboard" ? collecting(body) : body),
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("leaderboard-version-context").textContent).toContain(
+        "Rows rank by their settled v7 score while v8 collects",
+      ),
+    );
+    // The half miners read as a stalled rollout: v8 is being scored, v7 pays.
+    expect(el("leaderboard-version-context").textContent).toContain(
+      "Validator weights stay on v7 until the v8 rollout fully activates",
+    );
+  });
+
+  it("stops splitting the versions once the rollout has activated", async () => {
+    const activated = (body: unknown): LeaderboardPayload => ({
+      ...(body as LeaderboardPayload),
+      selection_mode: "authoritative",
+      active_bench_version: 8,
+      desired_bench_version: 8,
+      current_bench_version: 8,
+      scoring_bench_version: 8,
+      emission_bench_version: 8,
+    });
+    renderPage({
+      patch: (name, body) => (name === "leaderboard" ? activated(body) : body),
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("leaderboard-version-context").textContent).toBe(
+        "This pool drives validator weights.",
+      ),
+    );
+  });
+
   it("keeps a superseded rollout from reading as in progress", async () => {
     const superseded = (body: unknown): RolloutState => ({
       ...(body as RolloutState),

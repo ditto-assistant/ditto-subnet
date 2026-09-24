@@ -3825,6 +3825,12 @@ async def build_public_leaderboard(
         generated_at=now,
         count=len(entries),
         current_bench_version=display_version,
+        # One resolution, three names: the deprecated field, the clear one, and
+        # the pin that decides pay. Miners read the rollout as stalled when a
+        # board says 13 while the ledger is still paying 12, so both halves have
+        # to be present on the same response rather than inferred from it.
+        scoring_bench_version=display_version,
+        emission_bench_version=active_version,
         active_bench_version=active_version,
         desired_bench_version=desired_version,
         available_bench_versions=await list_scored_bench_versions(session),
@@ -7293,6 +7299,7 @@ async def agent_pipeline(
         ),
         submission_family=submission_family,
         active_bench_version=canonical_version,
+        emission_bench_version=canonical_version,
         score_bench_version=era_version,
         score_count=len(era_scores),
         quorum=SCORING_QUORUM,

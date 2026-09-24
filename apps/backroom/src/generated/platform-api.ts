@@ -158,7 +158,9 @@ export interface paths {
          * @description Explain one UUID's current admission with the scheduler's own fold.
          *
          *     This reads accepted score evidence and current policy. It cannot issue a
-         *     ticket, override an exclusion, or change the leaderboard.
+         *     ticket, override an exclusion, or change the leaderboard. Confirmation
+         *     datasets, prompts, and answer keys are never returned, and outstanding work
+         *     is reported as a count rather than a seed list.
          */
         get: operations["continual_retest_diagnostic_api_v1_admin_agents__agent_id__continual_retest_diagnostic_get"];
         put?: never;
@@ -2079,6 +2081,26 @@ export interface paths {
          * @description Group live screening failures in the current era unless history is requested.
          */
         get: operations["summarize_screening_failures_api_v1_admin_screening_failures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screening-infra-retries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Screening Infra Retries
+         * @description Report infrastructure-retry policy, parked agents, and breakers.
+         */
+        get: operations["screening_infra_retries_api_v1_admin_screening_infra_retries_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8634,12 +8656,33 @@ export interface components {
             agent_id: string;
             /** Agent Status */
             agent_status: string;
+            /**
+             * Aggregate Mode
+             * @default fleet_ready
+             * @enum {string}
+             */
+            aggregate_mode: "disabled" | "fleet_ready" | "enabled";
             /** Canonical Composite */
             canonical_composite: number | null;
+            /**
+             * Canonical Sample Count
+             * @default 0
+             */
+            canonical_sample_count: number;
+            claim?: components["schemas"]["RetestClaimability"] | null;
+            /** @default {} */
+            cohort_cutoff: components["schemas"]["RetestCutoffComparison"];
             /** Cohort Position */
             cohort_position: number | null;
             /** Cohort Size */
             cohort_size: number;
+            /**
+             * Completed Wave Depth
+             * @default 0
+             */
+            completed_wave_depth: number;
+            /** Composite Stderr */
+            composite_stderr?: number | null;
             /** Configured Cohort Size */
             configured_cohort_size: number;
             /** Configured Max Size */
@@ -8651,6 +8694,8 @@ export interface components {
             eligibility_mode: "fixed" | "statistical";
             /** Eligibility Z */
             eligibility_z: number;
+            /** @default {} */
+            emission_cutoff: components["schemas"]["RetestCutoffComparison"];
             /** Family */
             family: components["schemas"]["RetestFamilyMember"][];
             /** Folded Confirmation Seeds */
@@ -8668,22 +8713,74 @@ export interface components {
             in_retest_cohort: boolean;
             /** Is Same Owner Challenger */
             is_same_owner_challenger: boolean;
+            /** Latest Confirmation Composite */
+            latest_confirmation_composite?: number | null;
+            /** Latest Confirmation Recorded At */
+            latest_confirmation_recorded_at?: string | null;
+            /** Latest Ticket Failure Reason */
+            latest_ticket_failure_reason?: string | null;
+            /** Latest Ticket Status */
+            latest_ticket_status?: string | null;
+            /** Latest Ticket Updated At */
+            latest_ticket_updated_at?: string | null;
+            /** Latest Ticket Validator Hotkey */
+            latest_ticket_validator_hotkey?: string | null;
+            /**
+             * Ledger Eligible
+             * @default false
+             */
+            ledger_eligible: boolean;
             /** Official Composite */
             official_composite: number | null;
+            /**
+             * Official Sample Count
+             * @default 0
+             */
+            official_sample_count: number;
+            /** Owner Key */
+            owner_key?: string | null;
             /** Owner Representative Id */
             owner_representative_id: string | null;
+            /**
+             * Raw Confirmation Depth
+             * @default 0
+             */
+            raw_confirmation_depth: number;
             /** Raw Confirmation Seeds */
             raw_confirmation_seeds: string[];
+            /** Representative Canonical Composite */
+            representative_canonical_composite?: number | null;
+            /** Representative Margin */
+            representative_margin?: number | null;
+            /** Representative Official Composite */
+            representative_official_composite?: number | null;
+            /**
+             * Representative Selection
+             * @default none
+             * @enum {string}
+             */
+            representative_selection: "self" | "official_composite" | "efficiency_tiebreak" | "newest_generation" | "agent_id_tiebreak" | "none";
             /** Seed Anchor Block */
             seed_anchor_block: number | null;
             /** Seed Anchor Champion Id */
             seed_anchor_champion_id: string | null;
             /** Seed Anchor Pinned */
             seed_anchor_pinned: boolean | null;
+            /**
+             * Terminal Ticket Count
+             * @default 0
+             */
+            terminal_ticket_count: number;
             /** Ticket Status Counts */
             ticket_status_counts: {
                 [key: string]: number;
             };
+            /**
+             * Wave Membership
+             * @default participants
+             * @enum {string}
+             */
+            wave_membership: "strict" | "participants" | "per_agent";
         };
         /** AdminContinualRetestSettingsRequest */
         AdminContinualRetestSettingsRequest: {
@@ -19456,6 +19553,129 @@ export interface components {
             /** Windows */
             windows: components["schemas"]["InferenceLaneWindow"][];
         };
+        /** InfraRetryAgentView */
+        InfraRetryAgentView: {
+            /** Admitted */
+            admitted: boolean;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Backoff Until
+             * Format: date-time
+             */
+            backoff_until: string;
+            /** Breaker Phase */
+            breaker_phase?: ("closed" | "open" | "half_open") | null;
+            /**
+             * Claim Outlook
+             * @enum {string}
+             */
+            claim_outlook: "ready" | "waiting_backoff" | "waiting_breaker" | "needs_operator" | "not_admitted";
+            /** Consecutive Failures */
+            consecutive_failures: number;
+            /**
+             * Failed At
+             * Format: date-time
+             */
+            failed_at: string;
+            /** Lane */
+            lane?: string | null;
+            /**
+             * Next Retry At
+             * Format: date-time
+             */
+            next_retry_at: string;
+            /** Provider */
+            provider?: string | null;
+            /** Reason Code */
+            reason_code: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "backoff" | "breaker_held" | "probe_due" | "due" | "capped";
+        };
+        /** InfraRetryBreakerView */
+        InfraRetryBreakerView: {
+            /** Lane */
+            lane?: string | null;
+            /** Last Probe At */
+            last_probe_at?: string | null;
+            /** Next Probe At */
+            next_probe_at?: string | null;
+            /** Open Until */
+            open_until?: string | null;
+            /** Opened At */
+            opened_at?: string | null;
+            /** Parked Agents */
+            parked_agents: number;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "closed" | "open" | "half_open";
+            /** Provider */
+            provider?: string | null;
+            /** Reason Code */
+            reason_code: string;
+        };
+        /**
+         * InfraRetryPolicy
+         * @description The constants the planner runs with; durations are seconds.
+         */
+        InfraRetryPolicy: {
+            /** Auto Retry Max Age Seconds */
+            auto_retry_max_age_seconds: number;
+            /** Auto Retry Max Streak */
+            auto_retry_max_streak: number;
+            /** Auto Retry Reason Codes */
+            auto_retry_reason_codes: string[];
+            /** Base Backoff Seconds */
+            base_backoff_seconds: number;
+            /** Breaker Distinct Agents */
+            breaker_distinct_agents: number;
+            /** Breaker History Lookback Seconds */
+            breaker_history_lookback_seconds: number;
+            /** Breaker Open Seconds */
+            breaker_open_seconds: number;
+            /** Breaker Probe Interval Seconds */
+            breaker_probe_interval_seconds: number;
+            /** Breaker Window Seconds */
+            breaker_window_seconds: number;
+            /** Jitter Fraction */
+            jitter_fraction: number;
+            /** Max Backoff Seconds */
+            max_backoff_seconds: number;
+            /** Plan Max Claimable */
+            plan_max_claimable: number;
+        };
+        /** InfraRetrySummary */
+        InfraRetrySummary: {
+            /** Aged Out Agents */
+            aged_out_agents: number;
+            /** Breakers Total */
+            breakers_total: number;
+            /** By State */
+            by_state: {
+                [key: string]: number;
+            };
+            /** Half Open Breakers */
+            half_open_breakers: number;
+            /** Not Admitted */
+            not_admitted: number;
+            /** Open Breakers */
+            open_breakers: number;
+            /** Parked Agents */
+            parked_agents: number;
+        };
         /**
          * JobRequest
          * @description Signed request to claim one validator scoring ticket.
@@ -23766,7 +23986,7 @@ export interface components {
         PublicLeaderboardResponse: {
             /**
              * Active Bench Version
-             * @description Globally activated benchmark version.
+             * @description Globally activated benchmark version: the one whose scores the ledger pays on. Identical to ``emission_bench_version``, which is the clearer name for the same pin.
              */
             active_bench_version: number;
             /**
@@ -23792,7 +24012,7 @@ export interface components {
             count: number;
             /**
              * Current Bench Version
-             * @description The latest DittoBench benchmark version. Entries whose bench_version is below this were scored on a previous benchmark and are not directly comparable; the UI marks them as such.
+             * @description Deprecated name for ``scoring_bench_version``, kept so existing clients keep working. It is the version this board is scored and ranked on, which during a rollout is the version being collected rather than the one paying emissions. Read ``emission_bench_version`` for that.
              */
             current_bench_version: number;
             /**
@@ -23802,6 +24022,11 @@ export interface components {
             desired_bench_version: number;
             /** @description Relative token-efficiency bonus status for this board. Null below bench_version 7, while the feature is disabled, or before the first cohort snapshot is frozen. active=false means the frozen cohort has not reached its n_min activation gate and every bonus is zero. */
             efficiency?: components["schemas"]["PublicEfficiencyStatus"] | null;
+            /**
+             * Emission Bench Version
+             * @description The benchmark version that controls emissions right now, taken from the ledger pin. It changes only when a rollout activates, so during a rollout it stays behind ``scoring_bench_version`` while the new version is still being collected. Same value as ``active_bench_version``, named for what it decides.
+             */
+            emission_bench_version: number;
             /** @description Current KOTH fold over finalized, full-benchmark entries on the current benchmark. Null when no entry can receive emissions. */
             emissions?: components["schemas"]["PublicKothEmissions"] | null;
             /**
@@ -23826,6 +24051,11 @@ export interface components {
              * @description Router track measurement phase. ``shadow`` is present only when the published router ledger carries at least one measurement; the board's router surface is display-only and never changes ranking or emissions. Null means the router surface is off.
              */
             router_shadow_mode?: "shadow" | null;
+            /**
+             * Scoring Bench Version
+             * @description The benchmark version this board's ranking is computed on: the version currently being collected, or the pinned version on a historical board. Entries below it were scored on an earlier benchmark and are not directly comparable. A submission scored here is not yet earning on this version unless ``emission_bench_version`` equals it.
+             */
+            scoring_bench_version: number;
             /**
              * Selection Mode
              * @description authoritative is the pool that drives validator weights: pinned to active_bench_version while a rollout is collecting (the desired version takes over only at rollout activation); historical is a requested single version.
@@ -24817,7 +25047,7 @@ export interface components {
         PublicSubmissionPipeline: {
             /**
              * Active Bench Version
-             * @description Benchmark version currently being scored.
+             * @description The benchmark version that controls emissions: the ledger pin, not the version this submission is being scored on. During a rollout the fleet scores the version being collected while this stays on the version that still pays, so the two differ until the rollout activates. ``score_bench_version`` is the era this submission's own scores belong to.
              */
             active_bench_version: number;
             /** @description Live admission-retry state while the submission is still in build & admission; null once admission is terminal. */
@@ -24831,6 +25061,11 @@ export interface components {
             /** Confirmation Scores */
             confirmation_scores?: components["schemas"]["PublicConfirmationScore"][];
             dispute?: components["schemas"]["PublicScreeningDispute"] | null;
+            /**
+             * Emission Bench Version
+             * @description Same pin as ``active_bench_version``, named for what it decides. A submission finalized at a different ``score_bench_version`` is not earning on this version's ledger.
+             */
+            emission_bench_version: number;
             /**
              * Final Composite
              * @description Canonical median over the ``score_bench_version`` scores once quorum is reached; null while scores are still provisional.
@@ -25982,6 +26217,69 @@ export interface components {
             /** Score Count */
             score_count: number;
         };
+        /**
+         * RetestClaimability
+         * @description Whether a validator polling now could lease this exact agent.
+         *
+         *     A projection of the issuance lane's own predicates, in the order the lane
+         *     evaluates them. Reading it never issues, reserves, or reprioritizes work.
+         */
+        RetestClaimability: {
+            /** Champion Agent Id */
+            champion_agent_id: string | null;
+            /** Champion Crown Block */
+            champion_crown_block: number | null;
+            /** Claimable Seed Available */
+            claimable_seed_available: boolean;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "claimable" | "lane_disabled" | "not_in_cohort" | "chain_unavailable" | "round_not_due" | "newer_canonical_work_pending" | "no_pending_seeds" | "all_pending_seeds_leased" | "another_member_less_covered";
+            /** Idle Retests Enabled */
+            idle_retests_enabled: boolean;
+            /** In Catchup Set */
+            in_catchup_set: boolean;
+            /** Lane Enabled */
+            lane_enabled: boolean;
+            /** Latest Block */
+            latest_block: number | null;
+            /** Least Covered Admitted */
+            least_covered_admitted: boolean | null;
+            /** Live Lease Count */
+            live_lease_count: number;
+            /** Newer Canonical Work Pending */
+            newer_canonical_work_pending: boolean;
+            /** Pending Seed Count */
+            pending_seed_count: number;
+            /** Route Position */
+            route_position: number | null;
+            /**
+             * Route Priority
+             * @enum {string}
+             */
+            route_priority: "champion" | "catchup" | "emission" | "extended" | "not_routed";
+            /** Scheduled Round */
+            scheduled_round: boolean | null;
+            /** Spare Capacity Window */
+            spare_capacity_window: boolean;
+        };
+        /**
+         * RetestCutoffComparison
+         * @description One cutoff this agent was measured against, with the arithmetic.
+         */
+        RetestCutoffComparison: {
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Composite */
+            composite?: number | null;
+            /** Gap */
+            gap?: number | null;
+            /** Tie Band */
+            tie_band?: number | null;
+            /** Within Tie Band */
+            within_tie_band?: boolean | null;
+        };
         /** RetestFamilyMember */
         RetestFamilyMember: {
             /**
@@ -25991,6 +26289,20 @@ export interface components {
             agent_id: string;
             /** Canonical Composite */
             canonical_composite: number;
+            /**
+             * Canonical Sample Count
+             * @default 0
+             */
+            canonical_sample_count: number;
+            /**
+             * Completed Wave Depth
+             * @default 0
+             */
+            completed_wave_depth: number;
+            /** Effective Composite */
+            effective_composite?: number | null;
+            /** First Seen */
+            first_seen?: string | null;
             /** Official Composite */
             official_composite: number;
             /** Representative */
@@ -26891,6 +27203,8 @@ export interface components {
             image_id: string;
             /** Image Ref */
             image_ref: string;
+            /** Image Upload Id */
+            image_upload_id?: string | null;
             /** Sha256 */
             sha256: string;
             /** Size Bytes */
@@ -28292,6 +28606,30 @@ export interface components {
              * @enum {string}
              */
             source: "platform" | "cache" | "bootstrap";
+        };
+        /** ScreeningInfraRetryView */
+        ScreeningInfraRetryView: {
+            /** Agents */
+            agents?: components["schemas"]["InfraRetryAgentView"][];
+            /** Agents Limit */
+            agents_limit: number;
+            /** Agents Truncated */
+            agents_truncated: boolean;
+            /** Basis */
+            basis: string;
+            /** Breakers */
+            breakers?: components["schemas"]["InfraRetryBreakerView"][];
+            /** Breakers Limit */
+            breakers_limit: number;
+            /** Breakers Truncated */
+            breakers_truncated: boolean;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            policy: components["schemas"]["InfraRetryPolicy"];
+            summary: components["schemas"]["InfraRetrySummary"];
         };
         /**
          * ScreeningVerificationReceiptRequest
@@ -35844,6 +36182,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminScreeningFailureSummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    screening_infra_retries_api_v1_admin_screening_infra_retries_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningInfraRetryView"];
                 };
             };
             /** @description Validation Error */

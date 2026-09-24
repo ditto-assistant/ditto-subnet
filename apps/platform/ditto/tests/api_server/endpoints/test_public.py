@@ -4690,6 +4690,76 @@ class TestPublicLeaderboard:
         ]
         assert hidden_pipeline["submission_family"] == family
 
+    async def test_board_separates_the_scoring_version_from_the_paying_one(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A collecting rollout must not read as an activated one.
+
+        On 2026-09-21 the board reported ``current_bench_version`` 13 while the
+        ledger still paid 12, and that was read in Discord as a stalled or
+        inconsistent rollout. The two numbers are both correct and they answer
+        different questions, so the response has to carry them under names that
+        say which is which.
+        """
+        await _seed_k3(session_maker, miner=_MINER_A, composites=[0.9, 0.9, 0.9])
+        async with session_maker() as session, session.begin():
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=uuid4(),
+                    from_version=_ERA,
+                    desired_version=_NEXT_ERA,
+                    status="collecting",
+                    cohort_size=5,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        _install_db(app, session_maker)
+
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+        assert body["scoring_bench_version"] == _NEXT_ERA
+        assert body["emission_bench_version"] == _ERA
+        assert body["emission_bench_version"] == body["active_bench_version"]
+        # The deprecated name keeps its old meaning for existing clients.
+        assert body["current_bench_version"] == body["scoring_bench_version"]
+        assert body["scoring_bench_version"] != body["emission_bench_version"]
+
+        # The submission page answers the same question about one agent.
+        agent_id = body["entries"][0]["agent_id"]
+        pipeline = (
+            await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+        ).json()
+        assert pipeline["emission_bench_version"] == _ERA
+        assert pipeline["emission_bench_version"] == pipeline["active_bench_version"]
+
+    async def test_board_stops_splitting_versions_once_no_rollout_is_open(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """After activation the two questions have one answer again."""
+        await _seed_k3(session_maker, miner=_MINER_A, composites=[0.9, 0.9, 0.9])
+        async with session_maker() as session, session.begin():
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=uuid4(),
+                    from_version=_ERA,
+                    desired_version=_NEXT_ERA,
+                    status="activated",
+                    cohort_size=5,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        _install_db(app, session_maker)
+
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+        assert body["scoring_bench_version"] == body["emission_bench_version"]
+        assert body["current_bench_version"] == body["scoring_bench_version"]
+        assert body["active_bench_version"] == body["emission_bench_version"]
+
     async def test_open_rollout_exposes_settled_and_rollout_state_per_entry(
         self,
         app: FastAPI,
