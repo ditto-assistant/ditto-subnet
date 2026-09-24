@@ -91,11 +91,12 @@ MAX_REPLAY_LEASE = timedelta(hours=4)
 MAX_REPLAY_RENEWALS = 8
 RENEW_WINDOW = timedelta(minutes=10)
 URL_TTL_SECONDS = 300
-REPLAYABLE_BUDGET_FAILURES = frozenset(
+REPLAYABLE_SOURCE_REVIEW_FAILURES = frozenset(
     {
         "l2-model-total-budget",
         "l2-model-tool-budget",
         "l2-model-step-budget",
+        "l2-model-inconclusive",
         "l3-critic-model-tool-budget",
         "l3-violation-adjudicator-model-step-budget",
     }
@@ -200,13 +201,13 @@ async def _binding_ok(
         and quarantine is not None
         and quarantine.status == "active"
     )
-    held_budget_failure = bool(
+    held_source_review_failure = bool(
         agent is not None
         and agent.status == "screening_failed"
         and attempt is not None
         and attempt.status == "expired"
         and attempt.finished_at is not None
-        and attempt.reason_code in REPLAYABLE_BUDGET_FAILURES
+        and attempt.reason_code in REPLAYABLE_SOURCE_REVIEW_FAILURES
         and quarantine is not None
         and quarantine.status == "resolved"
         and quarantine.resolution == "rescreen"
@@ -214,7 +215,7 @@ async def _binding_ok(
         and quarantine.screener_hotkey == attempt.screener_hotkey
         and row.image_upload_id is None
     )
-    if held_budget_failure and quarantine is not None:
+    if held_source_review_failure and quarantine is not None:
         # A failed source review has no candidate image. Its signed verdict
         # retained bounded notes even before L2 budget audits were introduced.
         # Verify those notes again before independent, report-only replay.
@@ -259,7 +260,7 @@ async def _binding_ok(
         and quarantine.policy_version == row.policy_version
         and attempt is not None
         and attempt.agent_id == row.agent_id
-        and (held_quarantine or held_budget_failure)
+        and (held_quarantine or held_source_review_failure)
         and attempt.policy_version == row.policy_version
         and attempt.artifact_sha256 == row.artifact_sha256
         and (

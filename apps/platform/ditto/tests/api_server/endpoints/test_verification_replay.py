@@ -214,7 +214,7 @@ def _payload(attempt_id, quarantine_id, image_id, **changes):
     return VerificationReplayCreate(**values)
 
 
-async def _seed_budget_failure(session, reason_code="l2-model-total-budget"):
+async def _seed_source_review_failure(session, reason_code="l2-model-total-budget"):
     agent_id, attempt_id, quarantine_id, _image_id = await _seed(session)
     agent = await session.get(Agent, agent_id)
     attempt = await session.get(ScreeningAttempt, attempt_id)
@@ -244,11 +244,17 @@ async def _seed_budget_failure(session, reason_code="l2-model-total-budget"):
     return agent_id, attempt_id, quarantine_id
 
 
+@pytest.mark.parametrize(
+    "reason_code", ["l2-model-total-budget", "l2-model-inconclusive"]
+)
 @pytest.mark.asyncio
-async def test_budget_failed_attempt_can_enter_independent_replay_without_release(
+async def test_failed_source_review_can_enter_independent_replay_without_release(
     session,
+    reason_code,
 ):
-    agent_id, attempt_id, quarantine_id = await _seed_budget_failure(session)
+    agent_id, attempt_id, quarantine_id = await _seed_source_review_failure(
+        session, reason_code=reason_code
+    )
     payload = _payload(
         attempt_id,
         quarantine_id,
@@ -306,8 +312,8 @@ async def test_budget_failed_attempt_can_enter_independent_replay_without_releas
 
 
 @pytest.mark.asyncio
-async def test_budget_replay_rejects_stale_or_unverified_source_evidence(session):
-    agent_id, attempt_id, quarantine_id = await _seed_budget_failure(session)
+async def test_source_review_replay_rejects_stale_or_unverified_evidence(session):
+    agent_id, attempt_id, quarantine_id = await _seed_source_review_failure(session)
     payload = _payload(
         attempt_id,
         quarantine_id,
@@ -358,9 +364,9 @@ async def test_budget_replay_rejects_stale_or_unverified_source_evidence(session
 
 
 @pytest.mark.asyncio
-async def test_failed_nonbudget_screening_cannot_enter_replay(session):
-    agent_id, attempt_id, quarantine_id = await _seed_budget_failure(
-        session, reason_code="l2-model-inconclusive"
+async def test_non_source_review_failure_cannot_enter_replay(session):
+    agent_id, attempt_id, quarantine_id = await _seed_source_review_failure(
+        session, reason_code="challenge-http-500"
     )
     payload = _payload(
         attempt_id,
