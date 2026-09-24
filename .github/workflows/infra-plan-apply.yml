@@ -217,21 +217,18 @@ jobs:
 
       - name: Require exact V13 bootstrap creation scope
         if: inputs.root == 'gcp-v13-private-bootstrap'
+        env:
+          V13_APPROVED_BOOTSTRAP_JSON: ${{ secrets.V13_PRIVATE_APPROVED_BOOTSTRAP_JSON }}
         run: |
-          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan \
-            | jq -e '
-              [.resource_changes[] | select(.change.actions != ["no-op"])
-                | {base: (.address | sub("\\[.*$"; "")), actions: .change.actions}]
-              | (length == 4)
-                and all(.[]; .actions == ["create"])
-                and ([.[].base] | sort) == ([
-                  "google_project.verifier",
-                  "google_project_service.storage",
-                  "google_storage_bucket.state",
-                  "google_storage_bucket_iam_member.state_custodian"
-                ] | sort)
-            ' >/dev/null
-          echo 'V13 bootstrap scope: four creates, no updates or destroys.'
+          test -n "$V13_APPROVED_BOOTSTRAP_JSON"
+          umask 077
+          plan_json="$(mktemp)"
+          approved_json="$(mktemp)"
+          trap 'rm -f "$plan_json" "$approved_json"' EXIT
+          printf '%s' "$V13_APPROVED_BOOTSTRAP_JSON" > "$approved_json"
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
+          python3 infra/terraform/stacks/gcp-v13-private-bootstrap/check-plan.py \
+            "$plan_json" "$approved_json"
 
       - name: Reject replacement of an armed hotkey admin
         if: inputs.root == 'gcp-platform' && inputs.validator_hotkey_admin_phase == 'armed'
@@ -277,11 +274,16 @@ jobs:
     environment: infra-apply
     steps:
       - name: Validate immutable plan identity
+        env:
+          PLAN_SHA: ${{ inputs.plan_sha }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+          PLAN_CHECKSUM: ${{ inputs.plan_checksum }}
+          TF_ROOT: ${{ inputs.root }}
         run: |
-          [[ '${{ inputs.plan_sha }}' =~ ^[0-9a-f]{40}$ ]]
-          [[ '${{ inputs.plan_run_id }}' =~ ^[0-9]+$ ]]
-          if [ '${{ inputs.root }}' = gcp-v13-private-bootstrap ]; then
-            [[ '${{ inputs.plan_checksum }}' =~ ^[0-9a-f]{64}$ ]]
+          [[ "$PLAN_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PLAN_RUN_ID" =~ ^[0-9]+$ ]]
+          if [ "$TF_ROOT" = gcp-v13-private-bootstrap ]; then
+            [[ "$PLAN_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]
           fi
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -326,15 +328,35 @@ jobs:
         run: terraform -chdir=${{ steps.root.outputs.path }} init
 
       - name: Fetch and verify exact private plan
+        env:
+          PLAN_SHA: ${{ inputs.plan_sha }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+          PLAN_CHECKSUM: ${{ inputs.plan_checksum }}
+          TF_ROOT: ${{ inputs.root }}
         run: |
-          prefix="gs://${PLAN_BUCKET}/ci-plans/${{ inputs.root }}/${{ inputs.plan_sha }}/${{ inputs.plan_run_id }}"
+          prefix="gs://${PLAN_BUCKET}/ci-plans/${TF_ROOT}/${PLAN_SHA}/${PLAN_RUN_ID}"
           gcloud storage cp "${prefix}.tfplan" "${{ steps.root.outputs.path }}/tfplan"
           gcloud storage cp "${prefix}.sha256" "${{ steps.root.outputs.path }}/tfplan.sha256"
           cd "${{ steps.root.outputs.path }}"
           sha256sum -c tfplan.sha256
-          if [ '${{ inputs.root }}' = gcp-v13-private-bootstrap ]; then
-            test "$(sha256sum tfplan | awk '{print $1}')" = '${{ inputs.plan_checksum }}'
+          if [ "$TF_ROOT" = gcp-v13-private-bootstrap ]; then
+            test "$(sha256sum tfplan | awk '{print $1}')" = "$PLAN_CHECKSUM"
           fi
+
+      - name: Recheck V13 bootstrap values against apply approval
+        if: inputs.root == 'gcp-v13-private-bootstrap'
+        env:
+          V13_APPROVED_BOOTSTRAP_JSON: ${{ secrets.V13_PRIVATE_APPROVED_BOOTSTRAP_JSON }}
+        run: |
+          test -n "$V13_APPROVED_BOOTSTRAP_JSON"
+          umask 077
+          plan_json="$(mktemp)"
+          approved_json="$(mktemp)"
+          trap 'rm -f "$plan_json" "$approved_json"' EXIT
+          printf '%s' "$V13_APPROVED_BOOTSTRAP_JSON" > "$approved_json"
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan > "$plan_json"
+          python3 infra/terraform/stacks/gcp-v13-private-bootstrap/check-plan.py \
+            "$plan_json" "$approved_json"
 
       - name: Apply the reviewed binary plan
         env:
@@ -343,6 +365,10 @@ jobs:
 
       - name: Remove consumed private plan
         if: success()
+        env:
+          PLAN_SHA: ${{ inputs.plan_sha }}
+          PLAN_RUN_ID: ${{ inputs.plan_run_id }}
+          TF_ROOT: ${{ inputs.root }}
         run: |
-          prefix="gs://${PLAN_BUCKET}/ci-plans/${{ inputs.root }}/${{ inputs.plan_sha }}/${{ inputs.plan_run_id }}"
+          prefix="gs://${PLAN_BUCKET}/ci-plans/${TF_ROOT}/${PLAN_SHA}/${PLAN_RUN_ID}"
           gcloud storage rm "${prefix}.tfplan" "${prefix}.sha256"

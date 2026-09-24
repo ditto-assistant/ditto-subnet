@@ -85,7 +85,11 @@ An approved bootstrap requires a reviewed intent commit setting its flag true,
 then a read-only exact-head plan and separate apply approval. The protected
 `infra-plan-apply.yml` workflow has a `gcp-v13-private-bootstrap` root: its
 plan checks out current `main`, rejects targets, requires one private state
-custodian, and permits only the four bootstrap creates. It keeps detailed
+custodian, and checks the four bootstrap creates against a separate private
+approval manifest: exact project/bucket names, parent organization, billing
+account, state-bucket IAM recipient/role, API, and bucket safeguards. The
+same check runs against an independently configured `infra-apply` approval
+manifest immediately before apply. It keeps detailed
 Terraform output on the runner and publishes the plan SHA, run ID, and binary
 SHA-256; the binary plan and checksum are held in the private CI plan bucket.
 The `infra-apply` environment approval is required before apply. Apply
@@ -97,7 +101,13 @@ plan/apply service accounts and WIF bindings, the `infra-plan` secret
 `GCP_V13_BOOTSTRAP_PLAN_SA`, the `infra-apply` secret
 `GCP_V13_BOOTSTRAP_APPLY_SA`, and `infra-plan` values
 `V13_PRIVATE_ORGANIZATION_ID`, `V13_PRIVATE_BILLING_ACCOUNT_ID`, and
-`V13_PRIVATE_STATE_CUSTODIANS_JSON`, plus sufficient temporary
+`V13_PRIVATE_STATE_CUSTODIANS_JSON`. Independently configure
+`V13_PRIVATE_APPROVED_BOOTSTRAP_JSON` in both `infra-plan` and `infra-apply`
+from the private approval record; do not derive it from the plan output. Its
+fields are `project_id`, `state_bucket`, `organization_id`,
+`billing_account_id` (bare `XXXXXX-XXXXXX-XXXXXX`), and `state_custodian`
+(`user:...`). The plan and apply checks fail if either copy is absent or any
+planned value differs. These inputs also require sufficient temporary
 project-creation/billing/bucket authority. The generic Terraform apply account
 does not have direct organization project-creator or billing-user authority;
 the workflow rejects missing dedicated identities. The existing

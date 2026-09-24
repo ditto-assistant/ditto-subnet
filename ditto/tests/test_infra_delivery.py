@@ -45,13 +45,12 @@ def test_v13_bootstrap_uses_exact_scoped_protected_plan_and_apply() -> None:
         "secrets.GCP_V13_BOOTSTRAP_PLAN_SA",
         "secrets.GCP_V13_BOOTSTRAP_APPLY_SA",
         "secrets.V13_PRIVATE_STATE_CUSTODIANS_JSON",
+        "secrets.V13_PRIVATE_APPROVED_BOOTSTRAP_JSON",
         'test -z "$TF_TARGETS"',
         "enable_v13_private_bootstrap[[:space:]]*=[[:space:]]*true",
-        "length == 4",
-        'all(.[]; .actions == ["create"])',
-        "[[ '${{ inputs.plan_checksum }}' =~ ^[0-9a-f]{64}$ ]]",
-        "test \"$(sha256sum tfplan | awk '{print $1}')\" = "
-        "'${{ inputs.plan_checksum }}'",
+        "check-plan.py",
+        '[[ "$PLAN_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]',
+        'test "$(sha256sum tfplan | awk \'{print $1}\')" = "$PLAN_CHECKSUM"',
         'test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"',
     ):
         assert contract in text
