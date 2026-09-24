@@ -396,10 +396,11 @@ describe('Backroom MCP tools', () => {
     // L4 cohort diagnostic adds one catalog line without another tutorial.
     // The infra-retry read summary lands at 25,990, so the bound moves to 26_200.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      // Includes the V13 clock, independent replay, infra-retry, and ordinary
-      // source-review queue-age SLO, failure taxonomy route_basis, and
-      // reopened-hold reason summaries.
-      28_000,
+      // Includes the V13 clock, independent replay, infra-retry, ordinary
+      // source-review queue-age SLO, failure taxonomy route_basis,
+      // reopened-hold reason, three process-key summaries, and current V13
+      // provenance reads; measured at 28,253 characters.
+      28_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
