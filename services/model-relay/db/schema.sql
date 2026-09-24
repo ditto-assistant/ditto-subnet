@@ -4982,6 +4982,61 @@ CREATE TABLE public.v13_private_generation_groups (
 
 
 --
+-- Name: v13_replay_group_package_registrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_replay_group_package_registrations (
+    group_id uuid NOT NULL,
+    role text NOT NULL,
+    generation_receipt_sha256 text NOT NULL,
+    manifest_sha256 text NOT NULL,
+    pair_inventory_sha256 text NOT NULL,
+    registrar_actor text NOT NULL,
+    registered_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_actor CHECK (((length(registrar_actor) >= 1) AND (length(registrar_actor) <= 120))),
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_genera_55b4 CHECK ((length(generation_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_manife_e5dd CHECK ((length(manifest_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_pair_i_45ea CHECK ((length(pair_inventory_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_role CHECK ((role = ANY (ARRAY['target'::text, 'known_benign'::text])))
+);
+
+
+--
+-- Name: v13_replay_private_generation_groups; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_replay_private_generation_groups (
+    group_id uuid NOT NULL,
+    replay_id uuid NOT NULL,
+    target_agent_id uuid NOT NULL,
+    target_attempt_id uuid NOT NULL,
+    target_artifact_sha256 text NOT NULL,
+    target_image_sha256 text NOT NULL,
+    control_agent_id uuid NOT NULL,
+    control_attempt_id uuid NOT NULL,
+    control_artifact_sha256 text NOT NULL,
+    control_image_sha256 text NOT NULL,
+    approval_id uuid NOT NULL,
+    approval_receipt_sha256 text NOT NULL,
+    profile_sha256 text NOT NULL,
+    target_receipt_sha256 text NOT NULL,
+    control_receipt_sha256 text NOT NULL,
+    actor text NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_actor CHECK (((length(actor) >= 1) AND (length(actor) <= 120))),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_approval_9831 CHECK ((length(approval_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_control__4c20 CHECK ((length(control_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_control__727c CHECK ((length(control_image_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_control__f279 CHECK ((length(control_artifact_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_distinct_agents CHECK ((target_agent_id <> control_agent_id)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_profile__1f4f CHECK ((length(profile_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_target_a_9fde CHECK ((length(target_artifact_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_target_i_7e08 CHECK ((length(target_image_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_target_r_7369 CHECK ((length(target_receipt_sha256) = 64))
+);
+
+
+--
 -- Name: validator_heartbeats; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7209,6 +7264,22 @@ ALTER TABLE ONLY public.v13_private_generation_groups
 
 
 --
+-- Name: v13_replay_group_package_registrations pk_v13_replay_group_package_registrations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_group_package_registrations
+    ADD CONSTRAINT pk_v13_replay_group_package_registrations PRIMARY KEY (group_id, role);
+
+
+--
+-- Name: v13_replay_private_generation_groups pk_v13_replay_private_generation_groups; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT pk_v13_replay_private_generation_groups PRIMARY KEY (group_id);
+
+
+--
 -- Name: validator_lease_audit pk_validator_lease_audit; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7726,6 +7797,14 @@ ALTER TABLE ONLY public.v13_private_generation_groups
 
 ALTER TABLE ONLY public.validator_weight_receipts
     ADD CONSTRAINT uq_validator_weight_receipts_receipt_digest UNIQUE (receipt_digest);
+
+
+--
+-- Name: v13_replay_private_generation_groups v13rpg_replay_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT v13rpg_replay_key UNIQUE (replay_id);
 
 
 --
@@ -9206,6 +9285,20 @@ CREATE TRIGGER v13_private_generation_groups_immutable BEFORE DELETE OR UPDATE O
 
 
 --
+-- Name: v13_replay_group_package_registrations v13_replay_group_package_registrations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_replay_group_package_registrations_immutable BEFORE DELETE OR UPDATE ON public.v13_replay_group_package_registrations FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: v13_replay_private_generation_groups v13_replay_private_generation_groups_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_replay_private_generation_groups_immutable BEFORE DELETE OR UPDATE ON public.v13_replay_private_generation_groups FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
 -- Name: validator_tickets validator_tickets_bench_version_floor; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -10135,6 +10228,62 @@ ALTER TABLE ONLY public.v13_private_generation_groups
 
 ALTER TABLE ONLY public.v13_private_generation_groups
     ADD CONSTRAINT fk_v13_private_generation_groups_target_attempt_id_scre_ac0a FOREIGN KEY (target_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_group_package_registrations fk_v13_replay_group_package_registrations_group_id_v13__6b73; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_group_package_registrations
+    ADD CONSTRAINT fk_v13_replay_group_package_registrations_group_id_v13__6b73 FOREIGN KEY (group_id) REFERENCES public.v13_replay_private_generation_groups(group_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_approval_id_v13_484e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_approval_id_v13_484e FOREIGN KEY (approval_id) REFERENCES public.v13_known_benign_control_approvals(approval_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_control_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_control_agent_id_agents FOREIGN KEY (control_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_control_attempt_b51a; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_control_attempt_b51a FOREIGN KEY (control_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_replay_id_scree_7035; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_replay_id_scree_7035 FOREIGN KEY (replay_id) REFERENCES public.screening_verification_replays(replay_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_target_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_target_agent_id_agents FOREIGN KEY (target_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_target_attempt__08f4; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_target_attempt__08f4 FOREIGN KEY (target_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
 
 
 --

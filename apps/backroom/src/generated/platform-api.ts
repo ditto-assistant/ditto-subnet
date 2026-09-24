@@ -3017,6 +3017,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/v13-private-generation/replays/{replay_id}/group": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Replay Generation Group */
+        get: operations["get_replay_generation_group_api_v1_admin_v13_private_generation_replays__replay_id__group_get"];
+        put?: never;
+        /**
+         * Record Replay Generation Start
+         * @description Commit replay image and clean control before protected seed generation.
+         */
+        post: operations["record_replay_generation_start_api_v1_admin_v13_private_generation_replays__replay_id__group_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/v13-private-generation/replays/{replay_id}/packages/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Replay Group Package */
+        get: operations["get_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__get"];
+        put?: never;
+        /**
+         * Register Replay Group Package
+         * @description Record sealed package digests; registration alone is not verification.
+         */
+        post: operations["register_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v9-contract-retests": {
         parameters: {
             query?: never;
@@ -31084,6 +31126,126 @@ export interface components {
              */
             replay_id: string;
         };
+        /** V13ReplayGenerationGroupView */
+        V13ReplayGenerationGroupView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Approval Id
+             * Format: uuid
+             */
+            approval_id: string;
+            /** Approval Receipt Sha256 */
+            approval_receipt_sha256: string;
+            /**
+             * Control Agent Id
+             * Format: uuid
+             */
+            control_agent_id: string;
+            /** Control Artifact Sha256 */
+            control_artifact_sha256: string;
+            /**
+             * Control Attempt Id
+             * Format: uuid
+             */
+            control_attempt_id: string;
+            /** Control Image Sha256 */
+            control_image_sha256: string;
+            /** Control Receipt Sha256 */
+            control_receipt_sha256: string;
+            /**
+             * Group Id
+             * Format: uuid
+             */
+            group_id: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Status
+             * @default recorded_unverified
+             * @constant
+             */
+            status: "recorded_unverified";
+            /**
+             * Target Agent Id
+             * Format: uuid
+             */
+            target_agent_id: string;
+            /** Target Artifact Sha256 */
+            target_artifact_sha256: string;
+            /**
+             * Target Attempt Id
+             * Format: uuid
+             */
+            target_attempt_id: string;
+            /** Target Image Sha256 */
+            target_image_sha256: string;
+            /** Target Receipt Sha256 */
+            target_receipt_sha256: string;
+        };
+        /** V13ReplayGroupPackageView */
+        V13ReplayGroupPackageView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Generation Receipt Sha256 */
+            generation_receipt_sha256: string;
+            /**
+             * Group Id
+             * Format: uuid
+             */
+            group_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Pair Inventory Sha256 */
+            pair_inventory_sha256: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /**
+             * Registered At
+             * Format: date-time
+             */
+            registered_at: string;
+            /** Registrar Actor */
+            registrar_actor: string;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "target" | "known_benign";
+            /**
+             * Status
+             * @default recorded_unverified
+             * @constant
+             */
+            status: "recorded_unverified";
+        };
         /**
          * V13ReplayObservation
          * @description A runner claim; even ``passed`` remains unverified by this model.
@@ -38341,6 +38503,150 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["V13KnownBenignApprovalView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_replay_generation_group_api_v1_admin_v13_private_generation_replays__replay_id__group_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13ReplayGenerationGroupView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_replay_generation_start_api_v1_admin_v13_private_generation_replays__replay_id__group_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V13GenerationStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13ReplayGenerationGroupView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+                role: "target" | "known_benign";
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13ReplayGroupPackageView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_replay_group_package_api_v1_admin_v13_private_generation_replays__replay_id__packages__role__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+                role: "target" | "known_benign";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V13GroupPackageRegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13ReplayGroupPackageView"];
                 };
             };
             /** @description Validation Error */

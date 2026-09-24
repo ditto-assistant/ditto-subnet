@@ -1086,6 +1086,119 @@ class ScreeningVerificationReplaySignedObservation(Base):
     )
 
 
+class V13ReplayPrivateGenerationGroup(Base):
+    """Pre-randomness two-role commitment to a replay's verified image."""
+
+    __tablename__ = "v13_replay_private_generation_groups"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    target_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    target_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    target_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    control_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    control_artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    approval_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    target_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    control_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["target_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["target_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["control_agent_id"], ["agents.agent_id"], ondelete="RESTRICT"
+        ),
+        ForeignKeyConstraint(
+            ["control_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["approval_id"],
+            ["v13_known_benign_control_approvals.approval_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("replay_id", name="v13rpg_replay_key"),
+        CheckConstraint(
+            "target_agent_id <> control_agent_id", name="v13rpg_distinct_agents"
+        ),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13rpg_{name}_check")
+            for name in (
+                "target_artifact_sha256",
+                "target_image_sha256",
+                "control_artifact_sha256",
+                "control_image_sha256",
+                "approval_receipt_sha256",
+                "profile_sha256",
+                "target_receipt_sha256",
+                "control_receipt_sha256",
+            )
+        ),
+        CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13rpg_actor"),
+    )
+
+
+class V13ReplayGroupPackageRegistration(Base):
+    """Digest-only sealed package for one replay generation role."""
+
+    __tablename__ = "v13_replay_group_package_registrations"
+
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    role: Mapped[str] = mapped_column(Text, primary_key=True)
+    generation_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    pair_inventory_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    registrar_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    registered_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["group_id"],
+            ["v13_replay_private_generation_groups.group_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("role IN ('target', 'known_benign')", name="v13rgp_role"),
+        *(
+            CheckConstraint(f"length({name}) = 64", name=f"v13rgp_{name}")
+            for name in (
+                "generation_receipt_sha256",
+                "manifest_sha256",
+                "pair_inventory_sha256",
+            )
+        ),
+        CheckConstraint(
+            "length(registrar_actor) BETWEEN 1 AND 120", name="v13rgp_actor"
+        ),
+    )
+
+
 class AthReview(Base):
     """Durable, immutable-evidence audit record for an ATH copy hold."""
 
