@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+import os
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
@@ -26,6 +27,13 @@ from ditto.api_models.v13_private_generation import (
     V13GroupPackageView,
     V13KnownBenignApprovalRequest,
     V13KnownBenignApprovalView,
+)
+from ditto.api_models.v13_private_ticket import (
+    V13PrivateCaseClaims,
+    V13PrivateCaseTicket,
+    V13PrivateCaseTicketRequest,
+    issue_private_case_ticket,
+    new_private_case_nonce,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -351,6 +359,107 @@ async def get_generation_group(
     if row is None:
         raise HTTPException(status_code=404, detail="generation group not found")
     return _group_view(row)
+
+
+@router.post(
+    "/groups/{group_id}/private-case-tickets/{role}",
+    response_model=V13PrivateCaseTicket,
+)
+async def issue_group_private_case_ticket(
+    group_id: UUID,
+    role: Literal["target", "known_benign"],
+    payload: V13PrivateCaseTicketRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> V13PrivateCaseTicket:
+    """Issue one short-lived scorer admission, not a case result or verdict.
+
+    The private key is an explicit deployment gate. Platform reads exact
+    append-only group/package and verified-image state for every issuance;
+    caller-provided identities are limited to fresh scorer session/case UUIDs.
+    """
+    _actor(x_admin_actor)
+    key = os.environ.get("PLATFORM_V13_PRIVATE_TICKET_KEY", "").encode()
+    if len(key) < 32:
+        raise HTTPException(status_code=503, detail="private verifier unavailable")
+    group = await session.get(V13PrivateGenerationGroup, group_id)
+    registration = await session.get(V13GroupPackageRegistration, (group_id, role))
+    other_role: Literal["target", "known_benign"] = (
+        "known_benign" if role == "target" else "target"
+    )
+    other = await session.get(V13GroupPackageRegistration, (group_id, other_role))
+    if (
+        group is None
+        or registration is None
+        or other is None
+        or registration.pair_inventory_sha256 != other.pair_inventory_sha256
+        or group.profile_sha256 != V13_PRIVATE_PROFILE_SHA256
+        or registration.generation_receipt_sha256 != generation_role_digest(group, role)
+        or other.generation_receipt_sha256 != generation_role_digest(group, other_role)
+    ):
+        raise HTTPException(status_code=409, detail="private package unavailable")
+    target = role == "target"
+    agent_id = group.target_agent_id if target else group.control_agent_id
+    attempt_id = group.target_attempt_id if target else group.control_attempt_id
+    artifact_sha = (
+        group.target_artifact_sha256 if target else group.control_artifact_sha256
+    )
+    image_sha = group.target_image_sha256 if target else group.control_image_sha256
+    agent = await session.get(Agent, agent_id)
+    attempt = await session.get(ScreeningAttempt, attempt_id)
+    image = await session.scalar(
+        select(ScreenedImageUpload).where(
+            ScreenedImageUpload.agent_id == agent_id,
+            ScreenedImageUpload.attempt_id == attempt_id,
+            ScreenedImageUpload.screener_hotkey
+            == (attempt.screener_hotkey if attempt is not None else ""),
+            ScreenedImageUpload.sha256 == image_sha,
+            ScreenedImageUpload.status == "verified",
+        )
+    )
+    if (
+        agent is None
+        or attempt is None
+        or attempt.agent_id != agent_id
+        or attempt.policy_version != 13
+        or attempt.artifact_sha256 != artifact_sha
+        or agent.sha256.lower() != artifact_sha
+        or image is None
+        or (
+            target
+            and agent.status
+            not in {AgentStatus.QUARANTINED, AgentStatus.ATH_PENDING_REVIEW}
+        )
+        or (not target and agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE})
+    ):
+        raise HTTPException(status_code=409, detail="private identity changed")
+    now = await _database_now(session)
+    if (
+        now <= group.started_at
+        or now <= registration.registered_at
+        or image.expires_at <= now
+    ):
+        raise HTTPException(
+            status_code=409, detail="private registration timing invalid"
+        )
+    claims = V13PrivateCaseClaims(
+        group_id=group_id,
+        role=role,
+        agent_id=agent_id,
+        attempt_id=attempt_id,
+        artifact_sha256=artifact_sha,
+        image_sha256=image_sha,
+        image_upload_id=image.image_upload_id,
+        profile_sha256=group.profile_sha256,
+        manifest_sha256=registration.manifest_sha256,
+        session_id=payload.session_id,
+        case_id=payload.case_id,
+        nonce=new_private_case_nonce(),
+        issued_at=now,
+        expires_at=now + timedelta(minutes=5),
+    )
+    return issue_private_case_ticket(claims=claims, key=key, now=now)
 
 
 def _package_view(

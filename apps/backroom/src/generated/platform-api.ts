@@ -3039,6 +3039,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/v13-private-generation/groups/{group_id}/private-case-tickets/{role}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue Group Private Case Ticket
+         * @description Issue one short-lived scorer admission, not a case result or verdict.
+         *
+         *     The private key is an explicit deployment gate. Platform reads exact
+         *     append-only group/package and verified-image state for every issuance;
+         *     caller-provided identities are limited to fresh scorer session/case UUIDs.
+         */
+        post: operations["issue_group_private_case_ticket_api_v1_admin_v13_private_generation_groups__group_id__private_case_tickets__role__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v13-private-generation/known-benign-approvals": {
         parameters: {
             query?: never;
@@ -31129,6 +31153,29 @@ export interface components {
              */
             status: "recorded_unverified";
         };
+        /**
+         * V13PrivateCaseTicket
+         * @description Opaque canonical body and its domain-separated HMAC-SHA256.
+         */
+        V13PrivateCaseTicket: {
+            /** Body */
+            body: string;
+            /** Mac Sha256 */
+            mac_sha256: string;
+        };
+        /** V13PrivateCaseTicketRequest */
+        V13PrivateCaseTicketRequest: {
+            /**
+             * Case Id
+             * Format: uuid
+             */
+            case_id: string;
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
+        };
         /** V13ReviewClockRevision */
         V13ReviewClockRevision: {
             /**
@@ -38394,6 +38441,45 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["V13GroupPackageView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    issue_group_private_case_ticket_api_v1_admin_v13_private_generation_groups__group_id__private_case_tickets__role__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                group_id: string;
+                role: "target" | "known_benign";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V13PrivateCaseTicketRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["V13PrivateCaseTicket"];
                 };
             };
             /** @description Validation Error */

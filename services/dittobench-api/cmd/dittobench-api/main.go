@@ -190,6 +190,7 @@ type server struct {
 	runSlots               chan struct{} // bounds concurrent run_size jobs
 	memorySlots            chan struct{} // bounds embedding-heavy memory phases
 	broker                 *inferenceBroker
+	privateCaseAdmission   *privateCaseAdmission
 	// relayRunMu isolates scored runs that share this server's model relay.
 	// The relay exposes process-wide monotonic failure counters, so overlapping
 	// scored runs could otherwise attribute one run's provider failure to another.
@@ -298,6 +299,13 @@ func main() {
 	}
 	s.broker.relayWait = s.store.SetRelayWaiting
 	s.broker.terminalAgentFailure = s.failAgentInferenceRun
+	s.privateCaseAdmission = &privateCaseAdmission{
+		broker:         s.broker,
+		key:            []byte(os.Getenv("DITTOBENCH_V13_PRIVATE_TICKET_KEY")),
+		verifiedImages: make(map[string]string),
+		stoppedCases:   make(map[string]bool),
+		usedTickets:    make(map[string]privateCaseTicketUse),
+	}
 	confirmationRuntime, err := confirmationExecutorFromEnvironment(os.Getenv, sandboxRuntime, s.broker, s.allowPrivate)
 	if err != nil {
 		log.Fatalf("v9 confirmation installation failed: %v", err)
