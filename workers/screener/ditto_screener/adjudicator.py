@@ -1614,9 +1614,9 @@ class SourceReviewAdjudicator:
         """
         if verdict.decision == "escalate":
             return _escalate(
-                "adjudicator-evidence-incomplete",
-                "Automated adjudication could not complete mandatory verification; "
-                "held for operator review",
+                "adjudicator-operator-requested",
+                "Automated adjudication requested operator review because it "
+                "could not settle the retained evidence; held for review",
                 model=self._model,
                 notes=notes,
                 policy_version=policy_version,

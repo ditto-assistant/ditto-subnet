@@ -42,6 +42,12 @@ In particular, count `adjudicator-packet-too-large` and
 `adjudicator-evidence-incomplete` separately. Keep the change in shadow if
 those checks are unavailable or reveal a new false clear or reject.
 
+An explicit `request_operator_review` model tool call is recorded as
+`adjudicator-operator-requested`. Host-detected missing source coverage remains
+`adjudicator-evidence-incomplete`; transport, timeout, and malformed-tool
+failures keep their distinct codes. All of these outcomes remain holds. The
+operator-request code does not certify that evidence was actually missing.
+
 ## What it adjudicates
 
 Only an outcome that would otherwise WAIT:
