@@ -24,6 +24,7 @@ import io
 import re
 import tarfile
 from dataclasses import dataclass
+from pathlib import PurePosixPath
 
 MAX_LISTING_FILES = 512
 MAX_OPAQUE_BLOBS = 128
@@ -46,6 +47,9 @@ SEARCH_LINE_CHARS = 500
 MAX_TARBALL_BYTES = 64 * 1024 * 1024
 MAX_MEMBERS = 4096
 MAX_UNPACKED_BYTES = 256 * 1024 * 1024
+# The screener sandbox refuses an archive that expands past 64 MiB. Upload
+# uses that tighter cap so a gzip bomb never reaches object storage.
+UPLOAD_MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 
 
 class SourceInspectError(Exception):
@@ -519,6 +523,101 @@ class TarSourceInspector:
             return extracted.read(TEXT_SIZE_LIMIT + 1).decode("utf-8")
 
 
+def validate_upload_archive(tar_bytes: bytes) -> None:
+    """Reject an upload that is not a bounded gzip tar with a root Dockerfile.
+
+    One sequential pass. Member count and unpacked size use the inspect and
+    screener sandbox caps. Unsafe paths, links, and special files are rejected
+    rather than skipped. Import allowlisting stays with the screener: there is
+    no upload-time crate allowlist yet.
+    """
+    if not tar_bytes.startswith(b"\x1f\x8b"):
+        raise SourceInspectError("archive-not-gzip", "archive is not gzip-compressed")
+    count = 0
+    unpacked = 0
+    seen: set[str] = set()
+    saw_dockerfile = False
+    try:
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r|gz") as archive:
+            for member in archive:
+                count += 1
+                if count > MAX_MEMBERS:
+                    raise SourceInspectError(
+                        "artifact-too-many-members",
+                        f"archive exceeds {MAX_MEMBERS} members",
+                    )
+                name = member.name.removeprefix("./")
+                if not name and member.isdir():
+                    continue
+                path = PurePosixPath(name)
+                if (
+                    not name
+                    or name.startswith("/")
+                    or "\\" in name
+                    or (path.parts and path.parts[0].endswith(":"))
+                    or ".." in path.parts
+                ):
+                    raise SourceInspectError(
+                        "archive-unsafe-path", "archive contains an unsafe path"
+                    )
+                if str(path) != name:
+                    raise SourceInspectError(
+                        "archive-unsafe-path", "archive contains a non-canonical path"
+                    )
+                if name in seen:
+                    raise SourceInspectError(
+                        "archive-duplicate-path", "archive contains a duplicate path"
+                    )
+                if not (member.isfile() or member.isdir()):
+                    raise SourceInspectError(
+                        "archive-special-file",
+                        "archive contains a link or special file",
+                    )
+                if member.size < 0:
+                    raise SourceInspectError(
+                        "artifact-too-large", "archive member size is invalid"
+                    )
+                unpacked += member.size
+                if unpacked > UPLOAD_MAX_UNPACKED_BYTES:
+                    raise SourceInspectError(
+                        "artifact-too-large",
+                        f"archive exceeds {UPLOAD_MAX_UNPACKED_BYTES} unpacked bytes",
+                    )
+                seen.add(name)
+                if name != "Dockerfile" or not member.isfile():
+                    continue
+                if member.size > TEXT_SIZE_LIMIT:
+                    raise SourceInspectError(
+                        "archive-dockerfile-unreadable",
+                        "Dockerfile is not valid UTF-8 text",
+                    )
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise SourceInspectError(
+                        "archive-dockerfile-unreadable",
+                        "Dockerfile could not be read",
+                    )
+                try:
+                    extracted.read(TEXT_SIZE_LIMIT + 1).decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise SourceInspectError(
+                        "archive-dockerfile-unreadable",
+                        "Dockerfile is not valid UTF-8 text",
+                    ) from error
+                saw_dockerfile = True
+    except SourceInspectError:
+        raise
+    except (tarfile.TarError, OSError, EOFError) as error:
+        raise SourceInspectError(
+            "archive-unreadable", "archive is not a readable gzip-compressed tar"
+        ) from error
+    if not saw_dockerfile:
+        raise SourceInspectError(
+            "archive-missing-dockerfile",
+            "Dockerfile is missing from the archive root",
+        )
+
+
 __all__ = [
     "MAX_LISTING_FILES",
     "MAX_MEMBERS",
@@ -532,9 +631,11 @@ __all__ = [
     "OMIT_REASON_BYTE_BUDGET",
     "OMIT_REASON_FILE_LIMIT",
     "OMIT_REASON_UNREADABLE",
+    "UPLOAD_MAX_UNPACKED_BYTES",
     "SEARCH_LINE_CHARS",
     "OmittedTextFile",
     "SourceInspectError",
     "TarSourceInspector",
     "TextSnapshot",
+    "validate_upload_archive",
 ]
