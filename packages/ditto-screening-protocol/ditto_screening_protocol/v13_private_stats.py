@@ -14,7 +14,10 @@ from ditto_screening_protocol.v13_private_execute import (
     PrivateExecutionResult,
     PrivatePairCounts,
 )
-from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE
+from ditto_screening_protocol.v13_private_package import (
+    V13_PRIVATE_PROFILE,
+    V13_PRIVATE_PROFILE_SHA256,
+)
 
 _REQUIRED_CLASSES = frozenset(
     {"field_entity_rename", "request_paraphrase", "record_reorder_decoy"}
@@ -24,6 +27,7 @@ _ALPHA = 1 - V13_PRIVATE_PROFILE.confidence_level_bps / 10_000
 _MATERIAL = V13_PRIVATE_PROFILE.material_degradation_bps / 10_000
 _LOWER_THRESHOLD = V13_PRIVATE_PROFILE.confidence_lower_bound_bps / 10_000
 _CLEAN_MAX = V13_PRIVATE_PROFILE.clean_control_max_degradation_bps / 10_000
+_CELL_PAIRS = V13_PRIVATE_PROFILE.pairs_per_class_per_seed
 _Z_95 = 1.6448536269514722
 
 
@@ -105,9 +109,27 @@ def _lower_bound(
     return n, mean, mean - crit * math.sqrt(variance / n)
 
 
+def _one_sided_t(plus: int, minus: int, ties: int) -> float:
+    n, mean, variance = _mean_and_variance(plus, minus, ties)
+    if variance == 0:
+        if mean > 0:
+            return math.inf
+        if mean < 0:
+            return -math.inf
+        return 0.0
+    return mean / math.sqrt(variance / n)
+
+
+def _completed_pairs(result: PrivateExecutionResult) -> None:
+    if sum(row.pairs for row in result.aggregates) != result.summary.completed_pairs:
+        raise PrivateStatisticalUnavailable("private completed-pair count mismatch")
+
+
 def _group(result: PrivateExecutionResult) -> dict[str, dict[str, PrivatePairCounts]]:
     grouped: dict[str, dict[str, PrivatePairCounts]] = defaultdict(dict)
     for row in result.aggregates:
+        if row.pairs != _CELL_PAIRS:
+            raise PrivateStatisticalUnavailable("private cell size unavailable")
         _scores(row)
         if row.seed_commitment in grouped[row.transformation_class]:
             raise PrivateStatisticalUnavailable("duplicate private aggregate")
@@ -142,14 +164,17 @@ def _bps(value: float) -> int:
 def analyze_v13_private_pairs(
     *, target: PrivateExecutionResult, clean_control: PrivateExecutionResult
 ) -> PrivateStatisticalAnalysis:
-    """Pooled one-sided t bound. Exploratory classes use a wider Holm step."""
+    """Pooled one-sided t bound. Holm ranks classes by that t statistic."""
     if (
-        target.summary.profile_sha256 != clean_control.summary.profile_sha256
+        target.summary.profile_sha256 != V13_PRIVATE_PROFILE_SHA256
+        or clean_control.summary.profile_sha256 != V13_PRIVATE_PROFILE_SHA256
         or target.summary.manifest_sha256 != clean_control.summary.manifest_sha256
         or target.summary.status != "completed"
         or clean_control.summary.status != "completed"
     ):
         raise PrivateStatisticalUnavailable("private run identity mismatch")
+    _completed_pairs(target)
+    _completed_pairs(clean_control)
     target_rows = _group(target)
     clean_rows = _group(clean_control)
     if set(target_rows) != set(clean_rows):
@@ -183,17 +208,24 @@ def analyze_v13_private_pairs(
         ]
     )
     clean_effect = _mean_and_variance(clean_plus, clean_minus, clean_ties)[1]
-    class_stats: list[tuple[str, int, float, float]] = []
+    class_stats: list[tuple[float, str, int, float]] = []
     for name in sorted(target_rows):
         class_plus, class_minus, class_ties = _add(list(target_rows[name].values()))
         class_n, class_effect, _class_lower = _lower_bound(
             class_plus, class_minus, class_ties, _ALPHA
         )
-        class_stats.append((name, class_n, class_effect, class_effect))
+        class_stats.append(
+            (
+                _one_sided_t(class_plus, class_minus, class_ties),
+                name,
+                class_n,
+                class_effect,
+            )
+        )
     m = len(class_stats)
-    ordered = sorted(class_stats, key=lambda item: item[2], reverse=True)
+    ordered = sorted(class_stats, key=lambda item: (-item[0], item[1]))
     classes: list[PrivateClassAnalysis] = []
-    for rank, (name, class_n, class_effect, _) in enumerate(ordered, start=1):
+    for rank, (_statistic, name, class_n, class_effect) in enumerate(ordered, start=1):
         class_plus, class_minus, class_ties = _add(list(target_rows[name].values()))
         _n, _effect, holm_lower = _lower_bound(
             class_plus, class_minus, class_ties, _ALPHA / (m - rank + 1)

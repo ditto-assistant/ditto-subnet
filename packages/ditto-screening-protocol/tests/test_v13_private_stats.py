@@ -11,7 +11,10 @@ from ditto_screening_protocol.v13_private_execute import (
     PrivateExecutionResult,
     PrivatePairCounts,
 )
-from ditto_screening_protocol.v13_private_package import V13PrivateRunSummary
+from ditto_screening_protocol.v13_private_package import (
+    V13_PRIVATE_PROFILE_SHA256,
+    V13PrivateRunSummary,
+)
 from ditto_screening_protocol.v13_private_stats import (
     PrivateStatisticalUnavailable,
     analyze_v13_private_pairs,
@@ -32,7 +35,7 @@ def _summary(pairs: int) -> V13PrivateRunSummary:
         attempt_id=UUID(int=2),
         artifact_sha256="1" * 64,
         image_sha256="2" * 64,
-        profile_sha256="3" * 64,
+        profile_sha256=V13_PRIVATE_PROFILE_SHA256,
         manifest_sha256="4" * 64,
         runner_hotkey="runner",
         status="completed",
@@ -105,6 +108,68 @@ def test_weak_or_one_seed_effect_stays_inconclusive() -> None:
     opposite = analyze_v13_private_pairs(target=_result(rows), clean_control=clean)
     assert opposite.seed_replication is False
     assert opposite.primary_supported is False
+
+
+def test_uneven_cells_that_still_total_60_fail_closed() -> None:
+    """A pooled floor of 60 is not a substitute for 10 pairs in every cell."""
+    specs = {
+        ("field_entity_rename", _SEED_A): (6, 0, 10),
+        ("field_entity_rename", _SEED_B): (2, 0, 2),
+    }
+    coded = [
+        (class_name, seed, *specs.get((class_name, seed), (4, 0, 6)))
+        for class_name in _CLASSES
+        for seed in (_SEED_A, _SEED_B)
+    ]
+    assert sum(plus + minus + ties for _name, _seed, plus, minus, ties in coded) == 60
+    with pytest.raises(PrivateStatisticalUnavailable, match="cell size"):
+        analyze_v13_private_pairs(
+            target=_result(coded),
+            clean_control=_balanced(plus=0, minus=0, ties=10),
+        )
+
+
+def test_completed_count_and_profile_digest_fail_closed() -> None:
+    target = _balanced(plus=4, minus=0, ties=6)
+    clean = _balanced(plus=0, minus=0, ties=10)
+    wrong_count = target.model_copy(
+        update={"summary": target.summary.model_copy(update={"completed_pairs": 61})}
+    )
+    with pytest.raises(PrivateStatisticalUnavailable, match="completed-pair"):
+        analyze_v13_private_pairs(target=wrong_count, clean_control=clean)
+    wrong_profile = target.model_copy(
+        update={
+            "summary": target.summary.model_copy(update={"profile_sha256": "f" * 64})
+        }
+    )
+    with pytest.raises(PrivateStatisticalUnavailable, match="identity"):
+        analyze_v13_private_pairs(target=wrong_profile, clean_control=clean)
+
+
+def test_holm_ranks_by_t_statistic_not_raw_effect() -> None:
+    """A noisier larger effect must not take the stricter Holm step."""
+    from ditto_screening_protocol.v13_private_stats import _bps, _lower_bound
+
+    noisy = ("field_entity_rename", 5, 2, 3)  # pooled effect 0.30, wide variance
+    tight = ("request_paraphrase", 2, 0, 8)  # pooled effect 0.20, small variance
+    quiet = ("record_reorder_decoy", 0, 0, 10)
+    cells = {noisy[0]: noisy[1:], tight[0]: tight[1:], quiet[0]: quiet[1:]}
+    rows = [
+        (name, seed, plus, minus, ties)
+        for name, (plus, minus, ties) in cells.items()
+        for seed in (_SEED_A, _SEED_B)
+    ]
+    report = analyze_v13_private_pairs(
+        target=_result(rows), clean_control=_balanced(plus=0, minus=0, ties=10)
+    )
+    by_name = {row.transformation_class: row for row in report.classes}
+    assert by_name[noisy[0]].effect_bps > by_name[tight[0]].effect_bps
+    strict = _bps(_lower_bound(4, 0, 16, 0.05 / 3)[2])
+    wider = _bps(_lower_bound(10, 4, 6, 0.05 / 2)[2])
+    effect_ranked_tight = _bps(_lower_bound(4, 0, 16, 0.05 / 2)[2])
+    assert by_name[tight[0]].holm_lower_bound_bps == strict
+    assert by_name[noisy[0]].holm_lower_bound_bps == wider
+    assert strict != effect_ranked_tight
 
 
 def test_inconsistent_counts_fail_closed() -> None:
