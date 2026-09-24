@@ -64,6 +64,8 @@ other exact artifacts CLEAR. No replay mutated Backroom or miner state.
 | `bac8c60f` | CLEAR | `stream-no-tool-progress` after 129 s and 3,178 SSE events | `adjudicator-evidence-incomplete` after 4 s |
 
 Each Sol packet call returned a tool call, but its verdict was an escalation.
+The `7d8c41db` CLEAR-on-retained-leads label in this initial table was later
+superseded by the full-source I5 recheck documented below.
 Neither model produced a certified REJECT or CLEAR on this four-case cohort.
 Smaller prompts and bounded retries therefore improve request control but do
 not satisfy the model-verdict gate. The packet change remains draft and must
@@ -135,22 +137,26 @@ artifact. The source archives were SHA-verified before each run.
 | --- | --- | --- | ---: | --- |
 | `13e30145` | REJECT I3 | Certified REJECT I3, seven admitted citations | 4 | matched |
 | `c845249d` | CLEAR on retained lead | Certified CLEAR, seven admitted citations | 2 | matched |
-| `7d8c41db` | CLEAR on retained leads | Certified REJECT I5, eight admitted citations | 3 | disputed |
+| `7d8c41db` | REJECT I5 after full source recheck | Certified REJECT I5, eight admitted citations | 3 | matched after relabel |
 | `bac8c60f` | CLEAR on retained lead | `request_operator_review`, held | 4 | incomplete |
 
 The I5 decision on `7d8c41db` cites the served `S2_schema_terms` and
 `S3_personal_record` reading plans (`src/router/effects.rs:95,99,119-124`)
 and their insertion into the deciding conversation
-(`src/baseline.rs:923,966-994`). The independent review had verified the
-retained routing lead, but did not settle this distinct I5 allegation.
-Under policy v13 a closed subgroup and prescriptive prose alone are not proof;
-the case still needs an independent exact-artifact check of the claimed
-benchmark-specific assumption, activation, and substantive effect. The
-eight host-admissible citations verify source locations, not that semantic
-inference. A separate report-only review was requested.
+(`src/baseline.rs:923,966-994`). An independent second review of the full
+untruncated SHA-verified source corrected its earlier CLEAR-on-retained-leads
+label to REJECT I5. It traced default Router loading, the stage-4 family
+classifier, conflicting fixed chronology/answer recipes, and their injection
+as user-role instructions before the final model pass (`src/baseline.rs:613-616,
+903-925,966-1009`; `src/router/mod.rs:87-89,196-211,272-285`;
+`src/router/effects.rs:95-100,111-125`; `stage4_v1.meta.json:2-5`). The
+original review of retained routing leads had not settled this distinct I5
+mechanism. No production ruling was made.
 
 The Gryffindor result explicitly requested operator review after using all
 three additional reads. No host rule may turn that incomplete verification
-into a CLEAR. The four-case gate is therefore **not met** regardless of the
-I5 recheck. Do not merge, deploy, enable L4, or rescreen held submissions on
-these results. All production source-review holds remain unchanged.
+into a CLEAR. The four-case gate is therefore **not met**: three verdicts match
+independent source review, while Gryffindor's mandatory verification remains
+incomplete. Do not merge, deploy, enable L4, or rescreen held submissions
+through this reviewer on these results. All production source-review holds
+remain unchanged.
