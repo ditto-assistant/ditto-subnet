@@ -8,6 +8,10 @@ from statistics import median
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
+from ditto.api_models.public import (
+    PublicDeferredReviewTrigger,
+    PublicReviewConclusion,
+)
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
 
 if TYPE_CHECKING:
@@ -17,9 +21,8 @@ DEFERRED_REVIEW_KIND = "deferred_source_review"
 DEFERRED_REVIEW_REASON = "Score qualified this submission for deferred source review"
 DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
 INCONCLUSIVE_REASON_CODE = "source-review-inconclusive"
-# Public text written with INCONCLUSIVE_REASON_CODE. The dashboard keys its
-# "no finding" treatment on this exact string (SOURCE_REVIEW_INCONCLUSIVE_REASON
-# in dashboard/src/components/pipeline/status.ts); a parity test pins the two.
+# Public text written with INCONCLUSIVE_REASON_CODE. Clients classify a hold by
+# ``review_conclusion`` (see ``public_review_conclusion``), never by this text.
 SOURCE_REVIEW_INCONCLUSIVE_PUBLIC_REASON = (
     "Bounded source review was inconclusive; held for review"
 )
@@ -176,3 +179,85 @@ def evaluate_integrity_double_check(
     return DeferredReviewDecision(
         triggered, ("top_five",) if triggered else (), rank, evidence
     )
+
+
+# ── Public projection (#562) ──────────────────────────────────────────────────
+#
+# The public dashboard must say WHY a submission sits in the deferred branch and
+# WHAT the automated stage concluded, without exposing ranks, thresholds,
+# findings, notes, audits, or raw reason codes. Both projections below are
+# closed enums derived from reason codes; nothing else from the evidence leaves.
+
+_ANOMALY_TRIGGERS = frozenset({"composite_anomaly", "tool_anomaly", "memory_anomaly"})
+
+
+def public_deferred_review_triggers(
+    evidence: object,
+) -> list[PublicDeferredReviewTrigger]:
+    """Coarse public trigger kinds for one deferred-review evidence snapshot.
+
+    ``evidence`` is ``AthReview.original_evidence``. Unknown or malformed
+    trigger values are dropped rather than echoed.
+    """
+    deferred = evidence.get("deferred_review") if isinstance(evidence, dict) else None
+    raw = deferred.get("triggers") if isinstance(deferred, dict) else None
+    if not isinstance(raw, list):
+        return []
+    kinds = {str(trigger) for trigger in raw}
+    triggers: list[PublicDeferredReviewTrigger] = []
+    if "top_five" in kinds:
+        triggers.append("top_five")
+    if kinds & _ANOMALY_TRIGGERS:
+        triggers.append("anomaly")
+    return triggers
+
+
+def is_no_finding_reason_code(reason_code: str | None) -> bool:
+    """True for automated-review outcomes that ended without any finding.
+
+    An inconclusive review and any exhausted review budget (read, step, lease,
+    model) stopped before reaching a verdict. Every other code, including
+    unknown ones, is treated as an adverse signal so a new finding code can
+    never be softened by omission.
+    """
+    return reason_code is not None and (
+        reason_code == INCONCLUSIVE_REASON_CODE
+        or reason_code.endswith("-budget-exhausted")
+    )
+
+
+def public_review_conclusion(
+    *,
+    deferred_review_active: bool,
+    deferred_evidence: object,
+    quarantined: bool,
+    screening_reason_code: str | None,
+) -> PublicReviewConclusion | None:
+    """What the automated review concluded for a held submission.
+
+    For an active deferred review, the post-score deep attempt's result decides;
+    until one is recorded the review is ``pending``. For a pre-score quarantine
+    the agent's screening reason code decides. Every other hold (copy review,
+    operator hold) has no automated-review conclusion to report.
+    """
+    result = (
+        deferred_evidence.get("deep_review_result")
+        if deferred_review_active and isinstance(deferred_evidence, dict)
+        else None
+    )
+    if isinstance(result, dict):
+        code = result.get("reason_code")
+        return (
+            "no_finding"
+            if isinstance(code, str)
+            and is_no_finding_reason_code(code)
+            and result.get("finding_digest") is None
+            else "adverse_signal"
+        )
+    if quarantined and screening_reason_code is not None:
+        return (
+            "no_finding"
+            if is_no_finding_reason_code(screening_reason_code)
+            else "adverse_signal"
+        )
+    return "pending" if deferred_review_active else None

@@ -172,6 +172,8 @@ from ditto.api_models.public import (
     BenchServiceability,
     FleetAvailability,
     FleetHealth,
+    PublicDeferredReviewTrigger,
+    PublicReviewConclusion,
     PublicScreeningInvariantAssessment,
     PublicScreeningReviewNote,
     ScorerLiveness,
@@ -218,6 +220,11 @@ from ditto.api_server.continual_retest_settings import (
     tie_weighting_is_active,
 )
 from ditto.api_server.datapipeline import DataPipelineError
+from ditto.api_server.deferred_source_review import (
+    DEFERRED_REVIEW_KIND,
+    public_deferred_review_triggers,
+    public_review_conclusion,
+)
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
     ensure_current_efficiency_state,
@@ -5731,6 +5738,13 @@ def _public_activity_response(
             return None
         return matches.get(row.agent.duplicate_of)
 
+    review_projections = {
+        row.agent.agent_id: _public_review_projection(
+            row_status=row_status, agent=row.agent, review=_review(row)
+        )
+        for row, row_status in page_rows
+    }
+
     return PublicActivityResponse(
         generated_at=now,
         count=len(page_rows),
@@ -5791,6 +5805,8 @@ def _public_activity_response(
                     if row.agent.agent_id in (ath_reviews or {})
                     else None
                 ),
+                deferred_review_triggers=review_projections[row.agent.agent_id][0],
+                review_conclusion=review_projections[row.agent.agent_id][1],
                 preserved_composite=(ath_review_composite or {}).get(
                     row.agent.agent_id
                 ),
@@ -5952,6 +5968,30 @@ class _PublicAthReviewSnapshot:
     opened_at: datetime
     original_reason: str
     original_duplicate_of: UUID | None
+    # Internal only: the active deferred review's evidence, reduced to closed
+    # public enums by ``_public_review_projection``. Never serialized.
+    deferred_evidence: dict[str, Any] | None = None
+
+
+def _public_review_projection(
+    *,
+    row_status: str,
+    agent: Agent,
+    review: _PublicAthReviewSnapshot | None,
+) -> tuple[list[PublicDeferredReviewTrigger], PublicReviewConclusion | None]:
+    """Public trigger kinds and automated-review conclusion for one row (#562)."""
+    if row_status != "under_review":
+        return [], None
+    evidence = review.deferred_evidence if review is not None else None
+    return (
+        public_deferred_review_triggers(evidence),
+        public_review_conclusion(
+            deferred_review_active=evidence is not None,
+            deferred_evidence=evidence,
+            quarantined=agent.status == AgentStatus.QUARANTINED,
+            screening_reason_code=agent.screening_reason_code,
+        ),
+    )
 
 
 _DIRECT_POLICY_V12_REJECTION = re.compile(
@@ -6023,6 +6063,14 @@ async def _ath_review_public_snapshot(
             opened_at=lifecycle.opened_at,
             original_reason=review.original_reason or DEFAULT_OPEN_REASON,
             original_duplicate_of=review.original_duplicate_of,
+            deferred_evidence=(
+                review.original_evidence
+                if review.status == "pending"
+                and review.algorithm_provenance.get("review_kind")
+                == DEFERRED_REVIEW_KIND
+                and isinstance(review.original_evidence, dict)
+                else None
+            ),
         )
 
     active_agent_ids = {
@@ -6818,6 +6866,9 @@ async def agent_summary(
         else {}
     )
     review = ath_reviews.get(agent_id)
+    review_projection = _public_review_projection(
+        row_status=status, agent=row.agent, review=review
+    )
     show_similarity_evidence = not _supersedes_public_similarity_evidence(review)
     duplicate = (
         duplicate_metadata.get(row.agent.duplicate_of)
@@ -6872,6 +6923,8 @@ async def agent_summary(
             else None
         ),
         review_opened_at=review.opened_at if review is not None else None,
+        deferred_review_triggers=review_projection[0],
+        review_conclusion=review_projection[1],
         preserved_composite=ath_composites.get(agent_id),
         active_benchmarks=[
             _public_benchmark_progress(

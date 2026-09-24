@@ -6413,6 +6413,8 @@ class TestPublicActivity:
             "review_event_at": None,
             "review_original_reason": None,
             "review_opened_at": None,
+            "deferred_review_triggers": [],
+            "review_conclusion": None,
             "preserved_composite": None,
             "active_benchmarks": [],
         }
@@ -6815,6 +6817,8 @@ class TestPublicActivity:
             "review_event_at",
             "review_original_reason",
             "review_opened_at",
+            "deferred_review_triggers",
+            "review_conclusion",
             "preserved_composite",
             "score_count",
             "provisional_composite",
@@ -6923,6 +6927,166 @@ class TestPublicActivity:
             "opened_by",
         ):
             assert private_value not in serialized
+
+    async def test_deferred_review_projects_only_trigger_and_conclusion_enums(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """#562: say why a row is held and whether a finding exists, nothing more."""
+        opened_at = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+        private_note = "PRIVATE-REVIEW-NOTE src/secret_router.rs:42"
+        private_digest = "fd" * 32
+
+        def deferred_evidence(
+            triggers: list[str], deep_result: dict[str, object] | None
+        ) -> dict[str, object]:
+            evidence: dict[str, object] = {
+                "sha256": "ab" * 32,
+                "previous_status": "scored",
+                "deferred_review": {
+                    "rank": 3,
+                    "cohort_size": 41,
+                    "thresholds": {"composite": {"median": 0.4312, "mad": 0.0917}},
+                    "triggers": triggers,
+                    "screening_reason_code": "deferred-mechanical-admission",
+                    "review_notes": [{"summary": private_note}],
+                },
+            }
+            if deep_result is not None:
+                evidence["deep_review_result"] = deep_result
+            return evidence
+
+        budget_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "inconclusive",
+            "reason_code": "source-review-inconclusive",
+            "finding_digest": None,
+            "review_audit": {
+                "reason": "source-review-read-budget-exhausted",
+                "read_bytes_used": 338278,
+            },
+            "review_notes": [{"summary": private_note}],
+        }
+        adverse_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "quarantine",
+            "reason_code": "source-safety-malicious-risk",
+            "finding_digest": private_digest,
+            "review_audit": None,
+        }
+        cases: dict[str, tuple[AgentStatus, str | None, dict[str, object] | None]] = {
+            "budget-top5": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], budget_result),
+            ),
+            "pending-both": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five", "tool_anomaly"], None),
+            ),
+            "adverse-anomaly": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["composite_anomaly"], adverse_result),
+            ),
+            "quarantine-budget": (
+                AgentStatus.QUARANTINED,
+                "source-review-step-budget-exhausted",
+                None,
+            ),
+            "quarantine-tripwire": (
+                AgentStatus.QUARANTINED,
+                "agentic-source-review-tripwire",
+                None,
+            ),
+            "copy-hold": (AgentStatus.ATH_PENDING_REVIEW, None, None),
+        }
+        ids: dict[str, UUID] = {}
+        for name, (status, code, _evidence) in cases.items():
+            ids[name] = UUID(
+                await _seed_agent(
+                    session_maker, miner=_MINER_A, status=status, name=name
+                )
+            )
+            async with session_maker() as session, session.begin():
+                agent = await session.get(Agent, ids[name])
+                assert agent is not None
+                agent.screening_reason_code = code
+        async with session_maker() as session, session.begin():
+            for name, (status, _code, evidence) in cases.items():
+                if status != AgentStatus.ATH_PENDING_REVIEW:
+                    continue
+                session.add(
+                    AthReview(
+                        review_id=uuid4(),
+                        agent_id=ids[name],
+                        status="pending",
+                        opened_at=opened_at,
+                        original_duplicate_of=None,
+                        original_reason=(
+                            "Score qualified this submission for deferred source review"
+                            if evidence is not None
+                            else "Submission requires ATH similarity review"
+                        ),
+                        original_policy_version=13,
+                        original_evidence=evidence or {"sha256": "ab" * 32},
+                        algorithm_provenance={
+                            "review_kind": (
+                                "deferred_source_review"
+                                if evidence is not None
+                                else "copy"
+                            )
+                        },
+                    )
+                )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        response = await client.get(
+            "/api/v1/public/activity?status=under_review&limit=200"
+        )
+
+        assert response.status_code == 200
+        entries = {row["name"]: row for row in response.json()["entries"]}
+        projected = {
+            name: (row["deferred_review_triggers"], row["review_conclusion"])
+            for name, row in entries.items()
+        }
+        assert projected == {
+            "budget-top5": (["top_five"], "no_finding"),
+            "pending-both": (["top_five", "anomaly"], "pending"),
+            "adverse-anomaly": (["anomaly"], "adverse_signal"),
+            "quarantine-budget": ([], "no_finding"),
+            "quarantine-tripwire": ([], "adverse_signal"),
+            "copy-hold": ([], None),
+        }
+
+        summary = await client.get(f"/api/v1/public/agent/{ids['budget-top5']}/summary")
+        assert summary.status_code == 200
+        assert summary.json()["deferred_review_triggers"] == ["top_five"]
+        assert summary.json()["review_conclusion"] == "no_finding"
+
+        for body in (response.text, summary.text):
+            for private_value in (
+                "source-review-inconclusive",
+                "read-budget-exhausted",
+                "step-budget-exhausted",
+                "source-safety-malicious-risk",
+                "agentic-source-review-tripwire",
+                "deferred-mechanical-admission",
+                "tool_anomaly",
+                "composite_anomaly",
+                "338278",
+                "0.4312",
+                "0.0917",
+                private_note,
+                private_digest,
+                "ab" * 32,
+            ):
+                assert private_value not in body
 
     async def test_activity_projects_latest_reopen_reason_not_original_copy_reason(
         self,

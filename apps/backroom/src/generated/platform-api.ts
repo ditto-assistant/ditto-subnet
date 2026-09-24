@@ -22113,6 +22113,11 @@ export interface components {
             /** @description Latest aggregate Coding-shadow status for this exact submission artifact, screened image, and active benchmark. Display-only; never changes pipeline state, rank, score, weights, or emissions. */
             coding_shadow?: components["schemas"]["PublicCodingShadowScore"] | null;
             /**
+             * Deferred Review Triggers
+             * @description Why an active deferred source review hold was opened: ``top_five`` when the canonical score placed the submission in the top five, ``anomaly`` when a robust score anomaly check fired. Empty when the submission is not held for deferred source review. Ranks, thresholds, and evidence are not exposed.
+             */
+            deferred_review_triggers?: ("top_five" | "anomaly")[];
+            /**
              * Duplicate Hotkey
              * @description Hotkey of the matched submission. Equal to miner_hotkey when this hold is a same-miner rename or re-upload of that earlier row, not a comparison against someone else's agent.
              */
@@ -22190,6 +22195,11 @@ export interface components {
              * @description Why a below-quorum submission is or isn't advancing: running, retry_available, cooling_down, exhausted (needs operator recovery), or queued. Null once finalized or not yet evaluating.
              */
             retry_state?: ("running" | "retry_available" | "cooling_down" | "exhausted" | "queued") | null;
+            /**
+             * Review Conclusion
+             * @description What the automated source review concluded for a held (``under_review``) submission. ``pending``: the automated deep review has not reported yet. ``no_finding``: it ended without any finding (inconclusive, or a read, step, lease, or model budget ran out) and an operator decision is pending. ``adverse_signal``: it reported a concern that an operator must adjudicate. Null when the hold has no automated review conclusion (for example a copy review) or the submission is not held.
+             */
+            review_conclusion?: ("pending" | "no_finding" | "adverse_signal") | null;
             /**
              * Review Event
              * @description Latest public ATH lifecycle event. Null when the submission has no durable ATH review record.
@@ -22422,6 +22432,11 @@ export interface components {
              * @description Public URL for this miner's signed profile picture, if set.
              */
             avatar_url?: string | null;
+            /**
+             * Deferred Review Triggers
+             * @description Why an active deferred source review hold was opened: ``top_five`` when the canonical score placed the submission in the top five, ``anomaly`` when a robust score anomaly check fired. Empty when the submission is not held for deferred source review. Ranks, thresholds, and evidence are not exposed.
+             */
+            deferred_review_triggers?: ("top_five" | "anomaly")[];
             /** Duplicate Hotkey */
             duplicate_hotkey?: string | null;
             /** Duplicate Name */
@@ -22453,6 +22468,11 @@ export interface components {
             preserved_composite?: number | null;
             /** Quorum */
             quorum: number;
+            /**
+             * Review Conclusion
+             * @description What the automated source review concluded for a held (``under_review``) submission. ``pending``: the automated deep review has not reported yet. ``no_finding``: it ended without any finding (inconclusive, or a read, step, lease, or model budget ran out) and an operator decision is pending. ``adverse_signal``: it reported a concern that an operator must adjudicate. Null when the hold has no automated review conclusion (for example a copy review) or the submission is not held.
+             */
+            review_conclusion?: ("pending" | "no_finding" | "adverse_signal") | null;
             /** Review Event */
             review_event?: ("opened" | "reopened" | "cleared" | "rejected") | null;
             /** Review Event At */

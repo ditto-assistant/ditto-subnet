@@ -13,6 +13,9 @@ from ditto.api_server.deferred_source_review import (
     DeferredReviewDecision,
     evaluate_deferred_review,
     evaluate_integrity_double_check,
+    is_no_finding_reason_code,
+    public_deferred_review_triggers,
+    public_review_conclusion,
 )
 from ditto.api_server.endpoints.validator import (
     _deferred_screening_attempt,
@@ -885,3 +888,114 @@ async def test_double_check_off_reads_nothing(
             settings=DeferredSourceReviewSettings(),
             now=datetime.now(UTC),
         )
+
+
+# ── Public projection (#562) ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (["top_five"], ["top_five"]),
+        (["tool_anomaly"], ["anomaly"]),
+        (["memory_anomaly", "top_five", "composite_anomaly"], ["top_five", "anomaly"]),
+        (["unknown-private-trigger"], []),
+        ("top_five", []),
+        (None, []),
+    ],
+)
+def test_public_deferred_review_triggers_are_coarse(
+    raw: object, expected: list[str]
+) -> None:
+    assert (
+        public_deferred_review_triggers({"deferred_review": {"triggers": raw}})
+        == expected
+    )
+    assert public_deferred_review_triggers(None) == []
+    assert public_deferred_review_triggers({"deferred_review": "bad"}) == []
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        ("source-review-inconclusive", True),
+        ("source-review-read-budget-exhausted", True),
+        ("source-review-step-budget-exhausted", True),
+        ("source-review-lease-budget-exhausted", True),
+        ("model-budget-exhausted", True),
+        ("source-safety-malicious-risk", False),
+        ("agentic-source-review-tripwire", False),
+        ("adjudicated-source-review-escalate", False),
+        ("some-future-finding", False),
+        (None, False),
+    ],
+)
+def test_no_finding_codes_are_an_allowlist(code: str | None, expected: bool) -> None:
+    assert is_no_finding_reason_code(code) is expected
+
+
+def test_public_review_conclusion_prefers_the_deep_review_result() -> None:
+    def conclude(
+        *,
+        active: bool,
+        evidence: object,
+        quarantined: bool = False,
+        code: str | None = None,
+    ) -> object:
+        return public_review_conclusion(
+            deferred_review_active=active,
+            deferred_evidence=evidence,
+            quarantined=quarantined,
+            screening_reason_code=code,
+        )
+
+    budget = {"reason_code": "source-review-inconclusive", "finding_digest": None}
+    assert conclude(active=True, evidence={"deep_review_result": budget}) == (
+        "no_finding"
+    )
+    # A recorded finding digest is never softened, whatever the code says.
+    assert (
+        conclude(
+            active=True,
+            evidence={"deep_review_result": {**budget, "finding_digest": "ab" * 32}},
+        )
+        == "adverse_signal"
+    )
+    assert (
+        conclude(
+            active=True,
+            evidence={
+                "deep_review_result": {"reason_code": "source-safety-malicious-risk"}
+            },
+        )
+        == "adverse_signal"
+    )
+    # The admission-time code on the deferred snapshot is not a deep result.
+    assert (
+        conclude(
+            active=True,
+            evidence={
+                "deferred_review": {
+                    "screening_reason_code": "source-review-inconclusive"
+                }
+            },
+        )
+        == "pending"
+    )
+    assert (
+        conclude(
+            active=True,
+            evidence={},
+            quarantined=True,
+            code="source-review-read-budget-exhausted",
+        )
+        == "no_finding"
+    )
+    assert (
+        conclude(active=False, evidence=None, quarantined=True, code="tripwire")
+        == "adverse_signal"
+    )
+    assert conclude(active=False, evidence=None, quarantined=True) is None
+    assert (
+        conclude(active=False, evidence=None, code="source-review-inconclusive") is None
+    )

@@ -2903,6 +2903,30 @@ class PublicConfirmationProgress(BaseModel):
     subjects: list[PublicConfirmationSubject] = Field(default_factory=list)
 
 
+PublicDeferredReviewTrigger = Literal["top_five", "anomaly"]
+"""Why an active hold entered deferred source review (coarse, public-safe)."""
+
+PublicReviewConclusion = Literal["pending", "no_finding", "adverse_signal"]
+"""What the automated source review concluded for a held submission."""
+
+_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION = (
+    "Why an active deferred source review hold was opened: ``top_five`` when "
+    "the canonical score placed the submission in the top five, ``anomaly`` "
+    "when a robust score anomaly check fired. Empty when the submission is not "
+    "held for deferred source review. Ranks, thresholds, and evidence are not "
+    "exposed."
+)
+_REVIEW_CONCLUSION_DESCRIPTION = (
+    "What the automated source review concluded for a held (``under_review``) "
+    "submission. ``pending``: the automated deep review has not reported yet. "
+    "``no_finding``: it ended without any finding (inconclusive, or a read, "
+    "step, lease, or model budget ran out) and an operator decision is pending. "
+    "``adverse_signal``: it reported a concern that an operator must "
+    "adjudicate. Null when the hold has no automated review conclusion (for "
+    "example a copy review) or the submission is not held."
+)
+
+
 class PublicActivityEntry(BaseModel):
     """One submission's safe, public lifecycle state."""
 
@@ -3037,6 +3061,12 @@ class PublicActivityEntry(BaseModel):
             ),
         ),
     ] = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     review_opened_at: Annotated[
         datetime | None,
         Field(
@@ -3787,6 +3817,12 @@ class PublicAgentSummary(BaseModel):
     review_event_at: datetime | None = None
     review_original_reason: str | None = None
     review_opened_at: datetime | None = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     preserved_composite: Annotated[
         float | None, Field(default=None, ge=0.0, le=1.0)
     ] = None
