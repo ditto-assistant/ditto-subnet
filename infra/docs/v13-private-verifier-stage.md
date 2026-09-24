@@ -19,6 +19,33 @@ The stage playbook creates only a locked verifier user and an empty owner-only
 bank directory. It deliberately does not install Docker, fetch bank objects,
 read secret versions, start a scorer, or run a case.
 
+## Read-only live-state plan, 2026-09-24
+
+The GCS-backed `gcp-platform` state was read with a **targeted** Terraform
+plan for all 17 new resource/module addresses, using
+`enable_v13_private_verifier=true`, `manage_dns=false`, and synthetic values
+for unrelated required secret variables. The redacted result was **14 creates,
+0 changes, 0 destroys** for this proposal. Three existing dependencies
+(`google_project_service.iap`, the Platform API service account, and the VPC)
+were no-ops. This is an actual remote-state comparison, but a targeted plan
+does not certify unrelated stack drift. A fresh protected full plan with real
+deployment variables remains an apply gate.
+
+Read-only project checks found `10.32.0.0/24` unused among current regional
+subnets, IAP API enabled, and the proposed bucket name returned 404 (availability
+must be rechecked at apply). Regional reported quota was E2 CPUs 0/600,
+instances 7/6000, and total disk 0/102400 GiB; a single four-vCPU, 100-GiB
+host fits these reported limits, subject to zone capacity and quota refresh.
+
+The project IAM policy has three unconditional OS Admin Login principals, two
+unconditional IAP tunnel principals, and six unconditional service-account-user
+principals; one principal appears in both OS Admin Login and IAP sets. None
+appears in all three sets, but this does **not** prove exclusive access because
+group membership, custom roles, inherited bindings, and future grants were
+not expanded. The proposal's empty operator list does not remove existing
+project-wide grants. Resolve that access boundary before provisioning any
+bank or secret version; a separate project may be required for strict custody.
+
 ## Cost envelope
 
 At the published on-demand `us-central1` rate, e2-standard-4 is
@@ -49,7 +76,8 @@ Sources: [Google Compute E2 pricing](https://cloud.google.com/products/compute/p
 3. Implement and review the scorer-local manifest resolver and sandbox
    factory: exact registered manifest/image, fresh rootless container and
    broker per case, no caller-selected protected bytes, revocation/drain,
-   strict stop, signed sanitized receipt. Stage a dedicated rootless Docker
+   strict stop, signed sanitized receipt. Block container access to the GCE
+   metadata endpoint and host private addresses. Stage a dedicated rootless Docker
    service under the verifier uid only after this is ready.
 4. Implement the separate V13 provider grant with case, source, model,
    budget, and expiry binding. Add secret versions out of band and deploy
