@@ -604,6 +604,15 @@ def _policy_v13_base_prompt() -> str:
     """Remove legacy directives that contradict v13's incomplete-review hold."""
     replacements = (
         (
+            "- local_practice_harness_stub: a stub that only fires when no "
+            "tool_endpoint is\n  supplied is unreachable on the scored path.",
+            "- local_practice_harness_stub: an endpoint-absent stub is a safe "
+            "harbor only when the scored request contract or trusted observation "
+            "establishes an endpoint-present path and no scorer-visible effect "
+            "from the stub. An optional field in the request schema proves "
+            "neither absence nor presence on scored requests.",
+        ),
+        (
             "Your output is FINAL: a clear admits this\n"
             "submission to scoring, a reject is terminal for it.",
             "A clear admits this submission to scoring, a reject is terminal for it, "
@@ -1621,9 +1630,11 @@ class SourceReviewAdjudicator:
     ) -> SourceReviewAdjudication:
         """Refuse any decision the host cannot verify against the archive.
 
-        This is the whole safety argument for using a small model here. The
-        decision itself is cheap to check: the citations have to exist, have to
-        be code, and have to be locations this adjudicator actually opened.
+        Citation certification checks only archive membership, served lines,
+        code admissibility, and verdict vocabulary. It cannot prove scored
+        request reachability or scorer-visible effect from source citations.
+        The v13 policy fence must therefore retain source-only I6 rulings until
+        trusted exact-attempt runtime and private receipts can be checked.
         """
         if verdict.decision == "escalate":
             return _escalate(

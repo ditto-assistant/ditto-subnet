@@ -2076,6 +2076,9 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     assert "a valid scored request omits" in policy_v13
     assert "scorer-visible observed trajectory" in policy_v13
     assert "endpoint-present scored path that skips the required POST" in policy_v13
+    assert "An optional field in the request schema proves neither" in policy_v13
+    assert "An optional field in the request schema proves neither" not in policy_v12
+    assert "a stub that only fires when no tool_endpoint is" in policy_v12
     assert (
         "If reachability or\neffect remains unverified, call request_operator_review"
         in policy_v13
@@ -2113,13 +2116,17 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
 async def test_v13_certifies_visible_endpoint_present_i6_violation(
     tmp_path: Path,
 ) -> None:
-    """The I6 correction preserves a real scored-path fabrication control."""
+    """A valid, source-visible I6 verdict still passes citation certification.
+
+    The scripted verdict tests the transport/host boundary. It does not prove
+    that an unscripted reviewer would find the violation.
+    """
     source = (
         "fn run(req: Request) -> Response {\n"
         '    let endpoint = req.tool_endpoint.expect("scored endpoint");\n'
         "    let call = model_select(req.tools);\n"
         "    let result = fake_success(call); // no POST to endpoint\n"
-        "    Response { tool_calls: vec![call], result }\n"
+        "    Response { answer: render(result), tool_calls: vec![call] }\n"
         "}\n"
     )
     archive_path = tmp_path / "endpoint-present.tar.gz"
@@ -2165,6 +2172,65 @@ async def test_v13_certifies_visible_endpoint_present_i6_violation(
     assert result.decision == "reject"
     assert result.reject_invariant == "i6_tool_execution_fidelity"
     assert result.prompt_revision == ADJUDICATOR_PROMPT_REVISION
+
+
+async def test_v13_ambiguous_endpoint_absence_remains_operator_hold(
+    tmp_path: Path,
+) -> None:
+    """Optional endpoint syntax alone supplies no scored-path I6 proof.
+
+    The host checks a reviewer-requested hold; it cannot independently prove
+    the scored request contract or observed trajectory from source citations.
+    """
+    source = (
+        "async def run(req):\n"
+        "    call = await model_select(req.tools)\n"
+        "    if req.tool_endpoint:\n"
+        "        result = await post(req.tool_endpoint, call)\n"
+        "    else:\n"
+        '        result = {"ok": True}  # local no-endpoint stub\n'
+        "    return Response(answer=await model_answer(result), tool_calls=[call])\n"
+    )
+    archive_path = tmp_path / "ambiguous-endpoint.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        for name, value in {
+            "Dockerfile": (
+                "FROM python:3.12-slim\nCOPY agent.py /agent.py\n"
+                'ENTRYPOINT ["python", "/agent.py"]\n'
+            ),
+            "agent.py": source,
+        }.items():
+            raw = value.encode()
+            member = tarfile.TarInfo(name)
+            member.size = len(raw)
+            archive.addfile(member, io.BytesIO(raw))
+    result = await _adjudicator(
+        _key(tmp_path),
+        _transport(
+            [
+                [
+                    _call(
+                        "request_operator_review",
+                        {
+                            "reason": (
+                                "The source has a no-endpoint stub, but no "
+                                "trusted scored-request or trajectory evidence "
+                                "establishes that the branch ran."
+                            )
+                        },
+                    )
+                ]
+            ]
+        ),
+    ).adjudicate(
+        str(archive_path),
+        notes=[{"kind": "concern", "path": "agent.py", "line": 6}],
+        policy_version=13,
+        ledger_final=True,
+    )
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-evidence-incomplete"
+    assert result.reject_invariant is None
 
 
 async def test_policy_v13_can_keep_incomplete_mandatory_review_held(
