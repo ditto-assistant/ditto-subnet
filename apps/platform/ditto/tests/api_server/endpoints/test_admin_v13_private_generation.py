@@ -328,6 +328,30 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
                 ),
                 {"sha": "5" * 64, "group_id": UUID(body["group_id"])},
             )
+    # A newer screening attempt invalidates this group's old exact identity.
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=uuid4(),
+                agent_id=target_agent,
+                artifact_sha256="a" * 64,
+                screener_hotkey=f"screener-{target_agent}",
+                policy_version=13,
+                status="quarantined",
+                started_at=datetime.now(UTC) + timedelta(minutes=1),
+                deadline=datetime.now(UTC) + timedelta(hours=1),
+            )
+        )
+    stale_ticket = await client.post(
+        ticket_path, json=ticket_request, headers=_HEADERS
+    )
+    assert stale_ticket.status_code == 409
+    stale_pair_ticket = await client.post(
+        f"{_BASE}/groups/{body['group_id']}/private-case-tickets/known_benign",
+        json={"session_id": str(uuid4()), "case_id": str(uuid4())},
+        headers=_HEADERS,
+    )
+    assert stale_pair_ticket.status_code == 409
 
 
 async def test_generation_group_rows_are_immutable_in_postgres(

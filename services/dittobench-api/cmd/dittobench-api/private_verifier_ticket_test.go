@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,6 +40,43 @@ func signedPrivateTicket(t *testing.T, identity privateVerifierCaseIdentity, key
 	return privateCaseTicket{Body: base64.RawURLEncoding.EncodeToString(raw), MACSHA256: hex.EncodeToString(mac.Sum(nil))}
 }
 
+func TestPrivateVerifierTicketExpiresWhileWaitingForAdmissionLock(t *testing.T) {
+	broker, identity, _ := newPrivateVerifierLedgerFixture(t)
+	identity.CaseID = uuid.NewString()
+	key := []byte(strings.Repeat("x", 40))
+	ticket := signedPrivateTicket(t, identity, key)
+	var clock atomic.Int64
+	clock.Store(time.Now().UTC().UnixNano())
+	decoded := make(chan struct{})
+	var once sync.Once
+	admission := &privateCaseAdmission{
+		broker: broker, key: key,
+		now: func() time.Time {
+			once.Do(func() { close(decoded) })
+			return time.Unix(0, clock.Load()).UTC()
+		},
+		verifiedImages: map[string]string{}, admittedCases: map[string]string{},
+		stoppedCases: map[string]bool{}, usedTickets: map[string]privateCaseTicketUse{},
+	}
+	if !admission.bindVerifiedImage(identity.SessionID, identity.ImageSHA256) {
+		t.Fatal("image binding failed")
+	}
+	admission.mu.Lock()
+	result := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		result <- callPrivateTicketRoute(t, admission, "/v1/private-verifier/admit", ticket)
+	}()
+	<-decoded
+	clock.Store(time.Now().Add(6 * time.Minute).UTC().UnixNano())
+	admission.mu.Unlock()
+	if got := (<-result).Code; got != http.StatusUnauthorized {
+		t.Fatalf("expired ticket admitted after lock wait: %d", got)
+	}
+	if len(admission.usedTickets) != 0 || len(admission.admittedCases) != 0 {
+		t.Fatal("expired ticket changed admission state")
+	}
+}
+
 func callPrivateTicketRoute(t *testing.T, admission *privateCaseAdmission, route string, ticket privateCaseTicket) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(ticket)
@@ -64,7 +103,8 @@ func TestPrivateVerifierTicketAdmissionIsFailClosed(t *testing.T) {
 	admission := &privateCaseAdmission{
 		broker: broker, key: key,
 		verifiedImages: map[string]string{}, stoppedCases: map[string]bool{},
-		usedTickets: map[string]privateCaseTicketUse{},
+		admittedCases: map[string]string{},
+		usedTickets:   map[string]privateCaseTicketUse{},
 	}
 	if got := callPrivateTicketRoute(t, admission, "/v1/private-verifier/admit", ticket).Code; got != http.StatusConflict {
 		t.Fatalf("unverified image admitted: %d", got)
@@ -72,6 +112,9 @@ func TestPrivateVerifierTicketAdmissionIsFailClosed(t *testing.T) {
 	if !admission.bindVerifiedImage(identity.SessionID, identity.ImageSHA256) ||
 		admission.bindVerifiedImage(identity.SessionID, identity.ImageSHA256) {
 		t.Fatal("verified image binding was not single-use")
+	}
+	if admission.markContainerStopped(identity.SessionID) {
+		t.Fatal("container stop recorded before case admission")
 	}
 	wrong := ticket
 	wrong.MACSHA256 = strings.Repeat("0", 64)

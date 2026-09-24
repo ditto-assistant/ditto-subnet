@@ -96,9 +96,11 @@ type privateCaseAdmission struct {
 	broker *inferenceBroker
 	key    []byte
 	mu     sync.Mutex
+	now    func() time.Time
 	// Only the future scorer-owned sandbox factory may set these. No request
 	// field or public route can assert that an image ran or a container stopped.
 	verifiedImages map[string]string
+	admittedCases  map[string]string
 	stoppedCases   map[string]bool
 	usedTickets    map[string]privateCaseTicketUse
 }
@@ -106,6 +108,13 @@ type privateCaseAdmission struct {
 type privateCaseTicketUse struct {
 	bodySHA256 [sha256.Size]byte
 	expiresAt  time.Time
+}
+
+func (a *privateCaseAdmission) clockNow() time.Time {
+	if a.now != nil {
+		return a.now().UTC()
+	}
+	return time.Now().UTC()
 }
 
 func (a *privateCaseAdmission) bindVerifiedImage(sessionID, imageSHA256 string) bool {
@@ -129,7 +138,7 @@ func (a *privateCaseAdmission) markContainerStopped(sessionID string) bool {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.stoppedCases == nil || a.verifiedImages[sessionID] == "" || a.stoppedCases[sessionID] {
+	if a.stoppedCases == nil || a.verifiedImages[sessionID] == "" || a.admittedCases[sessionID] == "" || a.stoppedCases[sessionID] {
 		return false
 	}
 	a.stoppedCases[sessionID] = true
@@ -149,7 +158,7 @@ func (a *privateCaseAdmission) decodeRequest(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "private verifier ticket invalid", http.StatusUnauthorized)
 		return privateCaseClaims{}, privateCaseTicket{}, false
 	}
-	claims, err := decodePrivateCaseTicket(ticket, a.key, time.Now().UTC())
+	claims, err := decodePrivateCaseTicket(ticket, a.key, a.clockNow())
 	if err != nil {
 		http.Error(w, "private verifier ticket invalid", http.StatusUnauthorized)
 		return privateCaseClaims{}, privateCaseTicket{}, false
@@ -164,12 +173,16 @@ func (a *privateCaseAdmission) admit(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.usedTickets == nil {
+	if !claims.ExpiresAt.After(a.clockNow()) {
+		http.Error(w, "private verifier ticket invalid", http.StatusUnauthorized)
+		return
+	}
+	if a.usedTickets == nil || a.admittedCases == nil {
 		http.Error(w, "private verifier unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	for nonce, used := range a.usedTickets {
-		if !used.expiresAt.After(time.Now().UTC()) {
+		if !used.expiresAt.After(a.clockNow()) {
 			delete(a.usedTickets, nonce)
 		}
 	}
@@ -197,6 +210,7 @@ func (a *privateCaseAdmission) admit(w http.ResponseWriter, r *http.Request) {
 	a.usedTickets[claims.Nonce] = privateCaseTicketUse{
 		bodySHA256: sha256.Sum256([]byte(ticket.Body)), expiresAt: claims.ExpiresAt,
 	}
+	a.admittedCases[claims.SessionID] = claims.Nonce
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "admitted_report_only"})
 }
@@ -207,6 +221,11 @@ func (a *privateCaseAdmission) ledger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
+	if !claims.ExpiresAt.After(a.clockNow()) {
+		a.mu.Unlock()
+		http.Error(w, "private verifier ticket invalid", http.StatusUnauthorized)
+		return
+	}
 	use, admitted := a.usedTickets[claims.Nonce]
 	stopped := a.stoppedCases[claims.SessionID]
 	image := a.verifiedImages[claims.SessionID]

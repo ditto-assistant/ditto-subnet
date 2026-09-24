@@ -408,6 +408,26 @@ async def issue_group_private_case_ticket(
     image_sha = group.target_image_sha256 if target else group.control_image_sha256
     agent = await session.get(Agent, agent_id)
     attempt = await session.get(ScreeningAttempt, attempt_id)
+    latest_attempt_id = await session.scalar(
+        select(ScreeningAttempt.attempt_id)
+        .where(ScreeningAttempt.agent_id == agent_id)
+        .order_by(
+            ScreeningAttempt.started_at.desc(),
+            ScreeningAttempt.attempt_id.desc(),
+        )
+        .limit(1)
+    )
+    other_agent_id = group.control_agent_id if target else group.target_agent_id
+    other_attempt_id = group.control_attempt_id if target else group.target_attempt_id
+    latest_other_attempt_id = await session.scalar(
+        select(ScreeningAttempt.attempt_id)
+        .where(ScreeningAttempt.agent_id == other_agent_id)
+        .order_by(
+            ScreeningAttempt.started_at.desc(),
+            ScreeningAttempt.attempt_id.desc(),
+        )
+        .limit(1)
+    )
     image = await session.scalar(
         select(ScreenedImageUpload).where(
             ScreenedImageUpload.agent_id == agent_id,
@@ -422,6 +442,8 @@ async def issue_group_private_case_ticket(
         agent is None
         or attempt is None
         or attempt.agent_id != agent_id
+        or latest_attempt_id != attempt_id
+        or latest_other_attempt_id != other_attempt_id
         or attempt.policy_version != 13
         or attempt.artifact_sha256 != artifact_sha
         or agent.sha256.lower() != artifact_sha
