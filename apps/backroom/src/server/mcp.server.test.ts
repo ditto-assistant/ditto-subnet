@@ -349,6 +349,7 @@ describe('Backroom MCP tools', () => {
         'get_treasury_ledger_readiness',
         'quote_treasury_topup',
         'preview_treasury_topup',
+        'preview_submission_settings',
         'get_validation_retry',
         'list_stuck_submissions',
         'list_lease_revocations',
