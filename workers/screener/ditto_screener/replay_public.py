@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
+import os
+import re
+import tempfile
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,6 +52,9 @@ class ReplayLease(BaseModel):
     policy_version: Literal[13]
     image_upload_id: UUID | None
     image_sha256: str | None
+    image_size_bytes: int | None = None
+    image_id: str | None = None
+    image_verified_at: datetime | None = None
     lease_deadline: datetime
     status: Literal["running"]
 
@@ -89,9 +96,8 @@ class ReplayPublicRunner:
         """Finish one claimed lease as reported or failed, never as CLEAR."""
         image_sha256 = lease.image_sha256
         failure_code: str | None = None
+        existing_image_path: str | None = None
         try:
-            if lease.image_upload_id is not None or lease.image_sha256 is not None:
-                raise PlatformError("verified-image-replay-adapter-unavailable")
             inputs = ReplayInputs.model_validate(
                 await self._api.inputs(lease.replay_id)
             )
@@ -99,6 +105,25 @@ class ReplayPublicRunner:
                 raise PlatformError("replay-input-binding-changed")
             if inputs.urls_expire_at <= datetime.now(UTC):
                 raise PlatformError("replay-input-url-expired")
+            existing_image = lease.image_upload_id is not None
+            if existing_image:
+                if (
+                    lease.image_sha256 is None
+                    or lease.image_verified_at is None
+                    or lease.image_size_bytes is None
+                    or not 0 < lease.image_size_bytes <= 8 * 1024**3
+                    or lease.image_id is None
+                    or re.fullmatch(r"sha256:[0-9a-f]{64}", lease.image_id) is None
+                    or inputs.image_url is None
+                ):
+                    raise PlatformError("verified-image-replay-binding-incomplete")
+                existing_image_path = await self._download_existing_image(
+                    inputs.image_url,
+                    expected_sha256=lease.image_sha256,
+                    expected_size=lease.image_size_bytes,
+                )
+            elif lease.image_sha256 is not None or inputs.image_url is not None:
+                raise PlatformError("replay-image-binding-inconsistent")
             # The current gate uses this selector to emit bounded observations
             # after the local build and isolated smoke. The caller must create
             # it with shadow receipts enabled; checking here prevents a report
@@ -162,7 +187,7 @@ class ReplayPublicRunner:
                     {
                         "artifact_sha256": lease.artifact_sha256,
                         "policy_version": 13,
-                        "image_upload_id": None,
+                        "image_upload_id": lease.image_upload_id,
                         "image_sha256": image_sha256,
                         "check_code": check_code,
                         "evidence_sha256": evidence_sha256,
@@ -233,6 +258,17 @@ class ReplayPublicRunner:
                     ),
                 )
 
+            async def record_existing_image() -> None:
+                assert image_sha256 is not None
+                await receipt(
+                    "build_image_digest",
+                    mechanical_evidence_sha256(
+                        check_code="build_image_digest",
+                        artifact_sha256=lease.artifact_sha256,
+                        image_sha256=image_sha256,
+                    ),
+                )
+
             renewal_task = asyncio.create_task(keep_lease())
             try:
                 result = await self._gate.screen(
@@ -243,7 +279,13 @@ class ReplayPublicRunner:
                     sha256=lease.artifact_sha256,
                     download_url=inputs.artifact_url,
                     deadline=deadline,
-                    publish_image=publish_image,
+                    publish_image=None if existing_image else publish_image,
+                    preverified_image=(existing_image_path, lease.image_id)
+                    if existing_image_path is not None and lease.image_id is not None
+                    else None,
+                    record_preverified_image=record_existing_image
+                    if existing_image
+                    else None,
                     record_archive_verification=archive_receipt,
                     record_runtime_verification=receipt,
                     build_only=True,
@@ -270,7 +312,9 @@ class ReplayPublicRunner:
                 if isinstance(error, PlatformError)
                 and str(error)
                 in {
-                    "verified-image-replay-adapter-unavailable",
+                    "verified-image-replay-binding-incomplete",
+                    "verified-image-replay-download-failed",
+                    "replay-image-binding-inconsistent",
                     "replay-input-binding-changed",
                     "replay-input-url-expired",
                     "runtime-receipts-disabled",
@@ -297,6 +341,9 @@ class ReplayPublicRunner:
                     and current.artifact_sha256 == lease.artifact_sha256
                 ):
                     image_sha256 = current.image_sha256
+        if existing_image_path is not None:
+            with contextlib.suppress(OSError):
+                os.unlink(existing_image_path)
         await self._api.finish(
             lease.replay_id,
             status="failed" if failure_code is not None else "reported",
@@ -304,3 +351,33 @@ class ReplayPublicRunner:
             image_sha256=image_sha256,
             failure_code=failure_code,
         )
+
+    async def _download_existing_image(
+        self, url: str, *, expected_sha256: str, expected_size: int
+    ) -> str:
+        """Stage only the exact Platform-verified image tar under the 8 GiB cap."""
+        fd, path = tempfile.mkstemp(prefix="ditto-replay-image-", suffix=".tar")
+        keep = False
+        digest = hashlib.sha256()
+        size = 0
+        try:
+            with os.fdopen(fd, "wb") as target:
+                async with self._http.stream(
+                    "GET", url, follow_redirects=False
+                ) as response:
+                    if response.status_code != 200:
+                        raise PlatformError("verified-image-replay-download-failed")
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > expected_size:
+                            raise PlatformError("verified-image-replay-download-failed")
+                        digest.update(chunk)
+                        target.write(chunk)
+            if size != expected_size or digest.hexdigest() != expected_sha256:
+                raise PlatformError("verified-image-replay-download-failed")
+            keep = True
+            return path
+        finally:
+            if not keep:
+                with contextlib.suppress(OSError):
+                    os.unlink(path)

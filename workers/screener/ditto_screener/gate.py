@@ -1131,6 +1131,8 @@ class BuildGate:
         | None = None,
         build_only: bool = False,
         replay_runtime_probes: bool = False,
+        preverified_image: tuple[str, str] | None = None,
+        record_preverified_image: Callable[[], Awaitable[None]] | None = None,
         policy_only: bool = False,
         deferred_source_review: bool = False,
         policy_version: int = SCREENING_POLICY_VERSION,
@@ -1168,6 +1170,13 @@ class BuildGate:
             raise ValueError("build-only and policy-only modes are mutually exclusive")
         if replay_runtime_probes and (not build_only or policy_version != 13):
             raise ValueError("replay runtime probes require v13 build-only mode")
+        if preverified_image is not None and (
+            not replay_runtime_probes
+            or remote_build is not None
+            or publish_image is not None
+            or record_preverified_image is None
+        ):
+            raise ValueError("preverified image requires isolated replay mode")
 
         def core_decision(
             outcome: ScreeningOutcome,
@@ -1533,7 +1542,36 @@ class BuildGate:
             built_image_id: str | None = None
             targon_runtime_ok = False
             local_build_selected = False
-            if remote_build is not None:
+            if preverified_image is not None:
+                executor_error = await self._verify_executor()
+                if executor_error is not None:
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="executor-isolation-unavailable",
+                        summary="screener executor isolation is unavailable",
+                        detail=f"screener error: {executor_error}",
+                    )
+                used_local_docker = True
+                image_path, expected_image_id = preverified_image
+                if not self._replay_image_config_matches(image_path, expected_image_id):
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="replay-image-identity-mismatch",
+                        summary="verified replay image identity did not match",
+                        detail=(
+                            "screener error: image tar config differs from the "
+                            "pinned image ID"
+                        ),
+                    )
+                built, build_detail, built_image_id = await self._load_remote_image(
+                    image_path, expected_image_id, timeout=min(build_timeout, 120.0)
+                )
+                if built and built_image_id != expected_image_id:
+                    raise RuntimeError("preverified image ID changed during import")
+                if built:
+                    assert record_preverified_image is not None
+                    await record_preverified_image()
+            elif remote_build is not None:
                 try:
                     remote_archive = await remote_build()
                 except LocalScreeningProviderSelected:
@@ -1600,7 +1638,7 @@ class BuildGate:
                         "using local Docker",
                         _log_tail(build_detail),
                     )
-            if not built:
+            if not built and preverified_image is None:
                 executor_error = await self._verify_executor()
                 if executor_error is not None:
                     return core_decision(
@@ -1621,6 +1659,13 @@ class BuildGate:
                 (asyncio.get_running_loop().time() - started) * 1000
             )
             if not built:
+                if preverified_image is not None:
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="replay-image-load-failed",
+                        summary="verified replay image could not be loaded",
+                        detail=f"screener error: {build_detail}",
+                    )
                 retryable = _docker_infrastructure_failure(build_detail)
                 return core_decision(
                     ScreeningOutcome.RETRYABLE_INFRA
@@ -2849,6 +2894,41 @@ class BuildGate:
         if volumes.strip():
             return False, "docker image inspect returned invalid output", None
         return True, "", image_id
+
+    @staticmethod
+    def _replay_image_config_matches(path: str, expected_image_id: str) -> bool:
+        """Bind the downloaded portable tar to its Platform-pinned config ID."""
+        try:
+            with tarfile.open(path, mode="r:") as archive:
+                manifest = archive.getmember("manifest.json")
+                if not manifest.isfile() or not 0 < manifest.size <= 1 << 20:
+                    return False
+                manifest_file = archive.extractfile(manifest)
+                if manifest_file is None:
+                    return False
+                entries = json.load(manifest_file)
+                if not isinstance(entries, list) or len(entries) != 1:
+                    return False
+                config_name = entries[0].get("Config")
+                if not isinstance(config_name, str) or not re.fullmatch(
+                    r"[0-9a-f]{64}\.json", config_name
+                ):
+                    return False
+                config = archive.getmember(config_name)
+                if not config.isfile() or not 0 < config.size <= 4 << 20:
+                    return False
+                config_file = archive.extractfile(config)
+                if config_file is None:
+                    return False
+                config_bytes = config_file.read(config.size + 1)
+                digest = hashlib.sha256(config_bytes).hexdigest()
+                return (
+                    len(config_bytes) == config.size
+                    and config_name == f"{digest}.json"
+                    and expected_image_id == f"sha256:{digest}"
+                )
+        except (KeyError, OSError, tarfile.TarError, ValueError, TypeError):
+            return False
 
     async def _run_and_probe(
         self,

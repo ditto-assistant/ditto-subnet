@@ -18,10 +18,12 @@ process key. No private seed is sent to Platform.
 
 The runner rebuilds a replay with no pre-existing verified image. It verifies
 the uploaded image bytes through Platform before recording runtime observations.
-It fails the lease when any public observation is missing. Replays bound to an
-existing verified image currently fail with
-`verified-image-replay-adapter-unavailable`; they require a separate exact-image
-load and runtime adapter. The benchmark version in replay inputs is resolved
+For an existing verified image, it downloads the exact Platform-pinned tar,
+checks its byte size and SHA-256, checks the portable tar config against the
+pinned Docker image ID, then loads that image into the isolated rootless Docker
+executor. It never republishes the existing image. Receipts retain its original
+image upload ID. It fails the lease when any public observation is missing.
+The benchmark version in replay inputs is resolved
 from the submission's arrival era when inputs are fetched; a durable
 source-attempt benchmark pin remains future work.
 

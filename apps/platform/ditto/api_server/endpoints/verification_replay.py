@@ -79,6 +79,7 @@ from ditto.db.models import (
     V13ReplayGroupPackageRegistration,
     V13ReplayPrivateGenerationGroup,
 )
+from ditto.db.queries.benchmark_rollout import arrival_bench_version
 from ditto_screening_protocol.models import (
     ScreenReviewAudit,
     SourceReviewNote,
@@ -96,7 +97,6 @@ from ditto_screening_protocol.v13_replay_observation import (
     V13ReplayObservation,
     authentic_replay_observation,
 )
-from ditto.db.queries.benchmark_rollout import arrival_bench_version
 from ditto_screening_protocol.v13_replay_process_identity import (
     ReplayPurpose,
     V13ReplayProcessProof,

@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import io
+import json
+import tarfile
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -52,7 +55,9 @@ class FakeApi:
             "bench_version": 13,
             "miner_hotkey": "5" * 47,
             "artifact_url": "https://example.test/artifact",
-            "image_url": None,
+            "image_url": "https://example.test/image"
+            if self.lease.image_upload_id is not None
+            else None,
             "urls_expire_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
         }
 
@@ -92,16 +97,23 @@ class FakeGate:
         assert kwargs["replay_runtime_probes"] is True
         assert kwargs["policy_version"] == 13
         await kwargs["record_archive_verification"]()
-        data = self.image_path.read_bytes()
-        await kwargs["publish_image"](
-            BuiltImageArtifact(
-                path=str(self.image_path),
-                sha256=hashlib.sha256(data).hexdigest(),
-                size_bytes=len(data),
-                image_id="sha256:" + "b" * 64,
-                image_ref="replay-test",
+        if kwargs["preverified_image"] is not None:
+            assert kwargs["publish_image"] is None
+            path, image_id = kwargs["preverified_image"]
+            assert Path(path).read_bytes() == self.image_path.read_bytes()
+            assert image_id == "sha256:" + "b" * 64
+            await kwargs["record_preverified_image"]()
+        else:
+            data = self.image_path.read_bytes()
+            await kwargs["publish_image"](
+                BuiltImageArtifact(
+                    path=str(self.image_path),
+                    sha256=hashlib.sha256(data).hexdigest(),
+                    size_bytes=len(data),
+                    image_id="sha256:" + "b" * 64,
+                    image_ref="replay-test",
+                )
             )
-        )
         codes = sorted(PUBLIC_CHECKS - {"archive_sha", "build_image_digest"})
         if self.omit_last:
             codes.pop()
@@ -137,6 +149,84 @@ async def test_public_replay_reports_only_complete_receipts(tmp_path: Path) -> N
         if code != "archive_sha"
     )
     assert api.finished is not None and api.finished["status"] == "reported"
+
+
+async def test_public_replay_reuses_exact_verified_image(tmp_path: Path) -> None:
+    image = tmp_path / "image.tar"
+    image.write_bytes(b"isolated-image")
+    lease = _lease()
+    lease.image_upload_id = uuid4()
+    lease.image_sha256 = hashlib.sha256(image.read_bytes()).hexdigest()
+    lease.image_size_bytes = image.stat().st_size
+    lease.image_id = "sha256:" + "b" * 64
+    lease.image_verified_at = datetime.now(UTC)
+    api = FakeApi(lease)
+    requests: list[httpx.Request] = []
+
+    def download(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=image.read_bytes())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(download)) as http:
+        runner = ReplayPublicRunner(
+            api=cast(ReplayApiClient, api),
+            gate=cast(BuildGate, FakeGate(image)),
+            http=http,
+        )
+        await runner.run_lease(lease)
+    assert len(requests) == 1 and requests[0].method == "GET"
+    assert set(api.receipts) == PUBLIC_CHECKS
+    assert all(
+        receipt["image_upload_id"] == lease.image_upload_id
+        for receipt in api.receipts.values()
+    )
+    assert api.finished is not None and api.finished["status"] == "reported"
+
+
+async def test_public_replay_refuses_changed_verified_image(tmp_path: Path) -> None:
+    image = tmp_path / "image.tar"
+    image.write_bytes(b"isolated-image")
+    lease = _lease()
+    lease.image_upload_id = uuid4()
+    lease.image_sha256 = "f" * 64
+    lease.image_size_bytes = image.stat().st_size
+    lease.image_id = "sha256:" + "b" * 64
+    lease.image_verified_at = datetime.now(UTC)
+    api = FakeApi(lease)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, content=image.read_bytes())
+        )
+    ) as http:
+        runner = ReplayPublicRunner(
+            api=cast(ReplayApiClient, api),
+            gate=cast(BuildGate, FakeGate(image)),
+            http=http,
+        )
+        await runner.run_lease(lease)
+    assert not api.receipts
+    assert api.finished is not None
+    assert api.finished["status"] == "failed"
+    assert api.finished["failure_code"] == "verified-image-replay-download-failed"
+
+
+def test_preverified_image_tar_must_match_pinned_config_id(tmp_path: Path) -> None:
+    config_bytes = b'{"rootfs":{"type":"layers","diff_ids":[]}}'
+    digest = hashlib.sha256(config_bytes).hexdigest()
+    path = tmp_path / "portable.tar"
+    manifest = json.dumps(
+        [{"Config": f"{digest}.json", "RepoTags": None, "Layers": []}]
+    ).encode()
+    with tarfile.open(path, "w") as archive:
+        for name, data in (
+            ("manifest.json", manifest),
+            (f"{digest}.json", config_bytes),
+        ):
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+    assert BuildGate._replay_image_config_matches(str(path), f"sha256:{digest}")
+    assert not BuildGate._replay_image_config_matches(str(path), "sha256:" + "f" * 64)
 
 
 async def test_public_replay_fails_if_one_runtime_probe_is_missing(
