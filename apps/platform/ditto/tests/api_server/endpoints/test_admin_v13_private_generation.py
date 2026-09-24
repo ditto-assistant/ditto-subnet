@@ -289,8 +289,8 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
     assert (
         await client.post(ticket_path, json=ticket_request, headers=_HEADERS)
     ).status_code == 503
-    ticket_key = "synthetic-private-ticket-key-32-bytes"
-    monkeypatch.setenv("PLATFORM_V13_PRIVATE_TICKET_KEY", ticket_key)
+    synthetic_material = "x" * 40
+    monkeypatch.setenv("PLATFORM_V13_PRIVATE_TICKET_KEY", synthetic_material)
     assert (await client.post(ticket_path, json=ticket_request)).status_code == 401
     issued = await client.post(ticket_path, json=ticket_request, headers=_HEADERS)
     assert issued.status_code == 200, issued.text
@@ -304,7 +304,7 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
     assert hmac.compare_digest(
         token["mac_sha256"],
         hmac.new(
-            ticket_key.encode(),
+            synthetic_material.encode(),
             b"ditto-v13-private-case-ticket-v1\0" + raw,
             hashlib.sha256,
         ).hexdigest(),
