@@ -73,11 +73,10 @@ TOP5_MAX_COHORT_SIZE = 25
 # platform so the whole fleet folds the same number without agreeing about
 # clocks -- see ``weights.resolve_miner_emission_share``. Releasing everything is
 # the right fallback precisely because it is what the subnet did before the field
-# existed, so an omission is never a change. The burn hotkey is retained in
-# either case as the safe idle vector: with no eligible miners the whole vector
-# still routes to burn rather than zeroing the chain.
+# existed, so an omission is never a change. The burn destination is resolved
+# from the current subnet metagraph at each weight epoch, including the idle
+# vector. A hardcoded UID 0 hotkey can be deregistered or rotated.
 MINER_EMISSION_SHARE = 1.0
-FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
 
 # --- Competition-track emission split (scalable, retirable registry) ---
 # The subnet is splitting from a single competition into several independent
@@ -387,9 +386,9 @@ class ValidatorConfig:
     ledger's ``burn_share``; this is what the fold uses when that field is absent
     or invalid."""
 
-    burn_hotkey: str
-    """Owner-associated hotkey whose miner incentive Subtensor burns. Used for
-    the idle vector (no eligible miners) and for any residual share below 1.0."""
+    burn_hotkey: str | None
+    """Local-network burn target, or None to resolve registered UID 0 each
+    epoch on Finney. Never submit with an unresolved production destination."""
 
     min_stake_tao: float
     """Minimum stake (TAO) this validator expects on its own hotkey before it
@@ -680,13 +679,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         "VALIDATOR_HOTKEY", os.environ.get("VALIDATOR_HOTKEY", "")
     )
     subtensor_network = os.environ.get("SUBTENSOR_NETWORK", "finney")
-    # Finney SN118 has a fixed owner hotkey at UID 0. Production validators may
-    # use a named network or a custom non-loopback endpoint, so only explicit
-    # local aliases/endpoints self-target the local owner validator.
+    # Production UID 0 can rotate. Resolve it from the same metagraph snapshot
+    # used to filter registered miners each epoch. Only explicit local aliases
+    # or loopback endpoints self-target the local owner validator.
     burn_hotkey = (
-        validator_hotkey
-        if _is_local_subtensor_network(subtensor_network)
-        else FINNEY_BURN_HOTKEY
+        validator_hotkey if _is_local_subtensor_network(subtensor_network) else None
     )
 
     # All KOTH + ATH mechanism values are frozen (the KOTH_* module constants),

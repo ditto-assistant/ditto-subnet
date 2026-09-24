@@ -52,7 +52,8 @@ real and must be stated plainly: at full activation, miners receive
 ### Why the burn share can't be reused
 
 `apply_miner_emission_cap` (`ditto/validator/weights.py`) routes the residual to
-`FINNEY_BURN_HOTKEY`, which is the subnet owner's hotkey (UID 0). Subtensor
+the current registered UID 0 hotkey, resolved from the metagraph on each
+validator weight epoch. Subtensor
 *burns* miner incentive sent to an owner-associated hotkey. Weight sent there
 never reaches a spendable balance. A "fixed split of the existing burn share"
 would therefore still burn the money. The treasury needs its own destination:

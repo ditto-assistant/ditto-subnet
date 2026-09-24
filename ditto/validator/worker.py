@@ -682,6 +682,10 @@ class ValidatorWorker:
         self._platform = platform
         self._dittobench = dittobench
         self._chain = chain
+        # The registered-neuron snapshot must be refreshed for every weight
+        # epoch. It supplies both miner eligibility and the burn destination.
+        self._registered_neurons: list[Any] | None = None
+        self._last_burn_hotkey: str | None = getattr(config, "burn_hotkey", None)
         self._keypair = keypair
         # The weight sink: the Pylon-backed ChainClient by default, or an
         # injected setter (used in tests to substitute a fake).
@@ -1279,7 +1283,7 @@ class ValidatorWorker:
                 weights_submitted=outcome.submitted,
                 weights_fold=outcome.fold,
                 weights_due=set_weights,
-                burn_hotkey=self._config.burn_hotkey,
+                burn_hotkey=self._last_burn_hotkey,
                 onchain_last_update_block=onchain_last_update_block,
                 onchain_observed_block=onchain_observed_block,
             )
@@ -2007,6 +2011,8 @@ class ValidatorWorker:
         # champion/tail selection lets an absent miner occupy a paid slot and
         # changes the normalized miner/burn ratio. Filter before the fold so the
         # next registered contender receives the correct role and share.
+        self._registered_neurons = None
+        self._last_burn_hotkey = self._config.burn_hotkey
         registered_entries = await self._registered_ledger_entries(weight_entries)
         if registered_entries is None:
             # Eligibility is a live-chain fact. On an indeterminate read, leave
@@ -2015,6 +2021,10 @@ class ValidatorWorker:
             return _WeightOutcome(
                 leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
             )
+        burn_hotkey = self._resolve_burn_hotkey()
+        if burn_hotkey is None:
+            return _WeightOutcome(leaderboard=leaderboard)
+        self._last_burn_hotkey = burn_hotkey
 
         # Version-rollout re-scores are ordinary platform-leased jobs. The fold
         # reads every cryptographically verified contract it supports and skips
@@ -2091,7 +2101,7 @@ class ValidatorWorker:
         weights = apply_miner_emission_cap(
             miner_weights,
             miner_share=miner_share * allocated,
-            burn_hotkey=self._config.burn_hotkey,
+            burn_hotkey=burn_hotkey,
         )
         champion = select_champion(
             registered_entries,
@@ -2271,6 +2281,7 @@ class ValidatorWorker:
             )
             return None
 
+        self._registered_neurons = list(neurons)
         registered = {neuron.hotkey for neuron in neurons}
         kept = [entry for entry in entries if entry.miner_hotkey in registered]
         absent = sorted({entry.miner_hotkey for entry in entries} - registered)
@@ -2282,6 +2293,33 @@ class ValidatorWorker:
                 absent,
             )
         return kept
+
+    def _resolve_burn_hotkey(self) -> str | None:
+        """Resolve the unique registered owner UID from this epoch's metagraph.
+
+        An absent, duplicate, or malformed UID 0 is indeterminate: preserve the
+        existing chain weights rather than submitting a vector to a stale
+        address or accidentally paying a different miner.
+        """
+        if self._config.burn_hotkey is not None:
+            return self._config.burn_hotkey
+        neurons = self._registered_neurons
+        owners = (
+            []
+            if neurons is None
+            else [n for n in neurons if getattr(n, "uid", None) == 0]
+        )
+        if (
+            len(owners) != 1
+            or not isinstance(getattr(owners[0], "hotkey", None), str)
+            or not owners[0].hotkey
+        ):
+            logger.error(
+                "cannot resolve unique registered UID 0 burn target; "
+                "weights unchanged this epoch"
+            )
+            return None
+        return owners[0].hotkey
 
     async def _run_v9_confirmation_lane(
         self,
@@ -4330,7 +4368,7 @@ class ValidatorWorker:
                     weights_submitted=outcome.submitted,
                     weights_fold=outcome.fold,
                     weights_due=True,
-                    burn_hotkey=self._config.burn_hotkey,
+                    burn_hotkey=self._last_burn_hotkey,
                     onchain_last_update_block=last_update,
                     onchain_observed_block=observed_block,
                     scoring_sweep=False,
