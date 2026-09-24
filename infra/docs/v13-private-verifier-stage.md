@@ -39,12 +39,14 @@ host fits these reported limits, subject to zone capacity and quota refresh.
 
 The project IAM policy has three unconditional OS Admin Login principals, two
 unconditional IAP tunnel principals, and six unconditional service-account-user
-principals; one principal appears in both OS Admin Login and IAP sets. None
-appears in all three sets, but this does **not** prove exclusive access because
-group membership, custom roles, inherited bindings, and future grants were
-not expanded. The proposal's empty operator list does not remove existing
-project-wide grants. Resolve that access boundary before provisioning any
-bank or secret version; a separate project may be required for strict custody.
+principals; one principal appears in both OS Admin Login and IAP sets. More
+directly, project-wide storage admins (3), object viewer (1), secret accessors
+(9), secret admins (2), owners (3), and editors (4) inherit onto any bank bucket
+and secret container created here. Bucket-local and secret-local grants do not
+remove those effective privileges. The proposal's empty operator list does
+not establish exclusive custody. **Do not apply this project-local alternative
+for protected bytes or key versions.** A separate project with reviewed
+organization-owner access is the recommended custody boundary.
 
 ## Cost envelope
 
@@ -88,3 +90,12 @@ Sources: [Google Compute E2 pricing](https://cloud.google.com/products/compute/p
 Rollback starts by disabling ticket issuance and the verifier service,
 draining outstanding tickets, then revoking the provider grant and bank/key
 access. Preserve the bank generation and immutable receipts for audit.
+
+The Terraform flag is a **creation gate, not a rollback switch**. If an
+operator ever approves staging this alternative, first commit
+`enable_v13_private_verifier=true` to the production intent file and then
+apply the exact reviewed plan; keep that intent true on subsequent routine
+plans. Setting it back to false would propose destruction of the VM, bucket,
+and secrets and be blocked by deletion protection/prevent-destroy. A
+supervised teardown must separately disable runtime and grants, preserve the
+bank/audit trail, and review a specific state/resource disposition plan.
