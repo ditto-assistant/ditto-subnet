@@ -45,7 +45,6 @@ from ditto.db.models import (
     ScreeningVerificationReplay,
     ScreeningVerificationReplayReceipt,
 )
-
 from ditto_screening_protocol.v13_replay_process_identity import V13ReplayProcessProof
 
 ARTIFACT = "a" * 64
@@ -65,6 +64,11 @@ def _test_replay_runner_release(monkeypatch):
         admin_screener_capacity,
         "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE",
         (0, 999, 0),
+    )
+    # Legacy lease tests exercise scheduling and receipt semantics. The
+    # process-authenticated node-2 path has its own focused tests below.
+    monkeypatch.setattr(
+        verification_replay, "_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE", None
     )
 
 
@@ -103,6 +107,24 @@ async def _enroll(
         )
     )
     if replay_capacity:
+        process_public = (
+            Ed25519PrivateKey.generate()
+            .public_key()
+            .public_bytes(Encoding.Raw, PublicFormat.Raw)
+            .hex()
+        )
+        process_key_sha = hashlib.sha256(bytes.fromhex(process_public)).hexdigest()
+        session.add(
+            ScreenerReplayProcessKey(
+                node_id=node_id,
+                instance_id=f"{node_id}-worker-1",
+                public_key_hex=process_public,
+                key_sha256=process_key_sha,
+                revision=1,
+                status="active",
+                registered_at=now,
+            )
+        )
         session.add(
             ScreenerHeartbeat(
                 screener_hotkey=hotkey,
@@ -116,12 +138,13 @@ async def _enroll(
                 seen_at=now,
                 signature="ab" * 64,
                 system_metrics={
+                    "replay_process": {"key_sha256": process_key_sha},
                     "release": {
                         "builtin_policy_version": 13,
                         "revision": "a" * 40,
                         "version": "v0.999.0",
                         "activated_at": int(now.timestamp()),
-                    }
+                    },
                 },
             )
         )
@@ -276,7 +299,10 @@ async def test_rotated_sibling_process_key_cannot_use_existing_lease(
     created = await create_replay(
         agent_id, _payload(attempt_id, quarantine_id, image_id), None, session
     )
-    await _enroll(session, node_id=node_id, replay_capacity=1)
+    await _enroll(session, node_id=node_id, replay_capacity=0)
+    enrolled = await session.get(ScreenerNode, node_id)
+    assert enrolled is not None
+    enrolled.verification_replay_capacity = 1
     old_key = Ed25519PrivateKey.generate()
     new_key = Ed25519PrivateKey.generate()
     now = datetime.now(UTC)
