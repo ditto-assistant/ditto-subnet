@@ -126,6 +126,7 @@ import {
   setValidatorSlotSettingsInputSchema,
   setValidatorIssuancePauseInputSchema,
   updateSubmissionSettingsInputSchema,
+  previewSubmissionSettingsInputSchema,
   unbanHotkeyInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   retryFailedScreeningNowInputSchema,
@@ -294,6 +295,7 @@ import {
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
+  previewSubmissionSettings,
   fetchHotkeyBans,
   unbanHotkey,
   fetchConfirmationBundleSettings,
@@ -819,7 +821,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_burn_settings:
     'Read the emission burn in force, the miner share it leaves, the governing revision, and how many validators are live enough to fold it. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
   get_submission_cooldown:
-    'Read the current miner submission fee and owner-coldkey cooldown. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
+    'Read the fixed-TAO miner submission fee, its safe bounds, quote lifetime, and owner-coldkey cooldown. Revision history (old/new fee, actor, reason, time) is newest-first and opt-in; historyLimit defaults to 0.',
+  set_submission_cooldown:
+    'Apply a fixed-TAO fee/cooldown revision after preview_submission_settings, with expectedRevision, reason, and its exact confirmation; stale or concurrent writes return 409. Requires backroom:write.',
+  preview_submission_settings:
+    'Dry-run a fee/cooldown revision: diff, fee ratio, stale flag, exact confirmation, and in-flight quotes that keep their issued fee. Never mutates.',
   list_hotkey_bans: 'Hotkey bans.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
@@ -2186,6 +2192,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'preview_submission_settings',
+    {
+      title: 'Preview miner submission settings',
+      description:
+        'Dry-run one revision of the platform-owned miner submission fee and cooldown before set_submission_cooldown. Supply expectedRevision (from get_submission_cooldown), cooldownSeconds, and feeAmountRao (integer rao; 1 TAO = 1,000,000,000 rao; safe bounds 0.001 to 10 TAO). Returns the current revision, the proposed values with an exact nine-decimal TAO rendering, whether expectedRevision is stale (an apply would return 409), fee_change_ratio, applicable, the exact required_confirmation string, and the unexpired reserved quotes still in flight: each keeps the fee it was issued at until it is consumed or expires (quote_lifetime_seconds), after which only the new fee can be paid. The denomination is fixed_tao: the fee is an exact TAO amount, never a USD target. Requires backroom:read and changes nothing.',
+      inputSchema: previewSubmissionSettingsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await previewSubmissionSettings(input)),
+  )
+
+  registerTool(
     'get_continual_retest_settings',
     {
       title: 'Get continual retest settings',
@@ -3155,7 +3173,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set miner submission settings',
       description:
-        'Apply one append-only revision of the platform-owned miner submission cooldown and TAO-denominated fee. Supply expectedRevision, cooldownSeconds, feeAmountRao, an operator reason, and the exact confirmation string returned by the schema helper. Requires backroom:write.',
+        'Apply one append-only revision of the platform-owned miner submission cooldown and fixed-TAO fee, effective immediately without a deploy. Run preview_submission_settings first. Supply expectedRevision, cooldownSeconds, feeAmountRao (integer rao within the 0.001 to 10 TAO safe bounds), an operator reason, and the exact required_confirmation from the preview ("SET SUBMISSION COOLDOWN <seconds> SECONDS FEE <rao> RAO"). A stale expectedRevision or a concurrent write returns 409 and changes nothing. Already-reserved quotes keep their issued fee until they expire. Rollback is a new revision re-applying the older value. Requires backroom:write.',
       inputSchema: updateSubmissionSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

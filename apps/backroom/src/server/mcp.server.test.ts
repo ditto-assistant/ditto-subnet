@@ -236,6 +236,7 @@ describe('Backroom MCP tools', () => {
         'get_source_release_policy',
         'get_owner_attestations',
         'get_submission_cooldown',
+        'preview_submission_settings',
         'get_validation_retry',
         'list_stuck_submissions',
         'list_lease_revocations',

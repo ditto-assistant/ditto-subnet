@@ -269,6 +269,8 @@ import {
   validatorFleetObservabilitySchema,
   artifactReleaseControlSchema,
   submissionSettingsControlSchema,
+  submissionSettingsPreviewSchema,
+  previewSubmissionSettingsInputSchema,
   hotkeyBanControlSchema,
   hotkeyBanListSchema,
   hotkeyBanLookupInputSchema,
@@ -872,6 +874,17 @@ export async function fetchSubmissionSettingsControl() {
   return submissionSettingsControlSchema.parse(payload)
 }
 
+export async function previewSubmissionSettings(rawInput: unknown) {
+  const input = previewSubmissionSettingsInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    expected_revision: String(input.expectedRevision),
+    cooldown_seconds: String(input.cooldownSeconds),
+    fee_amount_rao: String(input.feeAmountRao),
+  })
+  const payload = await platformAdminRequest(`${SUBMISSION_SETTINGS_PATH}/preview?${query}`)
+  return submissionSettingsPreviewSchema.parse(payload)
+}
+
 export async function updateSubmissionSettings(actor: string, rawInput: unknown) {
   const input = updateSubmissionSettingsInputSchema.parse(rawInput)
   await platformAdminRequest(SUBMISSION_SETTINGS_PATH, {
@@ -881,6 +894,7 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
       expected_revision: input.expectedRevision,
       cooldown_seconds: input.cooldownSeconds,
       fee_amount_rao: input.feeAmountRao,
+      fee_denomination: input.feeDenomination,
       reason: input.reason,
       actor,
       confirmation: input.confirmation,
