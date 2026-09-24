@@ -31,6 +31,45 @@ class V13KnownBenignApprovalView(V13KnownBenignApprovalRequest):
     status: Literal["recorded_unverified"] = "recorded_unverified"
 
 
+class V13KnownBenignAttestationRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    assertion: str = Field(min_length=20, max_length=2048)
+    reason: str = Field(min_length=8)
+
+
+class V13TrustedKnownBenignReviewer(BaseModel):
+    """Digest component of one authenticated reviewer. No challenge bytes."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    principal_sub: str
+    assertion_sha256: str = Field(pattern=_SHA)
+    attested_at: datetime
+
+
+class V13TrustedKnownBenignApproval(BaseModel):
+    """Server-verified two-person control. Never inferred from X-Admin-Actor."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    approval_id: UUID
+    agent_id: UUID
+    attempt_id: UUID
+    artifact_sha256: str = Field(pattern=_SHA)
+    image_sha256: str = Field(pattern=_SHA)
+    profile_sha256: str = Field(pattern=_SHA)
+    review_evidence_sha256: str = Field(pattern=_SHA)
+    approval_receipt_sha256: str = Field(pattern=_SHA)
+    approved_at: datetime
+    provenance_status: Literal["two_person_authenticated"]
+    authenticated_reviewers: Literal[2]
+    provenance_review_evidence_sha256: str = Field(pattern=_SHA)
+    provenance_receipt_sha256: str = Field(pattern=_SHA)
+    completed_at: datetime
+    reviewers: list[V13TrustedKnownBenignReviewer]
+
+
 class V13GenerationStartRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
