@@ -4,6 +4,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
+  SCREENING_SUBMISSION_AGENT_STATUSES,
   auditReasonSchema,
   baselineDiffManifestSchema,
   sourceDiffManifestSchema,
@@ -1182,6 +1183,17 @@ type MutableConfirmationValue<T> = T extends string
 type MutableConfirmationBundle = MutableConfirmationValue<
   ReturnType<typeof confirmationBundle>
 >
+
+describe('screening submission search filters', () => {
+  it('lists exactly the generated Platform AgentStatus values', () => {
+    expectTypeOf<(typeof SCREENING_SUBMISSION_AGENT_STATUSES)[number]>().toEqualTypeOf<
+      PlatformComponents['schemas']['AgentStatus']
+    >()
+    expect(new Set(SCREENING_SUBMISSION_AGENT_STATUSES).size).toBe(
+      SCREENING_SUBMISSION_AGENT_STATUSES.length,
+    )
+  })
+})
 
 describe('Bench v9 confirmation bundle schemas', () => {
   it('stays statically exhaustive against the generated Platform response types', () => {

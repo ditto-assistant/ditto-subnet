@@ -2005,7 +2005,7 @@ async def list_screening_submissions(
     if agent_name is not None:
         where.append(Agent.name == agent_name)
     if agent_name_prefix is not None:
-        where.append(Agent.name.like(_like_prefix(agent_name_prefix)))
+        where.append(Agent.name.like(_like_prefix(agent_name_prefix), escape="\\"))
     if miner_hotkey is not None:
         where.append(Agent.miner_hotkey == miner_hotkey)
     if miner_coldkey is not None:

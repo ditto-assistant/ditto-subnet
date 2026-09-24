@@ -4895,7 +4895,20 @@ export const SCREENING_SUBMISSION_AGENT_STATUSES = [
   'live',
   'ath_pending_review',
   'banned',
-] as const
+] as const satisfies ReadonlyArray<PlatformComponents['schemas']['AgentStatus']>
+
+// Exhaustiveness: a status Platform adds to AgentStatus that is missing above
+// makes this `false` and fails the type check instead of silently drifting.
+type MissingScreeningSubmissionAgentStatus = Exclude<
+  PlatformComponents['schemas']['AgentStatus'],
+  (typeof SCREENING_SUBMISSION_AGENT_STATUSES)[number]
+>
+const screeningSubmissionAgentStatusesExhaustive: [
+  MissingScreeningSubmissionAgentStatus,
+] extends [never]
+  ? true
+  : false = true
+void screeningSubmissionAgentStatusesExhaustive
 
 const submissionAgentNameSchema = z.string().min(1).max(64)
 const submissionSs58KeySchema = z.string().regex(/^[A-Za-z0-9]{1,64}$/)
