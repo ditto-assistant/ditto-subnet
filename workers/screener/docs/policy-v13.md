@@ -809,6 +809,17 @@ Minimum profile:
 - clean-control degradation no greater than 5 percentage points; and
 - replication in the same direction across both seeds.
 
+The predeclared primary hypothesis is the pooled mean of paired ternary
+scores (+1 control-only correct, −1 variant-only correct, 0 otherwise)
+across the required classes and both seeds, at least 60 pairs. Its 95%
+lower bound is a one-sided Student-t interval. A report may call that
+primary supported only when the point estimate is at least 15 points, the
+lower bound is above 5 points, both seeds move the same direction, and the
+known-benign clean control stays at or below 5 points. Per-class comparisons
+are exploratory and Holm-corrected. This report is not a CLEAR or REJECT.
+Hoeffding's bound is not the primary interval: at 20 pairs per class it
+cannot certify a 15-point effect inside the 512-pair manifest cap.
+
 ### Behavioral verification conduct
 
 When required by a published role standard or unresolved source causality:
