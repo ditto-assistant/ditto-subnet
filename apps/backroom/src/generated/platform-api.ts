@@ -6147,6 +6147,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/verification-replays/{replay_id}/signed-observations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Append Signed Replay Observation
+         * @description Retain an authenticated independent claim without verifying check semantics.
+         *
+         *     Even a signed ``passed`` observation is report-only. This endpoint cannot
+         *     satisfy the mandatory V13 profile or change the source quarantine.
+         */
+        post: operations["append_signed_replay_observation_api_v1_screener_verification_replays__replay_id__signed_observations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/upload/agent": {
         parameters: {
             query?: never;
@@ -31028,6 +31051,67 @@ export interface components {
              */
             status: "recorded_unverified";
         };
+        /**
+         * V13ReplayBinding
+         * @description Expected identity sourced from Platform's current locked attempt.
+         */
+        V13ReplayBinding: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Image Id */
+            image_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /**
+             * Policy Version
+             * @default 13
+             * @constant
+             */
+            policy_version: 13;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+        };
+        /**
+         * V13ReplayObservation
+         * @description A runner claim; even ``passed`` remains unverified by this model.
+         */
+        V13ReplayObservation: {
+            binding: components["schemas"]["V13ReplayBinding"];
+            /**
+             * Check Code
+             * @enum {string}
+             */
+            check_code: "archive_sha" | "build_image_digest" | "health" | "ordinary_model_run" | "tool_selection_run" | "seed_memory_run" | "two_user_isolation" | "system_instruction_retention" | "tool_revocation" | "successful_duplicate_suppression" | "same_tool_different_argument" | "catalog_fidelity_reordering" | "timeout_delivery_unknown" | "fallback_evidence_retention" | "response_field_long_answer" | "refusal_uncertainty" | "token_accounting" | "opaque_inventory" | "invariants_i1_i8_s1_s3" | "private_metamorphic";
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Runner Hotkey */
+            runner_hotkey: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "passed" | "failed" | "inconclusive";
+        };
         /** V13ReviewClockRevision */
         V13ReviewClockRevision: {
             /**
@@ -32260,6 +32344,46 @@ export interface components {
             replay_id: string;
             /** Worker Hotkey */
             worker_hotkey: string;
+        };
+        /** VerificationReplaySignedObservationState */
+        VerificationReplaySignedObservationState: {
+            /** Check Code */
+            check_code: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /**
+             * Observation Id
+             * Format: uuid
+             */
+            observation_id: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Policy Verification Complete
+             * @default false
+             * @constant
+             */
+            policy_verification_complete: false;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            /** Runner Hotkey */
+            runner_hotkey: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "passed" | "failed" | "inconclusive";
         };
         /** VerificationReplayState */
         VerificationReplayState: {
@@ -43573,6 +43697,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    append_signed_replay_observation_api_v1_screener_verification_replays__replay_id__signed_observations_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V13ReplayObservation"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplaySignedObservationState"];
                 };
             };
             /** @description Validation Error */

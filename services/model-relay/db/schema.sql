@@ -4513,6 +4513,28 @@ CREATE TABLE public.screening_verification_replay_receipts (
 
 
 --
+-- Name: screening_verification_replay_signed_observations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_verification_replay_signed_observations (
+    observation_id uuid NOT NULL,
+    replay_id uuid NOT NULL,
+    check_code text NOT NULL,
+    status text NOT NULL,
+    evidence_sha256 text NOT NULL,
+    runner_hotkey text NOT NULL,
+    observed_at timestamp with time zone NOT NULL,
+    signature text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_0c04 CHECK ((length(signature) = 128)),
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_2c37 CHECK ((status = ANY (ARRAY['passed'::text, 'failed'::text, 'inconclusive'::text]))),
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_307e CHECK (((length(runner_hotkey) >= 1) AND (length(runner_hotkey) <= 120))),
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_52f5 CHECK ((length(evidence_sha256) = 64)),
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_ae35 CHECK (((length(check_code) >= 1) AND (length(check_code) <= 64)))
+);
+
+
+--
 -- Name: screening_verification_replays; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7059,6 +7081,14 @@ ALTER TABLE ONLY public.screening_verification_replay_receipts
 
 
 --
+-- Name: screening_verification_replay_signed_observations pk_screening_verification_replay_signed_observations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_signed_observations
+    ADD CONSTRAINT pk_screening_verification_replay_signed_observations PRIMARY KEY (observation_id);
+
+
+--
 -- Name: screening_verification_replays pk_screening_verification_replays; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8707,6 +8737,13 @@ CREATE UNIQUE INDEX svrr_replay_code_idx ON public.screening_verification_replay
 
 
 --
+-- Name: svrso_replay_check_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX svrso_replay_check_idx ON public.screening_verification_replay_signed_observations USING btree (replay_id, check_code);
+
+
+--
 -- Name: trusted_image_builds_queue_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9994,6 +10031,14 @@ ALTER TABLE ONLY public.screening_verification_receipts
 
 ALTER TABLE ONLY public.screening_verification_replay_receipts
     ADD CONSTRAINT fk_screening_verification_replay_receipts_replay_id_scr_4090 FOREIGN KEY (replay_id) REFERENCES public.screening_verification_replays(replay_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_verification_replay_signed_observations fk_screening_verification_replay_signed_observations_re_955e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_signed_observations
+    ADD CONSTRAINT fk_screening_verification_replay_signed_observations_re_955e FOREIGN KEY (replay_id) REFERENCES public.screening_verification_replays(replay_id) ON DELETE CASCADE;
 
 
 --
