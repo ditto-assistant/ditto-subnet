@@ -44,9 +44,16 @@ class ActivateV13ScorerCohortRequest(BaseModel):
     packet: V13ScorerPacket
     expected_slot_settings_revision: int = Field(ge=1)
     expected_slot_settings_checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
-    reason: str = Field(min_length=8, max_length=2000)
+    reason: str = Field(min_length=8)
     actor: str = Field(min_length=1, max_length=200)
     confirmation: str
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value: str) -> str:
+        if len(value.strip()) < 8:
+            raise ValueError("reason must contain at least eight nonblank characters")
+        return value.strip()
 
     @field_validator("hotkeys")
     @classmethod
