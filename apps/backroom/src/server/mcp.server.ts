@@ -603,7 +603,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   set_screener_node_replay_capacity:
     'Set report-only replay capacity to zero or one on the independently enrolled second screener, with exact hotkey, status, capacity, confirmation and audit guards. Read get_screener_capacity first.',
   get_screener_replay_process_readiness:
-    'Read exact node-2 process-key, signed worker heartbeat, release gate and missing readiness checks. No credentials or private key.',
+    'Read node-2 key, signed heartbeat, release gate and missing checks. No secrets.',
   register_screener_replay_process_key:
     'Pin one node-2 worker public key only while replay capacity is zero. Exact confirmation and operator audit required.',
   revoke_screener_replay_process_key:
@@ -2153,7 +2153,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get independent replay process readiness',
       description:
-        'Read the exact node-2 active public-key fingerprint, fresh signed worker-1 heartbeat, minimum release and missing checks. It does not attest physical isolation or enable replay. Requires backroom:read.',
+        'Read node-2 key fingerprint, signed worker heartbeat, release gate and readiness. No physical attestation or replay activation. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchReplayProcessReadiness()),
