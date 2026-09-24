@@ -26,6 +26,7 @@ dependencies = [
 ditto-screener = "ditto_screener.__main__:main"
 ditto-screener-enroll = "ditto_screener.enrollment:main"
 ditto-conversation-assess = "ditto_screener.conversation_cli:main"
+ditto-screener-replay = "ditto_screener.replay_main:main"
 
 [tool.uv.sources]
 ditto-screening-protocol = { path = "../../packages/ditto-screening-protocol" }
