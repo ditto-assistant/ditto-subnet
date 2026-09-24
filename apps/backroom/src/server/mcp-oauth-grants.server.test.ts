@@ -235,6 +235,7 @@ async function backroomAccess(props: McpGrantProps) {
     scopes: Array<string>
     grantedScopes: Array<string>
     grant: { id: string; clientId: string } | null
+    expires_at: string | null
   }
 }
 
@@ -425,9 +426,16 @@ describe('Backroom MCP OAuth grants (issue #2080)', () => {
     expect(refused.status).toBe(400)
     await expect(refused.json()).resolves.toMatchObject({ error: 'invalid_grant' })
 
-    // A full-length session still gets the 50-minute ceiling.
+    // A full-length session still gets the 24-hour ceiling.
     const normal = await connect(h, clientId, BACKROOM_READ_SCOPE, 'read')
-    expect(normal.expires_in).toBe(50 * 60)
+    expect(normal.expires_in).toBe(24 * 60 * 60)
+    const issued = await tokenProps(h, normal.access_token)
+    const expiresAt = Date.parse(issued.grant.props.accessExpiresAt ?? '')
+    expect(expiresAt).toBeGreaterThan(Date.now() + 23 * 60 * 60 * 1000)
+    expect(expiresAt).toBeLessThanOrEqual(Date.now() + 24 * 60 * 60 * 1000 + 5_000)
+    expect(await backroomAccess(issued.grant.props)).toMatchObject({
+      expires_at: issued.grant.props.accessExpiresAt,
+    })
   })
 
   it('refuses every MCP call once the authorizing staff session expired', async () => {

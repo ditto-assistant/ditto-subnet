@@ -288,6 +288,8 @@ export type McpGrantProps = {
    * listed (and revocable) on the Agent access page.
    */
   grant?: { id: string; clientId: string }
+  /** Absolute expiry of this access token. Absent on tokens issued before it. */
+  accessExpiresAt?: string
 }
 
 /**
@@ -870,6 +872,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         grant: props.grant ?? null,
         scopes: effectiveScopes(props),
         grantedScopes: props.scopes,
+        expires_at: props.accessExpiresAt ?? null,
         accessLevel: hasWriteAccess(props)
           ? hasArtifactAccess(props)
             ? 'full'

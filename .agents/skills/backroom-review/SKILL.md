@@ -8,7 +8,10 @@ description: Review Ditto SN118 miner submissions through Backroom — screening
 Use the OAuth-protected `sn118-backroom` MCP at
 `https://backroom.dittobench.ai/mcp` as the only production control plane. Do
 not use the private product Backroom, raw Platform admin endpoints, database
-writes, or copied credentials.
+writes, or copied credentials. An interactive MCP access token lasts 24 hours
+or until the staff session ends, whichever is sooner. `get_backroom_access`
+reports `expires_at`. Signed artifact URLs stay short-lived and are not
+covered by that window.
 
 Two courts, one control plane:
 
