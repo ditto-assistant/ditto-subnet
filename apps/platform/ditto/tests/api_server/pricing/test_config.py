@@ -30,8 +30,6 @@ class TestParsePricingConfigFromEnv:
 
         config = parse_pricing_config_from_env()
 
-        assert config.fee_usd == Decimal("5")
-        assert config.fee_buffer == Decimal("1.4")
         assert config.cache_ttl_seconds == 3600
         assert config.max_stale_seconds == 86400
         assert config.coingecko_timeout_seconds == 5.0
@@ -39,8 +37,6 @@ class TestParsePricingConfigFromEnv:
 
     def test_all_options_picked_up(self, monkeypatch: pytest.MonkeyPatch):
         _clear_pricing_env(monkeypatch)
-        monkeypatch.setenv("DITTO_UPLOAD_FEE_USD", "7.50")
-        monkeypatch.setenv("DITTO_UPLOAD_FEE_BUFFER", "1.2")
         monkeypatch.setenv("PRICING_CACHE_TTL_SECONDS", "60")
         monkeypatch.setenv("PRICING_MAX_STALE_SECONDS", "120")
         monkeypatch.setenv("PRICING_COINGECKO_TIMEOUT_SECONDS", "2.5")
@@ -48,8 +44,6 @@ class TestParsePricingConfigFromEnv:
 
         config = parse_pricing_config_from_env()
 
-        assert config.fee_usd == Decimal("7.50")
-        assert config.fee_buffer == Decimal("1.2")
         assert config.cache_ttl_seconds == 60
         assert config.max_stale_seconds == 120
         assert config.coingecko_timeout_seconds == 2.5
@@ -65,10 +59,28 @@ class TestParsePricingConfigFromEnv:
 
     def test_invalid_decimal_raises(self, monkeypatch: pytest.MonkeyPatch):
         _clear_pricing_env(monkeypatch)
-        monkeypatch.setenv("DITTO_UPLOAD_FEE_USD", "not-a-number")
+        monkeypatch.setenv("TAO_PRICE_OVERRIDE_USD", "not-a-number")
 
-        with pytest.raises(PricingError, match="DITTO_UPLOAD_FEE_USD"):
+        with pytest.raises(PricingError, match="TAO_PRICE_OVERRIDE_USD"):
             parse_pricing_config_from_env()
+
+    def test_retired_usd_fee_variables_have_no_pricing_authority(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The fee is the revisioned fixed-TAO DB policy, never a deploy knob.
+
+        A leftover deployment value (even a malformed one) must neither be
+        parsed nor surface on the config, so it cannot silently re-become a
+        USD-denominated fee.
+        """
+        _clear_pricing_env(monkeypatch)
+        monkeypatch.setenv("DITTO_UPLOAD_FEE_USD", "not-a-number")
+        monkeypatch.setenv("DITTO_UPLOAD_FEE_BUFFER", "-1")
+
+        config = parse_pricing_config_from_env()
+
+        assert not hasattr(config, "fee_usd")
+        assert not hasattr(config, "fee_buffer")
 
     def test_invalid_int_raises(self, monkeypatch: pytest.MonkeyPatch):
         _clear_pricing_env(monkeypatch)
@@ -86,26 +98,6 @@ class TestParsePricingConfigFromEnv:
         monkeypatch.setenv("TAO_PRICE_OVERRIDE_USD", bad)
 
         with pytest.raises(PricingError, match="positive finite"):
-            parse_pricing_config_from_env()
-
-    @pytest.mark.parametrize(
-        ("env_var", "bad"),
-        [
-            ("DITTO_UPLOAD_FEE_USD", "0"),
-            ("DITTO_UPLOAD_FEE_USD", "-1"),
-            ("DITTO_UPLOAD_FEE_USD", "NaN"),
-            ("DITTO_UPLOAD_FEE_USD", "Infinity"),
-            ("DITTO_UPLOAD_FEE_BUFFER", "0"),
-            ("DITTO_UPLOAD_FEE_BUFFER", "-0.5"),
-        ],
-    )
-    def test_invalid_decimal_env_var_raises(
-        self, monkeypatch: pytest.MonkeyPatch, env_var: str, bad: str
-    ):
-        _clear_pricing_env(monkeypatch)
-        monkeypatch.setenv(env_var, bad)
-
-        with pytest.raises(PricingError, match=f"{env_var}.*positive finite"):
             parse_pricing_config_from_env()
 
     @pytest.mark.parametrize(

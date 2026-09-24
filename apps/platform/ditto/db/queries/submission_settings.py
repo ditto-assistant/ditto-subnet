@@ -6,9 +6,12 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
+from ditto.api_models.submission_settings import SUBMISSION_FEE_DENOMINATION_FIXED_TAO
+from ditto.api_server.pricing.errors import UnsupportedFeeDenominationError
 from ditto.db.models import SubmissionSettingsRevision, UploadAdmissionReservation
 from ditto.db.queries.agents import SubmissionCooldownError, get_submission_retry_at
 from ditto.db.queries.submission_deposit_address import (
@@ -54,12 +57,29 @@ async def latest_submission_settings(
     )
 
 
+def require_supported_fee_denomination(row: SubmissionSettingsRevision) -> None:
+    """Refuse to quote from a revision whose denomination this build cannot price.
+
+    ``fixed_tao`` is the only reviewed mode: ``fee_amount_rao`` is the exact
+    quote. Any other value (for example a USD target) must never be read as a
+    fixed TAO fee, so admission fails closed instead of issuing a wrong quote.
+    """
+    if row.fee_denomination != SUBMISSION_FEE_DENOMINATION_FIXED_TAO:
+        raise UnsupportedFeeDenominationError(
+            f"submission settings revision {row.revision} uses fee denomination "
+            f"{row.fee_denomination!r}; only "
+            f"{SUBMISSION_FEE_DENOMINATION_FIXED_TAO!r} can be quoted"
+        )
+
+
 async def effective_submission_settings(
     session: AsyncSession,
     *,
     default_payment_address: str,
 ) -> EffectiveSubmissionSettings:
     latest = await latest_submission_settings(session)
+    if latest is not None:
+        require_supported_fee_denomination(latest)
     payment_address = await effective_submission_deposit_address(
         session, default_address=default_payment_address
     )
@@ -284,3 +304,61 @@ async def consume_or_enforce_upload_admission(
     )
     if submission_retry_at is not None:
         raise SubmissionCooldownError(submission_retry_at)
+
+
+async def submission_settings_history(
+    session: AsyncSession, *, limit: int
+) -> list[tuple[SubmissionSettingsRevision, SubmissionSettingsRevision | None]]:
+    """Newest-first revisions, each paired with the parent it replaced.
+
+    The parent is the revision the operator previewed and confirmed against
+    (``parent_revision``), which is not necessarily ``revision - 1``: a failed
+    insert still consumes a sequence value.
+    """
+    parent = aliased(SubmissionSettingsRevision)
+    rows = (
+        await session.execute(
+            select(SubmissionSettingsRevision, parent)
+            .outerjoin(
+                parent,
+                parent.revision == SubmissionSettingsRevision.parent_revision,
+            )
+            .order_by(SubmissionSettingsRevision.revision.desc())
+            .limit(limit)
+        )
+    ).all()
+    return [(row, previous) for row, previous in rows]
+
+
+@dataclass(frozen=True)
+class InFlightQuotes:
+    count: int
+    at_other_fees: int
+    expire_by: datetime | None
+
+
+async def in_flight_quotes(
+    session: AsyncSession,
+    *,
+    proposed_fee_amount_rao: int,
+    now: datetime | None = None,
+) -> InFlightQuotes:
+    """Summarize unexpired reservations, which keep their issued fee."""
+    current = _utc(now or datetime.now(UTC))
+    live = UploadAdmissionReservation.expires_at > current
+    count, at_other_fees, expire_by = (
+        await session.execute(
+            select(
+                func.count(),
+                func.count().filter(
+                    UploadAdmissionReservation.fee_amount_rao != proposed_fee_amount_rao
+                ),
+                func.max(UploadAdmissionReservation.expires_at),
+            ).where(live)
+        )
+    ).one()
+    return InFlightQuotes(
+        count=int(count),
+        at_other_fees=int(at_other_fees),
+        expire_by=_utc(expire_by) if expire_by is not None else None,
+    )

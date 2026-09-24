@@ -44,3 +44,18 @@ class MalformedPriceError(PricingError):
     - The response JSON does not match the expected shape.
     - A floating-point value comes back as ``NaN`` or ``Infinity``.
     """
+
+
+# --- Pricing policy ---
+
+
+class UnsupportedFeeDenominationError(PricingError):
+    """Raised when the effective submission fee uses a denomination this build
+    cannot quote.
+
+    This can happen when:
+    - A newer Platform wrote a revision in a denomination (for example a
+      USD-indexed target) that this build has not been reviewed to price.
+
+    Admission fails closed (503) rather than reading the amount as fixed TAO.
+    """

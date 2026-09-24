@@ -145,8 +145,6 @@ def _config_to_log_dict(config: ApiServerConfig) -> dict[str, object]:
             "legacy_bearer_accepted": config.screener_auth.legacy_bearer_accepted,
         },
         "pricing": {
-            "fee_usd": str(config.pricing.fee_usd),
-            "fee_buffer": str(config.pricing.fee_buffer),
             "cache_ttl_seconds": config.pricing.cache_ttl_seconds,
             "max_stale_seconds": config.pricing.max_stale_seconds,
             "coingecko_timeout_seconds": config.pricing.coingecko_timeout_seconds,
