@@ -2021,7 +2021,7 @@ class ValidatorWorker:
             return _WeightOutcome(
                 leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
             )
-        burn_hotkey = self._resolve_burn_hotkey()
+        burn_hotkey = await self._resolve_burn_hotkey()
         if burn_hotkey is None:
             return _WeightOutcome(leaderboard=leaderboard)
         self._last_burn_hotkey = burn_hotkey
@@ -2294,32 +2294,34 @@ class ValidatorWorker:
             )
         return kept
 
-    def _resolve_burn_hotkey(self) -> str | None:
-        """Resolve the unique registered owner UID from this epoch's metagraph.
+    async def _resolve_burn_hotkey(self) -> str | None:
+        """Resolve the chain's registered owner hotkey for this weight epoch.
 
-        An absent, duplicate, or malformed UID 0 is indeterminate: preserve the
-        existing chain weights rather than submitting a vector to a stale
-        address or accidentally paying a different miner.
+        Subtensor withholds incentive for the registered SubnetOwnerHotkey,
+        not for UID 0. Preserve existing weights if either read is ambiguous.
         """
         if self._config.burn_hotkey is not None:
             return self._config.burn_hotkey
         neurons = self._registered_neurons
-        owners = (
-            []
-            if neurons is None
-            else [n for n in neurons if getattr(n, "uid", None) == 0]
-        )
-        if (
-            len(owners) != 1
-            or not isinstance(getattr(owners[0], "hotkey", None), str)
-            or not owners[0].hotkey
-        ):
+        read = getattr(self._chain, "get_subnet_owner_hotkey", None)
+        if neurons is None or read is None:
             logger.error(
-                "cannot resolve unique registered UID 0 burn target; "
+                "cannot read subnet owner hotkey; weights unchanged this epoch"
+            )
+            return None
+        try:
+            owner_hotkey = await read(self._config.netuid)
+        except Exception as e:  # noqa: BLE001 - owner read must fail closed
+            logger.error("subnet owner hotkey read failed; weights unchanged: %s", e)
+            return None
+        matches = [n for n in neurons if getattr(n, "hotkey", None) == owner_hotkey]
+        if not isinstance(owner_hotkey, str) or not owner_hotkey or len(matches) != 1:
+            logger.error(
+                "cannot resolve unique registered subnet owner burn target; "
                 "weights unchanged this epoch"
             )
             return None
-        return owners[0].hotkey
+        return owner_hotkey
 
     async def _run_v9_confirmation_lane(
         self,

@@ -74,8 +74,8 @@ TOP5_MAX_COHORT_SIZE = 25
 # clocks -- see ``weights.resolve_miner_emission_share``. Releasing everything is
 # the right fallback precisely because it is what the subnet did before the field
 # existed, so an omission is never a change. The burn destination is resolved
-# from the current subnet metagraph at each weight epoch, including the idle
-# vector. A hardcoded UID 0 hotkey can be deregistered or rotated.
+# from on-chain SubnetOwnerHotkey and the current subnet metagraph at each
+# weight epoch, including the idle vector. UID 0 alone is not an owner signal.
 MINER_EMISSION_SHARE = 1.0
 
 # --- Competition-track emission split (scalable, retirable registry) ---
@@ -387,7 +387,7 @@ class ValidatorConfig:
     or invalid."""
 
     burn_hotkey: str | None
-    """Local-network burn target, or None to resolve registered UID 0 each
+    """Local-network burn target, or None to resolve the registered owner each
     epoch on Finney. Never submit with an unresolved production destination."""
 
     min_stake_tao: float
@@ -679,8 +679,8 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         "VALIDATOR_HOTKEY", os.environ.get("VALIDATOR_HOTKEY", "")
     )
     subtensor_network = os.environ.get("SUBTENSOR_NETWORK", "finney")
-    # Production UID 0 can rotate. Resolve it from the same metagraph snapshot
-    # used to filter registered miners each epoch. Only explicit local aliases
+    # Production owner hotkeys can rotate. Verify the chain's owner hotkey is in
+    # the metagraph used to filter registered miners. Only explicit local aliases
     # or loopback endpoints self-target the local owner validator.
     burn_hotkey = (
         validator_hotkey if _is_local_subtensor_network(subtensor_network) else None

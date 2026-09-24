@@ -51,6 +51,7 @@ _WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
 _COMMIT_REVEAL_ENABLED_STORAGE = "CommitRevealWeightsEnabled"
 _REVEAL_PERIOD_STORAGE = "RevealPeriodEpochs"
 _LAST_EPOCH_BLOCK_STORAGE = "LastEpochBlock"
+_SUBNET_OWNER_HOTKEY_STORAGE = "SubnetOwnerHotkey"
 
 
 class ChainClient:
@@ -278,6 +279,16 @@ class ChainClient:
         """
         raw = await self._query_subtensor_storage(_LAST_EPOCH_BLOCK_STORAGE, netuid)
         return None if raw is None else int(raw)
+
+    async def get_subnet_owner_hotkey(self, netuid: int) -> str | None:
+        """Read the chain's owner hotkey, whose registered incentive is withheld.
+
+        UID 0 is not an ownership signal: it can be occupied by another miner
+        after a deregistration. The caller must also verify this hotkey is in
+        the current registered-neuron snapshot before setting burn weights.
+        """
+        raw = await self._query_subtensor_storage(_SUBNET_OWNER_HOTKEY_STORAGE, netuid)
+        return str(raw) if raw else None
 
     async def get_commit_reveal_enabled(self, netuid: int) -> bool | None:
         """Read the subnet's ``CommitRevealWeightsEnabled`` hyperparameter.
