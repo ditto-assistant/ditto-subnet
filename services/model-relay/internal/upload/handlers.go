@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -35,6 +36,13 @@ const (
 	errorHotkeyBanned       = 1103
 	errorIdentical          = 1104
 	errorCooldown           = 1105
+	// errorPricing mirrors Python's PricingError envelope (503, 3100).
+	errorPricing = 3100
+
+	// feeDenominationFixedTAO is the only reviewed submission-fee denomination:
+	// fee_amount_rao is the exact quote. Any other stored value must never be
+	// served as a fixed TAO fee, so pricing and admission fail closed.
+	feeDenominationFixedTAO = "fixed_tao"
 
 	defaultCooldownSeconds = 3600
 	defaultFeeAmountRao    = int64(40_000_000)
@@ -73,6 +81,10 @@ func NewHandlers(deps *Deps) *server.UploadHandlers {
 	}
 }
 
+// errUnsupportedFeeDenomination marks a settings revision this relay has not
+// been reviewed to price. Handlers answer 503 rather than quoting it.
+var errUnsupportedFeeDenomination = errors.New("unsupported submission fee denomination")
+
 type settings struct {
 	revision        int32
 	cooldownSeconds int32
@@ -88,6 +100,9 @@ func (d *Deps) effectiveSettings(ctx context.Context, q *postgres.Queries) (sett
 	}
 	row, err := q.GetLatestSubmissionSettings(ctx)
 	if err == nil {
+		if row.FeeDenomination != feeDenominationFixedTAO {
+			return settings{}, fmt.Errorf("%w: revision %d uses %q", errUnsupportedFeeDenomination, row.Revision, row.FeeDenomination)
+		}
 		out.revision = row.Revision
 		out.cooldownSeconds = row.CooldownSeconds
 		out.feeAmountRao = row.FeeAmountRao
@@ -120,8 +135,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func (d *Deps) handleEvalPricing(w http.ResponseWriter, r *http.Request) {
 	value, err := d.effectiveSettings(r.Context(), d.Queries)
 	if err != nil {
-		d.Logger.Error("upload pricing query failed", slog.String("error", err.Error()))
-		relayhttp.WriteInternalError(w, r)
+		d.dbError(w, r, "upload pricing", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, evalPricingResponse{AmountRao: value.feeAmountRao, SendAddress: value.paymentAddress})
@@ -453,6 +467,11 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *Deps) dbError(w http.ResponseWriter, r *http.Request, operation string, err error) {
+	if errors.Is(err, errUnsupportedFeeDenomination) {
+		d.Logger.Error("upload pricing refused", slog.String("operation", operation), slog.String("error", err.Error()))
+		relayhttp.WriteError(w, r, http.StatusServiceUnavailable, errorPricing, "pricing failure", nil)
+		return
+	}
 	d.Logger.Error("upload database operation failed", slog.String("operation", operation), slog.String("error", err.Error()))
 	relayhttp.WriteInternalError(w, r)
 }

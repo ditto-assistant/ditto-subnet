@@ -28,8 +28,6 @@ from ditto.api_server.pricing import (
 
 def make_pricing_config(**overrides: Any) -> PricingConfig:
     base = PricingConfig(
-        fee_usd=Decimal("5"),
-        fee_buffer=Decimal("1.4"),
         cache_ttl_seconds=60,
         max_stale_seconds=300,
         coingecko_timeout_seconds=1.0,

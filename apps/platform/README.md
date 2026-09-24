@@ -51,7 +51,8 @@ dependency-light `ditto-screening-protocol` package, pinned to an exact commit.
 | --- | --- |
 | `GET /health` | Liveness + DB/chain readiness + running vs checked-out commit |
 | `GET /metrics` | Prometheus metrics |
-| `GET /api/v1/upload/eval-pricing` | Quote the upload fee in rao (CoinGecko TAO/USD oracle) |
+| `GET /api/v1/upload/eval-pricing` | Current operator-set submission fee in rao (fixed-TAO policy; informational — `/upload/check` reserves the binding quote) |
+| `GET /api/v1/public/submission-fee` | Public fee, denomination, policy revision, effective time, quote lifetime, and fee-change history (no operator identity or reasons) |
 | `POST /api/v1/upload/check` | Pre-payment validation (signature, registration, size, accidental identical-upload detection) |
 | `POST /api/v1/upload/agent` | Verified submission: assign payment/credit → store unique tarball → write `agents` + `evaluation_payments` atomically; an accidental paid identical upload becomes a reusable credit |
 | `GET /api/v1/retrieval/agent-by-hotkey` | Look up a miner's latest agent |
@@ -108,7 +109,9 @@ in `ditto-subnet` for validator scoring design and operations.
 - **Object storage:** S3-compatible via aioboto3 (MinIO locally)
 - **Chain reads:** [Pylon](https://github.com/bittensor-church/bittensor-pylon) +
   `async-substrate-interface`
-- **Pricing:** CoinGecko oracle with in-process cache + stale-guard
+- **Pricing:** revisioned, audited fixed-TAO submission fee in Postgres
+  (`/admin/submission-settings`, Backroom); CoinGecko TAO/USD oracle with
+  in-process cache + stale-guard is revenue-reporting metadata only
 - **Observability:** Prometheus metrics, structured request-id logging
 - **Tooling:** `uv` (deps/venv), `ruff` (lint/format), `mypy`, `pytest`
 
@@ -254,7 +257,7 @@ ditto/
     endpoints/         health · metrics · upload · retrieval · validator
     middleware/        request-id · auth pass-through · error envelope
     payment_verifier/  on-chain payment proof verification
-    pricing/           CoinGecko oracle + upload-fee config
+    pricing/           CoinGecko TAO/USD reporting oracle + pricing errors
     storage/           S3/MinIO client
     config.py          env-driven ApiServerConfig
     factory.py         create_api_server() + lifespan
@@ -275,9 +278,11 @@ scripts/               pm2 ecosystem + start/stop/update + smoke_pylon
 All configuration is environment-driven; see [`.env.example`](.env.example) for the
 full annotated list. Key groups: **API** (`API_HOST/PORT/LOG_LEVEL`), **Pylon/chain**
 (`PYLON_URL`, `PYLON_OPEN_ACCESS_TOKEN`, `NETUID`, `SUBTENSOR_NETWORK`), **Postgres**
-(`POSTGRES_*`), **upload/pricing** (`DITTO_UPLOAD_PAYMENT_ADDRESS`,
-`DITTO_UPLOAD_FEE_USD`, `DITTO_UPLOAD_FEE_BUFFER`), and **object storage**
-(`STORAGE_*`). The server validates config at boot and exits non-zero on a bad value
+(`POSTGRES_*`), **upload** (`DITTO_UPLOAD_PAYMENT_ADDRESS`), **TAO/USD reporting
+oracle** (`PRICING_*`, `TAO_PRICE_OVERRIDE_USD`), and **object storage**
+(`STORAGE_*`). The submission fee is not deploy configuration: operators change
+the revisioned fixed-TAO policy in Backroom, and the retired
+`DITTO_UPLOAD_FEE_USD` / `DITTO_UPLOAD_FEE_BUFFER` variables are ignored. The server validates config at boot and exits non-zero on a bad value
 so a supervisor restarts cleanly.
 
 Private DittoBench Coding records use an independent, optional

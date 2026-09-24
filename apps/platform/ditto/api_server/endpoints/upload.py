@@ -583,6 +583,11 @@ async def upload_agent(
         admission.miner_hotkey != hotkey or admission.sha256 != sha256
     ):
         admission = None
+    # A reserved quote binds the fee it was issued at, so a later pricing
+    # revision cannot invalidate it -- but only for its bounded lifetime. Once
+    # expired it grants nothing and the current policy's fee applies.
+    if admission is not None and _as_utc(admission.expires_at) <= datetime.now(UTC):
+        admission = None
     if admission is not None:
         expected_amount_rao = admission.fee_amount_rao
         legacy_payment_cutoff_at = admission.legacy_payment_cutoff_at
