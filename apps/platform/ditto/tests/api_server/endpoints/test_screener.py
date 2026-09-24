@@ -9584,6 +9584,90 @@ class TestArtifact:
 
 
 class TestScreenedImageUpload:
+    async def test_retry_with_same_id_returns_one_attempt_bound_upload(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        storage = _install_storage(app)
+        attempt_id = (await client.post(_CLAIM_URL, headers=_AUTH_HEADER)).json()[
+            "items"
+        ][0]["attempt_id"]
+        metadata = {
+            "attempt_id": attempt_id,
+            "image_upload_id": str(uuid4()),
+            "sha256": "12" * 32,
+            "size_bytes": 123,
+            "image_id": "sha256:" + "34" * 32,
+            "image_ref": f"ditto-screen/{agent_id}:latest",
+        }
+        url = f"/api/v1/screener/agent/{agent_id}/screened-image-upload"
+
+        first = await client.post(url, headers=_AUTH_HEADER, json=metadata)
+        retry = await client.post(url, headers=_AUTH_HEADER, json=metadata)
+        mismatch = await client.post(
+            url, headers=_AUTH_HEADER, json={**metadata, "sha256": "ff" * 32}
+        )
+
+        assert first.status_code == 200
+        assert first.json()["image_upload_id"] == metadata["image_upload_id"]
+        assert retry.status_code == 200
+        assert retry.json() == first.json()
+        assert mismatch.status_code == 409
+        storage.create_multipart_upload.assert_awaited_once()
+
+    async def test_concurrent_initiation_aborts_the_duplicate_storage_session(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        storage = _install_storage(app)
+        attempt_id = (await client.post(_CLAIM_URL, headers=_AUTH_HEADER)).json()[
+            "items"
+        ][0]["attempt_id"]
+        both_created = asyncio.Event()
+        count = 0
+
+        async def create_upload(**_kwargs: object) -> str:
+            nonlocal count
+            count += 1
+            storage_id = f"storage-upload-{count}"
+            if count == 2:
+                both_created.set()
+            await asyncio.wait_for(both_created.wait(), timeout=5)
+            return storage_id
+
+        storage.create_multipart_upload.side_effect = create_upload
+        metadata = {
+            "attempt_id": attempt_id,
+            "image_upload_id": str(uuid4()),
+            "sha256": "12" * 32,
+            "size_bytes": 123,
+            "image_id": "sha256:" + "34" * 32,
+            "image_ref": f"ditto-screen/{agent_id}:latest",
+        }
+        url = f"/api/v1/screener/agent/{agent_id}/screened-image-upload"
+
+        first, second = await asyncio.gather(
+            client.post(url, headers=_AUTH_HEADER, json=metadata),
+            client.post(url, headers=_AUTH_HEADER, json=metadata),
+        )
+
+        assert first.status_code == second.status_code == 200
+        assert first.json() == second.json()
+        assert storage.create_multipart_upload.await_count == 2
+        storage.abort_multipart_upload.assert_awaited_once()
+        assert (
+            storage.abort_multipart_upload.await_args.kwargs["upload_id"]
+            != (first.json()["storage_upload_id"])
+        )
+
     async def test_active_attempt_mints_metadata_bound_upload(
         self,
         app: FastAPI,

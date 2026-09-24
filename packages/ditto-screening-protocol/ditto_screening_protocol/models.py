@@ -167,6 +167,9 @@ class ScreenedImageUploadRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     attempt_id: UUID
+    # A new screener may reuse this ID after a lost initiation response. Older
+    # screeners omit it and retain the original one-shot behavior.
+    image_upload_id: UUID | None = None
     sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     size_bytes: Annotated[int, Field(gt=0, le=8 * 1024**3)]
     image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]

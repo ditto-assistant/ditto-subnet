@@ -26921,6 +26921,8 @@ export interface components {
             image_id: string;
             /** Image Ref */
             image_ref: string;
+            /** Image Upload Id */
+            image_upload_id?: string | null;
             /** Sha256 */
             sha256: string;
             /** Size Bytes */
