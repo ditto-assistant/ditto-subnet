@@ -123,3 +123,34 @@ below its $2 total cap, including BYOK. No Backroom state changed.
 Keep this PR draft and all source-review holds intact until the REJECT control
 and other CLEAR controls pass exact-artifact report-only replay, then stage a
 guarded production canary before any wider wave.
+
+## Four-case split-verdict control pass
+
+The disposable key's total cap was raised from $2 to $4 with explicit user
+authorization. BYOK remains included and the original one-day expiration is
+unchanged. All requests stayed report-only and were limited to four per exact
+artifact. The source archives were SHA-verified before each run.
+
+| SHA prefix | Independent source-review label | Split-verdict result | Requests | Gate |
+| --- | --- | --- | ---: | --- |
+| `13e30145` | REJECT I3 | Certified REJECT I3, seven admitted citations | 4 | matched |
+| `c845249d` | CLEAR on retained lead | Certified CLEAR, seven admitted citations | 2 | matched |
+| `7d8c41db` | CLEAR on retained leads | Certified REJECT I5, eight admitted citations | 3 | disputed |
+| `bac8c60f` | CLEAR on retained lead | `request_operator_review`, held | 4 | incomplete |
+
+The I5 decision on `7d8c41db` cites the served `S2_schema_terms` and
+`S3_personal_record` reading plans (`src/router/effects.rs:95,99,119-124`)
+and their insertion into the deciding conversation
+(`src/baseline.rs:923,966-994`). The independent review had verified the
+retained routing lead, but did not settle this distinct I5 allegation.
+Under policy v13 a closed subgroup and prescriptive prose alone are not proof;
+the case still needs an independent exact-artifact check of the claimed
+benchmark-specific assumption, activation, and substantive effect. The
+eight host-admissible citations verify source locations, not that semantic
+inference. A separate report-only review was requested.
+
+The Gryffindor result explicitly requested operator review after using all
+three additional reads. No host rule may turn that incomplete verification
+into a CLEAR. The four-case gate is therefore **not met** regardless of the
+I5 recheck. Do not merge, deploy, enable L4, or rescreen held submissions on
+these results. All production source-review holds remain unchanged.
