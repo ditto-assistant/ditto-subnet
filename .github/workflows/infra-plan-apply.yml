@@ -12,13 +12,17 @@ on:
         description: Terraform state root
         required: true
         type: choice
-        options: [gcp-platform, gcp-preview, cloudflare-dittobench]
+        options: [gcp-platform, gcp-preview, cloudflare-dittobench, gcp-v13-private-bootstrap]
       plan_sha:
         description: Exact main commit used by the plan (required for apply)
         required: false
         type: string
       plan_run_id:
         description: Plan workflow run id (required for apply)
+        required: false
+        type: string
+      plan_checksum:
+        description: Reviewed SHA-256 from the plan run (required for V13 bootstrap apply)
         required: false
         type: string
       targets:
@@ -71,10 +75,16 @@ jobs:
           ref: main
           fetch-depth: 0
 
+      - name: Require dedicated V13 bootstrap plan identity
+        if: inputs.root == 'gcp-v13-private-bootstrap'
+        env:
+          BOOTSTRAP_PLAN_SA: ${{ secrets.GCP_V13_BOOTSTRAP_PLAN_SA }}
+        run: test -n "$BOOTSTRAP_PLAN_SA"
+
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_TF_PLAN_SA }}
+          service_account: ${{ inputs.root == 'gcp-v13-private-bootstrap' && secrets.GCP_V13_BOOTSTRAP_PLAN_SA || secrets.GCP_TF_PLAN_SA }}
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
@@ -87,6 +97,7 @@ jobs:
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
             cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
+            gcp-v13-private-bootstrap) root=infra/terraform/stacks/gcp-v13-private-bootstrap ;;
             *) exit 2 ;;
           esac
           echo "path=$root" >> "$GITHUB_OUTPUT"
@@ -155,6 +166,9 @@ jobs:
           TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_zone_id: ${{ inputs.root == 'gcp-platform' && vars.CLOUDFLARE_HEYDITTO_ZONE_ID || vars.CLOUDFLARE_DITTOBENCH_ZONE_ID }}
           TF_VAR_screener_fleet_x509_ca_certificate_pem: ${{ vars.SCREENER_FLEET_X509_CA_CERTIFICATE_PEM }}
+          TF_VAR_organization_id: ${{ vars.V13_PRIVATE_ORGANIZATION_ID }}
+          TF_VAR_billing_account_id: ${{ secrets.V13_PRIVATE_BILLING_ACCOUNT_ID }}
+          V13_STATE_CUSTODIANS_JSON: ${{ secrets.V13_PRIVATE_STATE_CUSTODIANS_JSON }}
           TF_TARGETS: ${{ inputs.targets }}
           TF_ROOT: ${{ inputs.root }}
           SCREENER_DEV_HOST_ENABLED: ${{ inputs.screener_fleet_dev_host_enabled }}
@@ -168,6 +182,20 @@ jobs:
               -var="enable_screener_fleet_x509_identity=${{ inputs.screener_fleet_x509_identity_enabled }}"
             )
           fi
+          if [ "$TF_ROOT" = gcp-v13-private-bootstrap ]; then
+            test -z "$TF_TARGETS"
+            test -n "$TF_VAR_organization_id"
+            test -n "$TF_VAR_billing_account_id"
+            test -n "$V13_STATE_CUSTODIANS_JSON"
+            [[ "$TF_VAR_organization_id" =~ ^[0-9]+$ ]]
+            [[ "$TF_VAR_billing_account_id" =~ ^[0-9A-F]{6}-[0-9A-F]{6}-[0-9A-F]{6}$ ]]
+            jq -e 'type == "array" and length == 1 and (.[0] | test("^user:[^@]+@[^@]+$"))' \
+              <<< "$V13_STATE_CUSTODIANS_JSON" >/dev/null
+            grep -Eq '^enable_v13_private_bootstrap[[:space:]]*=[[:space:]]*true$' '${{ steps.root.outputs.path }}/prod.auto.tfvars'
+            umask 077
+            printf 'state_custodians = %s\n' "$V13_STATE_CUSTODIANS_JSON" > '${{ steps.root.outputs.path }}/private.tfvars'
+            extra+=(-var-file=private.tfvars)
+          fi
           if [ -n "${TF_TARGETS}" ]; then
             IFS=',' read -ra addrs <<< "${TF_TARGETS}"
             for addr in "${addrs[@]}"; do
@@ -176,8 +204,34 @@ jobs:
           fi
           # CLI variables intentionally outrank prod.auto.tfvars, whose checked-in
           # absent value is the safe default outside this protected ceremony.
-          terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan \
-            "${extra[@]}"
+          if [ "$TF_ROOT" = gcp-v13-private-bootstrap ]; then
+            if ! terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan \
+              "${extra[@]}" > "$RUNNER_TEMP/v13-private-bootstrap-plan.log" 2>&1; then
+              echo 'V13 bootstrap plan failed; private output remains on the runner.' >&2
+              exit 1
+            fi
+          else
+            terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan \
+              "${extra[@]}"
+          fi
+
+      - name: Require exact V13 bootstrap creation scope
+        if: inputs.root == 'gcp-v13-private-bootstrap'
+        run: |
+          terraform -chdir=${{ steps.root.outputs.path }} show -json tfplan \
+            | jq -e '
+              [.resource_changes[] | select(.change.actions != ["no-op"])
+                | {base: (.address | sub("\\[.*$"; "")), actions: .change.actions}]
+              | (length == 4)
+                and all(.[]; .actions == ["create"])
+                and ([.[].base] | sort) == ([
+                  "google_project.verifier",
+                  "google_project_service.storage",
+                  "google_storage_bucket.state",
+                  "google_storage_bucket_iam_member.state_custodian"
+                ] | sort)
+            ' >/dev/null
+          echo 'V13 bootstrap scope: four creates, no updates or destroys.'
 
       - name: Reject replacement of an armed hotkey admin
         if: inputs.root == 'gcp-platform' && inputs.validator_hotkey_admin_phase == 'armed'
@@ -226,6 +280,9 @@ jobs:
         run: |
           [[ '${{ inputs.plan_sha }}' =~ ^[0-9a-f]{40}$ ]]
           [[ '${{ inputs.plan_run_id }}' =~ ^[0-9]+$ ]]
+          if [ '${{ inputs.root }}' = gcp-v13-private-bootstrap ]; then
+            [[ '${{ inputs.plan_checksum }}' =~ ^[0-9a-f]{64}$ ]]
+          fi
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -238,10 +295,16 @@ jobs:
           git fetch --no-tags origin main
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
 
+      - name: Require dedicated V13 bootstrap apply identity
+        if: inputs.root == 'gcp-v13-private-bootstrap'
+        env:
+          BOOTSTRAP_APPLY_SA: ${{ secrets.GCP_V13_BOOTSTRAP_APPLY_SA }}
+        run: test -n "$BOOTSTRAP_APPLY_SA"
+
       - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
-          service_account: ${{ secrets.GCP_TF_APPLY_SA }}
+          service_account: ${{ inputs.root == 'gcp-v13-private-bootstrap' && secrets.GCP_V13_BOOTSTRAP_APPLY_SA || secrets.GCP_TF_APPLY_SA }}
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
 
@@ -254,6 +317,7 @@ jobs:
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
             cloudflare-dittobench) root=infra/terraform/stacks/cloudflare-dittobench ;;
+            gcp-v13-private-bootstrap) root=infra/terraform/stacks/gcp-v13-private-bootstrap ;;
             *) exit 2 ;;
           esac
           echo "path=$root" >> "$GITHUB_OUTPUT"
@@ -268,6 +332,9 @@ jobs:
           gcloud storage cp "${prefix}.sha256" "${{ steps.root.outputs.path }}/tfplan.sha256"
           cd "${{ steps.root.outputs.path }}"
           sha256sum -c tfplan.sha256
+          if [ '${{ inputs.root }}' = gcp-v13-private-bootstrap ]; then
+            test "$(sha256sum tfplan | awk '{print $1}')" = '${{ inputs.plan_checksum }}'
+          fi
 
       - name: Apply the reviewed binary plan
         env:

@@ -82,11 +82,28 @@ ANSIBLE_ROLES_PATH=infra/ansible/roles ansible-playbook \
 ```
 
 An approved bootstrap requires a reviewed intent commit setting its flag true,
-then a read-only exact-head plan and separate apply approval. The existing
+then a read-only exact-head plan and separate apply approval. The protected
+`infra-plan-apply.yml` workflow has a `gcp-v13-private-bootstrap` root: its
+plan checks out current `main`, rejects targets, requires one private state
+custodian, and permits only the four bootstrap creates. It keeps detailed
+Terraform output on the runner and publishes the plan SHA, run ID, and binary
+SHA-256; the binary plan and checksum are held in the private CI plan bucket.
+The `infra-apply` environment approval is required before apply. Apply
+requires the reviewed SHA-256 as a dispatch input, verifies the stored binary
+plan against it, and requires its commit still equal current `main`.
+
+The route cannot run until separately approved setup adds dedicated bootstrap
+plan/apply service accounts and WIF bindings, the `infra-plan` secret
+`GCP_V13_BOOTSTRAP_PLAN_SA`, the `infra-apply` secret
+`GCP_V13_BOOTSTRAP_APPLY_SA`, and `infra-plan` values
+`V13_PRIVATE_ORGANIZATION_ID`, `V13_PRIVATE_BILLING_ACCOUNT_ID`, and
+`V13_PRIVATE_STATE_CUSTODIANS_JSON`, plus sufficient temporary
+project-creation/billing/bucket authority. The generic Terraform apply account
+does not have direct organization project-creator or billing-user authority;
+the workflow rejects missing dedicated identities. The existing
 `gcp-platform` apply service account receives no new-project grant in this
-plan. If a temporary bootstrap principal is used, revoke its temporary roles
-after state-bucket creation; organization owners remain the reviewed root
-trust set. The
+plan. Revoke temporary bootstrap roles after state-bucket creation;
+organization owners remain the reviewed root trust set. The
 verifier root needs a subsequent reviewed intent commit setting its flag true
 and an exact-head protected plan using its own backend. Keep both flags true
 on subsequent routine plans. Setting either false after creation proposes
