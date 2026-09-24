@@ -1803,8 +1803,7 @@ class SourceReviewAdjudicator:
         ) as client:
             for _step in range(max_steps):
                 final_turn = decision_only and (
-                    _step + 1 == max_steps
-                    or decision_reads >= _DECISION_ONLY_MAX_READS
+                    _step + 1 == max_steps or decision_reads >= _DECISION_ONLY_MAX_READS
                 )
                 if final_turn:
                     messages.append(
