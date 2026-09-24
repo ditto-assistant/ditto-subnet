@@ -14,6 +14,7 @@ import { MinerAvatar } from "../ui/MinerAvatar";
 import {
   isSourceReviewIncomplete,
   policyScreeningLabel,
+  SCREENING_INCOMPLETE_LABEL,
   SOURCE_REVIEW_INCOMPLETE_NOTE,
 } from "../pipeline/status";
 import type { FleetReport } from "../../types/fleet";
@@ -239,7 +240,7 @@ function PipelineCard(props: {
   const admissionLabel = () => {
     if (props.column !== "admission") return "";
     if (entry().status === "waiting_screening") return "Waiting for admission";
-    if (entry().status === "screening_failed") return "Screening interrupted · retry required";
+    if (entry().status === "screening_failed") return SCREENING_INCOMPLETE_LABEL;
     return screeningLabel() || "Building image & admission";
   };
   const policyLabel = () => (props.column === "admission" ? policyScreeningLabel(entry()) : "");
@@ -469,14 +470,14 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
             }
             const active = Number(props.statusCounts.screening || 0);
             const queued = Number(props.statusCounts.waiting_screening || 0);
-            const interrupted = Number(props.statusCounts.screening_failed || 0);
-            if (active + queued + interrupted <= 0) return "";
+            const incomplete = Number(props.statusCounts.screening_failed || 0);
+            if (active + queued + incomplete <= 0) return "";
             return (
               active +
               " in progress · " +
               queued +
               " queued" +
-              (interrupted > 0 ? " · " + interrupted + " interrupted" : "")
+              (incomplete > 0 ? " · " + incomplete + " incomplete" : "")
             );
           };
           // The count and the item window are reconciled independently. Keep

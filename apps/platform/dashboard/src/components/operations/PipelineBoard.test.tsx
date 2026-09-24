@@ -81,18 +81,25 @@ const codingShadow = (
 });
 
 describe("the Up next badge (#458)", () => {
-  it("keeps interrupted screenings visible without claiming active work", () => {
-    const container = board([waiting({ status: "screening_failed", agent_id: "failed" })], {
-      statusCounts: { screening_failed: 1 },
-    });
+  it("keeps incomplete screenings visible without implying an infrastructure interruption", () => {
+    const container = board(
+      [
+        waiting({
+          status: "screening_failed",
+          agent_id: "failed",
+          screening_reason: "Bounded source review was inconclusive",
+        }),
+      ],
+      { statusCounts: { screening_failed: 1 } },
+    );
     const card = container.querySelector("#pipeline-admission .pipeline-item");
     expect(card).not.toBeNull();
-    expect(card?.textContent).toContain("Screening interrupted · retry required");
+    expect(card?.textContent).toContain("Screening incomplete · operator follow-up");
     expect(card?.getAttribute("data-admission")).toBe("waiting");
-    expect(card?.getAttribute("aria-label")).toContain("retry required");
+    expect(card?.getAttribute("aria-label")).toContain("operator follow-up");
     expect(card?.textContent).not.toContain("Building image & admission");
     expect(card?.textContent).not.toContain("Historical");
-    expect(container.textContent).toContain("0 in progress · 0 queued · 1 interrupted");
+    expect(container.textContent).toContain("0 in progress · 0 queued · 1 incomplete");
   });
 
   it("badges rank 1 only when nothing gates the lease", () => {

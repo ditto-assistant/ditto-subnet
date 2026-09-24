@@ -58,7 +58,7 @@ describe("status vocabulary (row 10)", () => {
     expect(activityStage("screening")).toEqual(["Image build & admission", "progress"]);
     expect(activityStage("screening_passed")).toEqual(["Admitted", "good"]);
     expect(activityStage("screening_failed")).toEqual([
-      "Screening interrupted · retry required",
+      "Screening incomplete · operator follow-up",
       "warn",
     ]);
     expect(ACTIVITY_FILTERS.queued).not.toContain("screening_failed");

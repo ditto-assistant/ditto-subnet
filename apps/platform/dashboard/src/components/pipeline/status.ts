@@ -60,6 +60,10 @@ export const ACTIVITY_FILTER_LABELS: Record<string, string> = {
   downloadable: "Source releases",
 };
 
+/** Screening failures may be infrastructure, reviewer-budget, or other
+ * operator-owned outcomes. The public status alone does not identify which. */
+export const SCREENING_INCOMPLETE_LABEL = "Screening incomplete · operator follow-up";
+
 /**
  * Stage pill per status (activityStage 6832–6850). Terminal states for a
  * closed benchmark generation (#462) read as history, not failure:
@@ -77,7 +81,7 @@ export function activityStage(
     waiting_screening: ["Waiting for admission", "progress"],
     screening: ["Image build & admission", "progress"],
     screening_passed: ["Admitted", "good"],
-    screening_failed: ["Screening interrupted · retry required", "warn"],
+    screening_failed: [SCREENING_INCOMPLETE_LABEL, "warn"],
     waiting_validator: ["Waiting for validators", "progress"],
     evaluating: ["Scoring", "progress"],
     below_score_floor: ["Low-priority completion", "warn"],
