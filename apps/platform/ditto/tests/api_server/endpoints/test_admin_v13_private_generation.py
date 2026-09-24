@@ -342,9 +342,7 @@ async def test_generation_start_requires_preapproved_exact_clean_image(
                 deadline=datetime.now(UTC) + timedelta(hours=1),
             )
         )
-    stale_ticket = await client.post(
-        ticket_path, json=ticket_request, headers=_HEADERS
-    )
+    stale_ticket = await client.post(ticket_path, json=ticket_request, headers=_HEADERS)
     assert stale_ticket.status_code == 409
     stale_pair_ticket = await client.post(
         f"{_BASE}/groups/{body['group_id']}/private-case-tickets/known_benign",

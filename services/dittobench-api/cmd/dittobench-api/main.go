@@ -303,7 +303,7 @@ func main() {
 		broker:         s.broker,
 		key:            []byte(os.Getenv("DITTOBENCH_V13_PRIVATE_TICKET_KEY")),
 		verifiedImages: make(map[string]string),
-		admittedCases:  make(map[string]string),
+		admittedCases:  make(map[string]privateVerifierCaseIdentity),
 		stoppedCases:   make(map[string]bool),
 		usedTickets:    make(map[string]privateCaseTicketUse),
 	}

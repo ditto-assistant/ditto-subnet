@@ -100,7 +100,7 @@ type privateCaseAdmission struct {
 	// Only the future scorer-owned sandbox factory may set these. No request
 	// field or public route can assert that an image ran or a container stopped.
 	verifiedImages map[string]string
-	admittedCases  map[string]string
+	admittedCases  map[string]privateVerifierCaseIdentity
 	stoppedCases   map[string]bool
 	usedTickets    map[string]privateCaseTicketUse
 }
@@ -133,12 +133,18 @@ func (a *privateCaseAdmission) bindVerifiedImage(sessionID, imageSHA256 string) 
 // markContainerStopped is only for the scorer-owned factory after a strict
 // StopRetainingImage succeeds. The route has no caller-controlled equivalent.
 func (a *privateCaseAdmission) markContainerStopped(sessionID string) bool {
-	if a == nil {
+	if a == nil || a.broker == nil {
 		return false
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.stoppedCases == nil || a.verifiedImages[sessionID] == "" || a.admittedCases[sessionID] == "" || a.stoppedCases[sessionID] {
+	identity, admitted := a.admittedCases[sessionID]
+	if a.stoppedCases == nil || a.verifiedImages[sessionID] == "" || !admitted || a.stoppedCases[sessionID] {
+		return false
+	}
+	// A stop callback before the one bound case has finished and the source
+	// capability has drained must never satisfy a later ledger request.
+	if _, err := a.broker.settledPrivateVerifierCaseLedger(identity); err != nil {
 		return false
 	}
 	a.stoppedCases[sessionID] = true
@@ -210,7 +216,7 @@ func (a *privateCaseAdmission) admit(w http.ResponseWriter, r *http.Request) {
 	a.usedTickets[claims.Nonce] = privateCaseTicketUse{
 		bodySHA256: sha256.Sum256([]byte(ticket.Body)), expiresAt: claims.ExpiresAt,
 	}
-	a.admittedCases[claims.SessionID] = claims.Nonce
+	a.admittedCases[claims.SessionID] = identity
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "admitted_report_only"})
 }

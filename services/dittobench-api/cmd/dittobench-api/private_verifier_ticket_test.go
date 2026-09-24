@@ -52,10 +52,11 @@ func TestPrivateVerifierTicketExpiresWhileWaitingForAdmissionLock(t *testing.T) 
 	admission := &privateCaseAdmission{
 		broker: broker, key: key,
 		now: func() time.Time {
+			observed := time.Unix(0, clock.Load()).UTC()
 			once.Do(func() { close(decoded) })
-			return time.Unix(0, clock.Load()).UTC()
+			return observed
 		},
-		verifiedImages: map[string]string{}, admittedCases: map[string]string{},
+		verifiedImages: map[string]string{}, admittedCases: map[string]privateVerifierCaseIdentity{},
 		stoppedCases: map[string]bool{}, usedTickets: map[string]privateCaseTicketUse{},
 	}
 	if !admission.bindVerifiedImage(identity.SessionID, identity.ImageSHA256) {
@@ -103,7 +104,7 @@ func TestPrivateVerifierTicketAdmissionIsFailClosed(t *testing.T) {
 	admission := &privateCaseAdmission{
 		broker: broker, key: key,
 		verifiedImages: map[string]string{}, stoppedCases: map[string]bool{},
-		admittedCases: map[string]string{},
+		admittedCases: map[string]privateVerifierCaseIdentity{},
 		usedTickets:   map[string]privateCaseTicketUse{},
 	}
 	if got := callPrivateTicketRoute(t, admission, "/v1/private-verifier/admit", ticket).Code; got != http.StatusConflict {
@@ -124,6 +125,9 @@ func TestPrivateVerifierTicketAdmissionIsFailClosed(t *testing.T) {
 	if got := callPrivateTicketRoute(t, admission, "/v1/private-verifier/admit", ticket).Code; got != http.StatusOK {
 		t.Fatalf("valid exact ticket denied: %d", got)
 	}
+	if admission.markContainerStopped(identity.SessionID) {
+		t.Fatal("container stop recorded before the admitted case ran")
+	}
 	if got := callPrivateTicketRoute(t, admission, "/v1/private-verifier/admit", ticket).Code; got != http.StatusConflict {
 		t.Fatalf("ticket reused: %d", got)
 	}
@@ -133,7 +137,13 @@ func TestPrivateVerifierTicketAdmissionIsFailClosed(t *testing.T) {
 	if _, started := broker.beginRunCase(identity.SessionID, identity.CaseID); !started {
 		t.Fatal("private case not started")
 	}
+	if admission.markContainerStopped(identity.SessionID) {
+		t.Fatal("container stop recorded while the admitted case ran")
+	}
 	broker.endRunCase(identity.SessionID, identity.CaseID)
+	if admission.markContainerStopped(identity.SessionID) {
+		t.Fatal("container stop recorded before source revocation")
+	}
 	session.mu.Lock()
 	session.sourceCapabilityActive = false
 	session.mu.Unlock()
