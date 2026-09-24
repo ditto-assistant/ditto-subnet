@@ -1199,6 +1199,41 @@ class V13ReplayGroupPackageRegistration(Base):
     )
 
 
+class ScreeningVerificationReplayPrivateReceipt(Base):
+    """Append-only authenticated report; policy verification remains separate."""
+
+    __tablename__ = "screening_verification_replay_private_receipts"
+
+    replay_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    group_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    runner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["replay_id"],
+            ["screening_verification_replays.replay_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["group_id"],
+            ["v13_replay_private_generation_groups.group_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("length(receipt_sha256) = 64", name="svrpr_receipt_sha"),
+        CheckConstraint("length(runner_hotkey) BETWEEN 1 AND 120", name="svrpr_runner"),
+        CheckConstraint("length(signature) = 128", name="svrpr_signature"),
+    )
+
+
 class AthReview(Base):
     """Durable, immutable-evidence audit record for an ATH copy hold."""
 

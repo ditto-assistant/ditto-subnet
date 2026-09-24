@@ -6,6 +6,8 @@ path. In particular, replay receipts do not satisfy the mandatory V13 profile.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
@@ -15,6 +17,12 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.v13_private_generation import (
+    V13KnownBenignApprovalView,
+    V13ReplayGenerationGroupView,
+    V13ReplayGroupPackageView,
+)
 from ditto.api_models.verification_replay import (
     VerificationReplayBuildUpload,
     VerificationReplayBuildUploadRequest,
@@ -23,6 +31,9 @@ from ditto.api_models.verification_replay import (
     VerificationReplayCreate,
     VerificationReplayFinish,
     VerificationReplayInputs,
+    VerificationReplayPrivateImageInput,
+    VerificationReplayPrivateInputs,
+    VerificationReplayPrivateReceiptState,
     VerificationReplayReceiptRequest,
     VerificationReplayReceiptState,
     VerificationReplaySignedObservationState,
@@ -44,8 +55,16 @@ from ditto.db.models import (
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningVerificationReplay,
+    ScreeningVerificationReplayPrivateReceipt,
     ScreeningVerificationReplayReceipt,
     ScreeningVerificationReplaySignedObservation,
+    V13KnownBenignControlApproval,
+    V13ReplayGroupPackageRegistration,
+    V13ReplayPrivateGenerationGroup,
+)
+from ditto_screening_protocol.v13_private_receipt import (
+    V13ReplayPrivateReceipt,
+    authentic_replay_private_receipt,
 )
 from ditto_screening_protocol.v13_replay_observation import (
     V13ReplayBinding,
@@ -533,6 +552,169 @@ async def get_replay_inputs(
     return result
 
 
+@screener_router.get(
+    "/{replay_id}/private-inputs", response_model=VerificationReplayPrivateInputs
+)
+async def get_replay_private_inputs(
+    replay_id: UUID, request: Request, worker: ScreenerDep, session: SessionDep
+) -> VerificationReplayPrivateInputs:
+    """Short-lived exact image inputs for an active independent replay worker."""
+    await _require_enrolled_replay_worker(request, worker, session)
+    replay = await _active_claim(session, replay_id, worker)
+    group = await session.scalar(
+        select(V13ReplayPrivateGenerationGroup).where(
+            V13ReplayPrivateGenerationGroup.replay_id == replay_id
+        )
+    )
+    if (
+        group is None
+        or replay.image_upload_id is not None
+        or replay.image_verified_at is None
+        or replay.image_verified_storage_key is None
+        or replay.image_sha256 != group.target_image_sha256
+        or replay.image_id is None
+        or replay.image_size_bytes is None
+        or replay.lease_started_at is None
+        or replay.lease_deadline is None
+        or replay.agent_id != group.target_agent_id
+        or replay.source_attempt_id != group.target_attempt_id
+        or replay.artifact_sha256 != group.target_artifact_sha256
+    ):
+        raise HTTPException(409, "replay private image unavailable")
+    approval = await session.get(V13KnownBenignControlApproval, group.approval_id)
+    control = await session.get(Agent, group.control_agent_id)
+    control_attempt = await session.get(ScreeningAttempt, group.control_attempt_id)
+    control_image = await session.scalar(
+        select(ScreenedImageUpload)
+        .where(
+            ScreenedImageUpload.agent_id == group.control_agent_id,
+            ScreenedImageUpload.attempt_id == group.control_attempt_id,
+            ScreenedImageUpload.sha256 == group.control_image_sha256,
+            ScreenedImageUpload.status == "verified",
+        )
+        .order_by(ScreenedImageUpload.verified_at.desc())
+        .limit(1)
+    )
+    target_attempt = await session.get(ScreeningAttempt, group.target_attempt_id)
+    if (
+        approval is None
+        or control is None
+        or control_attempt is None
+        or control_image is None
+        or target_attempt is None
+        or control.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+        or control.sha256.lower() != group.control_artifact_sha256
+        or control.screened_image_upload_id != control_image.image_upload_id
+        or control_attempt.agent_id != group.control_agent_id
+        or control_attempt.policy_version != 13
+        or control_attempt.artifact_sha256 != group.control_artifact_sha256
+        or approval.agent_id != group.control_agent_id
+        or approval.attempt_id != group.control_attempt_id
+        or approval.artifact_sha256 != group.control_artifact_sha256
+        or approval.image_sha256 != group.control_image_sha256
+        or approval.approval_receipt_sha256 != group.approval_receipt_sha256
+        or approval.approved_at >= group.started_at
+        or control_image.verified_at is None
+        or not control_image.image_id.startswith("sha256:")
+        or len(control_image.image_id) != 71
+        or any(char not in "0123456789abcdef" for char in control_image.image_id[7:])
+        or not 0 < control_image.size_bytes <= 8 * 1024 * 1024 * 1024
+    ):
+        raise HTTPException(409, "clean private image unavailable")
+    target_package = await session.get(
+        V13ReplayGroupPackageRegistration, (group.group_id, "target")
+    )
+    control_package = await session.get(
+        V13ReplayGroupPackageRegistration, (group.group_id, "known_benign")
+    )
+    if (
+        target_package is None
+        or control_package is None
+        or target_package.generation_receipt_sha256 != group.target_receipt_sha256
+        or control_package.generation_receipt_sha256 != group.control_receipt_sha256
+        or target_package.pair_inventory_sha256 != control_package.pair_inventory_sha256
+        or target_package.registered_at <= group.started_at
+        or control_package.registered_at <= group.started_at
+    ):
+        raise HTTPException(409, "matched private package unavailable")
+    storage = await get_storage_client(request)
+    target_url = await storage.presigned_get_url(
+        key=replay.image_verified_storage_key, expires_in=URL_TTL_SECONDS
+    )
+    control_url = await storage.presigned_get_url(
+        key=_screened_image_key(control.agent_id, control_image.image_upload_id),
+        expires_in=URL_TTL_SECONDS,
+    )
+
+    def package_view(
+        row: V13ReplayGroupPackageRegistration,
+        role: Literal["target", "known_benign"],
+    ) -> V13ReplayGroupPackageView:
+        target = role == "target"
+        return V13ReplayGroupPackageView(
+            replay_id=replay_id,
+            group_id=group.group_id,
+            role=role,
+            agent_id=group.target_agent_id if target else group.control_agent_id,
+            attempt_id=(
+                group.target_attempt_id if target else group.control_attempt_id
+            ),
+            artifact_sha256=(
+                group.target_artifact_sha256
+                if target
+                else group.control_artifact_sha256
+            ),
+            image_sha256=(
+                group.target_image_sha256 if target else group.control_image_sha256
+            ),
+            profile_sha256=group.profile_sha256,
+            generation_receipt_sha256=row.generation_receipt_sha256,
+            manifest_sha256=row.manifest_sha256,
+            pair_inventory_sha256=row.pair_inventory_sha256,
+            registrar_actor=row.registrar_actor,
+            registered_at=row.registered_at,
+        )
+
+    result = VerificationReplayPrivateInputs(
+        replay_id=replay_id,
+        lease_started_at=replay.lease_started_at,
+        lease_deadline=replay.lease_deadline,
+        group=V13ReplayGenerationGroupView.model_validate(group, from_attributes=True),
+        approval=V13KnownBenignApprovalView.model_validate(
+            approval, from_attributes=True
+        ),
+        target_package=package_view(target_package, "target"),
+        control_package=package_view(control_package, "known_benign"),
+        target_image=VerificationReplayPrivateImageInput(
+            role="target",
+            agent_id=group.target_agent_id,
+            attempt_id=group.target_attempt_id,
+            artifact_sha256=group.target_artifact_sha256,
+            image_sha256=group.target_image_sha256,
+            image_id=replay.image_id,
+            size_bytes=replay.image_size_bytes,
+            verified_at=replay.image_verified_at,
+            committed_at=target_attempt.started_at,
+            url=target_url,
+        ),
+        control_image=VerificationReplayPrivateImageInput(
+            role="known_benign",
+            agent_id=group.control_agent_id,
+            attempt_id=group.control_attempt_id,
+            artifact_sha256=group.control_artifact_sha256,
+            image_sha256=group.control_image_sha256,
+            image_id=control_image.image_id,
+            size_bytes=control_image.size_bytes,
+            verified_at=control_image.verified_at,
+            committed_at=control_attempt.started_at,
+            url=control_url,
+        ),
+        urls_expire_at=datetime.now(UTC) + timedelta(seconds=URL_TTL_SECONDS),
+    )
+    await session.commit()
+    return result
+
+
 @screener_router.post(
     "/{replay_id}/build-upload", response_model=VerificationReplayBuildUpload
 )
@@ -805,6 +987,133 @@ async def append_signed_replay_observation(
     await session.commit()
     return VerificationReplaySignedObservationState.model_validate(
         observation, from_attributes=True
+    )
+
+
+@screener_router.post(
+    "/{replay_id}/private-receipt",
+    response_model=VerificationReplayPrivateReceiptState,
+)
+async def append_replay_private_receipt(
+    replay_id: UUID,
+    payload: V13ReplayPrivateReceipt,
+    request: Request,
+    worker: ScreenerDep,
+    session: SessionDep,
+) -> VerificationReplayPrivateReceiptState:
+    """Authenticate one sealed execution claim; leave policy unverified."""
+    await _require_enrolled_replay_worker(request, worker, session)
+    replay = await _active_claim(session, replay_id, worker)
+    source_attempt = await session.get(ScreeningAttempt, replay.source_attempt_id)
+    if (
+        source_attempt is None
+        or source_attempt.screener_hotkey is None
+        or replay.image_upload_id is not None
+        or replay.image_verified_at is None
+        or replay.image_sha256 is None
+        or replay.image_id is None
+        or replay.lease_started_at is None
+        or replay.lease_deadline is None
+    ):
+        raise HTTPException(409, "independent replay image unavailable")
+    expected = V13ReplayBinding(
+        replay_id=replay.replay_id,
+        agent_id=replay.agent_id,
+        attempt_id=replay.source_attempt_id,
+        artifact_sha256=replay.artifact_sha256,
+        policy_version=13,
+        image_sha256=replay.image_sha256,
+        image_id=replay.image_id,
+    )
+    if not authentic_replay_private_receipt(
+        payload,
+        expected=expected,
+        enrolled_runner_hotkey=worker,
+        source_worker_hotkey=source_attempt.screener_hotkey,
+        lease_started_at=replay.lease_started_at,
+        lease_deadline=replay.lease_deadline,
+        verify_signature=_verify_signature,
+    ):
+        raise HTTPException(403, "private receipt signature or lease invalid")
+    matched = payload.matched
+    group = await session.get(V13ReplayPrivateGenerationGroup, matched.group_id)
+    if (
+        group is None
+        or group.replay_id != replay_id
+        or group.target_agent_id != replay.agent_id
+        or group.target_attempt_id != replay.source_attempt_id
+        or group.target_artifact_sha256 != replay.artifact_sha256
+        or group.target_image_sha256 != replay.image_sha256
+        or group.control_agent_id != matched.control_agent_id
+        or group.control_attempt_id != matched.control_attempt_id
+        or group.control_artifact_sha256 != matched.control_artifact_sha256
+        or group.control_image_sha256 != matched.control_image_sha256
+        or group.approval_id != matched.control_approval_id
+        or group.approval_receipt_sha256 != matched.control_approval_receipt_sha256
+        or group.profile_sha256 != matched.profile_sha256
+        or group.target_receipt_sha256 != matched.target_generation_receipt_sha256
+        or group.control_receipt_sha256 != matched.control_generation_receipt_sha256
+        or group.started_at >= payload.observed_at
+    ):
+        raise HTTPException(409, "private generation group changed")
+    target_package = await session.get(
+        V13ReplayGroupPackageRegistration, (group.group_id, "target")
+    )
+    control_package = await session.get(
+        V13ReplayGroupPackageRegistration, (group.group_id, "known_benign")
+    )
+    if (
+        target_package is None
+        or control_package is None
+        or target_package.generation_receipt_sha256 != group.target_receipt_sha256
+        or control_package.generation_receipt_sha256 != group.control_receipt_sha256
+        or target_package.manifest_sha256 != matched.target_manifest_sha256
+        or control_package.manifest_sha256 != matched.control_manifest_sha256
+        or target_package.pair_inventory_sha256 != matched.pair_inventory_sha256
+        or control_package.pair_inventory_sha256 != matched.pair_inventory_sha256
+        or target_package.registered_at >= payload.observed_at
+        or control_package.registered_at >= payload.observed_at
+    ):
+        raise HTTPException(409, "private package registration changed")
+    report = payload.model_dump(mode="json")
+    receipt_sha256 = hashlib.sha256(
+        json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    existing = await session.get(ScreeningVerificationReplayPrivateReceipt, replay_id)
+    if existing is not None:
+        if existing.receipt_sha256 != receipt_sha256:
+            raise HTTPException(409, "private receipt already differs")
+        return VerificationReplayPrivateReceiptState.model_validate(
+            existing, from_attributes=True
+        )
+    row = ScreeningVerificationReplayPrivateReceipt(
+        replay_id=replay_id,
+        group_id=group.group_id,
+        receipt_sha256=receipt_sha256,
+        runner_hotkey=worker,
+        observed_at=payload.observed_at,
+        signature=payload.signature,
+        report=report,
+    )
+    session.add(row)
+    await session.commit()
+    return VerificationReplayPrivateReceiptState.model_validate(
+        row, from_attributes=True
+    )
+
+
+@admin_router.get(
+    "/{replay_id}/private-receipt",
+    response_model=VerificationReplayPrivateReceiptState,
+)
+async def get_replay_private_receipt(
+    replay_id: UUID, _admin: AdminDep, session: SessionDep
+) -> VerificationReplayPrivateReceiptState:
+    row = await session.get(ScreeningVerificationReplayPrivateReceipt, replay_id)
+    if row is None:
+        raise HTTPException(404, "private receipt not found")
+    return VerificationReplayPrivateReceiptState.model_validate(
+        row, from_attributes=True
     )
 
 

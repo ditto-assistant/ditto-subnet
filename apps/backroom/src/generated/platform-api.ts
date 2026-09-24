@@ -2760,6 +2760,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-verification-replays/{replay_id}/private-receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Replay Private Receipt */
+        get: operations["get_replay_private_receipt_api_v1_admin_screening_verification_replays__replay_id__private_receipt_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/source-review-queue-slo": {
         parameters: {
             query?: never;
@@ -6142,6 +6159,46 @@ export interface paths {
         get: operations["get_replay_inputs_api_v1_screener_verification_replays__replay_id__inputs_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/verification-replays/{replay_id}/private-inputs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Replay Private Inputs
+         * @description Short-lived exact image inputs for an active independent replay worker.
+         */
+        get: operations["get_replay_private_inputs_api_v1_screener_verification_replays__replay_id__private_inputs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/verification-replays/{replay_id}/private-receipt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Append Replay Private Receipt
+         * @description Authenticate one sealed execution claim; leave policy unverified.
+         */
+        post: operations["append_replay_private_receipt_api_v1_screener_verification_replays__replay_id__private_receipt_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -21430,6 +21487,35 @@ export interface components {
             /** Validator Hotkey */
             validator_hotkey: string;
         };
+        /**
+         * PrivateExecutionResult
+         * @description Report-only paired outcomes; no materiality decision or policy verdict.
+         */
+        PrivateExecutionResult: {
+            /** Aggregates */
+            aggregates: components["schemas"]["PrivatePairCounts"][];
+            summary: components["schemas"]["V13PrivateRunSummary"];
+        };
+        /**
+         * PrivatePairCounts
+         * @description Sanitized aggregate; no prompts, answers, case IDs, or hidden seeds.
+         */
+        PrivatePairCounts: {
+            /** Control Correct */
+            control_correct: number;
+            /** Control Only Correct */
+            control_only_correct: number;
+            /** Pairs */
+            pairs: number;
+            /** Seed Commitment */
+            seed_commitment: string;
+            /** Transformation Class */
+            transformation_class: string;
+            /** Variant Correct */
+            variant_correct: number;
+            /** Variant Only Correct */
+            variant_only_correct: number;
+        };
         /** ProbeGrade */
         ProbeGrade: {
             /**
@@ -31094,6 +31180,103 @@ export interface components {
             status: "recorded_unverified";
         };
         /**
+         * V13MatchedCleanControlCommitment
+         * @description Digest-only same-case commitment, not an execution or policy result.
+         */
+        V13MatchedCleanControlCommitment: {
+            /**
+             * Control Agent Id
+             * Format: uuid
+             */
+            control_agent_id: string;
+            /**
+             * Control Approval Id
+             * Format: uuid
+             */
+            control_approval_id: string;
+            /** Control Approval Receipt Sha256 */
+            control_approval_receipt_sha256: string;
+            /** Control Artifact Sha256 */
+            control_artifact_sha256: string;
+            /**
+             * Control Attempt Id
+             * Format: uuid
+             */
+            control_attempt_id: string;
+            /** Control Generation Receipt Sha256 */
+            control_generation_receipt_sha256: string;
+            /** Control Image Sha256 */
+            control_image_sha256: string;
+            /** Control Manifest Sha256 */
+            control_manifest_sha256: string;
+            /**
+             * Group Id
+             * Format: uuid
+             */
+            group_id: string;
+            /** Pair Count */
+            pair_count: number;
+            /** Pair Inventory Sha256 */
+            pair_inventory_sha256: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /** Replay Id */
+            replay_id?: string | null;
+            /**
+             * Target Agent Id
+             * Format: uuid
+             */
+            target_agent_id: string;
+            /** Target Artifact Sha256 */
+            target_artifact_sha256: string;
+            /**
+             * Target Attempt Id
+             * Format: uuid
+             */
+            target_attempt_id: string;
+            /** Target Generation Receipt Sha256 */
+            target_generation_receipt_sha256: string;
+            /** Target Image Sha256 */
+            target_image_sha256: string;
+            /** Target Manifest Sha256 */
+            target_manifest_sha256: string;
+        };
+        /**
+         * V13PrivateRunSummary
+         * @description Sanitized runner output; this alone is never a V13 policy decision.
+         */
+        V13PrivateRunSummary: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Completed Pairs */
+            completed_pairs: number;
+            /** Evidence Sha256 */
+            evidence_sha256: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            /** Profile Sha256 */
+            profile_sha256: string;
+            /** Runner Hotkey */
+            runner_hotkey: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed" | "inconclusive";
+        };
+        /**
          * V13ReplayBinding
          * @description Expected identity sourced from Platform's current locked attempt.
          */
@@ -31273,6 +31456,31 @@ export interface components {
              * @enum {string}
              */
             status: "passed" | "failed" | "inconclusive";
+        };
+        /**
+         * V13ReplayPrivateReceipt
+         * @description Runner-signed aggregate claim bound to both exact images and sealed roles.
+         */
+        V13ReplayPrivateReceipt: {
+            binding: components["schemas"]["V13ReplayBinding"];
+            known_benign: components["schemas"]["PrivateExecutionResult"];
+            matched: components["schemas"]["V13MatchedCleanControlCommitment"];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Revision
+             * @default v13-replay-private-receipt-v1
+             * @constant
+             */
+            revision: "v13-replay-private-receipt-v1";
+            /** Runner Hotkey */
+            runner_hotkey: string;
+            /** Signature */
+            signature: string;
+            target: components["schemas"]["PrivateExecutionResult"];
         };
         /** V13ReviewClockRevision */
         V13ReviewClockRevision: {
@@ -32458,6 +32666,118 @@ export interface components {
              * Format: date-time
              */
             urls_expire_at: string;
+        };
+        /** VerificationReplayPrivateImageInput */
+        VerificationReplayPrivateImageInput: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Committed At
+             * Format: date-time
+             */
+            committed_at: string;
+            /** Image Id */
+            image_id: string;
+            /** Image Sha256 */
+            image_sha256: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "target" | "known_benign";
+            /** Size Bytes */
+            size_bytes: number;
+            /** Url */
+            url: string;
+            /**
+             * Verified At
+             * Format: date-time
+             */
+            verified_at: string;
+        };
+        /** VerificationReplayPrivateInputs */
+        VerificationReplayPrivateInputs: {
+            approval: components["schemas"]["V13KnownBenignApprovalView"];
+            control_image: components["schemas"]["VerificationReplayPrivateImageInput"];
+            control_package: components["schemas"]["V13ReplayGroupPackageView"];
+            group: components["schemas"]["V13ReplayGenerationGroupView"];
+            /**
+             * Lease Deadline
+             * Format: date-time
+             */
+            lease_deadline: string;
+            /**
+             * Lease Started At
+             * Format: date-time
+             */
+            lease_started_at: string;
+            /**
+             * Policy Verification Complete
+             * @default false
+             * @constant
+             */
+            policy_verification_complete: false;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            target_image: components["schemas"]["VerificationReplayPrivateImageInput"];
+            target_package: components["schemas"]["V13ReplayGroupPackageView"];
+            /**
+             * Urls Expire At
+             * Format: date-time
+             */
+            urls_expire_at: string;
+        };
+        /** VerificationReplayPrivateReceiptState */
+        VerificationReplayPrivateReceiptState: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Group Id
+             * Format: uuid
+             */
+            group_id: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Policy Verification Complete
+             * @default false
+             * @constant
+             */
+            policy_verification_complete: false;
+            /** Receipt Sha256 */
+            receipt_sha256: string;
+            /**
+             * Replay Id
+             * Format: uuid
+             */
+            replay_id: string;
+            /** Runner Hotkey */
+            runner_hotkey: string;
+            /**
+             * Status
+             * @default recorded_unverified
+             * @constant
+             */
+            status: "recorded_unverified";
         };
         /** VerificationReplayReceiptRequest */
         VerificationReplayReceiptRequest: {
@@ -37976,6 +38296,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayClaimability"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_replay_private_receipt_api_v1_admin_screening_verification_replays__replay_id__private_receipt_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayPrivateReceiptState"];
                 };
             };
             /** @description Validation Error */
@@ -43931,6 +44284,78 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayInputs"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_replay_private_inputs_api_v1_screener_verification_replays__replay_id__private_inputs_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayPrivateInputs"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    append_replay_private_receipt_api_v1_screener_verification_replays__replay_id__private_receipt_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                replay_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["V13ReplayPrivateReceipt"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VerificationReplayPrivateReceiptState"];
                 };
             };
             /** @description Validation Error */

@@ -5,12 +5,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from fastapi import FastAPI
-from sqlalchemy import text
+from fastapi import FastAPI, HTTPException
+from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -19,9 +21,14 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_v13_private_generation import (
     generation_role_digest,
 )
+from ditto.api_server.endpoints.verification_replay import (
+    append_replay_private_receipt,
+    get_replay_private_inputs,
+)
 from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
+    ScreenerNode,
     ScreeningAttempt,
     ScreeningPrivatePackageRegistration,
     ScreeningQuarantine,
@@ -29,7 +36,21 @@ from ditto.db.models import (
     V13PrivateGenerationGroup,
     V13ReplayPrivateGenerationGroup,
 )
-from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE_SHA256
+from ditto_screening_protocol.v13_private_clean_control import (
+    TrustedGenerationGroup,
+    V13MatchedCleanControlCommitment,
+    compute_v13_generation_role_digest,
+)
+from ditto_screening_protocol.v13_private_execute import (
+    PrivateExecutionResult,
+    PrivatePairCounts,
+)
+from ditto_screening_protocol.v13_private_package import (
+    V13_PRIVATE_PROFILE_SHA256,
+    V13PrivateRunSummary,
+)
+from ditto_screening_protocol.v13_private_receipt import V13ReplayPrivateReceipt
+from ditto_screening_protocol.v13_replay_observation import V13ReplayBinding
 
 pytestmark = pytest.mark.asyncio
 _BASE = "/api/v1/admin/v13-private-generation"
@@ -110,6 +131,7 @@ async def test_replay_generation_uses_independent_verified_image(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _install(app, session_maker)
     target_agent, target_attempt, clean_agent, clean_attempt = (
@@ -214,6 +236,12 @@ async def test_replay_generation_uses_independent_verified_image(
         )
         assert row is not None
         assert row.replay_id == replay_id
+        protocol_group = TrustedGenerationGroup.model_validate(
+            row, from_attributes=True
+        )
+        assert group["target_receipt_sha256"] == compute_v13_generation_role_digest(
+            protocol_group, "target"
+        )
     package = await client.post(
         f"{_BASE}/replays/{replay_id}/packages/target",
         json={
@@ -235,6 +263,159 @@ async def test_replay_generation_uses_independent_verified_image(
         headers=_HEADERS,
     )
     assert mismatched_control.status_code == 409
+    control_package = await client.post(
+        f"{_BASE}/replays/{replay_id}/packages/known_benign",
+        json={
+            "generation_receipt_sha256": group["control_receipt_sha256"],
+            "manifest_sha256": "4" * 64,
+            "pair_inventory_sha256": "3" * 64,
+        },
+        headers=_HEADERS,
+    )
+    assert control_package.status_code == 200, control_package.text
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id="private-replay-node",
+                provider="test",
+                provider_resource_id="private-replay-resource",
+                screener_hotkey="independent-worker",
+                token_hash="9" * 64,
+                token_expires_at=now + timedelta(hours=1),
+                status="active",
+                verification_replay_capacity=1,
+            )
+        )
+        clean_image = await session.scalar(
+            select(ScreenedImageUpload).where(
+                ScreenedImageUpload.agent_id == clean_agent,
+                ScreenedImageUpload.attempt_id == clean_attempt,
+            )
+        )
+        clean_agent_row = await session.get(Agent, clean_agent)
+        assert clean_image is not None and clean_agent_row is not None
+        clean_image.image_id = "sha256:" + "d" * 64
+        clean_agent_row.screened_image_upload_id = clean_image.image_upload_id
+        clean_agent_row.screened_image_sha256 = clean_image.sha256
+        clean_agent_row.screened_image_size_bytes = clean_image.size_bytes
+        clean_agent_row.screened_image_id = clean_image.image_id
+        clean_agent_row.screened_image_verified_at = clean_image.verified_at
+    storage = SimpleNamespace(
+        presigned_get_url=AsyncMock(side_effect=["target-url", "control-url"])
+    )
+    private_request = SimpleNamespace(
+        state=SimpleNamespace(
+            screener_node_id="private-replay-node", screener_node_status="active"
+        ),
+        app=SimpleNamespace(state=SimpleNamespace(storage=storage)),
+    )
+    async with session_maker() as session:
+        inputs = await get_replay_private_inputs(
+            replay_id, private_request, "independent-worker", session
+        )
+        assert inputs.target_image.url == "target-url"
+        assert inputs.control_image.url == "control-url"
+        assert inputs.target_image.image_sha256 == "f" * 64
+        assert inputs.control_image.image_sha256 == "d" * 64
+        assert inputs.policy_verification_complete is False
+    aggregate = tuple(
+        PrivatePairCounts(
+            transformation_class=class_name,
+            seed_commitment=seed,
+            pairs=10,
+            control_correct=10,
+            variant_correct=9,
+            control_only_correct=1,
+            variant_only_correct=0,
+        )
+        for seed in ("1" * 64, "2" * 64)
+        for class_name in (
+            "field_entity_rename",
+            "request_paraphrase",
+            "record_reorder_decoy",
+        )
+    )
+
+    def _execution(clean: bool) -> PrivateExecutionResult:
+        return PrivateExecutionResult(
+            summary=V13PrivateRunSummary(
+                agent_id=clean_agent if clean else target_agent,
+                attempt_id=clean_attempt if clean else target_attempt,
+                artifact_sha256=("c" if clean else "a") * 64,
+                image_sha256=("d" if clean else "f") * 64,
+                profile_sha256=V13_PRIVATE_PROFILE_SHA256,
+                manifest_sha256=("4" if clean else "2") * 64,
+                runner_hotkey="independent-worker",
+                status="completed",
+                completed_pairs=60,
+                evidence_sha256="8" * 64,
+            ),
+            aggregates=aggregate,
+        )
+
+    receipt = V13ReplayPrivateReceipt(
+        binding=V13ReplayBinding(
+            replay_id=replay_id,
+            agent_id=target_agent,
+            attempt_id=target_attempt,
+            artifact_sha256="a" * 64,
+            image_sha256="f" * 64,
+            image_id="sha256:" + "1" * 64,
+        ),
+        matched=V13MatchedCleanControlCommitment(
+            group_id=UUID(group["group_id"]),
+            replay_id=replay_id,
+            target_agent_id=target_agent,
+            target_attempt_id=target_attempt,
+            target_artifact_sha256="a" * 64,
+            target_image_sha256="f" * 64,
+            target_manifest_sha256="2" * 64,
+            control_agent_id=clean_agent,
+            control_attempt_id=clean_attempt,
+            control_artifact_sha256="c" * 64,
+            control_image_sha256="d" * 64,
+            control_manifest_sha256="4" * 64,
+            control_approval_id=UUID(approval.json()["approval_id"]),
+            control_approval_receipt_sha256=approval.json()["approval_receipt_sha256"],
+            target_generation_receipt_sha256=group["target_receipt_sha256"],
+            control_generation_receipt_sha256=group["control_receipt_sha256"],
+            profile_sha256=V13_PRIVATE_PROFILE_SHA256,
+            pair_inventory_sha256="3" * 64,
+            pair_count=60,
+        ),
+        target=_execution(False),
+        known_benign=_execution(True),
+        runner_hotkey="independent-worker",
+        observed_at=datetime.now(UTC),
+        signature="f" * 128,
+    )
+    from ditto.api_server.endpoints import verification_replay
+
+    monkeypatch.setattr(verification_replay, "_verify_signature", lambda *_: True)
+    request = private_request
+    async with session_maker() as session:
+        accepted = await append_replay_private_receipt(
+            replay_id, receipt, request, "independent-worker", session
+        )
+        assert accepted.status == "recorded_unverified"
+        assert accepted.policy_verification_complete is False
+        again = await append_replay_private_receipt(
+            replay_id, receipt, request, "independent-worker", session
+        )
+        assert again.receipt_sha256 == accepted.receipt_sha256
+        changed = receipt.model_copy(
+            update={
+                "matched": receipt.matched.model_copy(
+                    update={"pair_inventory_sha256": "5" * 64}
+                )
+            }
+        )
+        with pytest.raises(HTTPException) as mismatch:
+            await append_replay_private_receipt(
+                replay_id, changed, request, "independent-worker", session
+            )
+        assert mismatch.value.status_code == 409
     with pytest.raises(DBAPIError):
         async with session_maker() as session, session.begin():
             await session.execute(

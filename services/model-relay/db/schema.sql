@@ -4497,6 +4497,25 @@ CREATE TABLE public.screening_verification_receipts (
 
 
 --
+-- Name: screening_verification_replay_private_receipts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_verification_replay_private_receipts (
+    replay_id uuid NOT NULL,
+    group_id uuid NOT NULL,
+    receipt_sha256 text NOT NULL,
+    runner_hotkey text NOT NULL,
+    observed_at timestamp with time zone NOT NULL,
+    signature text NOT NULL,
+    report jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_verification_replay_private_receipts_svrpr_26ee CHECK ((length(receipt_sha256) = 64)),
+    CONSTRAINT ck_screening_verification_replay_private_receipts_svrpr_46d7 CHECK ((length(signature) = 128)),
+    CONSTRAINT ck_screening_verification_replay_private_receipts_svrpr_runner CHECK (((length(runner_hotkey) >= 1) AND (length(runner_hotkey) <= 120)))
+);
+
+
+--
 -- Name: screening_verification_replay_receipts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7128,6 +7147,14 @@ ALTER TABLE ONLY public.screening_verification_receipts
 
 
 --
+-- Name: screening_verification_replay_private_receipts pk_screening_verification_replay_private_receipts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_private_receipts
+    ADD CONSTRAINT pk_screening_verification_replay_private_receipts PRIMARY KEY (replay_id);
+
+
+--
 -- Name: screening_verification_replay_receipts pk_screening_verification_replay_receipts; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9264,6 +9291,13 @@ CREATE TRIGGER screening_review_events_immutable BEFORE DELETE OR UPDATE ON publ
 
 
 --
+-- Name: screening_verification_replay_private_receipts screening_verification_replay_private_receipts_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screening_verification_replay_private_receipts_immutable BEFORE DELETE OR UPDATE ON public.screening_verification_replay_private_receipts FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
 -- Name: v13_group_package_registrations v13_group_package_registrations_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -10116,6 +10150,22 @@ ALTER TABLE ONLY public.screening_verification_receipts
 
 ALTER TABLE ONLY public.screening_verification_receipts
     ADD CONSTRAINT fk_screening_verification_receipts_attempt_id_screening_3974 FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_verification_replay_private_receipts fk_screening_verification_replay_private_receipts_group_8a20; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_private_receipts
+    ADD CONSTRAINT fk_screening_verification_replay_private_receipts_group_8a20 FOREIGN KEY (group_id) REFERENCES public.v13_replay_private_generation_groups(group_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: screening_verification_replay_private_receipts fk_screening_verification_replay_private_receipts_repla_8af3; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_private_receipts
+    ADD CONSTRAINT fk_screening_verification_replay_private_receipts_repla_8af3 FOREIGN KEY (replay_id) REFERENCES public.screening_verification_replays(replay_id) ON DELETE RESTRICT;
 
 
 --

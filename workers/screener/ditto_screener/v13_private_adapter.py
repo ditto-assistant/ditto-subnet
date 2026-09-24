@@ -263,7 +263,10 @@ class BoundFreshCaseExecutor:
         case_id = str(uuid4())
         session: FreshCaseSession | None = None
         try:
-            async with asyncio.timeout(timeout_seconds):
+            # A fresh image/container/network may take longer to prepare than
+            # the 30-second case exchange. Keep setup outside the case budget
+            # while bounding it independently; never reuse another case state.
+            async with asyncio.timeout(300):
                 session = await self._factory.open_case(
                     role=self._role,
                     agent_id=self._agent_id,
@@ -273,10 +276,14 @@ class BoundFreshCaseExecutor:
                     session_id=session_id,
                     case_id=case_id,
                 )
+            async with asyncio.timeout(timeout_seconds):
                 if seed_envelope is not None:
                     await session.seed(seed_envelope, timeout_seconds)
                 response = await session.run(run_envelope, timeout_seconds)
                 _bounded_response_size(response)
+            # The sidecar must stop accepting work and drain active handlers
+            # before its ledger can be used as model-authority evidence.
+            async with asyncio.timeout(150):
                 ledger = await session.settle()
             expected_session = hashlib.sha256(session_id.encode()).hexdigest()
             expected_case = hmac.new(
@@ -317,7 +324,7 @@ class BoundFreshCaseExecutor:
         finally:
             if session is not None:
                 try:
-                    async with asyncio.timeout(10):
+                    async with asyncio.timeout(150):
                         await session.close()
                 except Exception:
                     raise PrivateExecutionUnavailable(

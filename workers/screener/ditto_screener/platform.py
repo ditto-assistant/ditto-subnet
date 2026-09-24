@@ -69,6 +69,7 @@ from ditto_screening_protocol import (
     SubmissionSourceReviewRequest,
     SubmissionSourceReviewResponse,
 )
+from ditto_screening_protocol.v13_private_receipt import V13ReplayPrivateReceipt
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -174,6 +175,70 @@ class PlatformClient:
                 f"conversation control returned HTTP {response.status_code}"
             )
         return response.json()
+
+    async def submit_replay_private_receipt(
+        self, receipt: V13ReplayPrivateReceipt
+    ) -> dict[str, Any]:
+        """One authenticated report-only dispatch; never retry uncertain writes."""
+        response = await self._client.post(
+            self._base
+            + _PREFIX
+            + f"/verification-replays/{receipt.binding.replay_id}/private-receipt",
+            json=receipt.model_dump(mode="json"),
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"replay private receipt returned HTTP {response.status_code}"
+            )
+        body = response.json()
+        if (
+            type(body) is not dict
+            or body.get("policy_verification_complete") is not False
+            or body.get("status") != "recorded_unverified"
+        ):
+            raise PlatformError("replay private receipt response invalid")
+        return body
+
+    async def replay_private_inputs(self, replay_id: UUID) -> dict[str, Any]:
+        """Fetch current short-lived image URLs and immutable role bindings."""
+        response = await self._client.get(
+            self._base + _PREFIX + f"/verification-replays/{replay_id}/private-inputs",
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"replay private inputs returned HTTP {response.status_code}"
+            )
+        body = response.json()
+        if (
+            type(body) is not dict
+            or body.get("replay_id") != str(replay_id)
+            or body.get("policy_verification_complete") is not False
+        ):
+            raise PlatformError("replay private inputs response invalid")
+        return body
+
+    async def renew_verification_replay(self, replay_id: UUID) -> dict[str, Any]:
+        response = await self._client.post(
+            self._base + _PREFIX + f"/verification-replays/{replay_id}/renew",
+            headers=await self._auth_headers(),
+            timeout=30,
+        )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"replay lease renewal returned HTTP {response.status_code}"
+            )
+        body = response.json()
+        if (
+            type(body) is not dict
+            or body.get("replay_id") != str(replay_id)
+            or body.get("status") != "running"
+        ):
+            raise PlatformError("replay lease renewal response invalid")
+        return body
 
     async def _refresh_auth_headers(self, path: Path) -> dict[str, str]:
         """Serialize credential rotation across every worker on one node."""

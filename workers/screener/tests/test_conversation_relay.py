@@ -82,6 +82,7 @@ def test_larger_client_allowance_uses_unchanged_ceiling(
     relay.post(route, body)
     assert json.loads(calls[0].data)[field] == 8192
     assert relay.tokens == 8212 and relay.spent == 16424 and not relay.failed
+    assert relay.chat_dispatches == relay.successful_chat_responses == 1
 
 
 @pytest.mark.parametrize("value", [0, -1, True, 1.5, "8192", None])
