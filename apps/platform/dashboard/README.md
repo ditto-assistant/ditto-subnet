@@ -32,6 +32,12 @@ API and links out to wandb for the per-epoch deep dive. This is Surface 3 in
   public-source state. Source becomes downloadable six hours after the third
   accepted score in one benchmark version; this is retroactive and independent
   of KOTH rank. A download requests a five-minute, no-store tarball link.
+- **Submission fee** — the Submissions page leads with the current
+  operator-set fee (fixed TAO, exact rao rendered without floating point), the
+  revision and date it took effect, and a collapsed history of every fee
+  change from `/public/submission-fee`. Operator identity and reasons are not
+  public. An unavailable or unreviewed-denomination response renders as
+  unavailable rather than a guessed amount.
 - **Submission pipeline** — screening and validator-ticket history, including a
   compact accessible benchmark progress bar for each validator currently
   evaluating the submission. Active benchmark work takes precedence over a

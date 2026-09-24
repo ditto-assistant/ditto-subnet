@@ -1,0 +1,39 @@
+{
+  "policy_revision": 6,
+  "fee_denomination": "fixed_tao",
+  "fee_amount_rao": 100000000,
+  "fee_amount_tao": "0.100000000",
+  "fee_revision": 5,
+  "fee_effective_at": "2026-09-14T16:20:00Z",
+  "quote_lifetime_seconds": 86400,
+  "history": [
+    {
+      "revision": 5,
+      "fee_denomination": "fixed_tao",
+      "fee_amount_rao": 100000000,
+      "fee_amount_tao": "0.100000000",
+      "previous_fee_amount_rao": 200000000,
+      "previous_fee_amount_tao": "0.200000000",
+      "effective_at": "2026-09-14T16:20:00Z"
+    },
+    {
+      "revision": 3,
+      "fee_denomination": "fixed_tao",
+      "fee_amount_rao": 200000000,
+      "fee_amount_tao": "0.200000000",
+      "previous_fee_amount_rao": 40000000,
+      "previous_fee_amount_tao": "0.040000000",
+      "effective_at": "2026-08-20T09:00:00Z"
+    },
+    {
+      "revision": 1,
+      "fee_denomination": "fixed_tao",
+      "fee_amount_rao": 40000000,
+      "fee_amount_tao": "0.040000000",
+      "previous_fee_amount_rao": null,
+      "previous_fee_amount_tao": null,
+      "effective_at": "2026-08-01T00:00:00Z"
+    }
+  ],
+  "history_truncated": false
+}
