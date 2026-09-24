@@ -1484,6 +1484,56 @@ class ScreeningQuarantineResolution(Base):
     )
 
 
+class ScreeningReviewEvent(Base):
+    """Immutable snapshot of an accepted automated review or operator ruling."""
+
+    __tablename__ = "screening_review_events"
+
+    event_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    quarantine_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    resolution_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    previous_event_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    event_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reviewer_model: Mapped[str | None] = mapped_column(Text)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(Text)
+    reason: Mapped[str | None] = mapped_column(Text)
+    prior_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
+    next_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["previous_event_id"],
+            ["screening_review_events.event_id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("event_kind IN ('automated', 'manual')", name="sre_kind_check"),
+        CheckConstraint("length(artifact_sha256) = 64", name="sre_sha_check"),
+        CheckConstraint("policy_version > 0", name="sre_policy_check"),
+        CheckConstraint("length(trim(actor)) > 0", name="sre_actor_check"),
+        Index(
+            "sre_automated_attempt_key",
+            "attempt_id",
+            unique=True,
+            postgresql_where=text("event_kind = 'automated'"),
+            sqlite_where=text("event_kind = 'automated'"),
+        ),
+        UniqueConstraint("resolution_id", name="sre_resolution_key"),
+        Index("sre_agent_created_idx", "agent_id", "created_at", "event_id"),
+        Index("sre_created_idx", "created_at", "event_id"),
+    )
+
+
 class ScreeningDispute(Base):
     """One miner-authenticated appeal: of a rejected screening decision
     (``kind = 'screening'``) or of cited bench v13+ gate notes on a scored

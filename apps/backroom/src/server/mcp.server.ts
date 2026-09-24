@@ -145,6 +145,7 @@ import {
   fetchScreeningQuarantineContext,
   fetchScreeningQuarantineContexts,
   fetchScreeningQuarantines,
+  fetchScreeningReviewEvents,
   fetchScreeningDisputes,
   fetchScreeningFailureDiagnostic,
   fetchAdjudicationAttempts,
@@ -782,6 +783,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   // context — which is also what buys the budget the queue's own entry needs.
   list_screening_quarantines:
     'Page screener quarantines (active | resolved | all), newest first; sort=oldest for chronology, detail=full for every evidence row. Active rows are auto-resolved by the platform within milliseconds, so this is not the operator queue — use get_screening_review_queue.',
+  list_screening_review_events:
+    'Read append-only source-review decisions with exact attempt, artifact SHA, policy version, model or actor, evidence and receipt snapshots, and state transitions.',
   list_screening_adjudication_attempts:
     'Recent L4 outcomes with attempt SHA, manifest and pinned settings; observed timing/provider only when recorded. Null success telemetry is unavailable, not zero.',
   get_screening_quarantine_context:
@@ -920,6 +923,23 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           detail,
         ),
       ),
+  )
+
+  registerTool(
+    'list_screening_review_events',
+    {
+      title: 'List screening review events',
+      description:
+        'Read immutable automated source-review results and manual quarantine rulings. The event records the exact attempt, artifact SHA, governing policy version, reviewer model or operator, evidence digests and receipts available at the decision, and before/after state. Receipt presence never establishes a policy PASS.',
+      inputSchema: {
+        agentId: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(20).default(10),
+        offset: z.number().int().min(0).default(0),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ agentId, limit, offset }) =>
+      result(await fetchScreeningReviewEvents(agentId, limit, offset)),
   )
 
   registerTool(

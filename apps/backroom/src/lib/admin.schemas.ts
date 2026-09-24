@@ -4404,6 +4404,32 @@ export const screeningQuarantineListSchema = z.object({
   count: z.number().int().nonnegative(),
 })
 
+export const screeningReviewEventListSchema = z.object({
+  items: z.array(z.object({
+    event_id: z.string().uuid(),
+    agent_id: z.string().uuid(),
+    attempt_id: z.string().uuid(),
+    quarantine_id: z.string().uuid().nullable(),
+    resolution_id: z.string().uuid().nullable(),
+    previous_event_id: z.string().uuid().nullable(),
+    event_kind: z.enum(['automated', 'manual']),
+    artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    policy_version: z.number().int().positive(),
+    actor: z.string(),
+    reviewer_model: z.string().nullable(),
+    outcome: z.string(),
+    reason_code: z.string().nullable(),
+    reason: z.string().nullable(),
+    prior_agent_status: z.string(),
+    next_agent_status: z.string(),
+    evidence: z.record(z.string(), z.unknown()),
+    created_at: z.string(),
+  })),
+  count: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+})
+
 export const resolveScreeningQuarantineInputSchema = z.object({
   quarantineId: z.string().uuid(),
   resolution: quarantineResolutionSchema,

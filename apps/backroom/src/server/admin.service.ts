@@ -109,6 +109,7 @@ import {
   screeningQuarantineBatchPreviewResponseSchema,
   screeningQuarantineContextSchema,
   screeningQuarantineListSchema,
+  screeningReviewEventListSchema,
   screeningArtifactInputSchema,
   screeningArtifactSchema,
   screeningFailureDiagnosticInputSchema,
@@ -1644,6 +1645,18 @@ export async function fetchScreeningQuarantines(
     `/api/v1/admin/screening-quarantines?${query.toString()}`,
   )
   return screeningQuarantineListSchema.parse(payload)
+}
+
+export async function fetchScreeningReviewEvents(
+  agentId: string | undefined,
+  limit = 50,
+  offset = 0,
+) {
+  const query = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+  if (agentId) query.set('agent_id', agentId)
+  return screeningReviewEventListSchema.parse(
+    await platformAdminRequest(`/api/v1/admin/screening-review-events?${query.toString()}`),
+  )
 }
 
 export async function resolveScreeningQuarantine(

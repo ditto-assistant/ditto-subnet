@@ -25,7 +25,8 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -104,6 +105,7 @@ from ditto.db.models import (
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
     ScreeningReviewDeadlineActivation,
+    ScreeningReviewEvent,
     ScreeningReviewWindow,
     ScreeningVerificationReceipt,
     SubmissionImageBuild,
@@ -6609,6 +6611,40 @@ class TestQuarantineAdmin:
         assert history_event["reason"] == detailed_reason
         assert history_event["actor"] == "backroom:test-user"
         assert conflict.status_code == 409
+        audit = await client.get(
+            f"/api/v1/admin/screening-review-events?agent_id={agent_id}",
+            headers=admin_headers,
+        )
+        assert audit.status_code == 200
+        assert audit.json()["count"] == 2
+        manual, automated = audit.json()["items"]
+        assert automated["event_kind"] == "automated"
+        assert automated["attempt_id"] == str(attempt_id)
+        assert automated["artifact_sha256"] == item["artifact_sha256"]
+        assert automated["policy_version"] == item["policy_version"]
+        assert automated["outcome"] == "quarantine"
+        assert automated["prior_agent_status"] == AgentStatus.SCREENING
+        assert automated["next_agent_status"] == AgentStatus.QUARANTINED
+        assert automated["evidence"]["manifest_digest"] == "56" * 32
+        assert manual["event_kind"] == "manual"
+        assert manual["resolution_id"] is not None
+        assert manual["previous_event_id"] == automated["event_id"]
+        assert manual["actor"] == "backroom:test-user"
+        assert manual["outcome"] == resolution
+        assert manual["reason"] == detailed_reason
+        assert manual["prior_agent_status"] == AgentStatus.QUARANTINED
+        assert manual["next_agent_status"] == expected_status
+        assert manual["evidence"]["reason"] == detailed_reason
+        async with session_maker() as session:
+            with pytest.raises(DBAPIError, match="append-only"):
+                async with session.begin():
+                    await session.execute(
+                        update(ScreeningReviewEvent)
+                        .where(
+                            ScreeningReviewEvent.event_id == UUID(manual["event_id"])
+                        )
+                        .values(outcome="reject")
+                    )
         async with session_maker() as session:
             agent = await session.get(Agent, agent_id)
             assert agent is not None
@@ -6683,6 +6719,21 @@ class TestQuarantineAdmin:
             for event in corrected.json()["quarantine"]["resolution_history"]
         ] == ["reject", "release"]
         assert repeated.status_code == 409
+        audit = await client.get(
+            f"/api/v1/admin/screening-review-events?agent_id={agent_id}",
+            headers=admin_headers,
+        )
+        assert audit.status_code == 200
+        assert [event["outcome"] for event in audit.json()["items"]] == [
+            "release",
+            "reject",
+            "quarantine",
+        ]
+        released_event, rejected_event, automated_event = audit.json()["items"]
+        assert released_event["previous_event_id"] == rejected_event["event_id"]
+        assert rejected_event["previous_event_id"] == automated_event["event_id"]
+        assert released_event["prior_agent_status"] == AgentStatus.REJECTED
+        assert released_event["actor"] == "backroom:second-reviewer"
 
         detail = await client.get(
             f"/api/v1/admin/screening-quarantines/{quarantine['quarantine_id']}",
@@ -10568,6 +10619,17 @@ class TestSubmitResult:
         assert first.status_code == 200
         assert second.status_code == 200
         assert second.json()["status"] == AgentStatus.EVALUATING
+        async with session_maker() as session:
+            events = (
+                await session.scalars(
+                    select(ScreeningReviewEvent).where(
+                        ScreeningReviewEvent.attempt_id == attempt_id
+                    )
+                )
+            ).all()
+            assert len(events) == 1
+            assert events[0].outcome == "pass"
+            assert events[0].policy_version > 0
 
     async def test_pass_pins_dataset_when_enabled(
         self,

@@ -248,6 +248,7 @@ describe('Backroom MCP tools', () => {
         'open_ath_review',
         'preview_screening_quarantine_batch',
         'list_screening_quarantines',
+        'list_screening_review_events',
         'list_screening_disputes',
         'list_screening_source_files',
         'list_screening_submissions',
@@ -1148,6 +1149,7 @@ describe('Backroom MCP tools', () => {
     > = {
       get_screening_review_queue: { maxLimit: 200, maxDefault: 50 },
       list_screening_quarantines: { maxLimit: 200, maxDefault: 50 },
+      list_screening_review_events: { maxLimit: 20, maxDefault: 10 },
       list_screening_disputes: { maxLimit: 200, maxDefault: 50 },
       list_screening_source_files: { maxLimit: 512, maxDefault: 512 },
       list_screening_submissions: { maxLimit: 200, maxDefault: 50 },

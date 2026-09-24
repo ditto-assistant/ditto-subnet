@@ -2224,6 +2224,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-review-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Screening Review Events
+         * @description Read immutable snapshots; a missing receipt remains missing, never CLEAR.
+         */
+        get: operations["list_screening_review_events_api_v1_admin_screening_review_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-submissions": {
         parameters: {
             query?: never;
@@ -11229,6 +11249,73 @@ export interface components {
             start_event: string | null;
             /** Window Started At */
             window_started_at: string | null;
+        };
+        /** AdminScreeningReviewEvent */
+        AdminScreeningReviewEvent: {
+            /** Actor */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /**
+             * Event Kind
+             * @enum {string}
+             */
+            event_kind: "automated" | "manual";
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Next Agent Status */
+            next_agent_status: string;
+            /** Outcome */
+            outcome: string;
+            /** Policy Version */
+            policy_version: number;
+            /** Previous Event Id */
+            previous_event_id: string | null;
+            /** Prior Agent Status */
+            prior_agent_status: string;
+            /** Quarantine Id */
+            quarantine_id: string | null;
+            /** Reason */
+            reason: string | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Resolution Id */
+            resolution_id: string | null;
+            /** Reviewer Model */
+            reviewer_model: string | null;
+        };
+        /** AdminScreeningReviewEventList */
+        AdminScreeningReviewEventList: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["AdminScreeningReviewEvent"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
         };
         /** AdminScreeningSubmission */
         AdminScreeningSubmission: {
@@ -36562,6 +36649,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminQuarantineResolveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_screening_review_events_api_v1_admin_screening_review_events_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScreeningReviewEventList"];
                 };
             };
             /** @description Validation Error */

@@ -104,6 +104,38 @@ class AdminQuarantineList(BaseModel):
     count: int
 
 
+class AdminScreeningReviewEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    event_id: UUID
+    agent_id: UUID
+    attempt_id: UUID
+    quarantine_id: UUID | None
+    resolution_id: UUID | None
+    previous_event_id: UUID | None
+    event_kind: Literal["automated", "manual"]
+    artifact_sha256: str
+    policy_version: int
+    actor: str
+    reviewer_model: str | None
+    outcome: str
+    reason_code: str | None
+    reason: str | None
+    prior_agent_status: str
+    next_agent_status: str
+    evidence: dict[str, object]
+    created_at: datetime
+
+
+class AdminScreeningReviewEventList(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[AdminScreeningReviewEvent]
+    count: int
+    limit: int
+    offset: int
+
+
 class AdminQuarantineResolveRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
