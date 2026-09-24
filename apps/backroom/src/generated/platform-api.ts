@@ -20203,6 +20203,10 @@ export interface components {
         L2CanaryClaimRequest: {
             /** Instance Id */
             instance_id: string;
+            /** Settings Checksum */
+            settings_checksum: string;
+            /** Settings Revision */
+            settings_revision: number;
         };
         /** L2CanaryClaimResponse */
         L2CanaryClaimResponse: {
