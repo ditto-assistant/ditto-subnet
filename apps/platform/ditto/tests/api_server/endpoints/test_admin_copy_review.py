@@ -233,6 +233,7 @@ async def _seed_scored_agent(
     *,
     score_count: int = 3,
     status: AgentStatus = AgentStatus.SCORED,
+    screening_policy_version: int = 8,
 ) -> tuple[UUID, str]:
     agent_id = uuid4()
     sha256 = agent_id.hex * 2
@@ -244,7 +245,7 @@ async def _seed_scored_agent(
                 name="benchmax",
                 sha256=sha256,
                 status=status,
-                screening_policy_version=8,
+                screening_policy_version=screening_policy_version,
                 created_at=_T0,
             )
         )
@@ -2086,3 +2087,121 @@ async def test_reject_requires_cited_evidence_and_a_reason_code(
     assert record.failure_domain == "artifact"
     assert record.reason_codes == ["I5.benchmark_semantic_compiler"]
     assert record.evidence_references == ["src/main.rs:42"]
+
+
+async def _assert_hold_untouched(
+    maker: async_sessionmaker[AsyncSession], agent_id: UUID
+) -> None:
+    from ditto.db.models import ScreeningDecisionRecord
+
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        review = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == agent_id)
+        )
+        assert agent is not None and agent.status == AgentStatus.ATH_PENDING_REVIEW
+        assert review is not None and review.status == "pending"
+        assert review.resolution is None
+        actions = list(
+            await session.scalars(
+                select(AthReviewAction).where(
+                    AthReviewAction.review_id == review.review_id,
+                    AthReviewAction.action != "reopen",
+                )
+            )
+        )
+        assert actions == []
+        assert (
+            await session.scalar(
+                select(ScreeningDecisionRecord).where(
+                    ScreeningDecisionRecord.agent_id == agent_id
+                )
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize(
+    "reason_codes",
+    [
+        # Free text that only satisfied the old two-character floor.
+        ["xx"],
+        # Near-miss and invented codes: not in the published catalog.
+        ["I5.benchmark_semantic_compiler_v2"],
+        ["I5.production_family_compiler"],
+        # One published code does not launder an unpublished one beside it.
+        ["I5.benchmark_semantic_compiler", "xx"],
+        # Published, but a verification/protocol failure, not a proven
+        # violation: this route always records violation_proven=True.
+        ["V2.platform_verification_failed"],
+        ["Q1.protocol_contract_failure"],
+    ],
+)
+async def test_reject_with_an_unpublished_reason_code_leaves_the_hold_untouched(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    reason_codes: list[str],
+) -> None:
+    """A reject must cite published proven-violation codes (policy-v13 catalog).
+
+    Otherwise the agent would be banned and a precedent-weight proven violation
+    recorded under a code the policy never published.
+    """
+    agent_id, sha256 = await _seed_scored_agent(maker)
+    _install(app, maker)
+    opened = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/open",
+        json={
+            "expected_sha256": sha256,
+            "expected_score_count": 3,
+            "reason": "Manual benchmark-overfit review",
+        },
+        headers=_HEADERS,
+    )
+    assert opened.status_code == 200
+
+    rejected = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "reject",
+            "reason": "Family compiler on served /run",
+            "evidence_references": ["src/main.rs:42"],
+            "reason_codes": reason_codes,
+        },
+        headers=_HEADERS,
+    )
+    assert rejected.status_code == 422
+    await _assert_hold_untouched(maker, agent_id)
+
+
+async def test_reject_under_a_policy_with_no_published_catalog_fails_closed(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A v14 decision cannot borrow the v13 catalog before v14 codes ship."""
+    agent_id, sha256 = await _seed_scored_agent(maker, screening_policy_version=14)
+    _install(app, maker)
+    opened = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/open",
+        json={
+            "expected_sha256": sha256,
+            "expected_score_count": 3,
+            "reason": "Manual benchmark-overfit review",
+        },
+        headers=_HEADERS,
+    )
+    assert opened.status_code == 200
+
+    rejected = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "reject",
+            "reason": "Family compiler on served /run",
+            "evidence_references": ["src/main.rs:42"],
+            "reason_codes": ["I5.benchmark_semantic_compiler"],
+        },
+        headers=_HEADERS,
+    )
+    assert rejected.status_code == 422
+    assert "no published reason-code catalog for screening policy v14" in rejected.text
+    await _assert_hold_untouched(maker, agent_id)

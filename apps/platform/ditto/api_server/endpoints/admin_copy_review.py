@@ -84,6 +84,7 @@ from ditto.db.queries.scores import (
     list_scores_for_agent,
 )
 from ditto.db.queries.screening_decisions import record_screening_decision
+from ditto_screening_protocol import unpublished_violation_codes
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -266,6 +267,34 @@ def _audit(
             for action in actions or []
         ],
     )
+
+
+def decision_policy_version(agent: Agent, review: AthReview) -> int:
+    """The policy version an ATH decision is recorded (and its codes checked) under."""
+    return max(1, agent.screening_policy_version, review.original_policy_version)
+
+
+def reject_reason_code_problem(
+    reason_codes: list[str], policy_version: int
+) -> str | None:
+    """Why ``reason_codes`` cannot back a reject at ``policy_version``, if they can't.
+
+    A reject records a proven violation with precedent weight, so every code
+    must be a published I*/S* code in that version's catalog. A version with no
+    published catalog refuses every code rather than borrowing an older one.
+    """
+    unknown = unpublished_violation_codes(reason_codes, policy_version)
+    if unknown is None:
+        return (
+            f"no published reason-code catalog for screening policy "
+            f"v{policy_version}; a reject cannot be recorded until it ships"
+        )
+    if unknown:
+        return (
+            "reject reason_codes are not published proven-violation codes "
+            f"for screening policy v{policy_version}: {', '.join(unknown)}"
+        )
+    return None
 
 
 def _string_list(value: object) -> list[str]:
@@ -1075,6 +1104,15 @@ async def resolve_copy_review(
             raise HTTPException(
                 status_code=409, detail="agent hold reason no longer matches review"
             )
+        policy_version = decision_policy_version(agent, review)
+        if canonical == "reject":
+            # Checked before any write: an unpublished code must leave the
+            # hold, the action history, and the decision ledger untouched.
+            problem = reject_reason_code_problem(
+                list(payload.reason_codes), policy_version
+            )
+            if problem is not None:
+                raise HTTPException(status_code=422, detail=problem)
         latest_reopen = await session.scalar(
             select(AthReviewAction)
             .where(
@@ -1159,9 +1197,7 @@ async def resolve_copy_review(
             failure_domain="artifact" if canonical == "reject" else "none",
             retry_count=0,
             independent_workers=0,
-            policy_version=max(
-                1, agent.screening_policy_version, review.original_policy_version
-            ),
+            policy_version=policy_version,
             public_reason=payload.reason,
             reviewer=actor,
             decided_at=now,

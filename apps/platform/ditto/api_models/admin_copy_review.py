@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from ditto.api_models.screener import ScreenReviewAudit
+from ditto_screening_protocol import unpublished_violation_codes
 
 # One ``file:line`` (optionally ``file:line-line``) citation into the reviewed
 # source, or one machine-produced evidence record reference such as
@@ -293,7 +294,10 @@ class AdminCopyReviewResolveRequest(BaseModel):
     writes it as a proven violation (``violation_proven=True``,
     ``failure_domain="artifact"``, ``precedent_weight=True``) that later
     reviews cite as precedent. An uncited reject would otherwise fabricate
-    exactly that proof.
+    exactly that proof. Reject codes must be published proven-violation codes
+    (I*/S*) from ``ditto_screening_protocol.policy_reason_codes``; free text,
+    and the Q1/V* verification-failure codes, are refused here and again
+    against the decision's own policy version in ``resolve_copy_review``.
     """
 
     model_config = ConfigDict(extra="ignore")
@@ -309,7 +313,9 @@ class AdminCopyReviewResolveRequest(BaseModel):
         ]
     ] = Field(default_factory=list)
     # Published policy reason codes (e.g. ``I4.final_text_rewritten``) for the
-    # decision record; free-form so a v14 addendum needs no wire change.
+    # decision record. A reject's codes are validated against the published
+    # catalog below; the wire stays a plain string list so a v14 catalog needs
+    # no wire change.
     reason_codes: list[
         Annotated[str, StringConstraints(strip_whitespace=True, min_length=2)]
     ] = Field(default_factory=list)
@@ -331,6 +337,14 @@ class AdminCopyReviewResolveRequest(BaseModel):
                 "rejecting an ATH hold requires at least one published "
                 "reason_codes entry backing the proven-violation record"
             )
+        if self.resolution in ("reject", "ban"):
+            unknown = unpublished_violation_codes(self.reason_codes)
+            if unknown:
+                raise ValueError(
+                    "rejecting an ATH hold requires published proven-violation "
+                    f"reason codes (I*/S* in the policy catalog); not published: "
+                    f"{', '.join(unknown)}"
+                )
         return self
 
 

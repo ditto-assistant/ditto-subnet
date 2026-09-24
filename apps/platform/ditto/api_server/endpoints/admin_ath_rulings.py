@@ -74,7 +74,9 @@ from ditto.api_models.admin_copy_review import (
 from ditto.api_server.continual_retest_settings import tie_weighting_is_active
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_copy_review import (
+    decision_policy_version,
     open_copy_review,
+    reject_reason_code_problem,
     resolve_copy_review,
 )
 from ditto.api_server.endpoints.admin_quarantine import (
@@ -564,6 +566,24 @@ async def _preview_ruling(
             conflict_reason="reject requires reason_codes",
             message="a reject ruling must cite at least one published reason code",
         )
+    if ruling.action == "reject":
+        # The same published-catalog check resolve_copy_review applies, at the
+        # policy version the decision would be recorded under (an item with no
+        # review yet is opened at the agent's own policy version).
+        code_problem = reject_reason_code_problem(
+            list(ruling.reason_codes),
+            decision_policy_version(agent, review)
+            if review is not None
+            else max(1, agent.screening_policy_version),
+        )
+        if code_problem is not None:
+            return _blocked(
+                **base,
+                ok=False,
+                disposition="invalid",
+                conflict_reason=code_problem,
+                message=code_problem,
+            )
 
     held = (
         agent.status == AgentStatus.ATH_PENDING_REVIEW

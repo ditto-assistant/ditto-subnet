@@ -1258,3 +1258,59 @@ async def test_a_reject_with_no_reason_code_is_invalid_on_both_legs(
     assert [action.action for action in actions] == ["reject"]
     # The reason code reached the shared resolve path, not only the batch note.
     assert actions[0].evidence["reason_codes"] == ["I5.benchmark_semantic_compiler"]
+
+
+async def test_a_reject_with_an_unpublished_reason_code_is_invalid_on_both_legs(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Preview refuses a reject whose codes are not published I*/S* codes.
+
+    It mirrors resolve_copy_review, so the batch never promises a "ready"
+    ruling that would fail at execute; the held agent stays held and no
+    reject action is written.
+    """
+    await _activate(maker)
+    unpublished = await _seed_held(
+        maker, hotkey="5Unpublished", composite=0.7, created_at=_T0 - timedelta(hours=1)
+    )
+    verification = await _seed_held(
+        maker, hotkey="5Verify", composite=0.6, created_at=_T0 - timedelta(hours=1)
+    )
+    _install(app, maker)
+
+    rulings = [
+        _ruling("reject", unpublished[0], unpublished[1], codes=("xx",)),
+        _ruling(
+            "reject",
+            verification[0],
+            verification[1],
+            codes=("V2.platform_verification_failed",),
+        ),
+    ]
+    preview = await client.post(_PREVIEW, json={"rulings": rulings}, headers=_HEADERS)
+    assert preview.status_code == 200, preview.text
+    items = preview.json()["items"]
+    assert [item["disposition"] for item in items] == ["invalid", "invalid"]
+    assert "not published proven-violation codes" in items[0]["conflict_reason"]
+    assert items[0]["conflict_reason"].endswith(": xx")
+    assert items[1]["conflict_reason"].endswith(": V2.platform_verification_failed")
+    assert preview.json()["blocked_count"] == 2
+
+    executed = await client.post(
+        _EXECUTE,
+        json={
+            "preview_token": preview.json()["preview_token"],
+            "confirmation": ATH_RULINGS_CONFIRMATION,
+            "rulings": rulings,
+        },
+        headers=_HEADERS,
+    )
+    assert executed.status_code == 200, executed.text
+    assert [item["status"] for item in executed.json()["items"]] == [
+        "failed",
+        "failed",
+    ]
+    for held in (unpublished, verification):
+        assert await _status(maker, held[0]) == AgentStatus.ATH_PENDING_REVIEW.value
+        _, actions = await _review(maker, held[0])
+        assert [action.action for action in actions if action.action != "reopen"] == []

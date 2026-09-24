@@ -27,7 +27,7 @@
         "I5"
       ],
       "reason_codes": [
-        "I5.production_family_compiler"
+        "I5.benchmark_semantic_compiler"
       ]
     },
     {
@@ -54,9 +54,9 @@
         "I7"
       ],
       "reason_codes": [
-        "I3.model_dissent_suppressed",
-        "I5.production_family_compiler",
-        "I7.tool_catalog_withheld"
+        "I3.semantic_retry_or_selection",
+        "I5.benchmark_semantic_compiler",
+        "I7.applicable_capability_removed"
       ]
     },
     {
@@ -79,7 +79,7 @@
         "I5"
       ],
       "reason_codes": [
-        "I5.production_family_compiler"
+        "I5.benchmark_semantic_compiler"
       ]
     },
     {
@@ -105,9 +105,9 @@
         "I7"
       ],
       "reason_codes": [
-        "I2.record_shape_altered",
-        "I5.production_family_compiler",
-        "I7.tool_catalog_withheld"
+        "I2.final_evidence_removed",
+        "I5.benchmark_semantic_compiler",
+        "I7.applicable_capability_removed"
       ]
     },
     {
@@ -133,8 +133,8 @@
         "I7"
       ],
       "reason_codes": [
-        "I5.production_family_compiler",
-        "I7.tool_catalog_withheld"
+        "I5.benchmark_semantic_compiler",
+        "I7.applicable_capability_removed"
       ]
     }
   ]
