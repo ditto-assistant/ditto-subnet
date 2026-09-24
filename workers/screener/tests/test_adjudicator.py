@@ -1540,7 +1540,7 @@ async def test_provider_status_is_recorded_without_the_response_body(
         (None, True),
     ],
 )
-async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
+async def test_evidence_bearing_ledger_can_settle_from_preloaded_source(
     tmp_path: Path,
     error_code: str | None,
     ledger_final: bool,
@@ -1609,10 +1609,222 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
     assert result.completion_receipt.completion_tokens == 40
     assert len(requests) == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
+        "read_file",
         "submit_adjudication",
         "request_operator_review",
     ]
     assert "Preloaded source evidence" in str(requests[0]["messages"])
+
+
+async def test_bounded_court_reads_missing_lead_then_certifies_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_PRELOADED_LEDGER_LOCATIONS", 1)
+    requests: list[dict[str, object]] = []
+    turns = iter(
+        [
+            _call(
+                "read_file",
+                {"path": "Dockerfile", "start_line": 1, "end_line": 1},
+            ),
+            _call(
+                "submit_adjudication",
+                {
+                    "decision": "clear",
+                    "clear_clause": "model_authors_graded_slot",
+                    "reason": "Both retained leads were inspected.",
+                    "citations": [
+                        {"path": "src/main.rs", "line": 6},
+                        {"path": "Dockerfile", "line": 1},
+                    ],
+                },
+            ),
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [next(turns)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(
+        _archive(tmp_path),
+        notes=[
+            {"kind": "concern", "path": "src/main.rs", "line": 6},
+            {"kind": "concern", "path": "Dockerfile", "line": 1},
+        ],
+        ledger_final=True,
+    )
+    assert result.decision == "clear"
+    assert result.completion_receipt is not None
+    assert result.completion_receipt.request_count == 2
+    assert len(requests) == 2
+    assert "read_file" in [tool["function"]["name"] for tool in requests[0]["tools"]]
+    assert '"path": "Dockerfile"' in str(requests[1]["messages"])
+
+
+async def test_bounded_court_final_turn_removes_read_tool(tmp_path: Path) -> None:
+    requests: list[dict[str, object]] = []
+    calls = iter(
+        [
+            _call("read_file", {"path": "src/main.rs", "start_line": 4, "end_line": 6}),
+            _call("read_file", {"path": "src/main.rs", "start_line": 7, "end_line": 8}),
+            _call("read_file", {"path": "Dockerfile", "start_line": 1, "end_line": 1}),
+            _call(
+                "request_operator_review", {"reason": "Other paths remain unverified"}
+            ),
+        ]
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {"message": {"role": "assistant", "tool_calls": [next(calls)]}}
+                ]
+            },
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-evidence-incomplete"
+    assert len(requests) == 4
+    assert "read_file" not in [
+        tool["function"]["name"] for tool in requests[-1]["tools"]
+    ]
+
+
+async def test_bounded_court_rejects_unadvertised_final_read(tmp_path: Path) -> None:
+    calls = [
+        _call("read_file", {"path": "src/main.rs", "start_line": 4, "end_line": 6})
+        for _ in range(4)
+    ]
+    result = await _adjudicator(
+        _key(tmp_path), _transport([[call] for call in calls])
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+    assert result.decision == "escalate"
+    assert result.escalation_code == "adjudicator-failed"
+    assert result.run_diagnostic is not None
+    assert result.run_diagnostic.request_count == 4
+
+
+async def test_bounded_court_accepts_two_read_windows_in_one_turn(
+    tmp_path: Path,
+) -> None:
+    first = _call("read_file", {"path": "src/main.rs", "start_line": 4, "end_line": 6})
+    second = _call("read_file", {"path": "Dockerfile", "start_line": 1, "end_line": 1})
+    second["id"] = "read-file-2"
+    transport = _transport(
+        [
+            [first, second],
+            [
+                _call(
+                    "submit_adjudication",
+                    {
+                        "decision": "clear",
+                        "clear_clause": "model_authors_graded_slot",
+                        "reason": "The served model writes the reply.",
+                        "citations": [
+                            {"path": "src/main.rs", "line": 6},
+                            {"path": "Dockerfile", "line": 1},
+                        ],
+                    },
+                )
+            ],
+        ]
+    )
+    result = await _adjudicator(_key(tmp_path), transport).adjudicate(
+        _archive(tmp_path), notes=[_CONCERN], ledger_final=True
+    )
+    assert result.decision == "clear"
+    assert result.completion_receipt is not None
+    assert result.completion_receipt.request_count == 2
+
+
+async def test_bounded_court_settles_when_read_budget_is_spent(tmp_path: Path) -> None:
+    requests: list[dict[str, object]] = []
+    read_calls = [
+        _call(
+            "read_file", {"path": "src/main.rs", "start_line": line, "end_line": line}
+        )
+        for line in (4, 5, 6)
+    ]
+    for index, call in enumerate(read_calls):
+        call["id"] = f"read-{index}"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        calls = (
+            read_calls
+            if len(requests) == 1
+            else [_call("request_operator_review", {"reason": "Other paths unknown"})]
+        )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "tool_calls": calls}}]},
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+    assert result.decision == "escalate"
+    assert len(requests) == 2
+    assert "read_file" not in [
+        tool["function"]["name"] for tool in requests[1]["tools"]
+    ]
+
+
+async def test_bounded_court_corrects_one_completed_turn_without_tools(
+    tmp_path: Path,
+) -> None:
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        calls = (
+            []
+            if len(requests) == 1
+            else [
+                _call(
+                    "submit_adjudication",
+                    {
+                        "decision": "clear",
+                        "clear_clause": "model_authors_graded_slot",
+                        "reason": "The served model writes the reply.",
+                        "citations": [{"path": "src/main.rs", "line": 6}],
+                    },
+                )
+            ]
+        )
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "tool_calls": calls}}]},
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], ledger_final=True)
+    assert result.decision == "clear"
+    assert len(requests) == 2
+    assert "omitted the required" in str(requests[1]["messages"])
 
 
 @pytest.mark.parametrize("decision", ["clear", "reject"])
@@ -1799,8 +2011,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v8-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v8-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v9-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v9-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:
@@ -1835,8 +2047,8 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     assert "omission of its duplicate README" in policy_v13
     assert "null compact score" in policy_v13
 
-    legacy_submit = _adjudicator_tools_for_policy(12, decision_only=True)[0]
-    current_submit = _adjudicator_tools_for_policy(13, decision_only=True)[0]
+    legacy_submit = _adjudicator_tools_for_policy(12, decision_only=True)[1]
+    current_submit = _adjudicator_tools_for_policy(13, decision_only=True)[1]
     legacy_invariants = legacy_submit["function"]["parameters"]["properties"][
         "reject_invariant"
     ]["enum"]
@@ -1848,11 +2060,11 @@ def test_adjudicator_policy_v13_adds_i8_and_incomplete_review_boundary() -> None
     assert [
         tool["function"]["name"]
         for tool in _adjudicator_tools_for_policy(13, decision_only=True)
-    ] == ["submit_adjudication", "request_operator_review"]
+    ] == ["read_file", "submit_adjudication", "request_operator_review"]
     assert [
         tool["function"]["name"]
         for tool in _adjudicator_tools_for_policy(12, decision_only=True)
-    ] == ["submit_adjudication"]
+    ] == ["read_file", "submit_adjudication"]
 
 
 async def test_policy_v13_can_keep_incomplete_mandatory_review_held(
@@ -1897,6 +2109,7 @@ async def test_policy_v13_can_keep_incomplete_mandatory_review_held(
     assert result.completion_receipt is not None
     assert result.completion_receipt.request_count == 1
     assert [tool["function"]["name"] for tool in requests[0]["tools"]] == [
+        "read_file",
         "submit_adjudication",
         "request_operator_review",
     ]

@@ -78,3 +78,30 @@ clear `c845249d`, it returned `source-review-inconsistent-verdict` after 39 s.
 This bounded probe does not validate the larger report-only single-Sol design
 in draft PR #2022. The existing fanout design also has an exact-SHA false
 CLEAR in a prior calibration and needs an independent certification gate.
+
+## Bounded on-demand read prototype
+
+The draft court now advertises only `read_file`, `submit_adjudication`, and
+policy-v13 `request_operator_review` after its complete initial packet. It
+allows at most three additional source windows over four model turns, removes
+`read_file` on the final turn, and certifies citations against the exact lines
+actually served. A terminal verdict cannot share a turn with a read. One
+completed turn without a tool call gets one corrective prompt; a stalled
+stream does not get replayed. Every error remains a held terminal result.
+Local tests cover a late concern read, multi-read batch, final-turn restriction,
+and citation certification.
+
+The limited report-only checks still did not pass the activation gate:
+
+| Exact SHA prefix | Independent label | On-demand observation |
+| --- | --- | --- |
+| `13e30145` | REJECT, I3 | Sol returned an invalid first-turn tool response in two trials; both held after one request. |
+| `7d8c41db` | CLEAR | Sol inspected source over three requests, then produced a self-inconsistent REJECT with a CLEAR clause; host contract validation held it. |
+| `bac8c60f` | CLEAR | GLM again streamed without a tool call; after accepting Sol's bounded read batch, Sol requested operator review after three requests. |
+
+The fourth artifact was not repeated on this variant because these three
+failures already block activation under the $2 experiment cap. Source-reading
+ability and deterministic terminal HOLD behavior are verified locally, but no
+live model in this sample produced a certified CLEAR or REJECT. Broader
+rescreening remains blocked on independent exact-artifact accuracy and citation
+evidence.
