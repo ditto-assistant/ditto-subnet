@@ -20,6 +20,7 @@ bucket.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import os
 import subprocess
 from collections.abc import AsyncIterator
@@ -42,7 +43,7 @@ from ditto.api_server.dependencies import (
     get_price_oracle,
 )
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_PAYMENT_REPLAYED
-from ditto.api_server.payment_verifier import VerifiedPayment
+from ditto.api_server.payment_verifier import PaymentVerifier, VerifiedPayment
 
 pytestmark = pytest.mark.integration
 
@@ -88,16 +89,24 @@ def _build_fake_verifier(
     verifier = MagicMock()
 
     async def _verify(
-        _proof,
-        *,
+        proof,
         expected_hotkey: str,
         expected_amount_rao: int,
-        legacy_amount_cutoff_at=None,
+        legacy_amount_cutoff_at: datetime | None = None,
         expected_send_address: str | None = None,
+        reserved_terms_expire_at: datetime | None = None,
+        fallback_amount_rao: int | None = None,
+        fallback_send_address: str | None = None,
     ) -> VerifiedPayment:
+        assert proof.block_hash == block_hash
         assert expected_amount_rao == _QUOTE_RAO
         assert legacy_amount_cutoff_at is None
         assert expected_send_address == dest_address
+        # These uploads carry no admission token, so no reserved quote binds
+        # them; the current fee is the only term.
+        assert reserved_terms_expire_at is None
+        assert fallback_amount_rao in (None, _QUOTE_RAO)
+        assert fallback_send_address in (None, dest_address)
         return VerifiedPayment(
             block_hash=block_hash,
             extrinsic_index=ext_idx,
@@ -109,6 +118,14 @@ def _build_fake_verifier(
             block_timestamp=datetime.now(UTC),
         )
 
+    # Fail loudly if the real verifier's signature drifts from this fake: an
+    # unexpected keyword would otherwise surface only as an opaque 500 in the
+    # MinIO-backed tier that local runs skip.
+    real = inspect.signature(PaymentVerifier.verify_payment)
+    fake = inspect.signature(_verify)
+    assert list(real.parameters)[1:] == list(fake.parameters), (
+        "PaymentVerifier.verify_payment changed; update _build_fake_verifier"
+    )
     verifier.verify_payment = AsyncMock(side_effect=_verify)
     return verifier
 
