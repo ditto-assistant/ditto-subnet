@@ -20,6 +20,7 @@ from ditto.api_models.benchmark_contract import (
     benchmark_contract,
     latest_benchmark_contract,
 )
+from ditto.api_models.public import PublicBenchRolloutResponse
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.benchmark_rollout import (
@@ -70,12 +71,15 @@ from ditto.db.queries.benchmark_rollout import (
     LEGACY_BENCH_VERSION,
     MIN_DESIRED_AUTHORITY_AGENTS,
     MIN_SCOREABLE_BENCH_VERSION,
+    PRIORITY_COHORT_SIZE,
+    SCORING_QUORUM,
     DatasetPin,
     InferenceActivationRequirements,
     RolloutConflictError,
     RolloutSnapshotMember,
     active_bench_version,
     append_rollout_member,
+    bench_promotion_requirement,
     bind_inference_activation_requirements,
     capable_validator_counts,
     create_rollout_snapshot,
@@ -218,7 +222,10 @@ async def test_admin_status_read_does_not_start_rollout(
             "max_rescore_cohort_size": 25,
             "priority_cohort_size": 5,
             "priority_cohort_target": None,
+            "priority_cohort_ready_count": 0,
             "priority_complete": False,
+            "promotion_pending": False,
+            "promotion_requirement": None,
             "members": [],
         }
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
@@ -536,6 +543,138 @@ async def _inherited_era_session(
     ):
         agent_ids, rollout = await _seed_rollout(session, now)
         yield session, agent_ids, rollout
+
+
+def _desired_quorum(
+    agent_id: UUID, *, desired_version: int, now: datetime, tag: str
+) -> list[Score]:
+    """One complete, rankable desired-version quorum for ``agent_id``."""
+    return [
+        Score(
+            agent_id=agent_id,
+            bench_version=desired_version,
+            validator_hotkey=f"validator-{validator}",
+            run_id=f"progress-{tag}-{validator}",
+            signature="bb",
+            seed=1,
+            composite=0.8,
+            tool_mean=0.8,
+            memory_mean=0.8,
+            median_ms=1,
+            n=114,
+            details={
+                "bench_version": desired_version,
+                "v9_base": {"semantic_gate_factor_bps": 10_000},
+            },
+            generated_at=now,
+        )
+        for validator in range(SCORING_QUORUM)
+    ]
+
+
+async def test_rollout_state_publishes_promotion_progress_through_activation(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """#2079: rollout status says what emission authority is waiting for.
+
+    During the Bench 13 rollout v13 scoring beside v12 emissions read as a
+    stall, because the rollout status published only ``priority_complete``.
+    This walks one rollout through every stage of the first flip and checks
+    the published progress at each: the priority barrier counted exactly as
+    the gate counts it (a permanently ineligible leader is satisfied), the
+    ranked-quorum gate still holding promotion after the barrier closes, the
+    hybrid flip clearing ``promotion_pending`` while the row is still open, and
+    durable activation.
+    """
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_rollout_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        desired = rollout.desired_version
+        source = await active_bench_version(session)
+        assert desired > source
+
+        # Two leaders finish; a third is banned, which the barrier skips.
+        for index in (0, 1):
+            session.add_all(
+                _desired_quorum(
+                    agent_ids[index], desired_version=desired, now=now, tag=str(index)
+                )
+            )
+        banned = await session.get(Agent, agent_ids[2])
+        assert banned is not None
+        banned.status = AgentStatus.BANNED
+        await session.flush()
+
+        state = await rollout_state(session, now=now)
+        assert state["status"] == "collecting"
+        assert state["active_version"] == source
+        assert state["priority_cohort_size"] == PRIORITY_COHORT_SIZE
+        assert state["priority_cohort_ready_count"] == 3
+        assert state["priority_complete"] is False
+        assert state["promotion_pending"] is True
+        requirement = state["promotion_requirement"]
+        assert requirement == bench_promotion_requirement(
+            emission_version=source,
+            rollout_version=desired,
+            priority_cohort_size=PRIORITY_COHORT_SIZE,
+        )
+        assert f"Bench v{desired} scoring is in progress" in requirement
+        assert f"Bench v{source} still controls emissions" in requirement
+        assert (
+            f"first {PRIORITY_COHORT_SIZE} inherited priority-cohort positions"
+            in requirement
+        )
+        assert f"complete {SCORING_QUORUM}-score v{desired} quorum" in requirement
+        assert f"at least {MIN_DESIRED_AUTHORITY_AGENTS} agents" in requirement
+        # The public wire model carries every new key unchanged.
+        public = PublicBenchRolloutResponse.model_validate(state)
+        assert public.promotion_pending is True
+        assert public.priority_cohort_ready_count == 3
+        assert public.promotion_requirement == requirement
+
+        # The barrier closes, but the banned leader leaves four ranked families
+        # at the desired version: the ranked-quorum gate still holds emissions.
+        for index in (3, 4):
+            session.add_all(
+                _desired_quorum(
+                    agent_ids[index], desired_version=desired, now=now, tag=str(index)
+                )
+            )
+        await session.flush()
+        state = await rollout_state(session, now=now)
+        assert state["priority_cohort_ready_count"] == PRIORITY_COHORT_SIZE
+        assert state["priority_complete"] is True
+        assert state["ranked_quorum_agents"] == MIN_DESIRED_AUTHORITY_AGENTS - 1
+        assert state["active_version"] == source
+        assert state["promotion_pending"] is True
+        assert state["promotion_requirement"] is not None
+
+        # A fifth ranked family completes the emission set. Authority moves to
+        # the desired version while the row is still collecting, and nothing is
+        # reported as pending any more.
+        await _seed_non_member_ranked_agent(session, now=now, desired_version=desired)
+        state = await rollout_state(session, now=now)
+        assert state["status"] == "collecting"
+        assert state["active_version"] == desired
+        assert state["promotion_pending"] is False
+        assert state["promotion_requirement"] is None
+
+        # Durable activation: the completed transition.
+        assert await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        state = await rollout_state(session, now=now)
+        assert state["status"] == "activated"
+        assert state["active_version"] == desired
+        assert state["desired_version"] == desired
+        assert state["promotion_pending"] is False
+        assert state["promotion_requirement"] is None
 
 
 async def test_historical_rescore_cohort_fills_from_exactly_two_prior_eras(

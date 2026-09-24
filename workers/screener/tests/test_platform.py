@@ -24,6 +24,7 @@ from ditto_screener.errors import PlatformError
 from ditto_screener.heartbeat import ScreenerHeartbeatRequest
 from ditto_screener.platform import (
     _REMOTE_SOURCE_REVIEW_SETTLEMENT_GRACE_SECONDS,
+    _TRANSIENT_PLATFORM_RETRY_DELAYS,
     PlatformClient,
     RemoteSubmissionBuildRejected,
     _remote_source_review_poll_deadline,
@@ -790,8 +791,10 @@ async def test_non_200_raises_platform_error(
             )
 
 
-async def test_multipart_part_failure_is_single_shot_and_aborted(
-    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+async def test_multipart_part_failure_exhausts_retries_and_aborts(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     archive = tmp_path / "image.tar"
     archive.write_bytes(b"retry-me")
@@ -830,6 +833,11 @@ async def test_multipart_part_failure_is_single_shot_and_aborted(
         raise AssertionError(request.url)
 
     client, http = _make_client(make_config(), handler)
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
     async with http:
         with pytest.raises(PlatformError, match="503"):
             await client.upload_screened_image(
@@ -841,8 +849,73 @@ async def test_multipart_part_failure_is_single_shot_and_aborted(
                 image_id="sha256:" + "34" * 32,
                 image_ref=f"ditto-screen/{_AGENT}:latest",
             )
-    assert put_calls == 1
+    assert put_calls == len(_TRANSIENT_PLATFORM_RETRY_DELAYS) + 1
     assert aborted
+
+
+async def test_multipart_part_mint_retries_transient_502(
+    make_config: Callable[..., ScreenerConfig],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive = tmp_path / "image.tar"
+    archive.write_bytes(b"retry-mint")
+    upload_id: UUID | None = None
+    mint_calls = 0
+    put_calls = 0
+
+    async def no_sleep(_delay: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal mint_calls, put_calls, upload_id
+        if request.url.path.endswith("/screened-image-upload"):
+            upload_id = UUID(json.loads(request.content)["image_upload_id"])
+            return httpx.Response(
+                200,
+                json={
+                    "image_upload_id": str(upload_id),
+                    "storage_upload_id": "storage-upload",
+                    "part_size_bytes": 5 * 1024**2,
+                    "expires_at": datetime.now(UTC).isoformat(),
+                },
+            )
+        if request.url.path.endswith("/part"):
+            mint_calls += 1
+            if mint_calls == 1:
+                return httpx.Response(502)
+            return httpx.Response(
+                200,
+                json={
+                    "upload_url": "https://storage.test/image.part",
+                    "expires_at": datetime.now(UTC).isoformat(),
+                    "required_headers": {},
+                },
+            )
+        if request.method == "PUT":
+            put_calls += 1
+            return httpx.Response(200, headers={"ETag": '"part-etag"'})
+        if request.url.path.endswith("/complete"):
+            return httpx.Response(200, json={"verified": True})
+        raise AssertionError(request.url)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        result = await client.upload_screened_image(
+            _AGENT,
+            attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+            path=str(archive),
+            sha256="12" * 32,
+            size_bytes=archive.stat().st_size,
+            image_id="sha256:" + "34" * 32,
+            image_ref=f"ditto-screen/{_AGENT}:latest",
+        )
+
+    assert result == upload_id
+    assert mint_calls == 2
+    assert put_calls == 1
 
 
 async def test_multipart_failure_aborts_upload(

@@ -44,6 +44,11 @@ function item(overrides: Partial<CopyReviewConsoleItem> = {}): CopyReviewConsole
       review_kind: 'copy',
       duplicate_of: '22222222-2222-4222-8222-222222222222',
       reason: 'legacy baseline-dominated hold',
+      reason_source: 'original_hold',
+      superseded_reason: null,
+      superseded_resolution: null,
+      superseded_resolution_reason: null,
+      superseded_at: null,
       policy_version: 1,
       fingerprint_versions: { lexical: null, structural: null, prompt: null },
       reference_provenance: 'legacy',
@@ -212,6 +217,45 @@ describe('CopyReviewPanel', () => {
     expect(screen.getByText('Same-owner lineage')).toBeDefined()
     fireEvent.click(screen.getByText(/held-agent/))
     expect(screen.getByText('Excluded — same payment owner lineage')).toBeDefined()
+  })
+
+  it('marks a withdrawn rejection as history and shows the reconsideration reason', () => {
+    // lets_635 v1: the queue kept showing the withdrawn I5 REJECT prose as the
+    // live hold reason on a pending appeal. The current reason is now the
+    // reconsideration, and the prior decision is labelled, not deleted.
+    const rejectProse = 'Reject under policy v13 for I5: benchmark-shaped answer assembly'
+    const reconsidered = item({
+      original: {
+        ...eligible.original,
+        reason: 'I5 rejection withdrawn as unsupported; reconsidering under v13',
+        reason_source: 'reconsideration',
+        superseded_reason: 'Deferred source review qualified this submission for I5',
+        superseded_resolution: 'reject',
+        superseded_resolution_reason: rejectProse,
+        superseded_at: '2026-09-23T05:36:00Z',
+      },
+    })
+    render(<CopyReviewPanel {...panelProps} initialItems={[reconsidered]} initialBulkEligibleCount={1} readOnly />)
+
+    expect(screen.getByText('Prior rejection withdrawn')).toBeDefined()
+    expect(
+      screen.getAllByText(/I5 rejection withdrawn as unsupported/).length,
+    ).toBeGreaterThan(0)
+    fireEvent.click(screen.getByText(/held-agent/))
+    expect(screen.getByText('Current reason (reconsideration)')).toBeDefined()
+    expect(screen.getByText(/Superseded — history, not an active finding/)).toBeDefined()
+    expect(screen.getByText(new RegExp(`Rejected: ${rejectProse}`))).toBeDefined()
+    expect(
+      screen.getByText(/Originally held for: Deferred source review qualified/),
+    ).toBeDefined()
+  })
+
+  it('leaves an ordinary hold reason unlabelled', () => {
+    render(<CopyReviewPanel {...panelProps} initialItems={[eligible]} initialBulkEligibleCount={1} readOnly />)
+    expect(screen.queryByText('Prior rejection withdrawn')).toBeNull()
+    fireEvent.click(screen.getByText(/held-agent/))
+    expect(screen.getByText('Reason')).toBeDefined()
+    expect(screen.queryByText(/Superseded — history/)).toBeNull()
   })
 
   it('names the matched submission that triggered the hold', () => {

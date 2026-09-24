@@ -4233,6 +4233,122 @@ class TestRunOnce:
         await worker.run_once()
         chain.put_weights.assert_awaited_once_with({registered: 1.0})
 
+    @pytest.mark.parametrize("burn_share", [0.4, 1.0])
+    async def test_registered_owner_replaces_rotated_burn_hotkey(
+        self, burn_share: float
+    ) -> None:
+        miner = "5Champion" + "x" * 39
+        owner = "5CurrentOwner" + "x" * 35
+        platform = _platform_with_ledger(jobs=[], ledger=[_entry(miner, 0.90)])
+        platform.get_ledger.return_value.burn_share = burn_share
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[
+                SimpleNamespace(uid=0, hotkey=miner),
+                SimpleNamespace(uid=1, hotkey=owner),
+            ]
+        )
+        chain.get_subnet_owner_hotkey = AsyncMock(return_value=owner)
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None  # Finney: derive target from live metagraph
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.get_recent_neurons.assert_awaited_once_with(cfg.netuid)
+        chain.get_subnet_owner_hotkey.assert_awaited_once_with(cfg.netuid)
+        chain.put_weights.assert_awaited_once()
+        weights = chain.put_weights.await_args.args[0]
+        assert weights[owner] == pytest.approx(burn_share)
+        assert weights.get(miner, 0) == pytest.approx(1.0 - burn_share)
+        assert "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz" not in weights
+
+    @pytest.mark.parametrize(
+        "neurons",
+        [
+            [SimpleNamespace(uid=1, hotkey="5Miner")],
+            [SimpleNamespace(uid=0, hotkey="")],
+            [
+                SimpleNamespace(uid=0, hotkey="5OwnerA"),
+                SimpleNamespace(uid=1, hotkey="5OwnerA"),
+            ],
+        ],
+    )
+    async def test_unresolved_owner_preserves_existing_weights(
+        self, neurons: list[SimpleNamespace]
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(return_value=neurons)
+        chain.get_subnet_owner_hotkey = AsyncMock(return_value="5OwnerA")
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.put_weights.assert_not_awaited()
+
+    async def test_uid_zero_without_owner_identity_is_not_burned(self) -> None:
+        miner = "5UnrelatedMiner" + "x" * 33
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[SimpleNamespace(uid=0, hotkey=miner)]
+        )
+        chain.get_subnet_owner_hotkey = AsyncMock(return_value="5AbsentOwner")
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.put_weights.assert_not_awaited()
+
+    async def test_empty_ledger_burns_to_registered_owner(self) -> None:
+        owner = "5CurrentOwner" + "x" * 35
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[SimpleNamespace(uid=0, hotkey=owner)]
+        )
+        chain.get_subnet_owner_hotkey = AsyncMock(return_value=owner)
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.put_weights.assert_awaited_once_with({owner: 1.0})
+
     async def test_chain_registration_read_failure_leaves_weights_unchanged(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:

@@ -1,8 +1,8 @@
 """Allow a withdrawn resolution on precautionary ATH holds.
 
 Revision ID: c4e8a1b27d90
-Revises: 1bc9d8a6207e
-Create Date: 2026-09-23
+Revises: 9d8c2e4a7f10
+Create Date: 2026-09-24
 
 ``withdraw`` records that an operator removed an unsupported precautionary
 hold. It is not a policy clear and not a reject.
@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "c4e8a1b27d90"
-down_revision: str | Sequence[str] | None = "1bc9d8a6207e"
+down_revision: str | Sequence[str] | None = "9d8c2e4a7f10"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

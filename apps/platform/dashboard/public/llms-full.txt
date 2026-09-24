@@ -23,7 +23,7 @@ All of the following are unauthenticated GET endpoints under `https://platform-a
 | `/bench/config` | Frozen scoring setup for the active bench |
 | `/bench/glossary` | Metric and category vocabulary |
 | `/bench/timeline` | Historical bench releases |
-| `/bench/rollout` | In-progress bench version collection |
+| `/bench/rollout` | Bench rollout progress and promotion gates |
 
 Source tarballs become downloadable only after the public-source window; review-held and rejected source stays private. In-progress score rows omit validator identity and ticket signatures.
 

@@ -1327,6 +1327,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/inference-failure-taxonomy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Inference Failure Taxonomy
+         * @description Recent chat/embedding outcomes by model, gateway, route, and error code.
+         *
+         *     ``/admin/inference-runtime-metrics`` already reports failures per lane per
+         *     window; this splits the same bounded windows by the dimensions an upstream
+         *     rate-limit burst actually moves. Counts and identifiers only.
+         */
+        get: operations["get_inference_failure_taxonomy_api_v1_admin_inference_failure_taxonomy_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/inference-routes": {
         parameters: {
             query?: never;
@@ -2234,6 +2258,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-review-events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Screening Review Events
+         * @description Read immutable snapshots; a missing receipt remains missing, never CLEAR.
+         */
+        get: operations["list_screening_review_events_api_v1_admin_screening_review_events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-submissions": {
         parameters: {
             query?: never;
@@ -2742,6 +2786,26 @@ export interface paths {
          * @description Show whether an independent enrolled identity exists, not worker readiness.
          */
         get: operations["get_replay_claimability_api_v1_admin_screening_verification_replays__agent_id___replay_id__claimability_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/source-review-queue-slo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Source Review Queue Slo
+         * @description p50/p95/oldest age, throughput, and reconciliation ghosts.
+         */
+        get: operations["get_source_review_queue_slo_api_v1_admin_source_review_queue_slo_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4328,7 +4392,8 @@ export interface paths {
          *     ``ranked_quorum_agents`` / ``min_ranked_quorum_agents`` answer the question
          *     the rest of this payload only implies: how close the desired version is to
          *     taking over weight-setting. Weights stay on ``active_version`` until the
-         *     former reaches the latter.
+         *     priority-cohort gate closes AND the former reaches the latter;
+         *     ``promotion_pending`` / ``promotion_requirement`` say so directly.
          */
         get: operations["benchmark_rollout_state_api_v1_public_bench_rollout_get"];
         put?: never;
@@ -9010,6 +9075,12 @@ export interface components {
             policy_version: number;
             /** Reason */
             reason: string | null;
+            /**
+             * Reason Source
+             * @default original_hold
+             * @enum {string}
+             */
+            reason_source: "original_hold" | "reconsideration";
             /** Reference Provenance */
             reference_provenance: string;
             /**
@@ -9018,6 +9089,14 @@ export interface components {
              * @enum {string}
              */
             review_kind: "copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score";
+            /** Superseded At */
+            superseded_at?: string | null;
+            /** Superseded Reason */
+            superseded_reason?: string | null;
+            /** Superseded Resolution */
+            superseded_resolution?: ("clear" | "reject") | null;
+            /** Superseded Resolution Reason */
+            superseded_resolution_reason?: string | null;
         };
         /** AdminCopyReviewItem */
         AdminCopyReviewItem: {
@@ -11310,6 +11389,75 @@ export interface components {
             start_event: string | null;
             /** Window Started At */
             window_started_at: string | null;
+        };
+        /** AdminScreeningReviewEvent */
+        AdminScreeningReviewEvent: {
+            /** Actor */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Effective Decision */
+            effective_decision: string;
+            /**
+             * Event Id
+             * Format: uuid
+             */
+            event_id: string;
+            /**
+             * Event Kind
+             * @enum {string}
+             */
+            event_kind: "automated" | "manual";
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Next Agent Status */
+            next_agent_status: string;
+            /** Outcome */
+            outcome: string;
+            /** Policy Version */
+            policy_version: number;
+            /** Previous Event Id */
+            previous_event_id: string | null;
+            /** Prior Agent Status */
+            prior_agent_status: string;
+            /** Quarantine Id */
+            quarantine_id: string | null;
+            /** Reason */
+            reason: string | null;
+            /** Reason Code */
+            reason_code: string | null;
+            /** Resolution Id */
+            resolution_id: string | null;
+            /** Reviewer Model */
+            reviewer_model: string | null;
+        };
+        /** AdminScreeningReviewEventList */
+        AdminScreeningReviewEventList: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["AdminScreeningReviewEvent"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
         };
         /** AdminScreeningSubmission */
         AdminScreeningSubmission: {
@@ -19333,6 +19481,104 @@ export interface components {
             /** Token Budget */
             token_budget?: number | null;
         };
+        /**
+         * InferenceFailureGroup
+         * @description One (window, lane, model, gateway, route, error code) bucket.
+         */
+        InferenceFailureGroup: {
+            /** Calls */
+            calls: number;
+            /** Canceled */
+            canceled: number;
+            /** Completed */
+            completed: number;
+            /** Failed */
+            failed: number;
+            /**
+             * Gateway
+             * @enum {string}
+             */
+            gateway: "openrouter" | "reliable" | "direct" | "ditto-router";
+            /** Model */
+            model: string;
+            /** Openrouter Attempts Max */
+            openrouter_attempts_max: number;
+            /**
+             * Request Kind
+             * @enum {string}
+             */
+            request_kind: "chat" | "embedding";
+            /**
+             * Route Basis
+             * @enum {string}
+             */
+            route_basis: "confirmed_selected" | "last_attempted" | "configured" | "router_internal" | "unknown" | "unrecognized";
+            /** Share Of Settled Calls */
+            share_of_settled_calls: number;
+            /** Terminal Error Code */
+            terminal_error_code: string | null;
+            /** Timed Out */
+            timed_out: number;
+            /** Upstream Http Status */
+            upstream_http_status: number | null;
+            /** Upstream Route */
+            upstream_route: string | null;
+            /** Window Seconds */
+            window_seconds: number;
+        };
+        /**
+         * InferenceFailureLaneWindow
+         * @description Lane totals for one window, counted independently of the group cap.
+         */
+        InferenceFailureLaneWindow: {
+            /** Calls */
+            calls: number;
+            /** Canceled */
+            canceled: number;
+            /** Completed */
+            completed: number;
+            /** Failed */
+            failed: number;
+            /** Failure Share */
+            failure_share: number;
+            /** Groups Returned */
+            groups_returned: number;
+            /** Groups Total */
+            groups_total: number;
+            /** Groups Truncated */
+            groups_truncated: boolean;
+            /** In Flight */
+            in_flight: number;
+            /** Rate Limited Failures */
+            rate_limited_failures: number;
+            /**
+             * Request Kind
+             * @enum {string}
+             */
+            request_kind: "chat" | "embedding";
+            /** Settled */
+            settled: number;
+            /** Timed Out */
+            timed_out: number;
+            /** Window Seconds */
+            window_seconds: number;
+        };
+        /** InferenceFailureTaxonomy */
+        InferenceFailureTaxonomy: {
+            /** Group Limit */
+            group_limit: number;
+            /** Groups */
+            groups: components["schemas"]["InferenceFailureGroup"][];
+            /** Lanes */
+            lanes: components["schemas"]["InferenceFailureLaneWindow"][];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Window Seconds */
+            window_seconds: number[];
+        };
         /** InferenceGrantOffer */
         InferenceGrantOffer: {
             /** Allowed Models */
@@ -22176,11 +22422,19 @@ export interface components {
          * @description Benchmark-version rollout state (``GET /public/bench/rollout``).
          *
          *     Two versions matter here and they are not the same number:
-         *     ``active_version`` is the one that currently drives on-chain weights, and
-         *     ``desired_version`` is the one being rolled out. The whole ledger switches
-         *     at once, and only once ``ranked_quorum_agents`` reaches
-         *     ``min_ranked_quorum_agents``: that gate is what guarantees the emission set
-         *     (champion plus tail) is never short at the moment authority moves.
+         *     ``active_version`` is the one that currently drives on-chain weights (the
+         *     leaderboard's ``emission_bench_version``), and ``desired_version`` is the
+         *     one being rolled out and scored. ``desired_version`` leading
+         *     ``active_version`` is the normal mid-rollout state, not a stall.
+         *
+         *     The whole ledger switches at once, and only once BOTH gates close: every
+         *     position in the frozen priority cohort holds a complete per-agent quorum at
+         *     ``desired_version`` (``priority_cohort_ready_count`` of
+         *     ``priority_cohort_size``), and ``ranked_quorum_agents`` reaches
+         *     ``min_ranked_quorum_agents``, which guarantees the emission set (champion
+         *     plus tail) is never short at the moment authority moves.
+         *     ``promotion_pending`` / ``promotion_requirement`` state that in one flag
+         *     and one sentence.
          *
          *     Extra keys are preserved rather than dropped: this model documents the shape
          *     without becoming a filter on it.
@@ -22224,6 +22478,12 @@ export interface components {
              */
             min_ranked_quorum_agents?: number | null;
             /**
+             * Priority Cohort Ready Count
+             * @description Priority-cohort members that already satisfy the barrier, out of priority_cohort_size: a complete desired-version quorum, or permanently ineligible (skipped exactly as the gate skips them).
+             * @default 0
+             */
+            priority_cohort_ready_count: number;
+            /**
              * Priority Cohort Size
              * @description Inherited leaders that must finish before later cohort work.
              * @default 5
@@ -22235,6 +22495,17 @@ export interface components {
              * @default false
              */
             priority_complete: boolean;
+            /**
+             * Promotion Pending
+             * @description True while desired_version is being collected and has not yet taken emission authority. The normal mid-rollout state, not a stall.
+             * @default false
+             */
+            promotion_pending: boolean;
+            /**
+             * Promotion Requirement
+             * @description The gates that must close before emission authority moves to desired_version, in one sentence built from their live values: the priority-cohort quorum over the frozen inherited prefix and the ranked quorum over the emission set. Null when nothing is pending.
+             */
+            promotion_requirement?: string | null;
             /** Qualification Blockers */
             qualification_blockers?: {
                 [key: string]: string;
@@ -24391,6 +24662,39 @@ export interface components {
             validators: components["schemas"]["PublicValidatorHeartbeatsResponse"];
         };
         /**
+         * PublicOrdinaryReview
+         * @description Source-safe ordinary source-review clock (ditto-subnet#2042, slice 1).
+         *
+         *     Deliberately thin: a miner learns why their own submission is waiting and
+         *     roughly how long that kind of wait typically takes, never the operator
+         *     detail behind it (no quarantine evidence, no reason codes, no other
+         *     miner's data). ``typical_p50_seconds``/``typical_p95_seconds`` are
+         *     subnet-wide statistics, not a promise about this specific submission.
+         *     Null on the pipeline response whenever the submission is not currently in
+         *     ordinary review (covers both "never entered it" and "already resolved").
+         */
+        PublicOrdinaryReview: {
+            /**
+             * Age Seconds
+             * @description Time since this submission entered ordinary review (its own created_at). Stable across retries: a rescreen does not reset it.
+             */
+            age_seconds: number;
+            /**
+             * Current Attempt Age Seconds
+             * @description Time since the CURRENT screening attempt started, separate from age_seconds above. Null when there is no attempt yet (capacity_wait).
+             */
+            current_attempt_age_seconds?: number | null;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "active_work" | "capacity_wait" | "infrastructure_backoff" | "escalation";
+            /** Typical P50 Seconds */
+            typical_p50_seconds?: number | null;
+            /** Typical P95 Seconds */
+            typical_p95_seconds?: number | null;
+        };
+        /**
          * PublicOrphanedSlot
          * @description A slot the platform released out from under a still-executing benchmark.
          *
@@ -25078,6 +25382,8 @@ export interface components {
             generated_at: string;
             /** Inference Runs */
             inference_runs?: components["schemas"]["PublicInferenceRun"][];
+            /** @description Ordinary source-review clock and reason while the submission is in the pre-score screening pipeline; null once it leaves that pipeline (whichever way). */
+            ordinary_review?: components["schemas"]["PublicOrdinaryReview"] | null;
             /** Provisional Scores */
             provisional_scores?: components["schemas"]["PublicProvisionalScore"][];
             /** Quorum */
@@ -27357,7 +27663,10 @@ export interface components {
             last_provider_error_at?: string | null;
             /** Last Provider Error Code */
             last_provider_error_code?: string | null;
-            /** Last Provider Success At */
+            /**
+             * Last Provider Success At
+             * @description Time of the last successful GCE fleet read by the capacity controller (managed-group target and instance counts). It advances whenever those GCE reads succeed, even when the provider-routing read fails in the same pass, and is not advanced when a GCE read fails. It does not indicate that any other provider (for example Targon) is healthy or has recovered.
+             */
             last_provider_success_at?: string | null;
             /** Provider Ready */
             provider_ready: boolean;
@@ -27425,7 +27734,10 @@ export interface components {
             last_provider_error_at?: string | null;
             /** Last Provider Error Code */
             last_provider_error_code?: string | null;
-            /** Last Provider Success At */
+            /**
+             * Last Provider Success At
+             * @description Time of the last successful GCE fleet read by the capacity controller (managed-group target and instance counts). It advances whenever those GCE reads succeed, even when the provider-routing read fails in the same pass, and is not advanced when a GCE read fails. It does not indicate that any other provider (for example Targon) is healthy or has recovered.
+             */
             last_provider_success_at?: string | null;
             /** Provider Ready */
             provider_ready: boolean;
@@ -29128,6 +29440,95 @@ export interface components {
          * @enum {string}
          */
         SourceReviewPassClause: "genuine_model_result" | "no_premodel_response" | "full_records_on_deciding_turn" | "non_authoritative_preliminary_pass" | "shape_only_validation" | "model_dissent_preserved" | "no_derived_value" | "untrusted_candidate_channel" | "runtime_described_generic_engine" | "no_family_compiler" | "model_selected_executed_tool" | "no_reported_tool_calls" | "no_tool_planning" | "policy_capability_filter_only" | "natural_singleton_class" | "evaluation_independent_runtime" | "no_evaluation_identity_branch" | "unreachable_nonruntime_code";
+        /**
+         * SourceReviewQueueSlo
+         * @description p50/p95/oldest age, throughput, overdue, and reconciliation ghosts.
+         *
+         *     Every age/threshold field is seconds. ``overdue_count`` and
+         *     ``p95_exceeds_threshold`` are ``null`` whenever their governing
+         *     threshold is unset -- never ``0`` and never a computed "healthy"
+         *     default. This endpoint is read-only: it enforces nothing (no alert, no
+         *     operator escalation action -- both are explicit ditto-subnet#2042
+         *     follow-ups).
+         */
+        SourceReviewQueueSlo: {
+            /** Active Work Count */
+            active_work_count: number;
+            /**
+             * Attempt Status Drift Ghost Count
+             * @description Agents whose latest screening attempt reports a status this endpoint's reason classification does not cover (e.g. a terminal passed/rejected verdict on an agent whose own status never advanced past screening) -- the same kind of attempts/agents drift as the two counts above, never folded into backlog_count.
+             */
+            attempt_status_drift_ghost_count: number;
+            /**
+             * Backlog Count
+             * @description Current, non-superseded, non-terminal, non-progressed-past-screening items counted below. Terminal ghosts are excluded here and reported separately.
+             */
+            backlog_count: number;
+            /** Capacity Wait Count */
+            capacity_wait_count: number;
+            /** Escalation Count */
+            escalation_count: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /**
+             * Ghost Count
+             * @description Sum of the three reconciliation counts above.
+             */
+            ghost_count: number;
+            /** Infrastructure Backoff Count */
+            infrastructure_backoff_count: number;
+            /**
+             * Max Actionable Age Threshold Seconds
+             * @description Configured overdue threshold, or null when unset. Observability-only: not enforced by this endpoint.
+             */
+            max_actionable_age_threshold_seconds?: number | null;
+            /**
+             * Oldest Age Seconds
+             * @description Age of the single oldest actionable item.
+             */
+            oldest_age_seconds?: number | null;
+            /**
+             * Overdue Count
+             * @description Actionable items older than the threshold; null when unset.
+             */
+            overdue_count?: number | null;
+            /**
+             * P50 Age Seconds
+             * @description Median actionable age; null only when the backlog is empty.
+             */
+            p50_age_seconds?: number | null;
+            /** P95 Age Seconds */
+            p95_age_seconds?: number | null;
+            /** P95 Age Threshold Seconds */
+            p95_age_threshold_seconds?: number | null;
+            /**
+             * P95 Exceeds Threshold
+             * @description Null unless a p95 threshold is configured.
+             */
+            p95_exceeds_threshold?: boolean | null;
+            /**
+             * Resolved Quarantine Ghost Count
+             * @description Agents stuck at quarantined status with no active quarantine row (a resolved quarantine that did not flip agent status).
+             */
+            resolved_quarantine_ghost_count: number;
+            /**
+             * Stale Running Ghost Count
+             * @description Agents whose latest screening attempt still looks 'running' although the agent already reached a terminal or progressed-past-screening status. Visible for reconciliation; never folded into the counts above. See ditto-subnet#2038.
+             */
+            stale_running_ghost_count: number;
+            /**
+             * Throughput Completed Count
+             * @description Full (non-build-only) screening attempts reaching a passed or rejected verdict within the throughput window.
+             */
+            throughput_completed_count: number;
+            /** Throughput Per Hour */
+            throughput_per_hour: number;
+            /** Throughput Window Hours */
+            throughput_window_hours: number;
+        };
         /**
          * SourceReviewScorerVisibleEffect
          * @description Concrete graded field or validator-owned outcome changed by a transition.
@@ -34780,6 +35181,37 @@ export interface operations {
             };
         };
     };
+    get_inference_failure_taxonomy_api_v1_admin_inference_failure_taxonomy_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceFailureTaxonomy"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_inference_routes_api_v1_admin_inference_routes_get: {
         parameters: {
             query?: never;
@@ -36473,6 +36905,41 @@ export interface operations {
             };
         };
     };
+    list_screening_review_events_api_v1_admin_screening_review_events_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScreeningReviewEventList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_screening_submissions_api_v1_admin_screening_submissions_get: {
         parameters: {
             query?: {
@@ -37427,6 +37894,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["VerificationReplayClaimability"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_source_review_queue_slo_api_v1_admin_source_review_queue_slo_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceReviewQueueSlo"];
                 };
             };
             /** @description Validation Error */

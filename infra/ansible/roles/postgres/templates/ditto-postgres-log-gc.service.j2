@@ -1,0 +1,42 @@
+[Unit]
+Description=Bounded retention for the Ditto PostgreSQL logging collector
+Documentation=https://github.com/ditto-assistant/ditto-subnet/issues/1745
+# After= only: this must never start PostgreSQL, and it never stops it either.
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+Environment=POSTGRES_LOG_GC_DIR={{ postgres_log_gc_dir }}
+Environment=POSTGRES_LOG_GC_GLOB={{ postgres_log_gc_glob }}
+Environment=POSTGRES_LOG_GC_RETENTION_DAYS={{ postgres_log_gc_retention_days }}
+Environment=POSTGRES_LOG_GC_MAX_TOTAL_MB={{ postgres_log_gc_max_total_mb }}
+Environment=POSTGRES_LOG_GC_CURRENT_LOGFILES={{ postgres_log_gc_current_logfiles }}
+Environment=POSTGRES_LOG_GC_DRY_RUN={{ postgres_log_gc_dry_run | bool | lower }}
+ExecStart={{ postgres_log_gc_bin }}
+SyslogIdentifier=ditto-postgres-log-gc
+TimeoutStartSec=10min
+Nice=10
+IOSchedulingClass=idle
+
+# The log directory is the only writable path; the cluster data directory is
+# readable (for current_logfiles) but never written.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateNetwork=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths={{ postgres_log_gc_dir }}
+ReadOnlyPaths={{ postgres_log_gc_data_dir }}
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictAddressFamilies=
+LockPersonality=true
+CapabilityBoundingSet=
+DevicePolicy=closed
+UMask=0077

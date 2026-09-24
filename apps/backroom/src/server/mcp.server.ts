@@ -147,6 +147,7 @@ import {
   fetchScreeningQuarantineContext,
   fetchScreeningQuarantineContexts,
   fetchScreeningQuarantines,
+  fetchScreeningReviewEvents,
   fetchScreeningDisputes,
   fetchScreeningFailureDiagnostic,
   fetchAdjudicationAttempts,
@@ -224,6 +225,8 @@ import {
   setContinualRetestSettings,
   fetchInferenceConcurrencySettings,
   fetchInferenceRuntimeMetrics,
+  fetchSourceReviewQueueSlo,
+  fetchInferenceFailureTaxonomy,
   fetchInferenceTraceObjects,
   createInferenceTraceDownloadUrl,
   peekInferenceTrace,
@@ -667,6 +670,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Apply the complete hosted-inference and v10 benchmark-runtime policy with expectedRevision, reason, and "APPLY INFERENCE CONCURRENCY SETTINGS". Chat budgets affect newly minted grants; chat and embedding concurrency are live admission controls; case_concurrency is 1-64 (default 4); relay delays are off or shadow.',
   get_inference_runtime_metrics:
     'Read inference load and relay health.',
+  get_source_review_queue_slo:
+    'Read ordinary source-review queue age, throughput, and reconciliation ghosts.',
+  get_inference_failure_taxonomy:
+    'Group recent chat and embedding outcomes by model, lane, gateway, upstream route, and error code. route_basis says how much of a route is known; an unknown route never names one.',
   start_runtime_profile:
     'Capture bounded private relay pprof.',
   download_runtime_profile:
@@ -781,6 +788,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   // context — which is also what buys the budget the queue's own entry needs.
   list_screening_quarantines:
     'Page screener quarantines (active | resolved | all), newest first; sort=oldest for chronology, detail=full for every evidence row. Active rows are auto-resolved by the platform within milliseconds, so this is not the operator queue — use get_screening_review_queue.',
+  list_screening_review_events:
+    'Read append-only source-review decisions with exact attempt, artifact SHA, policy version, model or actor, evidence and receipt snapshots, and state transitions.',
   list_screening_adjudication_attempts:
     'Recent L4 outcomes with attempt SHA, manifest and pinned settings; observed timing/provider only when recorded. Null success telemetry is unavailable, not zero.',
   get_screening_quarantine_context:
@@ -884,7 +893,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screening review queue',
       description:
-        'Page the SN118 operator review queue: every agent held in ath_pending_review with an unresolved ATH review, oldest hold first. Each row carries the held agent_id/agent_name/agent_version, miner_hotkey and payment-time miner_coldkey, submitted_at, opened_at, agent_status, and a `hold` object with review_kind (copy | benchmark_overfit | deferred_source_review | anomalous_score), the operator reason, and for a copy hold the matched agent\'s identity (duplicate_of plus its name, version, hotkey, coldkey and submission time). Filter with reviewKind; page with limit/offset. The queue is unresolved holds across every scoring generation and is not narrowable by either: a review status filter would let a closed hold read as open, and the platform\'s generation filter selects on whether the held agent has a score at a benchmark version, so its `active` default hides an upload-time copy hold (no scores at all) and any hold that survived a rollout (none at the new active version) while both still wait for an operator. `agent_status` is the field to read before acting: a pending review whose agent is NOT ath_pending_review is a hold stranded by some other path, and resolve_ath_review answers 409 for it. This is the queue enumeration; get_ath_review gives one review its full audit trail, and get_copy_review_source_diff the source evidence. This is NOT the quarantine queue — list_screening_quarantines is a different, screener-owned surface whose active rows the platform auto-resolves within milliseconds.',
+        'Page the SN118 operator review queue: every agent held in ath_pending_review with an unresolved ATH review, oldest hold first. Each row carries the held agent_id/agent_name/agent_version, miner_hotkey and payment-time miner_coldkey, submitted_at, opened_at, agent_status, and a `hold` object with review_kind (copy | benchmark_overfit | deferred_source_review | anomalous_score), the operator reason, and for a copy hold the matched agent\'s identity (duplicate_of plus its name, version, hotkey, coldkey and submission time). `hold.reason` is why the submission is under review NOW: after a withdrawn resolution and a guarded reopen, `hold.reason_source` reads `reconsideration`, `hold.reason` is the reopen reason, and the `superseded_*` fields carry the withdrawn decision as HISTORY, never a finding that still stands. Filter with reviewKind; page with limit/offset. The queue is unresolved holds across every scoring generation and is not narrowable by either: a review status filter would let a closed hold read as open, and the platform\'s generation filter selects on whether the held agent has a score at a benchmark version, so its `active` default hides an upload-time copy hold (no scores at all) and any hold that survived a rollout (none at the new active version) while both still wait for an operator. `agent_status` is the field to read before acting: a pending review whose agent is NOT ath_pending_review is a hold stranded by some other path, and resolve_ath_review answers 409 for it. This is the queue enumeration; get_ath_review gives one review its full audit trail, and get_copy_review_source_diff the source evidence. This is NOT the quarantine queue — list_screening_quarantines is a different, screener-owned surface whose active rows the platform auto-resolves within milliseconds.',
       inputSchema: { ...athReviewQueueInputSchema.shape, ...MCP_PAGINATION_INPUT },
       annotations: toolAnnotations('read'),
     },
@@ -919,6 +928,23 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           detail,
         ),
       ),
+  )
+
+  registerTool(
+    'list_screening_review_events',
+    {
+      title: 'List screening review events',
+      description:
+        'Read immutable automated source-review results and manual quarantine rulings. The event records the exact attempt, artifact SHA, governing policy version, reviewer model or operator, evidence digests and receipts available at the decision, and before/after state. Receipt presence never establishes a policy PASS.',
+      inputSchema: {
+        agentId: z.string().uuid().optional(),
+        limit: z.number().int().min(1).max(20).default(10),
+        offset: z.number().int().min(0).default(0),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ agentId, limit, offset }) =>
+      result(await fetchScreeningReviewEvents(agentId, limit, offset)),
   )
 
   registerTool(
@@ -1023,7 +1049,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get ATH review',
       description:
-        'Explain why one agent is or was held in ath_pending_review. Returns the public operator reason, review kind and status, opener, exact held artifact SHA-256 and score-count guard, previous agent status, and any resolution. Requires backroom:read.',
+        'Explain why one agent is or was held in ath_pending_review. Returns the public operator reason, review kind and status, opener, exact held artifact SHA-256 and score-count guard, previous agent status, any resolution, and the append-only action history. After a withdrawn resolution and reopen, `review.original.reason` is the current reconsideration reason and the `superseded_*` fields the withdrawn decision, as history. Requires backroom:read.',
       inputSchema: getAthReviewInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2071,7 +2097,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screener capacity',
       description:
-        'Read the live screener capacity snapshot, per-node identity, status, full-screen and channel concurrency controls and usage, provider-job inventory, recent controller events, and revisioned routing for build, runtime smoke, and source review. Provider routing is authoritative: Hetzner-first lanes handle base load, while the audited GCE overflow policy names the primary node, backlog multiple, minimum backlog, and maximum instances. GCE claims new unowned submissions on overflow or primary outage; it never retries a terminal Hetzner lane. Dashboard presentation and local defaults are not authoritative. Requires backroom:read and changes nothing.',
+        'Read the live screener capacity snapshot, per-node identity, status, full-screen and channel concurrency controls and usage, provider-job inventory, recent controller events, and revisioned routing for build, runtime smoke, and source review. Provider routing is authoritative: Hetzner-first lanes handle base load, while the audited GCE overflow policy names the primary node, backlog multiple, minimum backlog, and maximum instances. GCE claims new unowned submissions on overflow or primary outage; it never retries a terminal Hetzner lane. snapshot.last_provider_success_at is the last successful GCE fleet read, not a health signal for any other provider; it can advance while provider routing is unavailable. Dashboard presentation and local defaults are not authoritative. Requires backroom:read and changes nothing.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerCapacity()),
@@ -2673,6 +2699,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchInferenceRuntimeMetrics()),
+  )
+
+  registerTool(
+    'get_source_review_queue_slo',
+    {
+      title: 'Get source-review queue-age SLO',
+      description:
+        'Read the ordinary (pre-score) source-review queue-age SLO: p50/p95/oldest actionable age in seconds, throughput (completions per hour over a fixed window), and the current backlog broken out by reason -- active_work (a screener is claimed and running), capacity_wait (uploaded, no screener has claimed it yet), infrastructure_backoff (the last attempt ended retryable_infra/inconclusive and is fail-closed parked for an operator-authorized retry), and escalation (an active anti-cheat quarantine hold, which wins regardless of what the underlying attempt itself reports, e.g. a rescreen that then failed). Age is the stable queue-entry clock (the submission\'s own upload time); a retry never resets it, so a long-overdue item stays overdue through every rescreen. Also reports three reconciliation counts that are visible but NEVER folded into the metrics above: stale_running_ghost_count (a screening attempt still looks running though its agent already reached a terminal or later status), resolved_quarantine_ghost_count (an agent stuck at quarantined status with no active quarantine row), and attempt_status_drift_ghost_count (the latest attempt reports a status this SLO\'s reason classification does not cover, e.g. a terminal verdict on an agent whose own status never advanced). overdue_count and p95_exceeds_threshold are null until an operator configures a threshold (there is no shipped default); this tool enforces nothing -- no alert, no operator escalation action. Covers ORDINARY screening review only: stronger top-agent review, copy review, ATH review, and human escalation are separate review classes with their own clocks, not yet built. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchSourceReviewQueueSlo()),
+  )
+
+  registerTool(
+    'get_inference_failure_taxonomy',
+    {
+      title: 'Get hosted inference failure taxonomy',
+      description:
+        'Split the last 1, 5, 15, and 60 minutes of SETTLED hosted chat and embedding calls by model, lane, gateway, upstream route, and terminal error code. get_inference_runtime_metrics can say "209 of 903 chat calls failed" and cannot say which model, route, or code; this can. Per lane: calls, settled, completed, failed, canceled, in_flight, timed_out, failure_share, rate_limited_failures (exactly upstream_http_429), and groups_total / groups_returned / groups_truncated. Per group: the same counts plus upstream_http_status, openrouter_attempts_max (>1 means OpenRouter tried backup providers inside one request) and share_of_settled_calls. ' +
+        'READ route_basis BEFORE BELIEVING upstream_route. Only confirmed_selected means that upstream served the call, and it exists only on completed chat rows. last_attempted is the final upstream a FAILED chat row was sent to -- evidence, not a route. configured is the relay\'s pinned embedding provider, stamped before the call. router_internal, unknown and unrecognized always carry upstream_route null: the Ditto Router did not say, the ledger column was NULL (the usual case for a failure whose provider returned no metadata), or the stored value was not a plain identifier and was refused. A lane of unknown routes is a metadata gap, NOT a healthy route. ' +
+        'In-flight requests are excluded from the groups on purpose (no route and no code yet) and counted as in_flight instead, so failure_share is failed over settled. Counts and identifiers only: no prompts, responses, keys, headers, or trace bodies. This changes nothing and admits nothing -- route admission and provider-fallback policy are not controlled here.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchInferenceFailureTaxonomy()),
   )
 
   registerTool(

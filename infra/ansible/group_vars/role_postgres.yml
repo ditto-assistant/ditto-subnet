@@ -78,6 +78,8 @@ postgres_tuning:
   log_directory: "'/opt/ditto/logs/postgresql'"
   logging_collector: "on"
   log_filename: "'postgresql-%Y-%m-%d.log'"
+  # Rotation only opens a new file; roles/postgres reclaims via postgres_log_gc_*
+  # (role defaults: 7 days, 6144 MB hard ceiling — see #1745).
   log_rotation_age: "1d"
   log_rotation_size: "100MB"
   shared_preload_libraries: "'pg_stat_statements'"

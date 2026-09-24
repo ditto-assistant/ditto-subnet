@@ -1,4 +1,4 @@
-"""Private runtime metrics and bounded Go profile capture for Backroom."""
+"""Private runtime metrics, failure taxonomy, and bounded Go profile capture."""
 
 from __future__ import annotations
 
@@ -14,6 +14,13 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.inference_failure_taxonomy import (
+    InferenceFailureGroup,
+    InferenceFailureLaneWindow,
+    InferenceFailureTaxonomy,
+    InferenceGateway,
+    InferenceRouteBasis,
+)
 from ditto.api_models.inference_observability import (
     InferenceLaneCurrent,
     InferenceLaneWindow,
@@ -36,6 +43,11 @@ from ditto.api_server.runtime_profiles import (
 from ditto.db.models import ProviderOutageCircuit
 from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
+)
+from ditto.db.queries.inference_failure_taxonomy import (
+    FAILURE_GROUP_LIMIT,
+    FAILURE_WINDOWS_SECONDS,
+    load_inference_failure_taxonomy_rows,
 )
 from ditto.db.queries.inference_observability import load_inference_runtime_rows
 
@@ -212,6 +224,89 @@ async def get_inference_runtime_metrics(
             if provider_circuit is not None
             else None
         ),
+    )
+
+
+@router.get(
+    "/admin/inference-failure-taxonomy",
+    response_model=InferenceFailureTaxonomy,
+)
+async def get_inference_failure_taxonomy(
+    _admin: AdminDep,
+    session: SessionDep,
+) -> InferenceFailureTaxonomy:
+    """Recent chat/embedding outcomes by model, gateway, route, and error code.
+
+    ``/admin/inference-runtime-metrics`` already reports failures per lane per
+    window; this splits the same bounded windows by the dimensions an upstream
+    rate-limit burst actually moves. Counts and identifiers only.
+    """
+    lane_rows, group_rows = await load_inference_failure_taxonomy_rows(session)
+    settled_by_lane = {
+        (int(row["window_seconds"]), str(row["request_kind"])): int(row["settled"])
+        for row in lane_rows
+    }
+    returned: dict[tuple[int, str], int] = {}
+    totals: dict[tuple[int, str], int] = {}
+    groups: list[InferenceFailureGroup] = []
+    for row in group_rows:
+        key = (int(row["window_seconds"]), str(row["request_kind"]))
+        returned[key] = returned.get(key, 0) + 1
+        totals[key] = int(row["groups_total"])
+        settled = settled_by_lane.get(key, 0)
+        calls = int(row["calls"])
+        groups.append(
+            InferenceFailureGroup(
+                window_seconds=key[0],
+                request_kind=cast(Literal["chat", "embedding"], key[1]),
+                model=str(row["model"]),
+                gateway=cast(InferenceGateway, str(row["gateway"])),
+                upstream_route=row["upstream_route"],
+                route_basis=cast(InferenceRouteBasis, str(row["route_basis"])),
+                terminal_error_code=row["terminal_error_code"],
+                upstream_http_status=row["upstream_http_status"],
+                calls=calls,
+                completed=int(row["completed"]),
+                failed=int(row["failed"]),
+                canceled=int(row["canceled"]),
+                timed_out=int(row["timed_out"]),
+                openrouter_attempts_max=int(row["openrouter_attempts_max"]),
+                share_of_settled_calls=(
+                    round(calls / settled, 4) if settled > 0 else 0.0
+                ),
+            )
+        )
+    lanes: list[InferenceFailureLaneWindow] = []
+    for row in lane_rows:
+        key = (int(row["window_seconds"]), str(row["request_kind"]))
+        settled = int(row["settled"])
+        failed = int(row["failed"])
+        group_total = totals.get(key, 0)
+        group_count = returned.get(key, 0)
+        lanes.append(
+            InferenceFailureLaneWindow(
+                window_seconds=key[0],
+                request_kind=cast(Literal["chat", "embedding"], key[1]),
+                calls=int(row["calls"]),
+                settled=settled,
+                completed=int(row["completed"]),
+                failed=failed,
+                canceled=int(row["canceled"]),
+                in_flight=int(row["in_flight"]),
+                timed_out=int(row["timed_out"]),
+                rate_limited_failures=int(row["rate_limited_failures"]),
+                failure_share=round(failed / settled, 4) if settled > 0 else 0.0,
+                groups_total=group_total,
+                groups_returned=group_count,
+                groups_truncated=group_total > group_count,
+            )
+        )
+    return InferenceFailureTaxonomy(
+        observed_at=datetime.now(UTC),
+        window_seconds=list(FAILURE_WINDOWS_SECONDS),
+        group_limit=FAILURE_GROUP_LIMIT,
+        lanes=lanes,
+        groups=groups,
     )
 
 

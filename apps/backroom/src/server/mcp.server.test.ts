@@ -168,6 +168,8 @@ describe('Backroom MCP tools', () => {
         'get_efficiency_bonus_settings',
         'get_inference_concurrency_settings',
         'get_inference_runtime_metrics',
+        'get_source_review_queue_slo',
+        'get_inference_failure_taxonomy',
         'list_inference_traces',
         'download_inference_trace',
         'peek_inference_trace',
@@ -246,6 +248,7 @@ describe('Backroom MCP tools', () => {
         'open_ath_review',
         'preview_screening_quarantine_batch',
         'list_screening_quarantines',
+        'list_screening_review_events',
         'list_screening_disputes',
         'list_screening_source_files',
         'list_screening_submissions',
@@ -353,11 +356,16 @@ describe('Backroom MCP tools', () => {
     // Exact-agent continual retest diagnosis adds one bounded read schema.
     // One bounded L4 cohort read adds a compact schema and catalog line.
     // The two V13 clock tools and bounded, default-off replay control bring
-    // the measured catalog just above 142 KB. The no-input infra-retry read
-    // adds one more bounded catalog entry; measured 143,145 bytes together
-    // after #2180. The guarded ATH withdrawal adds two bounded operations;
-    // the measured catalog is 145,913 bytes with ~1 KB of headroom.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(147_000)
+    // the measured catalog just above 142 KB. The infra-retry and ordinary
+    // source-review queue-age SLO reads add two bounded catalog entries.
+    // The hosted-inference failure taxonomy adds one no-input read tool whose
+    // one-line catalog entry is its whole payload cost.
+    // The reopened-hold reason contract adds ~460 bytes across the queue and
+    // get_ath_review: which of `hold.reason` / `superseded_*` is the CURRENT
+    // reason and which is withdrawn history. That is a correctness rule for
+    // anything that quotes a reason back to a miner, not a tutorial.
+    // The guarded ATH withdrawal adds two bounded operations on top of that.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(150_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -378,9 +386,10 @@ describe('Backroom MCP tools', () => {
     // L4 cohort diagnostic adds one catalog line without another tutorial.
     // The infra-retry read summary lands at 25,990, so the bound moves to 26_200.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      // Includes the V13 clock, independent replay, infra-retry, and guarded
-      // ATH withdrawal summaries.
-      27_500,
+      // Includes the V13 clock, independent replay, infra-retry, ordinary
+      // source-review queue-age SLO, failure taxonomy route_basis,
+      // reopened-hold reason, and guarded ATH withdrawal summaries.
+      29_000,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -1143,6 +1152,7 @@ describe('Backroom MCP tools', () => {
     > = {
       get_screening_review_queue: { maxLimit: 200, maxDefault: 50 },
       list_screening_quarantines: { maxLimit: 200, maxDefault: 50 },
+      list_screening_review_events: { maxLimit: 20, maxDefault: 10 },
       list_screening_disputes: { maxLimit: 200, maxDefault: 50 },
       list_screening_source_files: { maxLimit: 512, maxDefault: 512 },
       list_screening_submissions: { maxLimit: 200, maxDefault: 50 },
@@ -2280,6 +2290,27 @@ describe('Backroom MCP tools', () => {
     }
   })
 
+  it('documents last_provider_success_at as the last GCE fleet read in the capacity tool help', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_backroom_tool_help',
+      arguments: { tool: 'get_screener_capacity' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const payload = readJsonResult(response) as { tool: string; guidance: string }
+    expect(payload.tool).toBe('get_screener_capacity')
+    // The field only proves a GCE fleet read succeeded; operators must not read it
+    // as another provider's health, and it can advance while routing is down.
+    expect(payload.guidance).toContain('last_provider_success_at is the last successful GCE fleet read')
+    expect(payload.guidance).toContain('not a health signal for any other provider')
+    expect(payload.guidance).toContain('can advance while provider routing is unavailable')
+
+    await client.close()
+    await server.close()
+  })
+
   it('applies the conversation switch with the authenticated operator identity', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValue(Response.json({
@@ -3263,6 +3294,152 @@ describe('Backroom MCP tools', () => {
       lanes: [{ request_kind: 'chat', peak_global_concurrency_60m: 11 }],
       windows: [{ calls_per_second: 1.55, latency_p95_ms: 9995 }],
     })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the ordinary source-review queue-age SLO', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        generated_at: '2026-09-23T00:00:00Z',
+        backlog_count: 4,
+        active_work_count: 1,
+        capacity_wait_count: 1,
+        infrastructure_backoff_count: 1,
+        escalation_count: 1,
+        p50_age_seconds: 300,
+        p95_age_seconds: 900,
+        oldest_age_seconds: 950,
+        throughput_window_hours: 24,
+        throughput_completed_count: 12,
+        throughput_per_hour: 0.5,
+        stale_running_ghost_count: 1,
+        resolved_quarantine_ghost_count: 0,
+        attempt_status_drift_ghost_count: 0,
+        ghost_count: 1,
+        max_actionable_age_threshold_seconds: null,
+        overdue_count: null,
+        p95_age_threshold_seconds: null,
+        p95_exceeds_threshold: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_source_review_queue_slo',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      backlog_count: 4,
+      escalation_count: 1,
+      stale_running_ghost_count: 1,
+      overdue_count: null,
+      p95_exceeds_threshold: null,
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the failure taxonomy and keeps an unknown route unknown', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        observed_at: '2026-09-22T18:20:30Z',
+        window_seconds: [60, 300, 900, 3600],
+        group_limit: 40,
+        lanes: [
+          {
+            window_seconds: 300,
+            request_kind: 'chat',
+            calls: 903,
+            settled: 903,
+            completed: 694,
+            failed: 209,
+            canceled: 0,
+            in_flight: 0,
+            timed_out: 0,
+            rate_limited_failures: 209,
+            failure_share: 0.2315,
+            groups_total: 3,
+            groups_returned: 3,
+            groups_truncated: false,
+          },
+        ],
+        groups: [
+          {
+            window_seconds: 300,
+            request_kind: 'chat',
+            model: 'openai/gpt-oss-20b',
+            gateway: 'openrouter',
+            upstream_route: 'Groq',
+            route_basis: 'last_attempted',
+            terminal_error_code: 'upstream_http_429',
+            upstream_http_status: 429,
+            calls: 180,
+            completed: 0,
+            failed: 180,
+            canceled: 0,
+            timed_out: 0,
+            openrouter_attempts_max: 1,
+            share_of_settled_calls: 0.1993,
+          },
+          {
+            window_seconds: 300,
+            request_kind: 'chat',
+            model: 'openai/gpt-oss-20b',
+            gateway: 'openrouter',
+            upstream_route: null,
+            route_basis: 'unknown',
+            terminal_error_code: 'upstream_http_429',
+            upstream_http_status: 429,
+            calls: 29,
+            completed: 0,
+            failed: 29,
+            canceled: 0,
+            timed_out: 0,
+            openrouter_attempts_max: 1,
+            share_of_settled_calls: 0.0321,
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_inference_failure_taxonomy',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/inference-failure-taxonomy',
+    )
+    const taxonomy = readJsonResult(response) as {
+      lanes: { rate_limited_failures: number }[]
+      groups: { upstream_route: string | null; route_basis: string }[]
+    }
+    expect(taxonomy.lanes[0]).toMatchObject({
+      failed: 209,
+      rate_limited_failures: 209,
+      failure_share: 0.2315,
+    })
+    // The attributable half names its route; the rest stays explicitly unknown
+    // rather than borrowing the route of the calls that did report one.
+    expect(taxonomy.groups.map((group) => group.route_basis)).toEqual([
+      'last_attempted',
+      'unknown',
+    ])
+    expect(taxonomy.groups[1]?.upstream_route).toBeNull()
+    expect(
+      taxonomy.groups.some((group) => group.route_basis === 'confirmed_selected'),
+    ).toBe(false)
 
     await client.close()
     await server.close()
@@ -5090,6 +5267,88 @@ describe('Backroom MCP tools', () => {
         }),
       }),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('shows a reopened hold its reconsideration reason and the rejection it withdrew', async () => {
+    // lets_635 v1: an I5 rejection was withdrawn as unsupported and the review
+    // guard-reopened, but the queue kept publishing the withdrawn REJECT prose
+    // as the live `hold.reason`, so a pending appeal read as a standing
+    // violation finding. The platform now projects the current reason and
+    // labels the prior decision; the tool must carry both through compaction.
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const rejectProse = 'Reject under policy v13 for I5: benchmark-shaped answer assembly'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            review_id: '89af175c-2471-4a5b-b4a7-e495cfad8d22',
+            agent_id: 'a8437894-71ec-4a5a-a618-1757ab53806e',
+            miner_hotkey: '5Lets635',
+            miner_coldkey: null,
+            agent_name: 'lets_635',
+            agent_version: 1,
+            submitted_at: '2026-09-20T00:00:00Z',
+            status: 'pending',
+            agent_status: 'ath_pending_review',
+            opened_at: '2026-09-23T05:36:00Z',
+            resolved_at: null,
+            resolved_by: null,
+            resolution: null,
+            resolution_reason: null,
+            original: {
+              review_kind: 'deferred_source_review',
+              duplicate_of: null,
+              reason: 'I5 rejection withdrawn as unsupported; reconsidering under v13',
+              reason_source: 'reconsideration',
+              superseded_reason: 'Deferred source review qualified this submission for I5',
+              superseded_resolution: 'reject',
+              superseded_resolution_reason: rejectProse,
+              superseded_at: '2026-09-23T05:36:00Z',
+              policy_version: 13,
+              fingerprint_versions: {},
+              reference_provenance: 'corpus',
+              backfilled: false,
+            },
+          },
+        ],
+        count: 1,
+        limit: 50,
+        offset: 0,
+        review_kind: null,
+        generation: 'all',
+        active_bench_version: 13,
+        rollout_bench_version: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_review_queue',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    const queue = readJsonResult(response) as {
+      items: Array<Record<string, unknown>>
+      items_shared?: Record<string, unknown>
+    }
+    const hold = {
+      ...(queue.items_shared?.hold as Record<string, unknown> | undefined),
+      ...(queue.items[0]?.hold as Record<string, unknown> | undefined),
+    }
+    expect(hold.reason).toBe('I5 rejection withdrawn as unsupported; reconsidering under v13')
+    expect(hold.reason_source).toBe('reconsideration')
+    expect(hold.superseded_resolution).toBe('reject')
+    expect(hold.superseded_resolution_reason).toBe(rejectProse)
+    expect(hold.superseded_reason).toBe(
+      'Deferred source review qualified this submission for I5',
+    )
+    // The withdrawn finding is never the active reason on a pending row.
+    expect(hold.reason).not.toBe(rejectProse)
+    expect(queue.items[0]?.resolution ?? null).toBeNull()
 
     await client.close()
     await server.close()

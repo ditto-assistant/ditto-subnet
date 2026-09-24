@@ -184,7 +184,19 @@ class ScreenerCapacitySnapshotRequest(BaseModel):
     gce_pending: Annotated[int, Field(ge=0)]
     gce_draining: Annotated[int, Field(ge=0)]
     fallback_reason: Annotated[str, Field(max_length=160)] | None = None
-    last_provider_success_at: datetime | None = None
+    last_provider_success_at: Annotated[
+        datetime | None,
+        Field(
+            description=(
+                "Time of the last successful GCE fleet read by the capacity "
+                "controller (managed-group target and instance counts). It "
+                "advances whenever those GCE reads succeed, even when the "
+                "provider-routing read fails in the same pass, and is not "
+                "advanced when a GCE read fails. It does not indicate that any "
+                "other provider (for example Targon) is healthy or has recovered."
+            )
+        ),
+    ] = None
     last_provider_error_code: (
         Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None
     ) = None

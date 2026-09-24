@@ -41,6 +41,22 @@ function sameMinerRename(item: Pick<CopyReviewConsoleItem, 'miner_hotkey' | 'ori
   )
 }
 
+// A hold whose resolution was withdrawn is pending reconsideration, so the
+// queue shows the reopen reason and the withdrawn decision has to be labelled
+// as history. Rendering the superseded prose unmarked is how an operator or a
+// miner reply ends up asserting a finding that no longer stands.
+function isReconsidered(item: Pick<CopyReviewConsoleItem, 'original'>): boolean {
+  return item.original.reason_source === 'reconsideration'
+}
+
+function supersededLabel(item: Pick<CopyReviewConsoleItem, 'original'>): string | null {
+  if (!isReconsidered(item)) return null
+  const withdrawn = item.original.superseded_resolution
+  if (withdrawn === 'reject') return 'Prior rejection withdrawn'
+  if (withdrawn === 'clear') return 'Prior clear withdrawn'
+  return 'Prior decision withdrawn'
+}
+
 function matchedSubmissionPhrase(item: Pick<CopyReviewConsoleItem, 'miner_hotkey' | 'original'>): string | null {
   if (!item.original.duplicate_of_name) return null
   const version =
@@ -541,6 +557,11 @@ export function CopyReviewPanel({
                           {REVIEW_KIND_COPY[item.original.review_kind].queue}
                         </span>
                       )}
+                      {supersededLabel(item) ? (
+                        <span className="mt-1 inline-flex items-center gap-1 rounded-full border border-[var(--amber)]/25 bg-[var(--amber-dim)] px-2 py-0.5 text-[10px] uppercase tracking-wide text-[var(--amber)]">
+                          {supersededLabel(item)}
+                        </span>
+                      ) : null}
                       <span className="block truncate text-[var(--muted-strong)]">
                         {item.original.reason ?? 'No stored reason'}
                       </span>
@@ -573,7 +594,32 @@ export function CopyReviewPanel({
               <h4 className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">Review evidence</h4>
               <dl className="mt-3 space-y-2 text-xs text-[var(--muted-strong)]">
                 <div><dt className="text-[var(--muted)]">Review type</dt><dd>{reviewType(selected)}</dd></div>
-                <div><dt className="text-[var(--muted)]">Reason</dt><dd>{selected.original.reason ?? 'No stored reason'}</dd></div>
+                <div>
+                  <dt className="text-[var(--muted)]">
+                    {isReconsidered(selected) ? 'Current reason (reconsideration)' : 'Reason'}
+                  </dt>
+                  <dd>{selected.original.reason ?? 'No stored reason'}</dd>
+                </div>
+                {isReconsidered(selected) ? (
+                  <div className="rounded-md border border-[var(--amber)]/25 bg-[var(--amber-dim)]/40 p-2">
+                    <dt className="text-[var(--amber)]">
+                      Superseded — history, not an active finding
+                      {selected.original.superseded_at
+                        ? ` · withdrawn ${formatDate(selected.original.superseded_at)}`
+                        : ''}
+                    </dt>
+                    <dd className="mt-1">
+                      {selected.original.superseded_resolution
+                        ? `${selected.original.superseded_resolution === 'reject' ? 'Rejected' : 'Cleared'}: ${selected.original.superseded_resolution_reason ?? 'reason not recorded'}`
+                        : 'Prior decision withdrawn; reason not recorded'}
+                    </dd>
+                    {selected.original.superseded_reason ? (
+                      <dd className="mt-1 text-[var(--muted)]">
+                        Originally held for: {selected.original.superseded_reason}
+                      </dd>
+                    ) : null}
+                  </div>
+                ) : null}
                 {selected.original.deferred_review ? (
                   <>
                     <div>

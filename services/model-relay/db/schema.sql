@@ -897,6 +897,15 @@ CREATE FUNCTION public.reject_screening_attempt_artifact_change() RETURNS trigge
 
 
 --
+-- Name: reject_screening_review_event_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_screening_review_event_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN RAISE EXCEPTION 'screening_review_events is append-only'; END $$;
+
+
+--
 -- Name: reject_v13_private_generation_mutation(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -4404,6 +4413,38 @@ ALTER SEQUENCE public.screening_review_deadline_activations_revision_seq OWNED B
 
 
 --
+-- Name: screening_review_events; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_review_events (
+    event_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    attempt_id uuid NOT NULL,
+    quarantine_id uuid,
+    resolution_id uuid,
+    previous_event_id uuid,
+    event_kind text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    policy_version integer NOT NULL,
+    actor text NOT NULL,
+    reviewer_model text,
+    outcome text NOT NULL,
+    effective_decision text NOT NULL,
+    reason_code text,
+    reason text,
+    prior_agent_status text NOT NULL,
+    next_agent_status text NOT NULL,
+    evidence jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_review_events_sre_actor_check CHECK ((length(TRIM(BOTH FROM actor)) > 0)),
+    CONSTRAINT ck_screening_review_events_sre_decision_check CHECK ((effective_decision = ANY (ARRAY['reject'::text, 'hold'::text, 'pass'::text, 'provisional_admission'::text, 'no_change'::text, 'release'::text, 'rescreen'::text]))),
+    CONSTRAINT ck_screening_review_events_sre_kind_check CHECK ((event_kind = ANY (ARRAY['automated'::text, 'manual'::text]))),
+    CONSTRAINT ck_screening_review_events_sre_policy_check CHECK ((policy_version > 0)),
+    CONSTRAINT ck_screening_review_events_sre_sha_check CHECK ((length(artifact_sha256) = 64))
+);
+
+
+--
 -- Name: screening_review_windows; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6986,6 +7027,14 @@ ALTER TABLE ONLY public.screening_review_deadline_activations
 
 
 --
+-- Name: screening_review_events pk_screening_review_events; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_events
+    ADD CONSTRAINT pk_screening_review_events PRIMARY KEY (event_id);
+
+
+--
 -- Name: screening_review_windows pk_screening_review_windows; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -7399,6 +7448,14 @@ ALTER TABLE ONLY public.screening_retry_overrides
 
 ALTER TABLE ONLY public.screening_retry_overrides
     ADD CONSTRAINT screening_retry_overrides_pkey PRIMARY KEY (override_id);
+
+
+--
+-- Name: screening_review_events sre_resolution_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_events
+    ADD CONSTRAINT sre_resolution_key UNIQUE (resolution_id);
 
 
 --
@@ -8552,6 +8609,27 @@ CREATE INDEX srda_policy_activate_idx ON public.screening_review_deadline_activa
 
 
 --
+-- Name: sre_agent_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sre_agent_created_idx ON public.screening_review_events USING btree (agent_id, created_at, event_id);
+
+
+--
+-- Name: sre_automated_attempt_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX sre_automated_attempt_key ON public.screening_review_events USING btree (attempt_id) WHERE (event_kind = 'automated'::text);
+
+
+--
+-- Name: sre_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX sre_created_idx ON public.screening_review_events USING btree (created_at, event_id);
+
+
+--
 -- Name: submission_image_builds_node_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -9060,6 +9138,13 @@ CREATE TRIGGER scores_reject_benchmark_canary BEFORE INSERT OR UPDATE ON public.
 --
 
 CREATE TRIGGER screening_attempt_artifact_immutable BEFORE UPDATE OF artifact_sha256 ON public.screening_attempts FOR EACH ROW EXECUTE FUNCTION public.reject_screening_attempt_artifact_change();
+
+
+--
+-- Name: screening_review_events screening_review_events_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screening_review_events_immutable BEFORE DELETE OR UPDATE ON public.screening_review_events FOR EACH ROW EXECUTE FUNCTION public.reject_screening_review_event_mutation();
 
 
 --
@@ -9845,6 +9930,22 @@ ALTER TABLE ONLY public.screening_private_package_registrations
 
 ALTER TABLE ONLY public.screening_private_package_registrations
     ADD CONSTRAINT fk_screening_private_package_registrations_clean_attemp_9359 FOREIGN KEY (clean_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_review_events fk_screening_review_events_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_events
+    ADD CONSTRAINT fk_screening_review_events_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: screening_review_events fk_screening_review_events_previous_event_id_screening__08f5; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_events
+    ADD CONSTRAINT fk_screening_review_events_previous_event_id_screening__08f5 FOREIGN KEY (previous_event_id) REFERENCES public.screening_review_events(event_id) ON DELETE RESTRICT;
 
 
 --

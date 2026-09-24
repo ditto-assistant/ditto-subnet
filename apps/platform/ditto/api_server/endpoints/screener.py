@@ -237,6 +237,7 @@ from ditto.db.queries.screening import (
     try_acquire_screening_claim_lock,
 )
 from ditto.db.queries.screening_infra_retry import INFRA_AUTO_RETRY_REASON_CODES
+from ditto.db.queries.screening_review_events import append_automated_review_event
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenResultOutcome,
@@ -6504,6 +6505,7 @@ async def submit_result(
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")
+        prior_review_agent_status = agent.status
         attempt: ScreeningAttempt | None = None
         attempt_status = (
             "passed"
@@ -7131,6 +7133,49 @@ async def submit_result(
                 agent.dataset_run_size = dataset_run_size
                 agent.dataset_seed_block = seed_block
                 agent.dataset_seed_block_hash = seed_block_hash
+        if attempt is not None and (
+            records_review_evidence
+            or (
+                deferred_deep_attempt and agent.status == AgentStatus.ATH_PENDING_REVIEW
+            )
+            or (
+                outcome_value == "pass"
+                and not attempt.build_only
+                and not payload.policy_only
+            )
+        ):
+            review_quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt.attempt_id
+                )
+            )
+            await append_automated_review_event(
+                session,
+                agent=agent,
+                attempt=attempt,
+                quarantine=review_quarantine,
+                payload=payload,
+                prior_agent_status=prior_review_agent_status,
+                next_agent_status=agent.status,
+                effective_decision=(
+                    "no_change"
+                    if late_deferred_result
+                    else "reject"
+                    if agent.status == AgentStatus.REJECTED
+                    else "hold"
+                    if agent.status
+                    in {
+                        AgentStatus.QUARANTINED,
+                        AgentStatus.ATH_PENDING_REVIEW,
+                        AgentStatus.SCREENING_FAILED,
+                    }
+                    else "provisional_admission"
+                    if outcome_value == "pass_inconclusive"
+                    else "pass"
+                ),
+                reason_code=stored_reason_code,
+                reason=public_reason,
+            )
         result_status = agent.status
 
     try:

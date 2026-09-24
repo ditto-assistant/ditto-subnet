@@ -104,6 +104,11 @@ jobs:
           python3 tests/test_screener_cache_gc.py
           uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/screener-cache-gc.yml
 
+      - name: Prove the PostgreSQL collector logs stay bounded and the data disk stays off
+        run: |
+          python3 tests/test_postgres_log_gc.py
+          uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/postgres-log-gc.yml
+
       - name: Check native PostgreSQL admission rendering without host mutations
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check

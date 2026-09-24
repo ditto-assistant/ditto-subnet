@@ -36,6 +36,10 @@ from ditto.api_models.admin_copy_review import (
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.anti_copy_comparison import compare_anti_copy_pair
 from ditto.api_server.artifact_audit import client_ip, request_detail
+from ditto.api_server.ath_review_state import (
+    derive_ath_review_lifecycle,
+    load_reopened_review_actions,
+)
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.source_diff import (
@@ -127,6 +131,7 @@ def _item(
     *,
     miner_coldkey: str | None = None,
     duplicate_of_coldkey: str | None = None,
+    actions: list[AthReviewAction] | None = None,
 ) -> AdminCopyReviewItem:
     provenance = review.algorithm_provenance
     review_kind = provenance.get("review_kind")
@@ -137,6 +142,16 @@ def _item(
         AdminDeferredReviewEvidence.model_validate(deferred_raw)
         if isinstance(deferred_raw, dict)
         else None
+    )
+    # The operator queue reads the same durable ledger the public projection
+    # does, so a reopened hold stops presenting the decision it withdrew as its
+    # live reason. ``actions`` is loaded only for rows that carry a
+    # ``reopened_at``; without it a reopened row still reports the
+    # reconsideration reason, just not what it superseded.
+    lifecycle = derive_ath_review_lifecycle(
+        review,
+        latest_action=actions[-1] if actions else None,
+        actions=actions,
     )
     return AdminCopyReviewItem(
         review_id=review.review_id,
@@ -164,7 +179,16 @@ def _item(
                 review_kind,
             ),
             duplicate_of=review.original_duplicate_of,
-            reason=review.original_reason,
+            reason=(
+                lifecycle.reason
+                if lifecycle.reason_source == "reconsideration"
+                else review.original_reason
+            ),
+            reason_source=lifecycle.reason_source,
+            superseded_reason=lifecycle.superseded_reason,
+            superseded_resolution=lifecycle.superseded_resolution,
+            superseded_resolution_reason=lifecycle.superseded_resolution_reason,
+            superseded_at=lifecycle.superseded_at,
             policy_version=review.original_policy_version,
             fingerprint_versions=_fingerprint_versions(review.original_evidence),
             reference_provenance=str(
@@ -217,6 +241,7 @@ def _audit(
             matched,
             miner_coldkey=miner_coldkey,
             duplicate_of_coldkey=duplicate_of_coldkey,
+            actions=list(actions or []),
         ),
         agent_status=agent.status.value,
         held_artifact_sha256=held_artifact_sha256,
@@ -569,6 +594,12 @@ async def list_copy_reviews(
         session,
         agent_ids={agent.agent_id for _review, agent in row_pairs} | set(matched),
     )
+    # A reopened hold's active reason lives in the action ledger, not on the
+    # review row. Without this the queue keeps publishing the reason of a
+    # decision that has since been withdrawn.
+    reopen_actions = await load_reopened_review_actions(
+        session, [review for review, _agent in row_pairs]
+    )
     return AdminCopyReviewList(
         items=[
             _item(
@@ -582,6 +613,7 @@ async def list_copy_reviews(
                     if review.original_duplicate_of is not None
                     else None
                 ),
+                actions=reopen_actions.get(review.review_id),
             )
             for review, agent in row_pairs
         ],
@@ -696,6 +728,9 @@ async def get_copy_review(
         matched,
         miner_coldkey=candidate_coldkey,
         duplicate_of_coldkey=reference_coldkey,
+        actions=(await load_reopened_review_actions(session, [review])).get(
+            review.review_id
+        ),
     )
 
 
@@ -853,7 +888,11 @@ async def open_copy_review(
             )
             if same_hold:
                 return AdminCopyReviewOpenResponse(
-                    review=_item(existing, agent),
+                    review=_item(
+                        existing,
+                        agent,
+                        actions=await _review_actions(session, existing.review_id),
+                    ),
                     agent_status=agent.status.value,
                     idempotent=True,
                     reopened=latest_reopen is not None,
@@ -919,7 +958,11 @@ async def open_copy_review(
             )
             await session.flush()
             return AdminCopyReviewOpenResponse(
-                review=_item(existing, agent),
+                review=_item(
+                    existing,
+                    agent,
+                    actions=await _review_actions(session, existing.review_id),
+                ),
                 agent_status=agent.status.value,
                 idempotent=False,
                 reopened=True,

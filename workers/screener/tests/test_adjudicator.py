@@ -1524,10 +1524,10 @@ async def test_evidence_bearing_ledger_uses_one_preloaded_final_turn(
 
 
 @pytest.mark.parametrize("decision", ["clear", "reject"])
-async def test_later_unread_concern_cannot_be_silently_cleared(
+async def test_concern_precedes_observation_in_bounded_preload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, decision: str
 ) -> None:
-    """One-turn L4 may preload fewer locations than the retained ledger."""
+    """A late lead gets the source window before an earlier cleared note."""
     monkeypatch.setattr(adjudicator_module, "_MAX_PRELOADED_LEDGER_LOCATIONS", 1)
     arguments: dict[str, object] = {
         "decision": decision,
@@ -1566,7 +1566,51 @@ async def test_later_unread_concern_cannot_be_silently_cleared(
     ).adjudicate(
         _archive(tmp_path),
         notes=[
-            {"kind": "observation", "path": "src/main.rs", "line": 6},
+            {"kind": "observation", "path": "Dockerfile", "line": 1},
+            {"kind": "concern", "path": "src/main.rs", "line": 6},
+        ],
+        ledger_final=True,
+    )
+    assert result.decision == decision
+
+
+@pytest.mark.parametrize("decision", ["clear", "reject"])
+async def test_excess_concerns_still_block_clear_but_not_cited_reject(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, decision: str
+) -> None:
+    """Prioritization never treats a lead beyond the cap as reviewed."""
+    monkeypatch.setattr(adjudicator_module, "_MAX_PRELOADED_LEDGER_LOCATIONS", 1)
+    arguments: dict[str, object] = {
+        "decision": decision,
+        "reason": "The cited source supports this decision.",
+        "citations": [{"path": "src/main.rs", "line": 6}],
+    }
+    if decision == "clear":
+        arguments["clear_clause"] = "model_authors_graded_slot"
+    else:
+        arguments["reject_invariant"] = "i5_production_engine"
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [_call("submit_adjudication", arguments)],
+                        }
+                    }
+                ]
+            },
+        )
+
+    result = await _adjudicator(
+        _key(tmp_path), httpx.MockTransport(handler)
+    ).adjudicate(
+        _archive(tmp_path),
+        notes=[
+            {"kind": "concern", "path": "src/main.rs", "line": 6},
             {"kind": "concern", "path": "Dockerfile", "line": 1},
         ],
         ledger_final=True,
@@ -1603,6 +1647,21 @@ def test_finding_evidence_not_in_preloaded_ledger_blocks_clear() -> None:
         {"evidence": [{"path": "Dockerfile", "line": 1}]},
         {("src/main.rs", 6)},
     )
+
+
+def test_finding_evidence_precedes_nonconcern_notes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(adjudicator_module, "_MAX_PRELOADED_LEDGER_LOCATIONS", 1)
+    evidence, reads, incomplete = _preload_ledger_evidence(
+        TarSourceRepository(_archive(tmp_path)),
+        [{"kind": "observation", "path": "Dockerfile", "line": 1}],
+        {"evidence": [{"path": "src/main.rs", "line": 6}]},
+    )
+    assert '"path":"src/main.rs"' in evidence
+    assert ("src/main.rs", 6) in reads
+    assert ("Dockerfile", 1) not in reads
+    assert incomplete is False
 
 
 async def test_budget_terminated_review_without_evidence_settles_immediately(

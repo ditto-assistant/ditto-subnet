@@ -116,7 +116,10 @@ from ditto.db.queries.audit import (
 from ditto.db.queries.benchmark_rollout import (
     DEFAULT_BENCH_VERSION,
     LEGACY_BENCH_VERSION,
+    MIN_DESIRED_AUTHORITY_AGENTS,
     MIN_SCOREABLE_BENCH_VERSION,
+    PRIORITY_COHORT_SIZE,
+    SCORING_QUORUM,
 )
 from ditto.db.queries.coding_evaluations import CodingShadowRunBundle
 from ditto.db.queries.confirmation_bundles import (
@@ -4845,6 +4848,73 @@ class TestPublicLeaderboard:
         assert partial["rollout_composite"] == pytest.approx(0.5)
         assert partial["rollout_score_count"] == 1
 
+    async def test_rollout_status_publishes_promotion_progress(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """#2079 follow-up: rollout status says what emissions are waiting on.
+
+        #2098 labels the board's ``scoring_bench_version`` apart from its
+        ``emission_bench_version``. This is the other half of the question a
+        miner asks when those differ -- what still has to happen -- answered
+        by ``/bench/rollout`` from the live gate values, then cleared by the
+        activation that makes the two versions equal again.
+        """
+        await _activate_era(session_maker)
+        await _seed_k3(session_maker, miner=_MINER_A, composites=[0.8, 0.8, 0.8])
+        rollout_id = uuid4()
+        async with session_maker() as s, s.begin():
+            s.add(
+                BenchmarkRollout(
+                    rollout_id=rollout_id,
+                    from_version=_ERA,
+                    desired_version=_NEXT_ERA,
+                    status="collecting",
+                    cohort_size=5,
+                    priority_cohort_target=PRIORITY_COHORT_SIZE,
+                    created_at=datetime.now(UTC),
+                )
+            )
+        _install_db(app, session_maker)
+
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        rollout = (await client.get("/api/v1/public/bench/rollout")).json()
+        # The rollout status and #2098's board fields describe one state.
+        assert board["scoring_bench_version"] == rollout["desired_version"]
+        assert board["emission_bench_version"] == rollout["active_version"] == _ERA
+        assert rollout["status"] == "collecting"
+        assert rollout["promotion_pending"] is True
+        assert rollout["priority_cohort_size"] == PRIORITY_COHORT_SIZE
+        assert rollout["priority_cohort_ready_count"] == 0
+        requirement = rollout["promotion_requirement"]
+        assert f"Bench v{_NEXT_ERA} scoring is in progress" in requirement
+        assert f"Bench v{_ERA} still controls emissions" in requirement
+        assert (
+            f"first {PRIORITY_COHORT_SIZE} inherited priority-cohort positions"
+            in requirement
+        )
+        assert f"complete {SCORING_QUORUM}-score v{_NEXT_ERA} quorum" in requirement
+        assert f"at least {MIN_DESIRED_AUTHORITY_AGENTS} agents" in requirement
+
+        # The completed activation: emission authority moves and nothing is
+        # pending any more, on the rollout status and on the board alike.
+        async with session_maker() as s, s.begin():
+            row = await s.get(BenchmarkRollout, rollout_id)
+            assert row is not None
+            row.status = "activated"
+            row.activated_at = datetime.now(UTC)
+
+        board = (await client.get("/api/v1/public/leaderboard")).json()
+        rollout = (await client.get("/api/v1/public/bench/rollout")).json()
+        assert rollout["status"] == "activated"
+        assert rollout["active_version"] == rollout["desired_version"] == _NEXT_ERA
+        assert board["emission_bench_version"] == board["scoring_bench_version"]
+        assert board["emission_bench_version"] == _NEXT_ERA
+        assert rollout["promotion_pending"] is False
+        assert rollout["promotion_requirement"] is None
+
     async def test_rollout_state_is_null_without_an_open_rollout(
         self,
         app: FastAPI,
@@ -6937,6 +7007,15 @@ class TestPublicActivity:
         assert entry["review_original_reason"] == original_reason
         assert "Same-owner lineage verified" not in response.text
         assert "operator@example.com" not in response.text
+        # The operator projection labels what a reopen withdrew; the public
+        # page must not widen to carry those fields.
+        assert not {
+            "reason_source",
+            "superseded_reason",
+            "superseded_resolution",
+            "superseded_resolution_reason",
+            "superseded_at",
+        } & set(entry)
 
     async def test_activity_projects_resolution_reason_for_resolved_review(
         self,

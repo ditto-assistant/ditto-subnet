@@ -121,14 +121,14 @@
     {
       "id": "platform-host-disk",
       "title": "Platform app VM disk inspect, cache reclaim, and boot size",
-      "keywords": ["no space left on device", "platform host disk", "app_boot_disk", "ditto-platform-prod disk", "platform disk full", "unable to write loose object"],
+      "keywords": ["no space left on device", "platform host disk", "app_boot_disk", "ditto-platform-prod disk", "platform disk full", "unable to write loose object", "postgres log retention", "logging collector", "collector logs", "ditto-pg-platform-data", "postgres data disk"],
       "summary": "A full 30G Platform boot disk blocks git fetch during platform-deploy. Inspect via IAP, reclaim caches with confirmation, then grow app_boot_disk_gb through protected Terraform.",
       "skills": ["gcloud-ditto-readonly", "ditto-subnet-release-ops"],
-      "owns": [".agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh", ".agents/skills/ditto-subnet-release-ops/scripts/reclaim_platform_disk_caches.sh", ".agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md"],
+      "owns": [".agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh", ".agents/skills/ditto-subnet-release-ops/scripts/reclaim_platform_disk_caches.sh", ".agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md", "infra/ansible/roles/postgres/files/ditto-postgres-log-gc.sh", "infra/ansible/roles/postgres/tasks/log_gc.yml", "infra/ansible/roles/postgres/tasks/data_disk.yml"],
       "read": [".agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md", ".agents/skills/gcloud-ditto-readonly/SKILL.md", "infra/terraform/stacks/gcp-platform/variables.tf"],
       "search": ["rg -n 'app_boot_disk_gb|No space left on device' infra .github/workflows/platform-deploy.yml .agents/skills"],
-      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "bash -n .agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh", "bash -n .agents/skills/ditto-subnet-release-ops/scripts/reclaim_platform_disk_caches.sh", "terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check"],
-      "invariants": ["Do not delete relay traces, Postgres, or .env to free space.", "On google provider 6.x, grow the boot disk with gcloud then filesystem grow; Terraform size is ForceNew and must not replace the VM.", "Cache reclaim requires the exact confirmation RECLAIM PLATFORM DISK CACHES."],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "bash -n .agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh", "bash -n .agents/skills/ditto-subnet-release-ops/scripts/reclaim_platform_disk_caches.sh", "terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check", "python3 infra/ansible/tests/test_postgres_log_gc.py", "cd infra/ansible && ansible-playbook --check -i localhost, tests/postgres-log-gc.yml"],
+      "invariants": ["Do not delete relay traces, Postgres, or .env to free space.", "On google provider 6.x, grow the boot disk with gcloud then filesystem grow; Terraform size is ForceNew and must not replace the VM.", "Cache reclaim requires the exact confirmation RECLAIM PLATFORM DISK CACHES.", "PostgreSQL rotation never reclaims: postgres_log_gc_* must stay enabled and bounded by both age and total size.", "ditto-pg-platform-data stays unmounted until an operator sets postgres_data_disk_enabled; mounting it never relocates PGDATA."],
       "related": ["prod-readonly", "release-delivery", "infra-cloud"]
     },
     {

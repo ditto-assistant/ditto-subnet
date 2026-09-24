@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from ditto.validator.config import FINNEY_BURN_HOTKEY, parse_validator_config_from_env
+from ditto.validator.config import parse_validator_config_from_env
 from ditto.validator.errors import ValidatorConfigError
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -36,7 +36,7 @@ class TestKothConfig:
         assert cfg.koth_confirmation_seeds == 3
         assert cfg.top5_max_confirmation_seeds == 15
         assert cfg.miner_emission_share == 1.0
-        assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
+        assert cfg.burn_hotkey is None  # resolved from registered UID 0 each epoch
         # Cadence knobs stay env-driven, with these defaults.
         assert cfg.sweep_seconds == 30
         assert cfg.epoch_seconds == 3600
@@ -84,7 +84,7 @@ class TestKothConfig:
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
         assert cfg.miner_emission_share == 1.0
-        assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
+        assert cfg.burn_hotkey is None
 
     def test_localnet_burns_to_local_owner_validator(
         self, monkeypatch: pytest.MonkeyPatch
@@ -98,12 +98,12 @@ class TestKothConfig:
         "network",
         ["wss://archive.chain.opentensor.ai:443", "wss://finney.example.com/ws"],
     )
-    def test_custom_finney_endpoint_burns_to_fixed_owner(
+    def test_custom_finney_endpoint_resolves_live_owner(
         self, monkeypatch: pytest.MonkeyPatch, network: str
     ) -> None:
         _base_env(monkeypatch)
         monkeypatch.setenv("SUBTENSOR_NETWORK", network)
-        assert parse_validator_config_from_env().burn_hotkey == FINNEY_BURN_HOTKEY
+        assert parse_validator_config_from_env().burn_hotkey is None
 
     @pytest.mark.parametrize(
         "network", ["localhost", "127.0.0.1", "ws://127.0.0.1:9944", "ws://[::1]:9944"]

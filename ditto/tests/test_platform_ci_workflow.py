@@ -238,3 +238,32 @@ def test_migration_order_retries_status_publish_without_failing_a_clean_check() 
     assert "max_attempts=6" in text
     assert "leaving that context pending" in text
     assert 'exit "$exit_code"' in text
+
+
+def test_migration_order_sweeps_share_one_lane_and_checks_stay_isolated() -> None:
+    workflow = _load(ROOT / ".github/workflows/platform-migration-order.yml")
+    # A workflow-level group would put per-ref checks and sweeps in one lane.
+    assert "concurrency" not in workflow
+    check = workflow["jobs"]["migration-order"]
+    sweep = workflow["jobs"]["recheck-open-prs"]
+
+    # Push and a manual dispatch on main run the sweep under one constant group.
+    # A branch dispatch (anti-copy refresh) must not: it would run that branch's
+    # older copy of the sweep and could rewrite every open PR's status last.
+    assert " ".join(sweep["if"].split()) == (
+        "github.event_name == 'push' || "
+        "(github.event_name == 'workflow_dispatch' && "
+        "github.ref == 'refs/heads/main')"
+    )
+    assert sweep["concurrency"] == {
+        "group": "platform-migration-order-main-sweep",
+        "cancel-in-progress": False,
+    }
+
+    # PR, merge_group and dispatch checks are keyed by head/ref, never the sweep.
+    assert check["if"] == "github.event_name != 'push'"
+    assert check["concurrency"] == {
+        "group": "platform-migration-order-${{ github.head_ref || github.ref }}",
+        "cancel-in-progress": True,
+    }
+    assert "main-sweep" not in check["concurrency"]["group"]

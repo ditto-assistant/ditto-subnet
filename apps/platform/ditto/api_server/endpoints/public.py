@@ -114,6 +114,7 @@ from ditto.api_models import (
     PublicNameHandle,
     PublicNextPinProjection,
     PublicOperationsResponse,
+    PublicOrdinaryReview,
     PublicOrphanedSlot,
     PublicPinAgreement,
     PublicProvisionalScore,
@@ -208,6 +209,10 @@ from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.ath_hold_withdrawal import (
     emission_withheld_agent_ids,
     without_emission_withheld,
+)
+from ditto.api_server.ath_review_state import (
+    DEFAULT_OPEN_REASON,
+    derive_ath_review_lifecycle,
 )
 from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retired
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
@@ -405,6 +410,10 @@ from ditto.db.queries.screening_infra_retry import (
 )
 from ditto.db.queries.screening_retry import failed_screening_retry_authorized
 from ditto.db.queries.screening_review_deadlines import POLICY_V13_DOCUMENT_DIGEST
+from ditto.db.queries.source_review_queue_slo import (
+    ORDINARY_REVIEW_ACTIONABLE_STATUSES,
+    load_source_review_queue_slo_snapshot,
+)
 from ditto.db.queries.tickets import (
     get_score_continuation_floor,
     get_score_continuation_floor_row,
@@ -6019,44 +6028,19 @@ async def _ath_review_public_snapshot(
 
     snapshots: dict[UUID, _PublicAthReviewSnapshot] = {}
     for review in reviews:
-        latest = latest_actions.get(review.review_id)
-        if review.status == "pending":
-            if latest is not None and latest.action == "reopen":
-                event: Literal[
-                    "opened", "reopened", "cleared", "rejected", "withdrawn"
-                ] = "reopened"
-                reason = latest.reason
-                event_at = latest.created_at
-            else:
-                event = "opened"
-                reason = review.original_reason or "Submission routed to ATH review."
-                event_at = review.opened_at
-            opened_at = review.reopened_at or review.opened_at
-        else:
-            resolution = review.resolution or (latest.action if latest else None)
-            event = (
-                "rejected"
-                if resolution == "reject"
-                else "withdrawn"
-                if resolution == "withdraw"
-                else "cleared"
-            )
-            reason = (
-                review.resolution_reason
-                or (latest.reason if latest is not None else None)
-                or "ATH review resolved."
-            )
-            event_at = review.resolved_at or (
-                latest.created_at if latest is not None else review.opened_at
-            )
-            opened_at = review.reopened_at or review.opened_at
+        # Shared with the operator queue and audit projections, so a reopened
+        # hold reads the same on every surface. Only the newest action is
+        # loaded here: the public page never shows what a reopen withdrew, so
+        # it does not pay for the full ledger.
+        lifecycle = derive_ath_review_lifecycle(
+            review, latest_action=latest_actions.get(review.review_id)
+        )
         snapshots[review.agent_id] = _PublicAthReviewSnapshot(
-            event=event,
-            reason=reason,
-            event_at=event_at,
-            opened_at=opened_at,
-            original_reason=review.original_reason
-            or "Submission routed to ATH review.",
+            event=lifecycle.event,
+            reason=lifecycle.reason,
+            event_at=lifecycle.event_at,
+            opened_at=lifecycle.opened_at,
+            original_reason=review.original_reason or DEFAULT_OPEN_REASON,
             original_duplicate_of=review.original_duplicate_of,
         )
 
@@ -7012,6 +6996,62 @@ async def agent_pipeline(
             select(ScreeningQuarantine).where(ScreeningQuarantine.agent_id == agent_id)
         )
     )
+    ordinary_review: PublicOrdinaryReview | None = None
+    # Reimplements ditto.db.queries.source_review_queue_slo's
+    # load_agent_ordinary_review_state inline (reusing the attempts/quarantines
+    # rows already fetched above, rather than a second round trip). The two are
+    # behaviourally equivalent by construction; keep them in sync by hand if
+    # either changes (or fold this into a call to that function).
+    if agent.status in ORDINARY_REVIEW_ACTIONABLE_STATUSES:
+        latest_attempt = attempts[0] if attempts else None
+        ordinary_reason: (
+            Literal[
+                "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
+            ]
+            | None
+        ) = None
+        if agent.status == AgentStatus.QUARANTINED:
+            active_quarantine = next(
+                (
+                    quarantine
+                    for quarantine in quarantines
+                    if quarantine.status == "active"
+                ),
+                None,
+            )
+            # No active quarantine row despite QUARANTINED status is the same
+            # resolved-quarantine reconciliation gap
+            # ``ditto.db.queries.source_review_queue_slo`` excludes from the
+            # operator snapshot; do not show a miner a guess here either.
+            if active_quarantine is not None:
+                ordinary_reason = "escalation"
+        elif latest_attempt is None:
+            ordinary_reason = "capacity_wait"
+        elif latest_attempt.status == "running":
+            ordinary_reason = "active_work"
+        elif latest_attempt.status in ("failed", "expired"):
+            ordinary_reason = "infrastructure_backoff"
+        if ordinary_reason is not None:
+            # Subnet-wide typical durations, not per-agent: cheap relative to
+            # the rest of this handler and bounded by the 10s response cache
+            # above; revisit with a short-TTL cache (see
+            # ``QueuePolicySettingsResolver``) if this shows up as hot.
+            typical = await load_source_review_queue_slo_snapshot(session)
+            # Stable clock: the agent's own created_at, which a retry (a new
+            # screening_attempts row) cannot reset -- see the query module's
+            # docstring. current_attempt_age_seconds separately answers "how
+            # long has the CURRENT attempt been going".
+            ordinary_review = PublicOrdinaryReview(
+                reason=ordinary_reason,
+                age_seconds=max(0.0, (now - agent.created_at).total_seconds()),
+                current_attempt_age_seconds=(
+                    max(0.0, (now - latest_attempt.started_at).total_seconds())
+                    if latest_attempt is not None
+                    else None
+                ),
+                typical_p50_seconds=typical.p50_age_seconds,
+                typical_p95_seconds=typical.p95_age_seconds,
+            )
     quarantines_by_attempt = {
         quarantine.attempt_id: quarantine for quarantine in quarantines
     }
@@ -7259,6 +7299,7 @@ async def agent_pipeline(
         generated_at=now,
         agent_id=agent_id,
         admission_retry=admission_retry,
+        ordinary_review=ordinary_review,
         artifact_release=(
             await _artifact_release_snapshot(
                 session,
@@ -8121,7 +8162,8 @@ async def benchmark_rollout_state(
     ``ranked_quorum_agents`` / ``min_ranked_quorum_agents`` answer the question
     the rest of this payload only implies: how close the desired version is to
     taking over weight-setting. Weights stay on ``active_version`` until the
-    former reaches the latter.
+    priority-cohort gate closes AND the former reaches the latter;
+    ``promotion_pending`` / ``promotion_requirement`` say so directly.
     """
     response.headers["Cache-Control"] = "public, max-age=30"
     state = await rollout_state(session)

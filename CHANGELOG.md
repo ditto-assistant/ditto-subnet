@@ -2,6 +2,83 @@
 
 <!-- version list -->
 
+## v0.307.0 (2026-09-24)
+
+### Features
+
+- **platform**: Publish benchmark rollout promotion progress
+  ([#2108](https://github.com/ditto-assistant/ditto-subnet/pull/2108),
+  [`e664368`](https://github.com/ditto-assistant/ditto-subnet/commit/e664368970c847750ada739a8e4791a91dd098c0))
+
+- **platform**: Record immutable screening review events
+  ([#2217](https://github.com/ditto-assistant/ditto-subnet/pull/2217),
+  [`a61a5fa`](https://github.com/ditto-assistant/ditto-subnet/commit/a61a5fa393fc9e06bad9692abbde72b777e9d721))
+
+
+## v0.306.3 (2026-09-24)
+
+### Bug Fixes
+
+- **validator**: Resolve burn target from registered owner
+  ([#2205](https://github.com/ditto-assistant/ditto-subnet/pull/2205),
+  [`bbbefb9`](https://github.com/ditto-assistant/ditto-subnet/commit/bbbefb9bf149324ad65f28316bb233a9d514a363))
+
+
+## v0.306.2 (2026-09-24)
+
+### Bug Fixes
+
+- **screener**: Retry transient image multipart calls
+  ([#2025](https://github.com/ditto-assistant/ditto-subnet/pull/2025),
+  [`6438aff`](https://github.com/ditto-assistant/ditto-subnet/commit/6438affae38e55d16f733b3924d6a8f982c65dac))
+
+
+## v0.306.1 (2026-09-24)
+
+### Bug Fixes
+
+- **screener**: Prioritize court concern evidence
+  ([#2162](https://github.com/ditto-assistant/ditto-subnet/pull/2162),
+  [`0e140f5`](https://github.com/ditto-assistant/ditto-subnet/commit/0e140f5e3145f26aedb4714238a7b432bf196b7e))
+
+
+## v0.306.0 (2026-09-24)
+
+### Bug Fixes
+
+- **ci**: Serialize migration-order sweep triggers
+  ([#2076](https://github.com/ditto-assistant/ditto-subnet/pull/2076),
+  [`55c1c04`](https://github.com/ditto-assistant/ditto-subnet/commit/55c1c042d06abf9d9cc16568b207ae2fbbc76801))
+
+- **infra**: Bound Platform PostgreSQL log retention
+  ([#2121](https://github.com/ditto-assistant/ditto-subnet/pull/2121),
+  [`3a5151d`](https://github.com/ditto-assistant/ditto-subnet/commit/3a5151d02a64b7387d7e957c811e193f70f4500c))
+
+- **platform**: Show the current reason for a reopened review hold
+  ([#2125](https://github.com/ditto-assistant/ditto-subnet/pull/2125),
+  [`8d42e15`](https://github.com/ditto-assistant/ditto-subnet/commit/8d42e15fa3581481e965345fab6089a003d2600c))
+
+- **screener**: Harden legacy worker unit and lock CI uv installs
+  ([#2062](https://github.com/ditto-assistant/ditto-subnet/pull/2062),
+  [`a1c3b4c`](https://github.com/ditto-assistant/ditto-subnet/commit/a1c3b4c8a7405eef154c479b8689a84c50bb6667))
+
+### Documentation
+
+- **platform**: Document last_provider_success_at as last GCE fleet read
+  ([#2082](https://github.com/ditto-assistant/ditto-subnet/pull/2082),
+  [`fdad2fb`](https://github.com/ditto-assistant/ditto-subnet/commit/fdad2fb473cf31b37acd36645407b5dc0ce521b8))
+
+### Features
+
+- **platform**: Add ordinary source-review queue-age SLO
+  ([#2134](https://github.com/ditto-assistant/ditto-subnet/pull/2134),
+  [`a38e643`](https://github.com/ditto-assistant/ditto-subnet/commit/a38e643c252126c15461ee167e7be6313c5ecc07))
+
+- **platform,backroom**: Expose chat failure taxonomy
+  ([#2109](https://github.com/ditto-assistant/ditto-subnet/pull/2109),
+  [`35f9b70`](https://github.com/ditto-assistant/ditto-subnet/commit/35f9b704fa6ea3a323bf1ade4bb5f19f8aa2f066))
+
+
 ## v0.305.0 (2026-09-24)
 
 ### Bug Fixes

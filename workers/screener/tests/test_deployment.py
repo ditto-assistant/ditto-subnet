@@ -474,6 +474,11 @@ def test_systemd_unit_runs_the_extracted_screener_entrypoint() -> None:
     assert "ditto.screener" not in unit
     assert "KillMode=mixed" in unit
     assert "TimeoutStopSec=15min" in unit
+    # The worker only execs the docker client against the rootless daemon
+    # socket and openssl; the daemon's setuid newuidmap/newgidmap needs live
+    # in its own user unit, so the worker must not be able to gain privileges.
+    assert "NoNewPrivileges=true" in unit
+    assert "NoNewPrivileges=false" not in unit
 
 
 def test_updater_installs_and_rolls_back_the_repository_owned_unit() -> None:

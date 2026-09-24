@@ -20,7 +20,7 @@ TimeoutStopSec=15min
 StandardOutput=append:/opt/ditto/logs/ditto-screener.log
 StandardError=append:/opt/ditto/logs/ditto-screener.log
 LimitNOFILE=65536
-NoNewPrivileges=false
+NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target

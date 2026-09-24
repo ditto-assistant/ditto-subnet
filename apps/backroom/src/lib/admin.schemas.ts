@@ -700,6 +700,8 @@ export const screenerCapacitySnapshotSchema = z.object({
   gce_pending: z.number().int().nonnegative(),
   gce_draining: z.number().int().nonnegative(),
   fallback_reason: z.string().nullable(),
+  // Last successful GCE fleet read by the capacity controller. It can advance
+  // while provider routing is unavailable and says nothing about other providers.
   last_provider_success_at: z.string().nullable(),
   last_provider_error_code: z.string().nullable(),
   last_provider_error_at: z.string().nullable(),
@@ -2295,6 +2297,76 @@ export const inferenceRuntimeMetricsSchema = z.object({
       process_started_at: z.string().nullable().optional(),
       capacity_declines: z.record(z.string(), z.number().int().nonnegative()).default({}),
       error: z.string().nullable().optional(),
+    }),
+  ),
+})
+
+// Which door the call went through, derived by the platform from the lane and
+// `fallback_phase`: chat phase 0 is the OpenRouter aggregate route and phase 1
+// the reserved `reliable` route; on the embedding lane phase 0 is the direct
+// provider call and phase 1 the OpenRouter fallback. `ditto-router` is the
+// dogfood lane, which picks its own upstream and never reports it.
+const inferenceGatewaySchema = z.enum(['openrouter', 'reliable', 'direct', 'ditto-router'])
+
+// How much the ledger actually knows about `upstream_route`. ONLY
+// `confirmed_selected` means "this upstream served the call": it is the single
+// selected endpoint parsed out of router metadata on a COMPLETED chat row.
+// `last_attempted` is the last upstream a FAILED chat row was sent to, which is
+// evidence and not a route. `configured` is the relay's pinned embedding
+// provider, stamped before the call and never observed. The remaining three
+// always arrive with `upstream_route: null` -- `router_internal` (the Ditto
+// Router chose and did not say), `unknown` (the column was NULL, the usual case
+// for a failure whose provider returned no metadata), and `unrecognized` (a
+// value was present but was not a plain bounded identifier, so the platform
+// refused to render it).
+const inferenceRouteBasisSchema = z.enum([
+  'confirmed_selected',
+  'last_attempted',
+  'configured',
+  'router_internal',
+  'unknown',
+  'unrecognized',
+])
+
+export const inferenceFailureTaxonomySchema = z.object({
+  observed_at: z.string(),
+  window_seconds: z.array(z.number().int().positive()),
+  group_limit: z.number().int().positive(),
+  lanes: z.array(
+    z.object({
+      window_seconds: z.number().int().positive(),
+      request_kind: inferenceRequestKindSchema,
+      calls: z.number().int().nonnegative(),
+      settled: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      canceled: z.number().int().nonnegative(),
+      in_flight: z.number().int().nonnegative(),
+      timed_out: z.number().int().nonnegative(),
+      rate_limited_failures: z.number().int().nonnegative(),
+      failure_share: z.number().nonnegative(),
+      groups_total: z.number().int().nonnegative(),
+      groups_returned: z.number().int().nonnegative(),
+      groups_truncated: z.boolean(),
+    }),
+  ),
+  groups: z.array(
+    z.object({
+      window_seconds: z.number().int().positive(),
+      request_kind: inferenceRequestKindSchema,
+      model: z.string(),
+      gateway: inferenceGatewaySchema,
+      upstream_route: z.string().nullable(),
+      route_basis: inferenceRouteBasisSchema,
+      terminal_error_code: z.string().nullable(),
+      upstream_http_status: z.number().int().nullable(),
+      calls: z.number().int().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      canceled: z.number().int().nonnegative(),
+      timed_out: z.number().int().nonnegative(),
+      openrouter_attempts_max: z.number().int().nonnegative(),
+      share_of_settled_calls: z.number().nonnegative(),
     }),
   ),
 })
@@ -4330,6 +4402,33 @@ export const screeningQuarantineSchema = z.object({
 export const screeningQuarantineListSchema = z.object({
   items: z.array(screeningQuarantineSchema),
   count: z.number().int().nonnegative(),
+})
+
+export const screeningReviewEventListSchema = z.object({
+  items: z.array(z.object({
+    event_id: z.string().uuid(),
+    agent_id: z.string().uuid(),
+    attempt_id: z.string().uuid(),
+    quarantine_id: z.string().uuid().nullable(),
+    resolution_id: z.string().uuid().nullable(),
+    previous_event_id: z.string().uuid().nullable(),
+    event_kind: z.enum(['automated', 'manual']),
+    artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+    policy_version: z.number().int().positive(),
+    actor: z.string(),
+    reviewer_model: z.string().nullable(),
+    outcome: z.string(),
+    effective_decision: z.string(),
+    reason_code: z.string().nullable(),
+    reason: z.string().nullable(),
+    prior_agent_status: z.string(),
+    next_agent_status: z.string(),
+    evidence: z.record(z.string(), z.unknown()),
+    created_at: z.string(),
+  })),
+  count: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
 })
 
 export const resolveScreeningQuarantineInputSchema = z.object({
@@ -6661,7 +6760,11 @@ export const benchmarkRolloutStateSchema = z.object({
   cohort_size: z.number().int().nonnegative().optional().default(0),
   cohort_ready_count: z.number().int().nonnegative().optional().default(0),
   priority_cohort_size: z.number().int().positive().optional().default(5),
+  // Promotion progress. Nullish so an older Platform still parses.
+  priority_cohort_ready_count: z.number().int().nonnegative().nullish().default(null),
   priority_complete: z.boolean().optional().default(false),
+  promotion_pending: z.boolean().nullish().default(null),
+  promotion_requirement: z.string().nullish().default(null),
   members: z.array(benchmarkRolloutMemberSchema),
   qualification_blockers: z
     .array(z.record(z.string(), z.string()))
@@ -6927,7 +7030,18 @@ export type AthReviewKind = z.infer<typeof athReviewKindSchema>
 export const copyReviewOriginalSchema = z.object({
   review_kind: athReviewKindSchema.default('copy'),
   duplicate_of: z.string().uuid().nullable(),
+  // Why the submission is under review RIGHT NOW. For a hold that was reopened
+  // after its resolution was withdrawn this is the reconsideration reason, not
+  // the withdrawn prose -- a pending appeal must never read as a live finding.
+  // The superseded text moves to the fields below and stays readable.
   reason: z.string().nullable(),
+  // Nullish defaults throughout: a platform that predates the reopen
+  // projection simply reports the original hold, which is what it meant.
+  reason_source: z.enum(['original_hold', 'reconsideration']).nullish().default('original_hold'),
+  superseded_reason: z.string().nullish().default(null),
+  superseded_resolution: copyReviewResolutionSchema.nullish().default(null),
+  superseded_resolution_reason: z.string().nullish().default(null),
+  superseded_at: z.string().nullish().default(null),
   policy_version: z.number().int(),
   fingerprint_versions: z.record(
     z.string(),
@@ -7927,6 +8041,12 @@ export const publicLeaderboardSchema = z.object({
   generated_at: z.string(),
   count: z.number().int().nonnegative(),
   current_bench_version: z.number().int().positive(),
+  // #2098's names for the two versions a rollout splits: what the board is
+  // scored on, and the ledger pin that pays. Nullish because Platform and
+  // Backroom ship together but do not deploy atomically, and an older
+  // Platform must not fail an operator board read.
+  scoring_bench_version: z.number().int().positive().nullish().default(null),
+  emission_bench_version: z.number().int().positive().nullish().default(null),
   active_bench_version: z.number().int().positive(),
   desired_bench_version: z.number().int().positive(),
   available_bench_versions: z.array(z.number().int().positive()),
@@ -7935,11 +8055,33 @@ export const publicLeaderboardSchema = z.object({
   emissions: publicKothEmissionsSchema.nullable().optional(),
 })
 
+/**
+ * What emission authority is still waiting for, from `/public/bench/rollout`.
+ * Relayed rather than re-worded, so an operator's answer to "why is the new
+ * version not paying" is Platform's own gate sentence. Every progress field is
+ * nullish so a Platform that predates them still yields a readable object.
+ */
+export const leaderboardRolloutPromotionSchema = z.object({
+  active_version: z.number().int().positive(),
+  desired_version: z.number().int().positive(),
+  status: z.string(),
+  promotion_pending: z.boolean().nullish().default(null),
+  promotion_requirement: z.string().nullish().default(null),
+  priority_cohort_size: z.number().int().nonnegative().nullish().default(null),
+  priority_cohort_ready_count: z.number().int().nonnegative().nullish().default(null),
+  ranked_quorum_agents: z.number().int().nonnegative().nullish().default(null),
+  min_ranked_quorum_agents: z.number().int().nonnegative().nullish().default(null),
+})
+
 export const scoreLeaderboardPageSchema = z.object({
   generated_at: z.string(),
   current_bench_version: z.number().int().positive(),
+  scoring_bench_version: z.number().int().positive().nullish().default(null),
+  emission_bench_version: z.number().int().positive().nullish().default(null),
   active_bench_version: z.number().int().positive(),
   desired_bench_version: z.number().int().positive(),
+  // Null on a historical board, or when the rollout status was unreadable.
+  rollout_promotion: leaderboardRolloutPromotionSchema.nullable().default(null),
   available_bench_versions: z.array(z.number().int().positive()),
   selection_mode: z.enum(['authoritative', 'historical']),
   status: z.enum(['all', 'finalized', 'provisional']),
@@ -8645,3 +8787,33 @@ export const confirmationSeedAnchorsInputSchema = z.object({
 export type ConfirmationSeedAnchorList = z.infer<
   typeof confirmationSeedAnchorListSchema
 >
+
+// Ordinary (pre-score) source-review queue-age SLO, ditto-subnet#2042 slice 1.
+// Read-only observability: overdue_count and p95_exceeds_threshold are null
+// until an operator configures a threshold, and this board enforces nothing.
+// Top-agent, copy, ATH, and human-escalation review are separate, later
+// clocks -- not covered here.
+export const sourceReviewQueueSloSchema = z.object({
+  generated_at: z.string(),
+  backlog_count: z.number().int().nonnegative(),
+  active_work_count: z.number().int().nonnegative(),
+  capacity_wait_count: z.number().int().nonnegative(),
+  infrastructure_backoff_count: z.number().int().nonnegative(),
+  escalation_count: z.number().int().nonnegative(),
+  p50_age_seconds: z.number().nonnegative().nullable(),
+  p95_age_seconds: z.number().nonnegative().nullable(),
+  oldest_age_seconds: z.number().nonnegative().nullable(),
+  throughput_window_hours: z.number().int().positive(),
+  throughput_completed_count: z.number().int().nonnegative(),
+  throughput_per_hour: z.number().nonnegative(),
+  stale_running_ghost_count: z.number().int().nonnegative(),
+  resolved_quarantine_ghost_count: z.number().int().nonnegative(),
+  attempt_status_drift_ghost_count: z.number().int().nonnegative(),
+  ghost_count: z.number().int().nonnegative(),
+  max_actionable_age_threshold_seconds: z.number().int().positive().nullable(),
+  overdue_count: z.number().int().nonnegative().nullable(),
+  p95_age_threshold_seconds: z.number().int().positive().nullable(),
+  p95_exceeds_threshold: z.boolean().nullable(),
+})
+
+export type SourceReviewQueueSlo = z.infer<typeof sourceReviewQueueSloSchema>
