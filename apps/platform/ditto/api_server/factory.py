@@ -88,6 +88,7 @@ from ditto.api_server.endpoints import (
     admin_inference_concurrency_settings_router,
     admin_inference_observability_router,
     admin_inference_routes_router,
+    admin_l2_report_canary_router,
     admin_leaderboard_router,
     admin_lease_revocations_router,
     admin_miner_fees_router,
@@ -124,6 +125,7 @@ from ditto.api_server.endpoints import (
     public_router,
     retrieval_router,
     scoring_router,
+    screener_l2_report_canary_router,
     screener_router,
     upload_router,
     validator_coding_certification_leases_router,
@@ -731,6 +733,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(validator_confirmation_router, prefix="/api/v1")
     app.include_router(inference_router, prefix="/api/v1")
     app.include_router(screener_router, prefix="/api/v1")
+    app.include_router(screener_l2_report_canary_router, prefix="/api/v1")
     app.include_router(scoring_router, prefix="/api/v1")
     app.include_router(public_router, prefix="/api/v1")
     app.include_router(admin_artifact_release_settings_router, prefix="/api/v1")
@@ -757,6 +760,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_scoring_readiness_router, prefix="/api/v1")
     app.include_router(admin_screener_review_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_fanout_shadow_router, prefix="/api/v1")
+    app.include_router(admin_l2_report_canary_router, prefix="/api/v1")
     app.include_router(admin_screener_capacity_router, prefix="/api/v1")
     app.include_router(admin_screening_infra_retry_router, prefix="/api/v1")
     app.include_router(admin_source_review_queue_slo_router, prefix="/api/v1")

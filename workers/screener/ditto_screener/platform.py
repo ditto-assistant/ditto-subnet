@@ -524,6 +524,65 @@ class PlatformClient:
             )
         return ArtifactResponse.model_validate(resp.json())
 
+    async def claim_l2_report_canary(
+        self,
+        *,
+        instance_id: str,
+        settings_revision: int,
+        settings_checksum: str,
+    ) -> dict[str, Any] | None:
+        """Claim an isolated, non-authoritative L2 audit only when idle."""
+        url = f"{self._base}{_PREFIX}/l2-report-canaries/claim"
+        try:
+            resp = await self._client.post(
+                url,
+                json={
+                    "instance_id": instance_id,
+                    "settings_revision": settings_revision,
+                    "settings_checksum": settings_checksum,
+                },
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"L2 canary claim failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"L2 canary claim rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        value = resp.json()
+        if value is not None and not isinstance(value, dict):
+            raise PlatformError("L2 canary claim response is invalid")
+        return value
+
+    async def complete_l2_report_canary(
+        self,
+        canary_id: UUID,
+        *,
+        lease_token: str,
+        status: str,
+        report: dict[str, Any],
+        error_code: str | None,
+    ) -> None:
+        """Commit report-only evidence; never post a screening verdict."""
+        url = f"{self._base}{_PREFIX}/l2-report-canaries/{canary_id}/complete"
+        try:
+            resp = await self._client.post(
+                url,
+                json={
+                    "lease_token": lease_token,
+                    "status": status,
+                    "report": report,
+                    "error_code": error_code,
+                },
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"L2 canary completion failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"L2 canary completion rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+
     async def record_verification_receipt(
         self,
         agent_id: UUID,

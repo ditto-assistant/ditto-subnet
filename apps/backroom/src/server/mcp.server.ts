@@ -112,6 +112,8 @@ import {
   peekInferenceTraceInputSchema,
   applyScreenerReviewSettingsInputSchema,
   screenerFanoutShadowInputSchema,
+  l2ReportCanaryLookupInputSchema,
+  scheduleL2ReportCanaryInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
   confirmationSeedAnchorsInputSchema,
@@ -265,6 +267,8 @@ import {
   revokeReplayProcessKey,
   fetchScreenerReviewControl,
   fetchScreenerFanoutShadow,
+  fetchL2ReportCanary,
+  scheduleL2ReportCanary,
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
   fetchConfirmationSeedAnchors,
@@ -668,6 +672,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Authorize one audited retry; preserves identity, history and budget caps.',
   get_screener_fanout_shadow:
     'Read bounded baseline/fan-out shadow comparisons, coverage, disagreements, latency, and spend.',
+  get_l2_report_canary:
+    'Read one exact-attempt non-authoritative L2 canary report and lease outcome.',
+  schedule_l2_report_canary:
+    'Queue one isolated L2 report on an enrolled Hetzner node; never changes screening, scoring, or quarantine.',
   get_copy_court_settings:
     'Read the copy-hold triage court posture and revision history.',
   get_confirmation_seed_anchors:
@@ -2321,6 +2329,29 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchScreenerFanoutShadow(input)),
+  )
+
+  registerTool(
+    'get_l2_report_canary',
+    {
+      title: 'Get report-only L2 canary',
+      description: 'Read the exact source identity, lease outcome, and persisted L2 audit. A report does not certify CLEAR or change miner state. Requires backroom:read.',
+      inputSchema: l2ReportCanaryLookupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchL2ReportCanary(input)),
+  )
+
+  registerTool(
+    'schedule_l2_report_canary',
+    {
+      title: 'Schedule report-only L2 canary',
+      description: 'Queue a single exact UUID/SHA/source-attempt V13 L2 audit on an enrolled Hetzner node. The status and score count must still match. requestId is the idempotency key; use a new requestId for an append-only replay after a terminal result. candidate_clear is not a certified benign label. Requires backroom:write and confirmation "QUEUE REPORT ONLY L2 CANARY".',
+      inputSchema: scheduleL2ReportCanaryInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => scheduleL2ReportCanary(input, props.session.email)),
   )
 
   registerTool(

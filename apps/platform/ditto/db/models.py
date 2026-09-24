@@ -6998,6 +6998,84 @@ class ScreenerFanoutShadowReview(Base):
     )
 
 
+class ScreenerL2ReportCanary(Base):
+    """One exact-attempt, non-authoritative L2 replay on an enrolled screener."""
+
+    __tablename__ = "screener_l2_report_canaries"
+
+    canary_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    source_attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_node_id: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_agent_status: Mapped[str] = mapped_column(Text, nullable=False)
+    expected_score_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    review_label: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="queued")
+    claimed_instance_id: Mapped[str | None] = mapped_column(Text)
+    settings_revision: Mapped[int | None] = mapped_column(Integer)
+    settings_checksum: Mapped[str | None] = mapped_column(Text)
+    runtime_evidence_sha256: Mapped[str | None] = mapped_column(Text)
+    lease_token_hash: Mapped[str | None] = mapped_column(Text)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    error_code: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["source_attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(["target_node_id"], ["screener_nodes.node_id"]),
+        UniqueConstraint("request_id", name="screener_l2_canary_request_key"),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'", name="screener_l2_canary_sha_check"
+        ),
+        CheckConstraint(
+            "policy_version = 13 AND bench_version = 13",
+            name="screener_l2_canary_v13_check",
+        ),
+        CheckConstraint(
+            "expected_score_count >= 0", name="screener_l2_canary_scores_check"
+        ),
+        CheckConstraint(
+            "review_label IN ('candidate_clear', 'known_reject')",
+            name="screener_l2_canary_label_check",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'leased', 'succeeded', 'incomplete', 'expired')",
+            name="screener_l2_canary_status_check",
+        ),
+        CheckConstraint(
+            "lease_token_hash IS NULL OR lease_token_hash ~ '^[0-9a-f]{64}$'",
+            name="screener_l2_canary_token_check",
+        ),
+        CheckConstraint(
+            "runtime_evidence_sha256 IS NULL OR "
+            "runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'",
+            name="screener_l2_canary_runtime_check",
+        ),
+        Index("screener_l2_canary_queue_idx", "target_node_id", "status", "created_at"),
+        Index(
+            "screener_l2_canary_one_active_source_idx",
+            "source_attempt_id",
+            unique=True,
+            postgresql_where=text("status IN ('queued', 'leased')"),
+        ),
+    )
+
+
 class ValidatorTicket(Base):
     """One validator's evaluation ticket for one agent (a k=3 scoring grant).
 

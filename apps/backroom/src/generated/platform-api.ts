@@ -1780,6 +1780,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-l2-report-canaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Schedule L2 Report Canary
+         * @description Queue one exact source once; this never reopens a screening attempt.
+         */
+        post: operations["schedule_l2_report_canary_api_v1_admin_screener_l2_report_canaries_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/screener-l2-report-canaries/{canary_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get L2 Report Canary */
+        get: operations["get_l2_report_canary_api_v1_admin_screener_l2_report_canaries__canary_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-nodes/{node_id}/channel-settings": {
         parameters: {
             query?: never;
@@ -5840,6 +5877,40 @@ export interface paths {
          * @description Record a fresh report signed by the dedicated screener identity.
          */
         post: operations["heartbeat_api_v1_screener_heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/l2-report-canaries/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim L2 Report Canary */
+        post: operations["claim_l2_report_canary_api_v1_screener_l2_report_canaries_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/l2-report-canaries/{canary_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete L2 Report Canary */
+        post: operations["complete_l2_report_canary_api_v1_screener_l2_report_canaries__canary_id__complete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -20127,6 +20198,159 @@ export interface components {
              * @default slot-0
              */
             slot_id: string;
+        };
+        /** L2CanaryClaimRequest */
+        L2CanaryClaimRequest: {
+            /** Instance Id */
+            instance_id: string;
+        };
+        /** L2CanaryClaimResponse */
+        L2CanaryClaimResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Canary Id
+             * Format: uuid
+             */
+            canary_id: string;
+            /** Download Url */
+            download_url: string;
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /** Lease Token */
+            lease_token: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Policy Version */
+            policy_version: number;
+            scored_runtime_evidence: components["schemas"]["ScoredRuntimeEvidenceLease"];
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
+        };
+        /** L2CanaryCompleteRequest */
+        L2CanaryCompleteRequest: {
+            /** Error Code */
+            error_code?: string | null;
+            /** Lease Token */
+            lease_token: string;
+            /** Report */
+            report: {
+                [key: string]: unknown;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "succeeded" | "incomplete";
+        };
+        /** L2CanaryCompleteResponse */
+        L2CanaryCompleteResponse: {
+            /** Accepted */
+            accepted: boolean;
+        };
+        /** L2CanaryScheduleRequest */
+        L2CanaryScheduleRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Confirm Report Only
+             * @constant
+             */
+            confirm_report_only: true;
+            /** Expected Agent Status */
+            expected_agent_status: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /**
+             * Policy Version
+             * @constant
+             */
+            policy_version: 13;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /**
+             * Review Label
+             * @enum {string}
+             */
+            review_label: "candidate_clear" | "known_reject";
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
+            /** Target Node Id */
+            target_node_id: string;
+        };
+        /** L2CanaryView */
+        L2CanaryView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Canary Id
+             * Format: uuid
+             */
+            canary_id: string;
+            /** Claimed Instance Id */
+            claimed_instance_id: string | null;
+            /** Completed At */
+            completed_at: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error Code */
+            error_code: string | null;
+            /** Expected Agent Status */
+            expected_agent_status: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Report */
+            report: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Request Id
+             * Format: uuid
+             */
+            request_id: string;
+            /** Review Label */
+            review_label: string;
+            /**
+             * Source Attempt Id
+             * Format: uuid
+             */
+            source_attempt_id: string;
+            /** Status */
+            status: string;
+            /** Target Node Id */
+            target_node_id: string;
         };
         /**
          * LedgerEntry
@@ -36675,6 +36899,74 @@ export interface operations {
             };
         };
     };
+    schedule_l2_report_canary_api_v1_admin_screener_l2_report_canaries_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["L2CanaryScheduleRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_l2_report_canary_api_v1_admin_screener_l2_report_canaries__canary_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                canary_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_screener_node_channel_settings_api_v1_admin_screener_nodes__node_id__channel_settings_get: {
         parameters: {
             query?: {
@@ -43931,6 +44223,80 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_l2_report_canary_api_v1_screener_l2_report_canaries_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["L2CanaryClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryClaimResponse"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_l2_report_canary_api_v1_screener_l2_report_canaries__canary_id__complete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                canary_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["L2CanaryCompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["L2CanaryCompleteResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

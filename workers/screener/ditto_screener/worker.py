@@ -529,6 +529,16 @@ class ScreenerWorker:
                 f"{required_policy}, received {queue.required_policy_version}"
             )
         if not queue.items:
+            from ditto_screener.l2_report_canary import consume as consume_l2_canary
+
+            if await consume_l2_canary(
+                config=self._config,
+                platform=self._platform,
+                primary_gate=self._gate,
+                settings=review_settings,
+                instance_id=self._instance_id,
+            ):
+                return 1
             # Only an idle primary worker may consume the optional shadow lane;
             # the Platform serializes its global budget and active assessment.
             from ditto_screener.conversation_worker import consume

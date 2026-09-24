@@ -276,6 +276,9 @@ import {
   screenerReviewRevisionSchema,
   screenerFanoutShadowInputSchema,
   screenerFanoutShadowResponseSchema,
+  l2ReportCanaryLookupInputSchema,
+  scheduleL2ReportCanaryInputSchema,
+  l2ReportCanaryViewSchema,
   screenerPolicyManifestControlSchema,
   copyCourtControlSchema,
   applyCopyCourtSettingsInputSchema,
@@ -589,6 +592,35 @@ export async function fetchScreenerFanoutShadow(rawInput: unknown = {}) {
     `/api/v1/admin/screener-fanout-shadow?${params.toString()}`,
   )
   return screenerFanoutShadowResponseSchema.parse(payload)
+}
+
+export async function fetchL2ReportCanary(rawInput: unknown) {
+  const input = l2ReportCanaryLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screener-l2-report-canaries/${input.canaryId}`,
+  )
+  return l2ReportCanaryViewSchema.parse(payload)
+}
+
+export async function scheduleL2ReportCanary(rawInput: unknown, actor: string) {
+  const input = scheduleL2ReportCanaryInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/screener-l2-report-canaries', {
+    method: 'POST',
+    actor,
+    body: {
+      request_id: input.requestId,
+      agent_id: input.agentId,
+      source_attempt_id: input.sourceAttemptId,
+      artifact_sha256: input.artifactSha256,
+      policy_version: 13,
+      expected_agent_status: input.expectedAgentStatus,
+      expected_score_count: input.expectedScoreCount,
+      target_node_id: input.targetNodeId,
+      review_label: input.reviewLabel,
+      confirm_report_only: true,
+    },
+  })
+  return l2ReportCanaryViewSchema.parse(payload)
 }
 
 export async function fetchCopyCourtControl() {

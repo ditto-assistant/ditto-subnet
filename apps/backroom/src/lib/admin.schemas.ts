@@ -477,6 +477,40 @@ export const screenerFanoutShadowInputSchema = z.object({
   offset: z.number().int().min(0).default(0),
 })
 
+export const l2ReportCanaryLookupInputSchema = z.object({
+  canaryId: z.string().uuid(),
+})
+
+export const scheduleL2ReportCanaryInputSchema = z.object({
+  requestId: z.string().uuid(),
+  agentId: z.string().uuid(),
+  sourceAttemptId: z.string().uuid(),
+  artifactSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedAgentStatus: z.string().min(1),
+  expectedScoreCount: z.number().int().nonnegative(),
+  targetNodeId: z.string().min(1).max(63),
+  reviewLabel: z.enum(['candidate_clear', 'known_reject']),
+  confirmation: z.literal('QUEUE REPORT ONLY L2 CANARY'),
+})
+
+export const l2ReportCanaryViewSchema = z.object({
+  canary_id: z.string().uuid(),
+  request_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  source_attempt_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  target_node_id: z.string(),
+  expected_agent_status: z.string(),
+  expected_score_count: z.number().int().nonnegative(),
+  review_label: z.string(),
+  status: z.string(),
+  claimed_instance_id: z.string().nullable(),
+  report: z.record(z.string(), z.unknown()).nullable(),
+  error_code: z.string().nullable(),
+  created_at: z.string(),
+  completed_at: z.string().nullable(),
+})
+
 export const screenerFanoutShadowReviewSchema = z.object({
   shadow_id: z.string().uuid(),
   agent_id: z.string().uuid(),

@@ -141,6 +141,12 @@ from ditto.api_server.endpoints.ditto_callback_challenge import (
 from ditto.api_server.endpoints.feedback_track import router as feedback_track_router
 from ditto.api_server.endpoints.health import router as health_router
 from ditto.api_server.endpoints.inference import router as inference_router
+from ditto.api_server.endpoints.l2_report_canary import (
+    admin_router as admin_l2_report_canary_router,
+)
+from ditto.api_server.endpoints.l2_report_canary import (
+    screener_router as screener_l2_report_canary_router,
+)
 from ditto.api_server.endpoints.metrics import router as metrics_router
 from ditto.api_server.endpoints.miner_auth import router as miner_auth_router
 from ditto.api_server.endpoints.miner_avatars import router as miner_avatars_router
@@ -225,6 +231,7 @@ __all__ = [
     "admin_scoring_readiness_router",
     "admin_screener_review_settings_router",
     "admin_screener_fanout_shadow_router",
+    "admin_l2_report_canary_router",
     "admin_screener_capacity_router",
     "admin_screening_infra_retry_router",
     "admin_screener_policy_activation_router",
@@ -246,6 +253,7 @@ __all__ = [
     "retrieval_router",
     "scoring_router",
     "screener_router",
+    "screener_l2_report_canary_router",
     "attestation_router",
     "name_claims_router",
     "upload_router",
