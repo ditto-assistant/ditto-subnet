@@ -478,11 +478,23 @@ async def maybe_finalize_targon_screen(
                 )
             except ValueError:
                 observation = None
+        if attempt.policy_version >= 13 and _actionable_adjudication(observation):
+            # A source-only L4 verdict cannot certify v13 runtime/private checks.
+            await _quarantine(
+                session,
+                attempt=attempt,
+                screener_hotkey=screener_hotkey,
+                observation=observation,
+                now=now,
+            )
+            return True
         coverage_admitted = _admitted_on_coverage(observation)
         if not _certified_low_risk(observation) and not coverage_admitted:
             adjudication = _actionable_adjudication(observation)
-            if adjudication is not None and (
-                await _effective_adjudicator_mode(session, attempt) == "enforce"
+            if (
+                attempt.policy_version < 13
+                and adjudication is not None
+                and (await _effective_adjudicator_mode(session, attempt) == "enforce")
             ):
                 if adjudication.decision == "reject":
                     await _reject_build(

@@ -1053,15 +1053,16 @@ def test_preexecution_review_failure_never_releases_or_rejects(
 
 
 @pytest.mark.parametrize(
-    ("court_decision", "outcome"),
+    ("policy_version", "court_decision", "outcome"),
     [
-        ("clear", ScreeningOutcome.PASS),
-        ("reject", ScreeningOutcome.QUARANTINE),
-        ("escalate", ScreeningOutcome.QUARANTINE),
+        (12, "clear", ScreeningOutcome.PASS),
+        (13, "clear", ScreeningOutcome.QUARANTINE),
+        (13, "reject", ScreeningOutcome.QUARANTINE),
+        (13, "escalate", ScreeningOutcome.QUARANTINE),
     ],
 )
 def test_final_adjudication_settles_preexecution_source_lead(
-    court_decision: str, outcome: ScreeningOutcome
+    policy_version: int, court_decision: str, outcome: ScreeningOutcome
 ) -> None:
     adjudication = {
         "decision": court_decision,
@@ -1081,12 +1082,14 @@ def test_final_adjudication_settles_preexecution_source_lead(
     )
 
     decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
-        observation
+        observation, policy_version=policy_version
     )
 
     assert decision.outcome == outcome
     assert decision.adjudication == adjudication
     assert decision.evidence[0].code == "source-review-adjudicated"
+    if policy_version == 13 and court_decision in {"clear", "reject"}:
+        assert decision.evidence[1].code == "source-review-awaiting-v13-verification"
 
 
 async def test_source_review_finding_travels_to_quarantine_decision() -> None:
@@ -1118,15 +1121,16 @@ async def test_source_review_finding_travels_to_quarantine_decision() -> None:
 
 
 @pytest.mark.parametrize(
-    ("court_decision", "outcome"),
+    ("policy_version", "court_decision", "outcome"),
     [
-        ("clear", ScreeningOutcome.PASS),
-        ("reject", ScreeningOutcome.QUARANTINE),
-        ("escalate", ScreeningOutcome.QUARANTINE),
+        (12, "clear", ScreeningOutcome.PASS),
+        (13, "clear", ScreeningOutcome.QUARANTINE),
+        (13, "reject", ScreeningOutcome.QUARANTINE),
+        (13, "escalate", ScreeningOutcome.QUARANTINE),
     ],
 )
 async def test_final_adjudication_crosses_the_local_policy_boundary(
-    court_decision: str, outcome: ScreeningOutcome
+    policy_version: int, court_decision: str, outcome: ScreeningOutcome
 ) -> None:
     async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
@@ -1158,14 +1162,18 @@ async def test_final_adjudication_crosses_the_local_policy_boundary(
             adjudication=adjudication,
         )
 
-    decision = await load_policy_engine(None).evaluate(_context(challenge, review))
+    decision = await load_policy_engine(None).evaluate(
+        _context(challenge, review, policy_version=policy_version)
+    )
 
     assert decision.outcome == outcome
     assert decision.adjudication == adjudication
+    if policy_version == 13 and court_decision in {"clear", "reject"}:
+        assert decision.evidence[1].code == "source-review-awaiting-v13-verification"
 
 
-async def test_later_inconclusive_module_drops_source_adjudication() -> None:
-    """A source clear cannot bind an unrelated terminal oracle outcome."""
+async def test_v13_source_clear_holds_before_later_oracle() -> None:
+    """An L4 source clear cannot bypass unverified runtime evidence."""
 
     async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
@@ -1197,11 +1205,11 @@ async def test_later_inconclusive_module_drops_source_adjudication() -> None:
 
     decision = await load_policy_engine(None).evaluate(_context(challenge, review))
 
-    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
-    assert decision.adjudication is None
+    assert decision.outcome == ScreeningOutcome.QUARANTINE
+    assert decision.adjudication == adjudication
     assert [item.code for item in decision.evidence] == [
         "source-review-adjudicated",
-        "behavioral-oracle-insufficient-round-trips",
+        "source-review-awaiting-v13-verification",
     ]
 
 
@@ -1209,7 +1217,7 @@ async def test_later_inconclusive_module_drops_source_adjudication() -> None:
     ("policy_version", "expected"),
     [
         (12, ScreeningOutcome.PASS),
-        (13, ScreeningOutcome.INCONCLUSIVE),
+        (13, ScreeningOutcome.QUARANTINE),
     ],
 )
 async def test_oracle_transport_failure_is_fail_closed_for_v13(
@@ -1253,11 +1261,15 @@ async def test_oracle_transport_failure_is_fail_closed_for_v13(
 
     assert decision.outcome == expected
     assert decision.policy_version == policy_version
-    assert decision.adjudication == (adjudication if policy_version == 12 else None)
-    assert [item.code for item in decision.evidence] == [
-        "source-review-adjudicated",
-        "challenge-transport-failure",
-    ]
+    assert decision.adjudication == adjudication
+    assert [item.code for item in decision.evidence] == (
+        ["source-review-adjudicated", "challenge-transport-failure"]
+        if policy_version == 12
+        else [
+            "source-review-adjudicated",
+            "source-review-awaiting-v13-verification",
+        ]
+    )
 
 
 async def test_clean_review_finding_is_kept_when_oracle_is_inconclusive() -> None:

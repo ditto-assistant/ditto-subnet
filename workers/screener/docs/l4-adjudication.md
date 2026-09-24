@@ -101,12 +101,38 @@ trail can check the claim against the same published list.
 - `off` — no adjudicator is constructed.
 - `shadow` — decisions are produced and recorded as quarantine evidence; the
   hold stands.
-- `enforce` — Platform resolves the decision terminally.
+- `enforce` — Platform may resolve a policy v12 or earlier decision terminally.
+  A v13 source-only `clear` or `reject` remains quarantined even under this
+  setting. Both local and Targon paths retain the adjudication as review
+  evidence; an older worker's signed v13 terminal result is refused.
 
 The worker produces an adjudication in both `shadow` and `enforce`. The
 authority to ACT on one is resolved by Platform from the current settings
 revision, not trusted from the payload, so a screener running a stale revision
 cannot release or reject anything the operator has not switched on.
+
+### Lifting the v13 hold
+
+The v13 fence is intermediate. A source adjudication alone does not attest the
+build, served runtime, or private checks. Lift it only in a separate reviewed
+change after the trusted replay runner and sealed private package are deployed:
+
+1. Finish the protected verifier bootstrap and apply its exact approved binary
+   plan. Keep the package inaccessible to miners and the reviewer model.
+2. Emit signed, trusted build, runtime, and private verification receipts bound
+   to the agent UUID, artifact SHA-256, attempt ID, policy version, and screened
+   image digest. Platform must check the receipt set against the claimed attempt
+   and refuse missing, mismatched, stale, or untrusted receipts.
+3. Change both local and Targon admission paths and the Platform result gate in
+   one reviewed patch. Test `clear`, `reject`, and `escalate` with receipt gaps,
+   altered identities, and replayed attempts. Preserve policy v12 behavior.
+4. Run one report-only exact-artifact canary, compare the signed receipts and
+   independent source review, then explicitly authorize terminal enforcement.
+   Capture the signed fleet descriptor digest before deployment for rollback.
+5. For held miners, use an audited, bounded rescreen batch: preview exact
+   quarantine IDs and decisions, apply that identical guarded plan, and reread
+   each new attempt and board status before a decision. A manual Backroom ruling
+   remains a separate exact-evidence operator action.
 
 ## Doctrine drift
 

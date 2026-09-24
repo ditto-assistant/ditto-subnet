@@ -91,6 +91,7 @@ async def _seed_held_screen(
     *,
     observation: dict[str, object],
     adjudicator_mode: Literal["off", "shadow", "enforce"],
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> UUID:
     agent_id = await _seed_agent(maker, status=AgentStatus.SCREENING)
     attempt_id = uuid4()
@@ -114,7 +115,7 @@ async def _seed_held_screen(
                 attempt_id=attempt_id,
                 agent_id=agent_id,
                 screener_hotkey=_SCREENER_HOTKEY,
-                policy_version=SCREENING_POLICY_VERSION,
+                policy_version=policy_version,
                 status="running",
                 build_only=False,
                 review_settings_revision=1,
@@ -184,7 +185,7 @@ async def _finalize(
 
 
 @pytest.mark.asyncio
-async def test_an_adjudicated_clear_admits_without_an_operator(
+async def test_v13_adjudicated_clear_stays_held_without_private_verification(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     attempt_id = await _seed_held_screen(
@@ -193,19 +194,20 @@ async def test_an_adjudicated_clear_admits_without_an_operator(
         adjudicator_mode="enforce",
     )
 
-    await _finalize(session_maker, attempt_id)
+    storage = await _finalize(session_maker, attempt_id)
 
     async with session_maker() as session:
         attempt = await session.get(ScreeningAttempt, attempt_id)
         assert attempt is not None
-        assert attempt.status == "passed"
+        assert attempt.status == "quarantined"
         agent = await session.get(Agent, attempt.agent_id)
         assert agent is not None
-        assert agent.status == AgentStatus.EVALUATING
+        assert agent.status == AgentStatus.QUARANTINED
+        assert storage.copied == []
 
 
 @pytest.mark.asyncio
-async def test_an_adjudicated_reject_is_terminal_with_its_reason(
+async def test_v13_adjudicated_reject_stays_held_without_private_verification(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     attempt_id = await _seed_held_screen(
@@ -219,19 +221,41 @@ async def test_an_adjudicated_reject_is_terminal_with_its_reason(
     async with session_maker() as session:
         attempt = await session.get(ScreeningAttempt, attempt_id)
         assert attempt is not None
-        assert attempt.status == "rejected"
-        assert attempt.reason_code == "adjudicated-source-review-reject"
+        assert attempt.status == "quarantined"
         agent = await session.get(Agent, attempt.agent_id)
         assert agent is not None
-        assert agent.status == AgentStatus.REJECTED
-        # The reason is the adjudicator's own, so the miner is told what was
-        # decided rather than "held for anti-cheat review".
-        assert agent.screening_reason is not None
-        assert "authors the served reply" in agent.screening_reason
+        assert agent.status == AgentStatus.QUARANTINED
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine).where(
+                ScreeningQuarantine.attempt_id == attempt_id
+            )
+        )
+        assert quarantine is not None
 
 
 @pytest.mark.asyncio
-async def test_attempt_bound_enforce_survives_global_canary_window_close(
+async def test_v13_l4_verdict_cannot_be_overridden_by_low_risk_flag(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    observation = _held_observation(_adjudication("clear"))
+    observation.update(ok=True, risk_level="low", clearance_certified=True)
+    attempt_id = await _seed_held_screen(
+        session_maker,
+        observation=observation,
+        adjudicator_mode="enforce",
+    )
+
+    storage = await _finalize(session_maker, attempt_id)
+
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "quarantined"
+        assert storage.copied == []
+
+
+@pytest.mark.asyncio
+async def test_v13_receipt_fence_survives_bound_enforce_setting(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     attempt_id = await _seed_held_screen(
@@ -259,11 +283,11 @@ async def test_attempt_bound_enforce_survives_global_canary_window_close(
     async with session_maker() as session:
         attempt = await session.get(ScreeningAttempt, attempt_id)
         assert attempt is not None
-        assert attempt.status == "passed"
+        assert attempt.status == "quarantined"
 
 
 @pytest.mark.asyncio
-async def test_attempt_bound_l4_clear_settles_an_early_l1_provider_fault(
+async def test_v13_l4_clear_holds_an_early_l1_provider_fault(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     observation = _held_observation(_adjudication("clear"))
@@ -276,6 +300,25 @@ async def test_attempt_bound_l4_clear_settles_an_early_l1_provider_fault(
         session_maker,
         observation=observation,
         adjudicator_mode="enforce",
+    )
+
+    await _finalize(session_maker, attempt_id)
+
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "quarantined"
+
+
+@pytest.mark.asyncio
+async def test_v12_l4_clear_retains_legacy_admission(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    attempt_id = await _seed_held_screen(
+        session_maker,
+        observation=_held_observation(_adjudication("clear")),
+        adjudicator_mode="enforce",
+        policy_version=12,
     )
 
     await _finalize(session_maker, attempt_id)
