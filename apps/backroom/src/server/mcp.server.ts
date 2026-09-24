@@ -124,6 +124,7 @@ import {
   advanceScoredPolicyRescreenInputSchema,
   restoreScoredScreeningSnapshotInputSchema,
   setValidatorSlotSettingsInputSchema,
+  setValidatorIssuancePauseInputSchema,
   updateSubmissionSettingsInputSchema,
   unbanHotkeyInputSchema,
   updateArtifactReleaseSettingsInputSchema,
@@ -285,6 +286,7 @@ import {
   fetchLedgerEpochSnapshots,
   fetchValidatorAssignments,
   setValidatorSlotSettings,
+  setValidatorIssuancePause,
   fetchBurnSettings,
   setBurnSettings,
   fetchSubmissionSettingsControl,
@@ -395,6 +397,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'schedule_v13_review_clock',
   'restore_scored_screening_snapshot',
   'set_validator_slot_settings',
+  'set_validator_issuance_pause',
   'activate_v13_scorer_cohort',
   'apply_copy_court_settings',
   'set_inference_concurrency_settings',
@@ -2872,6 +2875,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => setValidatorSlotSettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'set_validator_issuance_pause',
+    {
+      title: 'Pause or resume validator ticket issuance',
+      description:
+        'Guarded pause or resume of one validator by hotkey. Existing tickets continue. Requires backroom:write.',
+      inputSchema: setValidatorIssuancePauseInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => setValidatorIssuancePause(input, props.session.email)),
   )
 
   registerTool(

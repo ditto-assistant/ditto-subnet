@@ -208,6 +208,7 @@ describe('Backroom MCP tools', () => {
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
         'set_validator_slot_settings',
+        'set_validator_issuance_pause',
         'set_confirmation_bundle_settings',
         'authorize_confirmation_bundle_retest',
         'read_copy_review_source_diff_file',
@@ -380,8 +381,8 @@ describe('Backroom MCP tools', () => {
     // anything that quotes a reason back to a miner, not a tutorial.
     // Eight digest-only V13 provenance/analysis tools and three process-key
     // tools add bounded entries. Detailed procedures remain in tool help.
-    // The two scorer-pin controls add one bounded read and one audited write.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(160_000)
+    // The scorer-pin controls and exact-validator pause add bounded entries.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(161_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -494,6 +495,12 @@ describe('Backroom MCP tools', () => {
     )
     expect(validatorSlotWrite?.annotations?.readOnlyHint).toBe(false)
     expect(validatorSlotWrite?.annotations?.destructiveHint).toBe(true)
+    const issuancePauseWrite = response.tools.find(
+      (tool) => tool.name === 'set_validator_issuance_pause',
+    )
+    expect(issuancePauseWrite?.annotations?.readOnlyHint).toBe(false)
+    expect(issuancePauseWrite?.annotations?.destructiveHint).toBe(true)
+    expect(issuancePauseWrite?.description).toContain('Existing tickets continue')
     // Operators read these descriptions before ramping a live fleet, so the
     // properties that make the confirmation meaningful must stay documented.
     expect(validatorSlotWrite?.description).toContain('APPLY VALIDATOR SLOT CAP <n>')
