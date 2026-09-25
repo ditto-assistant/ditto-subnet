@@ -4,9 +4,16 @@
 set -euo pipefail
 
 STATE_DIR="${SCREENER_FLEET_UPDATE_STATE_DIR:-/var/lib/ditto-screener-fleet/updater}"
+FLEET_STATE_DIR="${SCREENER_FLEET_STATE_DIR:-$(dirname "$STATE_DIR")}"
 SYSTEMCTL="${SCREENER_FLEET_SYSTEMCTL:-systemctl}"
 PYTHON="${SCREENER_FLEET_PYTHON:-python3}"
-DRAIN_PY="${SCREENER_FLEET_DRAIN_PY:-$(dirname "$0")/screener-fleet-drain.py}"
+if [ -n "${SCREENER_FLEET_DRAIN_PY:-}" ]; then
+  DRAIN_PY="$SCREENER_FLEET_DRAIN_PY"
+elif [ -f "$(dirname "$0")/screener-fleet-drain.py" ]; then
+  DRAIN_PY="$(dirname "$0")/screener-fleet-drain.py"
+else
+  DRAIN_PY="$STATE_DIR/screener-fleet-drain.py"
+fi
 CONFIRMATION="RELEASE STUCK SCREENER REVIEW"
 
 worker="${1:-}"
@@ -20,7 +27,7 @@ phrase="${2:-}"
   exit 2
 }
 
-lease="$STATE_DIR/workers/$worker/active-lease.json"
+lease="$FLEET_STATE_DIR/workers/$worker/active-lease.json"
 decision="$("$PYTHON" "$DRAIN_PY" --lease "$lease" --now "$(date +%s)")"
 case "$decision" in
   wait|ready)

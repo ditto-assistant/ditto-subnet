@@ -28,7 +28,16 @@ ROOTLESS_DOCKER_HOST="${SCREENER_FLEET_ROOTLESS_DOCKER_HOST:-unix:///run/ditto-s
 L2_ANALYZER_ACTIVE="ditto-screener-l2-analyzer:active"
 DRAIN_BOUND_SECONDS="${SCREENER_FLEET_DRAIN_BOUND_SECONDS:-4200}"
 DRAIN_STATUS="$STATE_DIR/drain-status.env"
-DRAIN_PY="${SCREENER_FLEET_DRAIN_PY:-$(dirname "$0")/screener-fleet-drain.py}"
+# Worker leases live beside the review journal, under the fleet state root.
+# The updater's own STATE_DIR is that root's updater/ subdirectory.
+FLEET_STATE_DIR="${SCREENER_FLEET_STATE_DIR:-$(dirname "$STATE_DIR")}"
+if [ -n "${SCREENER_FLEET_DRAIN_PY:-}" ]; then
+  DRAIN_PY="$SCREENER_FLEET_DRAIN_PY"
+elif [ -f "$(dirname "$SELF_PATH")/screener-fleet-drain.py" ]; then
+  DRAIN_PY="$(dirname "$SELF_PATH")/screener-fleet-drain.py"
+else
+  DRAIN_PY="$(dirname "$0")/screener-fleet-drain.py"
+fi
 HELD_WORKERS="$STATE_DIR/held-workers"
 
 log() { printf 'screener-fleet-auto-update: %s\n' "$*" >&2; }
@@ -195,7 +204,7 @@ worker_indexes() {
 
 lease_decision() {
   local index="$1"
-  python3 "$DRAIN_PY" --lease "$STATE_DIR/workers/$index/active-lease.json" --now "$(date +%s)"
+  python3 "$DRAIN_PY" --lease "$FLEET_STATE_DIR/workers/$index/active-lease.json" --now "$(date +%s)"
 }
 
 stop_fleet() {
@@ -312,6 +321,12 @@ activate_release() {
   install -o root -g root -m 0755 \
     "$release_dir/src/scripts/screener-fleet-auto-update.sh" \
     "$SELF_PATH"
+  install -o root -g root -m 0755 \
+    "$release_dir/src/scripts/screener-fleet-drain.py" \
+    "$(dirname "$SELF_PATH")/screener-fleet-drain.py"
+  install -o root -g root -m 0755 \
+    "$release_dir/src/scripts/screener-fleet-release-hold.sh" \
+    "$(dirname "$SELF_PATH")/screener-fleet-release-hold"
   ln -s "releases/$revision" "$new_link"
   TARGET_REVISION="$revision"
   stop_fleet

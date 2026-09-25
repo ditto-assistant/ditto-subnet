@@ -98,6 +98,9 @@ def test_updater_authenticates_before_fetch_or_drain() -> None:
     assert activation.index(
         '"$release_dir/src/scripts/screener-fleet-auto-update.sh"'
     ) < (activation.index("stop_fleet\n"))
+    assert activation.index(
+        '"$release_dir/src/scripts/screener-fleet-drain.py"'
+    ) < (activation.index("stop_fleet\n"))
     assert '"$SELF_PATH"' in activation
     assert '[[ "$SELF_PATH" = "$STATE_DIR/"* ]]' in updater
 
