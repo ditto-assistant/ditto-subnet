@@ -61,6 +61,11 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--max-cost-usd", type=float, default=2.0)
     parser.add_argument("--turn-timeout-seconds", type=float)
     parser.add_argument(
+        "--retry-provider-body-once",
+        action="store_true",
+        help="retry one relayed provider fault in the same model turn",
+    )
+    parser.add_argument(
         "--single-layer-sol",
         action="store_true",
         help="report-only GPT-6 Sol analyst with isolated tools and no L3",
@@ -150,6 +155,8 @@ async def _main() -> None:
         raise SystemExit("--single-layer-sol requires --require-label-match")
     if args.omit_l1 and (not args.single_layer_sol or args.run_l1):
         raise SystemExit("--omit-l1 requires --single-layer-sol and excludes --run-l1")
+    if args.retry_provider_body_once and not args.single_layer_sol:
+        raise SystemExit("--retry-provider-body-once is report-only Sol mode")
     if not 30 <= args.l1_timeout_seconds <= 600:
         raise SystemExit("--l1-timeout-seconds must be between 30 and 600")
     if not 1 <= args.l1_max_steps <= 160:
@@ -207,6 +214,7 @@ async def _main() -> None:
         max_completion_request_seconds=args.turn_timeout_seconds,
         independent_analyst=args.omit_l1,
         terminal_verdict_required=args.single_layer_sol,
+        retry_provider_body_fault_once=args.retry_provider_body_once,
         model=analyst_model,
         fallback_models=() if args.single_layer_sol else L2_FALLBACK_MODELS,
         l3_enabled=not args.single_layer_sol,
@@ -248,6 +256,7 @@ async def _main() -> None:
             else "production_multilayer"
         ),
         "terminal_verdict_required": args.single_layer_sol,
+        "retry_provider_body_fault_once": args.retry_provider_body_once,
         "revisions": {
             "analyst_prompt": agent._analyst_prompt_revision(SCREENING_POLICY_VERSION),
             "critic_prompt": l2_critic_prompt_revision(SCREENING_POLICY_VERSION),

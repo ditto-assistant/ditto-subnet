@@ -300,6 +300,9 @@ told not to invent evidence to satisfy the terminal requirement. This comparator
 does not change production decisions or replace signed live evidence. The
 `--turn-timeout-seconds` override is local: production currently caps individual
 Responses API turns at 45 seconds even when its whole review lease is longer.
+`--retry-provider-body-once` optionally repeats one exact model turn after a
+transport-class fault relayed in an HTTP 200 response; the overall lease and
+local key cap still bound that report-only experiment.
 
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a
 directory of already verified artifacts. It rechecks every tarball digest,

@@ -4474,6 +4474,59 @@ async def test_report_only_terminal_schema_is_local_to_single_layer(
     ]
 
 
+async def test_report_only_provider_body_fault_retries_exact_turn_once(
+    tmp_path: Path,
+) -> None:
+    requests: list[bytes] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request.content)
+        if len(requests) == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "status": "failed",
+                    "error_type": "provider_unavailable",
+                    "error": {"code": "server_error"},
+                },
+            )
+        return httpx.Response(200, json={"status": "completed", "output": []})
+
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(None, retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+        retry_provider_body_fault_once=True,
+        transport=httpx.MockTransport(handler),
+    )
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        response = await agent._post(
+            client,
+            "test-key",
+            [],
+            artifact_sha256="d" * 64,
+            reasoning_effort="model_default",
+            model="openai/gpt-6-sol",
+            fallback_models=(),
+            provider=None,
+            deadline=asyncio.get_running_loop().time() + 1,
+        )
+    assert response.json()["status"] == "completed"
+    assert len(requests) == 2
+    assert requests[0] == requests[1]
+
+
 async def test_model_turn_has_an_aggregate_wall_clock_deadline(
     tmp_path: Path,
 ) -> None:

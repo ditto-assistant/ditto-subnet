@@ -2308,6 +2308,7 @@ class TerraSolSourceReviewAgent:
         max_completion_request_seconds: float | None = None,
         independent_analyst: bool = False,
         terminal_verdict_required: bool = False,
+        retry_provider_body_fault_once: bool = False,
         analyst_reasoning_effort: str = "model_default",
         critic_reasoning_effort: str = "medium",
         model: str = L2_MODEL,
@@ -2348,6 +2349,7 @@ class TerraSolSourceReviewAgent:
         if terminal_verdict_required and l3_enabled:
             raise ValueError("terminal-only comparator cannot enable L3")
         self._terminal_verdict_required = terminal_verdict_required
+        self._retry_provider_body_fault_once = retry_provider_body_fault_once
         if analyst_reasoning_effort != "model_default":
             raise ValueError("L2 analyst reasoning effort must be model_default")
         if critic_reasoning_effort not in {"low", "medium", "high"}:
@@ -4216,7 +4218,32 @@ class TerraSolSourceReviewAgent:
                         json=request,
                         timeout=timeout,
                     )
-                break
+                response.raise_for_status()
+                payload: object | None = None
+                with contextlib.suppress(ValueError, TypeError):
+                    payload = response.json()
+                model_error = _retryable_model_error_type(payload)
+                if (
+                    self._retry_provider_body_fault_once
+                    and model_error is not None
+                    and attempt + 1 < _MAX_COMPLETION_REQUEST_ATTEMPTS
+                    and (
+                        deadline is None or asyncio.get_running_loop().time() < deadline
+                    )
+                ):
+                    logger.warning(
+                        "L2/L3 provider body fault %s; retrying exact turn once",
+                        model_error,
+                    )
+                    continue
+                if model_error is not None:
+                    logger.warning(
+                        "L2/L3 model body reported a provider fault; parking "
+                        "attempt: fault=%s signature=%s",
+                        model_error,
+                        _body_signature(payload),
+                    )
+                return response
             except (TimeoutError, httpx.TimeoutException):
                 if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
                     raise
@@ -4230,21 +4257,7 @@ class TerraSolSourceReviewAgent:
                     attempt + 1,
                     _MAX_COMPLETION_REQUEST_ATTEMPTS,
                 )
-        else:  # pragma: no cover - the loop either breaks or raises.
-            raise RuntimeError("L2/L3 model turn retry loop exhausted")
-        response.raise_for_status()
-        payload: object | None = None
-        with contextlib.suppress(ValueError, TypeError):
-            payload = response.json()
-        model_error = _retryable_model_error_type(payload)
-        if model_error is not None:
-            logger.warning(
-                "L2/L3 model body reported a provider fault; parking attempt: "
-                "fault=%s signature=%s",
-                model_error,
-                _body_signature(payload),
-            )
-        return response
+        raise RuntimeError("L2/L3 model turn retry loop exhausted")
 
     def _turn_timeout(self, deadline: float | None) -> float:
         if deadline is None:
@@ -4343,6 +4356,7 @@ class TerraSolSourceReviewAgent:
             "model": self._model,
             "independent_analyst": self._independent_analyst,
             "terminal_verdict_required": self._terminal_verdict_required,
+            "retry_provider_body_fault_once": self._retry_provider_body_fault_once,
             "fallback_models": list(self._fallback_models),
             "critic_model": self._critic_model,
             "critic_provider": self._critic_provider,
@@ -4535,6 +4549,9 @@ class TerraSolSourceReviewAgent:
                     "report_only_single_layer_sol"
                     if self._terminal_verdict_required
                     else "production_multilayer"
+                ),
+                "retry_provider_body_fault_once": (
+                    self._retry_provider_body_fault_once
                 ),
                 "critic_prompt_revision": l2_critic_prompt_revision(policy_version),
                 "cause_prompt_revision": l2_cause_prompt_revision(policy_version),
