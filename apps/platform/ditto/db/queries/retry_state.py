@@ -52,7 +52,7 @@ AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
     }
 )
 _ADMISSION_DETAIL_PREFIX = "inference_request_rejected:"
-_ADMISSION_DETAIL_CODES = frozenset(
+_AGENT_ADMISSION_DETAIL_CODES = frozenset(
     {
         "request_too_large",
         "invalid_json",
@@ -61,8 +61,6 @@ _ADMISSION_DETAIL_CODES = frozenset(
         "model_not_allowed",
         "grant_not_servable",
         "grant_rate_denied",
-        "platform_capacity",
-        "provider_failure",
     }
 )
 
@@ -73,7 +71,11 @@ def is_agent_attributable_failure_detail(detail: str | None) -> bool:
         return True
     if not isinstance(detail, str) or not detail.startswith(_ADMISSION_DETAIL_PREFIX):
         return False
-    return detail.removeprefix(_ADMISSION_DETAIL_PREFIX) in _ADMISSION_DETAIL_CODES
+    return (
+        detail.removeprefix(_ADMISSION_DETAIL_PREFIX) in _AGENT_ADMISSION_DETAIL_CODES
+    )
+
+
 AGENT_ATTRIBUTABLE_WITHDRAW_REASON = (
     "exhausted on agent-attributable failures; withdraw rather than retry"
 )

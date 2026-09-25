@@ -310,6 +310,7 @@ _ADMISSION_CODES = frozenset(
         "provider_failure",
     }
 )
+_INFRASTRUCTURE_ADMISSION_CODES = frozenset({"platform_capacity", "provider_failure"})
 
 
 def _admission_suffix(payload: dict[str, object]) -> str | None:
@@ -323,17 +324,22 @@ def _admission_suffix(payload: dict[str, object]) -> str | None:
     taxonomy = diagnostics.get("admission_taxonomy")
     if not isinstance(taxonomy, dict) or not taxonomy:
         return None
-    best_code: str | None = None
-    best_count = -1
+    counts: dict[str, int] = {}
     for code, bucket in taxonomy.items():
         if not isinstance(code, str) or code not in _ADMISSION_CODES:
             continue
         count = bucket.get("count") if isinstance(bucket, dict) else None
-        if not isinstance(count, int) or count <= best_count:
+        if not isinstance(count, int) or count <= 0:
             continue
-        best_code = code
-        best_count = count
-    return best_code
+        counts[code] = count
+    if not counts:
+        return None
+    # Any infrastructure refusal prevents attributing this mixed run solely
+    # to the miner, even when request errors have the larger count.
+    candidates = _INFRASTRUCTURE_ADMISSION_CODES & counts.keys()
+    if not candidates:
+        candidates = counts.keys()
+    return max(candidates, key=lambda code: (counts[code], code))
 
 
 _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(

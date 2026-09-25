@@ -1911,6 +1911,36 @@ async def test_pre_reservation_413_is_request_too_large() -> None:
     assert "exhausted" not in str(raised.value)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "infrastructure_code", ["platform_capacity", "provider_failure"]
+)
+async def test_mixed_admission_taxonomy_preserves_infrastructure(
+    infrastructure_code: str,
+) -> None:
+    failure = {
+        "kind": "sandbox_failure",
+        "code": "inference_request_rejected",
+        "retryable": False,
+        "diagnostics": {
+            "admission_taxonomy": {
+                "request_too_large": {"count": 3},
+                infrastructure_code: {"count": 1},
+            }
+        },
+    }
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "failed", "failure": failure})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(DittobenchError) as raised:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+    assert raised.value.code == f"inference_request_rejected:{infrastructure_code}"
+
+
 def test_agent_inference_codes_are_never_no_fault() -> None:
     """Pinned as a set property, not only through the poll path.
 
