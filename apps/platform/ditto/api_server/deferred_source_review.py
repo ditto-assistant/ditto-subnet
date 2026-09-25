@@ -8,11 +8,14 @@ from statistics import median
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
+from pydantic import ValidationError
+
 from ditto.api_models.public import (
     PublicDeferredReviewTrigger,
     PublicReviewConclusion,
 )
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
+from ditto_screening_protocol.models import ScreenReviewAudit
 
 if TYPE_CHECKING:
     from ditto.db.queries.scores import LedgerRow
@@ -227,6 +230,23 @@ BUDGET_EXHAUSTED_REASON_CODES = frozenset(
         "lease-budget-exhausted",
     }
 )
+# V13 L2 reviewer codes that carry no verdict: the model's bounded
+# "inconclusive" disposition and its trajectory budgets (the no-verdict codes
+# ``screening_quarantines_review_audit_reason_check`` admits alongside
+# ``source-review-inconclusive``), plus the signed-runtime preflight hold
+# (``l2-runtime-evidence-unavailable``: lease unavailable or review disabled),
+# which a strict V13 INCONCLUSIVE verdict can carry as its reason code. Only a
+# proving audit softens any of them, and a preflight audit never proves a
+# review ran, so the preflight code can reach ``not_reviewed`` at most.
+L2_NO_VERDICT_REASON_CODES = frozenset(
+    {
+        "l2-runtime-evidence-unavailable",
+        "l2-model-inconclusive",
+        "l2-model-total-budget",
+        "l2-model-tool-budget",
+        "l2-model-step-budget",
+    }
+)
 # A deep attempt that stopped before any verdict: provider or platform outage,
 # or the runtime health re-check interrupted on a different screener host
 # (endpoints/screener.py keeps the hold and parks it for a manual retry).
@@ -235,20 +255,70 @@ _INTERRUPTED_REJECT = ("deterministic_reject", "health-contract")
 
 
 def is_no_finding_reason_code(reason_code: str | None) -> bool:
-    """True for automated-review outcomes that ended without any finding.
+    """True for screening reason codes that carry no verdict and no finding.
 
     An inconclusive review and a known exhausted review budget stopped before
-    reaching a verdict. Every other code, including unknown ones, is treated as
-    an adverse signal so a new finding code can never be softened by omission.
+    reaching a verdict. This gates only which codes may be softened; whether a
+    model review actually ran is decided from the recorded review audit. Every
+    other code, including unknown ones, is treated as an adverse signal so a
+    new finding code can never be softened by omission.
     """
     return reason_code is not None and (
         reason_code == INCONCLUSIVE_REASON_CODE
         or reason_code in BUDGET_EXHAUSTED_REASON_CODES
+        or reason_code in L2_NO_VERDICT_REASON_CODES
     )
+
+
+# Audit reason codes that prove a model review ran AND stopped on a budget it
+# was given: the L1 reviewer's ``SourceReviewBudgetExhausted.audit()`` and the
+# L2 trajectory budgets (l2_review.py ``L2TrajectoryError`` ->
+# ``budget_stop_reason`` aggregate/tool/step). Exact, like the reason-code set.
+BUDGET_AUDIT_REASON_CODES = frozenset(
+    {
+        "source-review-read-budget-exhausted",
+        "source-review-step-budget-exhausted",
+        "source-review-lease-budget-exhausted",
+        "l2-model-total-budget",
+        "l2-model-tool-budget",
+        "l2-model-step-budget",
+    }
+)
+_BUDGET_STOP_REASONS = frozenset({"step", "tool", "aggregate", "token", "cost", "time"})
 
 
 def _carries_finding(finding_digest: object, finding: object) -> bool:
     return finding_digest is not None or finding is not None
+
+
+def _recorded_review_outcome(
+    raw_audit: object,
+) -> Literal["not_reviewed", "no_finding", "budget_exhausted"]:
+    """Classify a no-verdict hold by the review audit actually recorded with it.
+
+    Only a well-formed ``ScreenReviewAudit`` whose counters show model steps
+    proves a model review ran. A missing audit (JSON ``null`` reads back as
+    ``None`` too), a malformed one, and the V13 signed-runtime preflight
+    (``final_stage == "preflight"`` / a ``cause_detail``: lease unavailable or
+    review disabled, zero steps) all mean the review never started, so nothing
+    may claim it ran or ran out of budget.
+    """
+    if not isinstance(raw_audit, dict):
+        return "not_reviewed"
+    try:
+        audit = ScreenReviewAudit.model_validate(raw_audit)
+    except ValidationError:
+        return "not_reviewed"
+    if audit.final_stage == "preflight" or audit.cause_detail is not None:
+        return "not_reviewed"
+    if audit.steps_used == 0 and not audit.model_steps_observed:
+        return "not_reviewed"
+    if (
+        audit.reason_code in BUDGET_AUDIT_REASON_CODES
+        or audit.budget_stop_reason in _BUDGET_STOP_REASONS
+    ):
+        return "budget_exhausted"
+    return "no_finding"
 
 
 def public_review_conclusion(
@@ -259,19 +329,26 @@ def public_review_conclusion(
     screening_reason_code: str | None,
     quarantine_finding_digest: str | None,
     quarantine_finding: object,
+    quarantine_review_audit: object,
 ) -> PublicReviewConclusion | None:
     """What the automated review concluded for a held submission.
 
-    Precedence, identical on both paths: a recorded finding (digest or payload)
-    is always ``adverse_signal``; an interrupted attempt has no conclusion yet
-    (``pending``); otherwise a known no-finding reason code is ``no_finding``
-    and anything else, including unknown codes, is ``adverse_signal``.
+    Precedence, identical on both paths:
 
-    For an active deferred review the post-score deep attempt's result decides,
-    and the review is ``pending`` until one is recorded. For a pre-score
-    quarantine the agent's screening reason code and the active quarantine's
-    finding decide. Every other hold (copy review, operator hold) has no
-    automated-review conclusion to report.
+    1. a recorded finding (digest or payload) is always ``adverse_signal``;
+    2. an interrupted deep attempt has no conclusion yet (``pending``);
+    3. a reason code outside the known no-verdict set, including unknown
+       codes, is ``adverse_signal``;
+    4. otherwise the recorded review audit decides: ``budget_exhausted`` or
+       ``no_finding`` only when it proves a model review ran, and
+       ``not_reviewed`` when there is no such proof (auditless, malformed, or
+       the V13 preflight that stops before any model review).
+
+    For an active deferred review the post-score deep attempt's result and its
+    ``review_audit`` decide, and the review is ``pending`` until one is
+    recorded. For a pre-score quarantine the agent's screening reason code and
+    the active quarantine's finding and ``review_audit`` decide. Every other
+    hold (copy review, operator hold) has no automated-review conclusion.
     """
     result = (
         deferred_evidence.get("deep_review_result")
@@ -285,18 +362,14 @@ def public_review_conclusion(
         code = result.get("reason_code")
         if outcome == _INTERRUPTED_OUTCOME or (outcome, code) == _INTERRUPTED_REJECT:
             return "pending"
-        return (
-            "no_finding"
-            if isinstance(code, str) and is_no_finding_reason_code(code)
-            else "adverse_signal"
-        )
+        if not (isinstance(code, str) and is_no_finding_reason_code(code)):
+            return "adverse_signal"
+        return _recorded_review_outcome(result.get("review_audit"))
     if quarantined:
         if _carries_finding(quarantine_finding_digest, quarantine_finding):
             return "adverse_signal"
         if screening_reason_code is not None:
-            return (
-                "no_finding"
-                if is_no_finding_reason_code(screening_reason_code)
-                else "adverse_signal"
-            )
+            if not is_no_finding_reason_code(screening_reason_code):
+                return "adverse_signal"
+            return _recorded_review_outcome(quarantine_review_audit)
     return "pending" if deferred_review_active else None

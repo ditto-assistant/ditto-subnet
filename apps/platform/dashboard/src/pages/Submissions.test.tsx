@@ -1203,18 +1203,46 @@ describe("deferred source review chip (#562)", () => {
     return document.querySelector(".stage-cell") as HTMLElement;
   }
 
-  it("shows a top-five budget hold as neutral with its trigger and no finding", async () => {
+  it("shows a recorded budget hold as neutral with its trigger and the budget copy", async () => {
     const cell = await renderHeld({
       screening_reason: "Deferred source review requires operator adjudication",
       deferred_review_triggers: ["top_five"],
-      review_conclusion: "no_finding",
+      review_conclusion: "budget_exhausted",
     });
     const chip = cell.querySelector(".stage") as HTMLElement;
     expect(chip.textContent).toBe("Deferred source review");
     expect(chip.classList.contains("warn")).toBe(false);
     expect(cell.querySelector(".deferred-review-summary")?.textContent).toBe(
-      "Score qualified (top 5) \u00b7 automated review incomplete \u2014 no finding",
+      "Score qualified (top 5) \u00b7 automated review ran out of budget \u2014 no finding",
     );
+  });
+
+  it("never claims a budget for a preflight or auditless hold", async () => {
+    const cell = await renderHeld({
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers: ["top_five"],
+      review_conclusion: "not_reviewed",
+    });
+    const chip = cell.querySelector(".stage") as HTMLElement;
+    expect(chip.classList.contains("warn")).toBe(false);
+    const summary = cell.querySelector(".deferred-review-summary")?.textContent ?? "";
+    expect(summary).toBe(
+      "Score qualified (top 5) \u00b7 automated review did not run \u2014 awaiting operator review",
+    );
+    expect(cell.textContent).not.toContain("budget");
+  });
+
+  it("uses inconclusive copy for an audited review that exhausted nothing", async () => {
+    const cell = await renderHeld({
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers: ["top_five"],
+      review_conclusion: "no_finding",
+    });
+    expect(cell.querySelector(".stage")?.classList.contains("warn")).toBe(false);
+    expect(cell.querySelector(".deferred-review-summary")?.textContent).toBe(
+      "Score qualified (top 5) \u00b7 automated review inconclusive \u2014 no finding",
+    );
+    expect(cell.textContent).not.toContain("budget");
   });
 
   it("keeps the warn chip for an adverse signal and names the anomaly trigger", async () => {

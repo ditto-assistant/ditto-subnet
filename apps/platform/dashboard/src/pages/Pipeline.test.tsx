@@ -178,7 +178,7 @@ describe("weekend drift: board reshape and refresh resilience", () => {
         activity: {
           ...ops.activity,
           entries: [
-            held("no_finding", ["top_five"], "11111111-1111-4111-8111-111111111111"),
+            held("budget_exhausted", ["top_five"], "11111111-1111-4111-8111-111111111111"),
             held("adverse_signal", ["anomaly"], "22222222-2222-4222-8222-222222222222"),
           ],
         },
@@ -192,7 +192,7 @@ describe("weekend drift: board reshape and refresh resilience", () => {
       );
       const cards = Array.from(container.querySelectorAll("#pipeline-review-items .pipeline-item"));
       expect(cards[0]?.querySelector(".deferred-review-summary")?.textContent).toBe(
-        "Score qualified (top 5) \u00b7 automated review incomplete \u2014 no finding",
+        "Score qualified (top 5) \u00b7 automated review ran out of budget \u2014 no finding",
       );
       expect(cards[1]?.querySelector(".deferred-review-summary")?.textContent).toBe(
         "Anomaly hold \u00b7 automated review raised a concern",

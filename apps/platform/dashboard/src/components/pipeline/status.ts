@@ -102,8 +102,15 @@ export function activityStage(
   // "warn"; a review that ended without a finding is neutral, and one that
   // has not reported yet is in progress.
   if (status === "under_review") {
-    if (entry?.review_conclusion === "no_finding") return ["Deferred source review", ""];
-    if (entry?.review_conclusion === "pending") return ["Deferred source review", "progress"];
+    const conclusion = entry?.review_conclusion;
+    if (
+      conclusion === "no_finding" ||
+      conclusion === "budget_exhausted" ||
+      conclusion === "not_reviewed"
+    ) {
+      return ["Deferred source review", ""];
+    }
+    if (conclusion === "pending") return ["Deferred source review", "progress"];
   }
   return (status != null && stages[status]) || ["Pending", ""];
 }
@@ -124,13 +131,21 @@ export const DEFERRED_REVIEW_TRIGGER_LABELS: Record<DeferredReviewTrigger, strin
 /** What the automated source review concluded, as a short clause. */
 export const REVIEW_CONCLUSION_LABELS: Record<ReviewConclusion, string> = {
   pending: "automated review pending",
-  no_finding: "automated review incomplete \u2014 no finding",
+  // The review stopped before any model review ran (no recorded audit, or a
+  // preflight hold): never claim it ran or ran out of budget.
+  not_reviewed: "automated review did not run \u2014 awaiting operator review",
+  no_finding: "automated review inconclusive \u2014 no finding",
+  // Only for an exact recorded budget-exhaustion audit.
+  budget_exhausted: "automated review ran out of budget \u2014 no finding",
   adverse_signal: "automated review raised a concern",
 };
 
-/** True when the hold is a review-budget outcome, not an adverse signal. */
+/** True when a recorded automated review ran and ended with no finding. */
 export function isSourceReviewIncomplete(entry: DeferredReviewFields): boolean {
-  return entry.status === "under_review" && entry.review_conclusion === "no_finding";
+  return (
+    entry.status === "under_review" &&
+    (entry.review_conclusion === "no_finding" || entry.review_conclusion === "budget_exhausted")
+  );
 }
 
 /**
@@ -406,11 +421,25 @@ export function validationDetail(e: ActivityStatusEntry): string {
           .join(" and ") +
         "; entering review is not a finding. "
       : "";
-    if (e.review_conclusion === "no_finding") {
+    if (e.review_conclusion === "budget_exhausted") {
       return (
         held +
         why +
         "The automated review ran out of budget before finishing, which is not a finding; an operator decision is pending."
+      );
+    }
+    if (e.review_conclusion === "no_finding") {
+      return (
+        held +
+        why +
+        "The automated review finished without reaching a decision and made no finding; an operator decision is pending."
+      );
+    }
+    if (e.review_conclusion === "not_reviewed") {
+      return (
+        held +
+        why +
+        "The automated review stopped before reviewing the source, so it made no finding; an operator decision is pending."
       );
     }
     if (e.review_conclusion === "pending") {

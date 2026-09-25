@@ -17,7 +17,12 @@ import type {
 export type DeferredReviewTrigger = "top_five" | "anomaly";
 
 /** Public automated-review conclusion for a held submission. */
-export type ReviewConclusion = "pending" | "no_finding" | "adverse_signal";
+export type ReviewConclusion =
+  | "pending"
+  | "not_reviewed"
+  | "no_finding"
+  | "budget_exhausted"
+  | "adverse_signal";
 
 export interface ActivityEntry {
   agent_id?: string;

@@ -22197,9 +22197,9 @@ export interface components {
             retry_state?: ("running" | "retry_available" | "cooling_down" | "exhausted" | "queued") | null;
             /**
              * Review Conclusion
-             * @description What the automated source review concluded for a held (``under_review``) submission. ``pending``: the automated deep review has not reported yet. ``no_finding``: it ended without any finding (inconclusive, or a read, step, lease, or model budget ran out) and an operator decision is pending. ``adverse_signal``: it reported a concern that an operator must adjudicate. Null when the hold has no automated review conclusion (for example a copy review) or the submission is not held.
+             * @description What the automated source review concluded for a held (``under_review``) submission. ``pending``: the automated deep review has not reported yet, or it was interrupted and awaits a retry. ``not_reviewed``: it stopped before any model review ran (no recorded review audit, or a preflight such as an unavailable runtime lease or disabled review), so nothing was reviewed and nothing was found; an operator decision is pending. ``no_finding``: a recorded audit shows a model review ran and ended without a decision or finding. ``budget_exhausted``: a recorded audit shows a model review ran and exhausted its read, step, tool, or model budget without a finding. ``adverse_signal``: it reported a concern that an operator must adjudicate. Null when the hold has no automated review conclusion (for example a copy review) or the submission is not held.
              */
-            review_conclusion?: ("pending" | "no_finding" | "adverse_signal") | null;
+            review_conclusion?: ("pending" | "not_reviewed" | "no_finding" | "budget_exhausted" | "adverse_signal") | null;
             /**
              * Review Event
              * @description Latest public ATH lifecycle event. Null when the submission has no durable ATH review record.
@@ -22470,9 +22470,9 @@ export interface components {
             quorum: number;
             /**
              * Review Conclusion
-             * @description What the automated source review concluded for a held (``under_review``) submission. ``pending``: the automated deep review has not reported yet. ``no_finding``: it ended without any finding (inconclusive, or a read, step, lease, or model budget ran out) and an operator decision is pending. ``adverse_signal``: it reported a concern that an operator must adjudicate. Null when the hold has no automated review conclusion (for example a copy review) or the submission is not held.
+             * @description What the automated source review concluded for a held (``under_review``) submission. ``pending``: the automated deep review has not reported yet, or it was interrupted and awaits a retry. ``not_reviewed``: it stopped before any model review ran (no recorded review audit, or a preflight such as an unavailable runtime lease or disabled review), so nothing was reviewed and nothing was found; an operator decision is pending. ``no_finding``: a recorded audit shows a model review ran and ended without a decision or finding. ``budget_exhausted``: a recorded audit shows a model review ran and exhausted its read, step, tool, or model budget without a finding. ``adverse_signal``: it reported a concern that an operator must adjudicate. Null when the hold has no automated review conclusion (for example a copy review) or the submission is not held.
              */
-            review_conclusion?: ("pending" | "no_finding" | "adverse_signal") | null;
+            review_conclusion?: ("pending" | "not_reviewed" | "no_finding" | "budget_exhausted" | "adverse_signal") | null;
             /** Review Event */
             review_event?: ("opened" | "reopened" | "cleared" | "rejected") | null;
             /** Review Event At */

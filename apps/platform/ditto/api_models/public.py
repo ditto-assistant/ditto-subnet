@@ -2906,7 +2906,9 @@ class PublicConfirmationProgress(BaseModel):
 PublicDeferredReviewTrigger = Literal["top_five", "anomaly"]
 """Why an active hold entered deferred source review (coarse, public-safe)."""
 
-PublicReviewConclusion = Literal["pending", "no_finding", "adverse_signal"]
+PublicReviewConclusion = Literal[
+    "pending", "not_reviewed", "no_finding", "budget_exhausted", "adverse_signal"
+]
 """What the automated source review concluded for a held submission."""
 
 _DEFERRED_REVIEW_TRIGGERS_DESCRIPTION = (
@@ -2918,12 +2920,17 @@ _DEFERRED_REVIEW_TRIGGERS_DESCRIPTION = (
 )
 _REVIEW_CONCLUSION_DESCRIPTION = (
     "What the automated source review concluded for a held (``under_review``) "
-    "submission. ``pending``: the automated deep review has not reported yet. "
-    "``no_finding``: it ended without any finding (inconclusive, or a read, "
-    "step, lease, or model budget ran out) and an operator decision is pending. "
-    "``adverse_signal``: it reported a concern that an operator must "
-    "adjudicate. Null when the hold has no automated review conclusion (for "
-    "example a copy review) or the submission is not held."
+    "submission. ``pending``: the automated deep review has not reported yet, "
+    "or it was interrupted and awaits a retry. ``not_reviewed``: it stopped "
+    "before any model review ran (no recorded review audit, or a preflight "
+    "such as an unavailable runtime lease or disabled review), so nothing was "
+    "reviewed and nothing was found; an operator decision is pending. "
+    "``no_finding``: a recorded audit shows a model review ran and ended "
+    "without a decision or finding. ``budget_exhausted``: a recorded audit "
+    "shows a model review ran and exhausted its read, step, tool, or model "
+    "budget without a finding. ``adverse_signal``: it reported a concern that "
+    "an operator must adjudicate. Null when the hold has no automated review "
+    "conclusion (for example a copy review) or the submission is not held."
 )
 
 

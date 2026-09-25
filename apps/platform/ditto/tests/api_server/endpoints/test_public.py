@@ -137,6 +137,7 @@ from ditto.tests.legacy_era import (
 )
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
+from ditto_screening_protocol.models import ScreenReviewAudit
 
 # Every use of SCREENING_POLICY_VERSION in this module means "the version the
 # platform REQUIRES," which — with no scheduled activation written — is the
@@ -6958,16 +6959,65 @@ class TestPublicActivity:
                 evidence["deep_review_result"] = deep_result
             return evidence
 
+        # Audit shapes as the screener records them (see
+        # test_deferred_source_review.py for the producer mapping).
+        l1_budget_audit = ScreenReviewAudit(
+            stage="l1",
+            reason_code="source-review-read-budget-exhausted",
+            prompt_revision="l1-v13",
+            max_steps=240,
+            steps_used=37,
+            max_read_bytes=320_000,
+            read_bytes_used=338_278,
+        ).model_dump(mode="json")
+        l2_inconclusive_audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-model-inconclusive",
+            prompt_revision="l2-v13",
+            max_steps=64,
+            steps_used=12,
+            model_disposition="inconclusive",
+            model_steps_observed=12,
+            budget_stop_reason="none",
+        ).model_dump(mode="json")
+        preflight_audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-runtime-evidence-unavailable",
+            prompt_revision="l2-v13",
+            max_steps=64,
+            steps_used=0,
+            model_steps_observed=0,
+            final_stage="preflight",
+            cause_detail="lease_unavailable",
+        ).model_dump(mode="json")
         budget_result: dict[str, object] = {
             "attempt_id": str(uuid4()),
             "outcome": "inconclusive",
             "reason_code": "source-review-inconclusive",
             "finding_digest": None,
-            "review_audit": {
-                "reason": "source-review-read-budget-exhausted",
-                "read_bytes_used": 338278,
-            },
+            "review_audit": l1_budget_audit,
             "review_notes": [{"summary": private_note}],
+        }
+        preflight_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "pass_inconclusive",
+            "reason_code": "source-review-inconclusive",
+            "finding_digest": None,
+            "review_audit": preflight_audit,
+        }
+        auditless_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "pass_inconclusive",
+            "reason_code": "source-review-inconclusive",
+            "finding_digest": None,
+            "review_audit": None,
+        }
+        model_inconclusive_result: dict[str, object] = {
+            "attempt_id": str(uuid4()),
+            "outcome": "inconclusive",
+            "reason_code": "l2-model-inconclusive",
+            "finding_digest": None,
+            "review_audit": l2_inconclusive_audit,
         }
         adverse_result: dict[str, object] = {
             "attempt_id": str(uuid4()),
@@ -7000,9 +7050,39 @@ class TestPublicActivity:
                 None,
                 deferred_evidence(["composite_anomaly"], adverse_result),
             ),
+            "preflight-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], preflight_result),
+            ),
+            "auditless-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], auditless_result),
+            ),
+            "inconclusive-deep": (
+                AgentStatus.ATH_PENDING_REVIEW,
+                None,
+                deferred_evidence(["top_five"], model_inconclusive_result),
+            ),
             "quarantine-budget": (
                 AgentStatus.QUARANTINED,
-                "source-review-step-budget-exhausted",
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-preflight": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-auditless": (
+                AgentStatus.QUARANTINED,
+                "source-review-inconclusive",
+                None,
+            ),
+            "quarantine-inconclusive": (
+                AgentStatus.QUARANTINED,
+                "l2-model-inconclusive",
                 None,
             ),
             "quarantine-tripwire": (
@@ -7060,39 +7140,76 @@ class TestPublicActivity:
                         },
                     )
                 )
-        # A pre-score quarantine whose code alone reads "inconclusive" but whose
-        # active quarantine recorded a finding must never be softened.
-        quarantine_attempt = uuid4()
+        # Active pre-score quarantines: (reason code, finding digest, finding,
+        # review audit). A finding is never softened; otherwise only a proving
+        # audit may publish a no-finding state.
+        quarantine_rows: dict[
+            str, tuple[str, str | None, dict[str, object] | None, dict | None]
+        ] = {
+            "quarantine-finding": (
+                "source-review-inconclusive",
+                quarantine_digest,
+                {"risk": "high", "summary": private_note},
+                None,
+            ),
+            "quarantine-budget": (
+                "source-review-inconclusive",
+                None,
+                None,
+                {
+                    **l1_budget_audit,
+                    "reason_code": "source-review-step-budget-exhausted",
+                },
+            ),
+            "quarantine-preflight": (
+                "source-review-inconclusive",
+                None,
+                None,
+                preflight_audit,
+            ),
+            "quarantine-inconclusive": (
+                "l2-model-inconclusive",
+                None,
+                None,
+                l2_inconclusive_audit,
+            ),
+        }
         async with session_maker() as session, session.begin():
-            session.add(
-                ScreeningAttempt(
-                    attempt_id=quarantine_attempt,
-                    agent_id=ids["quarantine-finding"],
-                    screener_hotkey=_MINER_B,
-                    policy_version=SCREENING_POLICY_VERSION,
-                    status="quarantined",
-                    started_at=opened_at,
-                    deadline=opened_at + timedelta(minutes=30),
-                    finished_at=opened_at + timedelta(minutes=5),
-                    public_reason="Bounded source review was inconclusive",
+            for name, (q_code, q_digest, q_finding, q_audit) in quarantine_rows.items():
+                attempt_id = uuid4()
+                session.add(
+                    ScreeningAttempt(
+                        attempt_id=attempt_id,
+                        agent_id=ids[name],
+                        screener_hotkey=_MINER_B,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="quarantined",
+                        started_at=opened_at,
+                        deadline=opened_at + timedelta(minutes=30),
+                        finished_at=opened_at + timedelta(minutes=5),
+                        public_reason="Bounded source review was inconclusive",
+                    )
                 )
-            )
-            await session.flush()
-            session.add(
-                ScreeningQuarantine(
-                    quarantine_id=uuid4(),
-                    agent_id=ids["quarantine-finding"],
-                    attempt_id=quarantine_attempt,
-                    screener_hotkey=_MINER_B,
-                    policy_version=SCREENING_POLICY_VERSION,
-                    manifest_digest="ab" * 32,
-                    finding_digest=quarantine_digest,
-                    reason_code="source-review-inconclusive",
-                    evidence=[],
-                    finding={"risk": "high", "summary": private_note},
-                    status="active",
+                await session.flush()
+                session.add(
+                    ScreeningQuarantine(
+                        quarantine_id=uuid4(),
+                        agent_id=ids[name],
+                        attempt_id=attempt_id,
+                        screener_hotkey=_MINER_B,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        manifest_digest="ab" * 32,
+                        finding_digest=q_digest,
+                        review_audit=q_audit,
+                        review_audit_digest=(
+                            "cd" * 32 if q_audit is not None else None
+                        ),
+                        reason_code=q_code,
+                        evidence=[],
+                        finding=q_finding,
+                        status="active",
+                    )
                 )
-            )
         await _activate_era(session_maker)
         _install_db(app, session_maker)
 
@@ -7107,10 +7224,16 @@ class TestPublicActivity:
             for name, row in entries.items()
         }
         assert projected == {
-            "budget-top5": (["top_five"], "no_finding"),
+            "budget-top5": (["top_five"], "budget_exhausted"),
+            "preflight-deep": (["top_five"], "not_reviewed"),
+            "auditless-deep": (["top_five"], "not_reviewed"),
+            "inconclusive-deep": (["top_five"], "no_finding"),
             "pending-both": (["top_five", "anomaly"], "pending"),
             "adverse-anomaly": (["anomaly"], "adverse_signal"),
-            "quarantine-budget": ([], "no_finding"),
+            "quarantine-budget": ([], "budget_exhausted"),
+            "quarantine-preflight": ([], "not_reviewed"),
+            "quarantine-auditless": ([], "not_reviewed"),
+            "quarantine-inconclusive": ([], "no_finding"),
             "quarantine-tripwire": ([], "adverse_signal"),
             "interrupted-deep": (["top_five"], "pending"),
             "quarantine-finding": ([], "adverse_signal"),
@@ -7120,7 +7243,7 @@ class TestPublicActivity:
         summary = await client.get(f"/api/v1/public/agent/{ids['budget-top5']}/summary")
         assert summary.status_code == 200
         assert summary.json()["deferred_review_triggers"] == ["top_five"]
-        assert summary.json()["review_conclusion"] == "no_finding"
+        assert summary.json()["review_conclusion"] == "budget_exhausted"
         quarantine_summary = await client.get(
             f"/api/v1/public/agent/{ids['quarantine-finding']}/summary"
         )
@@ -7137,6 +7260,12 @@ class TestPublicActivity:
                 "deferred-mechanical-admission",
                 "docker-build-infrastructure",
                 quarantine_digest,
+                "l2-model-inconclusive",
+                "l2-runtime-evidence-unavailable",
+                "lease_unavailable",
+                "final_stage",
+                "cause_detail",
+                "steps_used",
                 "tool_anomaly",
                 "composite_anomaly",
                 "338278",

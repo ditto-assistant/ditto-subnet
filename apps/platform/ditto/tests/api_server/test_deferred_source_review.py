@@ -34,6 +34,7 @@ from ditto.db.models import (
 )
 from ditto.db.queries.scores import LedgerRow
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
+from ditto_screening_protocol.models import ScreenReviewAudit
 
 # Seeded versions mean "the version the platform REQUIRES" — the floor in the
 # default no-scheduled-activation state.
@@ -925,6 +926,11 @@ def test_public_deferred_review_triggers_are_coarse(
         ("l2-lease-budget-exhausted", True),
         ("l2-model-budget-exhausted", True),
         ("lease-budget-exhausted", True),
+        ("l2-model-inconclusive", True),
+        ("l2-model-total-budget", True),
+        ("l2-model-tool-budget", True),
+        ("l2-model-step-budget", True),
+        ("l2-runtime-evidence-unavailable", True),
         # Exact set, not a suffix: an unknown budget code fails closed.
         ("source-review-finding-budget-exhausted", False),
         ("l3-critic-model-budget-exhausted", False),
@@ -949,6 +955,7 @@ def _conclude(
     code: str | None = None,
     quarantine_digest: str | None = None,
     quarantine_finding: object = None,
+    quarantine_audit: object = None,
 ) -> object:
     return public_review_conclusion(
         deferred_review_active=active,
@@ -957,6 +964,7 @@ def _conclude(
         screening_reason_code=code,
         quarantine_finding_digest=quarantine_digest,
         quarantine_finding=quarantine_finding,
+        quarantine_review_audit=quarantine_audit,
     )
 
 
@@ -964,31 +972,164 @@ def _deep(**result: object) -> dict[str, object]:
     return {"deep_review_result": result}
 
 
+# Audit shapes mirror the real producers in workers/screener: L1
+# ``SourceReviewBudgetExhausted.audit()``, the L2 trajectory-budget audit, the L2
+# ``l2-model-inconclusive`` audit, and the V13 ``_runtime_evidence_hold``
+# preflight audit (lease unavailable / review disabled, zero steps).
+L1_READ_BUDGET_AUDIT = ScreenReviewAudit(
+    stage="l1",
+    reason_code="source-review-read-budget-exhausted",
+    prompt_revision="l1-v13",
+    max_steps=240,
+    steps_used=37,
+    max_read_bytes=320_000,
+    read_bytes_used=338_278,
+).model_dump(mode="json")
+L2_STEP_BUDGET_AUDIT = ScreenReviewAudit(
+    stage="l2",
+    reason_code="l2-model-step-budget",
+    prompt_revision="l2-v13",
+    harness_revision="h1",
+    max_steps=64,
+    steps_used=64,
+    model_steps_observed=64,
+    tool_calls_observed=80,
+    budget_stop_reason="step",
+).model_dump(mode="json")
+L2_INCONCLUSIVE_AUDIT = ScreenReviewAudit(
+    stage="l2",
+    reason_code="l2-model-inconclusive",
+    prompt_revision="l2-v13",
+    harness_revision="h1",
+    max_steps=64,
+    steps_used=12,
+    model_disposition="inconclusive",
+    resolution_basis="insufficient_static_evidence",
+    model_steps_observed=12,
+    tool_calls_observed=20,
+    budget_stop_reason="none",
+).model_dump(mode="json")
+
+
+def _preflight_audit(cause: str) -> dict[str, object]:
+    return ScreenReviewAudit.model_validate(
+        {
+            "stage": "l2",
+            "reason_code": "l2-runtime-evidence-unavailable",
+            "prompt_revision": "l2-v13",
+            "harness_revision": "h1",
+            "max_steps": 64,
+            "steps_used": 0,
+            "max_input_tokens": 400_000,
+            "input_tokens_used": 0,
+            "max_output_tokens": 64_000,
+            "output_tokens_used": 0,
+            "max_cost_usd": 5.0,
+            "cost_usd_used": 0,
+            "model_steps_observed": 0,
+            "tool_calls_observed": 0,
+            "requested_model": "provider/model",
+            "final_stage": "preflight",
+            "cause_detail": cause,
+            "max_elapsed_ms": 600_000,
+            "elapsed_ms": 0,
+        }
+    ).model_dump(mode="json")
+
+
+# (audit, expected) for a no-verdict hold with no finding, shared by the
+# deferred and quarantine routes.
+_AUDIT_CASES = [
+    # No recorded audit: nothing proves a model review ran.
+    (None, "not_reviewed"),
+    # V13 signed-runtime preflight: stopped before any model review.
+    (_preflight_audit("lease_unavailable"), "not_reviewed"),
+    (_preflight_audit("review_disabled"), "not_reviewed"),
+    # Malformed or empty audits prove nothing.
+    ({"stage": "l3", "reason_code": "x"}, "not_reviewed"),
+    ({}, "not_reviewed"),
+    # A well-formed audit with no model steps is not a review either.
+    (
+        {**L2_INCONCLUSIVE_AUDIT, "steps_used": 0, "model_steps_observed": 0},
+        "not_reviewed",
+    ),
+    # A recorded budget audit: the review ran and ran out of budget.
+    (L1_READ_BUDGET_AUDIT, "budget_exhausted"),
+    (L2_STEP_BUDGET_AUDIT, "budget_exhausted"),
+    # The review ran, ended inconclusive, and exhausted nothing.
+    (L2_INCONCLUSIVE_AUDIT, "no_finding"),
+]
+
+
+@pytest.mark.parametrize(("audit", "expected"), _AUDIT_CASES)
+@pytest.mark.parametrize(
+    ("outcome", "code"),
+    [
+        ("pass_inconclusive", "source-review-inconclusive"),
+        ("inconclusive", "source-review-inconclusive"),
+        ("inconclusive", "source-review-read-budget-exhausted"),
+        ("inconclusive", "l2-model-step-budget"),
+        ("inconclusive", "l2-model-inconclusive"),
+        ("inconclusive", "l2-runtime-evidence-unavailable"),
+    ],
+)
+def test_deferred_no_verdict_requires_a_recorded_review_audit(
+    outcome: str, code: str, audit: object, expected: str
+) -> None:
+    evidence = _deep(outcome=outcome, reason_code=code, review_audit=audit)
+    assert _conclude(active=True, evidence=evidence) == expected
+
+
+@pytest.mark.parametrize(("audit", "expected"), _AUDIT_CASES)
+@pytest.mark.parametrize(
+    "code",
+    [
+        "source-review-inconclusive",
+        "source-review-step-budget-exhausted",
+        "l2-model-total-budget",
+        "l2-model-inconclusive",
+        "l2-runtime-evidence-unavailable",
+    ],
+)
+def test_quarantine_no_verdict_requires_a_recorded_review_audit(
+    code: str, audit: object, expected: str
+) -> None:
+    assert (
+        _conclude(
+            active=False,
+            evidence=None,
+            quarantined=True,
+            code=code,
+            quarantine_audit=audit,
+        )
+        == expected
+    )
+
+
 @pytest.mark.parametrize(
     ("result", "expected"),
     [
-        (
-            {"outcome": "inconclusive", "reason_code": "source-review-inconclusive"},
-            "no_finding",
-        ),
-        (
-            {
-                "outcome": "pass_inconclusive",
-                "reason_code": "source-review-read-budget-exhausted",
-            },
-            "no_finding",
-        ),
-        # A recorded finding is never softened, whatever the code says.
+        # A recorded finding is never softened, whatever the code or audit says.
         (
             {
                 "outcome": "inconclusive",
                 "reason_code": "source-review-inconclusive",
                 "finding_digest": "ab" * 32,
+                "review_audit": L1_READ_BUDGET_AUDIT,
             },
             "adverse_signal",
         ),
         (
             {"outcome": "quarantine", "reason_code": "source-safety-malicious-risk"},
+            "adverse_signal",
+        ),
+        # A budget audit cannot soften an adverse or unknown code.
+        (
+            {
+                "outcome": "quarantine",
+                "reason_code": "agentic-source-review-tripwire",
+                "review_audit": L1_READ_BUDGET_AUDIT,
+            },
             "adverse_signal",
         ),
         # Interrupted attempts have no conclusion yet.
@@ -1052,8 +1193,9 @@ def test_public_review_conclusion_without_a_deep_result() -> None:
             evidence={},
             quarantined=True,
             code="source-review-read-budget-exhausted",
+            quarantine_audit=L1_READ_BUDGET_AUDIT,
         )
-        == "no_finding"
+        == "budget_exhausted"
     )
     assert (
         _conclude(active=False, evidence=None, quarantined=True, code="tripwire")
@@ -1080,6 +1222,7 @@ def test_quarantine_finding_is_never_softened(digest: object, finding: object) -
                 code=code,
                 quarantine_digest=digest if isinstance(digest, str) else None,
                 quarantine_finding=finding,
+                quarantine_audit=L1_READ_BUDGET_AUDIT,
             )
             == "adverse_signal"
         )
@@ -1092,6 +1235,7 @@ def test_unknown_budget_code_on_quarantine_is_adverse() -> None:
             evidence=None,
             quarantined=True,
             code="source-review-finding-budget-exhausted",
+            quarantine_audit=L1_READ_BUDGET_AUDIT,
         )
         == "adverse_signal"
     )

@@ -5983,6 +5983,7 @@ class _QuarantineFinding:
 
     finding_digest: str | None
     finding: dict[str, Any] | None
+    review_audit: dict[str, Any] | None
 
 
 async def _active_quarantine_findings(
@@ -6006,14 +6007,17 @@ async def _active_quarantine_findings(
             ScreeningQuarantine.agent_id,
             ScreeningQuarantine.finding_digest,
             ScreeningQuarantine.finding,
+            ScreeningQuarantine.review_audit,
         ).where(
             ScreeningQuarantine.agent_id.in_(agent_ids),
             ScreeningQuarantine.status == "active",
         )
     )
     return {
-        agent_id: _QuarantineFinding(finding_digest=digest, finding=finding)
-        for agent_id, digest, finding in result.tuples()
+        agent_id: _QuarantineFinding(
+            finding_digest=digest, finding=finding, review_audit=review_audit
+        )
+        for agent_id, digest, finding, review_audit in result.tuples()
     }
 
 
@@ -6039,6 +6043,9 @@ def _public_review_projection(
                 quarantine.finding_digest if quarantine is not None else None
             ),
             quarantine_finding=(quarantine.finding if quarantine is not None else None),
+            quarantine_review_audit=(
+                quarantine.review_audit if quarantine is not None else None
+            ),
         ),
     )
 
