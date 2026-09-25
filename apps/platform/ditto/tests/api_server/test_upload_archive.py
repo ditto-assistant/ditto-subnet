@@ -78,9 +78,7 @@ def test_rejects_parent_traversal() -> None:
 
 def test_rejects_too_many_members() -> None:
     members = [("Dockerfile", b"FROM scratch\n", tarfile.REGTYPE)]
-    members.extend(
-        (f"f{index}", b"x", tarfile.REGTYPE) for index in range(MAX_MEMBERS)
-    )
+    members.extend((f"f{index}", b"x", tarfile.REGTYPE) for index in range(MAX_MEMBERS))
     with pytest.raises(SourceInspectError) as raised:
         validate_upload_archive(_archive(members))
     assert raised.value.code == "artifact-too-many-members"
