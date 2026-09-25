@@ -14,6 +14,35 @@ const item = {
   details: { settings: { chat_global_concurrency: 96 } },
   source: "request",
 };
+const treasuryDeposit = {
+  id: 2,
+  payment_id: "payment-2",
+  event_kind: "gm_token_deposit",
+  state: "chain_finalized",
+  finalized_event_id: null,
+  event_at: "2026-09-25T12:00:00Z",
+  policy_revision: 3,
+  burn_revision: 8,
+  burn_share_micros: 0,
+  denominator: "released_miner_emission",
+  maintenance_bps: 25,
+  gm_bps: 25,
+  allocation_bps: 25,
+  allocated_alpha_rao: "1000",
+  source_alpha_rao: "500",
+  route: "alpha_to_tao",
+  deposit_asset: "TAO",
+  deposit_amount_atomic: "99",
+  credited_usd_micros: null,
+  public_sender: "public-sender",
+  public_recipient: "public-recipient",
+  block_hash: "0xabc",
+  extrinsic_index: 2,
+  event_index: 3,
+  actor_provenance: "treasury_signer",
+  actor_public_id: "signer-1",
+  verification_source: "finalized_chain_rpc",
+};
 beforeEach(() => {
   history.replaceState(null, "", "/activity");
   request.mockReset();
@@ -80,28 +109,17 @@ it("shows verified treasury receipts separately from admin requests", async () =
     path.startsWith("/public/treasury-activity")
       ? {
           items: [
+            treasuryDeposit,
             {
-              id: 2,
-              payment_id: "payment-2",
+              ...treasuryDeposit,
+              id: 3,
               event_kind: "gm_credit_purchase",
-              state: "chain_finalized",
-              event_at: "2026-09-25T12:00:00Z",
-              policy_revision: 3,
-              burn_revision: "8",
-              denominator: "released_miner_emission",
-              allocation_bps: 25,
-              allocated_alpha_rao: "1000",
-              route: "alpha_to_tao",
-              asset: "TAO",
-              gross_amount_atomic: "99",
-              realized_amount_atomic: null,
-              public_sender: "public-sender",
-              public_recipient: "public-recipient",
-              block_hash: "0xabc",
-              extrinsic_index: 2,
-              event_index: 3,
-              actor_provenance: "operator-auth",
-              verification_source: "chain-rpc",
+              state: "reconciled",
+              finalized_event_id: 2,
+              credited_usd_micros: "3000000",
+              actor_provenance: "gm_reconciler",
+              actor_public_id: "reconciler-1",
+              verification_source: "chain_and_provider_reconciliation",
             },
           ],
           next_before: null,
@@ -109,7 +127,9 @@ it("shows verified treasury receipts separately from admin requests", async () =
       : { items: [item], next_before: null },
   );
   render(() => <ActivityPage />);
-  await screen.findByText("GM credit purchase");
-  expect(screen.getByText("public-recipient")).toBeInTheDocument();
+  await screen.findByText("GM token deposit finalized");
+  expect(screen.getAllByText("GM credits confirmed").length).toBeGreaterThan(0);
+  expect(screen.queryByText("GM credit purchase")).not.toBeInTheDocument();
+  expect(screen.getAllByText("public-recipient")).toHaveLength(2);
   expect(screen.getByText("inference concurrency settings")).toBeInTheDocument();
 });

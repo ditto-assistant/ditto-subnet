@@ -11042,27 +11042,34 @@ class TreasuryPublicEvent(Base):
     payment_id: Mapped[str] = mapped_column(Text, nullable=False)
     event_kind: Mapped[str] = mapped_column(Text, nullable=False)
     state: Mapped[str] = mapped_column(Text, nullable=False)
+    finalized_event_id: Mapped[int | None] = mapped_column(BigInteger)
     event_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     recorded_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
     policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
-    burn_revision: Mapped[str] = mapped_column(Text, nullable=False)
+    burn_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    burn_share_micros: Mapped[int] = mapped_column(Integer, nullable=False)
     denominator: Mapped[str] = mapped_column(Text, nullable=False)
+    maintenance_bps: Mapped[int] = mapped_column(Integer, nullable=False)
+    gm_bps: Mapped[int] = mapped_column(Integer, nullable=False)
     allocation_bps: Mapped[int] = mapped_column(Integer, nullable=False)
     allocated_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    source_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
     route: Mapped[str] = mapped_column(Text, nullable=False)
-    asset: Mapped[str] = mapped_column(Text, nullable=False)
-    gross_amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    realized_amount_atomic: Mapped[int | None] = mapped_column(BigInteger)
+    deposit_asset: Mapped[str] = mapped_column(Text, nullable=False)
+    deposit_amount_atomic: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    credited_usd_micros: Mapped[int | None] = mapped_column(BigInteger)
     public_sender: Mapped[str] = mapped_column(Text, nullable=False)
     public_recipient: Mapped[str] = mapped_column(Text, nullable=False)
     block_hash: Mapped[str] = mapped_column(Text, nullable=False)
     extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
     event_index: Mapped[int] = mapped_column(Integer, nullable=False)
     actor_provenance: Mapped[str] = mapped_column(Text, nullable=False)
+    actor_public_id: Mapped[str] = mapped_column(Text, nullable=False)
     verification_source: Mapped[str] = mapped_column(Text, nullable=False)
     __table_args__ = (
+        ForeignKeyConstraint(["finalized_event_id"], ["treasury_public_events.id"]),
         UniqueConstraint("payment_id", "state", name="treasury_public_payment_state"),
         UniqueConstraint(
             "block_hash",
@@ -11072,7 +11079,13 @@ class TreasuryPublicEvent(Base):
             name="treasury_public_chain_event_state",
         ),
         CheckConstraint(
-            "event_kind IN ('gm_credit_purchase', 'maintenance_bounty')",
+            "(event_kind = 'gm_token_deposit' AND state = 'chain_finalized' "
+            "AND finalized_event_id IS NULL AND credited_usd_micros IS NULL) OR "
+            "(event_kind = 'gm_credit_purchase' AND state = 'reconciled' "
+            "AND finalized_event_id IS NOT NULL AND credited_usd_micros IS NOT NULL "
+            "AND credited_usd_micros > 0) OR "
+            "(event_kind = 'maintenance_bounty' AND state = 'chain_finalized' "
+            "AND finalized_event_id IS NULL AND credited_usd_micros IS NULL)",
             name="treasury_public_kind",
         ),
         CheckConstraint(
@@ -11083,20 +11096,39 @@ class TreasuryPublicEvent(Base):
             name="treasury_public_denominator",
         ),
         CheckConstraint(
-            "allocation_bps BETWEEN 0 AND 10000 AND allocated_alpha_rao >= 0",
+            "maintenance_bps BETWEEN 0 AND 10000 AND "
+            "gm_bps BETWEEN 0 AND 10000 AND "
+            "allocation_bps BETWEEN 0 AND 10000 AND "
+            "allocated_alpha_rao >= 0 AND source_alpha_rao > 0 AND "
+            "burn_revision >= 0 AND burn_share_micros BETWEEN 0 AND 1000000",
             name="treasury_public_allocation",
         ),
         CheckConstraint(
-            "gross_amount_atomic >= 0 AND "
-            "(realized_amount_atomic IS NULL OR realized_amount_atomic >= 0)",
+            "(event_kind = 'maintenance_bounty' AND allocation_bps = maintenance_bps) "
+            "OR (event_kind <> 'maintenance_bounty' AND allocation_bps = gm_bps)",
+            name="treasury_public_purpose_allocation",
+        ),
+        CheckConstraint(
+            "deposit_amount_atomic > 0 AND "
+            "deposit_asset IN ('TAO', 'SN28_ALPHA', 'SN118_ALPHA')",
             name="treasury_public_amounts",
+        ),
+        CheckConstraint(
+            "route IN ('alpha_to_tao', 'alpha_to_gm_alpha', "
+            "'alpha_transfer', 'alpha_to_tao_bounty')",
+            name="treasury_public_route",
         ),
         CheckConstraint(
             "extrinsic_index >= 0 AND event_index >= 0", name="treasury_public_indexes"
         ),
         CheckConstraint(
-            "actor_provenance IN ('authenticated_operator', 'automated_planner')",
+            "actor_provenance IN "
+            "('treasury_signer', 'gm_reconciler', 'bounty_executor')",
             name="treasury_public_actor_provenance",
+        ),
+        CheckConstraint(
+            "length(actor_public_id) BETWEEN 3 AND 120",
+            name="treasury_public_actor_id",
         ),
         CheckConstraint(
             "verification_source IN "

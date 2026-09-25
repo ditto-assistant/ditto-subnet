@@ -42,19 +42,24 @@ async def list_treasury_activity(
                 "payment_id": row.payment_id,
                 "event_kind": row.event_kind,
                 "state": row.state,
+                "finalized_event_id": row.finalized_event_id,
                 "event_at": row.event_at,
                 "recorded_at": row.recorded_at,
                 "policy_revision": row.policy_revision,
                 "burn_revision": row.burn_revision,
+                "burn_share_micros": row.burn_share_micros,
                 "denominator": row.denominator,
+                "maintenance_bps": row.maintenance_bps,
+                "gm_bps": row.gm_bps,
                 "allocation_bps": row.allocation_bps,
                 "allocated_alpha_rao": str(row.allocated_alpha_rao),
+                "source_alpha_rao": str(row.source_alpha_rao),
                 "route": row.route,
-                "asset": row.asset,
-                "gross_amount_atomic": str(row.gross_amount_atomic),
-                "realized_amount_atomic": (
-                    str(row.realized_amount_atomic)
-                    if row.realized_amount_atomic is not None
+                "deposit_asset": row.deposit_asset,
+                "deposit_amount_atomic": str(row.deposit_amount_atomic),
+                "credited_usd_micros": (
+                    str(row.credited_usd_micros)
+                    if row.credited_usd_micros is not None
                     else None
                 ),
                 "public_sender": row.public_sender,
@@ -63,6 +68,7 @@ async def list_treasury_activity(
                 "extrinsic_index": row.extrinsic_index,
                 "event_index": row.event_index,
                 "actor_provenance": row.actor_provenance,
+                "actor_public_id": row.actor_public_id,
                 "verification_source": row.verification_source,
             }
         )

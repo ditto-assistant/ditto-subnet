@@ -26515,21 +26515,32 @@ export interface components {
         PublicTreasuryEvent: {
             /** Actor Provenance */
             actor_provenance: string;
+            /** Actor Public Id */
+            actor_public_id: string;
             /** Allocated Alpha Rao */
             allocated_alpha_rao: string;
             /** Allocation Bps */
             allocation_bps: number;
-            /** Asset */
-            asset: string;
             /** Block Hash */
             block_hash: string;
             /** Burn Revision */
-            burn_revision: string;
+            burn_revision: number;
+            /** Burn Share Micros */
+            burn_share_micros: number;
+            /** Credited Usd Micros */
+            credited_usd_micros: string | null;
             /**
              * Denominator
              * @enum {string}
              */
             denominator: "miner_emission" | "released_miner_emission";
+            /** Deposit Amount Atomic */
+            deposit_amount_atomic: string;
+            /**
+             * Deposit Asset
+             * @enum {string}
+             */
+            deposit_asset: "TAO" | "SN28_ALPHA" | "SN118_ALPHA";
             /**
              * Event At
              * Format: date-time
@@ -26541,13 +26552,17 @@ export interface components {
              * Event Kind
              * @enum {string}
              */
-            event_kind: "gm_credit_purchase" | "maintenance_bounty";
+            event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty";
             /** Extrinsic Index */
             extrinsic_index: number;
-            /** Gross Amount Atomic */
-            gross_amount_atomic: string;
+            /** Finalized Event Id */
+            finalized_event_id: number | null;
+            /** Gm Bps */
+            gm_bps: number;
             /** Id */
             id: number;
+            /** Maintenance Bps */
+            maintenance_bps: number;
             /** Payment Id */
             payment_id: string;
             /** Policy Revision */
@@ -26556,8 +26571,6 @@ export interface components {
             public_recipient: string;
             /** Public Sender */
             public_sender: string;
-            /** Realized Amount Atomic */
-            realized_amount_atomic: string | null;
             /**
              * Recorded At
              * Format: date-time
@@ -26565,6 +26578,8 @@ export interface components {
             recorded_at: string;
             /** Route */
             route: string;
+            /** Source Alpha Rao */
+            source_alpha_rao: string;
             /**
              * State
              * @enum {string}

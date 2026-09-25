@@ -20,24 +20,30 @@ interface ActivityPageData {
 interface TreasuryEvent {
   id: number;
   payment_id: string;
-  event_kind: "gm_credit_purchase" | "maintenance_bounty";
+  event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty";
   state: "chain_finalized" | "reconciled";
+  finalized_event_id: number | null;
   event_at: string;
   policy_revision: number;
-  burn_revision: string;
+  burn_revision: number;
+  burn_share_micros: number;
   denominator: "miner_emission" | "released_miner_emission";
+  maintenance_bps: number;
+  gm_bps: number;
   allocation_bps: number;
   allocated_alpha_rao: string;
+  source_alpha_rao: string;
   route: string;
-  asset: string;
-  gross_amount_atomic: string;
-  realized_amount_atomic: string | null;
+  deposit_asset: string;
+  deposit_amount_atomic: string;
+  credited_usd_micros: string | null;
   public_sender: string;
   public_recipient: string;
   block_hash: string;
   extrinsic_index: number;
   event_index: number;
   actor_provenance: string;
+  actor_public_id: string;
   verification_source: string;
 }
 interface TreasuryPageData {
@@ -120,9 +126,8 @@ export function ActivityPage(): JSX.Element {
       <section aria-label="Treasury spending" class="treasury-activity">
         <h2>Treasury spending</h2>
         <p>
-          Finalized public chain receipts for GM credit purchases and maintenance bounties. A
-          reconciled event confirms the payment outcome; entries with the same payment ID describe
-          one payment.
+          Finalized GM token deposits, confirmed GM credits, and maintenance bounties. Entries with
+          the same payment ID describe stages of one payment, not separate purchases.
         </p>
         <Show when={treasury.error()}>
           <div role="alert" class="activity-state">
@@ -149,9 +154,11 @@ export function ActivityPage(): JSX.Element {
                         {new Date(item.event_at).toLocaleString()}
                       </time>
                       <span class="activity-action">
-                        {item.event_kind === "gm_credit_purchase"
-                          ? "GM credit purchase"
-                          : "Maintenance bounty"}
+                        {item.event_kind === "gm_token_deposit"
+                          ? "GM token deposit finalized"
+                          : item.event_kind === "gm_credit_purchase"
+                            ? "GM credits confirmed"
+                            : "Maintenance bounty paid"}
                         <small>
                           Payment {item.payment_id} ·{" "}
                           {item.state === "reconciled" ? "Reconciled" : "Chain finalized"}
@@ -166,7 +173,15 @@ export function ActivityPage(): JSX.Element {
                         </div>
                         <div>
                           <dt>Burn revision</dt>
-                          <dd>{item.burn_revision}</dd>
+                          <dd>
+                            {item.burn_revision} · {item.burn_share_micros} millionths burned
+                          </dd>
+                        </div>
+                        <div>
+                          <dt>Purpose allocations</dt>
+                          <dd>
+                            Maintenance {item.maintenance_bps} bps · GM {item.gm_bps} bps
+                          </dd>
                         </div>
                         <div>
                           <dt>Allocation</dt>
@@ -180,17 +195,19 @@ export function ActivityPage(): JSX.Element {
                           <dd>{item.route}</dd>
                         </div>
                         <div>
-                          <dt>Gross amount</dt>
+                          <dt>Source spent</dt>
+                          <dd>{item.source_alpha_rao} SN118 alpha rao</dd>
+                        </div>
+                        <div>
+                          <dt>Chain deposit</dt>
                           <dd>
-                            {item.gross_amount_atomic} atomic {item.asset}
+                            {item.deposit_amount_atomic} atomic {item.deposit_asset}
                           </dd>
                         </div>
-                        <Show when={item.realized_amount_atomic !== null}>
+                        <Show when={item.credited_usd_micros !== null}>
                           <div>
-                            <dt>Realized amount</dt>
-                            <dd>
-                              {item.realized_amount_atomic} atomic {item.asset}
-                            </dd>
+                            <dt>GM credits confirmed</dt>
+                            <dd>{item.credited_usd_micros} USD micros</dd>
                           </div>
                         </Show>
                         <div>
@@ -210,7 +227,9 @@ export function ActivityPage(): JSX.Element {
                         </div>
                         <div>
                           <dt>Actor provenance</dt>
-                          <dd>{item.actor_provenance}</dd>
+                          <dd>
+                            {item.actor_provenance} · {item.actor_public_id}
+                          </dd>
                         </div>
                         <div>
                           <dt>Verification source</dt>
