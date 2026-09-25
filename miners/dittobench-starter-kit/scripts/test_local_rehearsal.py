@@ -20,6 +20,13 @@ GATES = LOCAL.rehearsal_gates
 
 
 class LocalRehearsalTest(unittest.TestCase):
+    def test_decline_prose_does_not_become_a_wire_abstention(self) -> None:
+        decline = {"final_text": "I could not find that in our conversation."}
+        self.assertEqual(GATES._decision_class(decline, []), "answer:none")
+        self.assertEqual(
+            GATES._decision_class({**decline, "abstain": True}, []), "abstain"
+        )
+
     def test_submit_body_defaults_to_live_scoring_version(self) -> None:
         self.assertEqual(
             LOCAL.submit_body("small", "http://127.0.0.1:8080", None),

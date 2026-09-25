@@ -680,6 +680,8 @@ def _seed_record_texts(dataset: dict[str, Any]) -> list[str]:
 
 
 def _decision_class(response: dict[str, Any], known_values: list[str]) -> str:
+    # Only the explicit wire field carries abstention authority. A decline in
+    # final_text remains prose; the starter harness must not synthesize this flag.
     if response.get("abstain") is True:
         return "abstain"
     slot = str(response.get("answer") or "").strip()
