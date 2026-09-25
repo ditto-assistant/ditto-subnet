@@ -322,6 +322,62 @@ def _compact_safe_has_coverage(
     return set(_COMPACT_DOSSIER_SECTIONS) <= fetched_sections and bool(read_files)
 
 
+_SUBMISSION_VALIDATION_HINTS = {
+    "schema": (
+        "Match the submit_l2_review schema exactly, including every required "
+        "field, type, and enum value."
+    ),
+    "artifact_citation": (
+        "Re-read exact source. Put every cited file and its SHA-256 in "
+        "analyzed_files, then cite real artifact paths and line numbers."
+    ),
+    "causal_link": (
+        "Bind the trigger, authority decision, and observed effect to exact "
+        "source locations and satisfy the required causal roles."
+    ),
+    "basis_category": (
+        "Align the risk level, categories, category evidence, and resolution "
+        "basis with the host-verified mechanism."
+    ),
+    "multi_location": (
+        "Cite two distinct artifact path/line locations for each category "
+        "that requires independent multi-location evidence."
+    ),
+}
+
+
+def _submission_validation_subcode(error: ValueError) -> str:
+    """Reduce fixed host validation failures to source-free correction codes."""
+    message = str(error)
+    if "multi-location evidence" in message:
+        return "multi_location"
+    if "not artifact-bound" in message or "did not analyze every L1" in message:
+        return "artifact_citation"
+    if any(
+        phrase in message
+        for phrase in (
+            "causal",
+            "invariant breach",
+            "authority transition",
+            "trigger/effect",
+        )
+    ):
+        return "causal_link"
+    if any(
+        phrase in message
+        for phrase in (
+            "category evidence",
+            "resolution basis",
+            "categories",
+            "not elevated",
+            "prohibited risk",
+            "contradictory evidence",
+        )
+    ):
+        return "basis_category"
+    return "schema"
+
+
 def _compact_consumed_tool_outputs(items: list[dict[str, object]]) -> None:
     """Retain a reloadable digest after the model has consumed exact tool bytes."""
     for item in items:
@@ -4340,7 +4396,6 @@ class TerraSolSourceReviewAgent:
                             reason="validation",
                             validation_subcode=_submission_validation_subcode(error),
                         )
-                        continue
                         continue
                     if (
                         self._compact_review_packet

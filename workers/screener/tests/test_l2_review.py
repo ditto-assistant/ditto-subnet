@@ -4542,6 +4542,22 @@ def test_compact_history_replaces_consumed_source_with_reloadable_digest() -> No
     assert items[1]["output"] == "{}"
 
 
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("L2 result has unexpected fields", "schema"),
+        ("L2 evidence is not artifact-bound", "artifact_citation"),
+        ("L2 violation lacks a causal trigger/effect path", "causal_link"),
+        ("L2 violation is missing category evidence", "basis_category"),
+        ("L2 violation lacks multi-location evidence", "multi_location"),
+    ],
+)
+def test_submission_validation_subcode_is_fixed_and_source_free(
+    message: str, expected: str
+) -> None:
+    assert l2_review._submission_validation_subcode(ValueError(message)) == expected
+
+
 async def test_report_only_audit_records_turn_timeout_and_tool_names_without_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4752,6 +4768,76 @@ async def test_compact_safe_correction_names_missing_sections_without_source(
     assert event["proposed_disposition"] == "safe"
     assert event["missing_sections"] == list(l2_review._COMPACT_DOSSIER_SECTIONS)
     assert event["needs_source_read"] is True
+    assert "private-source-marker" not in audit_path.read_text()
+
+
+async def test_report_only_citation_correction_is_fixed_and_keeps_gate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit_path = tmp_path / "citation-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+    )
+
+    def reject(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("L2 evidence is not artifact-bound")
+
+    monkeypatch.setattr(l2_review, "_parse_l2_review", reject)
+    requests: list[list[dict[str, object]]] = []
+
+    async def post(
+        _client: object, _key: object, items: list[dict[str, object]], **_kwargs: object
+    ) -> httpx.Response:
+        requests.append(list(items))
+        if len(requests) == 1:
+            return _response(
+                [_tool_call("1", "submit_l2_review", {"disposition": "violation"})],
+                model="openai/gpt-6-sol",
+            )
+        raise TimeoutError
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(TimeoutError):
+            await agent._run_trajectory(
+                client,
+                "test-key",
+                tmp_path,
+                None,  # type: ignore[arg-type]
+                artifact_sha256="d" * 64,
+                dossier={"source": "private-source-marker"},
+                role="analyst",
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider="azure",
+                usage_before=l2_review.L2Usage(),
+                deadline=None,
+                dossier_complete=True,
+            )
+    correction = json.loads(requests[1][-1]["output"])
+    assert correction["reason"] == "validation"
+    assert "SHA-256" in correction["message"]
+    event = next(
+        json.loads(line)
+        for line in audit_path.read_text().splitlines()
+        if json.loads(line).get("event_type") == "report_only_submit_correction"
+    )
+    assert event["validation_subcode"] == "artifact_citation"
+    assert event["proposed_disposition"] == "violation"
     assert "private-source-marker" not in audit_path.read_text()
 
 

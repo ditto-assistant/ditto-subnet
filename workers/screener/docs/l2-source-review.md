@@ -324,6 +324,10 @@ For missing safe coverage, the correction lists exact section IDs and whether
 an exact source read is still needed; schema, citation, and causal-evidence
 rejections remain fail-closed. The private audit records only the fixed cause,
 proposed disposition, and missing section IDs, never submitted source text.
+Host validation failures are further reduced to allowlisted schema,
+artifact-citation, causal-link, basis/category, or multi-location subcodes with
+matching fixed hints. The model must still resubmit the full evidence-bound
+certificate; a hint never relaxes a citation or causal acceptance check.
 The final report separately counts `terminal_decisions` and
 `no_decision_cases`. Its reported cost includes successful model turns from
 the private audit even when a later provider timeout prevents a final verdict;
