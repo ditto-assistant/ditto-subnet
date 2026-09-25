@@ -6238,6 +6238,8 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 call graph is not an object": "call-graph-invalid",
     "L2 analyst reasoning effort must be model_default": "config-invalid",
     "L2 critic reasoning effort must be low, medium, or high": "config-invalid",
+    "L2 completion request timeout must be 30-600 seconds": "config-invalid",
+    "terminal-only comparator cannot enable L3": "config-invalid",
     "at least one starter provenance manifest is required": "config-invalid",
     "invalid L2 mode": "config-invalid",
     "L2 review exceeded lease budget": "lease-budget-exhausted",
