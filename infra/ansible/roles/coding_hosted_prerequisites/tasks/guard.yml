@@ -1,0 +1,21 @@
+---
+# Kept separate so the disabled CI fixture can exercise the real guard.
+- name: Require the exact host, source, address and operator confirmation
+  ansible.builtin.assert:
+    that:
+      - inventory_hostname in groups.get('role_coding_hosted', [])
+      - ansible_facts['hostname'] == 'ditto-coding-hosted-v2'
+      - ansible_facts['architecture'] == 'x86_64'
+      - ansible_facts['distribution'] == 'Debian'
+      - ansible_facts['distribution_major_version'] == '13'
+      - coding_hosted_prerequisites_confirmation == 'CONVERGE NATIVE CODING HOST PREREQUISITES'
+      - coding_hosted_prerequisites_source_revision is string
+      - coding_hosted_prerequisites_source_revision | length == 40
+      - coding_hosted_prerequisites_source_revision is match('^[0-9a-f]{40}$')
+      - coding_hosted_prerequisites_host_address is string
+      - coding_hosted_prerequisites_host_address | trim == coding_hosted_prerequisites_host_address
+      # GCP reserves .0, .1, .254 and .255 in the dedicated 10.33.0.0/24 subnet.
+      - coding_hosted_prerequisites_host_address is match('^10[.]33[.]0[.]([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-3])$')
+      - coding_hosted_prerequisites_host_address == (ansible_facts['default_ipv4'] | default({})).get('address')
+    fail_msg: Require the reviewed source, the dedicated host, its exact primary private IPv4 and the exact confirmation.
+    quiet: true
