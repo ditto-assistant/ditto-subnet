@@ -106,6 +106,10 @@ screener_fleet_release_sha: ""
 # Safe first-converge/canary posture. Raise this alongside the audited
 # Backroom screening concurrency only after the lower setting is proven.
 screener_fleet_worker_processes: 1
+# Opt-in only on the independent physical node. The ordinary worker unit is
+# replaced by the signed, report-only replay entrypoint at the same instance ID.
+screener_fleet_replay_worker_enabled: false
+screener_fleet_replay_process_key_file: "{{ screener_fleet_config_dir }}/replay-process.key"
 screener_fleet_agent_workers: 12
 screener_fleet_poll_seconds: 2
 screener_fleet_build_timeout_seconds: 2400

@@ -282,6 +282,31 @@ CREATE FUNCTION public.coding_hosted_private_task_guard() RETURNS trigger
 
 
 --
+-- Name: enforce_v13_ticket_cohort(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.enforce_v13_ticket_cohort() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ DECLARE pinned jsonb; BEGIN
+          IF NEW.bench_version = 13 AND NEW.status = 'issued' THEN
+            PERFORM pg_advisory_xact_lock(
+              hashtextextended('ditto:validator-rollout-dispatch:v1', 0)
+            );
+            SELECT hotkeys INTO pinned FROM v13_scorer_cohort_rotations
+              WHERE bench_version = 13 ORDER BY rotation_id DESC LIMIT 1;
+            IF pinned IS NULL THEN
+              SELECT hotkeys INTO pinned FROM v13_scorer_cohort_pins
+                WHERE bench_version = 13;
+            END IF;
+            IF pinned IS NOT NULL AND NOT (pinned ? NEW.validator_hotkey) THEN
+              RAISE EXCEPTION 'V13 ticket validator is outside pinned scorer cohort';
+            END IF;
+          END IF;
+          RETURN NEW;
+        END $$;
+
+
+--
 -- Name: guard_coding_catalog_append_only(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -916,6 +941,17 @@ CREATE FUNCTION public.reject_v13_private_generation_mutation() RETURNS trigger
             RAISE EXCEPTION 'V13 private generation records are append-only';
         END;
         $$;
+
+
+--
+-- Name: reject_v13_scorer_pin_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_v13_scorer_pin_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+          RAISE EXCEPTION 'v13 scorer cohort pins are immutable';
+        END $$;
 
 
 --
@@ -3944,6 +3980,43 @@ CREATE TABLE public.screener_heartbeats (
 
 
 --
+-- Name: screener_l2_report_canaries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_l2_report_canaries (
+    canary_id uuid NOT NULL,
+    request_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    source_attempt_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    policy_version integer NOT NULL,
+    bench_version integer NOT NULL,
+    target_node_id text NOT NULL,
+    expected_agent_status text NOT NULL,
+    expected_score_count integer NOT NULL,
+    review_label text NOT NULL,
+    status text DEFAULT 'queued'::text NOT NULL,
+    claimed_instance_id text,
+    settings_revision integer,
+    settings_checksum text,
+    runtime_evidence_sha256 text,
+    lease_token_hash text,
+    lease_expires_at timestamp with time zone,
+    report jsonb,
+    error_code text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_label_check CHECK ((review_label = ANY (ARRAY['candidate_clear'::text, 'known_reject'::text]))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_runtime_check CHECK (((runtime_evidence_sha256 IS NULL) OR (runtime_evidence_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_scores_check CHECK ((expected_score_count >= 0)),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_sha_check CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'succeeded'::text, 'incomplete'::text, 'expired'::text]))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_token_check CHECK (((lease_token_hash IS NULL) OR (lease_token_hash ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_screener_l2_report_canaries_screener_l2_canary_v13_check CHECK (((policy_version = 13) AND (bench_version = 13)))
+);
+
+
+--
 -- Name: screener_node_bootstrap_grants; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4121,6 +4194,38 @@ CREATE SEQUENCE public.screener_provider_settings_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.screener_provider_settings_revisions_revision_seq OWNED BY public.screener_provider_settings_revisions.revision;
+
+
+--
+-- Name: screener_replay_process_keys; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_replay_process_keys (
+    key_sha256 text NOT NULL,
+    node_id text NOT NULL,
+    instance_id text NOT NULL,
+    public_key_hex text NOT NULL,
+    revision integer NOT NULL,
+    status text NOT NULL,
+    registered_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    CONSTRAINT ck_screener_replay_process_keys_srpk_key_sha256_length_check CHECK ((length(key_sha256) = 64)),
+    CONSTRAINT ck_screener_replay_process_keys_srpk_public_key_hex_len_1fc0 CHECK ((length(public_key_hex) = 64)),
+    CONSTRAINT ck_screener_replay_process_keys_srpk_revision_check CHECK ((revision > 0)),
+    CONSTRAINT ck_screener_replay_process_keys_srpk_status_check CHECK ((status = ANY (ARRAY['active'::text, 'revoked'::text])))
+);
+
+
+--
+-- Name: screener_replay_process_nonces; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_replay_process_nonces (
+    key_sha256 text NOT NULL,
+    nonce text NOT NULL,
+    consumed_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_screener_replay_process_nonces_srpn_nonce_length_check CHECK ((length(nonce) = 32))
+);
 
 
 --
@@ -4331,7 +4436,7 @@ CREATE TABLE public.screening_quarantines (
     review_notes jsonb,
     court_diagnostic jsonb,
     court_completion_receipt jsonb,
-    CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_099b CHECK (((review_audit IS NULL) OR (reason_code = ANY (ARRAY['source-review-inconclusive'::text, 'agentic-source-review-tripwire'::text])))),
+    CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_099b CHECK (((review_audit IS NULL) OR (reason_code = ANY (ARRAY['source-review-inconclusive'::text, 'agentic-source-review-tripwire'::text, 'l2-model-inconclusive'::text, 'l2-model-total-budget'::text, 'l2-model-tool-budget'::text, 'l2-model-step-budget'::text])))),
     CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_93b8 CHECK (((review_audit IS NULL) = (review_audit_digest IS NULL))),
     CONSTRAINT ck_screening_quarantines_screening_quarantines_review_a_b69b CHECK (((review_audit_digest IS NULL) OR (review_audit_digest ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_screening_quarantines_screening_quarantines_review_n_a86e CHECK (((review_notes IS NULL) = (review_notes_digest IS NULL))),
@@ -4497,6 +4602,25 @@ CREATE TABLE public.screening_verification_receipts (
 
 
 --
+-- Name: screening_verification_replay_private_receipts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_verification_replay_private_receipts (
+    replay_id uuid NOT NULL,
+    group_id uuid NOT NULL,
+    receipt_sha256 text NOT NULL,
+    runner_hotkey text NOT NULL,
+    observed_at timestamp with time zone NOT NULL,
+    signature text NOT NULL,
+    report jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_verification_replay_private_receipts_svrpr_26ee CHECK ((length(receipt_sha256) = 64)),
+    CONSTRAINT ck_screening_verification_replay_private_receipts_svrpr_46d7 CHECK ((length(signature) = 128)),
+    CONSTRAINT ck_screening_verification_replay_private_receipts_svrpr_runner CHECK (((length(runner_hotkey) >= 1) AND (length(runner_hotkey) <= 120)))
+);
+
+
+--
 -- Name: screening_verification_replay_receipts; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4509,6 +4633,28 @@ CREATE TABLE public.screening_verification_replay_receipts (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_screening_verification_replay_receipts_svrr_check_code_check CHECK (((length(check_code) >= 1) AND (length(check_code) <= 64))),
     CONSTRAINT ck_screening_verification_replay_receipts_svrr_evidence_9745 CHECK ((length(evidence_sha256) = 64))
+);
+
+
+--
+-- Name: screening_verification_replay_signed_observations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_verification_replay_signed_observations (
+    observation_id uuid NOT NULL,
+    replay_id uuid NOT NULL,
+    check_code text NOT NULL,
+    status text NOT NULL,
+    evidence_sha256 text NOT NULL,
+    runner_hotkey text NOT NULL,
+    observed_at timestamp with time zone NOT NULL,
+    signature text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_0c04 CHECK ((length(signature) = 128)),
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_2c37 CHECK ((status = ANY (ARRAY['passed'::text, 'failed'::text, 'inconclusive'::text]))),
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_307e CHECK (((length(runner_hotkey) >= 1) AND (length(runner_hotkey) <= 120))),
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_52f5 CHECK ((length(evidence_sha256) = 64)),
+    CONSTRAINT ck_screening_verification_replay_signed_observations_sv_ae35 CHECK (((length(check_code) >= 1) AND (length(check_code) <= 64)))
 );
 
 
@@ -4541,6 +4687,7 @@ CREATE TABLE public.screening_verification_replays (
     failure_code text,
     lease_started_at timestamp with time zone,
     lease_renewals integer DEFAULT 0 NOT NULL,
+    process_key_sha256 text,
     CONSTRAINT ck_screening_verification_replays_svrp_artifact_sha_check CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT ck_screening_verification_replays_svrp_image_metadata_check CHECK ((((image_sha256 IS NULL) AND (image_size_bytes IS NULL) AND (image_id IS NULL) AND (image_verified_at IS NULL)) OR ((image_sha256 IS NOT NULL) AND (image_size_bytes > 0) AND (image_id IS NOT NULL)))),
     CONSTRAINT ck_screening_verification_replays_svrp_image_sha_check CHECK (((image_sha256 IS NULL) OR (image_sha256 ~ '^[0-9a-f]{64}$'::text))),
@@ -4956,6 +5103,135 @@ CREATE TABLE public.v13_private_generation_groups (
     CONSTRAINT ck_v13_private_generation_groups_v13pg_target_artifact__febb CHECK ((length(target_artifact_sha256) = 64)),
     CONSTRAINT ck_v13_private_generation_groups_v13pg_target_image_sha_a15d CHECK ((length(target_image_sha256) = 64)),
     CONSTRAINT ck_v13_private_generation_groups_v13pg_target_receipt_s_4208 CHECK ((length(target_receipt_sha256) = 64))
+);
+
+
+--
+-- Name: v13_replay_group_package_registrations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_replay_group_package_registrations (
+    group_id uuid NOT NULL,
+    role text NOT NULL,
+    generation_receipt_sha256 text NOT NULL,
+    manifest_sha256 text NOT NULL,
+    pair_inventory_sha256 text NOT NULL,
+    registrar_actor text NOT NULL,
+    registered_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_actor CHECK (((length(registrar_actor) >= 1) AND (length(registrar_actor) <= 120))),
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_genera_55b4 CHECK ((length(generation_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_manife_e5dd CHECK ((length(manifest_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_pair_i_45ea CHECK ((length(pair_inventory_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_group_package_registrations_v13rgp_role CHECK ((role = ANY (ARRAY['target'::text, 'known_benign'::text])))
+);
+
+
+--
+-- Name: v13_replay_private_generation_groups; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_replay_private_generation_groups (
+    group_id uuid NOT NULL,
+    replay_id uuid NOT NULL,
+    target_agent_id uuid NOT NULL,
+    target_attempt_id uuid NOT NULL,
+    target_artifact_sha256 text NOT NULL,
+    target_image_sha256 text NOT NULL,
+    control_agent_id uuid NOT NULL,
+    control_attempt_id uuid NOT NULL,
+    control_artifact_sha256 text NOT NULL,
+    control_image_sha256 text NOT NULL,
+    approval_id uuid NOT NULL,
+    approval_receipt_sha256 text NOT NULL,
+    profile_sha256 text NOT NULL,
+    target_receipt_sha256 text NOT NULL,
+    control_receipt_sha256 text NOT NULL,
+    actor text NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_actor CHECK (((length(actor) >= 1) AND (length(actor) <= 120))),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_approval_9831 CHECK ((length(approval_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_control__4c20 CHECK ((length(control_receipt_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_control__727c CHECK ((length(control_image_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_control__f279 CHECK ((length(control_artifact_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_distinct_agents CHECK ((target_agent_id <> control_agent_id)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_profile__1f4f CHECK ((length(profile_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_target_a_9fde CHECK ((length(target_artifact_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_target_i_7e08 CHECK ((length(target_image_sha256) = 64)),
+    CONSTRAINT ck_v13_replay_private_generation_groups_v13rpg_target_r_7369 CHECK ((length(target_receipt_sha256) = 64))
+);
+
+
+--
+-- Name: v13_scorer_cohort_pins; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_scorer_cohort_pins (
+    bench_version integer NOT NULL,
+    hotkeys jsonb NOT NULL,
+    packet jsonb NOT NULL,
+    slot_settings_revision integer NOT NULL,
+    slot_settings_checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_settings_check_4272 CHECK ((length(slot_settings_checksum) = 64)),
+    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_three_hotkeys_check CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND (jsonb_array_length(hotkeys) = 3))),
+    CONSTRAINT ck_v13_scorer_cohort_pins_v13_scorer_pin_version_check CHECK ((bench_version = 13))
+);
+
+
+--
+-- Name: v13_scorer_cohort_pins_bench_version_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.v13_scorer_cohort_pins_bench_version_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: v13_scorer_cohort_pins_bench_version_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.v13_scorer_cohort_pins_bench_version_seq OWNED BY public.v13_scorer_cohort_pins.bench_version;
+
+
+--
+-- Name: v13_scorer_cohort_rotations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.v13_scorer_cohort_rotations (
+    rotation_id bigint NOT NULL,
+    bench_version integer NOT NULL,
+    hotkeys jsonb NOT NULL,
+    packet jsonb NOT NULL,
+    previous_packet jsonb NOT NULL,
+    slot_settings_revision integer NOT NULL,
+    slot_settings_checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_sett_c460 CHECK ((length(slot_settings_checksum) = 64)),
+    CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_thre_54aa CHECK (((jsonb_typeof(hotkeys) = 'array'::text) AND (jsonb_array_length(hotkeys) = 3))),
+    CONSTRAINT ck_v13_scorer_cohort_rotations_v13_scorer_rotation_vers_0d33 CHECK ((bench_version = 13))
+);
+
+
+--
+-- Name: v13_scorer_cohort_rotations_rotation_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.v13_scorer_cohort_rotations ALTER COLUMN rotation_id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.v13_scorer_cohort_rotations_rotation_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );
 
 
@@ -5409,6 +5685,13 @@ ALTER TABLE ONLY public.submission_deposit_address_revisions ALTER COLUMN revisi
 --
 
 ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.submission_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: v13_scorer_cohort_pins bench_version; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_scorer_cohort_pins ALTER COLUMN bench_version SET DEFAULT nextval('public.v13_scorer_cohort_pins_bench_version_seq'::regclass);
 
 
 --
@@ -6955,6 +7238,14 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 
 --
+-- Name: screener_l2_report_canaries pk_screener_l2_report_canaries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT pk_screener_l2_report_canaries PRIMARY KEY (canary_id);
+
+
+--
 -- Name: screener_node_bootstrap_grants pk_screener_node_bootstrap_grants; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6992,6 +7283,22 @@ ALTER TABLE ONLY public.screener_policy_activations
 
 ALTER TABLE ONLY public.screener_provider_settings_revisions
     ADD CONSTRAINT pk_screener_provider_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: screener_replay_process_keys pk_screener_replay_process_keys; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_replay_process_keys
+    ADD CONSTRAINT pk_screener_replay_process_keys PRIMARY KEY (key_sha256);
+
+
+--
+-- Name: screener_replay_process_nonces pk_screener_replay_process_nonces; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_replay_process_nonces
+    ADD CONSTRAINT pk_screener_replay_process_nonces PRIMARY KEY (key_sha256, nonce);
 
 
 --
@@ -7051,11 +7358,27 @@ ALTER TABLE ONLY public.screening_verification_receipts
 
 
 --
+-- Name: screening_verification_replay_private_receipts pk_screening_verification_replay_private_receipts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_private_receipts
+    ADD CONSTRAINT pk_screening_verification_replay_private_receipts PRIMARY KEY (replay_id);
+
+
+--
 -- Name: screening_verification_replay_receipts pk_screening_verification_replay_receipts; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.screening_verification_replay_receipts
     ADD CONSTRAINT pk_screening_verification_replay_receipts PRIMARY KEY (receipt_id);
+
+
+--
+-- Name: screening_verification_replay_signed_observations pk_screening_verification_replay_signed_observations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_signed_observations
+    ADD CONSTRAINT pk_screening_verification_replay_signed_observations PRIMARY KEY (observation_id);
 
 
 --
@@ -7176,6 +7499,38 @@ ALTER TABLE ONLY public.v13_known_benign_control_approvals
 
 ALTER TABLE ONLY public.v13_private_generation_groups
     ADD CONSTRAINT pk_v13_private_generation_groups PRIMARY KEY (group_id);
+
+
+--
+-- Name: v13_replay_group_package_registrations pk_v13_replay_group_package_registrations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_group_package_registrations
+    ADD CONSTRAINT pk_v13_replay_group_package_registrations PRIMARY KEY (group_id, role);
+
+
+--
+-- Name: v13_replay_private_generation_groups pk_v13_replay_private_generation_groups; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT pk_v13_replay_private_generation_groups PRIMARY KEY (group_id);
+
+
+--
+-- Name: v13_scorer_cohort_pins pk_v13_scorer_cohort_pins; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_scorer_cohort_pins
+    ADD CONSTRAINT pk_v13_scorer_cohort_pins PRIMARY KEY (bench_version);
+
+
+--
+-- Name: v13_scorer_cohort_rotations pk_v13_scorer_cohort_rotations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_scorer_cohort_rotations
+    ADD CONSTRAINT pk_v13_scorer_cohort_rotations PRIMARY KEY (rotation_id);
 
 
 --
@@ -7336,6 +7691,14 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 ALTER TABLE ONLY public.screener_heartbeats
     ADD CONSTRAINT screener_heartbeats_pkey PRIMARY KEY (screener_hotkey, instance_id);
+
+
+--
+-- Name: screener_l2_report_canaries screener_l2_canary_request_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT screener_l2_canary_request_key UNIQUE (request_id);
 
 
 --
@@ -7696,6 +8059,14 @@ ALTER TABLE ONLY public.v13_private_generation_groups
 
 ALTER TABLE ONLY public.validator_weight_receipts
     ADD CONSTRAINT uq_validator_weight_receipts_receipt_digest UNIQUE (receipt_digest);
+
+
+--
+-- Name: v13_replay_private_generation_groups v13rpg_replay_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT v13rpg_replay_key UNIQUE (replay_id);
 
 
 --
@@ -8490,6 +8861,20 @@ CREATE INDEX screener_heartbeats_seen_at_idx ON public.screener_heartbeats USING
 
 
 --
+-- Name: screener_l2_canary_one_active_source_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX screener_l2_canary_one_active_source_idx ON public.screener_l2_report_canaries USING btree (source_attempt_id) WHERE (status = ANY (ARRAY['queued'::text, 'leased'::text]));
+
+
+--
+-- Name: screener_l2_canary_queue_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screener_l2_canary_queue_idx ON public.screener_l2_report_canaries USING btree (target_node_id, status, created_at);
+
+
+--
 -- Name: screener_node_bootstrap_grants_node_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8630,6 +9015,20 @@ CREATE INDEX sre_created_idx ON public.screening_review_events USING btree (crea
 
 
 --
+-- Name: srpk_one_active_instance_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX srpk_one_active_instance_idx ON public.screener_replay_process_keys USING btree (node_id, instance_id) WHERE (status = 'active'::text);
+
+
+--
+-- Name: srpn_consumed_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX srpn_consumed_at_idx ON public.screener_replay_process_nonces USING btree (consumed_at);
+
+
+--
 -- Name: submission_image_builds_node_status_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -8704,6 +9103,13 @@ CREATE UNIQUE INDEX svrp_one_active_source_idx ON public.screening_verification_
 --
 
 CREATE UNIQUE INDEX svrr_replay_code_idx ON public.screening_verification_replay_receipts USING btree (replay_id, check_code);
+
+
+--
+-- Name: svrso_replay_check_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX svrso_replay_check_idx ON public.screening_verification_replay_signed_observations USING btree (replay_id, check_code);
 
 
 --
@@ -9148,6 +9554,13 @@ CREATE TRIGGER screening_review_events_immutable BEFORE DELETE OR UPDATE ON publ
 
 
 --
+-- Name: screening_verification_replay_private_receipts screening_verification_replay_private_receipts_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER screening_verification_replay_private_receipts_immutable BEFORE DELETE OR UPDATE ON public.screening_verification_replay_private_receipts FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
 -- Name: v13_group_package_registrations v13_group_package_registrations_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 
@@ -9166,6 +9579,41 @@ CREATE TRIGGER v13_known_benign_control_approvals_immutable BEFORE DELETE OR UPD
 --
 
 CREATE TRIGGER v13_private_generation_groups_immutable BEFORE DELETE OR UPDATE ON public.v13_private_generation_groups FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: v13_replay_group_package_registrations v13_replay_group_package_registrations_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_replay_group_package_registrations_immutable BEFORE DELETE OR UPDATE ON public.v13_replay_group_package_registrations FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: v13_replay_private_generation_groups v13_replay_private_generation_groups_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_replay_private_generation_groups_immutable BEFORE DELETE OR UPDATE ON public.v13_replay_private_generation_groups FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: v13_scorer_cohort_pins v13_scorer_pin_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_scorer_pin_immutable BEFORE DELETE OR UPDATE ON public.v13_scorer_cohort_pins FOR EACH ROW EXECUTE FUNCTION public.reject_v13_scorer_pin_mutation();
+
+
+--
+-- Name: v13_scorer_cohort_rotations v13_scorer_rotation_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_scorer_rotation_immutable BEFORE DELETE OR UPDATE ON public.v13_scorer_cohort_rotations FOR EACH ROW EXECUTE FUNCTION public.reject_v13_scorer_pin_mutation();
+
+
+--
+-- Name: validator_tickets v13_ticket_cohort_gate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER v13_ticket_cohort_gate BEFORE INSERT OR UPDATE ON public.validator_tickets FOR EACH ROW EXECUTE FUNCTION public.enforce_v13_ticket_cohort();
 
 
 --
@@ -9901,6 +10349,46 @@ ALTER TABLE ONLY public.screener_fanout_shadow_reviews
 
 
 --
+-- Name: screener_l2_report_canaries fk_screener_l2_report_canaries_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT fk_screener_l2_report_canaries_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: screener_l2_report_canaries fk_screener_l2_report_canaries_source_attempt_id_screen_d13e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT fk_screener_l2_report_canaries_source_attempt_id_screen_d13e FOREIGN KEY (source_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: screener_l2_report_canaries fk_screener_l2_report_canaries_target_node_id_screener_nodes; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_l2_report_canaries
+    ADD CONSTRAINT fk_screener_l2_report_canaries_target_node_id_screener_nodes FOREIGN KEY (target_node_id) REFERENCES public.screener_nodes(node_id);
+
+
+--
+-- Name: screener_replay_process_keys fk_screener_replay_process_keys_node_id_screener_nodes; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_replay_process_keys
+    ADD CONSTRAINT fk_screener_replay_process_keys_node_id_screener_nodes FOREIGN KEY (node_id) REFERENCES public.screener_nodes(node_id);
+
+
+--
+-- Name: screener_replay_process_nonces fk_screener_replay_process_nonces_key_sha256_screener_r_4e03; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_replay_process_nonces
+    ADD CONSTRAINT fk_screener_replay_process_nonces_key_sha256_screener_r_4e03 FOREIGN KEY (key_sha256) REFERENCES public.screener_replay_process_keys(key_sha256);
+
+
+--
 -- Name: screening_private_package_registrations fk_screening_private_package_registrations_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9989,11 +10477,35 @@ ALTER TABLE ONLY public.screening_verification_receipts
 
 
 --
+-- Name: screening_verification_replay_private_receipts fk_screening_verification_replay_private_receipts_group_8a20; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_private_receipts
+    ADD CONSTRAINT fk_screening_verification_replay_private_receipts_group_8a20 FOREIGN KEY (group_id) REFERENCES public.v13_replay_private_generation_groups(group_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: screening_verification_replay_private_receipts fk_screening_verification_replay_private_receipts_repla_8af3; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_private_receipts
+    ADD CONSTRAINT fk_screening_verification_replay_private_receipts_repla_8af3 FOREIGN KEY (replay_id) REFERENCES public.screening_verification_replays(replay_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: screening_verification_replay_receipts fk_screening_verification_replay_receipts_replay_id_scr_4090; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.screening_verification_replay_receipts
     ADD CONSTRAINT fk_screening_verification_replay_receipts_replay_id_scr_4090 FOREIGN KEY (replay_id) REFERENCES public.screening_verification_replays(replay_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_verification_replay_signed_observations fk_screening_verification_replay_signed_observations_re_955e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replay_signed_observations
+    ADD CONSTRAINT fk_screening_verification_replay_signed_observations_re_955e FOREIGN KEY (replay_id) REFERENCES public.screening_verification_replays(replay_id) ON DELETE CASCADE;
 
 
 --
@@ -10090,6 +10602,62 @@ ALTER TABLE ONLY public.v13_private_generation_groups
 
 ALTER TABLE ONLY public.v13_private_generation_groups
     ADD CONSTRAINT fk_v13_private_generation_groups_target_attempt_id_scre_ac0a FOREIGN KEY (target_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_group_package_registrations fk_v13_replay_group_package_registrations_group_id_v13__6b73; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_group_package_registrations
+    ADD CONSTRAINT fk_v13_replay_group_package_registrations_group_id_v13__6b73 FOREIGN KEY (group_id) REFERENCES public.v13_replay_private_generation_groups(group_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_approval_id_v13_484e; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_approval_id_v13_484e FOREIGN KEY (approval_id) REFERENCES public.v13_known_benign_control_approvals(approval_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_control_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_control_agent_id_agents FOREIGN KEY (control_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_control_attempt_b51a; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_control_attempt_b51a FOREIGN KEY (control_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_replay_id_scree_7035; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_replay_id_scree_7035 FOREIGN KEY (replay_id) REFERENCES public.screening_verification_replays(replay_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_target_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_target_agent_id_agents FOREIGN KEY (target_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: v13_replay_private_generation_groups fk_v13_replay_private_generation_groups_target_attempt__08f4; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.v13_replay_private_generation_groups
+    ADD CONSTRAINT fk_v13_replay_private_generation_groups_target_attempt__08f4 FOREIGN KEY (target_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
 
 
 --
@@ -10410,6 +10978,14 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 ALTER TABLE ONLY public.submission_source_reviews
     ADD CONSTRAINT submission_source_reviews_node_id_fkey FOREIGN KEY (node_id) REFERENCES public.screener_nodes(node_id) ON DELETE SET NULL;
+
+
+--
+-- Name: screening_verification_replays svrp_process_key_fk; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_verification_replays
+    ADD CONSTRAINT svrp_process_key_fk FOREIGN KEY (process_key_sha256) REFERENCES public.screener_replay_process_keys(key_sha256);
 
 
 --

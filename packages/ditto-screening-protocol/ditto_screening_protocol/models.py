@@ -11,6 +11,7 @@ from uuid import UUID
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     model_validator,
@@ -281,6 +282,46 @@ class ScreenerReviewSettingsOverride(BaseModel):
     checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
+class ScoredRuntimeEvidenceLease(BaseModel):
+    """Platform-bound scorer evidence for one exact V13 screening attempt."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    policy_version: Literal[13]
+    bench_version: Literal[13]
+    scorer_source_revision: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+    release_descriptor_digest: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    scorer_image_digest: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    scorer_env_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    injected_keys: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]*$", max_length=128)], ...],
+        BeforeValidator(
+            lambda value: tuple(value) if isinstance(value, list) else value
+        ),
+    ]
+    validator_count: Annotated[int, Field(ge=1, le=1_000)]
+    observed_at: Annotated[int, Field(ge=0)]
+
+    @model_validator(mode="after")
+    def bound_digest(self) -> ScoredRuntimeEvidenceLease:
+        if (
+            not self.injected_keys
+            or tuple(sorted(set(self.injected_keys))) != self.injected_keys
+        ):
+            raise ValueError("scorer runtime keys must be nonempty, sorted, and unique")
+        material = (
+            "scored-runtime-env-v1\n13\n"
+            + self.scorer_source_revision
+            + "\n"
+            + "\n".join(self.injected_keys)
+        )
+        if hashlib.sha256(material.encode()).hexdigest() != self.scorer_env_sha256:
+            raise ValueError("scorer runtime evidence digest mismatch")
+        return self
+
+
 class ScreenerQueueItem(BaseModel):
     """One agent awaiting screening."""
 
@@ -335,6 +376,7 @@ class ScreenerQueueItem(BaseModel):
             ),
         ),
     ] = None
+    scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None
     precheck_reason_code: Annotated[
         str | None,
         Field(
@@ -1090,16 +1132,39 @@ class ScreenReviewAudit(BaseModel):
     reason_code: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
     prompt_revision: Annotated[str, Field(min_length=1, max_length=64)]
     harness_revision: Annotated[str | None, Field(min_length=1, max_length=64)] = None
-    max_steps: Annotated[int, Field(ge=1, le=100)]
-    steps_used: Annotated[int, Field(ge=0, le=100)]
+    # L1 allows 240 steps; ordinary L2 can be configured up to 256.
+    max_steps: Annotated[int, Field(ge=1, le=256)]
+    steps_used: Annotated[int, Field(ge=0, le=256)]
     max_read_bytes: Annotated[int | None, Field(ge=1, le=256 * 1024**2)] = None
     read_bytes_used: Annotated[int | None, Field(ge=0, le=256 * 1024**2)] = None
-    max_input_tokens: Annotated[int | None, Field(ge=1, le=2_000_000)] = None
-    input_tokens_used: Annotated[int | None, Field(ge=0, le=2_000_000)] = None
-    max_output_tokens: Annotated[int | None, Field(ge=1, le=256_000)] = None
-    output_tokens_used: Annotated[int | None, Field(ge=0, le=256_000)] = None
+    # Configured billable-equivalent input ceiling; raw input is reported below.
+    max_input_tokens: Annotated[int | None, Field(ge=1, le=5_000_000)] = None
+    # Aggregate usage can exceed the configured per-trajectory input budget
+    # across L2 reviewer roles; the old 2M wire cap rejected a 2.6M audit.
+    input_tokens_used: Annotated[int | None, Field(ge=0, le=100_000_000)] = None
+    max_output_tokens: Annotated[int | None, Field(ge=1, le=1_000_000)] = None
+    output_tokens_used: Annotated[int | None, Field(ge=0, le=1_000_000)] = None
     max_cost_usd: Annotated[float | None, Field(gt=0, le=100)] = None
     cost_usd_used: Annotated[float | None, Field(ge=0, le=100)] = None
+    # Optional V13 L2 diagnostics contain only fixed labels and counts. Keep
+    # absent fields out of the digest so older signed audits still validate.
+    model_disposition: Literal["inconclusive"] | None = None
+    resolution_basis: Literal["insufficient_static_evidence"] | None = None
+    model_steps_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
+    tool_calls_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
+    budget_stop_reason: (
+        Literal["none", "step", "tool", "aggregate", "token", "cost", "time"] | None
+    ) = None
+    requested_model: Annotated[
+        str | None, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9/._:-]{0,127}$")
+    ] = None
+    response_provider: Annotated[
+        str | None, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
+    ] = None
+    final_stage: Literal["preflight", "analyst", "critic", "adjudicator"] | None = None
+    cause_detail: Literal["lease_unavailable", "review_disabled"] | None = None
+    max_elapsed_ms: Annotated[int | None, Field(ge=1, le=3_600_000)] = None
+    elapsed_ms: Annotated[int | None, Field(ge=0, le=3_600_000)] = None
 
     @model_validator(mode="after")
     def validate_pairs_and_usage(self) -> ScreenReviewAudit:
@@ -1113,11 +1178,31 @@ class ScreenReviewAudit(BaseModel):
                 raise ValueError(f"{label} maximum and usage must be paired")
         if self.steps_used > self.max_steps:
             raise ValueError("review steps used exceed configured maximum")
+        if (self.max_elapsed_ms is None) != (self.elapsed_ms is None):
+            raise ValueError("elapsed maximum and usage must be paired")
         return self
 
     def canonical_digest(self) -> str:
+        diagnostic_fields = {
+            "model_disposition",
+            "resolution_basis",
+            "model_steps_observed",
+            "tool_calls_observed",
+            "budget_stop_reason",
+            "requested_model",
+            "response_provider",
+            "final_stage",
+            "cause_detail",
+            "max_elapsed_ms",
+            "elapsed_ms",
+        }
+        absent_diagnostics = {
+            field for field in diagnostic_fields if getattr(self, field) is None
+        }
         canonical = json.dumps(
-            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            self.model_dump(mode="json", exclude=absent_diagnostics),
+            sort_keys=True,
+            separators=(",", ":"),
         )
         return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -1426,6 +1511,7 @@ class SourceReviewAdjudication(BaseModel):
             # early host refusal must not be described as a completed call.
             model_completed_refusals = {
                 "adjudicator-evidence-incomplete",
+                "adjudicator-operator-requested",
                 "uncited-decision",
                 "cited-unknown-member",
                 "cited-unread-source",

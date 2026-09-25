@@ -9,6 +9,7 @@ import json
 import logging
 import secrets
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -97,6 +98,8 @@ from ditto.api_models.admin_quarantine import (
     AdminValidatorAssignmentList,
     AdminValidatorAssignmentReleaseRequest,
     AdminValidatorAssignmentReleaseResponse,
+    resolution_reason_code,
+    review_event_resolution_reason_code,
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
@@ -137,10 +140,11 @@ from ditto.api_server.source_inspect import (
     TarSourceInspector,
 )
 from ditto.api_server.starter_kit import (
-    align_candidate_paths,
     is_stock_kit_text,
     starter_kit_head_text,
     starter_kit_provenance,
+    strip_wrapping_root,
+    wrapping_root,
 )
 from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
 from ditto.db.models import (
@@ -252,7 +256,14 @@ async def list_screening_review_events(
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminScreeningReviewEventList:
-    """Read immutable snapshots; a missing receipt remains missing, never CLEAR."""
+    """Read immutable snapshots; a missing receipt remains missing, never CLEAR.
+
+    Each event reports two distinct codes: ``screening_reason_code`` is the
+    screening-origin code the screener's verdict carried, and
+    ``resolution_reason_code`` is the operator ruling's own code, non-null only
+    on a manual event. They disagree by design on a manual ruling, because the
+    ruling is a decision *about* the screening lead, not a replacement for it.
+    """
     predicate = (
         ScreeningReviewEvent.agent_id == agent_id if agent_id is not None else None
     )
@@ -273,13 +284,48 @@ async def list_screening_review_events(
     ).all()
     count = int(await session.scalar(count_statement) or 0)
     return AdminScreeningReviewEventList(
-        items=[
-            AdminScreeningReviewEvent.model_validate(row, from_attributes=True)
-            for row in rows
-        ],
+        items=[_review_event(row) for row in rows],
         count=count,
         limit=limit,
         offset=offset,
+    )
+
+
+def _review_event(row: ScreeningReviewEvent) -> AdminScreeningReviewEvent:
+    """Project one immutable ledger row onto the wire.
+
+    The ledger stores exactly one code per event and is append-only, so it is
+    never restated here: ``screening_reason_code`` passes the stored value
+    through verbatim, which on a manual event is the screening-origin code of
+    the quarantine the operator ruled on. The operator's own basis is derived
+    from ``effective_decision`` at read time and is ``None`` for automated
+    events — an automated rejection is the screener's verdict arriving over the
+    signed screening path, never an operator ruling. Deriving it keeps every
+    row already in the ledger correct without rewriting an append-only table.
+    """
+    return AdminScreeningReviewEvent(
+        event_id=row.event_id,
+        agent_id=row.agent_id,
+        attempt_id=row.attempt_id,
+        quarantine_id=row.quarantine_id,
+        resolution_id=row.resolution_id,
+        previous_event_id=row.previous_event_id,
+        event_kind=row.event_kind,  # type: ignore[arg-type]
+        artifact_sha256=row.artifact_sha256,
+        policy_version=row.policy_version,
+        actor=row.actor,
+        reviewer_model=row.reviewer_model,
+        outcome=row.outcome,
+        effective_decision=row.effective_decision,
+        screening_reason_code=row.reason_code,
+        resolution_reason_code=review_event_resolution_reason_code(
+            row.event_kind, row.effective_decision
+        ),
+        reason=row.reason,
+        prior_agent_status=row.prior_agent_status,
+        next_agent_status=row.next_agent_status,
+        evidence=row.evidence,
+        created_at=row.created_at,
     )
 
 
@@ -357,7 +403,7 @@ def _item(
         policy_version=row.policy_version,
         manifest_digest=row.manifest_digest,
         finding_digest=row.finding_digest,
-        reason_code=row.reason_code,
+        screening_reason_code=row.reason_code,
         review_audit_digest=(
             row.review_audit_digest if review_audit is not None else None
         ),
@@ -375,12 +421,14 @@ def _item(
         resolved_by=row.resolved_by,
         resolution=row.resolution,  # type: ignore[arg-type]
         resolution_reason=row.resolution_reason,
+        resolution_reason_code=resolution_reason_code(row.resolution),
         resolution_history=[
             AdminQuarantineResolutionEvent(
                 resolution=event.resolution,  # type: ignore[arg-type]
                 reason=event.reason,
                 actor=event.actor,
                 created_at=event.created_at,
+                resolution_reason_code=resolution_reason_code(event.resolution),
             )
             for event in history or []
         ],
@@ -1069,6 +1117,9 @@ async def execute_quarantine_batch(
                 now = datetime.now(UTC)
                 agent.status = target
                 agent.screening_reason = decision.reason
+                agent.screening_reason_code = resolution_reason_code(
+                    decision.resolution
+                )
                 await _apply_dataset(session, agent, new_dataset)
                 quarantine.status = "resolved"
                 quarantine.resolved_at = now
@@ -1257,10 +1308,11 @@ async def _build_quarantine_context(
             quarantine_id=row.quarantine_id,
             agent_id=row.agent_id,
             agent_name=other.name,
-            reason_code=row.reason_code,
+            screening_reason_code=row.reason_code,
             status=row.status,  # type: ignore[arg-type]
             resolution=row.resolution,  # type: ignore[arg-type]
             resolution_reason=row.resolution_reason,
+            resolution_reason_code=resolution_reason_code(row.resolution),
             created_at=row.created_at,
             resolved_at=row.resolved_at,
         )
@@ -1524,6 +1576,10 @@ async def resolve_quarantine(
         }[payload.resolution]
         agent.status = target
         agent.screening_reason = payload.reason
+        # The miner-facing pair must agree: ``screening_reason`` is the
+        # operator's prose for this outcome, so its code is the operator's
+        # ruling, not the screening-origin code the hold was opened under.
+        agent.screening_reason_code = resolution_reason_code(payload.resolution)
         await _apply_dataset(session, agent, new_dataset)
         quarantine.status = "resolved"
         quarantine.resolved_at = datetime.now(UTC)
@@ -1647,10 +1703,21 @@ async def resolve_screening_dispute(
     existing = await session.get(ScreeningDispute, dispute_id)
     existing_kind = existing.kind if existing is not None else None
     existing_quarantine_id = existing.quarantine_id if existing is not None else None
+    existing_agent_status = (
+        await session.scalar(
+            select(Agent.status).where(Agent.agent_id == existing.agent_id)
+        )
+        if existing is not None
+        else None
+    )
     await session.rollback()
     if existing is None:
         raise HTTPException(status_code=404, detail="dispute not found")
-    if payload.resolution == "release" and existing_kind == "screening":
+    if (
+        payload.resolution == "release"
+        and existing_kind == "screening"
+        and existing_agent_status == AgentStatus.REJECTED
+    ):
         if existing_quarantine_id is None:
             raise HTTPException(status_code=404, detail="dispute not found")
         new_dataset = await _prepare_release_dataset(
@@ -1681,7 +1748,6 @@ async def resolve_screening_dispute(
             raise HTTPException(status_code=409, detail="dispute is already resolved")
         if dispute.kind == "screening" and (
             quarantine is None
-            or agent.status != AgentStatus.REJECTED
             or quarantine.status != "resolved"
             or quarantine.resolution != "reject"
         ):
@@ -1689,17 +1755,62 @@ async def resolve_screening_dispute(
                 status_code=409,
                 detail="the disputed rejection is no longer current",
             )
+        already_restored = False
+        if dispute.kind == "screening" and agent.status != AgentStatus.REJECTED:
+            # A later, exact-artifact pass can restore the submission while its
+            # earlier rejection appeal remains pending. Record the appeal's
+            # release verdict without changing that scored submission or the
+            # original quarantine history.
+            latest_attempt = await session.scalar(
+                select(ScreeningAttempt)
+                .where(ScreeningAttempt.agent_id == agent.agent_id)
+                .order_by(
+                    ScreeningAttempt.started_at.desc(),
+                    ScreeningAttempt.attempt_id.desc(),
+                )
+                .limit(1)
+            )
+            already_restored = (
+                payload.resolution == "release"
+                and agent.status == AgentStatus.SCORED
+                and latest_attempt is not None
+                and latest_attempt.status == "passed"
+                and latest_attempt.finished_at is not None
+                and quarantine is not None
+                and quarantine.resolved_at is not None
+                and latest_attempt.finished_at > quarantine.resolved_at
+                and latest_attempt.artifact_sha256 is not None
+                and latest_attempt.artifact_sha256.lower() == agent.sha256.lower()
+            )
+            if not already_restored:
+                raise HTTPException(
+                    status_code=409,
+                    detail="the disputed rejection is no longer current",
+                )
+        if (
+            dispute.kind == "screening"
+            and agent.status == AgentStatus.REJECTED
+            and existing_agent_status != AgentStatus.REJECTED
+        ):
+            raise HTTPException(
+                status_code=409, detail="submission changed during resolution"
+            )
 
         now = datetime.now(UTC)
         # A gate-notes dispute appeals shadow evidence on a scored submission:
         # either resolution records the operator's verdict on the cited notes
         # and NEVER releases, re-evaluates or re-scores the agent. Only a
         # screening release moves the agent.
-        if payload.resolution == "release" and dispute.kind == "screening":
+        if (
+            payload.resolution == "release"
+            and dispute.kind == "screening"
+            and not already_restored
+        ):
             assert quarantine is not None
             prior_agent_status = agent.status
             agent.status = AgentStatus.EVALUATING
             agent.screening_reason = payload.reason
+            agent.screening_reason_code = resolution_reason_code("release")
             await _apply_dataset(session, agent, new_dataset)
             quarantine.resolved_at = now
             quarantine.resolved_by = x_admin_actor
@@ -2506,9 +2617,39 @@ async def get_screening_failure_diagnostic(
         reason_code=attempt.reason_code,
         private_failure_detail=attempt.private_failure_detail,
         private_failure_log_tail=attempt.private_failure_log_tail,
+        l2_review_diagnostic=await _l2_review_diagnostic(session, agent_id, attempt_id),
         court_diagnostic=await _court_diagnostic(session, attempt_id),
         court_completion_receipt=await _court_completion_receipt(session, attempt_id),
     )
+
+
+async def _l2_review_diagnostic(
+    session: AsyncSession, agent_id: UUID, attempt_id: UUID
+) -> ScreenReviewAudit | None:
+    """Return only an exact-attempt, digest-verified L2 audit."""
+    quarantine = await session.scalar(
+        select(ScreeningQuarantine).where(
+            ScreeningQuarantine.attempt_id == attempt_id,
+            ScreeningQuarantine.agent_id == agent_id,
+        )
+    )
+    if (
+        quarantine is None
+        or not isinstance(quarantine.review_audit, dict)
+        or quarantine.review_audit_digest is None
+    ):
+        return None
+    try:
+        audit = ScreenReviewAudit.model_validate(quarantine.review_audit)
+    except ValidationError:
+        logger.warning("screening L2 diagnostic rejected attempt_id=%s", attempt_id)
+        return None
+    if (
+        audit.stage != "l2"
+        or audit.canonical_digest() != quarantine.review_audit_digest
+    ):
+        return None
+    return audit
 
 
 async def _court_diagnostic(
@@ -2789,6 +2930,12 @@ async def rescreen_rejected_submission(
             raise HTTPException(status_code=409, detail="screening attempt is missing")
         agent.status = AgentStatus.SCREENING_FAILED
         agent.screening_reason = "Operator requested a screening retry"
+        # The submission is going back to the screener, so no verdict describes
+        # it right now. Leaving the previous attempt's code in place would pair
+        # this operator prose with a screening code the retry has superseded --
+        # the conflation #2260 is about. The code is repopulated when the new
+        # attempt concludes, and the attempt row keeps the old lead verbatim.
+        agent.screening_reason_code = None
         await _authorize_screening_retry(
             session,
             agent=agent,
@@ -4555,14 +4702,43 @@ async def search_screening_source(
     )
 
 
+@dataclass(frozen=True)
+class _BaselinePair:
+    agent: Agent
+    inspector: TarSourceInspector
+    candidate: dict[str, str]
+    baseline: dict[str, str]
+    path_aligned: bool
+    # Aligned path -> inspector path for every readable text file the bounded
+    # snapshot skipped. Those files were not compared; they are reported as
+    # omitted, never diffed as if the submission did not have them.
+    omitted: dict[str, str]
+
+
 async def _baseline_pair(
     agent_id: UUID, session: AsyncSession, storage: S3StorageClient
-) -> tuple[Agent, dict[str, str], dict[str, str], bool]:
+) -> _BaselinePair:
     """Load one submission's text map aligned against the starter-kit baseline."""
     agent, inspector = await _load_inspector(agent_id, session, storage)
-    raw_text = await asyncio.to_thread(inspector.read_all_text)
-    candidate = await asyncio.to_thread(align_candidate_paths, raw_text)
-    return agent, candidate, starter_kit_head_text(), candidate is not raw_text
+    snapshot = await asyncio.to_thread(inspector.read_text_snapshot)
+    # Align on EVERY readable path, skipped ones included, so a skipped file is
+    # named by the same path its loaded siblings are.
+    root = await asyncio.to_thread(
+        wrapping_root, [*snapshot.texts, *snapshot.omitted_paths]
+    )
+    return _BaselinePair(
+        agent=agent,
+        inspector=inspector,
+        candidate={
+            strip_wrapping_root(path, root): text
+            for path, text in snapshot.texts.items()
+        },
+        baseline=starter_kit_head_text(),
+        path_aligned=root is not None,
+        omitted={
+            strip_wrapping_root(path, root): path for path in snapshot.omitted_paths
+        },
+    )
 
 
 @router.get(
@@ -4584,34 +4760,42 @@ async def get_screening_baseline_diff(
     marks stock kit code — including files that match an older kit revision
     rather than the tip — so the operator can go straight to the custom surface.
 
+    Totals cover every compared file. Readable files the bounded source read
+    skipped are listed in ``omitted_paths`` rather than diffed; when any exist,
+    ``custom_added_lines_complete`` is false and the total is a lower bound.
+
     Unified-diff bodies come from the per-file endpoint.
     """
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
-    agent, candidate, baseline, aligned = await _baseline_pair(
-        agent_id, session, storage
-    )
+    pair = await _baseline_pair(agent_id, session, storage)
     manifest = await asyncio.to_thread(
-        build_baseline_diff_manifest, candidate, baseline, is_stock_kit_text
+        build_baseline_diff_manifest,
+        pair.candidate,
+        pair.baseline,
+        is_stock_kit_text,
+        omitted=list(pair.omitted),
     )
     provenance = starter_kit_provenance()
     logger.info(
-        "admin_actor=%s viewed baseline diff agent_id=%s custom_lines=%s revision=%s",
+        "admin_actor=%s viewed baseline diff agent_id=%s custom_lines=%s "
+        "omitted_files=%s revision=%s",
         x_admin_actor,
         agent_id,
         manifest["custom_added_lines"],
+        manifest["omitted_file_count"],
         provenance["revision"],
     )
     return AdminBaselineDiffManifest(
         agent_id=agent_id,
-        artifact_sha256=agent.sha256,
+        artifact_sha256=pair.agent.sha256,
         baseline=AdminStarterKitProvenance(
             source=provenance["source"],
             revision=provenance["revision"],
             commit_set_sha256=provenance["commit_set_sha256"],
             commit_count=int(provenance["commit_count"]),
         ),
-        path_aligned=aligned,
+        path_aligned=pair.path_aligned,
         **manifest,  # type: ignore[arg-type]
     )
 
@@ -4632,15 +4816,26 @@ async def read_screening_baseline_diff_file(
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
     normalized = path.removeprefix("./")
-    _agent, candidate, baseline, _aligned = await _baseline_pair(
-        agent_id, session, storage
-    )
+    pair = await _baseline_pair(agent_id, session, storage)
+    candidate = pair.candidate
+    skipped_source = pair.omitted.get(normalized)
+    if skipped_source is not None:
+        # The combined snapshot budget skipped this file; one file on its own is
+        # within the per-file text bound, so read it rather than diff it as if
+        # the submission did not contain it.
+        try:
+            skipped_text = await asyncio.to_thread(
+                pair.inspector.read_full_text, skipped_source
+            )
+        except SourceInspectError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        candidate = {**candidate, normalized: skipped_text}
     try:
         detail = await asyncio.to_thread(
             unified_diff_for_file,
             normalized,
             candidate,
-            baseline,
+            pair.baseline,
             pair_renames=False,
         )
     except KeyError as error:

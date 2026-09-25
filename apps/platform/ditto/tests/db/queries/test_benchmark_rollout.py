@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -22,6 +23,7 @@ from ditto.api_models.benchmark_contract import (
 )
 from ditto.api_models.public import PublicBenchRolloutResponse
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.benchmark_rollout import (
     ensure_rolling_qualification,
@@ -48,6 +50,7 @@ from ditto.api_server.inference_routing import (
     aggregate_profile_revision,
     benchmark_model,
 )
+from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
@@ -59,8 +62,10 @@ from ditto.db.models import (
     InferenceRoutingPolicy,
     OwnerAttestation,
     Score,
+    V13ScorerCohortPin,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
+    ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import (
@@ -99,6 +104,7 @@ from ditto.db.queries.benchmark_rollout import (
     rollout_state,
     select_active_bench_version,
     supersede_open_rollout,
+    verified_scorer_for_version,
 )
 from ditto.db.queries.queue_policy_settings import (
     insert_queue_policy_settings_revision,
@@ -2871,6 +2877,186 @@ def _heartbeat(
         signature="ab" * 64,
         capabilities=capabilities,
         stack=stack,
+    )
+
+
+async def test_scored_runtime_lease_requires_same_signed_fleet_packet(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    revision = "a" * 40
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    material = "scored-runtime-env-v1\n13\n" + revision + "\n" + "\n".join(keys)
+    digest = hashlib.sha256(material.encode()).hexdigest()
+    attempt_id = uuid4()
+    artifact_sha256 = "f" * 64
+
+    def managed(hotkey: str, packet_digest: str = digest) -> ValidatorHeartbeat:
+        row = _heartbeat(hotkey, now, versions=[7, 13], protocol_version=18)
+        row.benchmark_capacity = {
+            "configured_slots": 1,
+            "healthy_slots": ["slot-0"],
+            "admission": "accepting",
+            "active": [],
+        }
+        assert row.stack is not None and row.capabilities is not None
+        row.stack["mode"] = "managed"
+        row.stack["release_descriptor_digest"] = "sha256:" + "d" * 64
+        for component in row.stack["components"].values():
+            component["provenance"] = "signed_descriptor"
+            component["image_digest"] = "sha256:" + "e" * 64
+        row.capabilities["scorer_benchmarks"]["scored_runtime_env"] = {
+            "bench_version": 13,
+            "scope": "scorer-injected-env-only",
+            "source_revision": revision,
+            "injected_keys": keys,
+            "sha256": packet_digest,
+        }
+        return row
+
+    first = managed("first")
+    second = managed("second")
+    third = managed("third")
+    assert verified_scorer_for_version(first, version=13) is not None
+    assert heartbeat_supports_version(first, now=now, version=13)
+    session.add_all((first, second, third))
+    session.add(
+        ValidatorSlotSettingsRevision(
+            parent_revision=0,
+            scope="*",
+            settings=ValidatorSlotSettings().model_dump(mode="json"),
+            checksum="f" * 64,
+            reason="test routable settings",
+            actor="test",
+        )
+    )
+    await session.flush()
+    # No signed L2 lease exists until the three exact scorer identities have
+    # been operator-pinned, regardless of any number of capable heartbeats.
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
+    )
+    session.add(
+        V13ScorerCohortPin(
+            bench_version=13,
+            hotkeys=["first", "second", "third"],
+            packet={
+                "source_revision": revision,
+                "release_descriptor_digest": "sha256:" + "d" * 64,
+                "scorer_image_digest": "sha256:" + "e" * 64,
+                "scorer_env_sha256": digest,
+                "injected_keys": keys,
+            },
+            slot_settings_revision=1,
+            slot_settings_checksum="f" * 64,
+            reason="test signed cohort",
+            actor="test",
+        )
+    )
+    await session.flush()
+    lease = await scored_runtime_evidence_for_lease(
+        session,
+        attempt_id=attempt_id,
+        artifact_sha256=artifact_sha256,
+        policy_version=13,
+        bench_version=13,
+        now=now,
+    )
+    assert lease is not None
+    assert lease.attempt_id == attempt_id
+    assert lease.artifact_sha256 == artifact_sha256
+    assert lease.validator_count == 3
+    assert lease.scorer_env_sha256 == digest
+    assert lease.release_descriptor_digest == "sha256:" + "d" * 64
+    assert lease.scorer_image_digest == "sha256:" + "e" * 64
+    external = _heartbeat("external", now, versions=[7, 13], protocol_version=18)
+    session.add(external)
+    await session.flush()
+    assert heartbeat_supports_version(external, now=now, version=13)
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        == lease
+    )
+
+    first_capabilities = first.capabilities
+    second_capabilities = second.capabilities
+    second_stack = second.stack
+    assert first_capabilities is not None
+    assert second_capabilities is not None
+    assert second_stack is not None
+    second_capabilities["scorer_benchmarks"]["scored_runtime_env"] = None
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
+    )
+    second_capabilities["scorer_benchmarks"]["scored_runtime_env"] = first_capabilities[
+        "scorer_benchmarks"
+    ]["scored_runtime_env"]
+    second_stack["components"]["dittobench_api"]["image_digest"] = "sha256:" + "c" * 64
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
+    )
+
+    second_stack["components"]["dittobench_api"]["image_digest"] = "sha256:" + "e" * 64
+    second_stack["mode"] = "source"
+    second_stack["release_descriptor_digest"] = None
+    for component in second_stack["components"].values():
+        component["provenance"] = "committed_pin"
+        component["image_digest"] = None
+    assert heartbeat_supports_version(second, now=now, version=13)
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
+    )
+    first.seen_at = now - timedelta(minutes=6)
+    second.seen_at = now - timedelta(minutes=6)
+    assert (
+        await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=13,
+            bench_version=13,
+            now=now,
+        )
+        is None
     )
 
 

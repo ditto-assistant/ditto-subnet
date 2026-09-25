@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
@@ -45,11 +46,13 @@ from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.source_diff import (
     build_source_diff_manifest,
     unified_diff_for_file,
+    without_omitted,
 )
 from ditto.api_server.source_inspect import (
     MAX_TARBALL_BYTES,
     SourceInspectError,
     TarSourceInspector,
+    TextSnapshot,
 )
 from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
 from ditto.db.models import (
@@ -1182,13 +1185,40 @@ async def _open_inspector(agent: Agent, storage: S3StorageClient) -> TarSourceIn
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+@dataclass(frozen=True)
+class _DiffPair:
+    candidate: Agent
+    reference: Agent
+    candidate_inspector: TarSourceInspector
+    reference_inspector: TarSourceInspector
+    candidate_snapshot: TextSnapshot
+    reference_snapshot: TextSnapshot
+
+    @property
+    def omitted(self) -> set[str]:
+        """Paths the bounded read skipped in EITHER artifact: not compared."""
+        return {
+            *self.candidate_snapshot.omitted_paths,
+            *self.reference_snapshot.omitted_paths,
+        }
+
+
+async def _read_skipped(inspector: TarSourceInspector, path: str) -> str:
+    """Read one file the combined snapshot budget skipped, on its own."""
+    try:
+        return await asyncio.to_thread(inspector.read_full_text, path)
+    except SourceInspectError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
 async def _diff_pair(
     agent_id: UUID, session: AsyncSession, storage: S3StorageClient
-) -> tuple[Agent, Agent, dict[str, str], dict[str, str]]:
-    """Load the held agent, its matched reference, and both text-file maps.
+) -> _DiffPair:
+    """Load the held agent, its matched reference, and both text snapshots.
 
     Both tarballs are fetched, digest-verified, and read in one pass each; the
-    per-file text maps feed either the manifest or a single-file unified diff.
+    per-file text maps feed either the manifest or a single-file unified diff,
+    and each snapshot names the files its bounded read skipped.
     """
     row = await _get_review(session, agent_id)
     if row is None:
@@ -1205,11 +1235,18 @@ async def _diff_pair(
         )
     candidate_inspector = await _open_inspector(candidate_agent, storage)
     reference_inspector = await _open_inspector(reference_agent, storage)
-    candidate_text, reference_text = await asyncio.gather(
-        asyncio.to_thread(candidate_inspector.read_all_text),
-        asyncio.to_thread(reference_inspector.read_all_text),
+    candidate_snapshot, reference_snapshot = await asyncio.gather(
+        asyncio.to_thread(candidate_inspector.read_text_snapshot),
+        asyncio.to_thread(reference_inspector.read_text_snapshot),
     )
-    return candidate_agent, reference_agent, candidate_text, reference_text
+    return _DiffPair(
+        candidate=candidate_agent,
+        reference=reference_agent,
+        candidate_inspector=candidate_inspector,
+        reference_inspector=reference_inspector,
+        candidate_snapshot=candidate_snapshot,
+        reference_snapshot=reference_snapshot,
+    )
 
 
 async def _audit_diff_pair(
@@ -1267,15 +1304,19 @@ async def get_copy_review_source_diff(
     Classifies every path as added / removed / modified / identical / renamed
     with change stats so an operator can see at a glance which files were copied
     verbatim, which were altered, and which were only moved. Unified-diff
-    bodies come from the per-file endpoint.
+    bodies come from the per-file endpoint. Readable files the bounded source
+    read skipped in either artifact are listed in ``omitted_paths``, never
+    classified as added or removed.
     """
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
-    candidate, reference, candidate_text, reference_text = await _diff_pair(
-        agent_id, session, storage
-    )
+    pair = await _diff_pair(agent_id, session, storage)
+    candidate, reference = pair.candidate, pair.reference
     manifest = await asyncio.to_thread(
-        build_source_diff_manifest, candidate_text, reference_text
+        build_source_diff_manifest,
+        pair.candidate_snapshot.texts,
+        pair.reference_snapshot.texts,
+        omitted=sorted(pair.omitted),
     )
     logger.info(
         "admin_actor=%s viewed copy-review source diff agent_id=%s reference_id=%s",
@@ -1320,9 +1361,24 @@ async def get_copy_review_source_diff_file(
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
     normalized = path.removeprefix("./")
-    candidate, reference, candidate_text, reference_text = await _diff_pair(
-        agent_id, session, storage
+    pair = await _diff_pair(agent_id, session, storage)
+    candidate, reference = pair.candidate, pair.reference
+    # Match the manifest: files skipped on either side are out of the pairing.
+    candidate_text, reference_text, _ = without_omitted(
+        pair.candidate_snapshot.texts, pair.reference_snapshot.texts, pair.omitted
     )
+    if normalized in pair.omitted:
+        # The requested file itself was skipped by the combined budget. Read it
+        # on its own from each side that has it, so the diff compares the real
+        # bodies instead of reporting a one-sided add or delete.
+        for inspector, snapshot, texts in (
+            (pair.candidate_inspector, pair.candidate_snapshot, candidate_text),
+            (pair.reference_inspector, pair.reference_snapshot, reference_text),
+        ):
+            if normalized in snapshot.texts:
+                texts[normalized] = snapshot.texts[normalized]
+            elif normalized in snapshot.omitted_paths:
+                texts[normalized] = await _read_skipped(inspector, normalized)
     try:
         detail = await asyncio.to_thread(
             unified_diff_for_file, normalized, candidate_text, reference_text

@@ -817,6 +817,7 @@ describe('screening submission admin service', () => {
       ),
     ).resolves.toEqual({
       ...diagnostic,
+      l2_review_diagnostic: null,
       court_diagnostic: null,
       court_completion_receipt: null,
     })
@@ -940,6 +941,7 @@ describe('screening submission admin service', () => {
       ),
     ).resolves.toEqual({
       ...diagnostic,
+      l2_review_diagnostic: null,
       court_diagnostic: court,
       court_completion_receipt: null,
     })
@@ -988,6 +990,7 @@ describe('screening submission admin service', () => {
       fetchScreeningFailureDiagnostic({ agentId, attemptId }, 'reviewer@example.com'),
     ).resolves.toEqual({
       ...response,
+      l2_review_diagnostic: null,
       court_completion_receipt: receipt,
     })
   })
@@ -2835,6 +2838,36 @@ describe('copy review admin service', () => {
           request_id: derivedRetryId,
           expected_snapshot: snapshot,
           reason: 'Verified validator OOM',
+          acknowledge_provider_outage: false,
+        }),
+      }),
+    )
+
+    // An acknowledged retry into a still-open provider outage says so on the
+    // wire; the platform refuses it otherwise (ditto-subnet#2087).
+    fetchMock.mockResolvedValueOnce(Response.json({ recovery, idempotent: false }))
+    await retryValidation(
+      {
+        agentId,
+        expectedSnapshot: snapshot,
+        reason: 'Provider lane verified healthy',
+        acknowledgeProviderOutage: true,
+      },
+      'operator@example.com',
+    )
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/retry`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          request_id: await deriveRequestId('validation-retry', [
+            agentId,
+            'operator@example.com',
+            'Provider lane verified healthy',
+            snapshot,
+          ]),
+          expected_snapshot: snapshot,
+          reason: 'Provider lane verified healthy',
+          acknowledge_provider_outage: true,
         }),
       }),
     )

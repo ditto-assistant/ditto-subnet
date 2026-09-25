@@ -618,7 +618,7 @@ being measured:
 | canary | a lexical/exact-match index. Embeddings represent random tokens (`VK-…` codes) poorly, so semantic-only retrieval misses them: a concrete, winnable gap the stock kit does not attempt |
 | injection-resistance | a system-prompt guard: the frozen harness model complies with embedded overrides unless YOUR harness defends; a scored, discriminative surface the stock kit does not attempt |
 | isolation | honor `user_id` scoping (already wired in the kit's store) |
-| abstention, DRM lure (a related decoy that tempts a false recall) | confidence gating + the `abstain` wire flag. Decline when retrieval finds nothing (or finds only someone ELSE's value) instead of fabricating |
+| abstention, DRM lure (a related decoy that tempts a false recall) | model-authored grounded decline in `final_text`; use `abstain` only when the model authors that field. Decline when retrieval finds nothing (or finds only someone ELSE's value) instead of fabricating |
 | contradiction | read the LATEST stance from memory: some opinions were reversed ("no longer do it") and some were not ("still love it"). Both answers occur under the same question surface, so the signal must come from retrieval |
 
 The two rows that most separate a naive submission from a competitive one are

@@ -18,7 +18,10 @@ from ditto.api_models.system_health import (
     HostSpecs,
     SystemMetrics,
 )
-from ditto_screening_protocol import SourceReviewObservationPayload
+from ditto_screening_protocol import (
+    ScoredRuntimeEvidenceLease,
+    SourceReviewObservationPayload,
+)
 
 ScreenerProvider = Literal["gcp", "targon", "hetzner", "home", "test"]
 ScreenerNodeStatus = Literal["active", "draining", "quarantined", "revoked"]
@@ -589,6 +592,7 @@ class SubmissionSourceReviewSourceResponse(BaseModel):
     source_url_b64: str
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     policy_version: Annotated[int, Field(ge=1, le=1_000)]
+    scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None
 
 
 class SubmissionSourceReviewCompleteRequest(BaseModel):

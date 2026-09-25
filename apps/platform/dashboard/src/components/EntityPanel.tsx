@@ -574,7 +574,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     }
     if (current.tenant === "agent") {
       const e = current.entry;
-      const stage = activityStage(e.status);
+      const stage = activityStage(e.status, e);
       return {
         title: publicDisplayName(e.name, e.name_handle),
         handle: e.name_handle,
@@ -968,7 +968,7 @@ function MinerSubmissions(props: { submissions: PublicMinerSubmission[] }): JSX.
       <ul class="account-list miner-subs-list">
         <For each={visible()}>
           {(item) => {
-            const stage = () => activityStage(item.status);
+            const stage = () => activityStage(item.status, item);
             return (
               <li class="miner-sub">
                 <span class="miner-sub-main">

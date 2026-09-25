@@ -26,7 +26,8 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
 class _Identified(Protocol):
-    agent_id: UUID
+    @property
+    def agent_id(self) -> UUID: ...
 
 
 _RowT = TypeVar("_RowT", bound=_Identified)

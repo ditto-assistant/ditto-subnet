@@ -67,6 +67,7 @@ from ditto.db.models import (
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
     ScreenerProviderSettingsRevision,
+    ScreenerReplayProcessKey,
     ScreeningAttempt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -90,9 +91,9 @@ AdminDep = Annotated[None, Depends(require_admin)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 _SOURCE_REPOSITORY = "https://github.com/ditto-assistant/ditto-subnet.git"
 _RUNTIME_REGISTRY = "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-runtime"
-# Deliberately unset until the independent replay runner is implemented and
-# released. A heartbeat from today's ordinary screener must not enable replay.
-_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE: tuple[int, int, int] | None = None
+# First published release containing the independent report-only replay runner.
+# Capacity still requires its signed process identity on a fresh node 2 heartbeat.
+_MIN_VERIFICATION_REPLAY_RUNNER_RELEASE: tuple[int, int, int] | None = (0, 309, 0)
 _REPLAY_HEARTBEAT_FRESHNESS = timedelta(minutes=5)
 _STABLE_RELEASE_VERSION = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)$")
 
@@ -169,7 +170,25 @@ async def _replay_workers_ready(
     ]
     if not workers:
         return False
+    key = await session.scalar(
+        select(ScreenerReplayProcessKey).where(
+            ScreenerReplayProcessKey.node_id == node.node_id,
+            ScreenerReplayProcessKey.instance_id == f"{node.node_id}-worker-1",
+            ScreenerReplayProcessKey.status == "active",
+        )
+    )
+    if key is None or len(workers) != 1 or workers[0].instance_id != key.instance_id:
+        return False
     for row in workers:
+        envelope = row.system_metrics
+        verified = (
+            envelope.get("replay_process") if isinstance(envelope, dict) else None
+        )
+        if (
+            not isinstance(verified, dict)
+            or verified.get("key_sha256") != key.key_sha256
+        ):
+            return False
         release = fleet_release_from_heartbeat_envelope(row.system_metrics)
         version = (
             _STABLE_RELEASE_VERSION.fullmatch(release.version)

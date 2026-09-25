@@ -12,9 +12,9 @@ import { pushEntityRoute } from "../../stores/routeStore";
 import { HandleBadge } from "../ui/HandleBadge";
 import { MinerAvatar } from "../ui/MinerAvatar";
 import {
-  isSourceReviewIncomplete,
+  deferredReviewSummary,
   policyScreeningLabel,
-  SOURCE_REVIEW_INCOMPLETE_NOTE,
+  SCREENING_INCOMPLETE_LABEL,
 } from "../pipeline/status";
 import type { FleetReport } from "../../types/fleet";
 import type { CodingShadowScore } from "../../types/leaderboard";
@@ -239,7 +239,7 @@ function PipelineCard(props: {
   const admissionLabel = () => {
     if (props.column !== "admission") return "";
     if (entry().status === "waiting_screening") return "Waiting for admission";
-    if (entry().status === "screening_failed") return "Screening interrupted · retry required";
+    if (entry().status === "screening_failed") return SCREENING_INCOMPLETE_LABEL;
     return screeningLabel() || "Building image & admission";
   };
   const policyLabel = () => (props.column === "admission" ? policyScreeningLabel(entry()) : "");
@@ -469,14 +469,14 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
             }
             const active = Number(props.statusCounts.screening || 0);
             const queued = Number(props.statusCounts.waiting_screening || 0);
-            const interrupted = Number(props.statusCounts.screening_failed || 0);
-            if (active + queued + interrupted <= 0) return "";
+            const incomplete = Number(props.statusCounts.screening_failed || 0);
+            if (active + queued + incomplete <= 0) return "";
             return (
               active +
               " in progress · " +
               queued +
               " queued" +
-              (interrupted > 0 ? " · " + interrupted + " interrupted" : "")
+              (incomplete > 0 ? " · " + incomplete + " incomplete" : "")
             );
           };
           // The count and the item window are reconciled independently. Keep
@@ -600,7 +600,7 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
   );
 }
 
-/** The conditional post-scoring source-integrity branch (weekend drift
+/** The conditional post-scoring deferred source-review branch (weekend drift
  * #623/#635; markup 2833–2838, renderIntegrityReviewBranch 8330–8359). Only
  * leaderboard qualifiers and robust anomaly holds enter it — the aside says
  * so instead of implying every submission passes through review. */
@@ -628,9 +628,9 @@ export function IntegrityReviewBranch(props: {
         </span>
       </summary>
       <p class="pipeline-review-copy">
-        Only leaderboard qualifiers and robust anomaly holds enter this branch. A hold is neutral
-        when the automated review only ran out of budget before finishing; the row says so. Other
-        admitted submissions go directly through validator scoring.
+        Only leaderboard qualifiers and robust anomaly holds enter this branch, and entering it is
+        not a finding. Each row names its trigger and what the automated review concluded; only a
+        raised concern is flagged. Other admitted submissions go directly through validator scoring.
       </p>
       <div class="pipeline-review-items" id="pipeline-review-items">
         <Show
@@ -679,10 +679,12 @@ export function IntegrityReviewBranch(props: {
                     <span class="pipeline-item-priority-detail">
                       {integrityReviewReason(item.entry)}
                     </span>
-                    <Show when={isSourceReviewIncomplete(item.entry)}>
-                      <span class="pipeline-item-priority-detail">
-                        {SOURCE_REVIEW_INCOMPLETE_NOTE}
-                      </span>
+                    <Show when={deferredReviewSummary(item.entry)}>
+                      {(summary) => (
+                        <span class="pipeline-item-priority-detail deferred-review-summary">
+                          {summary()}
+                        </span>
+                      )}
                     </Show>
                   </a>
                 )}

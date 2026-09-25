@@ -332,3 +332,11 @@ platform_ditto_router_lanes: ""
 platform_ditto_router_competition_ack: ""
 # Secret Manager id holding the DittoBench endpoint key used by the relay; empty = not read.
 secret_ditto_router_api_key: ""
+
+# Docker's apt signing key (https://download.docker.com/linux/debian/gpg),
+# pinned so a tampered or substituted key file fails closed instead of becoming
+# an apt trust root. Fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88
+# ("Docker Release (CE deb)"). To rotate, verify the new key's fingerprint out of
+# band, then update every copy; infra/ansible/tests/test_docker_apt_key_pin.py
+# keeps them identical.
+docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"

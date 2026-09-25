@@ -297,12 +297,13 @@ jobs:
       - name: Start MinIO
         if: matrix.object_storage
         run: |
-          # Docker Hub archived minio/minio and now rejects its digest-only pull.
-          # MinIO's official Quay repositories retain these exact manifests.
+          # The archived official Docker Hub and Quay images now reject pulls.
+          # This pinned community image builds the tagged MinIO source; it is
+          # used only by this disposable integration-test service.
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minio \
             -e MINIO_ROOT_PASSWORD=miniominio \
-            quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
+            docker.io/alpine/minio@sha256:cf23643a6cf9ce159c57643ceb88279e431262282428c9e0bf3a7ef1a97e84b4 server /home/minio/data
           for _ in $(seq 1 30); do
             if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
               break
@@ -310,10 +311,7 @@ jobs:
             sleep 2
           done
           curl -sf http://localhost:9000/minio/health/live >/dev/null
-          docker run --rm --network host --entrypoint sh \
-            quay.io/minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727 -c \
-            'mc alias set local http://localhost:9000 minio miniominio && \
-             mc mb --ignore-existing local/ditto-agents'
+          uv run python -c 'from ditto.tests.minioharness import _ensure_bucket; _ensure_bucket("http://localhost:9000")'
 
       - name: pytest
         env:

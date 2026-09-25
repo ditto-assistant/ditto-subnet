@@ -585,6 +585,11 @@ def analyze_reachability(files: Mapping[str, str]) -> dict[str, ReachabilityEvid
     stages, docker_unresolved = _parse_stages(dockerfile)
     relevant, stage_unresolved = _relevant_stage_indexes(stages)
     global_unresolved = docker_unresolved or stage_unresolved
+    # A dynamic command can use files already copied into its stage, but it
+    # cannot reach an otherwise excluded build-context file. Keep that proof
+    # only while every context source is statically known and no bind mount can
+    # expose the context to RUN.
+    context_unresolved = global_unresolved
     copied: set[str] = {"Dockerfile"}
     cargo_contexts: list[tuple[set[str], set[str]]] = []
     states: list[_StageState] = []
@@ -628,11 +633,13 @@ def analyze_reachability(files: Mapping[str, str]) -> dict[str, ReachabilityEvid
                     )
                 ):
                     state.unresolved = True
+                    context_unresolved = True
                     continue
                 if instruction == "ADD":
                     # ADD may unpack local archives or retrieve remote content.
                     # COPY is the only source-to-container mapping we prove.
                     state.unresolved = True
+                    context_unresolved = True
                     continue
                 if from_ref is None:
                     additions, selected, copy_unresolved = _copy_local_sources(
@@ -659,10 +666,19 @@ def analyze_reachability(files: Mapping[str, str]) -> dict[str, ReachabilityEvid
                         )
                 _merge_paths(state.paths, additions)
                 state.unresolved |= unresolved or copy_unresolved
+                context_unresolved |= unresolved or copy_unresolved
                 continue
             if instruction == "RUN":
                 if value.lstrip().startswith("--mount="):
                     state.unresolved = True
+                    mounts = re.findall(r"--mount=([^\s]+)", value)
+                    if not mounts or any(
+                        not re.search(
+                            r"(?:^|,)type=(?:secret|cache|tmpfs|ssh)(?:,|$)", mount
+                        )
+                        for mount in mounts
+                    ):
+                        context_unresolved = True
                     continue
                 if (
                     stage.index in relevant
@@ -730,7 +746,9 @@ def analyze_reachability(files: Mapping[str, str]) -> dict[str, ReachabilityEvid
             )
             if state.unresolved:
                 unresolved_paths.update(
-                    path for path in members if path.endswith(_SOURCE_SUFFIXES)
+                    path
+                    for path in (members if context_unresolved else copied)
+                    if path.endswith(_SOURCE_SUFFIXES)
                 )
     if global_unresolved:
         unresolved_paths.update(members - {"Dockerfile"})

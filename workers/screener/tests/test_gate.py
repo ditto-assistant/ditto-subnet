@@ -289,9 +289,80 @@ async def test_v13_shadow_semantics_require_tool_and_user_specific_memory(
     assert all(marker not in repr(decisions) for marker in memories.values())
 
 
+async def test_v13_incomplete_source_hold_retains_verified_image_without_passing(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    tarball = _valid_tar()
+    gate = _gate_with(make_config(), _ok_run(), tarball=tarball)
+    held = ScreeningDecision(
+        outcome=ScreeningOutcome.QUARANTINE,
+        detail="source review incomplete",
+        manifest_digest="ab" * 32,
+        evidence=(
+            PolicyEvidence(
+                "adjudication", "adjudicated-source-review-escalate", "held"
+            ),
+        ),
+        policy_version=13,
+    )
+    uploads: list[str] = []
+
+    async def evaluate(*_args: Any, **_kwargs: Any) -> ScreeningDecision:
+        return held
+
+    async def run_and_probe(*_args: Any, **_kwargs: Any) -> tuple[Any, Any]:
+        return gate_module._StageResult(True, ""), gate_module._AuditRuntime(
+            harness_base="http://harness:8080",
+            gateway_response_token="secret-a",
+            oracle_answer="secret-b",
+            gateway_state_file="/state/model-called",
+            tool_route="route",
+            tool_key=b"key",
+        )
+
+    async def export_image(
+        image_id: str, *, image_ref: str, deadline: float | None
+    ) -> BuiltImageArtifact:
+        assert deadline is None
+        path = tmp_path / "held-image.tar"
+        path.write_bytes(b"held image")
+        return BuiltImageArtifact(
+            path=str(path),
+            sha256=hashlib.sha256(b"held image").hexdigest(),
+            size_bytes=10,
+            image_id=image_id,
+            image_ref=image_ref,
+        )
+
+    async def publish_held(image: BuiltImageArtifact) -> None:
+        uploads.append(image.sha256)
+
+    gate._policy.evaluate = evaluate  # type: ignore[method-assign]
+    gate._run_and_probe = run_and_probe  # type: ignore[method-assign]
+    gate._export_image = export_image  # type: ignore[method-assign]
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=13,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            policy_version=13,
+            publish_image=lambda _image: asyncio.sleep(0),
+            publish_held_image=publish_held,
+        )
+
+    assert result.outcome == ScreeningOutcome.QUARANTINE
+    assert uploads == [hashlib.sha256(b"held image").hexdigest()]
+    assert not (tmp_path / "held-image.tar").exists()
+
+
+@pytest.mark.parametrize("replay_probes", [False, True])
 async def test_v13_shadow_observation_runs_only_after_policy_decision(
     make_config: Callable[..., ScreenerConfig],
     tmp_path: Path,
+    replay_probes: bool,
 ) -> None:
     tarball = _valid_tar()
     gate = _gate_with(
@@ -316,8 +387,8 @@ async def test_v13_shadow_observation_runs_only_after_policy_decision(
             tool_key=b"key",
         )
 
-    async def observe(*_args: Any, **_kwargs: Any) -> None:
-        events.append("shadow")
+    async def observe(*_args: Any, **kwargs: Any) -> None:
+        events.append(f"shadow:{kwargs['include_runs']}")
 
     async def export_image(
         image_id: str, *, image_ref: str, deadline: float | None
@@ -351,13 +422,14 @@ async def test_v13_shadow_observation_runs_only_after_policy_decision(
             sha256=hashlib.sha256(tarball).hexdigest(),
             download_url=_URL,
             build_only=True,
+            replay_runtime_probes=replay_probes,
             policy_version=13,
             publish_image=publish_image,
             record_runtime_verification=lambda _code, _digest: asyncio.sleep(0),
         )
 
     assert decision.outcome == ScreeningOutcome.PASS
-    assert events == ["policy", "export", "publish", "shadow"]
+    assert events == ["policy", "export", "publish", f"shadow:{replay_probes}"]
 
 
 async def test_v13_shadow_timeout_does_not_change_decision(
@@ -659,6 +731,95 @@ def test_unportable_build_context_owner_is_infrastructure_failure() -> None:
     assert _docker_infrastructure_failure(
         'failed to Lchown "Dockerfile" for UID 197108, GID 197121: '
         "lchownat Dockerfile: invalid argument"
+    )
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        "ERROR: failed to solve: rpc error: code = Unknown desc = no http "
+        "response from session for qmxu3s09iqv12evun9jcoq2we",
+        "ERROR: failed to solve: no active session for "
+        "qmxu3s09iqv12evun9jcoq2we: context deadline exceeded",
+        "ERROR: failed to receive status: rpc error: code = Unavailable "
+        "desc = error reading from server: EOF",
+    ],
+)
+def test_lost_buildkit_session_is_infrastructure_failure(detail: str) -> None:
+    assert _docker_infrastructure_failure(detail)
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101',
+        "ERROR: failed to solve: failed to compute cache key: failed to "
+        'calculate checksum of ref abc::xyz: "/Cargo.lock": not found',
+        "ERROR: failed to solve: dockerfile parse error on line 3: "
+        "unknown instruction: RUNN",
+    ],
+)
+def test_artifact_build_failure_is_not_infrastructure(detail: str) -> None:
+    assert not _docker_infrastructure_failure(detail)
+
+
+def _rustc_failure(source_line: str) -> str:
+    return (
+        "#12 [builder 5/6] RUN cargo build --release --locked\n"
+        "#12 43.02 error[E0308]: mismatched types\n"
+        "#12 43.02    --> src/relay.rs:88:24\n"
+        "#12 43.02     |\n"
+        f"#12 43.02 88  |         {source_line}\n"
+        "#12 43.02     |                       ^^^^ expected `RelayError`\n"
+        "#12 43.05 error: could not compile `dittobench-miner` due to 1 "
+        "previous error\n"
+        '#12 ERROR: process "/bin/sh -c cargo build --release --locked" did '
+        "not complete successfully: exit code: 101\n"
+        "------\n"
+        " > [builder 5/6] RUN cargo build --release --locked:\n"
+        f"43.02 88  |         {source_line}\n"
+        "------\n"
+        "Dockerfile:14\n"
+        "--------------------\n"
+        "  14 | >>> RUN cargo build --release --locked\n"
+        "--------------------\n"
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101'
+    )
+
+
+@pytest.mark.parametrize(
+    "source_line",
+    [
+        '503 => return Err("service unavailable"),',
+        '429 => bail!("too many requests"),',
+        'Err(e) => log::warn!("connection refused: {e}"),',
+    ],
+)
+def test_compiler_quoted_source_is_not_infrastructure(source_line: str) -> None:
+    assert not _docker_infrastructure_failure(_rustc_failure(source_line))
+
+
+def test_dockerfile_excerpt_is_not_infrastructure() -> None:
+    assert not _docker_infrastructure_failure(
+        "Dockerfile:9\n"
+        "--------------------\n"
+        '   9 | >>> RUN ./check.sh || (echo "killed" && exit 1)\n'
+        "--------------------\n"
+        'ERROR: failed to solve: process "/bin/sh -c ./check.sh" did not '
+        "complete successfully: exit code: 1"
+    )
+
+
+def test_dependency_fetch_failure_stays_infrastructure() -> None:
+    assert _docker_infrastructure_failure(
+        "#12 3.21 error: failed to get `serde` as a dependency of package "
+        "`dittobench-miner v0.1.0 (/app)`\n"
+        "#12 3.21 Caused by:\n"
+        "#12 3.21   [6] Could not resolve host: index.crates.io\n"
+        'ERROR: failed to solve: process "/bin/sh -c cargo build --release '
+        '--locked" did not complete successfully: exit code: 101'
     )
 
 
@@ -1079,10 +1240,11 @@ async def test_static_malicious_preflight_quarantines_before_docker(
 ) -> None:
     tarball = _valid_tar(
         **{
+            "Dockerfile": b"FROM scratch\nCOPY src/main.rs /src/main.rs\n",
             "src/main.rs": (
                 b'let endpoint = "/var/run/docker.sock";\n'
                 b"connect_control_socket(endpoint);\n"
-            )
+            ),
         }
     )
     calls: list[list[str]] = []
@@ -1219,7 +1381,7 @@ async def test_static_preflight_v2_enforce_reviews_helper_before_build(
     assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
 
 
-async def test_static_preflight_v2_shadow_preserves_v1_and_journals_delta(
+async def test_static_preflight_v2_shadow_clears_excluded_helper_and_journals_delta(
     make_config: Callable[..., ScreenerConfig], tmp_path: Path
 ) -> None:
     tarball = _valid_tar(
@@ -1249,13 +1411,11 @@ async def test_static_preflight_v2_shadow_preserves_v1_and_journals_delta(
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
-    assert result.outcome == ScreeningOutcome.QUARANTINE
-    assert result.finding is not None
-    assert result.finding["prompt_revision"] == "static-malicious-preflight-v1"
-    assert not any(call[0] in {"build", "run", "exec"} for call in calls)
+    assert result.outcome == ScreeningOutcome.PASS
+    assert any(call[0] == "build" for call in calls)
     record = json.loads(audit_path.read_text())
     assert record["mode"] == "shadow"
-    assert record["legacy_decisive"] is True
+    assert record["legacy_decisive"] is False
     assert record["candidate_decisive"] is False
     assert record["artifact_sha256"] == hashlib.sha256(tarball).hexdigest()
     assert "collector.invalid" not in audit_path.read_text()
@@ -1376,10 +1536,10 @@ async def test_l3_cleared_static_lead_can_continue_to_build(
     assert any(call[0] == "build" for call in calls)
 
 
-async def test_l4_cleared_static_lead_builds_before_it_passes(
+async def test_v13_l4_cleared_static_lead_holds_before_build(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    """A terminal L4 clear admits only after the full image contract passes."""
+    """A source-only L4 clear cannot authorize v13 build or admission."""
     tarball = _valid_tar(
         **{
             "Dockerfile": b"FROM scratch\nCOPY . .\nRUN ./scripts/local-only.sh\n",
@@ -1397,12 +1557,12 @@ async def test_l4_cleared_static_lead_builds_before_it_passes(
     async with gate._client:
         result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
 
-    assert result.outcome == ScreeningOutcome.PASS
+    assert result.outcome == ScreeningOutcome.QUARANTINE
     assert result.adjudication is not None
     assert result.adjudication["decision"] == "clear"
     assert reviewer.resolve_calls == 1
     assert reviewer.l1_calls == 0
-    assert any(call[0] == "build" for call in calls)
+    assert not any(call[0] == "build" for call in calls)
 
 
 async def test_reports_only_coarse_pipeline_stages(
@@ -1824,6 +1984,31 @@ async def test_unloaded_buildx_result_is_retryable_infrastructure(
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "docker-build-infrastructure"
     assert "No such image" in result.detail
+
+
+async def test_lost_buildkit_session_is_retryable_infrastructure(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+
+    async def session_lost(
+        args: list[str], *, stdin: Any = None, **_: Any
+    ) -> tuple[int, str]:
+        if args[0] == "build" and stdin is not None:
+            stdin.read()
+            return 1, (
+                "ERROR: failed to solve: rpc error: code = Unknown desc = no "
+                "http response from session for qmxu3s09iqv12evun9jcoq2we"
+            )
+        return 0, ""
+
+    gate = _gate_with(make_config(), session_lost, tarball=tarball)
+    async with gate._client:
+        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert result.evidence[-1].code == "docker-build-infrastructure"
+    assert "no http response from session" in result.detail
 
 
 async def test_build_uses_daemon_image_id_resolved_from_unique_tag(

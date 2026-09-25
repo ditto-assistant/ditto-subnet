@@ -3,6 +3,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StuckSubmissionFleetPanel } from './StuckSubmissionFleetPanel'
+import type { StuckSubmission } from '../lib/admin.schemas'
 
 const listStuckSubmissions = vi.fn()
 const batchRetryStuckSubmissions = vi.fn()
@@ -27,6 +28,8 @@ const first = {
   blocking_reason: 'manual retry evidence required',
   recommended_action: 'retry' as const,
   dominant_failure_code: null,
+  provider_outage: null,
+  provider_outage_blocks_retry: false,
   earliest_retry_after: null,
   attempts_used: 12,
   exhausted_validator_count: 2,
@@ -58,7 +61,47 @@ const blocked = {
   snapshot: 'ef'.repeat(32),
 }
 
-function response(submissions = [first, second, blocked]) {
+const providerParked = {
+  ...first,
+  agent_id: '9fa5271e-2977-4501-8bd4-c1bc2fa27e82',
+  agent_name: 'provider-parked-agent',
+  score_count: 2,
+  recovery_allowed: false,
+  blocking_reason: 'inference provider outage circuit is still open and parked these slots',
+  recommended_action: null,
+  provider_outage: {
+    provider: 'openrouter',
+    state: 'open' as const,
+    epoch: '1e1f7c1a-4f35-4a35-9a53-3d0b3c7c7a11',
+    opened_at: '2026-09-21T16:00:00Z',
+    retry_at: '2026-09-21T23:20:00Z',
+    last_failure_at: '2026-09-21T22:53:00Z',
+    closed_at: null,
+    failure_count: 41,
+    last_status: 503,
+    last_error_code: 'upstream_http_503',
+    probe_kind: null,
+    probe_key: null,
+    probe_expires_at: null,
+  },
+  provider_outage_blocks_retry: true,
+  snapshot: '12'.repeat(32),
+}
+
+// An agent-attributable exhaustion observed while the provider circuit is open:
+// the outage view still sets provider_outage_blocks_retry, but the Platform
+// recommends withdraw, and a retry can never repair it.
+const agentFaultDuringOutage = {
+  ...providerParked,
+  agent_id: '3b7a6c0e-51d2-4f0b-9c55-6a2f1f0d8e21',
+  agent_name: 'agent-fault-during-outage',
+  blocking_reason: 'exhausted on agent-attributable failures; withdraw rather than retry',
+  recommended_action: 'withdraw' as const,
+  dominant_failure_code: 'inference_request_rejected',
+  snapshot: '34'.repeat(32),
+}
+
+function response(submissions: StuckSubmission[] = [first, second, blocked]) {
   return {
     generated_at: '2026-08-11T20:00:00Z',
     generation: 'active' as const,
@@ -98,6 +141,35 @@ describe('StuckSubmissionFleetPanel', () => {
     expect(screen.getByText('18')).toBeTruthy()
     expect(screen.getByText('withdraw · inference_request_rejected')).toBeTruthy()
     expect((screen.getByLabelText('Select blocked-agent') as HTMLInputElement).disabled).toBe(true)
+  })
+
+  it('marks a slot parked by a still-open provider outage as waiting, not retryable', () => {
+    render(
+      <StuckSubmissionFleetPanel initial={response([first, providerParked])} readOnly={false} />,
+    )
+
+    expect(screen.getByText('wait for provider · upstream_http_503')).toBeTruthy()
+    expect(
+      (screen.getByLabelText('Select provider-parked-agent') as HTMLInputElement).disabled,
+    ).toBe(true)
+    expect(screen.getByText('Select all 1 recoverable')).toBeTruthy()
+  })
+
+  it('shows withdraw, not wait for provider, for an agent-attributable row during an outage', () => {
+    render(
+      <StuckSubmissionFleetPanel
+        initial={response([providerParked, agentFaultDuringOutage])}
+        readOnly={false}
+      />,
+    )
+
+    // The provider-caused row still waits; the agent-caused one must not.
+    expect(screen.getByText('wait for provider · upstream_http_503')).toBeTruthy()
+    expect(screen.getByText('withdraw · inference_request_rejected')).toBeTruthy()
+    expect(screen.getAllByText(/^wait for provider/)).toHaveLength(1)
+    expect(
+      (screen.getByLabelText('Select agent-fault-during-outage') as HTMLInputElement).disabled,
+    ).toBe(true)
   })
 
   it('refreshes only the exhausted summary lane', async () => {

@@ -43,7 +43,7 @@ from ditto_screener.review_provider import (
     review_gateway_headers,
 )
 from ditto_screener.source_causality import analyze_static_candidates_v2
-from ditto_screener.source_reachability import analyze_reachability
+from ditto_screener.source_reachability import ReachabilityState, analyze_reachability
 from ditto_screener.source_signals import (
     find_benchmark_emulation_fingerprints,
     find_decisive_malicious_source,
@@ -67,6 +67,10 @@ from ditto_screening_protocol import (
 from ditto_screening_protocol.models import (
     source_review_invariants_for_policy,
     source_review_pass_clauses_for_policy,
+)
+from ditto_screening_protocol.review_ledger import (
+    MULTI_LOCATION_CATEGORIES,
+    concern_threshold_reached,
 )
 
 # Every policy version whose L1 policy text this build carries. The platform
@@ -163,42 +167,6 @@ def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> Non
             return
 
 
-def substantiated_concern_count(
-    notes: Sequence[Mapping[str, object]],
-) -> int:
-    """Count concerns that could actually survive as a finding.
-
-    A ``concern`` note is a lead the reviewer recorded mid-inspection, not a
-    verdict. The reviewer records them liberally by design -- the prompt asks
-    for one "the moment you see one" -- so counting them raw makes any
-    budget-cut review look guilty. Production, 2026-08-28: every one of 273
-    concern notes cited a path, so "did it cite" separates nothing; distinct
-    locations do. Reviews that RAN TO COMPLETION and then concluded low risk
-    carried at most 2 substantiated concerns (mean 0.8), while budget- or
-    fault-terminated reviews carried 6 to 19.
-
-    The multi-location rule is the finding contract itself: a
-    ``benchmark_emulation`` or ``scorer_contract_manipulation`` claim needs two
-    distinct source locations to be admissible as a finding, so a single-site
-    note in those categories could never have become one either.
-    """
-    locations: dict[str, set[tuple[str, object]]] = {}
-    for note in notes:
-        if note.get("kind") != "concern":
-            continue
-        path = note.get("path")
-        if not isinstance(path, str) or not path:
-            continue
-        category = str(note.get("category") or "none")
-        locations.setdefault(category, set()).add((path, note.get("line")))
-    total = 0
-    for category, sites in locations.items():
-        if category in _MULTI_LOCATION_CATEGORIES and len(sites) < 2:
-            continue
-        total += len(sites)
-    return total
-
-
 def ledger_disposition(
     notes: Sequence[Mapping[str, object]],
     *,
@@ -214,8 +182,9 @@ def ledger_disposition(
     at 1. Raising the operator's threshold changed nothing. A threshold has to
     mean "fewer than this many does not hold", so that is what this does.
     """
-    concerns = substantiated_concern_count(notes)
-    if concerns >= max(1, concern_hold_count):
+    # The threshold rule is shared with Platform's public review conclusion
+    # (ditto_screening_protocol.review_ledger), so the two cannot disagree.
+    if concern_threshold_reached(notes, concern_hold_count=concern_hold_count):
         return "inconclusive"
     cleared = sum(1 for note in notes if note.get("kind") == "cleared")
     if cleared >= max(1, clear_min_notes):
@@ -367,9 +336,7 @@ def source_review_categories_for_policy(policy_version: int) -> frozenset[str]:
 _ADVISORY_CATEGORIES = frozenset(
     {"external_build_dependency", "user_isolation_correctness"}
 )
-_MULTI_LOCATION_CATEGORIES = frozenset(
-    {"benchmark_emulation", "scorer_contract_manipulation"}
-)
+_MULTI_LOCATION_CATEGORIES = MULTI_LOCATION_CATEGORIES
 _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
     {
         "rate_limit_exceeded",
@@ -2819,10 +2786,42 @@ class TarSourceRepository:
         legacy_matches = find_decisive_malicious_source(
             readable, explicitly_executable_paths=runtime_paths
         )
+        if not legacy_matches and mode == "off":
+            return None
+        # The legacy path is still the production default. Its broad source
+        # inventory includes local scripts that a precise Docker build never
+        # copies. Clear only matches whose every cited file is PROVEN inert;
+        # ambiguous build inputs and genuinely reachable files retain the
+        # existing serial-review floor. Include unreadable archive members in
+        # the COPY inventory so an opaque fixture does not make a concrete
+        # directory COPY appear dynamic.
+        reachability_inputs = {
+            name: all_readable.get(name, "") for name in self._members
+        }
+        unreadable_source = any(
+            name not in all_readable and is_executable_source_path(name)
+            for name in self._members
+        )
+        reachability = analyze_reachability(reachability_inputs)
+        if not unreadable_source:
+
+            def proven_inert_legacy_match(match: Mapping[str, object]) -> bool:
+                locations = match["locations"]
+                assert isinstance(locations, list)
+                return all(
+                    reachability[str(location["path"])].state
+                    == ReachabilityState.PROVEN_INERT
+                    for location in locations
+                )
+
+            legacy_matches = [
+                match
+                for match in legacy_matches
+                if not proven_inert_legacy_match(match)
+            ]
         matches = legacy_matches
         detector_revision = "static-malicious-preflight-v1"
         if mode != "off":
-            reachability = analyze_reachability(all_readable)
             v2 = analyze_static_candidates_v2(
                 (
                     (path, text)

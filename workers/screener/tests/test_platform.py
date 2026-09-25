@@ -55,6 +55,56 @@ def _make_client(
     return PlatformClient(cfg, http), http
 
 
+async def test_l2_canary_completion_retries_identical_body_after_502(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    canary_id = uuid4()
+    bodies: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        _assert_auth(request)
+        assert request.url.path.endswith(f"/l2-report-canaries/{canary_id}/complete")
+        bodies.append(json.loads(request.content))
+        return httpx.Response(502 if len(bodies) == 1 else 200)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        await client.complete_l2_report_canary(
+            canary_id,
+            lease_token="same-token",
+            lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+            status="incomplete",
+            report={"authority": "none"},
+            error_code="l2-model-tool-contract",
+        )
+    assert len(bodies) == 2
+    assert bodies[0] == bodies[1]
+
+
+async def test_l2_canary_completion_does_not_retry_expired_or_conflicting_lease(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(409)
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        with pytest.raises(PlatformError, match=r"rejected \(409\)"):
+            await client.complete_l2_report_canary(
+                uuid4(),
+                lease_token="token",
+                lease_expires_at=datetime.now(UTC) + timedelta(minutes=1),
+                status="incomplete",
+                report={"authority": "none"},
+                error_code="l2-model-tool-contract",
+            )
+    assert calls == 1
+
+
 async def test_mechanical_receipt_posts_only_digest_and_exact_binding(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
@@ -139,6 +189,65 @@ async def test_claim_next_parses_leased_item(
     assert resp.items[0].agent_id == _AGENT
     assert resp.items[0].bench_version == 12
     assert resp.items[0].sha256 == "de" * 32
+
+
+async def test_claim_next_parses_strict_v13_runtime_lease_from_json_wire(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    review_settings = bootstrap_review_settings(make_config())
+    source_revision = "ab" * 20
+    injected_keys = ["OPENAI_API_KEY"]
+    env_sha = hashlib.sha256(
+        f"scored-runtime-env-v1\n13\n{source_revision}\nOPENAI_API_KEY".encode()
+    ).hexdigest()
+    attempt_id = uuid4()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/screener/claim"
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "agent_id": str(_AGENT),
+                        "bench_version": 13,
+                        "miner_hotkey": _MINER,
+                        "name": "v13-agent",
+                        "sha256": "de" * 32,
+                        "status": "screening",
+                        "created_at": "2026-09-25T01:52:23Z",
+                        "attempt_id": str(attempt_id),
+                        "lease_deadline": "2026-09-25T02:02:28Z",
+                        "policy_version": 13,
+                        "scored_runtime_evidence": {
+                            "attempt_id": str(attempt_id),
+                            "artifact_sha256": "de" * 32,
+                            "policy_version": 13,
+                            "bench_version": 13,
+                            "scorer_source_revision": source_revision,
+                            "release_descriptor_digest": "sha256:" + "cd" * 32,
+                            "scorer_image_digest": "sha256:" + "ef" * 32,
+                            "scorer_env_sha256": env_sha,
+                            "injected_keys": injected_keys,
+                            "validator_count": 3,
+                            "observed_at": 1_790_300_000,
+                        },
+                    }
+                ],
+                "count": 1,
+                "required_policy_version": 13,
+            },
+        )
+
+    client, http = _make_client(make_config(), handler)
+    async with http:
+        response = await client.claim_next(
+            policy_version=13,
+            review_settings=review_settings,
+            instance_id="worker-1",
+        )
+    assert response.items[0].scored_runtime_evidence is not None
+    assert response.items[0].scored_runtime_evidence.attempt_id == attempt_id
 
 
 async def test_policy_preflight_is_read_only(

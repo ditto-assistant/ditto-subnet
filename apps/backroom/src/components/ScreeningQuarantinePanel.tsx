@@ -87,6 +87,50 @@ function submissionLabel(version: number | null | undefined) {
   return version == null ? 'Legacy submission' : `Submission v${version}`
 }
 
+/**
+ * Render a machine code for display.
+ *
+ * A quarantine carries two codes from disjoint vocabularies: the
+ * screening-origin code it was opened under, and the operator's ruling code.
+ * They are never interchangeable, so every call site says which one it is
+ * showing. Nullable because Backroom may be deployed ahead of the field.
+ */
+function humanizeCode(code: string | null | undefined) {
+  return code ? code.replaceAll('_', ' ').replaceAll('-', ' ') : 'not recorded'
+}
+
+/**
+ * The screening-origin code, labelled as the reason it was held.
+ *
+ * Naming the origin is the whole point: an unlabelled code sitting under a
+ * `reject` badge reads as the reason for the rejection, which is how a
+ * CLEAR-side code such as `behavioral-oracle-passed` came to look like the
+ * justification for rejecting the submission it cleared.
+ */
+function ScreeningOrigin({ code }: { code: string | null | undefined }) {
+  return (
+    <span title="Why the screener held this submission. Not the operator's ruling.">
+      Held for {humanizeCode(code)}
+    </span>
+  )
+}
+
+/**
+ * The operator's ruling code, labelled as the decision rather than the lead.
+ *
+ * Derived by the platform from the resolution, so it is shown next to the
+ * resolution it explains and never substituted for the screening origin.
+ * Rendered only when the platform reports one; an unresolved quarantine has
+ * no ruling to name.
+ */
+function RulingBasis({ code }: { code: string }) {
+  return (
+    <span title="The operator decision this quarantine was closed with.">
+      Ruled {humanizeCode(code)}
+    </span>
+  )
+}
+
 function SubmissionBadge({ version }: { version: number | null | undefined }) {
   return (
     <span className="inline-flex shrink-0 rounded-full border border-[var(--line)] bg-white/[0.035] px-2 py-0.5 font-mono text-[10px] font-medium text-[var(--muted-strong)]">
@@ -323,7 +367,8 @@ export function ScreeningQuarantinePanel({
           submissionLabel(item.agent_version),
           item.agent_id,
           item.miner_hotkey,
-          item.reason_code,
+          item.screening_reason_code ?? '',
+          item.resolution_reason_code ?? '',
           item.artifact_sha256,
         ]
           .join(' ')
@@ -620,7 +665,8 @@ export function ScreeningQuarantinePanel({
                           <td className="block max-w-sm align-top sm:table-cell sm:px-4 sm:py-3">
                             <p className="font-medium text-white">{item.agent_name}</p>
                             <p className="mt-1 text-[10px] text-[var(--muted)]">
-                              {item.reason_code.replaceAll('_', ' ')} · policy v{item.policy_version}
+                              <ScreeningOrigin code={item.screening_reason_code} /> · policy
+                              v{item.policy_version}
                             </p>
                             <p className="mt-1 line-clamp-2 leading-4 text-[var(--muted-strong)]">
                               {item.finding?.summary ?? 'No source-review summary was recorded.'}
@@ -854,8 +900,13 @@ export function ScreeningQuarantinePanel({
                           </div>
                           <div className="mt-3 flex flex-wrap items-center gap-2">
                             <p className="text-xs capitalize text-[var(--muted-strong)]">
-                              {item.reason_code.replaceAll('_', ' ')}
+                              <ScreeningOrigin code={item.screening_reason_code} />
                             </p>
+                            {item.resolution_reason_code ? (
+                              <p className="text-xs capitalize text-[var(--muted-strong)]">
+                                <RulingBasis code={item.resolution_reason_code} />
+                              </p>
+                            ) : null}
                             {item.finding && item.finding_verified ? (
                               <span
                                 className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase ${
