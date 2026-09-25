@@ -153,6 +153,43 @@ def test_syntax_receipts_parse_source_without_executing_it(
     assert bad["syntax_valid"] is False
 
 
+def test_source_navigation_can_page_past_first_files_and_hits(tmp_path: Path) -> None:
+    for index in range(260):
+        (tmp_path / f"{index:03}.go").write_text(
+            f"package main\n// located needle {index}\n", encoding="utf-8"
+        )
+    workspace = _Workspace(tmp_path)
+    first = workspace.call("list_files", {"prefix": "", "offset": 0})
+    second = workspace.call("list_files", {"prefix": "", "offset": 256})
+    assert first["next_offset"] == 256
+    assert second["paths"] == [f"{index:03}.go" for index in range(256, 260)]
+    hits = workspace.call("search", {"query": "needle", "offset": 80})
+    assert hits["hits"][0]["path"] == "080.go"
+    assert hits["next_offset"] == 160
+
+
+def test_host_notes_are_searchable_but_cannot_be_cited_as_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "main.py").write_text("print('ok')\n", encoding="utf-8")
+    notes = tmp_path / "l1-notes.md"
+    notes.write_text("# Host notes\nlocated finding\n", encoding="utf-8")
+    workspace = _Workspace(source)
+    workspace.attach_notes(notes)
+    assert (
+        "review/l1-notes.md"
+        in workspace.call("list_files", {"prefix": "review/", "offset": 0})["paths"]
+    )
+    assert (
+        workspace.call("search", {"query": "located", "offset": 0})["hits"][0]["path"]
+        == "review/l1-notes.md"
+    )
+    assert not workspace.has_line("review/l1-notes.md", 2)
+    assert workspace.has_line("main.py", 1)
+
+
 @pytest.mark.asyncio
 async def test_archive_path_traversal_is_rejected_before_model_call(
     tmp_path: Path,

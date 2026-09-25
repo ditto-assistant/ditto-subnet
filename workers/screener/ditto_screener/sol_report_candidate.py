@@ -63,9 +63,9 @@ _LINE = {"type": "integer", "minimum": 1}
 _TOOLS_COMMON = [
     _tool(
         "list_files",
-        "List source paths with optional prefix",
-        {"prefix": {"type": "string"}},
-        ["prefix"],
+        "List one page of source paths with optional prefix and zero-based offset",
+        {"prefix": {"type": "string"}, "offset": {"type": "integer", "minimum": 0}},
+        ["prefix", "offset"],
     ),
     _tool(
         "read_file",
@@ -75,9 +75,12 @@ _TOOLS_COMMON = [
     ),
     _tool(
         "search",
-        "Search source text, returning bounded located hits",
-        {"query": {"type": "string", "minLength": 2, "maxLength": 128}},
-        ["query"],
+        "Search source text, returning a page of located hits by zero-based offset",
+        {
+            "query": {"type": "string", "minLength": 2, "maxLength": 128},
+            "offset": {"type": "integer", "minimum": 0},
+        },
+        ["query", "offset"],
     ),
     _tool(
         "verify_syntax",
@@ -167,6 +170,7 @@ class Identity:
 class _Workspace:
     def __init__(self, source: Path) -> None:
         self.source = source
+        self.notes_path: Path | None = None
         self.paths = tuple(
             sorted(
                 p.relative_to(source).as_posix()
@@ -175,9 +179,18 @@ class _Workspace:
             )
         )
 
+    def attach_notes(self, path: Path) -> None:
+        """Expose host-written notes through ordinary navigation, outside source."""
+        self.notes_path = path
+        self.paths = (*self.paths, "review/l1-notes.md")
+
     def _text(self, path: str) -> str | None:
         if path not in self.paths:
             return None
+        if path == "review/l1-notes.md":
+            return (
+                self.notes_path.read_text(encoding="utf-8") if self.notes_path else None
+            )
         target = self.source.joinpath(*path.split("/"))
         if target.stat().st_size > _MAX_FILE_BYTES:
             return None
@@ -187,6 +200,8 @@ class _Workspace:
             return None
 
     def has_line(self, path: str, line: int) -> bool:
+        if path == "review/l1-notes.md":
+            return False
         value = self._text(path)
         return value is not None and 1 <= line <= len(value.splitlines())
 
@@ -268,13 +283,20 @@ class _Workspace:
             return self._verify_syntax(path)
         if name == "list_files":
             prefix = args.get("prefix", "")
-            if not isinstance(prefix, str):
-                return {"error": "invalid-prefix"}
+            offset = args.get("offset", 0)
+            if (
+                not isinstance(prefix, str)
+                or not isinstance(offset, int)
+                or isinstance(offset, bool)
+                or offset < 0
+            ):
+                return {"error": "invalid-list-request"}
             paths = [p for p in self.paths if p.startswith(prefix)]
             return {
-                "paths": paths[:256],
+                "paths": paths[offset : offset + 256],
                 "total": len(paths),
-                "truncated": len(paths) > 256,
+                "offset": offset,
+                "next_offset": offset + 256 if offset + 256 < len(paths) else None,
             }
         if name == "read_file":
             path, start, end = (
@@ -307,19 +329,35 @@ class _Workspace:
             }
         if name == "search":
             query = args.get("query")
-            if not isinstance(query, str) or not 2 <= len(query) <= 128:
-                return {"error": "invalid-query"}
+            offset = args.get("offset", 0)
+            if (
+                not isinstance(query, str)
+                or not 2 <= len(query) <= 128
+                or not isinstance(offset, int)
+                or isinstance(offset, bool)
+                or offset < 0
+            ):
+                return {"error": "invalid-search-request"}
             hits: list[dict[str, Any]] = []
+            seen = 0
             for path in self.paths:
                 value = self._text(path)
                 if value is None:
                     continue
                 for line, content in enumerate(value.splitlines(), 1):
                     if query.casefold() in content.casefold():
-                        hits.append({"path": path, "line": line, "text": content[:500]})
+                        if seen < offset:
+                            seen += 1
+                            continue
                         if len(hits) == _MAX_HITS:
-                            return {"hits": hits, "truncated": True}
-            return {"hits": hits, "truncated": False}
+                            return {
+                                "hits": hits,
+                                "offset": offset,
+                                "next_offset": offset + len(hits),
+                            }
+                        hits.append({"path": path, "line": line, "text": content[:500]})
+                        seen += 1
+            return {"hits": hits, "offset": offset, "next_offset": None}
         return {"error": "unknown-tool"}
 
 
@@ -356,6 +394,8 @@ async def _phase(
         "hidden answer material, review-adaptive behavior, unauthorized "
         "network or secrets access, and causal evidence. Cite actual source "
         "lines. Do not execute miner code or assume a filename proves behavior. "
+        "review/l1-notes.md is the host-written, searchable note packet, "
+        "not submitted source; cite only submitted source paths. "
         + (
             "Record concise concern, cleared, or context notes after each "
             "area; then finish_notes. Do not decide a verdict."
@@ -689,6 +729,7 @@ async def run_report_candidate(
         notes_path = root_path / "l1-notes.md"
         notes_path.write_text(_notes_document(identity, []), encoding="utf-8")
         os.chmod(notes_path, 0o600)
+        workspace.attach_notes(notes_path)
         deadline = time.monotonic() + timeout_seconds
         total_usage = {
             "input_tokens": 0.0,
