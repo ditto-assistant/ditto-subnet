@@ -60,12 +60,18 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--max-output-tokens", type=int, default=20_000)
     parser.add_argument("--max-completion-tokens", type=int, default=2_400)
     parser.add_argument("--max-cost-usd", type=float, default=2.0)
+    parser.add_argument("--turn-timeout-seconds", type=float)
     parser.add_argument(
         "--single-layer-sol",
         action="store_true",
         help="report-only GPT-6 Sol analyst with isolated tools and no L3",
     )
     parser.add_argument("--run-l1", action="store_true")
+    parser.add_argument(
+        "--omit-l1",
+        action="store_true",
+        help="single-layer Sol reviews the artifact without an L1 finding",
+    )
     parser.add_argument("--l1-model", default="openai/gpt-5.6-luna")
     parser.add_argument("--l1-timeout-seconds", type=float, default=600.0)
     parser.add_argument("--l1-max-steps", type=int, default=160)
@@ -137,8 +143,14 @@ async def _main() -> None:
         raise SystemExit("--max-completion-tokens must be between 1 and 16000")
     if not 0 < args.max_cost_usd <= 25:
         raise SystemExit("--max-cost-usd must be between 0 and 25")
+    if args.turn_timeout_seconds is not None and not (
+        30 <= args.turn_timeout_seconds <= 600
+    ):
+        raise SystemExit("--turn-timeout-seconds must be between 30 and 600")
     if args.single_layer_sol and not args.require_label_match:
         raise SystemExit("--single-layer-sol requires --require-label-match")
+    if args.omit_l1 and (not args.single_layer_sol or args.run_l1):
+        raise SystemExit("--omit-l1 requires --single-layer-sol and excludes --run-l1")
     if not 30 <= args.l1_timeout_seconds <= 600:
         raise SystemExit("--l1-timeout-seconds must be between 30 and 600")
     if not 1 <= args.l1_max_steps <= 160:
@@ -193,6 +205,8 @@ async def _main() -> None:
         max_completion_tokens=args.max_completion_tokens,
         max_cost_usd=args.max_cost_usd,
         cache_ttl_seconds=7 * 86_400,
+        max_completion_request_seconds=args.turn_timeout_seconds,
+        independent_analyst=args.omit_l1,
         model=analyst_model,
         fallback_models=() if args.single_layer_sol else L2_FALLBACK_MODELS,
         l3_enabled=not args.single_layer_sol,
@@ -260,6 +274,7 @@ async def _main() -> None:
             "max_output_tokens": args.max_output_tokens,
             "max_completion_tokens": args.max_completion_tokens,
             "max_cost_usd": args.max_cost_usd,
+            "turn_timeout_seconds": args.turn_timeout_seconds or 45.0,
         },
         "runtime_evidence_origin": (
             "local_cohort_packet_simulation"
@@ -268,7 +283,13 @@ async def _main() -> None:
             if args.scorer_capabilities_url
             else "absent"
         ),
-        "l1_mode": "fresh_local_review" if l1_agent else "archived_observation",
+        "l1_mode": (
+            "omitted"
+            if args.omit_l1
+            else "fresh_local_review"
+            if l1_agent
+            else "archived_observation"
+        ),
     }
     semaphore = asyncio.Semaphore(args.concurrency)
     output_lock = asyncio.Lock()
@@ -306,6 +327,13 @@ async def _main() -> None:
                         "model": args.l1_model,
                         "observation": asdict(l1_observation),
                     },
+                )
+            elif args.omit_l1:
+                l1_observation = SourceReviewObservation(
+                    ok=True,
+                    risk_level=None,
+                    finding_digest=None,
+                    categories=(),
                 )
             else:
                 raw_observation = item.get("l1_observation")

@@ -259,6 +259,7 @@ uv run --project workers/screener python workers/screener/scripts/run_l2_calibra
   --timeout-seconds 1800 --max-steps 256 \
   --max-input-tokens 5000000 --max-output-tokens 1000000 \
   --max-completion-tokens 16000 --max-cost-usd 20 \
+  --turn-timeout-seconds 300 \
   --run-l1 --l1-timeout-seconds 600 --l1-max-steps 160 \
   --l1-max-read-bytes 8000000 --l1-max-completion-tokens 8000 \
   --require-label-match
@@ -290,9 +291,14 @@ For a report-only single-layer comparator, repeat the same exact manifest and
 limits with `--single-layer-sol --require-label-match` and separate private
 cache, audit, and result paths. This runs GPT-6 Sol as the sole autonomous
 coding analyst against the same isolated analyzers, with no fallback model or
-L3 critic. The strict gate requires a terminal, label-matching safe or violation
-outcome; a provider fault or inconclusive response fails it. This comparator
-does not change production decisions or replace signed live evidence.
+L3 critic. Compare two inputs for each label: retained exact L1 evidence, and
+`--omit-l1`, which supplies no L1 finding and tasks Sol to review the entire
+served artifact independently. The strict gate requires a terminal,
+label-matching safe or violation outcome; a provider fault or inconclusive
+response fails it. This comparator
+does not change production decisions or replace signed live evidence. The
+`--turn-timeout-seconds` override is local: production currently caps individual
+Responses API turns at 45 seconds even when its whole review lease is longer.
 
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a
 directory of already verified artifacts. It rechecks every tarball digest,

@@ -2305,6 +2305,8 @@ class TerraSolSourceReviewAgent:
         max_completion_tokens: int,
         max_cost_usd: float,
         cache_ttl_seconds: float,
+        max_completion_request_seconds: float | None = None,
+        independent_analyst: bool = False,
         analyst_reasoning_effort: str = "model_default",
         critic_reasoning_effort: str = "medium",
         model: str = L2_MODEL,
@@ -2336,6 +2338,12 @@ class TerraSolSourceReviewAgent:
         self._max_completion_tokens = max_completion_tokens
         self._max_cost_usd = max_cost_usd
         self._cache_ttl_seconds = cache_ttl_seconds
+        if max_completion_request_seconds is not None and not (
+            30 <= max_completion_request_seconds <= 600
+        ):
+            raise ValueError("L2 completion request timeout must be 30-600 seconds")
+        self._max_completion_request_seconds = max_completion_request_seconds
+        self._independent_analyst = independent_analyst
         if analyst_reasoning_effort != "model_default":
             raise ValueError("L2 analyst reasoning effort must be model_default")
         if critic_reasoning_effort not in {"low", "medium", "high"}:
@@ -3755,7 +3763,14 @@ class TerraSolSourceReviewAgent:
     ) -> L2RunResult:
         if role == "analyst":
             task = (
-                "Resolve the L1 quarantine lead using the dossier and targeted tools."
+                "No L1 finding is supplied. Independently review the entire served "
+                "artifact against I1-I7 using the dossier and targeted tools. "
+                "Reach a grounded terminal safe or violation verdict when the "
+                "evidence permits; return inconclusive only for a specific "
+                "unresolved causal link."
+                if self._independent_analyst
+                else "Resolve the L1 quarantine lead using the dossier and "
+                "targeted tools."
             )
         elif role == "critic":
             task = (
@@ -4158,7 +4173,10 @@ class TerraSolSourceReviewAgent:
         # A provider can keep a broken response alive with occasional bytes, so
         # bound each turn and allow one fresh connection before escalating.
         for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
-            timeout = min(self._turn_timeout(deadline), _MAX_COMPLETION_REQUEST_SECONDS)
+            timeout = min(
+                self._turn_timeout(deadline),
+                self._max_completion_request_seconds or _MAX_COMPLETION_REQUEST_SECONDS,
+            )
             try:
                 async with asyncio.timeout(timeout):
                     response = await client.post(
@@ -4285,6 +4303,7 @@ class TerraSolSourceReviewAgent:
             "artifact_sha256": artifact_sha256,
             "l1_finding_digest": l1_observation.finding_digest,
             "model": self._model,
+            "independent_analyst": self._independent_analyst,
             "fallback_models": list(self._fallback_models),
             "critic_model": self._critic_model,
             "critic_provider": self._critic_provider,
