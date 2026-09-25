@@ -33,6 +33,32 @@ def test_accepts_a_root_dockerfile() -> None:
     validate_upload_archive(_ok())
 
 
+@pytest.mark.parametrize("directory", ["src/", "./src/"])
+def test_accepts_a_directory_with_trailing_slash(directory: str) -> None:
+    validate_upload_archive(
+        _archive(
+            [
+                ("Dockerfile", b"FROM scratch\n", tarfile.REGTYPE),
+                (directory, b"", tarfile.DIRTYPE),
+                ("src/lib.rs", b"fn main() {}\n", tarfile.REGTYPE),
+            ]
+        )
+    )
+
+
+def test_rejects_duplicate_directory_after_normalization() -> None:
+    blob = _archive(
+        [
+            ("Dockerfile", b"FROM scratch\n", tarfile.REGTYPE),
+            ("src/", b"", tarfile.DIRTYPE),
+            ("./src/", b"", tarfile.DIRTYPE),
+        ]
+    )
+    with pytest.raises(SourceInspectError) as raised:
+        validate_upload_archive(blob)
+    assert raised.value.code == "archive-duplicate-path"
+
+
 def test_rejects_bytes_without_gzip_magic() -> None:
     with pytest.raises(SourceInspectError, match="gzip") as raised:
         validate_upload_archive(b"not-gzip")

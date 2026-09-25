@@ -549,9 +549,12 @@ def validate_upload_archive(tar_bytes: bytes) -> None:
                 name = member.name.removeprefix("./")
                 if not name and member.isdir():
                     continue
-                path = PurePosixPath(name)
+                # Tar directories conventionally end in one slash. Normalize
+                # that separator before both canonical-path and duplicate checks.
+                canonical_name = name.removesuffix("/") if member.isdir() else name
+                path = PurePosixPath(canonical_name)
                 if (
-                    not name
+                    not canonical_name
                     or name.startswith("/")
                     or "\\" in name
                     or (path.parts and path.parts[0].endswith(":"))
@@ -560,11 +563,11 @@ def validate_upload_archive(tar_bytes: bytes) -> None:
                     raise SourceInspectError(
                         "archive-unsafe-path", "archive contains an unsafe path"
                     )
-                if str(path) != name:
+                if str(path) != canonical_name:
                     raise SourceInspectError(
                         "archive-unsafe-path", "archive contains a non-canonical path"
                     )
-                if name in seen:
+                if canonical_name in seen:
                     raise SourceInspectError(
                         "archive-duplicate-path", "archive contains a duplicate path"
                     )
@@ -583,8 +586,8 @@ def validate_upload_archive(tar_bytes: bytes) -> None:
                         "artifact-too-large",
                         f"archive exceeds {UPLOAD_MAX_UNPACKED_BYTES} unpacked bytes",
                     )
-                seen.add(name)
-                if name != "Dockerfile" or not member.isfile():
+                seen.add(canonical_name)
+                if canonical_name != "Dockerfile" or not member.isfile():
                     continue
                 if member.size > TEXT_SIZE_LIMIT:
                     raise SourceInspectError(
