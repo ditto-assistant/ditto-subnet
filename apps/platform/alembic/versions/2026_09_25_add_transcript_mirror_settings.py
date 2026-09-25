@@ -1,7 +1,7 @@
 """Gate the public transcript mirror behind an audited operator setting.
 
 Revision ID: b7e2c9a41d08
-Revises: 1bc9d8a6207e
+Revises: a40f7d9c621e
 Create Date: 2026-09-24
 
 The genesis row leaves the mirror off. A public bucket alone must not publish
@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "b7e2c9a41d08"
-down_revision: str | Sequence[str] | None = "1bc9d8a6207e"
+down_revision: str | Sequence[str] | None = "a40f7d9c621e"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
