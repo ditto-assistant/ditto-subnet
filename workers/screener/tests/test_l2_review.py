@@ -4511,6 +4511,17 @@ def test_catalog_pricing_budget_accounts_for_long_context_tier() -> None:
     assert _cost(272_000, 8_000, cached_input_tokens=200_000) == pytest.approx(1.28)
 
 
+def test_gpt6_sol_cost_fallback_uses_its_own_conservative_rates() -> None:
+    assert _cost(80_000, 8_000, model="openai/gpt-6-sol") == pytest.approx(0.48)
+    assert _cost(272_000, 8_000, model="openai/gpt-6-sol") == pytest.approx(1.248)
+    assert _cost(
+        272_000,
+        8_000,
+        cached_input_tokens=200_000,
+        model="openai/gpt-6-sol-20260922",
+    ) == pytest.approx(0.528)
+
+
 def test_exact_reported_cost_precedes_conservative_fallback(
     tmp_path: Path,
 ) -> None:

@@ -5669,7 +5669,10 @@ def _response_output_and_usage(
             cache_write_input_tokens=cache_write,
             reasoning_tokens=reasoning,
             estimated_cost_usd=_cost(
-                input_tokens, output_tokens, cached_input_tokens=cached
+                input_tokens,
+                output_tokens,
+                cached_input_tokens=cached,
+                model=model,
             ),
             reported_cost_usd=(
                 float(reported_cost) if reported_cost is not None else None
@@ -5746,8 +5749,21 @@ def _call_id_value(call: object) -> str:
 
 
 def _cost(
-    input_tokens: int, output_tokens: int, *, cached_input_tokens: int = 0
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cached_input_tokens: int = 0,
+    model: str | None = None,
 ) -> float:
+    if model == "openai/gpt-6-sol" or (model or "").startswith("openai/gpt-6-sol-"):
+        # OpenRouter 2026-09-25: standard Sol6 is $2/$10 per million;
+        # use the $4/$20 OpenAI Fast ceiling when exact reported cost is absent.
+        uncached = max(0, input_tokens - cached_input_tokens)
+        return (
+            uncached * 4.0 / 1_000_000
+            + cached_input_tokens * 0.4 / 1_000_000
+            + output_tokens * 20.0 / 1_000_000
+        )
     # Conservative GPT-5.6 SOL upper bound from the OpenRouter 2026-07-18
     # catalog. Terra and GLM 5.2 are cheaper, and every response's exact
     # OpenRouter-reported cost is preferred when present. SOL uses its higher
