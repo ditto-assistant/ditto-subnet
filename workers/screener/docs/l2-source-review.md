@@ -269,8 +269,11 @@ expected resolution basis. Inspect each private audit and the full result,
 including error code and budget stop, before a PR; a summary classification
 metric alone does not certify a CLEAR. The per-case cost ceiling is a stop, so
 use a separate total key limit for the corpus. `--run-l1` reruns the actual
-Luna source reviewer locally before L2; omit it only when testing a retained,
-exact L1 observation. A scored runtime capabilities
+Luna source reviewer locally before L2 and saves an owner-only L1 checkpoint
+alongside the results. If L2 hits a provider fault, the checkpoint's
+`observation` can be placed in the exact item's manifest as `l1_observation`
+for a later L2-only diagnostic run; a fresh full gate still requires
+`--run-l1`. A scored runtime capabilities
 endpoint may be supplied with `--scorer-capabilities-url` and
 `--expected-scorer-revision` together; without that trusted endpoint, local
 replay lacks signed scorer runtime evidence. To compare with an active cohort,

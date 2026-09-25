@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 import time
+from dataclasses import asdict
 from pathlib import Path
 from uuid import UUID
 
@@ -278,6 +279,16 @@ async def _main() -> None:
                         "local L1 did not produce a complete observation: "
                         f"{l1_observation.error_code}"
                     )
+                _write_private_json(
+                    args.results_file.parent
+                    / "l1-checkpoints"
+                    / f"{artifact_sha}.json",
+                    {
+                        "artifact_sha256": artifact_sha,
+                        "model": args.l1_model,
+                        "observation": asdict(l1_observation),
+                    },
+                )
             else:
                 raw_observation = item.get("l1_observation")
                 if not isinstance(raw_observation, dict):
