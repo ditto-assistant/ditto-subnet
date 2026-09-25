@@ -338,8 +338,28 @@ def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
     assert l2_safety_prompt_revision(11) == "l3-sol-safety-adjudicator-v24-policy-v11"
     assert "Request-local memoization of an identical invocation" in SYSTEM_PROMPT
     assert "deduplication is not fabricated telemetry" in SYSTEM_PROMPT
+    assert "unexecuted proposals in scorer-visible `tool_calls`" in SYSTEM_PROMPT
+    assert "a suppressed duplicate is not an executed call" in SYSTEM_PROMPT
+    assert "Do not infer fabrication merely because" in SYSTEM_PROMPT
+    assert (
+        "separately requested\nidentical effect suppressed without authority"
+        in SYSTEM_PROMPT
+    )
     assert "distinguish execution from transport" in _SAFETY_ADJUDICATOR_TASK
     assert "the cache crosses requests" in _SAFETY_ADJUDICATOR_TASK
+    fixtures = {
+        case["id"]: case
+        for case in json.loads(
+            (ROOT / "tests/fixtures/l2-review-regressions.json").read_text()
+        )
+    }
+    safe = fixtures["safe-request-local-identical-tool-memoization"]
+    violation = fixtures["violation-duplicate-suppression-false-executed-receipt"]
+    assert safe["disposition"] == "safe"
+    assert "Not sent again" in safe["source"]
+    assert "self.executed_calls.push(result)" in safe["source"]
+    assert violation["category"] == "fabricated_tool_trajectory"
+    assert "fake_completed_call" in violation["source"]
 
 
 def test_l2_policy_v10_prompt_keeps_the_original_i7_text() -> None:
@@ -408,7 +428,7 @@ def test_l2_policy_v13_prompt_adds_i8_and_authority_boundaries() -> None:
     assert "`bench_version` activating learned routing" in v13
     assert "exact path-and-digest provenance" in v13
     assert "null compact score field" in v13
-    assert l2_prompt_revision(13) == "l2-terra-source-review-v39-policy-v13"
+    assert l2_prompt_revision(13) == "l2-terra-source-review-v40-policy-v13"
 
     legacy = _l2_tools_for_policy(12)[-1]["parameters"]["properties"]["invariants"]
     current = _l2_tools_for_policy(13)[-1]["parameters"]["properties"]["invariants"]
