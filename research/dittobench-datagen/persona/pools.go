@@ -399,18 +399,17 @@ var starSigns = []string{
 	"Sagittarius", "Capricorn", "Aquarius", "Pisces",
 }
 
-// v8StarSigns keep the sign name but require the word "sign", so "cancer
+// v14StarSigns keep the sign name but require the word "sign", so "cancer
 // screening" and "a leo is a lion" are not answers.
-var v8StarSigns = []string{
+var v14StarSigns = []string{
 	"Aries sign", "Taurus sign", "Gemini sign", "Cancer sign", "Leo sign",
 	"Virgo sign", "Libra sign", "Scorpio sign", "Sagittarius sign",
 	"Capricorn sign", "Aquarius sign", "Pisces sign",
 }
 
-// v8IncidentalProse is ordinary English that must not grade as an answer.
-// Pool fixes for v8 and later are checked against this list; v7 pools stay
-// frozen even when they collide with it.
-var v8IncidentalProse = []string{
+// incidentalProse is ordinary English that must not grade as a corrected
+// answer. Published V8-V13 pools stay frozen even when they collide with it.
+var incidentalProse = []string{
 	"let me go check that",
 	"the sage advice helped",
 	"a slate of options",
@@ -434,9 +433,9 @@ var v8IncidentalProse = []string{
 
 var eyeColors = []string{"brown", "blue", "green", "hazel", "gray", "amber"}
 
-// v8EyeColors are multi-word so ordinary prose ("feeling blue", "brown paper",
+// v14EyeColors are multi-word so ordinary prose ("feeling blue", "brown paper",
 // "amber light") cannot satisfy grade.Hit.
-var v8EyeColors = []string{
+var v14EyeColors = []string{
 	"dark brown", "bright blue", "deep green", "light hazel", "cool gray", "warm amber",
 }
 

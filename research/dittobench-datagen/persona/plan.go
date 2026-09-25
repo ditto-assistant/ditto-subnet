@@ -972,7 +972,11 @@ func BuildPlanForVersion(seed int64, opts Opts, benchVersion int) (*Plan, error)
 		roll := r.Float64()
 		switch {
 		case roll < pSometimesSelf:
-			v := pick(r, answerPoolForVersion(s.attr, s.pool, benchVersion))
+			pool := s.pool
+			if benchVersion >= answerPoolFixBenchVersion {
+				pool = answerPoolForVersion(s.attr, pool, benchVersion)
+			}
+			v := pick(r, pool)
 			p.Facts = append(p.Facts, Fact{
 				ID:        "f-" + s.attr,
 				Kind:      KindScalar,
@@ -989,7 +993,11 @@ func BuildPlanForVersion(seed int64, opts Opts, benchVersion int) (*Plan, error)
 		case roll < pSometimesDecoy:
 			who := pick(r, firstNames)
 			rel := relations[d%len(relations)]
-			v := pick(r, answerPoolForVersion(s.attr, s.pool, benchVersion))
+			pool := s.pool
+			if benchVersion >= answerPoolFixBenchVersion {
+				pool = answerPoolForVersion(s.attr, pool, benchVersion)
+			}
+			v := pick(r, pool)
 			p.Facts = append(p.Facts, Fact{
 				ID:        "f-fp-" + s.attr,
 				Kind:      KindDistractor,
@@ -1269,41 +1277,52 @@ func answerPoolForVersion(attr string, pool []string, benchVersion int) []string
 	if benchVersion < protocol.BenchVersionV8 {
 		return pool
 	}
+	// V8 through V13 are published generation contracts. Stage the correction
+	// for the next contract; protocol must explicitly support that version
+	// across the stack before these pools can be generated in a scored run.
+	if benchVersion >= answerPoolFixBenchVersion {
+		switch attr {
+		case "eye_color":
+			return v14EyeColors
+		case "star_sign":
+			return v14StarSigns
+		case "middle_name":
+			return v14MiddleNames()
+		}
+	}
 	switch attr {
 	case "favorite_color":
 		return v8Colors
 	case "primary_language":
 		return v8SoftwareLanguages
-	case "eye_color":
-		return v8EyeColors
-	case "star_sign":
-		return v8StarSigns
 	case "middle_name":
-		return v8MiddleNames()
+		return v8HumanGivenNames
 	default:
 		return pool
 	}
 }
 
+const answerPoolFixBenchVersion = 14
+
 var (
-	v8MiddleNamesOnce sync.Once
-	v8MiddleNamesList []string
+	v14MiddleNamesOnce sync.Once
+	v14MiddleNamesList []string
 )
 
-func v8MiddleNames() []string {
-	v8MiddleNamesOnce.Do(func() {
+func v14MiddleNames() []string {
+	v14MiddleNamesOnce.Do(func() {
 		for _, name := range v8HumanGivenNames {
-			if v8NameHitsIncidentalProse(name) {
+			if nameHitsIncidentalProse(name) {
 				continue
 			}
-			v8MiddleNamesList = append(v8MiddleNamesList, name)
+			v14MiddleNamesList = append(v14MiddleNamesList, name)
 		}
 	})
-	return v8MiddleNamesList
+	return v14MiddleNamesList
 }
 
-func v8NameHitsIncidentalProse(name string) bool {
-	for _, sentence := range v8IncidentalProse {
+func nameHitsIncidentalProse(name string) bool {
+	for _, sentence := range incidentalProse {
 		if grade.Hit(name, sentence) {
 			return true
 		}

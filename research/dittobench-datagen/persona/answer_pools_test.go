@@ -8,7 +8,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-func TestEveryV8AnswerPoolRejectsIncidentalTokens(t *testing.T) {
+func TestFutureAnswerPoolsRejectIncidentalTokens(t *testing.T) {
 	pools := map[string][]string{
 		"city": cities, "occupation": occupations, "employer": companies,
 		"car": carModels, "partner": firstNames, "instrument": instruments,
@@ -27,56 +27,69 @@ func TestEveryV8AnswerPoolRejectsIncidentalTokens(t *testing.T) {
 		"sports_team": sportsTeams, "favorite_film": favoriteFilms,
 	}
 	for attr, legacy := range pools {
-		pool := answerPoolForVersion(attr, legacy, protocol.BenchVersionV8)
+		pool := answerPoolForVersion(attr, legacy, answerPoolFixBenchVersion)
+		if len(pool) == 0 {
+			t.Fatalf("future %s answer pool is empty", attr)
+		}
 		for _, value := range pool {
-			for _, sentence := range v8IncidentalProse {
+			for _, sentence := range incidentalProse {
 				if grade.Hit(value, sentence) {
-					t.Errorf("v8 %s value %q hits incidental %q", attr, value, sentence)
+					t.Errorf("future %s value %q hits incidental %q", attr, value, sentence)
 				}
 			}
 		}
 	}
 }
 
-func TestV8IncidentalExposureIsZeroAcrossOneHundredSeeds(t *testing.T) {
-	v8Hits := 0
-	v9Hits := 0
-	v7Hits := 0
-	for seed := int64(1); seed <= 100; seed++ {
-		v8, err := BuildPlanForVersion(seed, fullOpts(), protocol.BenchVersionV8)
-		if err != nil {
-			t.Fatal(err)
+func TestPublishedAnswerPoolsRemainFrozen(t *testing.T) {
+	for version := protocol.BenchVersionV8; version <= protocol.BenchVersionV13; version++ {
+		for _, tc := range []struct {
+			attr string
+			base []string
+			want []string
+		}{
+			{"eye_color", eyeColors, eyeColors},
+			{"star_sign", starSigns, starSigns},
+			{"middle_name", firstNames, v8HumanGivenNames},
+		} {
+			got := answerPoolForVersion(tc.attr, tc.base, version)
+			if len(got) != len(tc.want) || &got[0] != &tc.want[0] {
+				t.Fatalf("v%d %s pool changed", version, tc.attr)
+			}
 		}
-		v9, err := BuildPlanForVersion(seed, fullOpts(), protocol.BenchVersionV9)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v7, err := BuildPlanForVersion(seed, fullOpts(), protocol.BenchVersionV7)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v8Hits += incidentalHits(t, "v8", v8)
-		v9Hits += incidentalHits(t, "v9", v9)
-		v7Hits += incidentalHits(t, "v7", v7)
 	}
-	t.Logf("incidental grade.Hit collisions over 100 full-profile seeds: v7=%d v8=%d v9=%d", v7Hits, v8Hits, v9Hits)
-	if v8Hits != 0 || v9Hits != 0 {
-		t.Fatalf("qualified plans still contain incidental answer collisions: v8=%d v9=%d", v8Hits, v9Hits)
-	}
-	if v7Hits == 0 {
-		t.Fatal("v7 fixture no longer reproduces the frozen collisions")
+	if protocol.SupportedBenchVersion(answerPoolFixBenchVersion) {
+		t.Fatal("answer-pool fix became runnable without a complete new-version rollout")
 	}
 }
 
-func incidentalHits(t *testing.T, label string, plan *Plan) int {
-	t.Helper()
+func TestPublishedIncidentalExposureAcrossOneHundredSeeds(t *testing.T) {
+	totals := map[int]int{}
+	for seed := int64(1); seed <= 100; seed++ {
+		for _, version := range []int{protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9} {
+			plan, err := BuildPlanForVersion(seed, fullOpts(), version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			totals[version] += incidentalHits(plan)
+		}
+	}
+	for version, want := range map[int]int{
+		protocol.BenchVersionV7: 167,
+		protocol.BenchVersionV8: 83,
+		protocol.BenchVersionV9: 90,
+	} {
+		if got := totals[version]; got != want {
+			t.Errorf("v%d incidental collisions over 100 full-profile seeds: got %d, want %d", version, got, want)
+		}
+	}
+}
+
+func incidentalHits(plan *Plan) int {
 	hits := 0
 	for _, fact := range plan.Facts {
-		for _, sentence := range v8IncidentalProse {
+		for _, sentence := range incidentalProse {
 			if grade.Hit(fact.Value, sentence) {
-				if label != "v7" && hits < 20 {
-					t.Logf("%s seed fact %s=%q hits %q", label, fact.Attribute, fact.Value, sentence)
-				}
 				hits++
 				break
 			}
@@ -85,7 +98,7 @@ func incidentalHits(t *testing.T, label string, plan *Plan) int {
 	return hits
 }
 
-func TestV8AmbiguousAnswerPoolsAreQualified(t *testing.T) {
+func TestV8AmbiguousAnswerPoolsStayQualified(t *testing.T) {
 	for attr, legacy := range map[string][]string{
 		"favorite_color":   colors,
 		"primary_language": softwareLanguages,
