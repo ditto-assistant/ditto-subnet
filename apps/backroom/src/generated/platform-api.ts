@@ -6781,11 +6781,12 @@ export interface paths {
          *     platform accepts the bytes only when their SHA-256 equals that declared
          *     digest, then stores them content-addressed in authoritative storage.
          *     The anonymous public mirror is a separate audited setting and, when
-         *     enabled, runs only from quorum finalization. Because the binding is *content*
-         *     equality against an already-signed digest, a
+         *     enabled, runs at quorum or on a later upload after quorum. Because the
+         *     binding is *content* equality against an already-signed digest, a
          *     caller spoofing another validator's hotkey can only ever upload the exact
          *     bytes that validator attested — so the header + permit check is sufficient
-         *     auth here. Idempotent: re-uploading an existing digest is a no-op.
+         *     auth here. A retry does not rewrite the primary object and can complete a
+         *     missing public mirror once quorum and the operator setting allow it.
          */
         put: operations["submit_transcript_api_v1_validator_agent__agent_id__transcript__run_id__put"];
         post?: never;
