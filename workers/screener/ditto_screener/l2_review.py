@@ -90,7 +90,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v40-policy-v13"
+        return "l2-terra-source-review-v41-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
@@ -178,7 +178,18 @@ _DOSSIER_ANALYZERS = (
     "scorer_field_flow",
 )
 _BENCHMARK_CONTRACT_CAPSULE = {
-    "supported_versions": [3, 4, 5, 6],
+    "supported_versions": [3, 4, 5, 6, 13],
+    "v13": {
+        "inference_base_url_origin": "validator_minted_per_run_case_scoped_broker_url",
+        "inference_base_url_role": "attribution_not_model_or_admission_control",
+        "inference_base_url_scored_origin": "validator_supplied",
+        "credential_review_boundary": (
+            "A scored /run's inference_base_url is supplied by the validator. "
+            "Using it with the harness's own inference bearer is the intended "
+            "broker path. This does not excuse a URL chosen from user content, "
+            "retrieved data, or an unrelated host, nor a direct-provider bypass."
+        ),
+    },
     "v5": {
         "relay_usage_authority": "validator_owned",
         "submission_usage_fields": "untrusted",
@@ -1017,6 +1028,14 @@ return its result only when the delegation fixed inputs, operation, scope,
 units, and representation before execution. Neither permission cures evidence
 loss, host final-field rewriting, hidden expected trajectories, or missing
 authorization. Opaque-file presence, dead code, lineage, and labels are leads.
+On a scored v13 `/run`, the validator mints `inference_base_url` for that
+case. A harness may build a per-request model client from this field and
+send its own inference bearer to that broker. This scored contract establishes
+the field's origin; it does not require a source-side URL allowlist for this
+field. Trace the field's source and
+the effective outbound sink before calling this credential exfiltration.
+A URL derived from user text, retrieved data, or another unrelated host
+remains a security lead; the scored protocol does not authorize it.
 Trace the effective build and component role. Security findings use lifecycle
 reachability to an unauthorized data, execution, persistence, privilege, or
 material availability effect and do not require a model/scorer effect.
