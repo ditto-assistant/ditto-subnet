@@ -310,7 +310,10 @@ _ADMISSION_CODES = frozenset(
         "provider_failure",
     }
 )
-_INFRASTRUCTURE_ADMISSION_CODES = frozenset({"platform_capacity", "provider_failure"})
+_MINER_REQUEST_ADMISSION_CODES = frozenset(
+    {"request_too_large", "invalid_json", "invalid_schema", "model_not_allowed"}
+)
+_NON_AGENT_ADMISSION_CODES = _ADMISSION_CODES - _MINER_REQUEST_ADMISSION_CODES
 
 
 def _admission_suffix(payload: dict[str, object]) -> str | None:
@@ -334,9 +337,10 @@ def _admission_suffix(payload: dict[str, object]) -> str | None:
         counts[code] = count
     if not counts:
         return None
-    # Any infrastructure refusal prevents attributing this mixed run solely
-    # to the miner, even when request errors have the larger count.
-    candidates = _INFRASTRUCTURE_ADMISSION_CODES & counts.keys()
+    # Generic 409 and 429 responses do not prove a miner fault: the Platform
+    # can also return them for route/grant state or capacity. Any such refusal
+    # prevents attributing this mixed run solely to the miner.
+    candidates = _NON_AGENT_ADMISSION_CODES & counts.keys()
     if not candidates:
         candidates = counts.keys()
     return max(candidates, key=lambda code: (counts[code], code))

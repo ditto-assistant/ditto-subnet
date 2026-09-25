@@ -57,10 +57,7 @@ _AGENT_ADMISSION_DETAIL_CODES = frozenset(
         "request_too_large",
         "invalid_json",
         "invalid_schema",
-        "stale_session",
         "model_not_allowed",
-        "grant_not_servable",
-        "grant_rate_denied",
     }
 )
 

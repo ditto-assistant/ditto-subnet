@@ -1913,10 +1913,17 @@ async def test_pre_reservation_413_is_request_too_large() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "infrastructure_code", ["platform_capacity", "provider_failure"]
+    "non_agent_code",
+    [
+        "stale_session",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    ],
 )
-async def test_mixed_admission_taxonomy_preserves_infrastructure(
-    infrastructure_code: str,
+async def test_mixed_admission_taxonomy_preserves_non_agent_code(
+    non_agent_code: str,
 ) -> None:
     failure = {
         "kind": "sandbox_failure",
@@ -1925,7 +1932,7 @@ async def test_mixed_admission_taxonomy_preserves_infrastructure(
         "diagnostics": {
             "admission_taxonomy": {
                 "request_too_large": {"count": 3},
-                infrastructure_code: {"count": 1},
+                non_agent_code: {"count": 1},
             }
         },
     }
@@ -1938,7 +1945,7 @@ async def test_mixed_admission_taxonomy_preserves_infrastructure(
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
                 "run-1", expected_bench_version=8
             )
-    assert raised.value.code == f"inference_request_rejected:{infrastructure_code}"
+    assert raised.value.code == f"inference_request_rejected:{non_agent_code}"
 
 
 def test_agent_inference_codes_are_never_no_fault() -> None:

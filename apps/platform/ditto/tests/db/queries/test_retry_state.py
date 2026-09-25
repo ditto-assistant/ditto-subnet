@@ -60,8 +60,14 @@ def test_classified_request_rejection_is_still_not_retried() -> None:
     assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is True
 
 
-def test_capacity_and_provider_refusals_remain_retryable() -> None:
-    for infrastructure_code in ("platform_capacity", "provider_failure"):
+def test_non_miner_refusals_remain_retryable() -> None:
+    for infrastructure_code in (
+        "stale_session",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    ):
         tickets = [
             _ticket(
                 validator_hotkey="validator-0",
