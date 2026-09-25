@@ -22,6 +22,7 @@ from ditto.treasury.store import TreasuryStore
 
 HOST_NAME = "sn118-treasury-signer"
 SECRET_ID = "sn118-treasury-signing-key"
+MIN_FEE_RESERVE_RAO = 1_000_000
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,9 @@ def dispatch_chain_leg(
     if amount_rao <= 0:
         raise ValueError("positive leg amount is required")
     with bt.Subtensor(network="finney") as chain:
+        free_tao_rao = chain.get_balance(source).rao
+        if free_tao_rao < MIN_FEE_RESERVE_RAO:
+            raise ValueError("treasury signer lacks its reserved TAO fee balance")
         if leg == "unstake":
             stake = chain.get_stake(source, plan["treasury_hotkey"], 118)
             if stake.rao < amount_rao:
@@ -161,8 +165,7 @@ def dispatch_chain_leg(
                 raise RuntimeError("unstake proceeds fell below approved floor")
             return _receipt(response, min(proceeds, intent["tao_value_rao"]))
         if leg == "stake_gm":
-            balance = chain.get_balance(source)
-            if balance.rao <= amount_rao:
+            if free_tao_rao - amount_rao < MIN_FEE_RESERVE_RAO:
                 raise ValueError("TAO balance lacks a fee reserve")
             response = chain.add_stake(
                 wallet=wallet,
@@ -185,6 +188,8 @@ def dispatch_chain_leg(
         if leg == "deposit_tao":
             if intent["route"] != "tao":
                 raise ValueError("TAO deposit mismatches the route")
+            if free_tao_rao - amount_rao < MIN_FEE_RESERVE_RAO:
+                raise ValueError("TAO deposit would consume the fee reserve")
             response = chain.transfer(
                 wallet=wallet,
                 destination_ss58=plan["destination_coldkey"],

@@ -130,3 +130,12 @@ def test_both_chain_routes_use_safe_sdk_calls(monkeypatch: pytest.MonkeyPatch) -
     assert chain.calls[-1][1]["origin_netuid"] == 28
     assert chain.calls[-1][1]["destination_netuid"] == 28
     assert chain.calls[-1][1]["hotkey_ss58"] == "gm-hotkey"
+
+
+def test_tao_deposit_keeps_a_free_fee_reserve(monkeypatch: pytest.MonkeyPatch) -> None:
+    chain = _Chain()
+    monkeypatch.setattr(execution.bt, "Subtensor", lambda **_kwargs: chain)
+    wallet = SimpleNamespace(coldkeypub=SimpleNamespace(ss58_address="reviewed-wallet"))
+    with pytest.raises(ValueError, match="fee reserve"):
+        execution.dispatch_chain_leg("deposit_tao", 9_500_000, _plan("tao"), wallet)
+    assert not chain.calls
