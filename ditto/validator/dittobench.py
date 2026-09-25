@@ -342,7 +342,7 @@ def _admission_suffix(payload: dict[str, object]) -> str | None:
     # prevents attributing this mixed run solely to the miner.
     candidates = _NON_AGENT_ADMISSION_CODES & counts.keys()
     if not candidates:
-        candidates = counts.keys()
+        candidates = frozenset(counts)
     return max(candidates, key=lambda code: (counts[code], code))
 
 
