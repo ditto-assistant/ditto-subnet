@@ -39,6 +39,7 @@ else
   DRAIN_PY="$(dirname "$0")/screener-fleet-drain.py"
 fi
 HELD_WORKERS="$STATE_DIR/held-workers"
+UNIT_DROPIN_ROOT="${SCREENER_FLEET_UNIT_DROPIN_ROOT:-/etc/systemd/system}"
 
 log() { printf 'screener-fleet-auto-update: %s\n' "$*" >&2; }
 die() { log "error: $*"; exit 1; }
@@ -207,6 +208,22 @@ lease_decision() {
   python3 "$DRAIN_PY" --lease "$FLEET_STATE_DIR/workers/$index/active-lease.json" --now "$(date +%s)"
 }
 
+# Debian systemctl kill defaults to --kill-whom=all, which also signals Docker
+# and L2 children in the unit cgroup. Only the Python main process should see
+# SIGTERM so those children can finish and the worker can sign its verdict.
+signal_worker_main() {
+  "$SYSTEMCTL" kill --kill-whom=main -s SIGTERM \
+    "ditto-screener-worker@$1.service" >/dev/null 2>&1 || true
+}
+
+prevent_restart_after_review() {
+  local index="$1" dropin
+  dropin="$UNIT_DROPIN_ROOT/ditto-screener-worker@${index}.service.d"
+  install -d -m 0755 "$dropin"
+  printf '[Service]\nRestart=no\n' >"$dropin/drain-no-restart.conf"
+  "$SYSTEMCTL" disable "ditto-screener-worker@$index.service"
+}
+
 stop_fleet() {
   local pids=() index decision bound
   : >"$HELD_WORKERS"
@@ -216,7 +233,7 @@ stop_fleet() {
   timeout 60 "$SYSTEMCTL" stop ditto-screener-fleet-agent.service || true
 
   for index in $(worker_indexes); do
-    "$SYSTEMCTL" kill -s SIGTERM "ditto-screener-worker@$index.service" >/dev/null 2>&1 || true
+    signal_worker_main "$index"
   done
   bound=$((DRAIN_STARTED_AT + DRAIN_BOUND_SECONDS))
   while [ "$(date +%s)" -lt "$bound" ]; do
@@ -255,20 +272,16 @@ stop_fleet() {
   # Ansible normally reconciles this at converge time. The self-updater must
   # enforce the same bound too: release delivery is deliberately pull-based,
   # and it must be safe even when no Ansible run follows the canary change.
-  for index in $(
-    "$SYSTEMCTL" list-units --all --type=service --plain --no-legend \
-      'ditto-screener-worker@*.service' \
-      | awk '$1 ~ /^ditto-screener-worker@[1-9][0-9]*\.service$/ {
-          worker = $1
-          sub(/^ditto-screener-worker@/, "", worker)
-          sub(/\.service$/, "", worker)
-          print worker
-        }'
-  ); do
+  # Restart=always survives disable, so an out-of-range worker that is still
+  # finishing a review must not be restarted when that process exits.
+  local reload=0
+  for index in $(worker_indexes); do
     if [ "$index" -gt "$WORKER_PROCESSES" ]; then
-      "$SYSTEMCTL" disable "ditto-screener-worker@$index.service"
+      prevent_restart_after_review "$index"
+      reload=1
     fi
   done
+  [ "$reload" -eq 0 ] || "$SYSTEMCTL" daemon-reload
 }
 
 ensure_worker_state() {
@@ -362,6 +375,10 @@ activate_release() {
   log "activated $revision from authenticated descriptor $exact"
 }
 
+if [ "${SCREENER_FLEET_TEST_STOP_FLEET:-}" = 1 ]; then
+  stop_fleet
+  exit 0
+fi
 [ "$(id -u)" -eq 0 ] || die "run as root"
 [[ "$SELF_PATH" = "$STATE_DIR/"* ]] || \
   die "self-update path must stay inside the updater state directory"

@@ -48,5 +48,6 @@ printf 'WORKER=%s\nDECIDED_AT=%s\nACTION=operator-hold\n' \
   "$worker" "$(date +%s)" >"$STATE_DIR/operator-hold-worker-$worker.env"
 # Ask the unit to finish. Do not escalate. If the process is already gone,
 # Platform parks the unsigned attempt for manual retry after the heartbeat grace.
-"$SYSTEMCTL" kill -s SIGTERM "ditto-screener-worker@${worker}.service" || true
+"$SYSTEMCTL" kill --kill-whom=main -s SIGTERM \
+  "ditto-screener-worker@${worker}.service" || true
 echo "recorded operator hold for worker $worker; no SIGKILL was sent"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -248,7 +250,7 @@ def test_self_updater_reconciles_stale_workers_when_canary_shrinks() -> None:
 
     assert "list-units --all --type=service --plain --no-legend" in updater
     assert "ditto-screener-worker@*.service" in updater
-    assert len(awk_programs) == 2
+    assert len(awk_programs) == 1
     unit_listing = "\n".join(
         (
             "ditto-screener-worker@1.service loaded active running",
@@ -362,3 +364,95 @@ def test_gce_overflow_workers_pull_the_same_authenticated_release() -> None:
     assert "ditto-screener-release-update.timer" in bootstrap
     assert "ExecStart=/opt/ditto/screener/src/" in service
     assert "OnUnitActiveSec=10min" in timer
+
+
+def test_drain_signals_only_the_main_process_and_stops_restart_on_shrink(
+    tmp_path: Path,
+) -> None:
+    """SIGTERM hits only the main process, and a held extra worker cannot restart."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    state = tmp_path / "fleet"
+    updater_state = state / "updater"
+    updater_state.mkdir(parents=True)
+    dropins = tmp_path / "units"
+    log = tmp_path / "systemctl.log"
+    worker = state / "workers" / "12"
+    worker.mkdir(parents=True)
+    now = 1_700_000_000
+    (worker / "active-lease.json").write_text(
+        json.dumps(
+            {
+                "agent_id": "worker-12",
+                "attempt_id": "attempt-12",
+                "lease_deadline": now + 3600,
+                "progress_at": now,
+                "revision": "a" * 40,
+            }
+        )
+    )
+    (bin_dir / "systemctl").write_text(
+        """#!/bin/sh
+printf '%s\\n' "$*" >>"$SCREENER_TEST_SYSTEMCTL_LOG"
+case "$1" in
+  kill)
+    printf '%s\\n' "$*" | grep -q 'worker@' || exit 0
+    printf '%s\\n' "$*" | grep -q -- '--kill-whom=main' || {
+      printf 'child-signaled\\n' >>"$SCREENER_TEST_SYSTEMCTL_LOG"
+      exit 1
+    }
+    ;;
+  is-active)
+    printf '%s\\n' "$*" | grep -q 'worker@12' && exit 0
+    exit 1
+    ;;
+  list-units)
+    printf '%s\\n' 'ditto-screener-worker@12.service loaded active running'
+    ;;
+  stop)
+    printf '%s\\n' "$*" | grep -q 'worker@12' && {
+      printf 'interrupted-review\\n' >>"$SCREENER_TEST_SYSTEMCTL_LOG"
+      exit 1
+    }
+    ;;
+esac
+exit 0
+"""
+    )
+    (bin_dir / "systemctl").chmod(0o755)
+    (bin_dir / "timeout").write_text("#!/bin/sh\nshift\nexec \"$@\"\n")
+    (bin_dir / "timeout").chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{bin_dir}:{env.get('PATH', '')}",
+            "SCREENER_FLEET_TEST_STOP_FLEET": "1",
+            "SCREENER_FLEET_UPDATE_STATE_DIR": str(updater_state),
+            "SCREENER_FLEET_STATE_DIR": str(state),
+            "SCREENER_FLEET_UNIT_DROPIN_ROOT": str(dropins),
+            "SCREENER_FLEET_WORKER_PROCESSES": "1",
+            "SCREENER_FLEET_DRAIN_BOUND_SECONDS": "0",
+            "SCREENER_TEST_SYSTEMCTL_LOG": str(log),
+            "SCREENER_FLEET_SELF_PATH": str(UPDATER),
+        }
+    )
+    result = subprocess.run(
+        ["bash", str(UPDATER)],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    recorded = log.read_text()
+    assert "--kill-whom=main -s SIGTERM ditto-screener-worker@12.service" in recorded
+    assert "child-signaled" not in recorded
+    assert "interrupted-review" not in recorded
+    assert "disable ditto-screener-worker@12.service" in recorded
+    assert "daemon-reload" in recorded
+    dropin = (
+        dropins / "ditto-screener-worker@12.service.d" / "drain-no-restart.conf"
+    )
+    assert dropin.read_text() == "[Service]\nRestart=no\n"
+    hold = (ROOT / "scripts/screener-fleet-release-hold.sh").read_text()
+    assert "kill --kill-whom=main -s SIGTERM" in hold
