@@ -60,6 +60,11 @@ def _arguments() -> argparse.Namespace:
     parser.add_argument("--max-output-tokens", type=int, default=20_000)
     parser.add_argument("--max-completion-tokens", type=int, default=2_400)
     parser.add_argument("--max-cost-usd", type=float, default=2.0)
+    parser.add_argument(
+        "--single-layer-sol",
+        action="store_true",
+        help="report-only GPT-6 Sol analyst with isolated tools and no L3",
+    )
     parser.add_argument("--run-l1", action="store_true")
     parser.add_argument("--l1-model", default="openai/gpt-5.6-luna")
     parser.add_argument("--l1-timeout-seconds", type=float, default=600.0)
@@ -132,6 +137,8 @@ async def _main() -> None:
         raise SystemExit("--max-completion-tokens must be between 1 and 16000")
     if not 0 < args.max_cost_usd <= 25:
         raise SystemExit("--max-cost-usd must be between 0 and 25")
+    if args.single_layer_sol and not args.require_label_match:
+        raise SystemExit("--single-layer-sol requires --require-label-match")
     if not 30 <= args.l1_timeout_seconds <= 600:
         raise SystemExit("--l1-timeout-seconds must be between 30 and 600")
     if not 1 <= args.l1_max_steps <= 160:
@@ -167,6 +174,7 @@ async def _main() -> None:
             raise SystemExit("no manifest item matched --artifact-sha256")
     cache_dir = args.cache_dir or args.results_file.parent / "cache"
     audit_file = args.audit_file or args.results_file.parent / "audit.jsonl"
+    analyst_model = "openai/gpt-6-sol" if args.single_layer_sol else L2_MODEL
     agent = TerraSolSourceReviewAgent(
         api_key_file=str(args.api_key_file),
         base_url="https://openrouter.ai/api/v1",
@@ -185,6 +193,9 @@ async def _main() -> None:
         max_completion_tokens=args.max_completion_tokens,
         max_cost_usd=args.max_cost_usd,
         cache_ttl_seconds=7 * 86_400,
+        model=analyst_model,
+        fallback_models=() if args.single_layer_sol else L2_FALLBACK_MODELS,
+        l3_enabled=not args.single_layer_sol,
         scorer_capabilities_url=args.scorer_capabilities_url,
         expected_scorer_revision=args.expected_scorer_revision,
         # Local IPv6 paths to OpenRouter can be unstable on some developer
@@ -211,10 +222,17 @@ async def _main() -> None:
     )
     metadata = {
         "models": {
-            "analyst": L2_MODEL,
-            "analyst_fallbacks": list(L2_FALLBACK_MODELS),
-            "critic": L3_MODEL,
+            "analyst": analyst_model,
+            "analyst_fallbacks": (
+                [] if args.single_layer_sol else list(L2_FALLBACK_MODELS)
+            ),
+            "critic": None if args.single_layer_sol else L3_MODEL,
         },
+        "review_mode": (
+            "report_only_single_layer_sol"
+            if args.single_layer_sol
+            else "production_multilayer"
+        ),
         "revisions": {
             "analyst_prompt": l2_prompt_revision(SCREENING_POLICY_VERSION),
             "critic_prompt": l2_critic_prompt_revision(SCREENING_POLICY_VERSION),

@@ -286,6 +286,14 @@ analysis but cannot produce a trusted image, served runtime, private challenge,
 or validator receipt. Those still require an isolated report-only live replay
 before a primary retry.
 
+For a report-only single-layer comparator, repeat the same exact manifest and
+limits with `--single-layer-sol --require-label-match` and separate private
+cache, audit, and result paths. This runs GPT-6 Sol as the sole autonomous
+coding analyst against the same isolated analyzers, with no fallback model or
+L3 critic. The strict gate requires a terminal, label-matching safe or violation
+outcome; a provider fault or inconclusive response fails it. This comparator
+does not change production decisions or replace signed live evidence.
+
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a
 directory of already verified artifacts. It rechecks every tarball digest,
 runs the production reviewer and analyzer image with bounded concurrency, and
