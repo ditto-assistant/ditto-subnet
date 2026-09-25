@@ -133,6 +133,9 @@ and intervening inference usage.
 
 ## Durable execution and daily trigger
 
+The [operator runbook](sn118-treasury-operator-runbook.md) gives the exact
+review, custody, planner, plan-file, and one-leg payment sequence.
+
 `ditto/treasury/store.py` uses a private SQLite WAL journal with full synchronous
 commits and an append-only, hash-chained event table. It starts paused. A plan
 binds one idempotency key, policy revision, GM account reference, linked sender,
