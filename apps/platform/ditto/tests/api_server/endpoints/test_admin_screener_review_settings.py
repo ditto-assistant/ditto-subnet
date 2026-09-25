@@ -1,8 +1,9 @@
 """Contract and concurrency tests for screener review settings."""
 
+import hashlib
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -12,8 +13,9 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from ditto.api_models.screener_review_settings import policy_manifest_digest
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import ScreenerHeartbeat
+from ditto.db.models import ScreenerHeartbeat, ScreenerNode
 
 pytestmark = pytest.mark.asyncio
 
@@ -158,6 +160,34 @@ async def test_enforce_is_activatable_but_global_inherit_is_not(
     )
     assert inherit.status_code == 409
     assert "exact worker scope" in inherit.text
+
+
+async def test_gpt6_sol_l2_setting_round_trips_to_worker(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, settings_maker)
+    payload = _payload("*", "enforce")
+    settings = payload["settings"]
+    assert isinstance(settings, dict)
+    settings["l2_model"] = "openai/gpt-6-sol"
+    settings["source_review_model"] = "openai/gpt-6-luna"
+    settings["l3_model"] = "openai/gpt-6-sol"
+    written = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=payload,
+    )
+    assert written.status_code == 200, written.text
+    fetched = await client.get(
+        "/api/v1/screener/review-settings?instance_id=ditto-screener-prod",
+        headers=_SCREENER_HEADERS,
+    )
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["settings"]["l2_model"] == "openai/gpt-6-sol"
+    assert fetched.json()["settings"]["source_review_model"] == "openai/gpt-6-luna"
+    assert fetched.json()["settings"]["l3_model"] == "openai/gpt-6-sol"
 
 
 async def test_manifest_rotation_preserves_policy_and_requires_exact_confirmation(
@@ -324,3 +354,84 @@ async def test_admin_read_is_authenticated_and_history_is_append_only(
         second.json()["revision"],
         first.json()["revision"],
     ]
+
+
+async def test_applied_worker_settings_use_enrolled_node_scope_before_global(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, settings_maker)
+    node_id = "screener-node-1"
+    worker_id = f"{node_id}-worker-2"
+    hotkey = _SCREENER_HEADERS["X-Screener-Hotkey"]
+    global_write = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=_payload("*", "shadow"),
+    )
+    assert global_write.status_code == 200, global_write.text
+    node_write = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=_payload(node_id, "enforce"),
+    )
+    assert node_write.status_code == 200, node_write.text
+    node_revision = node_write.json()
+    settings = node_revision["settings"]
+    now = datetime.now(UTC)
+    async with settings_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id=node_id,
+                provider="test",
+                provider_resource_id="test-screener-node-1",
+                screener_hotkey=hotkey,
+                token_hash=hashlib.sha256(b"test-node-token").hexdigest(),
+                token_expires_at=now + timedelta(hours=1),
+                status="active",
+                capacity=2,
+            )
+        )
+        session.add(
+            ScreenerHeartbeat(
+                screener_hotkey=hotkey,
+                instance_id=worker_id,
+                software_version="0.21.2",
+                protocol_version=7,
+                policy_version=13,
+                state="polling",
+                first_seen_at=now,
+                reported_at=now,
+                seen_at=now,
+                signature="ab" * 64,
+                system_metrics={
+                    "review_settings": {
+                        "revision": node_revision["revision"],
+                        "scope": node_id,
+                        "mode": "enforce",
+                        "checksum": node_revision["checksum"],
+                        "source": "platform",
+                        "policy_manifest_profile": settings["policy_manifest_profile"],
+                        "policy_manifest_rotation_id": settings[
+                            "policy_manifest_rotation_id"
+                        ],
+                        "policy_manifest_digest": policy_manifest_digest(
+                            settings["policy_manifest_profile"],
+                            settings["policy_manifest_rotation_id"],
+                        ),
+                    }
+                },
+            )
+        )
+    response = await client.get(
+        "/api/v1/admin/screener-review-settings", headers=_ADMIN_HEADERS
+    )
+    assert response.status_code == 200, response.text
+    applied = response.json()["applied_instances"]
+    assert len(applied) == 1
+    assert applied[0]["instance_id"] == worker_id
+    assert applied[0]["expected_scope"] == node_id
+    assert applied[0]["expected_revision"] == node_revision["revision"]
+    assert applied[0]["matches_effective"] is True

@@ -41,6 +41,11 @@ from ditto.api_models.queue_policy_settings import (
     QueuePolicySettingsRevision,
     rollout_locked_change,
 )
+from ditto.api_models.screener_review_settings import (
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
+    ScreenerReviewSettings,
+    integrity_double_check_posture_error,
+)
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.queue_policy_settings import (
@@ -56,6 +61,7 @@ from ditto.db.queries.queue_policy_settings import (
     latest_queue_policy_settings_revision,
     list_queue_policy_settings_revisions,
 )
+from ditto.db.queries.screening import latest_integrity_double_check_posture
 
 router = APIRouter(prefix="/admin/queue-policy-settings", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -183,6 +189,36 @@ async def get_settings(
     )
 
 
+async def _assert_integrity_double_check_posture(session: AsyncSession) -> None:
+    """Refuse an enforced double-check that no screener could ever run.
+
+    Holds opened without a usable posture are never claimed, so enabling
+    enforce first would pull top-five rows off the emission ledger with no
+    review able to release them.
+    """
+    row = await latest_integrity_double_check_posture(session)
+    if row is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "integrity_double_check_mode=enforce requires a screener review "
+                f"settings revision in scope {INTEGRITY_DOUBLE_CHECK_SCOPE!r}; "
+                "apply the stronger reviewer posture there first"
+            ),
+        )
+    error = integrity_double_check_posture_error(
+        ScreenerReviewSettings.model_validate(row.settings)
+    )
+    if error is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{INTEGRITY_DOUBLE_CHECK_SCOPE} reviewer revision {row.revision} "
+                f"cannot run the double-check: {error}"
+            ),
+        )
+
+
 @router.post("", response_model=QueuePolicySettingsRevision)
 async def create_settings_revision(
     payload: AdminQueuePolicySettingsRequest,
@@ -223,6 +259,8 @@ async def create_settings_revision(
         current=settings_from_row(latest),
         proposed=payload.settings,
     )
+    if payload.settings.deferred_source_review.integrity_double_check_mode == "enforce":
+        await _assert_integrity_double_check_posture(session)
     try:
         row = await insert_queue_policy_settings_revision(
             session,

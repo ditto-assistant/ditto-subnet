@@ -27,6 +27,8 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_REMOTE_BUILD_MODE",
         "SCREENER_BUILD_MEMORY",
         "SCREENER_IMAGE_BUILD_MEMORY",
+        "SCREENER_V13_RUNTIME_RECEIPTS_MODE",
+        "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE",
         "NETUID",
     ):
         monkeypatch.delenv(k, raising=False)
@@ -45,6 +47,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.image_build_memory == "8g"
     assert cfg.remote_build_timeout_seconds == 1500
     assert cfg.remote_build_mode == "off"
+    assert cfg.v13_runtime_receipts_mode == "off"
     assert cfg.gh_token_file is None
     # Must default to (at least) the platform's 20 MiB upload cap, else the gate
     # false-fails legitimately-uploaded tarballs.
@@ -71,6 +74,26 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.l2_max_cost_usd == 2.0
     assert cfg.l2_analyst_reasoning_effort == "model_default"
     assert cfg.l2_critic_reasoning_effort == "medium"
+    assert cfg.require_signed_runtime_lease is False
+
+
+def test_gpt6_sol_l2_model_is_valid_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_L2_REVIEW_MODEL", "openai/gpt-6-sol")
+    monkeypatch.setenv("SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-6-luna")
+    monkeypatch.setenv("SCREENER_L3_REVIEW_MODEL", "openai/gpt-6-sol")
+    config = parse_screener_config_from_env()
+    assert config.l2_review_model == "openai/gpt-6-sol"
+    assert config.source_review_model == "openai/gpt-6-luna"
+    assert config.l3_review_model == "openai/gpt-6-sol"
+
+
+def test_signed_runtime_lease_requires_explicit_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", "true")
+    assert parse_screener_config_from_env().require_signed_runtime_lease is True
 
 
 def test_image_build_memory_additively_replaces_legacy_name(
@@ -82,6 +105,17 @@ def test_image_build_memory_additively_replaces_legacy_name(
 
     monkeypatch.setenv("SCREENER_IMAGE_BUILD_MEMORY", "8g")
     assert parse_screener_config_from_env().image_build_memory == "8g"
+
+
+def test_v13_runtime_receipts_require_explicit_shadow_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_V13_RUNTIME_RECEIPTS_MODE", "shadow")
+    assert parse_screener_config_from_env().v13_runtime_receipts_mode == "shadow"
+    monkeypatch.setenv("SCREENER_V13_RUNTIME_RECEIPTS_MODE", "enforce")
+    with pytest.raises(ValueError, match="SCREENER_V13_RUNTIME_RECEIPTS_MODE"):
+        parse_screener_config_from_env()
 
 
 def test_remote_build_timeout_is_independent_and_configurable(
@@ -124,10 +158,10 @@ def test_remote_build_timeout_is_independent_and_configurable(
             "ditto",
             "must match SCREENER_REVIEW_INFERENCE_PROVIDER",
         ),
-        ("SCREENER_L2_MAX_INPUT_TOKENS", "1000001", "1000000"),
-        ("SCREENER_L2_MAX_COST_USD", "20", r"in \(0, 10\]"),
+        ("SCREENER_L2_MAX_INPUT_TOKENS", "5000001", "5000000"),
+        ("SCREENER_L2_MAX_COST_USD", "25.01", r"in \(0, 25\]"),
         ("SCREENER_L2_ANALYST_REASONING_EFFORT", "high", "model_default"),
-        ("SCREENER_L2_CRITIC_REASONING_EFFORT", "none", "low or medium"),
+        ("SCREENER_L2_CRITIC_REASONING_EFFORT", "none", "low, medium, or high"),
         (
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS",
             "60",
@@ -300,3 +334,34 @@ def test_openrouter_stays_the_default_review_gateway(monkeypatch) -> None:
     cfg = parse_screener_config_from_env()
     assert cfg.review_inference_provider == "openrouter"
     assert cfg.source_review_base_url == "https://openrouter.ai/api/v1"
+
+
+def test_platform_review_budget_limits_are_accepted(monkeypatch):
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_L2_MAX_STEPS", "256")
+    monkeypatch.setenv("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000000")
+    monkeypatch.setenv("SCREENER_L2_MAX_COST_USD", "25")
+    monkeypatch.setenv("SCREENER_L2_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("SCREENER_L2_CRITIC_REASONING_EFFORT", "high")
+    config = parse_screener_config_from_env()
+    assert config.l2_max_steps == 256
+    assert config.l2_max_output_tokens == 1_000_000
+    assert config.l2_max_cost_usd == 25
+    assert config.l2_timeout_seconds == 1800
+    assert config.l2_critic_reasoning_effort == "high"
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("SCREENER_L2_MAX_STEPS", "257"),
+        ("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000001"),
+        ("SCREENER_L2_MAX_COST_USD", "25.01"),
+        ("SCREENER_L2_TIMEOUT_SECONDS", "1801"),
+    ],
+)
+def test_review_budgets_remain_bounded(monkeypatch, name, value):
+    _base_env(monkeypatch)
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ScreenerConfigError):
+        parse_screener_config_from_env()

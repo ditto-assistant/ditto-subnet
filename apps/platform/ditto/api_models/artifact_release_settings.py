@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure
 
 
@@ -26,11 +28,60 @@ class ArtifactReleaseSettingsRevision(BaseModel):
     created_at: datetime | None
 
 
+class SourceReleaseEligibilityRow(BaseModel):
+    """Bounded receipt metadata, without raw validator payloads or source."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    agent_id: UUID
+    artifact_sha256: str
+    crowned_at: datetime
+    weight_confirmed_at: datetime | None
+    emission_confirmed_at: datetime | None
+    emission_block: int | None
+    emission_block_hash: str | None
+    emission_epoch_index: int | None
+    emission_ledger_digest: str | None
+
+
+class ReceiptDiagnosticRow(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    report: ReceiptDiagnosticReport
+    received_at: datetime
+    stale: bool
+
+
+class SourceReleaseGateStatus(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    version: str
+    automatic_confirmation_enabled: bool = False
+    collector_cursor_block: int | None = None
+    collector_cursor_hash: str | None = None
+    collector_runtime_code_hash: str | None = None
+    collector_blocked_reason: str | None = None
+    last_payout_block: int | None = None
+    last_payout_blocked_reason: str | None = None
+    last_payout_attributed: bool = False
+    unresolved_payout_count: int = 0
+    pending_receipt_count: int = 0
+    receipt_diagnostics: list[ReceiptDiagnosticRow] = Field(
+        default_factory=list, max_length=64
+    )
+    receipt_diagnostics_has_more: bool = False
+    pending_kings: int
+    confirmed_kings: int
+    rows: Annotated[list[SourceReleaseEligibilityRow], Field(max_length=25)]
+    rows_limit: int = 25
+    rows_has_more: bool
+
+
 class AdminArtifactReleaseSettingsResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: ArtifactReleaseSettingsRevision
     history: list[ArtifactReleaseSettingsRevision]
+    release_gate: SourceReleaseGateStatus
 
 
 class AdminArtifactReleaseSettingsRequest(BaseModel):

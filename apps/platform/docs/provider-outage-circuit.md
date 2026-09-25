@@ -9,8 +9,12 @@ control both scoring and source-review leases.
 
 The relay opens the `openrouter` circuit only after its bounded in-place retry
 sequence is exhausted entirely by canonical, receipt-free HTTP 429 or 503
-responses. Timeouts, transport ambiguity, receipt-bearing responses, and
-ordinary provider errors do not open the circuit.
+chat responses. Pinned embedding-model backpressure is scoped to the failed
+embedding request: it cannot open the provider-wide chat circuit or close an
+existing chat outage on an embedding success. Its evaluation remains an
+infrastructure failure without a score. Timeouts, transport ambiguity,
+receipt-bearing responses, and ordinary provider errors do not open the
+chat circuit.
 
 Targon source review calls OpenRouter directly. Its short-lived Platform job
 capability may therefore report an exhausted HTTP 429 through the relay's

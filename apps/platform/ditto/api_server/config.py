@@ -35,12 +35,22 @@ from ditto.api_server.datapipeline import (
     DataPipelineConfig,
     parse_data_pipeline_config_from_env,
 )
+from ditto.api_server.ditto_link import DittoLinkConfig
 from ditto.api_server.embedding import (
     EmbeddingConfig,
     parse_embedding_config_from_env,
 )
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.pricing import PricingConfig, parse_pricing_config_from_env
+from ditto.api_server.private_benchmark_preparation import (
+    PrivatePreparationConfig,
+    check_private_preparation_config,
+    parse_private_preparation_config,
+)
+from ditto.api_server.source_review_queue_slo_config import (
+    SourceReviewQueueSloConfig,
+    parse_source_review_queue_slo_config_from_env,
+)
 from ditto.api_server.storage import StorageConfig, parse_storage_config_from_env
 from ditto.api_server.validator_names import (
     ValidatorNamesConfig,
@@ -67,6 +77,11 @@ def _http_origin(value: str) -> tuple[str, str, int] | None:
     return parsed.scheme, parsed.hostname.lower(), port or default_port
 
 
+DEFAULT_CAPACITY_EVENT_RETENTION_DAYS = 30
+# Floor for a non-zero window so a typo cannot erase incident-review history.
+MIN_CAPACITY_EVENT_RETENTION_DAYS = 7
+
+
 @dataclass(frozen=True)
 class ScreenerAuthConfig:
     """Credentials accepted by the platform-operated screener endpoints."""
@@ -88,6 +103,9 @@ class ScreenerAuthConfig:
 
     controller_lease_seconds: int = 180
     """Fencing lease renewed by the single normal capacity writer."""
+
+    capacity_event_retention_days: int = DEFAULT_CAPACITY_EVENT_RETENTION_DAYS
+    """Age past which capacity audit events are pruned; ``0`` keeps them all."""
 
     @property
     def enabled(self) -> bool:
@@ -250,6 +268,7 @@ class TargonRentalConfig:
     candidate_reader_sa: str
     bootstrap_sa: str
     source_review_secret_resource: str
+    fanout_shadow_secret_resource: str = ""
     environment: str = "prod"
     interval_seconds: float = 15.0
     provision_timeout_seconds: float = 600.0
@@ -348,6 +367,10 @@ class ApiServerConfig:
     validator_compatibility: ValidatorCompatibilityConfig
     """Validator release and heartbeat requirements for scoring tickets."""
 
+    private_preparation: PrivatePreparationConfig = field(
+        default_factory=PrivatePreparationConfig
+    )
+
     inference_proxy: InferenceProxyConfig = field(
         default_factory=lambda: InferenceProxyConfig(
             enabled=False,
@@ -395,6 +418,18 @@ class ApiServerConfig:
 
     admin_api_token: str | None = None
     """Bearer token for private Backroom/operator administration endpoints."""
+
+    ditto_link: DittoLinkConfig = field(
+        default_factory=lambda: DittoLinkConfig(
+            enabled=False,
+            issuer="https://api.heyditto.ai",
+            client_id=None,
+            client_secret=None,
+            redirect_url="",
+            return_url="https://dittobench.ai/#/reviews",
+        )
+    )
+    """Sign in with Ditto relying-party settings; disabled until configured."""
 
     coding_catalog_curator_hotkeys: tuple[str, ...] = ()
     """Offline curator keys allowed to register signed coding catalogs.
@@ -476,16 +511,28 @@ class ApiServerConfig:
     backoff never reaches zero rate: a champion whose interval flatlines at the
     cap is itself the signal that the field has gone stagnant."""
 
+    conversation_shadow_enabled: bool = False
+    """Admit top-five Astra conversation assessments; never changes reward scores."""
+
     efficiency_bonus: EfficiencyBonusConfig = field(
         default_factory=EfficiencyBonusConfig
     )
     """Relative token-efficiency bonus knobs (bench_version >= 7); default-off."""
+
+    source_review_queue_slo: SourceReviewQueueSloConfig = field(
+        default_factory=SourceReviewQueueSloConfig
+    )
+    """Observability-only overdue thresholds for the ordinary source-review
+    queue-age SLO (ditto-subnet#2042). Both thresholds default unset."""
 
     targon: TargonRentalConfig | None = None
     """In-process Targon rental loop. Disabled when the API key is absent."""
 
     cloudrun: CloudRunScreeningConfig | None = None
     """Cloud Run Jobs/Service fallback. Disabled when project/SA env is absent."""
+
+    source_emission_confirmation_enabled: bool = True
+    """Allow verified payout attribution to arm the embargo; collection stays on."""
 
 
 def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig | None:
@@ -531,6 +578,9 @@ def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig
         bootstrap_sa=os.environ.get("DITTO_TARGON_BOOTSTRAP_SA", "").strip(),
         source_review_secret_resource=os.environ.get(
             "DITTO_TARGON_SOURCE_REVIEW_SECRET", ""
+        ).strip(),
+        fanout_shadow_secret_resource=os.environ.get(
+            "DITTO_TARGON_FANOUT_SHADOW_SECRET", ""
         ).strip(),
         environment=os.environ.get("DITTO_TARGON_ENVIRONMENT", "prod").strip()
         or "prod",
@@ -675,6 +725,24 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         raise ApiServerConfigError(
             "screener bootstrap, node token, and controller lease TTLs must be integers"
         ) from error
+    try:
+        screener_capacity_event_retention_days = int(
+            os.environ.get(
+                "SCREENER_CAPACITY_EVENT_RETENTION_DAYS",
+                str(DEFAULT_CAPACITY_EVENT_RETENTION_DAYS),
+            )
+        )
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "SCREENER_CAPACITY_EVENT_RETENTION_DAYS must be an integer"
+        ) from error
+    if screener_capacity_event_retention_days != 0 and (
+        screener_capacity_event_retention_days < MIN_CAPACITY_EVENT_RETENTION_DAYS
+    ):
+        raise ApiServerConfigError(
+            "SCREENER_CAPACITY_EVENT_RETENTION_DAYS must be 0 (keep all) or at "
+            f"least {MIN_CAPACITY_EVENT_RETENTION_DAYS}"
+        )
     minimum_validator_version = (
         os.environ.get("DITTO_MIN_VALIDATOR_SOFTWARE_VERSION", "0.7.0").strip() or None
     )
@@ -906,6 +974,16 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     cloudrun = _parse_cloudrun_screening_config_from_env()
 
     return ApiServerConfig(
+        conversation_shadow_enabled=os.environ.get(
+            "DITTO_CONVERSATION_SHADOW_ENABLED", "false"
+        )
+        .strip()
+        .lower()
+        in _TRUTHY,
+        source_emission_confirmation_enabled=(
+            os.environ.get("DITTO_SOURCE_EMISSION_CONFIRMATION_ENABLED", "true").lower()
+            in _TRUTHY
+        ),
         host=host,
         port=port,
         log_level=log_level,
@@ -917,6 +995,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         storage=parse_storage_config_from_env(),
         embedding=parse_embedding_config_from_env(),
         data_pipeline=parse_data_pipeline_config_from_env(),
+        private_preparation=parse_private_preparation_config(),
         targon=targon,
         cloudrun=cloudrun,
         screener_auth=ScreenerAuthConfig(
@@ -926,6 +1005,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             bootstrap_ttl_seconds=screener_bootstrap_ttl_seconds,
             node_token_ttl_seconds=screener_node_token_ttl_seconds,
             controller_lease_seconds=screener_controller_lease_seconds,
+            capacity_event_retention_days=screener_capacity_event_retention_days,
         ),
         validator_names=parse_validator_names_config_from_env(),
         validator_compatibility=ValidatorCompatibilityConfig(
@@ -935,6 +1015,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         ),
         inference_proxy=inference_proxy,
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
+        ditto_link=parse_ditto_link_config_from_env(),
         coding_catalog_curator_hotkeys=tuple(
             value
             for item in os.environ.get(
@@ -956,7 +1037,61 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         top5_backoff_doubling_tempos=top5_backoff_doubling_tempos,
         top5_backoff_cap=top5_backoff_cap,
         efficiency_bonus=efficiency_bonus,
+        source_review_queue_slo=parse_source_review_queue_slo_config_from_env(),
     )
+
+
+def parse_ditto_link_config_from_env() -> DittoLinkConfig:
+    """``DITTO_LINK_*``: Sign in with Ditto as a relying party. Off by default."""
+    enabled = os.environ.get("DITTO_LINK_ENABLED", "false").strip().lower() in _TRUTHY
+    try:
+        timeout_seconds = float(os.environ.get("DITTO_LINK_TIMEOUT_SECONDS", "10"))
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_LINK_TIMEOUT_SECONDS must be numeric"
+        ) from error
+    return DittoLinkConfig(
+        enabled=enabled,
+        issuer=os.environ.get("DITTO_LINK_ISSUER", "https://api.heyditto.ai")
+        .strip()
+        .rstrip("/"),
+        client_id=os.environ.get("DITTO_LINK_CLIENT_ID", "").strip() or None,
+        client_secret=os.environ.get("DITTO_LINK_CLIENT_SECRET", "").strip() or None,
+        redirect_url=os.environ.get("DITTO_LINK_REDIRECT_URL", "").strip(),
+        return_url=os.environ.get(
+            "DITTO_LINK_RETURN_URL", "https://dittobench.ai/#/reviews"
+        ).strip(),
+        scopes=os.environ.get("DITTO_LINK_SCOPES", "openid email").strip()
+        or "openid email",
+        timeout_seconds=timeout_seconds,
+        callback_challenge_token=os.environ.get(
+            "DITTO_CALLBACK_CHALLENGE_TOKEN", ""
+        ).strip()
+        or None,
+    )
+
+
+def check_ditto_link_config(config: DittoLinkConfig) -> None:
+    if not config.enabled:
+        return
+    if not config.client_id or not config.client_secret:
+        raise ApiServerConfigError(
+            "DITTO_LINK_CLIENT_ID and DITTO_LINK_CLIENT_SECRET are required when "
+            "DITTO_LINK_ENABLED is true"
+        )
+    for name, value in (
+        ("DITTO_LINK_ISSUER", config.issuer),
+        ("DITTO_LINK_REDIRECT_URL", config.redirect_url),
+        ("DITTO_LINK_RETURN_URL", config.return_url),
+    ):
+        if not value.startswith("https://") and not value.startswith(
+            "http://localhost"
+        ):
+            raise ApiServerConfigError(f"{name} must be an https URL")
+    if not 1 <= config.timeout_seconds <= 60:
+        raise ApiServerConfigError(
+            "DITTO_LINK_TIMEOUT_SECONDS must be between 1 and 60"
+        )
 
 
 def check_config(config: ApiServerConfig) -> None:
@@ -967,6 +1102,8 @@ def check_config(config: ApiServerConfig) -> None:
             ``log_level`` is not a stdlib level name.
     """
     check_hosted_signer_config(config.coding_hosted_signer)
+    check_private_preparation_config(config.private_preparation)
+    check_ditto_link_config(config.ditto_link)
     if not 1 <= config.port <= 65535:
         raise ApiServerConfigError(f"port out of range: {config.port}")
     if config.log_level not in _VALID_LOG_LEVELS:

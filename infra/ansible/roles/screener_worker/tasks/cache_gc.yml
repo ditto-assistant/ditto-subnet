@@ -1,0 +1,55 @@
+---
+# Scheduled, bounded BuildKit cache cleanup for the rootless screener executor.
+# See screener_cache_gc_* in defaults/main.yml for the policy.
+
+- name: Install the BuildKit cache cleanup script
+  ansible.builtin.copy:
+    src: ditto-screener-cache-gc.sh
+    dest: "{{ screener_cache_gc_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: screener_cache_gc_enabled | bool
+
+- name: Install the BuildKit cache cleanup service and timer
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: ditto-screener-cache-gc.service.j2, dest: "{{ screener_cache_gc_unit }}.service" }
+    - { src: ditto-screener-cache-gc.timer.j2, dest: "{{ screener_cache_gc_unit }}.timer" }
+  when: screener_cache_gc_enabled | bool
+  notify:
+    - reload systemd (screener)
+    - restart screener cache cleanup timer
+
+# The units may not exist yet in check mode; that is not a failure.
+- name: Enable and start the BuildKit cache cleanup timer
+  ansible.builtin.systemd:
+    name: "{{ screener_cache_gc_unit }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: true
+  register: screener_cache_gc_timer
+  failed_when:
+    - screener_cache_gc_timer.failed | default(false)
+    - not (ansible_check_mode and 'Could not find' in (screener_cache_gc_timer.msg | default('')))
+  when: screener_cache_gc_enabled | bool
+
+- name: Inspect an installed BuildKit cache cleanup timer
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ screener_cache_gc_unit }}.timer"
+  register: screener_cache_gc_timer_file
+  when: not (screener_cache_gc_enabled | bool)
+
+- name: Stop and disable the BuildKit cache cleanup timer when the policy is disabled
+  ansible.builtin.systemd:
+    name: "{{ screener_cache_gc_unit }}.timer"
+    enabled: false
+    state: stopped
+  when:
+    - not (screener_cache_gc_enabled | bool)
+    - screener_cache_gc_timer_file.stat.exists

@@ -38,6 +38,41 @@
 //!    `openai/gpt-oss-20b`, so it is not a scored lever; use it to rehearse against
 //!    the reference weights locally.
 //!
+//! ======================= BENCH V13 HONEST ARCHITECTURE =====================
+//! Bench v13 grades the prose and adds relay-observed gates (see `v13.rs`
+//! and PROTOCOL.md "Bench v13"). The kit stays inside every gate by
+//! construction, and each rule below is the line a rewrite would cross:
+//!
+//!  * The model's value is served as the model wrote it. The `answer` slot is
+//!    only ever a verbatim substring of `final_text` (`v13::answer_slot_from_prose`);
+//!    the host never rescales (`/100`), maps a direction word, reformats a
+//!    number, or composes a slot. (`slot_not_in_prose`,
+//!    `served_text_not_model_emitted`.) The slot is OFF unless
+//!    `DITTOBENCH_ANSWER_SLOT` is set (the `--gates` rehearsal sets it): the
+//!    wire stays at bench 9, so a default-on slot would change live v12
+//!    grading (an authoritative slot has no prose fallback).
+//!  * The graded value is never written into a harness-authored span. The
+//!    system prompt carries a values-free policy (`v13::HARNESS_POLICY_PROMPT`);
+//!    retrieved memory is injected by the harness library as `/seed`-derived
+//!    context, which the causal gate exempts. (`answer_in_prompt`.)
+//!  * The whole catalog is offered on every turn, including the deciding one.
+//!    The documented preloading example (`DITTOBENCH_PRELOAD_TOP_K`) trims by
+//!    the PUBLISHED embedding and always retains its top-3, which is the
+//!    safe harbor. Restraint is the model's choice: a model-emitted call is
+//!    always executed, never swallowed. (`restraint_without_offer`,
+//!    `expected_tool_not_offered`, `swallowed_model_call`.)
+//!  * Clarifying questions and declines come from the model, name the missing
+//!    detail, and cite what memory search found. The stock harness leaves the
+//!    optional `abstain` field absent; prose is never converted into a wire flag.
+//!  * Runtime-described options (`set_accent_color`, `set_chat_font`) are
+//!    solved list-then-act: the model calls `discover_capabilities`, reads the
+//!    served inventory, and passes one listed spelling; a near-miss is decided
+//!    by the qualifier the user used. The mock's "unknown option" error is fed
+//!    back to the model to recover, never patched on the host.
+//!
+//! `scripts/local-rehearsal.py --gates` replays the public rules against a
+//! local run and prints per-case notes before you upload.
+//!
 //! =========================================================================
 
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -60,338 +95,13 @@ use ditto_harness::types::{
 use serde_json::{json, Value};
 
 use crate::protocol;
+use crate::v13;
 
 // This is a starter-harness safety boundary, not a benchmark scoring limit.
 // Outcome-driven agents may legitimately use more than fifteen tool calls;
 // parallel calls can also share one model turn. Miners remain free to tune or
 // remove this local turn bound, subject to the validator's case deadline.
 const DEFAULT_MAX_AGENT_TURNS: usize = 24;
-
-/// Deterministically classify high-confidence grounded declines from model prose.
-///
-/// The wire-level `abstain` field is the canonical signal. This deliberately
-/// lives in the starter harness rather than the frozen validator grader. The
-/// grammar covers common possession, knowledge, recall, retrieval, disclosure,
-/// and record-absence constructions while rejecting responses that recover an
-/// answer later in the same message.
-fn inferred_abstain(final_text: &str) -> Option<bool> {
-    const GROUNDED_DECLINES: &[&str] = &[
-        // First-person possession / knowledge absence.
-        "i don't have",
-        "i do not have",
-        "i haven't got",
-        "i have not got",
-        "i have no record",
-        "i have no records",
-        "i have no information",
-        "i have no memory of",
-        "i have no memory for",
-        "i have no knowledge of",
-        "i have no knowledge about",
-        "i lack information about",
-        "i lack information on",
-        "i lack any record",
-        "i have nothing on file",
-        "i have nothing recorded",
-        "i don't have enough information",
-        "i do not have enough information",
-        "i don't have enough context",
-        "i do not have enough context",
-        "i have no recollection of",
-        "i don't know",
-        "i do not know",
-        // Recall / memory failure.
-        "i don't recall",
-        "i do not recall",
-        "i can't recall",
-        "i cannot recall",
-        "i couldn't recall",
-        "i could not recall",
-        "i don't remember",
-        "i do not remember",
-        "i can't remember",
-        "i cannot remember",
-        "i couldn't remember",
-        "i could not remember",
-        // Retrieval failure.
-        "i can't find",
-        "i cannot find",
-        "i couldn't find",
-        "i could not find",
-        "i was unable to find",
-        "i'm unable to find",
-        "i am unable to find",
-        "i can't locate",
-        "i cannot locate",
-        "i couldn't locate",
-        "i could not locate",
-        "i can't retrieve",
-        "i cannot retrieve",
-        "i couldn't retrieve",
-        "i could not retrieve",
-        "i don't see any mention",
-        "i do not see any mention",
-        "i don't see any record",
-        "i do not see any record",
-        "i don't see any information",
-        "i do not see any information",
-        "i can't determine from",
-        "i cannot determine from",
-        "i couldn't determine from",
-        "i could not determine from",
-        "i'm unable to determine from",
-        "i am unable to determine from",
-        "i can't verify from",
-        "i cannot verify from",
-        "i see no mention",
-        "i see no record",
-        "i see no information",
-        "i found no mention",
-        "i found no record",
-        "i found no information",
-        "i can't answer based on",
-        "i cannot answer based on",
-        "i'm unable to answer based on",
-        "i am unable to answer based on",
-        // Explicit awareness absence, scoped to conversation evidence.
-        "i'm not aware of any mention",
-        "i am not aware of any mention",
-        "i'm not aware of any record",
-        "i am not aware of any record",
-        "i'm not aware of any information",
-        "i am not aware of any information",
-        "i wasn't aware of any mention",
-        "i was not aware of any mention",
-        "i'm unaware of any mention",
-        "i am unaware of any mention",
-        "i'm unaware of any record",
-        "i am unaware of any record",
-        "i haven't been told",
-        "i have not been told",
-        "i wasn't told",
-        "i was not told",
-        "i wasn't given",
-        "i was not given",
-        // The user never disclosed the fact.
-        "you haven't told",
-        "you have not told",
-        "you never told",
-        "you didn't tell",
-        "you did not tell",
-        "you haven't shared",
-        "you have not shared",
-        "you never shared",
-        "you didn't share",
-        "you did not share",
-        "you haven't mentioned",
-        "you have not mentioned",
-        "you never mentioned",
-        "you didn't mention",
-        "you did not mention",
-        "you haven't provided",
-        "you have not provided",
-        "you never provided",
-        "you didn't provide",
-        "you did not provide",
-        "you haven't given",
-        "you have not given",
-        "you never gave",
-        "you didn't give",
-        "you did not give",
-        "you haven't stated",
-        "you have not stated",
-        "you never stated",
-        "you didn't state",
-        "you did not state",
-        "you haven't specified",
-        "you have not specified",
-        "you never specified",
-        "you didn't specify",
-        "you did not specify",
-        "you haven't indicated",
-        "you have not indicated",
-        "you never indicated",
-        "you didn't indicate",
-        "you did not indicate",
-        "you haven't disclosed",
-        "you have not disclosed",
-        "you never disclosed",
-        "you didn't disclose",
-        "you did not disclose",
-        "you haven't said",
-        "you have not said",
-        "you never said",
-        "you didn't say",
-        "you did not say",
-        "we haven't discussed",
-        "we have not discussed",
-        "we never discussed",
-        // Impersonal record / conversation absence.
-        "there's no record",
-        "there is no record",
-        "there was no record",
-        "there are no records",
-        "there were no records",
-        "there's no information",
-        "there is no information",
-        "there was no information",
-        "there isn't enough information",
-        "there is not enough information",
-        "there wasn't enough information",
-        "there was not enough information",
-        "insufficient information in",
-        "no record of",
-        "no information about",
-        "no information on",
-        "no such information was provided",
-        "no such information was shared",
-        "no such information was mentioned",
-        "no such detail was provided",
-        "no such detail was shared",
-        "no such detail was mentioned",
-        "nothing in my memory",
-        "nothing in our conversation",
-        "nothing in the conversation",
-        "nothing in our chat",
-        "nothing in the chat",
-        "not in my memory",
-        "not in my records",
-        "not in our conversation",
-        "not in the conversation",
-        "not in our chat",
-        "not in the chat",
-        "not in the conversation history",
-        "not in our conversation history",
-        "not on record",
-        "that wasn't mentioned",
-        "that was not mentioned",
-        "that wasn't provided",
-        "that was not provided",
-        "that wasn't stated",
-        "that was not stated",
-        "it wasn't mentioned",
-        "it was not mentioned",
-        "it wasn't provided",
-        "it was not provided",
-        "it wasn't stated",
-        "it was not stated",
-        "our conversation doesn't contain",
-        "our conversation does not contain",
-        "the conversation doesn't contain",
-        "the conversation does not contain",
-        "our chat doesn't contain",
-        "our chat does not contain",
-        "the chat doesn't contain",
-        "the chat does not contain",
-        "the history doesn't include",
-        "the history does not include",
-        "this hasn't come up",
-        "this has not come up",
-        "that hasn't come up",
-        "that has not come up",
-        "it hasn't been mentioned",
-        "it has not been mentioned",
-        "that hasn't been mentioned",
-        "that has not been mentioned",
-        "that hasn't been discussed",
-        "that has not been discussed",
-    ];
-    const ANSWER_RECOVERY: &[&str] = &[
-        "but",
-        "however",
-        "actually",
-        "yet",
-        "nevertheless",
-        "nonetheless",
-        "although",
-        "though",
-        "except",
-        "turns out",
-        "i found",
-        "i located",
-        "i retrieved",
-        "i remember now",
-        "now i remember",
-        "i do remember",
-        "i can confirm",
-        "i can tell you",
-        "the answer is",
-        "the value is",
-        "value is",
-        "answer is",
-        "stored value is",
-        "record shows",
-        "record says",
-        "history shows",
-    ];
-    const NON_GROUNDED_REFUSAL: &[&str] = &[
-        "permission",
-        "authorization",
-        "authority",
-        "access",
-        "ability",
-        "capability",
-        "to disclose",
-        "to delete",
-        "to forget",
-        "to remove",
-        "to save",
-        "to store",
-    ];
-
-    let normalized = normalize_decline_text(final_text);
-    let padded = format!(" {normalized} ");
-    let matched = GROUNDED_DECLINES
-        .iter()
-        .filter_map(|phrase| {
-            let needle = format!(" {phrase} ");
-            padded.find(&needle).map(|start| (start, needle.len()))
-        })
-        .min_by_key(|(start, _)| *start);
-    let (start, length) = matched?;
-    let tail = &padded[start + length..];
-    let non_grounded_refusal = NON_GROUNDED_REFUSAL
-        .iter()
-        .any(|phrase| contains_decline_phrase(tail, phrase));
-    let recovered = ANSWER_RECOVERY
-        .iter()
-        .any(|phrase| contains_decline_phrase(tail, phrase))
-        || contains_subject_copula(tail, "your")
-        || contains_subject_copula(tail, "it")
-        || contains_decline_phrase(tail, "i have");
-
-    (!non_grounded_refusal && !recovered).then_some(true)
-}
-
-fn normalize_decline_text(text: &str) -> String {
-    let mut normalized = String::with_capacity(text.len());
-    for character in text.chars() {
-        match character {
-            '\u{2018}' | '\u{2019}' | '\u{02bc}' => normalized.push('\''),
-            c if c.is_alphanumeric() || c == '\'' => {
-                normalized.extend(c.to_lowercase());
-            }
-            _ => normalized.push(' '),
-        }
-    }
-    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn contains_decline_phrase(text: &str, phrase: &str) -> bool {
-    let padded = format!(" {text} ");
-    padded.contains(&format!(" {phrase} "))
-}
-
-fn contains_subject_copula(text: &str, subject: &str) -> bool {
-    let words = text.split_whitespace().collect::<Vec<_>>();
-    words.iter().enumerate().any(|(index, word)| {
-        *word == subject
-            && (index == 0 || !matches!(words[index - 1], "what" | "which" | "whether"))
-            && words[index + 1..words.len().min(index + 7)]
-                .iter()
-                .any(|candidate| matches!(*candidate, "is" | "was" | "are" | "were"))
-    })
-}
 
 /// Shared per-case context for executing catalog tools through the validator's
 /// mock tool endpoint (observed execution). One is built per `/run` when
@@ -1009,14 +719,39 @@ impl Baseline {
         // catalog arrives on the wire. Memory tools are dropped here when the
         // harness serves the real ones (avoids duplicate declarations).
         // EXTENSION POINT: see `WireTool`.
-        let host_tools: Vec<Arc<dyn Tool>> = req
+        //
+        // Bench v13 catalog-present gate: the model must be OFFERED the catalog
+        // on the deciding turn for restraint or a tool choice to be its own.
+        // The default offers everything. `DITTOBENCH_PRELOAD_TOP_K` is the
+        // documented semantic-preloading example: it trims by the published
+        // embedding and always keeps the safe-harbor top-3 (`v13::preload_catalog`).
+        let wire_tools: Vec<protocol::ToolDefWire> = req
             .tools
             .iter()
             .filter(|d| {
                 !(self.include_memory_tools && MEMORY_TOOL_NAMES.contains(&d.name.as_str()))
             })
+            .cloned()
+            .collect();
+        let offered =
+            v13::preload_catalog(&req.user_input, &wire_tools, v13::preload_top_k_from_env());
+        let mut tools_offered: Vec<String> = offered.iter().map(|d| d.name.clone()).collect();
+        if self.include_memory_tools {
+            tools_offered.extend(MEMORY_TOOL_NAMES.iter().map(|name| name.to_string()));
+        }
+        let host_tools: Vec<Arc<dyn Tool>> = offered
+            .iter()
             .map(|d| Arc::new(WireTool::from_wire(d, exec_ctx.clone())) as Arc<dyn Tool>)
             .collect();
+
+        // The system prompt the model runs on: the wire prompt first, then the
+        // values-free v13 answering policy (answer in the requested unit, ask
+        // by naming the missing detail, list-then-act, grounded declines), and
+        // the `Answer:` line request only when the slot is enabled.
+        // EXTENSION POINT: keep it values-free — a graded value written here is
+        // a harness-authored span and the v13 causal gate zeroes it.
+        let answer_slot = v13::answer_slot_enabled();
+        let system_prompt = v13::compose_system_prompt(&req.system_prompt, answer_slot);
 
         let case_model = match req
             .inference_base_url
@@ -1043,7 +778,7 @@ impl Baseline {
                         user_id: user_id.clone(),
                         // user_input drives memory retrieval (the query)...
                         user_input: req.user_input.clone(),
-                        system_prompt: req.system_prompt.clone(),
+                        system_prompt,
                         // ...and is ALSO passed explicitly as the user turn:
                         // `normalize_messages` only seeds `user_input` as a
                         // message when there is no system prompt, so with a
@@ -1103,19 +838,43 @@ impl Baseline {
             output_tokens += c.usage.output_tokens;
         }
 
+        // Local gate diagnostics: when the rehearsal asks for it, record what
+        // the model was offered and what it emitted so `--gates` can replay the
+        // v13 rules. Never set on-chain; the validator's relay holds its own
+        // record.
+        if let Ok(path) = std::env::var(v13::COMPLETION_LOG_ENV) {
+            if !path.trim().is_empty() {
+                let entry = v13::completion_log_entry(
+                    &req,
+                    &user_id,
+                    tools_offered,
+                    &result.result.messages,
+                );
+                if let Err(err) = v13::append_completion_log(std::path::Path::new(&path), &entry) {
+                    eprintln!("completion log append failed for {}: {err}", req.case_id);
+                }
+            }
+        }
+
         let final_text = result.result.text;
         Ok(protocol::RunResponse {
-            abstain: inferred_abstain(&final_text),
+            // An optional scorer field may be set only by the model itself.
+            // A decline in final_text is not authority to synthesize abstain.
+            abstain: None,
+            // The slot is the model's own trailing `Answer:` line, copied
+            // verbatim, or absent; absent always while `DITTOBENCH_ANSWER_SLOT`
+            // is unset (see `v13::ANSWER_SLOT_ENV`). Bench v13 grades the prose
+            // and uses the slot as a tie-break; a slot the prose does not carry,
+            // or one the model never emitted (a `/100` rescale, a direction map,
+            // a reformatted number), is what `slot_not_in_prose` /
+            // `served_text_not_model_emitted` charge. EXTENSION POINT: keep any
+            // extractor a verbatim copy.
+            answer: v13::answer_slot(&final_text, answer_slot),
             final_text,
             tool_calls,
             prompt_tokens,
             output_tokens,
             latency_ms,
-            // EXTENSION POINT: populate the answer slot with the bare value
-            // your final_text asserts (and abstain when the fact is not in
-            // memory). The validator grades the slot when present, prose
-            // containment otherwise -- an explicit slot removes phrasing risk.
-            answer: None,
         })
     }
 }
@@ -1178,137 +937,5 @@ mod tests {
         }
 
         Baseline::build_model(&provider).expect("build injected platform broker model");
-    }
-
-    #[test]
-    fn grounded_decline_grammar_covers_natural_model_variants() {
-        for text in [
-            "It seems I couldn't find any information about that.",
-            "I could not find that in our previous conversation.",
-            "I'm not aware of any mention of that in our conversation.",
-            "I don’t have your blood type in memory.",
-            "I do not have a record of your blood type.",
-            "I haven't got that detail saved.",
-            "I have no information about your preferred airport.",
-            "I have no memory of you naming a preferred airport.",
-            "I have no knowledge about that preference.",
-            "I lack information about your preferred airport.",
-            "I lack any record of that preference.",
-            "I have nothing on file for your blood type.",
-            "I have nothing recorded about that preference.",
-            "I don't have enough information to answer that.",
-            "I do not have enough context to determine that.",
-            "I have no recollection of you sharing that preference.",
-            "I don't know your blood type.",
-            "I do not know which airport you prefer.",
-            "I don't recall you sharing that.",
-            "I cannot recall that detail.",
-            "I couldn’t recall any such preference.",
-            "I don't remember your blood type.",
-            "I cannot remember you mentioning it.",
-            "I could not remember that from our chat.",
-            "I can't find that detail in memory.",
-            "I was unable to find a saved preference.",
-            "I’m unable to find any previous mention.",
-            "I can't locate a record for that.",
-            "I could not locate it in our conversation.",
-            "I cannot retrieve that information.",
-            "I couldn't retrieve a saved answer.",
-            "I don't see any mention of that preference.",
-            "I do not see any record of your blood type.",
-            "I cannot determine from our conversation which airport you prefer.",
-            "I’m unable to determine from the chat what your blood type is.",
-            "I can't verify from my memory that you provided that detail.",
-            "I see no mention of a preferred airport.",
-            "I found no record of your blood type.",
-            "I cannot answer based on our conversation history.",
-            "I am not aware of any record of that.",
-            "I wasn't aware of any mention of it.",
-            "I’m unaware of any record of that preference.",
-            "I haven't been told your blood type.",
-            "I was not given a preferred airport.",
-            "You haven't told me your blood type.",
-            "You did not tell me which airport you prefer.",
-            "You never shared that preference with me.",
-            "You haven't mentioned a blood type.",
-            "You did not mention that in our chat.",
-            "You never provided that detail.",
-            "You haven't given me that information.",
-            "You never gave me a preferred airport.",
-            "You have not stated that preference.",
-            "You haven't specified a preferred airport.",
-            "You never indicated your blood type.",
-            "You did not disclose that detail.",
-            "You haven't said which airport you prefer.",
-            "We have not discussed your blood type.",
-            "There’s no record of your blood type here.",
-            "There are no records containing that preference.",
-            "There was no information about that in our conversation.",
-            "There isn't enough information in our chat to answer that.",
-            "Insufficient information in the conversation to determine that.",
-            "No record of that appears in memory.",
-            "No information on that preference is available.",
-            "No such information was provided in our conversation.",
-            "No such detail was mentioned in our chat.",
-            "Nothing in my memory identifies your preferred airport.",
-            "Nothing in our conversation states your blood type.",
-            "That detail is not in my memory.",
-            "It is not in our conversation history.",
-            "That preference is not on record.",
-            "That wasn't mentioned previously.",
-            "It was not provided in the chat.",
-            "That wasn’t stated anywhere in our conversation.",
-            "Our conversation doesn't contain that information.",
-            "The chat does not contain a preferred airport.",
-            "The history doesn't include your blood type.",
-            "This hasn't come up in our conversation.",
-            "That has not come up in our chat.",
-            "It hasn't been mentioned in the conversation.",
-            "That has not been discussed before.",
-            "  I   COULD   NOT   FIND   that detail.  ",
-        ] {
-            assert_eq!(inferred_abstain(text), Some(true), "{text}");
-        }
-    }
-
-    #[test]
-    fn grounded_decline_grammar_rejects_answers_and_recoveries() {
-        for text in [
-            "Your value is Lisbon.",
-            "I found your blood type: AB negative.",
-            "The record shows your preferred airport is DCA.",
-            "I am not aware of any issue with your saved preference.",
-            "I can't share private information.",
-            "I don't have permission to disclose your blood type.",
-            "You never told me to delete Lisbon from memory.",
-            "I couldn't find it at first, but your value is Lisbon.",
-            "I don't remember why; however, your value is Lisbon.",
-            "I had no record initially. Actually, the answer is Lisbon.",
-            "I could not locate it, yet I found the value: Lisbon.",
-            "I don't know why, though your blood type is AB negative.",
-            "I couldn't retrieve it. Turns out the value is Lisbon.",
-            "I didn't remember before; now I remember: Lisbon.",
-            "I had no information at first; I can confirm it is Lisbon.",
-            "I don't have Lisbon; I have Porto.",
-            "I couldn't find a mismatch. The record says Lisbon.",
-            "I don't see any issue. The stored value is Lisbon.",
-            "The conversation doesn't contain an error; the answer is Lisbon.",
-            "No record of deletion exists; your value is Lisbon.",
-            "You never specified that Lisbon was wrong; your value is Lisbon.",
-            "I don't recall an error. Your preferred airport is DCA.",
-            "I couldn't find it earlier. It is Lisbon.",
-        ] {
-            assert_eq!(inferred_abstain(text), None, "{text}");
-        }
-    }
-
-    #[test]
-    fn v8_emits_typed_abstention() {
-        for text in [
-            "I couldn't find any information about that.",
-            "I'm not aware of any mention of that in our conversation.",
-        ] {
-            assert_eq!(inferred_abstain(text), Some(true), "v8: {text}");
-        }
     }
 }

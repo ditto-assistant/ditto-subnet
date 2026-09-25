@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
+import type { ReviewConclusion } from "../../types/pipeline";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +10,8 @@ import {
   ACTIVITY_FILTERS,
   ACTIVITY_STATUSES,
   activityStage,
+  deferredReviewSummary,
+  isSourceReviewIncomplete,
   duplicateComparisonLabel,
   policyScreeningLabel,
   reviewEventLabel,
@@ -27,6 +30,7 @@ describe("status vocabulary (row 10)", () => {
   it("keeps the canonical status whitelist and the quick-filter map", () => {
     expect(ACTIVITY_STATUSES).toEqual([
       "waiting_screening",
+      "screening_failed",
       "screening",
       "waiting_validator",
       "evaluating",
@@ -54,27 +58,115 @@ describe("status vocabulary (row 10)", () => {
     expect(activityStage("waiting_screening")).toEqual(["Waiting for admission", "progress"]);
     expect(activityStage("screening")).toEqual(["Image build & admission", "progress"]);
     expect(activityStage("screening_passed")).toEqual(["Admitted", "good"]);
-    expect(activityStage("screening_failed")).toEqual(["Admission interrupted", "warn"]);
+    expect(activityStage("screening_failed")).toEqual(["Screening incomplete", "warn"]);
+    expect(ACTIVITY_FILTERS.queued).not.toContain("screening_failed");
     expect(activityStage("waiting_validator")).toEqual(["Waiting for validators", "progress"]);
     expect(activityStage("evaluating")).toEqual(["Scoring", "progress"]);
     expect(activityStage("below_score_floor")).toEqual(["Low-priority completion", "warn"]);
     expect(activityStage("not_queued")).toEqual(["Historical · not queued", ""]);
     expect(activityStage("retired")).toEqual(["Retired · earlier benchmark", ""]);
-    expect(activityStage("under_review")).toEqual(["Source integrity review", "warn"]);
+    expect(activityStage("under_review")).toEqual(["Deferred source review", "warn"]);
     expect(activityStage("rejected")).toEqual(["Rejected", "bad"]);
     expect(activityStage("nonsense")).toEqual(["Pending", ""]);
   });
 
-  it("names the quick filters with the integrity-review vocabulary", () => {
-    expect(ACTIVITY_FILTER_LABELS.under_review).toBe("Integrity review");
+  it("keeps a review-budget hold neutral and states no finding was made (#562)", () => {
+    const held = {
+      status: "under_review",
+      deferred_review_triggers: ["top_five"] as const,
+      review_conclusion: "budget_exhausted" as const,
+    };
+    expect(isSourceReviewIncomplete(held)).toBe(true);
+    expect(activityStage("under_review", held)).toEqual(["Deferred source review", ""]);
+    expect(deferredReviewSummary(held)).toBe(
+      "Score qualified (top 5) \u00b7 automated review ran out of budget \u2014 no finding",
+    );
+    // A review that ran and ended inconclusive without exhausting a budget
+    // never borrows the budget copy.
+    const inconclusive = { ...held, review_conclusion: "no_finding" as const };
+    expect(isSourceReviewIncomplete(inconclusive)).toBe(true);
+    expect(activityStage("under_review", inconclusive)).toEqual(["Deferred source review", ""]);
+    expect(deferredReviewSummary(inconclusive)).toBe(
+      "Score qualified (top 5) \u00b7 automated review inconclusive \u2014 no finding",
+    );
+    // An auditless or preflight hold: claim only that no review completed with
+    // a recorded conclusion, never a budget; the chip stays neutral because no
+    // finding was recorded.
+    const notCompleted = { ...held, review_conclusion: "not_completed" as const };
+    expect(isSourceReviewIncomplete(notCompleted)).toBe(false);
+    expect(activityStage("under_review", notCompleted)).toEqual(["Deferred source review", ""]);
+    expect(deferredReviewSummary(notCompleted)).toBe(
+      "Score qualified (top 5) \u00b7 automated review did not complete \u2014 no finding recorded",
+    );
+    expect(deferredReviewSummary(notCompleted)).not.toContain("budget");
+    expect(deferredReviewSummary(notCompleted)).not.toContain("did not run");
+    const adverse = {
+      status: "under_review",
+      deferred_review_triggers: ["anomaly"] as const,
+      review_conclusion: "adverse_signal" as const,
+    };
+    expect(isSourceReviewIncomplete(adverse)).toBe(false);
+    expect(activityStage("under_review", adverse)).toEqual(["Deferred source review", "warn"]);
+    expect(deferredReviewSummary(adverse)).toBe(
+      "Anomaly hold \u00b7 automated review raised a concern",
+    );
+    const pending = {
+      status: "under_review",
+      deferred_review_triggers: ["top_five", "anomaly"] as const,
+      review_conclusion: "pending" as const,
+    };
+    expect(activityStage("under_review", pending)).toEqual(["Deferred source review", "progress"]);
+    expect(deferredReviewSummary(pending)).toBe(
+      "Score qualified (top 5) \u00b7 Anomaly hold \u00b7 automated review pending",
+    );
+    // A hold without an automated conclusion (copy review, older API) keeps
+    // the previous warn chip and adds no summary line.
+    expect(activityStage("under_review", { status: "under_review" })).toEqual([
+      "Deferred source review",
+      "warn",
+    ]);
+    expect(deferredReviewSummary({ status: "under_review" })).toBe("");
+    // The public reason text alone no longer decides the tone.
+    expect(
+      isSourceReviewIncomplete({
+        status: "under_review",
+        screening_reason: "Bounded source review was inconclusive; held for review",
+      } as { status: string }),
+    ).toBe(false);
+    expect(deferredReviewSummary({ ...held, status: "scored" })).toBe("");
+  });
+
+  it("names the quick filters with the deferred-review vocabulary", () => {
+    expect(ACTIVITY_FILTER_LABELS.under_review).toBe("Deferred review");
     expect(ACTIVITY_FILTER_LABELS.waiting_validator).toBe("Waiting for validators");
   });
 
-  it("explains an operator review as paused automation", () => {
+  it("explains a review hold without claiming the screener is idle", () => {
     expect(validationDetail({ status: "under_review" })).toBe(
-      "Automated processing is paused while an operator reviews this submission. " +
-        "No screener or validator is currently working on it.",
+      "This submission is held for deferred source review. Existing scores do not clear the hold. " +
+        "The screening history below shows whether a deep review is running or an operator decision is pending.",
     );
+  });
+
+  it("says 'ran out of budget' only for a recorded budget exhaustion", () => {
+    const detail = (review_conclusion: ReviewConclusion) =>
+      validationDetail({
+        status: "under_review",
+        deferred_review_triggers: ["top_five"],
+        review_conclusion,
+      });
+    expect(detail("budget_exhausted")).toContain("ran out of budget");
+    expect(detail("budget_exhausted")).toContain("which is not a finding");
+    expect(detail("budget_exhausted")).toContain("its score placed it in the top five");
+    expect(detail("no_finding")).toContain("without reaching a decision and made no finding");
+    expect(detail("no_finding")).not.toContain("budget");
+    expect(detail("not_completed")).toContain("did not complete and recorded no finding");
+    expect(detail("not_completed")).not.toContain("before reviewing");
+    expect(detail("not_completed")).not.toContain("budget");
+    expect(detail("adverse_signal")).not.toContain("ran out of budget");
+    expect(detail("adverse_signal")).toContain("raised a concern");
+    expect(detail("pending")).toContain("has not reported yet");
+    expect(detail("pending")).not.toContain("budget");
   });
 
   it("labels previous-generation and closed-generation rows (#458/#462)", () => {
@@ -192,7 +284,7 @@ describe("policy screening label (#623 + row 14 chip)", () => {
 
   it("names the deferred integrity branch for a full review in screening", () => {
     expect(policyScreeningLabel({ status: "screening", screening_build_only: false })).toBe(
-      "Source integrity review",
+      "Deferred source review",
     );
   });
 
@@ -316,6 +408,29 @@ describe("admissionRetryLine (#1215)", () => {
     expect(admissionRetryLine({ state: "retry_queued", attempt_count: 1 }, now)).toBe(
       "A guarded retry was authorized and is waiting for a screener slot (attempt 2).",
     );
+  });
+
+  it("promises an automatic retry only when a retry time is scheduled", () => {
+    const line = (next_retry_at: string) =>
+      admissionRetryLine(
+        {
+          state: "retry_queued",
+          attempt_count: 2,
+          next_retry_at,
+          last_failure_infrastructure: true,
+        },
+        now,
+      );
+    const head =
+      "A Ditto build infrastructure failure, not a miner failure. It retries automatically with backoff";
+    // A UTC wall clock, whatever offset the wire timestamp carries.
+    expect(line("2099-08-28T10:20:45Z")).toBe(head + ", no earlier than 2099-08-28 10:20 UTC.");
+    expect(line("2099-08-28T12:20:00+02:00")).toBe(
+      head + ", no earlier than 2099-08-28 10:20 UTC.",
+    );
+    // Already due, and an unparseable time, never print a raw or invalid date.
+    expect(line("2000-01-01T00:00:00Z")).toBe(head + " and is due for another attempt.");
+    expect(line("not-a-date")).toBe(head + ".");
   });
 
   it("renders nothing without the block or for unknown states", () => {

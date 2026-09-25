@@ -1,0 +1,327 @@
+{
+  "generated_at": "2026-07-31T11:47:00Z",
+  "mode": "epoch",
+  "count": 5,
+  "epochs": [
+    {
+      "epoch_index": 24281,
+      "last_epoch_block": 8741509,
+      "pinned_block": 8741511,
+      "pinned_at": "2026-07-31T10:42:12Z",
+      "bench_version": 7,
+      "entry_count": 12,
+      "ledger_digest": "0000000000000000000000000000000000000000000000000000000000005ed9",
+      "crown_mode": "incumbent",
+      "champion": {
+        "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+        "agent_name": "kabaw-v57",
+        "agent_version": 1
+      },
+      "incumbent": {
+        "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+        "agent_name": "kabaw-v57",
+        "agent_version": 1
+      },
+      "crown_changed": false,
+      "recipients": [
+        {
+          "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+          "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+          "agent_name": "kabaw-v57",
+          "agent_version": 1,
+          "role": "champion",
+          "share_of_miner_pool": 0.65
+        },
+        {
+          "agent_id": "c77140d8-3ac5-42c3-8f5c-a99cd283365d",
+          "miner_hotkey": "5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx",
+          "agent_name": "bolt-v7-top1",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.14
+        },
+        {
+          "agent_id": "2d64b84b-d5bf-4c87-ae62-ed0668b1023e",
+          "miner_hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
+          "agent_name": "rb-13",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.1
+        },
+        {
+          "agent_id": "f2eb3bb1-6cf9-4df7-9657-d7b8c125b89d",
+          "miner_hotkey": "5FpbZbRArrPfansMaH1iKMVAGnBD3JT1g2FE5wp6wbPkm31o",
+          "agent_name": "dominator-6",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.07
+        },
+        {
+          "agent_id": "182ade18-a23b-4282-bed0-af27094fd845",
+          "miner_hotkey": "5HdaZEUn2CmoBZe37a3MuSEuoSJBhWjDSPHkVsundR8byvFb",
+          "agent_name": "god-v10",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.04
+        }
+      ]
+    },
+    {
+      "epoch_index": 24280,
+      "last_epoch_block": 8741149,
+      "pinned_block": 8741151,
+      "pinned_at": "2026-07-31T09:30:12Z",
+      "bench_version": 7,
+      "entry_count": 12,
+      "ledger_digest": "0000000000000000000000000000000000000000000000000000000000005ed8",
+      "crown_mode": "incumbent",
+      "champion": {
+        "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+        "agent_name": "kabaw-v57",
+        "agent_version": 1
+      },
+      "incumbent": {
+        "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+        "agent_name": "kabaw-v57",
+        "agent_version": 1
+      },
+      "crown_changed": false,
+      "recipients": [
+        {
+          "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+          "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+          "agent_name": "kabaw-v57",
+          "agent_version": 1,
+          "role": "champion",
+          "share_of_miner_pool": 0.65
+        },
+        {
+          "agent_id": "c77140d8-3ac5-42c3-8f5c-a99cd283365d",
+          "miner_hotkey": "5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx",
+          "agent_name": "bolt-v7-top1",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.14
+        },
+        {
+          "agent_id": "2d64b84b-d5bf-4c87-ae62-ed0668b1023e",
+          "miner_hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
+          "agent_name": "rb-13",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.1
+        },
+        {
+          "agent_id": "f2eb3bb1-6cf9-4df7-9657-d7b8c125b89d",
+          "miner_hotkey": "5FpbZbRArrPfansMaH1iKMVAGnBD3JT1g2FE5wp6wbPkm31o",
+          "agent_name": "dominator-6",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.07
+        },
+        {
+          "agent_id": "182ade18-a23b-4282-bed0-af27094fd845",
+          "miner_hotkey": "5HdaZEUn2CmoBZe37a3MuSEuoSJBhWjDSPHkVsundR8byvFb",
+          "agent_name": "god-v10",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.04
+        }
+      ]
+    },
+    {
+      "epoch_index": 24279,
+      "last_epoch_block": 8740789,
+      "pinned_block": 8740791,
+      "pinned_at": "2026-07-31T08:18:12Z",
+      "bench_version": 7,
+      "entry_count": 12,
+      "ledger_digest": "0000000000000000000000000000000000000000000000000000000000005ed7",
+      "crown_mode": "incumbent",
+      "champion": {
+        "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+        "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+        "agent_name": "kabaw-v57",
+        "agent_version": 1
+      },
+      "incumbent": {
+        "agent_id": "c77140d8-3ac5-42c3-8f5c-a99cd283365d",
+        "miner_hotkey": "5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx",
+        "agent_name": "bolt-v7-top1",
+        "agent_version": 1
+      },
+      "crown_changed": true,
+      "recipients": [
+        {
+          "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+          "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+          "agent_name": "kabaw-v57",
+          "agent_version": 1,
+          "role": "champion",
+          "share_of_miner_pool": 0.65
+        },
+        {
+          "agent_id": "c77140d8-3ac5-42c3-8f5c-a99cd283365d",
+          "miner_hotkey": "5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx",
+          "agent_name": "bolt-v7-top1",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.14
+        },
+        {
+          "agent_id": "2d64b84b-d5bf-4c87-ae62-ed0668b1023e",
+          "miner_hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
+          "agent_name": "rb-13",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.1
+        },
+        {
+          "agent_id": "f2eb3bb1-6cf9-4df7-9657-d7b8c125b89d",
+          "miner_hotkey": "5FpbZbRArrPfansMaH1iKMVAGnBD3JT1g2FE5wp6wbPkm31o",
+          "agent_name": "dominator-6",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.07
+        },
+        {
+          "agent_id": "182ade18-a23b-4282-bed0-af27094fd845",
+          "miner_hotkey": "5HdaZEUn2CmoBZe37a3MuSEuoSJBhWjDSPHkVsundR8byvFb",
+          "agent_name": "god-v10",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.04
+        }
+      ]
+    },
+    {
+      "epoch_index": 24278,
+      "last_epoch_block": 8740429,
+      "pinned_block": 8740431,
+      "pinned_at": "2026-07-31T07:06:12Z",
+      "bench_version": 7,
+      "entry_count": 12,
+      "ledger_digest": "0000000000000000000000000000000000000000000000000000000000005ed6",
+      "crown_mode": "incumbent",
+      "champion": {
+        "agent_id": "c77140d8-3ac5-42c3-8f5c-a99cd283365d",
+        "miner_hotkey": "5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx",
+        "agent_name": "bolt-v7-top1",
+        "agent_version": 1
+      },
+      "incumbent": {
+        "agent_id": "c77140d8-3ac5-42c3-8f5c-a99cd283365d",
+        "miner_hotkey": "5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx",
+        "agent_name": "bolt-v7-top1",
+        "agent_version": 1
+      },
+      "crown_changed": false,
+      "recipients": [
+        {
+          "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+          "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+          "agent_name": "kabaw-v57",
+          "agent_version": 1,
+          "role": "champion",
+          "share_of_miner_pool": 0.65
+        },
+        {
+          "agent_id": "c77140d8-3ac5-42c3-8f5c-a99cd283365d",
+          "miner_hotkey": "5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx",
+          "agent_name": "bolt-v7-top1",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.14
+        },
+        {
+          "agent_id": "2d64b84b-d5bf-4c87-ae62-ed0668b1023e",
+          "miner_hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
+          "agent_name": "rb-13",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.1
+        },
+        {
+          "agent_id": "f2eb3bb1-6cf9-4df7-9657-d7b8c125b89d",
+          "miner_hotkey": "5FpbZbRArrPfansMaH1iKMVAGnBD3JT1g2FE5wp6wbPkm31o",
+          "agent_name": "dominator-6",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.07
+        },
+        {
+          "agent_id": "182ade18-a23b-4282-bed0-af27094fd845",
+          "miner_hotkey": "5HdaZEUn2CmoBZe37a3MuSEuoSJBhWjDSPHkVsundR8byvFb",
+          "agent_name": "god-v10",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.04
+        }
+      ]
+    },
+    {
+      "epoch_index": 24277,
+      "last_epoch_block": 8740069,
+      "pinned_block": 8740071,
+      "pinned_at": "2026-07-31T05:54:12Z",
+      "bench_version": 7,
+      "entry_count": 12,
+      "ledger_digest": "0000000000000000000000000000000000000000000000000000000000005ed5",
+      "crown_mode": null,
+      "champion": {
+        "agent_id": "c77140d8-3ac5-42c3-8f5c-a99cd283365d",
+        "miner_hotkey": "5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx",
+        "agent_name": "bolt-v7-top1",
+        "agent_version": 1
+      },
+      "incumbent": null,
+      "crown_changed": false,
+      "recipients": [
+        {
+          "agent_id": "42d2965f-ea28-4056-8223-e68dd714f693",
+          "miner_hotkey": "5FZ9wU4cE8WjPHusDe2GfFU6NAWJaZZgpDHDruSRDmaf7oDU",
+          "agent_name": "kabaw-v57",
+          "agent_version": 1,
+          "role": "champion",
+          "share_of_miner_pool": 0.65
+        },
+        {
+          "agent_id": "c77140d8-3ac5-42c3-8f5c-a99cd283365d",
+          "miner_hotkey": "5EcmtyeSWeQKjSQLrPZk9v4a5wZTg4xzj4BQ6jn5Qh67bnqx",
+          "agent_name": "bolt-v7-top1",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.14
+        },
+        {
+          "agent_id": "2d64b84b-d5bf-4c87-ae62-ed0668b1023e",
+          "miner_hotkey": "5Hgau66p3CaQPg2Dn1sYry3et8RSjPykHCjaGztzLoNbeA4s",
+          "agent_name": "rb-13",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.1
+        },
+        {
+          "agent_id": "f2eb3bb1-6cf9-4df7-9657-d7b8c125b89d",
+          "miner_hotkey": "5FpbZbRArrPfansMaH1iKMVAGnBD3JT1g2FE5wp6wbPkm31o",
+          "agent_name": "dominator-6",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.07
+        },
+        {
+          "agent_id": "182ade18-a23b-4282-bed0-af27094fd845",
+          "miner_hotkey": "5HdaZEUn2CmoBZe37a3MuSEuoSJBhWjDSPHkVsundR8byvFb",
+          "agent_name": "god-v10",
+          "agent_version": 1,
+          "role": "tail",
+          "share_of_miner_pool": 0.04
+        }
+      ]
+    }
+  ]
+}

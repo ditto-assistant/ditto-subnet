@@ -171,7 +171,7 @@ describe('screening list summaries', () => {
           policy_version: 9,
           manifest_digest: 'ef'.repeat(32),
           finding_digest: '12'.repeat(32),
-          reason_code: 'unsafe_source',
+          screening_reason_code: 'unsafe_source',
           evidence: Array.from({ length: 8 }, (_, index) => ({
             module_id: `module-${index}`,
             code: `CODE_${index}`,
@@ -550,6 +550,46 @@ describe('compactMinerOwnerFootprint', () => {
 })
 
 describe('compactValidatorFleet', () => {
+  it('keeps bounded aggregate run progress without private heartbeat fields', () => {
+    const run = {
+      agent_id: '842c28de-6b6c-445a-8c3f-cf5492422ef6',
+      slot_id: 'slot-0',
+      bench_version: 13,
+      started_at: '2026-09-21T16:13:30Z',
+      stage: 'running_benchmark',
+      completed_checks: 120,
+      total_checks: 350,
+      percent: 34,
+      stalled: false,
+      purpose: 'canonical_quorum',
+      run_token: 'private-run-token',
+      cases: [{ question: 'private-question' }],
+    }
+    const payload = validatorFleetObservabilitySchema.parse({
+      generated_at: '2026-09-21T16:20:00Z',
+      validators: [{ validator_hotkey: '5' + 'A'.repeat(47), active_benchmarks: Array(10).fill(run) }],
+    })
+    const member = compactValidatorFleet(payload).validators[0]
+    expect(member.active_benchmark_count).toBe(10)
+    expect(member.active_benchmarks).toHaveLength(8)
+    expect(member.active_benchmarks[0]).toEqual({
+      agent_id: run.agent_id, slot_id: 'slot-0', bench_version: 13,
+      started_at: run.started_at, stage: 'running_benchmark',
+      completed_checks: 120, total_checks: 350, percent: 34,
+      stalled: false, purpose: 'canonical_quorum',
+    })
+    expect(JSON.stringify(member)).not.toContain('private-')
+  })
+
+  it('preserves legacy counts and rejects unbound or malformed progress', () => {
+    const payload = validatorFleetObservabilitySchema.parse({
+      generated_at: '2026-09-21T16:20:00Z',
+      validators: [{ validator_hotkey: '5' + 'A'.repeat(47), active_benchmarks: [{ slot_id: 'slot-0' }, null] }],
+    })
+    expect(payload.validators[0].active_benchmark_count).toBe(2)
+    expect(payload.validators[0].active_benchmarks).toEqual([])
+  })
+
   it('counts serving validators and buckets software versions before paging', () => {
     const payload = validatorFleetObservabilitySchema.parse({
       generated_at: '2026-08-20T13:40:00Z',

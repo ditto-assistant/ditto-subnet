@@ -250,6 +250,40 @@ class DeferredSourceReviewSettings(BaseModel):
     ``resolve_ath_review``.
     """
 
+    integrity_double_check_mode: Literal["off", "observe", "enforce"] = "off"
+    """Second, stronger deep review for every top-five entrant.
+
+    ``mode`` above only reaches submissions that skipped the deep screen at
+    admission. A submission that passed the full pre-score screen can still
+    reach the top five on the strength of something that screen missed, and
+    winner-take-all makes that the costliest miss on the board. This control
+    closes the gap: ``eval -> top five -> integrity double-check -> clear or
+    reject``, independent of ``mode``.
+
+    ``off`` -- nothing is computed.
+
+    ``observe`` -- each canonical ledger mutation appends a score-audit record
+        (``audit_kind: "integrity_double_check"``, ``enforced: false``) for
+        every top-five row that would be held. Nothing is held.
+
+    ``enforce`` -- a top-five row with no prior double-check opens the same
+        pending ``deferred_source_review`` hold the deferred path uses, marked
+        ``integrity_double_check`` in its provenance. A screener re-claims it
+        for one deep pass bound to the latest reviewer revision in scope
+        ``integrity-double-check`` (the stronger L2/L3 models), and a
+        mechanically admitted top-five row's deferred pass binds that posture
+        too. A clean pass restores the agent; anything else stays an operator
+        hold, or rejects through the adjudicator when that posture enforces
+        it. Platform refuses ``enforce`` until that scope holds an ``enforce``
+        revision with L3 and the ``l1_l2`` manifest.
+
+    Each agent is double-checked at most once; operator clears are never
+    reopened. Rows already held for a post-score deep review keep their rank
+    slot, so holds cannot cascade down the board while reviews run. Like
+    ``mode``, this never touches copy/plagiarism enforcement, and open holds
+    drain in every setting.
+    """
+
     min_cohort_size: Annotated[int, Field(ge=5, le=100)] = 8
     composite_mad_multiplier: Annotated[float, Field(ge=1.0, le=20.0)] = 6.0
     axis_mad_multiplier: Annotated[float, Field(ge=1.0, le=20.0)] = 6.0
@@ -609,7 +643,9 @@ class QueuePolicySettings(BaseModel):
 
     Top-five qualification is a fixed integrity invariant in ``enforce`` mode;
     operators can tune only the robust anomaly trigger or roll the whole feature
-    between off, observe, and enforce.
+    between off, observe, and enforce. ``integrity_double_check_mode``
+    separately extends the top-five review, on a stronger reviewer posture, to
+    submissions that already passed the full pre-score screen.
     """
 
     @model_validator(mode="after")

@@ -11,16 +11,28 @@ from uuid import UUID
 
 from pydantic import (
     BaseModel,
+    BeforeValidator,
     ConfigDict,
     Field,
     model_validator,
 )
 
-SCREENING_POLICY_VERSION = 12
+SCREENING_POLICY_VERSION = 13
+STRICT_TWO_OUTCOME_POLICY_VERSION = 13
+# The highest policy version the scheduling API will present as
+# activation-ready. It moves separately from ``SCREENING_POLICY_VERSION`` so a
+# build that merely distributes new review/evidence code for compatibility and
+# pre-activation tests never advertises an incomplete policy lifecycle as
+# schedulable. V13 was held at a v12 ceiling from #1801 (2026-09-12) until its
+# strict two-outcome contract shipped, both production screeners reported
+# builtin policy 13 on release 0.264.0, and fleet adoption was verified on
+# 2026-09-14; the ceiling then moved to 13 so the operator can schedule the
+# v13 activation window.
+SCREENING_ACTIVATION_CEILING_POLICY_VERSION = 13
 # The oldest policy version a mixed-fleet platform may require during a
-# scheduled activation window. v10 stays the floor until the v12 activation
-# has re-stamped the scored cohort; raise it in a follow-up, never alongside
-# the policy text that the activation window still has to serve.
+# scheduled activation window. v10 stays the floor while the v13 activation is
+# scheduled but not yet governing; raise it only after every older-policy
+# cohort has reached a terminal, recorded transition.
 SCREENING_FLOOR_POLICY_VERSION = 10
 TYPED_OUTCOME_POLICY_VERSION = 9
 
@@ -156,6 +168,9 @@ class ScreenedImageUploadRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     attempt_id: UUID
+    # A new screener may reuse this ID after a lost initiation response. Older
+    # screeners omit it and retain the original one-shot behavior.
+    image_upload_id: UUID | None = None
     sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     size_bytes: Annotated[int, Field(gt=0, le=8 * 1024**3)]
     image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
@@ -267,6 +282,46 @@ class ScreenerReviewSettingsOverride(BaseModel):
     checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
+class ScoredRuntimeEvidenceLease(BaseModel):
+    """Platform-bound scorer evidence for one exact V13 screening attempt."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    policy_version: Literal[13]
+    bench_version: Literal[13]
+    scorer_source_revision: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+    release_descriptor_digest: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    scorer_image_digest: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
+    scorer_env_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    injected_keys: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]*$", max_length=128)], ...],
+        BeforeValidator(
+            lambda value: tuple(value) if isinstance(value, list) else value
+        ),
+    ]
+    validator_count: Annotated[int, Field(ge=1, le=1_000)]
+    observed_at: Annotated[int, Field(ge=0)]
+
+    @model_validator(mode="after")
+    def bound_digest(self) -> ScoredRuntimeEvidenceLease:
+        if (
+            not self.injected_keys
+            or tuple(sorted(set(self.injected_keys))) != self.injected_keys
+        ):
+            raise ValueError("scorer runtime keys must be nonempty, sorted, and unique")
+        material = (
+            "scored-runtime-env-v1\n13\n"
+            + self.scorer_source_revision
+            + "\n"
+            + "\n".join(self.injected_keys)
+        )
+        if hashlib.sha256(material.encode()).hexdigest() != self.scorer_env_sha256:
+            raise ValueError("scorer runtime evidence digest mismatch")
+        return self
+
+
 class ScreenerQueueItem(BaseModel):
     """One agent awaiting screening."""
 
@@ -321,6 +376,7 @@ class ScreenerQueueItem(BaseModel):
             ),
         ),
     ] = None
+    scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None
     precheck_reason_code: Annotated[
         str | None,
         Field(
@@ -413,7 +469,7 @@ class ScreenerQueueResponse(BaseModel):
                 "items": [
                     {
                         "agent_id": "550e8400-e29b-41d4-a716-446655440000",
-                        "bench_version": 12,
+                        "bench_version": 13,
                         "miner_hotkey": (
                             "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
                         ),
@@ -495,6 +551,7 @@ class SourceReviewAuthorityTransition(StrEnum):
     DERIVED_VALUE_AUTHORITATIVE = "derived_value_authoritative"
     FAMILY_COMPILER_AUTHORITATIVE = "family_compiler_authoritative"
     TOOL_SELECTION_PREDETERMINED = "tool_selection_predetermined"
+    EVALUATION_IDENTITY_AUTHORITATIVE = "evaluation_identity_authoritative"
 
 
 class SourceReviewScorerVisibleEffect(StrEnum):
@@ -577,11 +634,21 @@ _SCORER_VISIBLE_EFFECTS_BY_TRANSITION = {
             SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
         }
     ),
+    SourceReviewAuthorityTransition.EVALUATION_IDENTITY_AUTHORITATIVE: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.TOOL_CALLS,
+            SourceReviewScorerVisibleEffect.VALIDATOR_OBSERVED_TRAJECTORY,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
 }
 
 
 class SourceReviewInvariant(StrEnum):
-    """Policy-v10 source-review invariants, evaluated independently."""
+    """Versioned source-review invariants, evaluated independently."""
 
     MODEL_INVOCATION = "i1_model_invocation"
     EVIDENCE_RETENTION = "i2_evidence_retention"
@@ -590,6 +657,24 @@ class SourceReviewInvariant(StrEnum):
     PRODUCTION_ENGINE = "i5_production_engine"
     TOOL_EXECUTION_FIDELITY = "i6_tool_execution_fidelity"
     MODEL_TOOL_PLANNING = "i7_model_tool_planning"
+    EVALUATION_INDEPENDENCE = "i8_evaluation_independence"
+
+
+_POLICY_V10_V12_INVARIANTS = tuple(
+    invariant
+    for invariant in SourceReviewInvariant
+    if invariant != SourceReviewInvariant.EVALUATION_INDEPENDENCE
+)
+
+
+def source_review_invariants_for_policy(
+    policy_version: int,
+) -> tuple[SourceReviewInvariant, ...]:
+    """Return the invariant set signed by one screening-policy generation."""
+
+    if policy_version >= 13:
+        return tuple(SourceReviewInvariant)
+    return _POLICY_V10_V12_INVARIANTS
 
 
 class SourceReviewInvariantDisposition(StrEnum):
@@ -618,7 +703,31 @@ class SourceReviewPassClause(StrEnum):
     NO_TOOL_PLANNING = "no_tool_planning"
     POLICY_CAPABILITY_FILTER_ONLY = "policy_capability_filter_only"
     NATURAL_SINGLETON_CLASS = "natural_singleton_class"
+    EVALUATION_INDEPENDENT_RUNTIME = "evaluation_independent_runtime"
+    NO_EVALUATION_IDENTITY_BRANCH = "no_evaluation_identity_branch"
     UNREACHABLE_NONRUNTIME_CODE = "unreachable_nonruntime_code"
+
+
+_POLICY_V13_ONLY_PASS_CLAUSES = frozenset(
+    {
+        SourceReviewPassClause.EVALUATION_INDEPENDENT_RUNTIME,
+        SourceReviewPassClause.NO_EVALUATION_IDENTITY_BRANCH,
+    }
+)
+
+
+def source_review_pass_clauses_for_policy(
+    policy_version: int,
+) -> tuple[SourceReviewPassClause, ...]:
+    """Return the pass-clause vocabulary exposed by one policy generation."""
+
+    if policy_version >= 13:
+        return tuple(SourceReviewPassClause)
+    return tuple(
+        clause
+        for clause in SourceReviewPassClause
+        if clause not in _POLICY_V13_ONLY_PASS_CLAUSES
+    )
 
 
 _PASS_CLAUSES_BY_INVARIANT = {
@@ -665,6 +774,12 @@ _PASS_CLAUSES_BY_INVARIANT = {
             SourceReviewPassClause.NATURAL_SINGLETON_CLASS,
         }
     ),
+    SourceReviewInvariant.EVALUATION_INDEPENDENCE: frozenset(
+        {
+            SourceReviewPassClause.EVALUATION_INDEPENDENT_RUNTIME,
+            SourceReviewPassClause.NO_EVALUATION_IDENTITY_BRANCH,
+        }
+    ),
 }
 for _invariant in SourceReviewInvariant:
     _PASS_CLAUSES_BY_INVARIANT[_invariant] = _PASS_CLAUSES_BY_INVARIANT[_invariant] | {
@@ -706,22 +821,49 @@ class SourceReviewInvariantDecision(BaseModel):
 
 
 class SourceReviewInvariantAssessment(BaseModel):
-    """Complete policy-v10 sweep; omission cannot silently clear an invariant."""
+    """Complete versioned sweep; omission cannot silently clear an invariant.
+
+    Schema v1 is the byte-compatible policy-v10-v12 I1-I7 assessment. Schema
+    v2 adds policy-v13 I8 without making stored historical findings invalid.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     decisions: Annotated[
-        list[SourceReviewInvariantDecision], Field(min_length=7, max_length=7)
+        list[SourceReviewInvariantDecision], Field(min_length=7, max_length=8)
     ]
+
+    @model_validator(mode="before")
+    @classmethod
+    def infer_schema_version(cls, value: object) -> object:
+        """Let current producers omit the version while preserving v1 inputs."""
+
+        if isinstance(value, dict) and "schema_version" not in value:
+            decisions = value.get("decisions")
+            if isinstance(decisions, list) and len(decisions) == 8:
+                return {**value, "schema_version": 2}
+        return value
 
     @model_validator(mode="after")
     def validate_complete_sweep(self) -> Self:
         invariants = [decision.invariant for decision in self.decisions]
         if len(invariants) != len(set(invariants)):
             raise ValueError("invariant decisions must be unique")
-        if set(invariants) != set(SourceReviewInvariant):
-            raise ValueError("source review must decide every policy-v10 invariant")
+        expected = (
+            set(_POLICY_V10_V12_INVARIANTS)
+            if self.schema_version == 1
+            else set(SourceReviewInvariant)
+        )
+        if set(invariants) != expected:
+            raise ValueError(
+                "source review must decide every invariant for its schema version"
+            )
+        if (
+            self.schema_version == 2
+            and sum(len(decision.summary) for decision in self.decisions) > 1_680
+        ):
+            raise ValueError("policy-v13 invariant summaries exceed bounded size")
         return self
 
 
@@ -990,16 +1132,39 @@ class ScreenReviewAudit(BaseModel):
     reason_code: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]
     prompt_revision: Annotated[str, Field(min_length=1, max_length=64)]
     harness_revision: Annotated[str | None, Field(min_length=1, max_length=64)] = None
-    max_steps: Annotated[int, Field(ge=1, le=100)]
-    steps_used: Annotated[int, Field(ge=0, le=100)]
+    # L1 allows 240 steps; ordinary L2 can be configured up to 256.
+    max_steps: Annotated[int, Field(ge=1, le=256)]
+    steps_used: Annotated[int, Field(ge=0, le=256)]
     max_read_bytes: Annotated[int | None, Field(ge=1, le=256 * 1024**2)] = None
     read_bytes_used: Annotated[int | None, Field(ge=0, le=256 * 1024**2)] = None
-    max_input_tokens: Annotated[int | None, Field(ge=1, le=2_000_000)] = None
-    input_tokens_used: Annotated[int | None, Field(ge=0, le=2_000_000)] = None
-    max_output_tokens: Annotated[int | None, Field(ge=1, le=256_000)] = None
-    output_tokens_used: Annotated[int | None, Field(ge=0, le=256_000)] = None
+    # Configured billable-equivalent input ceiling; raw input is reported below.
+    max_input_tokens: Annotated[int | None, Field(ge=1, le=5_000_000)] = None
+    # Aggregate usage can exceed the configured per-trajectory input budget
+    # across L2 reviewer roles; the old 2M wire cap rejected a 2.6M audit.
+    input_tokens_used: Annotated[int | None, Field(ge=0, le=100_000_000)] = None
+    max_output_tokens: Annotated[int | None, Field(ge=1, le=1_000_000)] = None
+    output_tokens_used: Annotated[int | None, Field(ge=0, le=1_000_000)] = None
     max_cost_usd: Annotated[float | None, Field(gt=0, le=100)] = None
     cost_usd_used: Annotated[float | None, Field(ge=0, le=100)] = None
+    # Optional V13 L2 diagnostics contain only fixed labels and counts. Keep
+    # absent fields out of the digest so older signed audits still validate.
+    model_disposition: Literal["inconclusive"] | None = None
+    resolution_basis: Literal["insufficient_static_evidence"] | None = None
+    model_steps_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
+    tool_calls_observed: Annotated[int | None, Field(ge=0, le=10_000)] = None
+    budget_stop_reason: (
+        Literal["none", "step", "tool", "aggregate", "token", "cost", "time"] | None
+    ) = None
+    requested_model: Annotated[
+        str | None, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9/._:-]{0,127}$")
+    ] = None
+    response_provider: Annotated[
+        str | None, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$")
+    ] = None
+    final_stage: Literal["preflight", "analyst", "critic", "adjudicator"] | None = None
+    cause_detail: Literal["lease_unavailable", "review_disabled"] | None = None
+    max_elapsed_ms: Annotated[int | None, Field(ge=1, le=3_600_000)] = None
+    elapsed_ms: Annotated[int | None, Field(ge=0, le=3_600_000)] = None
 
     @model_validator(mode="after")
     def validate_pairs_and_usage(self) -> ScreenReviewAudit:
@@ -1013,11 +1178,31 @@ class ScreenReviewAudit(BaseModel):
                 raise ValueError(f"{label} maximum and usage must be paired")
         if self.steps_used > self.max_steps:
             raise ValueError("review steps used exceed configured maximum")
+        if (self.max_elapsed_ms is None) != (self.elapsed_ms is None):
+            raise ValueError("elapsed maximum and usage must be paired")
         return self
 
     def canonical_digest(self) -> str:
+        diagnostic_fields = {
+            "model_disposition",
+            "resolution_basis",
+            "model_steps_observed",
+            "tool_calls_observed",
+            "budget_stop_reason",
+            "requested_model",
+            "response_provider",
+            "final_stage",
+            "cause_detail",
+            "max_elapsed_ms",
+            "elapsed_ms",
+        }
+        absent_diagnostics = {
+            field for field in diagnostic_fields if getattr(self, field) is None
+        }
         canonical = json.dumps(
-            self.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+            self.model_dump(mode="json", exclude=absent_diagnostics),
+            sort_keys=True,
+            separators=(",", ":"),
         )
         return hashlib.sha256(canonical.encode()).hexdigest()
 
@@ -1107,6 +1292,146 @@ class SourceReviewCitation(BaseModel):
     line: Annotated[int, Field(ge=1, le=10_000_000)]
 
 
+class AdjudicationRequestAttemptDiagnostic(BaseModel):
+    """Bounded, text-free timing for one automated-court model request."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    ordinal: Annotated[int, Field(ge=1, le=1_024)]
+    started_ms: Annotated[int, Field(ge=0, le=3_600_000)]
+    elapsed_ms: Annotated[int, Field(ge=0, le=3_600_000)]
+    stage: Literal["request", "headers", "bytes", "event", "complete"]
+    stream_requested: bool
+    prompt_bytes: Annotated[int, Field(ge=0, le=20_000_000)]
+    http_status: Annotated[int, Field(ge=100, le=599)] | None = None
+    headers_ms: Annotated[int, Field(ge=0, le=3_600_000)] | None = None
+    first_byte_ms: Annotated[int, Field(ge=0, le=3_600_000)] | None = None
+    last_byte_ms: Annotated[int, Field(ge=0, le=3_600_000)] | None = None
+    first_event_ms: Annotated[int, Field(ge=0, le=3_600_000)] | None = None
+    last_event_ms: Annotated[int, Field(ge=0, le=3_600_000)] | None = None
+    event_count: Annotated[int, Field(ge=0, le=100_000)] = 0
+    wire_bytes: Annotated[int, Field(ge=0, le=20_000_000)] = 0
+    upstream: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")] | None = (
+        None
+    )
+
+
+class AdjudicationRunDiagnostic(BaseModel):
+    """Sanitized trace of one automated-court run that did not finish.
+
+    Operators need the failure class, fixed subtype, stage, and provider
+    status. The trace never carries source, prompts, credentials, exception
+    text, or model text.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    error_class: (
+        Annotated[str, Field(pattern=r"^[A-Za-z][A-Za-z0-9]{0,63}$")] | None
+    ) = None
+    failure_code: (
+        Literal[
+            "completion-timeout",
+            "provider-http-error",
+            "provider-stream-error",
+            "provider-body-error",
+            "transport-error",
+            "stream-incomplete",
+            "stream-no-tool-call",
+            "stream-no-tool-progress",
+            "stream-invalid",
+            "response-too-large",
+            "response-json-invalid",
+            "tool-call-invalid",
+            "verdict-invalid",
+            "lease-budget",
+            "step-budget",
+            "response-invalid",
+        ]
+        | None
+    ) = None
+    """Fixed, text-free subtype of a court failure; null on older attempts."""
+    response_bound_kind: Literal["wire", "tool"] | None = None
+    """Which bounded response surface overflowed; old consumers ignore it."""
+    escalation_code: (
+        Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")] | None
+    ) = None
+    timeout_stage: (
+        Literal["completion", "lease", "step-budget", "unavailable", "response"] | None
+    ) = None
+    http_status: Annotated[int, Field(ge=100, le=599)] | None = None
+    elapsed_ms: Annotated[int, Field(ge=0, le=3_600_000)]
+    prompt_tokens: Annotated[int, Field(ge=0, le=10_000_000)] | None = None
+    completion_tokens: Annotated[int, Field(ge=0, le=10_000_000)] | None = None
+    final_tool_call_returned: bool | None = None
+    completion_ceiling_reached: bool | None = None
+    """True only when a complete no-tool stream reports a length finish and
+    usage at the requested completion cap. Null when that cannot be proved.
+    """
+    model: (
+        Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")] | None
+    ) = None
+    provider: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")] | None = (
+        None
+    )
+    """The inference gateway the court called, which is one configured value."""
+    upstream: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")] | None = (
+        None
+    )
+    """Which upstream behind that gateway actually served the call.
+
+    The gateway routes one model across many upstreams and may fail over
+    between them per request, so ``provider`` alone cannot attribute a burst of
+    failures. Normalized from the response body to a lowercase slug and dropped
+    when it does not fit, so an upstream name is never free text. Null on a
+    failure that produced no response to read it from.
+    """
+    request_count: Annotated[int, Field(ge=0, le=1_024)] = 0
+    request_attempts: Annotated[
+        list[AdjudicationRequestAttemptDiagnostic], Field(max_length=32)
+    ] = Field(default_factory=list)
+    """Last 32 requests, oldest first; count includes any earlier requests."""
+
+
+class AdjudicationCompletionReceipt(BaseModel):
+    """Text-free measurements from a completed L4 tool-call run.
+
+    This is telemetry, not evidence for the clear/reject decision. The model
+    and upstream are observed response fields, so they stay null when a gateway
+    omits them; gateway_provider names the configured route actually called.
+    first_tool_call_ms is elapsed from the court run start to the first
+    substantive tool-call signal in the final model request. For buffered
+    responses this signal is only observable at complete-body receipt.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    elapsed_ms: Annotated[int, Field(ge=0, le=3_600_000)]
+    first_tool_call_ms: Annotated[int, Field(ge=0, le=3_600_000)] | None = None
+    first_tool_observation: Literal["stream_delta", "complete_body"] | None = None
+    observed_model: (
+        Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$")] | None
+    ) = None
+    gateway_provider: (
+        Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")] | None
+    ) = None
+    observed_upstream: (
+        Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,63}$")] | None
+    ) = None
+    request_count: Annotated[int, Field(ge=0, le=1_024)]
+    final_request_prompt_bytes: Annotated[int, Field(ge=0, le=20_000_000)] | None = None
+    final_request_wire_bytes: Annotated[int, Field(ge=0, le=20_000_000)] | None = None
+    final_request_event_count: Annotated[int, Field(ge=0, le=100_000)] | None = None
+    prompt_tokens: Annotated[int, Field(ge=0, le=10_000_000)] | None = None
+    completion_tokens: Annotated[int, Field(ge=0, le=10_000_000)] | None = None
+
+    @model_validator(mode="after")
+    def validate_first_tool_observation(self) -> AdjudicationCompletionReceipt:
+        if (self.first_tool_call_ms is None) != (self.first_tool_observation is None):
+            raise ValueError("first tool timing and observation must be paired")
+        return self
+
+
 class SourceReviewAdjudication(BaseModel):
     """Terminal clear/reject decision on a review that would otherwise hold.
 
@@ -1140,12 +1465,26 @@ class SourceReviewAdjudication(BaseModel):
     escalation_code: (
         Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")] | None
     ) = None
+    run_diagnostic: AdjudicationRunDiagnostic | None = None
+    """Operator metadata for an escalation. Excluded from ``canonical_digest``
+    so a platform that has not yet learned the field still verifies the signed
+    verdict."""
+    completion_receipt: AdjudicationCompletionReceipt | None = None
+    """Optional telemetry for a completed model call, including a host-refused
+    verdict. It does not establish completed policy verification. Excluded from
+    the canonical verdict digest for rolling-upgrade compatibility."""
 
     @model_validator(mode="after")
     def validate_decision_basis(self) -> SourceReviewAdjudication:
         if self.decision == "reject":
             if self.reject_invariant is None:
                 raise ValueError("a reject must name the policy invariant it breached")
+            if self.reject_invariant not in source_review_invariants_for_policy(
+                self.policy_version
+            ):
+                raise ValueError(
+                    "a reject invariant is unavailable under the applied policy"
+                )
             if self.clear_clause is not None:
                 raise ValueError("a reject cannot cite a false-positive clause")
             if not self.citations:
@@ -1162,12 +1501,41 @@ class SourceReviewAdjudication(BaseModel):
                 raise ValueError("a clear requires at least one cited location")
         elif self.escalation_code is None:
             raise ValueError("an escalation must name why the decision was refused")
+        if self.run_diagnostic is not None and self.decision != "escalate":
+            raise ValueError("adjudication run diagnostic requires an escalation")
+        if self.run_diagnostic is not None and self.completion_receipt is not None:
+            raise ValueError("adjudication failure and completion telemetry conflict")
+        if self.completion_receipt is not None and self.decision == "escalate":
+            # These refusals occur only after a complete L4 tool-call result
+            # reaches the host verifier. A provider/transport failure or an
+            # early host refusal must not be described as a completed call.
+            model_completed_refusals = {
+                "adjudicator-evidence-incomplete",
+                "adjudicator-operator-requested",
+                "uncited-decision",
+                "cited-unknown-member",
+                "cited-unread-source",
+                "inadmissible-citations",
+                "verdict-contract-failed",
+            }
+            if self.escalation_code not in model_completed_refusals:
+                raise ValueError(
+                    "adjudication completion receipt requires a completed model call"
+                )
         return self
 
     def canonical_digest(self) -> str:
-        """Bind the complete court result into the signed worker verdict."""
+        """Bind the court decision into the signed worker verdict.
+
+        ``run_diagnostic`` and ``completion_receipt`` are operator metadata.
+        Leaving them out keeps the
+        digest stable for verdicts signed before the field existed and for
+        platforms that ignore unknown adjudication fields during a rollout.
+        """
         payload = json.dumps(
-            self.model_dump(mode="json"),
+            self.model_dump(
+                mode="json", exclude={"run_diagnostic", "completion_receipt"}
+            ),
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
@@ -1197,9 +1565,9 @@ class SourceReviewObservationPayload(BaseModel):
     review_audit: ScreenReviewAudit | None = None
     notes: Annotated[list[SourceReviewNote], Field(default_factory=list, max_length=48)]
     adjudication: SourceReviewAdjudication | None = None
-    """Automated clear/reject on a review that would otherwise hold. Absent
-    when the adjudicator is off, when the review needed no adjudication, or
-    when the adjudicator itself failed."""
+    """Automated clear, reject, or escalation. An escalation may carry a
+    sanitized ``run_diagnostic``; that trace is not part of the signed digest.
+    Absent when the adjudicator is off or the review needed no adjudication."""
 
     @model_validator(mode="after")
     def validate_finding_binding(self) -> SourceReviewObservationPayload:
@@ -1208,6 +1576,10 @@ class SourceReviewObservationPayload(BaseModel):
                 raise ValueError("source-review finding requires its digest")
             if self.finding.canonical_digest() != self.finding_digest:
                 raise ValueError("source-review finding does not match its digest")
+            if self.risk_level != self.finding.risk_level:
+                raise ValueError("source-review risk does not match its finding")
+            if set(self.categories) != set(self.finding.categories):
+                raise ValueError("source-review categories do not match its finding")
         if self.ok and self.risk_level is None:
             raise ValueError("successful source review requires a risk level")
         return self
@@ -1331,6 +1703,10 @@ class ScreenResultRequest(BaseModel):
         ),
     ] = None
     adjudication: SourceReviewAdjudication | None = None
+    completion_receipt_signature: Annotated[
+        str | None, Field(pattern=_SIGNATURE_HEX_PATTERN)
+    ] = None
+    """Detached hotkey signature over exact-artifact L4 completion telemetry."""
     policy_version: Annotated[
         int,
         Field(
@@ -1440,6 +1816,11 @@ class ScreenResultRequest(BaseModel):
         ):
             raise ValueError("passed must agree with outcome")
         if (
+            self.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+            and self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+        ):
+            raise ValueError("strict two-outcome policy cannot admit pass-inconclusive")
+        if (
             self.outcome
             in {
                 ScreenResultOutcome.QUARANTINE,
@@ -1449,10 +1830,16 @@ class ScreenResultRequest(BaseModel):
             and self.attempt_id is None
         ):
             raise ValueError("review outcome requires attempt_id")
-        if self.outcome in {
+        review_binding_required = self.outcome in {
             ScreenResultOutcome.QUARANTINE,
             ScreenResultOutcome.PASS_INCONCLUSIVE,
-        } and (self.manifest_digest is None or self.reason_code is None):
+        } or (
+            self.outcome == ScreenResultOutcome.INCONCLUSIVE
+            and self.review_audit is not None
+        )
+        if review_binding_required and (
+            self.manifest_digest is None or self.reason_code is None
+        ):
             raise ValueError("review result requires manifest_digest and reason_code")
         image_fields = (
             self.image_sha256,
@@ -1513,22 +1900,42 @@ class ScreenResultRequest(BaseModel):
                 != self.review_notes_digest
             ):
                 raise ValueError("review_notes do not match review_notes_digest")
-        if self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
-            if self.review_audit is None or self.review_audit_digest is None:
-                raise ValueError("pass-inconclusive requires review audit")
+        review_audit_allowed = (
+            self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+            or (
+                self.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                and self.outcome == ScreenResultOutcome.INCONCLUSIVE
+            )
+        )
+        if review_audit_allowed and self.review_audit is not None:
+            if self.review_audit_digest is None:
+                raise ValueError("review audit requires its digest")
             if self.review_audit.canonical_digest() != self.review_audit_digest:
                 raise ValueError("review audit does not match review_audit_digest")
+        elif self.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
+            if self.review_audit is None or self.review_audit_digest is None:
+                raise ValueError("pass-inconclusive requires review audit")
         elif self.review_audit is not None or self.review_audit_digest is not None:
-            raise ValueError("review audit requires pass-inconclusive outcome")
+            raise ValueError(
+                "review audit requires a compatible inconclusive review outcome"
+            )
         if (self.adjudication is None) != (self.adjudication_digest is None):
             raise ValueError(
                 "adjudication and adjudication_digest must travel together"
             )
+        if self.adjudication is None and self.completion_receipt_signature is not None:
+            raise ValueError("completion receipt signature requires adjudication")
         if self.adjudication is not None:
             if self.review_settings_revision is None:
                 raise ValueError("adjudication requires reviewer settings binding")
             if self.adjudication.canonical_digest() != self.adjudication_digest:
                 raise ValueError("adjudication does not match adjudication_digest")
+            if (self.adjudication.completion_receipt is None) != (
+                self.completion_receipt_signature is None
+            ):
+                raise ValueError(
+                    "completion receipt and its detached signature must travel together"
+                )
             if self.outcome not in {
                 ScreenResultOutcome.PASS,
                 ScreenResultOutcome.QUARANTINE,

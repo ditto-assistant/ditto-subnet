@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import yaml
@@ -55,7 +56,48 @@ def test_hosted_release_fails_closed_unless_current_contracts_are_advertised() -
         "Verify the live practice endpoint reports its release identity",
     )
 
-    assert "(.supported_bench_versions | sort == [8, 9, 10, 11, 12])" in verify["run"]
+    identity_gate = "(.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13])"
+    assert identity_gate in verify["run"]
+
+
+def _release_identity_gate_versions() -> list[int]:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    verify = _step(
+        workflow["jobs"]["deploy-dittobench"]["steps"],
+        "Verify the live practice endpoint reports its release identity",
+    )
+    gate = re.search(
+        r"\.supported_bench_versions \| sort == \[([\d, ]+)\]", verify["run"]
+    )
+    assert gate is not None, "release.yml identity gate not found"
+    return [int(v) for v in gate.group(1).split(",")]
+
+
+def test_validator_executable_set_tracks_the_scorer_advertisement() -> None:
+    """The validator must advertise exactly what the scorer advertises.
+
+    ``ditto.validator.dittobench.SUPPORTED_BENCH_VERSIONS`` is intersected with
+    the scorer's ``supported_bench_versions`` before the signed heartbeat, so a
+    version the scorer offers but this tuple omits is dropped and Platform
+    counts ZERO capable validators for it -- the exact v11 outage. The scorer's
+    advertised set is pinned by the release deploy identity gate (which fails
+    the deploy closed on any other set), so the two must be the same list.
+
+    This is deliberately RED while the validator lags: the scorer half of a
+    bench bump (#1519) cannot merge green until the wiring sweep that moves
+    ``SUPPORTED_BENCH_VERSIONS`` (and the ``V9EvidenceBenchVersion`` Literal,
+    starter-kit ``MAX_SUPPORTED_BENCH_VERSION``, local-rehearsal
+    ``MAX_BENCH_VERSION`` and the regenerated contract goldens) has landed.
+    """
+    from ditto.validator.dittobench import SUPPORTED_BENCH_VERSIONS
+
+    gate = _release_identity_gate_versions()
+    assert sorted(SUPPORTED_BENCH_VERSIONS) == gate, (
+        f"validator SUPPORTED_BENCH_VERSIONS={sorted(SUPPORTED_BENCH_VERSIONS)} "
+        f"lags the scorer's advertised set {gate}: land the #1519 wiring sweep "
+        "(ditto/validator/dittobench.py, ditto-screening-protocol bench_v9.py, "
+        "starter-kit protocol.rs, local-rehearsal.py, contract goldens) first"
+    )
 
 
 def test_every_dittobench_surface_triggers_ci() -> None:

@@ -40,13 +40,6 @@ locals {
         covered_by_ssh_users = true
       }
     },
-    var.enable_screener ? {
-      screener_dev = {
-        vm                   = module.screener_vm[0].hostname
-        zone                 = var.zone
-        covered_by_ssh_users = false
-      }
-    } : {},
     var.enable_screener_prod ? {
       screener_prod = {
         vm                   = google_compute_instance.screener_vm_prod[0].name

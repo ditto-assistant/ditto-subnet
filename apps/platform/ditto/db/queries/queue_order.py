@@ -329,6 +329,7 @@ def _top_provisional_contenders(
         select(func.count())
         .where(
             ValidatorTicket.agent_id == contender.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.status == TicketStatus.SCORED,
         )
@@ -486,6 +487,7 @@ def queue_order_terms(
         select(func.count())
         .where(
             ValidatorTicket.agent_id == agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.status == TicketStatus.ISSUED,
             ValidatorTicket.deadline > now,
@@ -550,6 +552,7 @@ def queue_order_terms(
             select(ValidatorTicket.agent_id)
             .where(
                 ValidatorTicket.agent_id == agent.agent_id,
+                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
                 ValidatorTicket.validator_hotkey == validator_hotkey,
             )
             .correlate(agent)
@@ -812,6 +815,7 @@ async def owner_live_lease_agent_ids(
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.deadline > now,
                 ValidatorTicket.purpose != TicketPurpose.CONTINUAL_RETEST,
+                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
                 linkage.same_owner_predicate(
                     agent=sibling_agent, payment=sibling_payment
                 ),
@@ -841,6 +845,7 @@ async def miner_has_newer_canonical_work(
         select(func.count())
         .where(
             ValidatorTicket.agent_id == Agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.status == TicketStatus.SCORED,
         )
@@ -914,6 +919,7 @@ async def selected_owner_agent_id(
         select(func.min(ValidatorTicket.issued_at))
         .where(
             ValidatorTicket.agent_id == sibling_agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == bench_version,
             (
                 (ValidatorTicket.status == TicketStatus.SCORED)
@@ -963,6 +969,7 @@ async def selected_owner_agent_id(
         select(func.count(func.distinct(ValidatorTicket.validator_hotkey)))
         .where(
             ValidatorTicket.agent_id == sibling_agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.status == TicketStatus.SCORED,
         )
@@ -977,6 +984,7 @@ async def selected_owner_agent_id(
         select(func.count(func.distinct(ValidatorTicket.validator_hotkey)))
         .where(
             ValidatorTicket.agent_id == sibling_agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.validator_hotkey.in_(set(capable_validator_hotkeys)),
             or_(
@@ -1312,6 +1320,7 @@ async def preview_queue_order(
         select(func.count())
         .where(
             ValidatorTicket.agent_id == Agent.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == bench_version,
             or_(
                 ValidatorTicket.status == TicketStatus.SCORED,

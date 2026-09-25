@@ -73,8 +73,9 @@ application packages.
 Private modules can rotate timing and relay tripwires, randomized controls,
 source/fingerprint triage, and behavioral challenge packs without changing the
 v9 protocol or signing bytes. No private signal proves causal model use.
-Modules can pass or route to `retryable_infra`, `quarantine`, `inconclusive`,
-or `pass_inconclusive`;
+Modules can pass or route to `retryable_infra`, `quarantine`, or `inconclusive`;
+historical v10-v12 attempts also retain `pass_inconclusive` compatibility, while
+the v13 wire contract rejects that fail-open outcome;
 only the objective stable core can return `deterministic_reject`.
 
 The worker also sends the optional signed, privacy-bounded fleet heartbeat
@@ -148,6 +149,30 @@ Required values are supplied through the production host's protected
 - `SCREENER_SOURCE_REVIEW_API_KEY_FILE`: required mode-0400 OpenRouter key file
   for the private read-only source reviewer. The default model is
   `openai/gpt-5.6-luna`.
+- `SCREENER_SEED_PROBE_MODE`: `shadow` (default), `enforce`, or `off`. After
+  the health gate, one bounded `POST /seed` wave with a single coined pair
+  proves the image can ingest state, not just answer `/health`. `shadow`
+  records the failure class as evidence beside the existing outcome;
+  `enforce` makes it a deterministic contract failure whose detail tells the
+  miner what to fix (writing outside `/tmp`, the sandbox memory cap, a non-2xx
+  reply, or no reply). The probe is served by the same isolated fake gateway as
+  the rest of the smoke, so it costs no provider call.
+  `SCREENER_SEED_PROBE_TIMEOUT_SECONDS` (default `60`) bounds it, and
+  `SCREENER_SEED_PATH` (default `/seed`) names the path. Whatever the mode
+  decides, the probe also samples what the container consumed of the sandbox
+  envelope (`memory.peak` and `/tmp`, the same cgroup files the validator reads
+  after a scored run) and records it as `seed-envelope-usage` evidence on every
+  screened image, passing ones included -- how close the fleet runs to the caps
+  cannot be read from rejections alone. An image without a shell reports
+  nothing and screening is unchanged.
+- `SCREENER_V13_RUNTIME_RECEIPTS_MODE`: `off` (default) or `shadow`. The shadow
+  mode sends bounded `/run` and `/seed` requests through the isolated smoke
+  network and records digest-only, exact-attempt observations for V13 runtime
+  checks 3–7. A receipt means `recorded_unverified`, never a pass: the fake
+  model cannot establish actual tool choice, memory correctness, or user
+  isolation. The mode has no influence on the screening outcome and should
+  remain off until its overhead and evidence profile have been calibrated.
+  Targon-only smoke and pre-build source holds leave these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
 - `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-5.6-terra`; legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
@@ -164,6 +189,20 @@ Required values are supplied through the production host's protected
   `ditto-screener-l2-analyzer:active` image.
 - `SCREENER_L2_CACHE_DIR` and `SCREENER_L2_AUDIT_JOURNAL_FILE`: protected
   sanitized cache/audit locations. Raw source and transcripts are never stored.
+- `SCREENER_SCORER_CAPABILITIES_URL` and `SCREENER_EXPECTED_SCORER_REVISION`:
+  optional paired V13 L2 evidence gate. Point the URL at a trusted HTTPS
+  scorer's exact `/v1/capabilities` endpoint and pin the compiled 40-character
+  scorer release revision. L2 fetches a fresh, digest-bound list of variables
+  injected into its V13 sandbox before using a cached review or calling a
+  model. A missing, stale, env-asserted, or mismatched packet holds the review
+  as inconclusive. The packet does not cover image ENV, source defaults, or
+  other validator deployments; those need independent source and runtime
+  checks before any CLEAR or emissions decision.
+- `SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE=true`: V13 canary gate that holds L2
+  inconclusive before any model call unless Platform supplied a fresh signed
+  cohort lease for the exact attempt and artifact. Set on the Platform process
+  (which forwards it to Targon source-review rentals) and on local screeners.
+  Leave it off for legacy screening; never treat an absent lease as CLEAR.
 - `SCREENER_STATIC_PREFLIGHT_V2_MODE`: `off` (default), `shadow`, or `enforce`.
   `off` and `shadow` preserve the v1 decisive result; `shadow` additionally
   computes the reachability-and-causality v2 candidate for comparison.

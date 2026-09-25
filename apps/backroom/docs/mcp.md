@@ -114,10 +114,34 @@ is still live. `mcp-scope.server.ts` additionally challenges the request with a
 `WWW-Authenticate` scope hint before the tool runs, so an under-scoped client
 gets a 403 naming the scope it needs rather than a tool-level refusal.
 
-Access tokens never outlive the operator session: `tokenExchangeCallback`
-refuses an expired one and clamps the token TTL to the session's remaining life.
-There is no refresh path for the identity itself — when the session ends, the
-operator authorizes again.
+A grant is the intersection of the scopes the client requested, the level the
+operator selected on consent, and the account's live level. Consent can narrow
+a request but never widen it: a `scope=backroom:read` request yields a
+read-only grant whatever is selected, and a client that needs more must
+reconnect and request the broader scope (the step-up challenge above names it).
+The unauthenticated `/mcp` 401 challenge advertises all three scopes, because
+MCP clients request exactly the challenged scope: a first connection asks for
+everything, and the operator narrows it on consent. The consent screen always
+shows all four levels and disables any this request or account cannot receive,
+with the reason.
+Approving a client replaces every earlier grant that client id held, and a
+token request can only downscope within its grant. `get_backroom_access`
+reports the connection's exact `grant` id and client id, the token's
+`grantedScopes`, and the effective `scopes` after the live-level cap. Operators
+list and revoke their own grants (with every access and refresh token issued
+under them) on the Agent access page, backed by `GET /oauth/grants` and
+same-origin `POST /oauth/grants/revoke`.
+
+Access tokens never outlive the operator session. `mcpTokenExchange` clamps the
+token TTL to the session's exact remaining seconds (capped at 24 hours) and
+answers `invalid_grant` when less than 60 seconds remain, because Workers KV
+cannot express an expiry under a minute and rounding it up would outlive the
+session. The MCP handler re-checks `session.expiresAt` on every request, exactly
+as it re-derives the live email level, so an expired session ends read, artifact,
+and write access at once. `get_backroom_access` reports that access-token
+`expires_at`. Signed artifact download URLs stay on their own short lifetime
+and are not extended with the session. There is no refresh path for the
+identity itself — when the session ends, the operator authorizes again.
 
 ## Bindings
 
@@ -174,6 +198,25 @@ manifest an operator reads to decide *what exists* — today
 `list_screening_source_files` — defaults to the platform's whole listing rather
 than a page, because a row silently missing from page one is evidence the
 reviewer never learns to ask for. `mcp.server.test.ts` pins each tool's bound.
+
+## Independent V13 replay process identity
+
+`get_screener_replay_process_readiness` reads the exact node-2 public-key
+fingerprint, signed worker-1 heartbeat, minimum runner release, and missing
+admission checks from Platform. A healthy ordinary screener heartbeat is not a
+signed replay-process heartbeat. This read does not prove physical host
+isolation or activate replay.
+
+`register_screener_replay_process_key` accepts only a host-generated Ed25519
+**public** key for `subnet-screener-2-worker-1`. Platform requires the enrolled
+node's expected hotkey, replay capacity zero, an audit reason, and the exact
+confirmation containing the SHA-256 of the 32-byte public key. Never send the
+private key to Backroom. `revoke_screener_replay_process_key` binds the active
+key fingerprint and expected hotkey; it remains available during a live canary
+so a compromised or stale process can be stopped. Both writes require
+`backroom:write` and forward the signed-in operator email as `X-Admin-Actor`.
+No key registration, capacity change, or live host enrollment is performed by
+these tools merely becoming available.
 
 ## The review queue
 

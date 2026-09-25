@@ -16,10 +16,14 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections import defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from ditto.api_models.validator_weights_fold import WeightsFold
 
 if TYPE_CHECKING:
     from ditto.api_models.validator import ScoreReport
@@ -83,6 +87,28 @@ class ScoredAgentStat:
     isolation_cases: int = 0
 
 
+# Diagnostic kinds are minted by the scorer's allowlist (http_status_503,
+# missing_final_text, ...); this only guards the metric-name shape.
+_CONFIRMATION_DIAGNOSTIC_KIND = re.compile(r"[a-z0-9_]{1,40}")
+
+
+@dataclass(frozen=True)
+class ConfirmationLongMemDiagnosticsStat:
+    """One completed LongMem bundle's received-failure histogram.
+
+    Mirrors the scorer's allowlisted ``longmem_diagnostics``: counts only, no
+    bodies, identities, or exception text. Purely observational.
+    """
+
+    bundle_id: str
+    case_count: int
+    received_failures: int
+    received_failure_kinds: Mapping[str, int]
+    received_failure_reader_attempts: int
+    received_failure_reader_agent_rejections: int
+    received_failure_embedding_dispatches: int
+
+
 @dataclass(frozen=True)
 class ConfirmationFailureStat:
     """One confirmation slot failure, reduced to low-cardinality diagnostics.
@@ -136,6 +162,8 @@ class SweepStats:
     onchain_last_update_block: int | None = None
     onchain_observed_block: int | None = None
     scoring_sweep: bool = True
+    weights_fold: WeightsFold | None = None
+    """The pin identity and vector digest this sweep's fold produced."""
 
 
 def per_category_means(report: ScoreReport) -> dict[str, float]:
@@ -260,6 +288,53 @@ class ValidatorTelemetry:
         except Exception as e:  # noqa: BLE001 - telemetry must never break scoring
             logger.warning("wandb confirmation log failed (continuing): %s", e)
 
+    def record_confirmation_longmem_diagnostics(
+        self, stat: ConfirmationLongMemDiagnosticsStat
+    ) -> None:
+        """Log one completed bundle's received-failure histogram. Swallows errors.
+
+        A bundle that completes as an official zero because every ``/run``
+        returned an unjudgeable response looks, from Platform, exactly like an
+        execution outage. This is the only fleet-wide signal saying which
+        boundary the submitted harness failed at and whether it ever attempted
+        the frozen reader.
+        """
+        if self._run is None:
+            return
+        try:
+            self._log_confirmation_longmem_diagnostics(stat)
+        except Exception as e:  # noqa: BLE001 - telemetry must never break scoring
+            logger.warning(
+                "wandb confirmation diagnostics log failed (continuing): %s", e
+            )
+
+    def _log_confirmation_longmem_diagnostics(
+        self, stat: ConfirmationLongMemDiagnosticsStat
+    ) -> None:
+        wandb = self._wandb
+        payload: dict[str, Any] = {
+            "confirmation/longmem_bundle_id": stat.bundle_id,
+            "confirmation/longmem_case_count": stat.case_count,
+            "confirmation/longmem_received_failures": stat.received_failures,
+            "confirmation/longmem_received_failure_reader_attempts": (
+                stat.received_failure_reader_attempts
+            ),
+            "confirmation/longmem_received_failure_reader_agent_rejections": (
+                stat.received_failure_reader_agent_rejections
+            ),
+            "confirmation/longmem_received_failure_embedding_dispatches": (
+                stat.received_failure_embedding_dispatches
+            ),
+        }
+        for kind, count in sorted(stat.received_failure_kinds.items()):
+            if _CONFIRMATION_DIAGNOSTIC_KIND.fullmatch(kind) is None:
+                # The scorer allowlists kinds; refuse to mint a metric name from
+                # anything that does not look like one.
+                continue
+            payload[f"confirmation/longmem_received_failure_kinds/{kind}"] = count
+        wandb.log(payload, step=self._step)
+        self._step += 1
+
     def _log_confirmation_failure(self, stat: ConfirmationFailureStat) -> None:
         wandb = self._wandb
         self._confirmation_failures[stat.failure_class] += 1
@@ -337,6 +412,15 @@ class ValidatorTelemetry:
                 )
             if stats.onchain_observed_block is not None:
                 payload["weights/onchain_observed_block"] = stats.onchain_observed_block
+            if stats.weights_fold is not None:
+                fold = stats.weights_fold
+                payload["weights/vector_digest"] = fold.vector_digest
+                if fold.epoch_index is not None:
+                    payload["weights/epoch_index"] = fold.epoch_index
+                if fold.ledger_digest is not None:
+                    payload["weights/ledger_digest"] = fold.ledger_digest
+                if fold.champion_agent_id is not None:
+                    payload["weights/champion_agent_id"] = str(fold.champion_agent_id)
             if (
                 stats.onchain_last_update_block is not None
                 and stats.onchain_observed_block is not None

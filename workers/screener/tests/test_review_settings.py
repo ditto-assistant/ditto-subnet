@@ -18,11 +18,23 @@ from ditto_screener.review_settings import (
     _POST_CHECKSUM_FIELDS,
     CachedReviewSettings,
     EffectiveReviewSettings,
+    ReviewSettings,
     ReviewSettingsCache,
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
     bootstrap_review_settings,
 )
+
+
+def test_gpt6_sol_l2_setting_is_valid_with_existing_critic(make_config) -> None:
+    settings = bootstrap_review_settings(make_config()).settings.model_dump(mode="json")
+    settings["l2_model"] = "openai/gpt-6-sol"
+    settings["source_review_model"] = "openai/gpt-6-luna"
+    settings["l3_model"] = "openai/gpt-6-sol"
+    parsed = ReviewSettings.model_validate(settings)
+    assert parsed.l2_model == "openai/gpt-6-sol"
+    assert parsed.source_review_model == "openai/gpt-6-luna"
+    assert parsed.l3_model == "openai/gpt-6-sol"
 
 
 def _shadow_observation(*, stages: int) -> ShadowReviewObservationRequest:
@@ -163,8 +175,9 @@ def _legacy_payload(config, dropped: tuple[str, ...]) -> dict:
     baseline = bootstrap_review_settings(config)
     payload = baseline.model_dump()
     legacy = baseline.settings.model_dump(mode="json")
+    legacy.pop("adjudicator_max_completion_tokens", None)
     for name in dropped:
-        legacy.pop(name)
+        legacy.pop(name, None)
     payload["checksum"] = hashlib.sha256(
         json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -198,6 +211,28 @@ def test_pre_l1_model_checksum_remains_valid(make_config) -> None:
     assert compatible.settings.source_review_timeout_seconds == 1_800
 
 
+def test_inactive_fanout_uses_legacy_checksum_during_rolling_upgrade(
+    make_config,
+) -> None:
+    config = make_config(source_review_timeout_seconds=1_800)
+    payload = _legacy_payload(config, _introduced_from("fanout_shadow_mode"))
+    payload["settings"].update(
+        {
+            "fanout_shadow_mode": "off",
+            "fanout_shadow_image_source_sha": "1" * 40,
+            "fanout_shadow_max_requests": 12,
+            "fanout_shadow_daily_cost_usd": 5,
+        }
+    )
+    compatible = EffectiveReviewSettings.model_validate(payload)
+    assert compatible.settings.fanout_shadow_mode == "off"
+    assert compatible.settings.fanout_shadow_max_requests == 12
+
+    payload["settings"]["fanout_shadow_mode"] = "shadow"
+    with pytest.raises(ValidationError, match="checksum mismatch"):
+        EffectiveReviewSettings.model_validate(payload)
+
+
 @pytest.mark.parametrize(("mode", "profile"), (("shadow", "l1"), ("enforce", "l1_l2")))
 def test_pre_manifest_checksum_infers_legacy_profile(
     make_config, mode, profile
@@ -216,6 +251,69 @@ def test_explicit_budget_is_never_dropped_from_the_checksum(make_config) -> None
     payload["settings"]["source_review_max_read_bytes"] = 2_000_000
     with pytest.raises(ValidationError, match="checksum"):
         EffectiveReviewSettings.model_validate(payload)
+
+
+def _platform_shaped_payload(config, **updates: object) -> dict:
+    """Checksum exactly as Platform's ``review_settings_checksum`` mints it."""
+    baseline = bootstrap_review_settings(config)
+    payload = baseline.model_dump(mode="json")
+    payload["settings"].update(updates)
+    hashed = dict(payload["settings"])
+    if hashed["adjudicator_max_completion_tokens"] is None:
+        hashed.pop("adjudicator_max_completion_tokens")
+    if hashed["fanout_shadow_mode"] == "off":
+        for name in _POST_CHECKSUM_FIELDS[
+            _POST_CHECKSUM_FIELDS.index(
+                "fanout_shadow_mode"
+            ) : _POST_CHECKSUM_FIELDS.index("fanout_shadow_reserved_targon_slots") + 1
+        ]:
+            hashed.pop(name)
+    if not hashed["l2_always_escalate"]:
+        hashed.pop("l2_always_escalate")
+    payload["checksum"] = hashlib.sha256(
+        json.dumps(hashed, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return payload
+
+
+@pytest.mark.parametrize("fanout_mode", ("off", "shadow"))
+@pytest.mark.parametrize("always_escalate", (False, True))
+def test_always_escalate_posture_checksum_verifies(
+    make_config, fanout_mode, always_escalate
+) -> None:
+    config = make_config(source_review_timeout_seconds=1_800)
+    payload = _platform_shaped_payload(
+        config,
+        fanout_shadow_mode=fanout_mode,
+        fanout_shadow_image_source_sha="1" * 40,
+        l2_always_escalate=always_escalate,
+    )
+    verified = EffectiveReviewSettings.model_validate(payload)
+    assert verified.settings.l2_always_escalate is always_escalate
+
+
+def test_always_escalate_cannot_be_stripped_from_a_signed_posture(make_config) -> None:
+    config = make_config(source_review_timeout_seconds=1_800)
+    payload = _platform_shaped_payload(config, l2_always_escalate=True)
+    payload["settings"]["l2_always_escalate"] = False
+    with pytest.raises(ValidationError, match="checksum"):
+        EffectiveReviewSettings.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    ("env_escalates", "posture_escalates", "expected"),
+    ((False, False, False), (False, True, True), (True, False, True)),
+)
+def test_posture_can_add_but_never_remove_escalation(
+    make_config, env_escalates, posture_escalates, expected
+) -> None:
+    config = make_config(
+        source_review_timeout_seconds=1_800, l2_always_escalate=env_escalates
+    )
+    effective = EffectiveReviewSettings.model_validate(
+        _platform_shaped_payload(config, l2_always_escalate=posture_escalates)
+    )
+    assert effective.apply_to(config).l2_always_escalate is expected
 
 
 @pytest.mark.asyncio

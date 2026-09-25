@@ -1,13 +1,4 @@
-"""The publication predicate the anti-copy gate judges past uploads against.
-
-Release on SN118 is **king-only** and its clock starts at on-chain weight
-confirmation, not at upload. That distinction is the whole reason this query
-exists rather than a ``created_at + embargo_hours`` expression at the call site:
-of ~1600 submissions on the live subnet, 30 have ever been downloadable, and
-their unlock times sit anywhere from hours to a week past upload depending on
-when validators' revealed weights landed. A gate that assumed otherwise would
-exempt copies of artifacts that were never published.
-"""
+"""Publication predicates require completed emissions before the embargo starts."""
 
 from __future__ import annotations
 
@@ -22,6 +13,7 @@ from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.endpoints.public import _public_artifact_release
 from ditto.db.models import Agent, AgentStatus, ArtifactReleaseSettingsRevision, Score
 from ditto.db.queries.artifact_release import (
+    available_public_source_agent_ids,
     list_first_score_quorums,
     list_public_source_releases,
 )
@@ -31,7 +23,9 @@ from ditto.db.queries.artifact_release_settings import (
     artifact_release_policy_as_of,
 )
 from ditto.db.queries.king_reign import (
+    KingEmissionProof,
     get_king_reveal,
+    record_emission_confirmed,
     record_first_crowned,
     record_weight_confirmed,
 )
@@ -53,6 +47,7 @@ async def _submission(
     scores: int = _QUORUM,
     status: AgentStatus = AgentStatus.SCORED,
     crowned_at: datetime | None = None,
+    emission_confirmed_at: datetime | None = None,
     weight_confirmed_at: datetime | None = None,
 ) -> UUID:
     agent_id = uuid4()
@@ -94,25 +89,26 @@ async def _submission(
         await record_weight_confirmed(
             session, agent_id=agent_id, now=weight_confirmed_at
         )
+    if emission_confirmed_at is not None:
+        await record_emission_confirmed(
+            session,
+            agent_id=agent_id,
+            proof=KingEmissionProof(emission_confirmed_at, 100, "0xabc", 1, "digest"),
+        )
     await session.flush()
     return agent_id
 
 
-async def test_window_runs_from_weight_confirmation_not_upload(
+async def test_window_runs_from_emission_confirmation_not_upload(
     session: AsyncSession,
 ) -> None:
-    """The red-dragon v12 timings, which the exemption tests lean on.
-
-    Uploaded 2026-08-04 06:21:53Z, weight-confirmed 11:46:31Z the same day, and
-    served publicly from 2026-08-09 11:46:31Z under the 120-hour policy -- five
-    hours and change later than ``upload + 120h`` would have said.
-    """
+    """Payout-block time, rather than upload or weights, anchors the embargo."""
     confirmed = datetime(2026, 8, 4, 11, 46, 31, tzinfo=UTC)
     agent_id = await _submission(
         session,
         name="red-dragon",
         crowned_at=datetime(2026, 8, 4, 8, 0, tzinfo=UTC),
-        weight_confirmed_at=confirmed,
+        emission_confirmed_at=confirmed,
     )
 
     releases = await list_public_source_releases(
@@ -140,7 +136,7 @@ async def test_never_crowned_submission_is_never_published(
 async def test_king_awaiting_on_chain_confirmation_is_not_published(
     session: AsyncSession,
 ) -> None:
-    """Crowned is not enough: commit-reveal has to have landed."""
+    """Crowned is not enough: completed winner earnings must be proven."""
     agent_id = await _submission(
         session, name="king", crowned_at=datetime(2026, 8, 4, 8, 0, tzinfo=UTC)
     )
@@ -159,7 +155,7 @@ async def test_below_quorum_king_is_not_published(session: AsyncSession) -> None
         name="quorumless",
         scores=2,
         crowned_at=datetime(2026, 8, 4, 8, 0, tzinfo=UTC),
-        weight_confirmed_at=datetime(2026, 8, 4, 11, 46, 31, tzinfo=UTC),
+        emission_confirmed_at=datetime(2026, 8, 4, 11, 46, 31, tzinfo=UTC),
     )
 
     assert (
@@ -185,7 +181,7 @@ async def test_non_serving_status_is_not_published(
         name="pulled",
         status=status,
         crowned_at=datetime(2026, 8, 4, 8, 0, tzinfo=UTC),
-        weight_confirmed_at=datetime(2026, 8, 4, 11, 46, 31, tzinfo=UTC),
+        emission_confirmed_at=datetime(2026, 8, 4, 11, 46, 31, tzinfo=UTC),
     )
 
     assert (
@@ -202,7 +198,7 @@ async def test_disclosure_never_publishes_nothing(session: AsyncSession) -> None
         session,
         name="withheld",
         crowned_at=datetime(2026, 8, 4, 8, 0, tzinfo=UTC),
-        weight_confirmed_at=datetime(2026, 8, 4, 11, 46, 31, tzinfo=UTC),
+        emission_confirmed_at=datetime(2026, 8, 4, 11, 46, 31, tzinfo=UTC),
     )
 
     assert (
@@ -229,7 +225,7 @@ async def test_agrees_with_the_public_route_projection(
         session,
         name="king",
         crowned_at=datetime(2026, 8, 4, 8, 0, tzinfo=UTC),
-        weight_confirmed_at=confirmed,
+        emission_confirmed_at=confirmed,
     )
     releases = await list_public_source_releases(
         session, agent_ids=[agent_id], quorum=_QUORUM, policy=_PUBLIC_120H
@@ -252,6 +248,23 @@ async def test_agrees_with_the_public_route_projection(
 
     assert serves(available_at) is True
     assert serves(available_at - timedelta(seconds=1)) is False
+    assert agent_id in await available_public_source_agent_ids(
+        session, quorum=_QUORUM, policy=_PUBLIC_120H, now=available_at
+    )
+    assert agent_id not in await available_public_source_agent_ids(
+        session,
+        quorum=_QUORUM,
+        policy=_PUBLIC_120H,
+        now=available_at - timedelta(seconds=1),
+    )
+
+    assert agent_id in await available_public_source_agent_ids(
+        session,
+        quorum=_QUORUM,
+        policy=_PUBLIC_120H,
+        now=available_at - timedelta(seconds=1),
+        include_pending=True,
+    )
 
 
 class TestPolicyAsOf:
@@ -310,3 +323,190 @@ class TestPolicyAsOf:
         assert before_any.embargo_hours == DEFAULT_ARTIFACT_RELEASE_EMBARGO_HOURS
         assert under_short.embargo_hours == 24
         assert under_long.embargo_hours == 240
+
+
+async def test_legacy_weights_do_not_release_or_enter_available_index(
+    session: AsyncSession,
+) -> None:
+    confirmed = _UPLOADED + timedelta(hours=2)
+    agent_id = await _submission(
+        session,
+        name="legacy",
+        crowned_at=_UPLOADED,
+        weight_confirmed_at=confirmed,
+    )
+    assert (
+        await list_public_source_releases(
+            session, agent_ids=[agent_id], quorum=_QUORUM, policy=_PUBLIC_120H
+        )
+        == {}
+    )
+    assert agent_id not in await available_public_source_agent_ids(
+        session,
+        quorum=_QUORUM,
+        policy=_PUBLIC_120H,
+        now=confirmed + timedelta(days=100),
+    )
+    reveal = (await get_king_reveal(session, agent_ids=[agent_id]))[agent_id]
+    assert reveal.weight_confirmed_at == confirmed
+    assert reveal.emission_confirmed_at is None
+    quorum = (
+        await list_first_score_quorums(
+            session,
+            agent_ids=[agent_id],
+            quorum=_QUORUM,
+        )
+    )[agent_id]
+    release = _public_artifact_release(
+        status=AgentStatus.SCORED,
+        score_quorum=quorum,
+        policy=_PUBLIC_120H,
+        king_reveal=reveal,
+        now=confirmed + timedelta(days=100),
+    )
+    assert release.download_available is False
+    assert release.available_at is None
+    assert release.status == "embargoed"
+
+
+@pytest.mark.parametrize("policy", [_PUBLIC_120H, _NEVER])
+async def test_actual_publication_survives_policy_pause_and_agent_suspension(
+    session: AsyncSession,
+    policy: ArtifactReleasePolicy,
+) -> None:
+    from ditto.db.models import ArtifactFetchAudit
+    from ditto.db.queries.artifact_fetch_audit import ENDPOINT_PUBLIC_ARTIFACT
+
+    agent_id = await _submission(session, name="published", status=AgentStatus.BANNED)
+    first_fetch = _UPLOADED + timedelta(hours=1)
+    for offset in (0, 2):
+        session.add(
+            ArtifactFetchAudit(
+                agent_id=agent_id,
+                endpoint=ENDPOINT_PUBLIC_ARTIFACT,
+                requester_kind="public",
+                artifact_sha256="p" * 64,
+                fetched_at=first_fetch + timedelta(hours=offset),
+            )
+        )
+    await session.flush()
+    assert await list_public_source_releases(
+        session,
+        agent_ids=[agent_id],
+        quorum=_QUORUM,
+        policy=policy,
+    ) == {agent_id: first_fetch}
+    # Historical publication must never reopen today's download index.
+    assert agent_id not in await available_public_source_agent_ids(
+        session,
+        quorum=_QUORUM,
+        policy=policy,
+        now=first_fetch + timedelta(days=100),
+    )
+
+
+@pytest.mark.parametrize(
+    "endpoint,kind,sha",
+    [
+        ("admin.get_screening_artifact", "admin", "p" * 64),
+        ("validator.agent_artifact", "validator", "p" * 64),
+        ("screener.agent_artifact", "screener", "p" * 64),
+        ("public.agent_artifact", "admin", "p" * 64),
+        ("public.agent_artifact", "public", "wrong" * 16),
+        ("public.agent_artifact", "public", None),
+    ],
+)
+async def test_private_or_mismatched_fetch_is_not_publication(
+    session: AsyncSession,
+    endpoint: str,
+    kind: str,
+    sha: str | None,
+) -> None:
+    from ditto.db.models import ArtifactFetchAudit
+
+    agent_id = await _submission(session, name="private")
+    session.add(
+        ArtifactFetchAudit(
+            agent_id=agent_id,
+            endpoint=endpoint,
+            requester_kind=kind,
+            requester_id=None if kind == "public" else "reader",
+            artifact_sha256=sha,
+            fetched_at=_UPLOADED,
+        )
+    )
+    await session.flush()
+    assert (
+        await list_public_source_releases(
+            session,
+            agent_ids=[agent_id],
+            quorum=_QUORUM,
+            policy=_NEVER,
+        )
+        == {}
+    )
+
+
+async def test_copy_before_actual_public_fetch_is_not_exempt(
+    session: AsyncSession,
+) -> None:
+    from ditto.api_server.scoring_gate import (
+        PublicSourceRelease,
+        evaluate_duplicate_signals,
+    )
+    from ditto.db.models import ArtifactFetchAudit
+    from ditto.db.queries.scores import LedgerRow
+
+    agent_id = await _submission(session, name="published")
+    fetched_at = _UPLOADED + timedelta(hours=2)
+    session.add(
+        ArtifactFetchAudit(
+            agent_id=agent_id,
+            endpoint="public.agent_artifact",
+            requester_kind="public",
+            artifact_sha256="p" * 64,
+            fetched_at=fetched_at,
+        )
+    )
+    await session.flush()
+    releases = await list_public_source_releases(
+        session,
+        agent_ids=[agent_id],
+        quorum=_QUORUM,
+        policy=_NEVER,
+    )
+    sketch = {"v": 1, "k": 256, "card": 20, "m": [f"{i:016x}" for i in range(20)]}
+    reference = LedgerRow(
+        agent_id=agent_id,
+        miner_hotkey="original",
+        composite=0.8,
+        tool_mean=0.8,
+        memory_mean=0.8,
+        first_seen=_UPLOADED,
+        sha256="p" * 64,
+        size_bytes=500000,
+        run_id="run",
+        seed=42,
+        validator_hotkey="validator",
+        signature="ab" * 64,
+        status=AgentStatus.SCORED,
+        content_fingerprint=sketch,
+    )
+    for submitted_at, expected_hold in (
+        (fetched_at - timedelta(seconds=1), True),
+        (fetched_at, False),
+    ):
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="builder",
+            sha256="b" * 64,
+            composite=0.81,
+            size_bytes=520000,
+            content_fingerprint=sketch,
+            eligible=[reference],
+            submitted_at=submitted_at,
+            public_source_releases=[
+                PublicSourceRelease(k, v) for k, v in releases.items()
+            ],
+        )
+        assert decision.held is expected_hold

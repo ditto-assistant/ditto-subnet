@@ -13,6 +13,7 @@ import {
   Terminal,
 } from 'lucide-react'
 import { useState } from 'react'
+import { McpGrantsPanel } from '../../components/McpGrantsPanel'
 import { PageHeader } from '../../components/PageHeader'
 
 const MCP_URL = 'https://backroom.dittobench.ai/mcp'
@@ -105,6 +106,8 @@ function AgentAccessPage() {
           </button>
         </div>
       </section>
+
+      <McpGrantsPanel />
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(22rem,0.8fr)]">
         <section className="rounded-xl border border-[var(--line)] bg-[var(--panel)] p-5 sm:p-6">

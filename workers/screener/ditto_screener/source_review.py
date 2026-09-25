@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import fnmatch
 import hashlib
 import json
 import logging
+import math
 import posixpath
 import re
 import tarfile
@@ -26,6 +28,11 @@ from ditto_screener.category_guards import (
     find_unmatchable_category_guards,
     guard_report,
 )
+from ditto_screener.decision_path_prompt import (
+    DECISION_PATH_GUIDANCE,
+    V13_BATCH_READS_GUIDANCE,
+    V13_COVERAGE_NUDGE,
+)
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.review_provider import (
@@ -36,7 +43,7 @@ from ditto_screener.review_provider import (
     review_gateway_headers,
 )
 from ditto_screener.source_causality import analyze_static_candidates_v2
-from ditto_screener.source_reachability import analyze_reachability
+from ditto_screener.source_reachability import ReachabilityState, analyze_reachability
 from ditto_screener.source_signals import (
     find_benchmark_emulation_fingerprints,
     find_decisive_malicious_source,
@@ -57,6 +64,14 @@ from ditto_screening_protocol import (
     SourceReviewInvariantDisposition,
     SourceReviewPassClause,
 )
+from ditto_screening_protocol.models import (
+    source_review_invariants_for_policy,
+    source_review_pass_clauses_for_policy,
+)
+from ditto_screening_protocol.review_ledger import (
+    MULTI_LOCATION_CATEGORIES,
+    concern_threshold_reached,
+)
 
 # Every policy version whose L1 policy text this build carries. The platform
 # may require any one of them during a scheduled activation window.
@@ -67,6 +82,8 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
+    if policy_version == 13:
+        return "source-review-v26-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -150,42 +167,6 @@ def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> Non
             return
 
 
-def substantiated_concern_count(
-    notes: Sequence[Mapping[str, object]],
-) -> int:
-    """Count concerns that could actually survive as a finding.
-
-    A ``concern`` note is a lead the reviewer recorded mid-inspection, not a
-    verdict. The reviewer records them liberally by design -- the prompt asks
-    for one "the moment you see one" -- so counting them raw makes any
-    budget-cut review look guilty. Production, 2026-08-28: every one of 273
-    concern notes cited a path, so "did it cite" separates nothing; distinct
-    locations do. Reviews that RAN TO COMPLETION and then concluded low risk
-    carried at most 2 substantiated concerns (mean 0.8), while budget- or
-    fault-terminated reviews carried 6 to 19.
-
-    The multi-location rule is the finding contract itself: a
-    ``benchmark_emulation`` or ``scorer_contract_manipulation`` claim needs two
-    distinct source locations to be admissible as a finding, so a single-site
-    note in those categories could never have become one either.
-    """
-    locations: dict[str, set[tuple[str, object]]] = {}
-    for note in notes:
-        if note.get("kind") != "concern":
-            continue
-        path = note.get("path")
-        if not isinstance(path, str) or not path:
-            continue
-        category = str(note.get("category") or "none")
-        locations.setdefault(category, set()).add((path, note.get("line")))
-    total = 0
-    for category, sites in locations.items():
-        if category in _MULTI_LOCATION_CATEGORIES and len(sites) < 2:
-            continue
-        total += len(sites)
-    return total
-
-
 def ledger_disposition(
     notes: Sequence[Mapping[str, object]],
     *,
@@ -201,8 +182,9 @@ def ledger_disposition(
     at 1. Raising the operator's threshold changed nothing. A threshold has to
     mean "fewer than this many does not hold", so that is what this does.
     """
-    concerns = substantiated_concern_count(notes)
-    if concerns >= max(1, concern_hold_count):
+    # The threshold rule is shared with Platform's public review conclusion
+    # (ditto_screening_protocol.review_ledger), so the two cannot disagree.
+    if concern_threshold_reached(notes, concern_hold_count=concern_hold_count):
         return "inconclusive"
     cleared = sum(1 for note in notes if note.get("kind") == "cleared")
     if cleared >= max(1, clear_min_notes):
@@ -271,6 +253,9 @@ _SOURCE_REVIEW_FAILURE_CODES: Mapping[str, str] = {
     "source archive contains a duplicate path": "archive-invalid",
     "provenance file could not be read": "archive-invalid",
     "static preflight mode must be off, shadow, or enforce": "detector-config-invalid",
+    "max_completion_request_seconds must be finite and positive": (
+        "request-timeout-config-invalid"
+    ),
     # The reviewer exhausted a budget we set. Not infrastructure: the submission
     # was too large or too deep to review within the configured bounds.
     "source reviewer exceeded lease budget": "lease-budget-exhausted",
@@ -329,15 +314,29 @@ _ALLOWED_CATEGORIES = frozenset(
         "user_isolation_correctness",
         "external_build_dependency",
         "prompt_injection",
+        "mandatory_contract_failure",
         "none",
     }
 )
+_POLICY_V13_ONLY_CATEGORIES = frozenset(
+    {
+        "mandatory_contract_failure",
+    }
+)
+
+
+def source_review_categories_for_policy(policy_version: int) -> frozenset[str]:
+    """Keep historical category contracts frozen while adding v13 coverage."""
+
+    if policy_version >= 13:
+        return _ALLOWED_CATEGORIES
+    return _ALLOWED_CATEGORIES - _POLICY_V13_ONLY_CATEGORIES
+
+
 _ADVISORY_CATEGORIES = frozenset(
     {"external_build_dependency", "user_isolation_correctness"}
 )
-_MULTI_LOCATION_CATEGORIES = frozenset(
-    {"benchmark_emulation", "scorer_contract_manipulation"}
-)
+_MULTI_LOCATION_CATEGORIES = MULTI_LOCATION_CATEGORIES
 _RETRYABLE_MODEL_ERROR_TYPES = frozenset(
     {
         "rate_limit_exceeded",
@@ -458,11 +457,12 @@ class SourceReviewBudgetExhausted(ValueError):
 def policy_v10_static_assessment(
     *,
     breaches: Mapping[SourceReviewInvariant, list[int]],
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> SourceReviewInvariantAssessment:
     """Build a complete host-authored sweep for a deterministic static hold."""
 
     decisions = []
-    for invariant in SourceReviewInvariant:
+    for invariant in source_review_invariants_for_policy(policy_version):
         evidence_indices = breaches.get(invariant)
         if evidence_indices:
             decisions.append(
@@ -481,9 +481,13 @@ def policy_v10_static_assessment(
                     summary=(
                         "This deterministic detector did not assess the invariant."
                     ),
+                    evidence_indices=[],
                 )
             )
-    return SourceReviewInvariantAssessment(decisions=decisions)
+    return SourceReviewInvariantAssessment(
+        schema_version=2 if policy_version >= 13 else 1,
+        decisions=decisions,
+    )
 
 
 _STATIC_INVARIANT_BY_KIND = {
@@ -1802,9 +1806,98 @@ kind=cleared with the reachability reason and do not raise risk on it.
 _POLICY_TAILS[12] = _POLICY_TAILS[11] + _POLICY_V12_ADDENDUM
 
 
-# Version-independent L1 throughput guidance (added by the L1 bounding work).
-# Appended to every policy tail so the batching rules apply under each
-# implemented screening-policy version.
+_POLICY_V13_ADDENDUM = """\
+POLICY V13 — MECHANISM-BASED AUTHORITY, SECURITY, AND VERIFICATION.
+
+Apply the complete Policy v13 checklist in docs/policy-v13.md. Review the exact
+source artifact, built image, enabled configuration, and served entrypoint.
+Names, comments, fingerprints, scores, similarity, and lineage are leads only.
+A finding needs a valid trigger, reachable mechanism, authority/evidence/field
+or capability transition, and substantive served or execution consequence.
+For build and security findings, trace the reachable lifecycle operation to an
+unauthorized read, disclosure, write, execution, persistence, privilege, or
+material availability effect; no model or scorer effect is required.
+
+Decide I1 through I8 independently. I8 EVALUATION INDEPENDENCE prohibits live
+case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
+markers, or `bench_version` from changing substantive retrieval, capability
+ordering, authority, execution, or output beyond the published compatibility
+contract. Complete source proof is enforceable. Behavioral
+degradation alone is a lead until a versioned post-commit, controlled,
+predeclared and replicated test attributes it to evaluation dependence. Use
+evaluation_independent_runtime or no_evaluation_identity_branch only after
+tracing the served path; unreachable_nonruntime_code remains available when the
+effective build excludes the path.
+
+I2 requires an exact applicable record or receipt, its discard point, and a
+material alternative the deciding authority can no longer evaluate. Generic
+top-k retrieval and ordinary misses are not breaches. I3 distinguishes shape
+repair from a declared genuine model critic or final selector: model-led
+refinement may pass when the selector has necessary evidence and may preserve
+uncertainty, refusal, or dissent. Host accept-until-preferred loops do not pass.
+
+I4 protects finalized fields. Removing ANSWER values such as unknown, none, or
+n/a; deriving abstain from prose; moving a long answer to final_text under a
+miner-defined limit; rescaling currency; adding equivalent values; or mapping
+direction words after final authority are scorer_field_rewritten. Preserving
+the original words elsewhere does not cure a changed authoritative field. A
+user/model-authored program may return its result directly only when delegation
+fixed the operation, inputs, scope, units, and representation before execution;
+that does not authorize later host rewriting.
+
+I5 is mechanism-based. Conditionality is neither necessary nor sufficient: an
+always-on benchmark recipe is activated on every served request. Identify the
+generator-, fixture-, grader-, or evaluation-specific assumption, where it
+applies, and the semantic or trajectory effect. Common formulas, finite domain
+vocabularies, typo handling, prescriptive wording, and fixture references alone
+are insufficient. Distributed compilation across routing, retrieval, prompts,
+calculators and finalizers remains one end-to-end mechanism.
+
+I7 also prohibits incorrect host removal of an applicable, authorized and
+available capability. Check quoted titles, entity names, compound requests,
+negation scope, setting-and-remember requests, duplicate calls followed by
+unfinished work, and identifiers available only through a supplied tool. A
+genuine authoritative model planner may produce an exact pinned plan; an
+advisory planner must remain rejectable and every valid deviation executable.
+Neither architecture bypasses authorization or safety.
+
+Opaque files are not violations by presence. Establish each loaded component's
+actual role and apply the published role-specific verification requirement.
+Private behavioral testing is mandatory only when that role requires it or
+source causality remains unresolved. Tests, diagnostics, and helpers require
+effective build/startup/runtime reachability; refuting one dormant lead does
+not clear the rest of the artifact.
+Before labeling an optional environment-gated branch reachable, inspect its
+configuration default, Dockerfile environment, and any proven runtime override.
+A disabled default refutes default-image reachability, but does not prove an
+external deployment override absent. Record uncertainty instead of asserting
+that the branch runs.
+
+Merge submission evidence with exact path-and-digest starter-kit provenance
+supplied by the platform. A matched official component satisfies only the
+fields and role recorded there, but its README, metadata sidecar, or duplicate
+self-report need not be present in the archive. Recheck changed configuration,
+loaders, candidate boundaries, inputs, outputs, and downstream authority. A
+null score or leaderboard field does not prove that an artifact-bound
+screening package is absent.
+
+Security review covers unauthorized cross-user access, credential access,
+secret emission, private-data exfiltration, host-resource access, hidden
+runtime replacement, and screening-only behavior changes. Attribute
+platform/provider failures separately. Do not invent additional rejection
+grounds outside the published S1-S3 contract.
+Missing predefined evidence or incomplete mandatory verification cannot CLEAR,
+but neither proves misconduct. Final operator eligibility outcomes are CLEAR or
+REJECT with a reason and violation_proven flag; screening pass, quarantine,
+retry and review states remain processing evidence, not those final outcomes.
+"""
+_POLICY_TAILS[13] = (
+    _POLICY_TAILS[12] + _POLICY_V13_ADDENDUM + "\n" + DECISION_PATH_GUIDANCE
+)
+
+
+# Historical L1 throughput guidance. V13 uses path-complete guidance instead
+# of treating one cleared note per broad area as a completeness certificate.
 _BATCH_READS_GUIDANCE = """
 BATCH RELATED READS. In each inspection turn, request every independent file
 read, search, or binary analysis you already know you need for that area in one
@@ -1825,7 +1918,16 @@ def _source_review_system_prompt(policy_version: int) -> str:
             f"{policy_version} is not implemented by this build "
             f"(implements {sorted(_POLICY_TAILS)})"
         ) from None
-    return _SYSTEM_PROMPT_HEAD + tail + _BATCH_READS_GUIDANCE
+    batch_guidance = (
+        V13_BATCH_READS_GUIDANCE if policy_version >= 13 else _BATCH_READS_GUIDANCE
+    )
+    prompt = _SYSTEM_PROMPT_HEAD + tail + batch_guidance
+    if policy_version >= 13:
+        prompt = prompt.replace(
+            "one decision for each I1 through I7.",
+            "one decision for each I1 through I8.",
+        )
+    return prompt
 
 
 def _assert_policy_tails_differ() -> None:
@@ -1833,6 +1935,8 @@ def _assert_policy_tails_differ() -> None:
     assert _POLICY_TAILS[10] != _POLICY_TAILS[11]
     assert _POLICY_TAILS[11] != _POLICY_TAILS[12]
     assert _POLICY_TAILS[12].startswith(_POLICY_TAILS[11])
+    assert _POLICY_TAILS[12] != _POLICY_TAILS[13]
+    assert _POLICY_TAILS[13].startswith(_POLICY_TAILS[12])
 
 
 def _l1_prompt_cache_key(messages: list[dict[str, object]]) -> str:
@@ -2617,6 +2721,7 @@ class TarSourceRepository:
         artifact_sha256: str,
         provenance_manifest_paths: tuple[str, ...] | None = None,
         mode: str = "off",
+        policy_version: int = SCREENING_POLICY_VERSION,
         audit_recorder: Callable[[Mapping[str, object]], None] | None = None,
     ) -> SourceReviewObservation | None:
         """Produce a signed, location-only finding before untrusted execution."""
@@ -2681,10 +2786,42 @@ class TarSourceRepository:
         legacy_matches = find_decisive_malicious_source(
             readable, explicitly_executable_paths=runtime_paths
         )
+        if not legacy_matches and mode == "off":
+            return None
+        # The legacy path is still the production default. Its broad source
+        # inventory includes local scripts that a precise Docker build never
+        # copies. Clear only matches whose every cited file is PROVEN inert;
+        # ambiguous build inputs and genuinely reachable files retain the
+        # existing serial-review floor. Include unreadable archive members in
+        # the COPY inventory so an opaque fixture does not make a concrete
+        # directory COPY appear dynamic.
+        reachability_inputs = {
+            name: all_readable.get(name, "") for name in self._members
+        }
+        unreadable_source = any(
+            name not in all_readable and is_executable_source_path(name)
+            for name in self._members
+        )
+        reachability = analyze_reachability(reachability_inputs)
+        if not unreadable_source:
+
+            def proven_inert_legacy_match(match: Mapping[str, object]) -> bool:
+                locations = match["locations"]
+                assert isinstance(locations, list)
+                return all(
+                    reachability[str(location["path"])].state
+                    == ReachabilityState.PROVEN_INERT
+                    for location in locations
+                )
+
+            legacy_matches = [
+                match
+                for match in legacy_matches
+                if not proven_inert_legacy_match(match)
+            ]
         matches = legacy_matches
         detector_revision = "static-malicious-preflight-v1"
         if mode != "off":
-            reachability = analyze_reachability(all_readable)
             v2 = analyze_static_candidates_v2(
                 (
                     (path, text)
@@ -2835,6 +2972,7 @@ class TarSourceRepository:
             )[:240],
             invariant_assessment=policy_v10_static_assessment(
                 breaches=breaches,
+                policy_version=policy_version,
             ),
         ).require_policy_v10_invariants()
         payload = finding.model_dump(mode="json")
@@ -3234,6 +3372,7 @@ class OpenRouterSourceReviewAgent:
             _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS
         ),
         inference_provider: str = "openrouter",
+        max_completion_request_seconds: float | None = None,
     ) -> None:
         self._inference_provider = inference_provider
         # Gradient thresholds for a budget-terminated review: this many
@@ -3251,6 +3390,21 @@ class OpenRouterSourceReviewAgent:
             _MIN_MAX_COMPLETION_TOKENS, int(max_completion_tokens)
         )
         self._reasoning_effort = reasoning_effort
+        request_timeout = (
+            _MAX_COMPLETION_REQUEST_SECONDS
+            if max_completion_request_seconds is None
+            else max_completion_request_seconds
+        )
+        if (
+            not isinstance(request_timeout, (int, float))
+            or isinstance(request_timeout, bool)
+            or not math.isfinite(request_timeout)
+            or request_timeout <= 0
+        ):
+            raise ValueError(
+                "max_completion_request_seconds must be finite and positive"
+            )
+        self._max_completion_request_seconds = float(request_timeout)
         self._transport_retry_delays = tuple(
             max(0.0, float(delay)) for delay in transport_retry_delays
         )
@@ -3449,7 +3603,9 @@ class OpenRouterSourceReviewAgent:
                     reasoning_effort=_phase_reasoning_effort(
                         self._reasoning_effort, assessment=assessment_phase
                     ),
-                    tools=_FINAL_REVIEW_TOOLS if final_turn else _TOOLS,
+                    tools=_source_review_tools_for_policy(
+                        policy_version, final_turn=final_turn
+                    ),
                     tool_choice="required" if final_turn else "auto",
                 )
                 messages.append(message)
@@ -3559,7 +3715,14 @@ class OpenRouterSourceReviewAgent:
                 if _coverage_complete(notes) and not coverage_nudged:
                     coverage_nudged = True
                     messages.append(
-                        {"role": "user", "content": _COVERAGE_COMPLETE_NUDGE}
+                        {
+                            "role": "user",
+                            "content": (
+                                V13_COVERAGE_NUDGE
+                                if policy_version >= 13
+                                else _COVERAGE_COMPLETE_NUDGE
+                            ),
+                        }
                     )
                 if progress is not None:
                     progress(_step + 1, self._max_steps)
@@ -3660,6 +3823,15 @@ class OpenRouterSourceReviewAgent:
 
         raise AssertionError("model retry loop exhausted without a result")
 
+    def _completion_request_headers(
+        self, api_key: str, _effective_timeout: float
+    ) -> dict[str, str]:
+        """Gateway headers; subclasses can communicate an already bounded deadline."""
+        return {
+            "Authorization": f"Bearer {api_key}",
+            **review_gateway_headers(self._inference_provider),
+        }
+
     async def _post_completion(
         self,
         client: httpx.AsyncClient,
@@ -3674,7 +3846,11 @@ class OpenRouterSourceReviewAgent:
         request = {
             "model": self._model,
             "messages": messages,
-            "tools": list(_TOOLS if tools is None else tools),
+            "tools": list(
+                _source_review_tools_for_policy(SCREENING_POLICY_VERSION)
+                if tools is None
+                else tools
+            ),
             "tool_choice": tool_choice,
             "max_completion_tokens": self._max_completion_tokens,
             "reasoning": {"effort": reasoning_effort},
@@ -3685,23 +3861,18 @@ class OpenRouterSourceReviewAgent:
                 # Disabling this turned one provider outage into a terminal L1
                 # timeout even though a compliant provider was available.
                 "allow_fallbacks": True,
-                "sort": "throughput",
-                "zdr": True,
                 "data_collection": "deny",
                 "require_parameters": True,
             },
         }
         effective_timeout = min(
             timeout if timeout is not None else self._timeout_seconds,
-            _MAX_COMPLETION_REQUEST_SECONDS,
+            self._max_completion_request_seconds,
         )
         async with asyncio.timeout(effective_timeout):
             response = await client.post(
                 f"{self._base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    **review_gateway_headers(self._inference_provider),
-                },
+                headers=self._completion_request_headers(api_key, effective_timeout),
                 json=request,
                 timeout=effective_timeout,
             )
@@ -3730,6 +3901,26 @@ def _source_review_failure_code(error: BaseException) -> str:
 
 
 def _assistant_message(payload: object) -> dict[str, object]:
+    # Metadata only: never log private source, prompts, model text or arguments.
+    if isinstance(payload, dict):
+        choices = payload.get("choices")
+        choice = (
+            choices[0]
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict)
+            else {}
+        )
+        message = choice.get("message") or {}
+        if isinstance(message, dict) and not message.get("tool_calls"):
+            usage = payload.get("usage") or {}
+            logger.warning(
+                "model response without tools model=%s finish=%s "
+                "content_chars=%s prompt_tokens=%s completion_tokens=%s",
+                payload.get("model"),
+                choice.get("finish_reason"),
+                len(str(message.get("content") or "")),
+                usage.get("prompt_tokens") if isinstance(usage, dict) else None,
+                usage.get("completion_tokens") if isinstance(usage, dict) else None,
+            )
     if not isinstance(payload, dict):
         raise ValueError("source reviewer response is not an object")
     choices = payload.get("choices")
@@ -3796,6 +3987,7 @@ def _validated_invariant_assessment(
     submitted_evidence: list[dict[str, object]],
     finding_evidence: list[dict[str, object]],
     demoted_to_low: bool,
+    policy_version: int = 12,
 ) -> SourceReviewInvariantAssessment:
     """Filter invariant citations through the host evidence boundary."""
 
@@ -3813,7 +4005,10 @@ def _validated_invariant_assessment(
             for item in value
         ]
     parsed = SourceReviewInvariantAssessment.model_validate(
-        {"decisions": normalized_value}
+        {
+            "schema_version": 2 if policy_version >= 13 else 1,
+            "decisions": normalized_value,
+        }
     )
     final_indices: dict[tuple[str, int, str], int] = {}
     for index, item in enumerate(finding_evidence):
@@ -3896,7 +4091,10 @@ def _parse_review(
         or not 0 <= float(confidence) <= 1
         or not isinstance(categories, list)
         or not 1 <= len(categories) <= 8
-        or any(item not in _ALLOWED_CATEGORIES for item in categories)
+        or any(
+            item not in source_review_categories_for_policy(policy_version)
+            for item in categories
+        )
         or not isinstance(evidence, list)
         or len(evidence) > 16
         or not isinstance(summary, str)
@@ -3914,7 +4112,7 @@ def _parse_review(
             or not isinstance(line, int)
             or isinstance(line, bool)
             or line < 1
-            or category not in _ALLOWED_CATEGORIES
+            or category not in source_review_categories_for_policy(policy_version)
         ):
             raise ValueError("source review evidence fields are invalid")
         normalized_evidence.append({"path": path, "line": line, "category": category})
@@ -4068,6 +4266,7 @@ def _parse_review(
             submitted_evidence=submitted_evidence,
             finding_evidence=normalized_evidence,
             demoted_to_low=risk == "low" and submitted_risk != "low",
+            policy_version=policy_version,
         ),
     ).require_policy_v10_invariants()
     return SourceReviewObservation(
@@ -4293,7 +4492,7 @@ _TOOLS: list[dict[str, object]] = [
                     "invariants": {
                         "type": "array",
                         "minItems": 7,
-                        "maxItems": 7,
+                        "maxItems": 8,
                         "items": {
                             "type": "object",
                             "properties": {
@@ -4369,6 +4568,72 @@ _TOOLS: list[dict[str, object]] = [
 # The final source-review turn may only settle the evidence already retained;
 # it cannot begin another inspection loop at the step budget boundary.
 _FINAL_REVIEW_TOOLS: tuple[dict[str, object], ...] = (_TOOLS[-1],)
+
+
+def _source_review_tools_for_policy(
+    policy_version: int, *, final_turn: bool = False
+) -> tuple[dict[str, object], ...]:
+    """Return an exact-version verdict schema without mutating frozen policies."""
+
+    tools = copy.deepcopy(_FINAL_REVIEW_TOOLS if final_turn else tuple(_TOOLS))
+    categories = source_review_categories_for_policy(policy_version)
+    for tool in tools:
+        function = tool["function"]
+        assert isinstance(function, dict)
+        parameters = function["parameters"]
+        assert isinstance(parameters, dict)
+        properties = parameters["properties"]
+        assert isinstance(properties, dict)
+        if function["name"] == "record_note":
+            category = properties["category"]
+            assert isinstance(category, dict)
+            category["enum"] = sorted(categories)
+
+    submit = tools[-1]["function"]
+    assert isinstance(submit, dict)
+    parameters = submit["parameters"]
+    assert isinstance(parameters, dict)
+    properties = parameters["properties"]
+    assert isinstance(properties, dict)
+    category_items = properties["categories"]
+    assert isinstance(category_items, dict)
+    category_item = category_items["items"]
+    assert isinstance(category_item, dict)
+    category_item["enum"] = sorted(categories)
+    evidence = properties["evidence"]
+    assert isinstance(evidence, dict)
+    evidence_items = evidence["items"]
+    assert isinstance(evidence_items, dict)
+    evidence_properties = evidence_items["properties"]
+    assert isinstance(evidence_properties, dict)
+    evidence_category = evidence_properties["category"]
+    assert isinstance(evidence_category, dict)
+    evidence_category["enum"] = sorted(categories)
+    invariants = properties["invariants"]
+    assert isinstance(invariants, dict)
+    selected = source_review_invariants_for_policy(policy_version)
+    invariants["minItems"] = len(selected)
+    invariants["maxItems"] = len(selected)
+    items = invariants["items"]
+    assert isinstance(items, dict)
+    item_properties = items["properties"]
+    assert isinstance(item_properties, dict)
+    invariant = item_properties["invariant"]
+    assert isinstance(invariant, dict)
+    invariant["enum"] = sorted(item.value for item in selected)
+    pass_clause = item_properties["pass_clause"]
+    assert isinstance(pass_clause, dict)
+    pass_variants = pass_clause["anyOf"]
+    assert isinstance(pass_variants, list)
+    pass_schema = pass_variants[1]
+    assert isinstance(pass_schema, dict)
+    pass_schema["enum"] = sorted(
+        clause.value for clause in source_review_pass_clauses_for_policy(policy_version)
+    )
+    summary = item_properties["summary"]
+    assert isinstance(summary, dict)
+    summary["maxLength"] = 210 if policy_version >= 13 else 240
+    return tools
 
 
 __all__ = [

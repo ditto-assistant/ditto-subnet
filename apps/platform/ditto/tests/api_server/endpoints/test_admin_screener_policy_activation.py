@@ -22,6 +22,10 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.screener_review_settings import (
+    ScreenerReviewSettings,
+    policy_manifest_digest,
+)
 from ditto.api_server.dependencies import get_session
 from ditto.db.models import (
     Agent,
@@ -35,7 +39,9 @@ from ditto.db.models import (
 from ditto.db.queries.screener_policy_activation import (
     insert_screener_policy_activation,
 )
+from ditto.db.queries.screening_review_deadlines import POLICY_V13_DOCUMENT_DIGEST
 from ditto_screening_protocol import (
+    SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
 )
@@ -48,6 +54,121 @@ _URL = "/api/v1/admin/screener-policy-activation"
 _CONFIRMATION = "SCHEDULE SCREENER POLICY ACTIVATION"
 _RESTORE_CONFIRMATION = "RESTORE SCORED SCREENING SNAPSHOT"
 _ADVANCE_CONFIRMATION = "ADVANCE SCORED POLICY RESCREEN"
+_CLOCK_URL = f"{_URL}/review-clock"
+
+
+async def test_v13_review_clock_is_default_off_and_schedule_is_guarded(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    activation_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, activation_maker)
+    assert (await client.get(_CLOCK_URL)).status_code == 401
+    empty = await client.get(_CLOCK_URL, headers=_HEADERS)
+    assert empty.status_code == 200
+    assert empty.json()["latest"] is None
+    assert empty.json()["finalizer_state"] == "not_configured"
+    public_empty = await client.get("/api/v1/public/v13-review-clock")
+    assert public_empty.status_code == 200
+    assert public_empty.headers["cache-control"] == "no-store, max-age=0"
+    assert public_empty.json()["due_revision"] is None
+    assert public_empty.json()["revisions"] == []
+    settings = ScreenerReviewSettings()
+    body = {
+        "expected_revision": 0,
+        "policy_version": 13,
+        "policy_document_digest": POLICY_V13_DOCUMENT_DIGEST,
+        "policy_manifest_digest": policy_manifest_digest(
+            settings.policy_manifest_profile, settings.policy_manifest_rotation_id
+        ),
+        "activate_at": _future(2),
+        "window_seconds": 7200,
+        "reason": "published first-claim review window",
+        "actor": "operator@example.com",
+        "confirmation": "SCHEDULE V13 REVIEW CLOCK",
+    }
+    assert (await client.post(_CLOCK_URL, json=body)).status_code == 401
+    wrong_digest = await client.post(
+        _CLOCK_URL,
+        headers=_HEADERS,
+        json={**body, "policy_document_digest": "0" * 64},
+    )
+    assert wrong_digest.status_code == 409
+    too_soon = await client.post(
+        _CLOCK_URL,
+        headers=_HEADERS,
+        json={**body, "activate_at": _future(0.5)},
+    )
+    assert too_soon.status_code == 422
+    inside_publication_margin = await client.post(
+        _CLOCK_URL,
+        headers=_HEADERS,
+        json={**body, "activate_at": _future(1.02)},
+    )
+    assert inside_publication_margin.status_code == 422
+    scheduled = await client.post(_CLOCK_URL, headers=_HEADERS, json=body)
+    assert scheduled.status_code == 200, scheduled.text
+    latest = scheduled.json()["latest"]
+    assert latest["revision"] == 1
+    assert latest["policy_document_digest"] == POLICY_V13_DOCUMENT_DIGEST
+    assert latest["policy_manifest_digest"] == body["policy_manifest_digest"]
+    assert latest["start_event"] == "first-v13-screening-claim"
+    assert latest["window_seconds"] == 7200
+    assert latest["state"] == "pending"
+    public_scheduled = await client.get("/api/v1/public/v13-review-clock")
+    assert public_scheduled.status_code == 200
+    assert public_scheduled.headers["cache-control"] == "no-store, max-age=0"
+    public_body = public_scheduled.json()
+    assert public_body["due_revision"] is None
+    assert public_body["revisions"][0]["window_seconds"] == 7200
+    assert public_body["revisions"][0]["state"] == "pending"
+    assert "actor" not in public_body["revisions"][0]
+    assert "reason" not in public_body["revisions"][0]
+    stale = await client.post(_CLOCK_URL, headers=_HEADERS, json=body)
+    assert stale.status_code == 409
+
+
+async def test_v13_clock_rechecks_database_notice_after_schedule_lock(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    activation_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(app, activation_maker)
+    settings = ScreenerReviewSettings()
+    activate_at = datetime.now(UTC) + timedelta(hours=2)
+
+    async def delayed_database_clock(session: AsyncSession) -> datetime:
+        assert session.in_transaction()
+        # The request initially has two hours of notice, but loses almost
+        # all of it while waiting for the serialized write boundary.
+        return activate_at - timedelta(minutes=30)
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.admin_screener_policy_activation._review_clock_database_now",
+        delayed_database_clock,
+    )
+    response = await client.post(
+        _CLOCK_URL,
+        headers=_HEADERS,
+        json={
+            "expected_revision": 0,
+            "policy_version": 13,
+            "policy_document_digest": POLICY_V13_DOCUMENT_DIGEST,
+            "policy_manifest_digest": policy_manifest_digest(
+                settings.policy_manifest_profile, settings.policy_manifest_rotation_id
+            ),
+            "activate_at": activate_at.isoformat(),
+            "window_seconds": 7200,
+            "reason": "publish a durable first-claim window",
+            "actor": "operator@example.com",
+            "confirmation": "SCHEDULE V13 REVIEW CLOCK",
+        },
+    )
+    assert response.status_code == 422
+    schedule = await client.get(_CLOCK_URL, headers=_HEADERS)
+    assert schedule.status_code == 200
+    assert schedule.json()["latest"] is None
 
 
 @pytest.fixture
@@ -89,7 +210,7 @@ def _payload(
         "target_policy_version": (
             target_policy_version
             if target_policy_version is not None
-            else SCREENING_POLICY_VERSION
+            else SCREENING_ACTIVATION_CEILING_POLICY_VERSION
         ),
         "activate_at": activate_at if activate_at is not None else _future(),
         "rescreen_scored": rescreen_scored,
@@ -151,7 +272,10 @@ class TestDefaultAndRoundTrip:
         assert body["effective_policy_version"] == SCREENING_FLOOR_POLICY_VERSION
         assert body["latest"]["state"] == "pending"
         assert body["latest"]["revision"] == 1
-        assert body["latest"]["target_policy_version"] == SCREENING_POLICY_VERSION
+        assert (
+            body["latest"]["target_policy_version"]
+            == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+        )
         assert body["latest"]["canary_only"] is False
 
     async def test_past_activate_at_via_the_api_is_rejected_even_for_due_semantics(
@@ -295,6 +419,59 @@ class TestWriteGuards:
         assert response.status_code == 422
         assert "implements" in response.json()["message"]
 
+    async def test_v13_is_activation_ready(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # Policy v13 became activation-ready on 2026-09-14: #1801 shipped the
+        # strict two-outcome contract and every production screener reported
+        # builtin 13, so the published ceiling now equals the built-in version.
+        assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION == 13
+        assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION == SCREENING_POLICY_VERSION
+        _install(app, activation_maker)
+        response = await client.post(
+            _URL,
+            json=_payload(target_policy_version=13),
+            headers=_HEADERS,
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["latest"]["target_policy_version"] == 13
+        # Scheduling is notice, not activation: the queue still requires the
+        # floor until activate_at passes.
+        assert body["effective_policy_version"] == SCREENING_FLOOR_POLICY_VERSION
+
+    async def test_a_target_above_the_published_ceiling_is_not_activation_ready(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        activation_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # The ceiling guard is checked separately from the build's implemented
+        # version: distributed-but-incomplete policy code must never be
+        # presented as activation-ready even when the build implements it.
+        from ditto.api_server.endpoints import admin_screener_policy_activation
+
+        monkeypatch.setattr(
+            admin_screener_policy_activation,
+            "SCREENING_ACTIVATION_CEILING_POLICY_VERSION",
+            SCREENING_POLICY_VERSION - 1,
+        )
+        _install(app, activation_maker)
+        response = await client.post(
+            _URL,
+            json=_payload(target_policy_version=SCREENING_POLICY_VERSION),
+            headers=_HEADERS,
+        )
+
+        assert response.status_code == 422
+        assert "not activation-ready" in response.json()["message"]
+        assert str(SCREENING_POLICY_VERSION - 1) in response.text
+
     async def test_stale_expected_revision_conflicts(
         self,
         app: FastAPI,
@@ -313,7 +490,7 @@ class TestWriteGuards:
 
 
 class TestResolverDueActivation:
-    async def test_due_activation_governs_and_clamps_to_the_build(
+    async def test_due_activation_governs_at_the_activation_ceiling(
         self,
         activation_maker: async_sessionmaker[AsyncSession],
     ) -> None:
@@ -325,7 +502,7 @@ class TestResolverDueActivation:
             await insert_screener_policy_activation(
                 session,
                 parent_revision=0,
-                target_policy_version=SCREENING_POLICY_VERSION,
+                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
                 activate_at=datetime.now(UTC) - timedelta(minutes=1),
                 rescreen_scored=True,
                 reason="test: due activation governs the required version",
@@ -333,15 +510,76 @@ class TestResolverDueActivation:
             )
             await session.commit()
             policy = await resolve_screener_policy_activation(session)
-            assert policy.required_policy_version == SCREENING_POLICY_VERSION
+            assert (
+                policy.required_policy_version
+                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            )
             assert policy.rescreen_stale_agents is True
             assert policy.rescreen_scored is True
             # A full activation still releases scored rows one at a time. The
             # global V11 requirement applies to fresh work, while the target
             # here fences each retained V10 score behind an explicit release.
-            assert policy.scored_rescreen_policy_version == SCREENING_POLICY_VERSION
+            assert (
+                policy.scored_rescreen_policy_version
+                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            )
 
-    async def test_target_above_the_build_clamps_to_it(
+    async def test_due_row_above_the_ceiling_does_not_override_a_valid_activation(
+        self,
+        activation_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server import screener_policy_activation as resolver_module
+        from ditto.api_server.screener_policy_activation import (
+            ScreenerPolicyActivationResolver,
+            resolve_screener_policy_activation,
+        )
+
+        # The published ceiling equals the built-in version now that v13 is
+        # activation-ready, so pin the resolver one version below the build to
+        # exercise the guard: a due schedule row for a distributed-but-not-
+        # ready version (e.g. one that survived a rollback) must never govern
+        # over the newest valid at-ceiling activation.
+        ceiling = SCREENING_POLICY_VERSION - 1
+        monkeypatch.setattr(
+            resolver_module, "SCREENING_ACTIVATION_CEILING_POLICY_VERSION", ceiling
+        )
+
+        async with activation_maker() as session:
+            valid = await insert_screener_policy_activation(
+                session,
+                parent_revision=0,
+                target_policy_version=ceiling,
+                activate_at=datetime.now(UTC) - timedelta(minutes=2),
+                rescreen_scored=True,
+                reason="test: valid at-ceiling activation remains authoritative",
+                actor="test",
+            )
+            above = await insert_screener_policy_activation(
+                session,
+                parent_revision=valid.revision,
+                target_policy_version=SCREENING_POLICY_VERSION,
+                activate_at=datetime.now(UTC) - timedelta(minutes=1),
+                rescreen_scored=True,
+                reason="test: above-ceiling activation must remain ineffective",
+                actor="test",
+            )
+            await session.commit()
+
+            policy = await resolve_screener_policy_activation(session)
+
+            assert policy.required_policy_version == ceiling
+            assert policy.governing_revision == valid.revision
+            assert policy.latest_revision == above.revision
+
+            cached = await ScreenerPolicyActivationResolver(ttl_seconds=0).resolve(
+                activation_maker
+            )
+            assert cached.required_policy_version == ceiling
+            assert cached.governing_revision == valid.revision
+            assert cached.latest_revision == above.revision
+
+    async def test_due_version_above_activation_ceiling_cannot_govern(
         self,
         activation_maker: async_sessionmaker[AsyncSession],
     ) -> None:
@@ -363,7 +601,8 @@ class TestResolverDueActivation:
             )
             await session.commit()
             policy = await resolve_screener_policy_activation(session)
-            assert policy.required_policy_version == SCREENING_POLICY_VERSION
+            assert policy.required_policy_version == SCREENING_FLOOR_POLICY_VERSION
+            assert policy.scored_rescreen_policy_version is None
 
     async def test_due_canary_keeps_ordinary_queue_at_the_floor(
         self,
@@ -377,7 +616,7 @@ class TestResolverDueActivation:
             await insert_screener_policy_activation(
                 session,
                 parent_revision=0,
-                target_policy_version=SCREENING_POLICY_VERSION,
+                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
                 activate_at=datetime.now(UTC) - timedelta(minutes=1),
                 rescreen_scored=True,
                 canary_only=True,
@@ -387,7 +626,10 @@ class TestResolverDueActivation:
             await session.commit()
             policy = await resolve_screener_policy_activation(session)
             assert policy.required_policy_version == SCREENING_FLOOR_POLICY_VERSION
-            assert policy.scored_rescreen_policy_version == SCREENING_POLICY_VERSION
+            assert (
+                policy.scored_rescreen_policy_version
+                == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+            )
             assert policy.rescreen_stale_agents is True
 
 
@@ -579,7 +821,7 @@ class TestScoredPolicyRescreenCheckpoint:
             activation = await insert_screener_policy_activation(
                 session,
                 parent_revision=0,
-                target_policy_version=SCREENING_POLICY_VERSION,
+                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
                 activate_at=datetime.now(UTC) - timedelta(minutes=5),
                 rescreen_scored=True,
                 canary_only=True,
@@ -616,7 +858,7 @@ class TestScoredPolicyRescreenCheckpoint:
             activation = await insert_screener_policy_activation(
                 session,
                 parent_revision=0,
-                target_policy_version=SCREENING_POLICY_VERSION,
+                target_policy_version=SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
                 activate_at=now - timedelta(minutes=5),
                 rescreen_scored=True,
                 reason="canary v11 scored policy rollout retains the v10 board",
@@ -672,7 +914,7 @@ class TestScoredPolicyRescreenCheckpoint:
         assert checkpoint.status_code == 200, checkpoint.text
         assert checkpoint.json() == {
             "activation_revision": activation.revision,
-            "target_policy_version": SCREENING_POLICY_VERSION,
+            "target_policy_version": SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
             "current": None,
             "active": [],
             "next_agent_id": str(first_id),
@@ -694,7 +936,7 @@ class TestScoredPolicyRescreenCheckpoint:
         assert response.status_code == 200, response.text
         assert response.json()["current"] == {
             "activation_revision": activation.revision,
-            "target_policy_version": SCREENING_POLICY_VERSION,
+            "target_policy_version": SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
             "agent_id": str(first_id),
             "position": 1,
             "state": "pending",
@@ -906,6 +1148,12 @@ class TestFleetReadiness:
         response = await client.get(_URL, headers=_HEADERS)
         assert response.status_code == 200, response.text
         fleet = response.json()["fleet"]
-        assert fleet["safe_to_schedule_up_to"] == SCREENING_POLICY_VERSION
+        # Every worker announces builtin 13 and the published ceiling is 13, so
+        # the board presents v13 as safe to schedule.
+        assert fleet["safe_to_schedule_up_to"] == 13
+        assert (
+            fleet["safe_to_schedule_up_to"]
+            == SCREENING_ACTIVATION_CEILING_POLICY_VERSION
+        )
         assert fleet["lagging_instances"] == []
         assert fleet["instances_without_release"] == []

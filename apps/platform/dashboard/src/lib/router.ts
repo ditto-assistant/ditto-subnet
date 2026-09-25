@@ -10,6 +10,7 @@
 import { bootParams } from "./config";
 
 export type PageName =
+  | "activity"
   | "overview"
   | "leaderboard"
   | "pipeline"
@@ -27,6 +28,10 @@ const OPERATIONS_VIEW_SET = new Set<OperationsView>(["validators", "screeners", 
 // benchmark subtitle is rewritten in place once the live bench version is
 // known.
 export const PAGES: Record<PageName, { title: string; sub: string }> = {
+  activity: {
+    title: "Admin activity",
+    sub: "Public history of Backroom actions and operational changes",
+  },
   overview: {
     title: "Overview",
     sub: "Subnet snapshot and the full leaderboard · ranked by composite",
@@ -37,7 +42,7 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   },
   pipeline: {
     title: "Submission pipeline",
-    sub: "Every submission from upload to scored · admission, validation, and integrity review",
+    sub: "Every submission from upload to scored · admission, validation, and source review",
   },
   operations: {
     title: "Fleet",
@@ -133,6 +138,8 @@ export const ENTITY_PAGES: Record<string, PageName> = {
 // Per-page view state (submissions filters + either pager's "page"). It is
 // scoped to the page that owns it, so it must not ride along to another page.
 export const PAGE_SCOPED_PARAMS: string[] = [
+  "activity_q",
+  "activity_status",
   "status",
   "downloadable",
   "q",
@@ -140,6 +147,10 @@ export const PAGE_SCOPED_PARAMS: string[] = [
   "code",
   "login",
   "complete",
+  // Sign in with Ditto callback result, consumed once by the sign-in page.
+  "ditto",
+  "reason",
+  "attempt",
 ];
 
 // The config knobs allowed to appear in the real query string.

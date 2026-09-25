@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
 	"io"
 	"log"
 	"net/http"
@@ -64,6 +65,11 @@ type confirmationExecutionResult struct {
 	EmbeddingAblation            json.RawMessage `json:"embedding_ablation"`
 	AblationCoordinatorLatencyMS uint64          `json:"ablation_coordinator_latency_ms"`
 	EvidenceSHA256               string          `json:"evidence_sha256"`
+	// LongMemDiagnostics is present only when at least one selected LongMem
+	// case was a received harness failure. It is scorer-owned, allowlisted,
+	// and deliberately outside confirmationWireSHA256 and the signed evidence
+	// root: the validator logs and publishes it as telemetry, nothing scores it.
+	LongMemDiagnostics *longmemeval.ExecutionDiagnostics `json:"longmem_diagnostics,omitempty"`
 }
 
 type confirmationExecutor interface {

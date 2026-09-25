@@ -48,7 +48,10 @@ from ditto.validator.update_control import (
     mark_bootstrap_resumed,
     write_update_state,
 )
-from ditto.validator.worker import ValidatorWorker
+from ditto.validator.worker import (
+    PlatformRouterLedgerSource,
+    ValidatorWorker,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +171,18 @@ async def _amain() -> int:
                         poll_seconds=config.coding_canary_poll_seconds,
                     )
                     logger.info("coding canary worker enabled")
+                # Router-track compute-destination seam. Default-off: unless
+                # VALIDATOR_ROUTER_LEDGER_READ_ENABLED is set the worker keeps its
+                # EmptyRouterLedgerSource, so the fold is byte-identical to v1.
+                # When on, read the shadow ledger the offloaded scorer publishes;
+                # PlatformRouterLedgerSource is fail-closed (any error -> empty
+                # ledger), and the track stays shadow so this changes no chain
+                # output, only which ledger the zero-weighted router fold measures.
+                router_ledger_source = (
+                    PlatformRouterLedgerSource(read=platform.get_router_ledger)
+                    if config.router_ledger_read_enabled
+                    else None
+                )
                 worker = ValidatorWorker(
                     config=config,
                     platform=platform,
@@ -180,6 +195,7 @@ async def _amain() -> int:
                     after_score=(
                         coding_canary.offer if coding_canary is not None else None
                     ),
+                    router_ledger_source=router_ledger_source,
                 )
                 async with AsyncExitStack() as coding_resources:
                     coding_worker = await _create_coding_shadow_worker(

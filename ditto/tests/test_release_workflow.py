@@ -582,7 +582,7 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert jobs["verify-dittobench-datagen"]["defaults"]["run"][
         "working-directory"
     ] == ("research/dittobench-datagen")
-    assert "go test ./..." in datagen_verification["run"]
+    assert datagen_verification["run"] == "go test -timeout 20m ./..."
 
     component_gates = {
         "verify-backroom": (

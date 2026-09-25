@@ -44,6 +44,7 @@ def _context(  # type: ignore[no-untyped-def]
     review_source=None,
     *,
     bench_version: int = _BENCH_VERSION,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> PolicyContext:
     return PolicyContext(
         agent_id=_AGENT,
@@ -57,6 +58,7 @@ def _context(  # type: ignore[no-untyped-def]
         health_elapsed_ms=20,
         run_challenge=challenge,
         review_source=review_source,
+        policy_version=policy_version,
     )
 
 
@@ -91,6 +93,46 @@ def _model_binding_engine(tmp_path: Path) -> PolicyEngine:
         ),
     )
     return PolicyEngine(manifest, (selector, challenge))
+
+
+async def test_v13_terminal_l2_inconclusive_preserves_bounded_audit() -> None:
+    audit = {
+        "stage": "l2",
+        "reason_code": "l2-model-inconclusive",
+        "prompt_revision": "l2-v13",
+        "max_steps": 12,
+        "steps_used": 2,
+        "model_disposition": "inconclusive",
+        "resolution_basis": "insufficient_static_evidence",
+        "model_steps_observed": 2,
+        "tool_calls_observed": 3,
+        "budget_stop_reason": "none",
+    }
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="l2-model-inconclusive",
+            failure_disposition="inconclusive",
+            review_audit=audit,
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        raise AssertionError("inconclusive source review must stop before challenge")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="l2-inconclusive-audit",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+    decision = await engine.evaluate(_context(challenge, review))
+    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
+    assert decision.review_audit == audit
 
 
 async def test_core_only_pass_never_calls_run() -> None:
@@ -145,8 +187,18 @@ async def test_default_v7_runs_luna_review_and_behavioral_oracle_and_passes() ->
     assert challenges == 1
 
 
-async def test_full_valid_source_review_ledger_reaches_the_decision() -> None:
-    """A complete signed ledger is evidence, not an infrastructure failure."""
+@pytest.mark.parametrize(
+    ("policy_version", "expected"),
+    [
+        (12, ScreeningOutcome.PASS),
+        (13, ScreeningOutcome.INCONCLUSIVE),
+    ],
+)
+async def test_skipped_mandatory_challenge_is_fail_closed_for_v13(
+    policy_version: int,
+    expected: ScreeningOutcome,
+) -> None:
+    """A complete source ledger cannot replace mandatory v13 runtime evidence."""
 
     notes = tuple(
         SourceReviewNote(
@@ -175,11 +227,15 @@ async def test_full_valid_source_review_ledger_reaches_the_decision() -> None:
         )
 
     decision = await load_policy_engine(None).evaluate(
-        _context(no_challenge, review), skip_challenges=True
+        _context(no_challenge, review, policy_version=policy_version),
+        skip_challenges=True,
     )
 
-    assert decision.outcome == ScreeningOutcome.PASS
+    assert decision.outcome == expected
+    assert decision.policy_version == policy_version
     assert decision.review_notes == notes
+    if policy_version == 13:
+        assert decision.evidence[-1].code == "challenge-inconclusive"
 
 
 async def test_timing_is_only_a_tripwire_and_routes_to_quarantine(
@@ -263,6 +319,83 @@ async def test_l2_failure_disposition_fails_closed_without_rejection(
 
     assert decision.outcome == expected
     assert decision.outcome != ScreeningOutcome.DETERMINISTIC_REJECT
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "expected", "passed"),
+    [
+        (12, ScreeningOutcome.PASS_INCONCLUSIVE, True),
+        (13, ScreeningOutcome.INCONCLUSIVE, False),
+    ],
+)
+async def test_bounded_review_exhaustion_is_fail_closed_for_v13(
+    policy_version: int,
+    expected: ScreeningOutcome,
+    passed: bool,
+) -> None:
+    async def challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError("bounded source review does not need a challenge")
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code="source-review-step-budget-exhausted",
+            failure_disposition="pass_inconclusive",
+            review_audit={"stage": "l1", "steps_used": 20},
+        )
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="bounded-review-exhaustion",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+
+    decision = await engine.evaluate(
+        _context(challenge, review, policy_version=policy_version)
+    )
+
+    assert decision.outcome == expected
+    assert decision.policy_version == policy_version
+    assert decision.review_audit == {"stage": "l1", "steps_used": 20}
+    assert decision.submits_verdict is passed
+    if passed:
+        assert decision.passed
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "expected"),
+    [
+        (12, ScreeningOutcome.PASS_INCONCLUSIVE),
+        (13, ScreeningOutcome.INCONCLUSIVE),
+    ],
+)
+def test_preexecution_budget_exhaustion_is_fail_closed_for_v13(
+    policy_version: int,
+    expected: ScreeningOutcome,
+) -> None:
+    observation = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-step-budget-exhausted",
+        failure_disposition="pass_inconclusive",
+        review_audit={"stage": "l1", "steps_used": 20},
+    )
+
+    decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
+        observation,
+        policy_version=policy_version,
+    )
+
+    assert decision.outcome == expected
+    assert decision.policy_version == policy_version
+    assert decision.review_audit == {"stage": "l1", "steps_used": 20}
 
 
 def test_l2_enforcement_is_manifest_bound_but_shadow_is_not() -> None:
@@ -852,7 +985,7 @@ def test_manifest_rotation_changes_digest_not_policy_or_signature_contract(
         )
     )
     engine = load_policy_engine(str(manifest))
-    assert engine.manifest.policy_version == SCREENING_POLICY_VERSION == 12
+    assert engine.manifest.policy_version == SCREENING_POLICY_VERSION == 13
     assert engine.manifest.digest != CORE_ONLY_MANIFEST.digest
 
 
@@ -876,14 +1009,34 @@ def test_review_journal_is_bounded_private_and_mode_0600(tmp_path: Path) -> None
     assert row["attempt_id"] == str(_ATTEMPT)
     assert row["bench_version"] == _BENCH_VERSION
     assert row["outcome"] == "quarantine"
+    assert row["policy_version"] == SCREENING_POLICY_VERSION
     assert not os.stat(journal_path).st_mode & 0o077
+
+
+def test_review_journal_rejects_mismatched_policy_identity(tmp_path: Path) -> None:
+    journal = ReviewJournal(str(tmp_path / "review.jsonl"))
+
+    async def challenge(*_):  # type: ignore[no-untyped-def]
+        raise AssertionError
+
+    context = _context(challenge, policy_version=12)
+    decision = core_decision(
+        ScreeningOutcome.QUARANTINE,
+        code="private-review",
+        summary="operator review required",
+        detail="private policy quarantine pending operator review",
+        policy_version=13,
+    )
+
+    with pytest.raises(ValueError, match="journal policy version mismatch"):
+        journal.record(context=context, decision=decision)
 
 
 def test_live_v6_snapshot_is_an_acceptance_fixture() -> None:
     fixture = Path(__file__).parent / "fixtures" / "production-v6-snapshot.json"
     snapshot = json.loads(fixture.read_text())
     assert snapshot["screening_policy_version"] == 6
-    assert SCREENING_POLICY_VERSION == 12
+    assert SCREENING_POLICY_VERSION == 13
     assert snapshot["queue"]["waiting_validator"] == 9
     assert snapshot["queue"]["evaluating"] == 1
     assert len(snapshot["rust_contract_rejections"]) == 6
@@ -940,15 +1093,16 @@ def test_preexecution_review_failure_never_releases_or_rejects(
 
 
 @pytest.mark.parametrize(
-    ("court_decision", "outcome"),
+    ("policy_version", "court_decision", "outcome"),
     [
-        ("clear", ScreeningOutcome.PASS),
-        ("reject", ScreeningOutcome.QUARANTINE),
-        ("escalate", ScreeningOutcome.QUARANTINE),
+        (12, "clear", ScreeningOutcome.PASS),
+        (13, "clear", ScreeningOutcome.QUARANTINE),
+        (13, "reject", ScreeningOutcome.QUARANTINE),
+        (13, "escalate", ScreeningOutcome.QUARANTINE),
     ],
 )
 def test_final_adjudication_settles_preexecution_source_lead(
-    court_decision: str, outcome: ScreeningOutcome
+    policy_version: int, court_decision: str, outcome: ScreeningOutcome
 ) -> None:
     adjudication = {
         "decision": court_decision,
@@ -968,12 +1122,14 @@ def test_final_adjudication_settles_preexecution_source_lead(
     )
 
     decision = PolicyEngine(CORE_ONLY_MANIFEST).preexecution_source_decision(
-        observation
+        observation, policy_version=policy_version
     )
 
     assert decision.outcome == outcome
     assert decision.adjudication == adjudication
     assert decision.evidence[0].code == "source-review-adjudicated"
+    if policy_version == 13 and court_decision in {"clear", "reject"}:
+        assert decision.evidence[1].code == "source-review-awaiting-v13-verification"
 
 
 async def test_source_review_finding_travels_to_quarantine_decision() -> None:
@@ -1005,15 +1161,16 @@ async def test_source_review_finding_travels_to_quarantine_decision() -> None:
 
 
 @pytest.mark.parametrize(
-    ("court_decision", "outcome"),
+    ("policy_version", "court_decision", "outcome"),
     [
-        ("clear", ScreeningOutcome.PASS),
-        ("reject", ScreeningOutcome.QUARANTINE),
-        ("escalate", ScreeningOutcome.QUARANTINE),
+        (12, "clear", ScreeningOutcome.PASS),
+        (13, "clear", ScreeningOutcome.QUARANTINE),
+        (13, "reject", ScreeningOutcome.QUARANTINE),
+        (13, "escalate", ScreeningOutcome.QUARANTINE),
     ],
 )
 async def test_final_adjudication_crosses_the_local_policy_boundary(
-    court_decision: str, outcome: ScreeningOutcome
+    policy_version: int, court_decision: str, outcome: ScreeningOutcome
 ) -> None:
     async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
@@ -1045,14 +1202,18 @@ async def test_final_adjudication_crosses_the_local_policy_boundary(
             adjudication=adjudication,
         )
 
-    decision = await load_policy_engine(None).evaluate(_context(challenge, review))
+    decision = await load_policy_engine(None).evaluate(
+        _context(challenge, review, policy_version=policy_version)
+    )
 
     assert decision.outcome == outcome
     assert decision.adjudication == adjudication
+    if policy_version == 13 and court_decision in {"clear", "reject"}:
+        assert decision.evidence[1].code == "source-review-awaiting-v13-verification"
 
 
-async def test_later_inconclusive_module_drops_source_adjudication() -> None:
-    """A source clear cannot bind an unrelated terminal oracle outcome."""
+async def test_v13_source_clear_holds_before_later_oracle() -> None:
+    """An L4 source clear cannot bypass unverified runtime evidence."""
 
     async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
@@ -1084,16 +1245,26 @@ async def test_later_inconclusive_module_drops_source_adjudication() -> None:
 
     decision = await load_policy_engine(None).evaluate(_context(challenge, review))
 
-    assert decision.outcome == ScreeningOutcome.INCONCLUSIVE
-    assert decision.adjudication is None
+    assert decision.outcome == ScreeningOutcome.QUARANTINE
+    assert decision.adjudication == adjudication
     assert [item.code for item in decision.evidence] == [
         "source-review-adjudicated",
-        "behavioral-oracle-insufficient-round-trips",
+        "source-review-awaiting-v13-verification",
     ]
 
 
-async def test_l4_clear_settles_oracle_transport_failure() -> None:
-    """A no-response oracle transport failure cannot overturn an L4 clear."""
+@pytest.mark.parametrize(
+    ("policy_version", "expected"),
+    [
+        (12, ScreeningOutcome.PASS),
+        (13, ScreeningOutcome.QUARANTINE),
+    ],
+)
+async def test_oracle_transport_failure_is_fail_closed_for_v13(
+    policy_version: int,
+    expected: ScreeningOutcome,
+) -> None:
+    """A source-only clear cannot complete v13 mandatory runtime verification."""
 
     async def challenge(challenge_id, _request, _timeout):  # type: ignore[no-untyped-def]
         return ChallengeObservation(
@@ -1124,14 +1295,21 @@ async def test_l4_clear_settles_oracle_transport_failure() -> None:
             adjudication=adjudication,
         )
 
-    decision = await load_policy_engine(None).evaluate(_context(challenge, review))
+    decision = await load_policy_engine(None).evaluate(
+        _context(challenge, review, policy_version=policy_version)
+    )
 
-    assert decision.outcome == ScreeningOutcome.PASS
+    assert decision.outcome == expected
+    assert decision.policy_version == policy_version
     assert decision.adjudication == adjudication
-    assert [item.code for item in decision.evidence] == [
-        "source-review-adjudicated",
-        "challenge-transport-failure",
-    ]
+    assert [item.code for item in decision.evidence] == (
+        ["source-review-adjudicated", "challenge-transport-failure"]
+        if policy_version == 12
+        else [
+            "source-review-adjudicated",
+            "source-review-awaiting-v13-verification",
+        ]
+    )
 
 
 async def test_clean_review_finding_is_kept_when_oracle_is_inconclusive() -> None:

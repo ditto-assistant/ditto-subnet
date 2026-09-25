@@ -1,0 +1,95 @@
+---
+# Scheduled, bounded retention for the PostgreSQL logging collector directory.
+# log_rotation_age / log_rotation_size start a new file but never reclaim an old
+# one, so rotation alone let /opt/ditto/logs/postgresql grow to 12 GB and fill
+# ditto-pg-platform's root filesystem (#1745). See postgres_log_gc_* in
+# defaults/main.yml for the policy and why the bounds are what they are.
+
+- name: Reject an unbounded PostgreSQL log retention policy
+  ansible.builtin.assert:
+    that:
+      - postgres_log_gc_retention_days | int >= 1
+      - postgres_log_gc_retention_days | int <= 30
+      - postgres_log_gc_max_total_mb | int >= 256
+      - postgres_log_gc_max_total_mb | int <= 20480
+    fail_msg: >-
+      postgres_log_gc_retention_days must be 1-30 days and
+      postgres_log_gc_max_total_mb must be 256-20480 MB. Both bounds exist so the
+      collector directory cannot grow without limit again; widening the ceiling
+      past the boot disk's headroom recreates the 2026-09-08 outage.
+    quiet: true
+  when: postgres_log_gc_enabled | bool
+
+# group_vars replace postgres_tuning wholesale (Ansible does not deep-merge
+# dicts), so the retention policy and the collector settings can drift apart. A
+# policy pointed at the wrong directory or pattern reclaims nothing and the next
+# disk-full looks identical to the last one.
+- name: Require the retention policy to match the configured collector
+  ansible.builtin.assert:
+    that:
+      - (postgres_tuning.log_directory | default("'" ~ postgres_log_gc_dir ~ "'")
+         | replace("'", "")) == postgres_log_gc_dir
+      - (postgres_tuning.log_filename | default('') | replace("'", ""))
+        is match(postgres_log_gc_glob | replace('*', '.*'))
+    fail_msg: >-
+      postgres_log_gc_dir ({{ postgres_log_gc_dir }}) and postgres_log_gc_glob
+      ({{ postgres_log_gc_glob }}) must describe the same files as
+      postgres_tuning.log_directory ({{ postgres_tuning.log_directory | default('unset') }})
+      and postgres_tuning.log_filename ({{ postgres_tuning.log_filename | default('unset') }}).
+      Otherwise retention runs against the wrong path and reclaims nothing.
+    quiet: true
+  when:
+    - postgres_log_gc_enabled | bool
+    - postgres_tuning.logging_collector | default('off') | replace("'", "") == 'on'
+
+- name: Install the PostgreSQL log retention script
+  ansible.builtin.copy:
+    src: ditto-postgres-log-gc.sh
+    dest: "{{ postgres_log_gc_bin }}"
+    owner: root
+    group: root
+    mode: "0755"
+  when: postgres_log_gc_enabled | bool
+
+- name: Install the PostgreSQL log retention service and timer
+  ansible.builtin.template:
+    src: "{{ item.src }}"
+    dest: "/etc/systemd/system/{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - { src: ditto-postgres-log-gc.service.j2, dest: "{{ postgres_log_gc_unit }}.service" }
+    - { src: ditto-postgres-log-gc.timer.j2, dest: "{{ postgres_log_gc_unit }}.timer" }
+  when: postgres_log_gc_enabled | bool
+  notify:
+    - reload systemd (postgres)
+    - restart postgres log retention timer
+
+# The units may not exist yet in check mode; that is not a failure.
+- name: Enable and start the PostgreSQL log retention timer
+  ansible.builtin.systemd:
+    name: "{{ postgres_log_gc_unit }}.timer"
+    enabled: true
+    state: started
+    daemon_reload: true
+  register: postgres_log_gc_timer
+  failed_when:
+    - postgres_log_gc_timer.failed | default(false)
+    - not (ansible_check_mode and 'Could not find' in (postgres_log_gc_timer.msg | default('')))
+  when: postgres_log_gc_enabled | bool
+
+- name: Inspect an installed PostgreSQL log retention timer
+  ansible.builtin.stat:
+    path: "/etc/systemd/system/{{ postgres_log_gc_unit }}.timer"
+  register: postgres_log_gc_timer_file
+  when: not (postgres_log_gc_enabled | bool)
+
+- name: Stop and disable the PostgreSQL log retention timer when the policy is disabled
+  ansible.builtin.systemd:
+    name: "{{ postgres_log_gc_unit }}.timer"
+    enabled: false
+    state: stopped
+  when:
+    - not (postgres_log_gc_enabled | bool)
+    - postgres_log_gc_timer_file.stat.exists

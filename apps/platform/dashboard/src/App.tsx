@@ -54,6 +54,7 @@ import { LeaderboardPage } from "./pages/LeaderboardPage";
 import { OperationsPage } from "./pages/OperationsPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { PipelinePage } from "./pages/PipelinePage";
+import { ActivityPage } from "./pages/ActivityPage";
 import { AthPage } from "./pages/AthPage";
 import { ReviewsPage } from "./pages/ReviewsPage";
 import { SubmissionsPage } from "./pages/SubmissionsPage";
@@ -331,6 +332,7 @@ export default function App(): JSX.Element {
           }}
           displayVersion={displayVersion()}
           epoch={() => latest(weights)?.epoch ?? null}
+          pin={() => latest(weights)?.pin_agreement ?? null}
           onRefresh={refreshAll}
         />
         <main class="main" id="main-content">
@@ -374,6 +376,9 @@ export default function App(): JSX.Element {
               <Match when={currentPage() === "reviews"}>
                 <ReviewsPage />
               </Match>
+              <Match when={currentPage() === "activity"}>
+                <ActivityPage />
+              </Match>
               <Match when={currentPage() === "ath"}>
                 <AthPage />
               </Match>
@@ -389,6 +394,7 @@ export default function App(): JSX.Element {
         operations={ops}
         validatorNames={names}
         currentBench={() => bench().current}
+        emissionBench={() => bench().active}
         settledView={settledView}
       />
     </>

@@ -22,6 +22,9 @@ Lifecycle + scope decisions (documented so they're easy to revisit):
 - **Dedicated auth.** Every request carries a bearer token and the configured
   screener hotkey. Result POSTs additionally verify the hotkey's sr25519
   signature over the verdict and its policy version.
+- **Every verdict names the caller's claimed attempt.** A result without an
+  ``attempt_id``, or naming an attempt that is not this caller's claim for this
+  agent and policy version, is a 409 with no state change.
 """
 
 from __future__ import annotations
@@ -35,8 +38,8 @@ import logging
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
-from uuid import UUID, uuid4
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, cast
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import (
     APIRouter,
@@ -92,8 +95,14 @@ from ditto.api_models import (
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import (
+    ScreeningVerificationReceiptRequest,
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
+)
+from ditto.api_models.screener_fanout_shadow import (
+    FanoutShadowCompleteRequest,
+    FanoutShadowCompleteResponse,
+    FanoutShadowSourceResponse,
 )
 from ditto.api_models.screener_nodes import (
     SubmissionBuildCompleteRequest,
@@ -126,8 +135,11 @@ from ditto.api_models.screener_nodes import (
 )
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.api_models.screener_review_settings import (
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
     EffectiveScreenerReviewSettings,
     ScreenerReviewSettings,
+    policy_manifest_digest,
+    review_settings_checksum,
 )
 from ditto.api_models.system_health import (
     fleet_release_signing_token,
@@ -155,6 +167,7 @@ from ditto.api_server.endpoints.validator import (
 )
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
+from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
 from ditto.api_server.screener_policy_activation import (
     EffectiveScreenerPolicy,
@@ -184,6 +197,7 @@ from ditto.db.models import (
     ScreenedImageUpload,
     ScreenerCapacityEvent,
     ScreenerCapacitySnapshot,
+    ScreenerFanoutShadowReview,
     ScreenerHeartbeat,
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
@@ -192,6 +206,7 @@ from ditto.db.models import (
     ScreenerShadowReview,
     ScreeningAttempt,
     ScreeningQuarantine,
+    ScreeningVerificationReceipt,
     SubmissionImageBuild,
     SubmissionSourceReview,
     TrustedImageBuild,
@@ -220,15 +235,26 @@ from ditto.db.queries.screening import (
     POLICY_ONLY_RESCREEN_REASON,
     claim_screening_attempts,
     get_screening_attempt,
+    infra_retry_agent_admitted,
     prerequisite_screening_predicates,
     screening_priority_order,
+    try_acquire_screening_claim_lock,
 )
+from ditto.db.queries.screening_infra_retry import INFRA_AUTO_RETRY_REASON_CODES
+from ditto.db.queries.screening_review_events import append_automated_review_event
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenResultOutcome,
+    SourceReviewFinding,
     SourceReviewObservationPayload,
+    completion_receipt_signing_message,
     verdict_signing_message,
 )
+from ditto_screening_protocol.mechanical_verification import (
+    MECHANICAL_PROFILE_SHA256,
+    mechanical_evidence_sha256,
+)
+from ditto_screening_protocol.models import source_review_invariants_for_policy
 from ditto_screening_protocol.private_failure import (
     PRIVATE_FAILURE_DETAIL_LIMIT,
     PRIVATE_FAILURE_LOG_TAIL_LIMIT,
@@ -408,11 +434,6 @@ _LEGACY_INSTANCE_ID = "legacy"
 _HEARTBEAT_RETENTION = timedelta(days=1)
 _CLAIM_FALLBACK_LOCK = asyncio.Lock()
 
-# Policy v1 used the legacy three-field signature. Every policy from v2 onward
-# binds its version, including an older worker reporting a failure during a
-# future rolling policy upgrade.
-_FIRST_VERSIONED_POLICY = 2
-
 
 def _artifact_key(agent_id: UUID) -> str:
     return f"{agent_id}/agent.tar.gz"
@@ -541,6 +562,112 @@ async def require_screener(
 
 
 ScreenerDep = Annotated[str, Depends(require_screener)]
+
+
+@router.post(
+    "/agent/{agent_id}/verification-receipts",
+    response_model=None,
+    status_code=204,
+)
+async def record_screening_verification_receipt(
+    agent_id: UUID,
+    payload: ScreeningVerificationReceiptRequest,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> None:
+    """Append one check digest under the active v13 lease.
+
+    Only the authenticated owner of a running, unexpired attempt may write.
+    Platform recomputes mechanical digests from the committed artifact and
+    verified image upload. Runtime rows remain observation-only. Neither kind
+    is a complete policy-v13 check pass or CLEAR authorization.
+    A deterministic receipt ID makes an uncertain HTTP retry idempotent.
+    """
+    async with session.begin():
+        agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
+        attempt = await get_screening_attempt(
+            session, attempt_id=payload.attempt_id, for_update=True
+        )
+        if agent is None or attempt is None or attempt.agent_id != agent_id:
+            raise HTTPException(status_code=404, detail="screening attempt not found")
+        # Re-read time after acquiring both row locks. An in-flight request
+        # waiting on a competing settlement must not backdate a receipt past
+        # the lease deadline.
+        now = datetime.now(UTC)
+        deadline = attempt.deadline
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        mechanical = payload.check_code in {"archive_sha", "build_image_digest"}
+        if (
+            attempt.screener_hotkey != screener_hotkey
+            or attempt.policy_version != payload.policy_version
+            or attempt.status != "running"
+            or now >= deadline
+            or agent.sha256.lower() != payload.artifact_sha256
+            or (
+                (mechanical or attempt.artifact_sha256 is not None)
+                and (
+                    attempt.artifact_sha256 is None
+                    or attempt.artifact_sha256.lower() != payload.artifact_sha256
+                )
+            )
+        ):
+            raise HTTPException(
+                status_code=409, detail="verification receipt lease is stale"
+            )
+        if mechanical and payload.evidence_sha256 != mechanical_evidence_sha256(
+            check_code=payload.check_code,
+            artifact_sha256=agent.sha256.lower(),
+            image_sha256=payload.image_sha256,
+        ):
+            raise HTTPException(
+                status_code=409, detail="mechanical receipt evidence digest mismatch"
+            )
+        if payload.check_code == "build_image_digest":
+            verified_image = await session.scalar(
+                select(ScreenedImageUpload.image_upload_id).where(
+                    ScreenedImageUpload.agent_id == agent_id,
+                    ScreenedImageUpload.attempt_id == payload.attempt_id,
+                    ScreenedImageUpload.screener_hotkey == screener_hotkey,
+                    ScreenedImageUpload.sha256 == payload.image_sha256,
+                    ScreenedImageUpload.status == "verified",
+                )
+            )
+            if verified_image is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="build image receipt lacks verified image upload",
+                )
+        receipt_id = uuid5(
+            NAMESPACE_URL,
+            f"v13:{agent_id}:{payload.attempt_id}:{payload.check_code}",
+        )
+        existing = await session.get(ScreeningVerificationReceipt, receipt_id)
+        if existing is not None and (
+            existing.evidence_sha256 != payload.evidence_sha256
+            or existing.image_sha256 != payload.image_sha256
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="verification receipt conflicts with prior evidence",
+            )
+        if existing is None:
+            session.add(
+                ScreeningVerificationReceipt(
+                    receipt_id=receipt_id,
+                    agent_id=agent_id,
+                    attempt_id=payload.attempt_id,
+                    artifact_sha256=payload.artifact_sha256,
+                    policy_version=payload.policy_version,
+                    check_code=payload.check_code,
+                    evidence_sha256=payload.evidence_sha256,
+                    image_sha256=payload.image_sha256,
+                    profile_sha256=MECHANICAL_PROFILE_SHA256 if mechanical else None,
+                    challenge_manifest_sha256=None,
+                    worker_hotkey=screener_hotkey,
+                    created_at=now,
+                )
+            )
 
 
 def _is_enrolled_node_heartbeat_instance(
@@ -748,6 +875,36 @@ async def _locked_source_review_for_job(
         raise HTTPException(status_code=401, detail="source-review job token expired")
     if row.status not in {"leased", "running"}:
         raise HTTPException(status_code=409, detail="source-review job is not active")
+    return row
+
+
+async def _locked_fanout_shadow_for_job(
+    session: AsyncSession,
+    *,
+    shadow_id: UUID,
+    authorization: str | None,
+) -> ScreenerFanoutShadowReview:
+    token = _submission_build_token(authorization)
+    row = await session.scalar(
+        select(ScreenerFanoutShadowReview)
+        .where(ScreenerFanoutShadowReview.shadow_id == shadow_id)
+        .with_for_update()
+    )
+    if row is None or row.job_token_hash is None:
+        raise HTTPException(status_code=401, detail="invalid fanout shadow job token")
+    if not secrets.compare_digest(
+        hashlib.sha256(token.encode()).hexdigest(), row.job_token_hash
+    ):
+        raise HTTPException(status_code=401, detail="invalid fanout shadow job token")
+    expiry = row.job_token_expires_at
+    if expiry is None:
+        raise HTTPException(status_code=401, detail="fanout shadow job token expired")
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    if datetime.now(UTC) >= expiry:
+        raise HTTPException(status_code=401, detail="fanout shadow job token expired")
+    if row.status not in {"leased", "running"}:
+        raise HTTPException(status_code=409, detail="fanout shadow job is not active")
     return row
 
 
@@ -3325,8 +3482,27 @@ async def get_submission_source_review_source(
         row = await _locked_source_review_for_job(
             session, review_id=review_id, authorization=authorization
         )
+        attempt = await session.get(ScreeningAttempt, row.attempt_id)
+        if attempt is None:
+            raise HTTPException(
+                status_code=409, detail="source-review attempt is unavailable"
+            )
         agent_id = row.agent_id
         artifact_sha256 = row.artifact_sha256
+        policy_version = attempt.policy_version
+        agent = await session.get(Agent, agent_id)
+        if agent is None:
+            raise HTTPException(
+                status_code=409, detail="source-review agent is unavailable"
+            )
+        bench_version = await arrival_bench_version(session, agent=agent)
+        scored_runtime_evidence = await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt.attempt_id,
+            artifact_sha256=artifact_sha256,
+            policy_version=policy_version,
+            bench_version=bench_version,
+        )
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
@@ -3334,6 +3510,8 @@ async def get_submission_source_review_source(
     return SubmissionSourceReviewSourceResponse(
         source_url_b64=base64.b64encode(url.encode()).decode(),
         artifact_sha256=artifact_sha256,
+        policy_version=policy_version,
+        scored_runtime_evidence=scored_runtime_evidence,
     )
 
 
@@ -3362,10 +3540,48 @@ async def complete_submission_source_review(
         row = await _locked_source_review_for_job(
             session, review_id=review_id, authorization=authorization
         )
+        attempt = await session.get(ScreeningAttempt, row.attempt_id)
+        if attempt is None:
+            raise HTTPException(
+                status_code=409, detail="source-review attempt is unavailable"
+            )
+        expected_policy_suffix = f"-policy-v{attempt.policy_version}"
         finding = payload.observation.finding
         if finding is not None and finding.artifact_sha256 != row.artifact_sha256:
             raise HTTPException(
                 status_code=409, detail="source-review artifact mismatch"
+            )
+        if finding is not None and not finding.prompt_revision.endswith(
+            expected_policy_suffix
+        ):
+            raise HTTPException(
+                status_code=409, detail="source-review finding policy mismatch"
+            )
+        if finding is not None:
+            expected_assessment_schema = 2 if attempt.policy_version >= 13 else 1
+            assessment = finding.invariant_assessment
+            if (
+                assessment is None
+                or assessment.schema_version != expected_assessment_schema
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="source-review invariant policy mismatch",
+                )
+        review_audit = payload.observation.review_audit
+        if review_audit is not None and not review_audit.prompt_revision.endswith(
+            expected_policy_suffix
+        ):
+            raise HTTPException(
+                status_code=409, detail="source-review audit policy mismatch"
+            )
+        adjudication = payload.observation.adjudication
+        if adjudication is not None and (
+            adjudication.policy_version != attempt.policy_version
+            or not adjudication.prompt_revision.endswith(expected_policy_suffix)
+        ):
+            raise HTTPException(
+                status_code=409, detail="source-review adjudication policy mismatch"
             )
         row.observation = payload.observation.model_dump(mode="json")
         parked = bool(
@@ -3550,10 +3766,7 @@ async def list_controller_nodes(
 
 
 def _review_settings_checksum(settings: ScreenerReviewSettings) -> str:
-    payload = json.dumps(
-        settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    ).encode()
-    return hashlib.sha256(payload).hexdigest()
+    return review_settings_checksum(settings)
 
 
 async def _resolve_effective_review_settings(
@@ -3743,6 +3956,470 @@ async def submit_shadow_review(
     return ShadowReviewObservationResponse(accepted=True)
 
 
+@router.get(
+    "/fanout-shadow-reviews/{shadow_id}/source",
+    response_model=FanoutShadowSourceResponse,
+)
+async def get_fanout_shadow_source(
+    shadow_id: UUID,
+    session: SessionDep,
+    storage: StorageDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> FanoutShadowSourceResponse:
+    """Mint one digest-bound source URL for an admitted shadow-only job."""
+    async with session.begin():
+        row = await _locked_fanout_shadow_for_job(
+            session, shadow_id=shadow_id, authorization=authorization
+        )
+        agent_id = row.agent_id
+        artifact_sha256 = row.artifact_sha256
+        policy_version = row.policy_version
+        policy_manifest_profile = row.policy_manifest_profile
+        policy_manifest_rotation_id = row.policy_manifest_rotation_id
+        policy_manifest_digest_value = row.policy_manifest_digest
+    url = await storage.presigned_get_url(
+        key=_artifact_key(agent_id),
+        expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
+    )
+    return FanoutShadowSourceResponse(
+        source_url_b64=base64.b64encode(url.encode()).decode(),
+        artifact_sha256=artifact_sha256,
+        policy_version=policy_version,
+        policy_manifest_profile=cast(
+            Literal["core", "l1", "l1_l2"], policy_manifest_profile
+        ),
+        policy_manifest_rotation_id=policy_manifest_rotation_id,
+        policy_manifest_digest=policy_manifest_digest_value,
+    )
+
+
+@router.post(
+    "/fanout-shadow-reviews/{shadow_id}/complete",
+    response_model=FanoutShadowCompleteResponse,
+)
+async def complete_fanout_shadow_review(
+    shadow_id: UUID,
+    payload: FanoutShadowCompleteRequest,
+    request: Request,
+    session: SessionDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> FanoutShadowCompleteResponse:
+    """Persist comparison evidence without touching screening authority."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await _locked_fanout_shadow_for_job(
+            session, shadow_id=shadow_id, authorization=authorization
+        )
+        if payload.report.get("artifact_sha256") != row.artifact_sha256:
+            raise HTTPException(status_code=409, detail="fanout artifact mismatch")
+        if payload.report.get("policy_version") != row.policy_version:
+            raise HTTPException(status_code=409, detail="fanout policy mismatch")
+        if (
+            payload.report.get("policy_manifest_profile") != row.policy_manifest_profile
+            or payload.report.get("policy_manifest_rotation_id")
+            != row.policy_manifest_rotation_id
+            or payload.report.get("policy_manifest_digest")
+            != row.policy_manifest_digest
+        ):
+            raise HTTPException(
+                status_code=409, detail="fanout policy manifest mismatch"
+            )
+        usage = payload.report["usage"]
+        reported = usage.get("reported_cost_usd")
+        reported_microusd = (
+            round(float(reported) * 1_000_000) if reported is not None else None
+        )
+        unmetered = bool(
+            usage.get("unmetered_requests", 0) or usage.get("unmetered_responses", 0)
+        )
+        settings_revision = await session.get(
+            ScreenerReviewSettingsRevision, row.settings_revision
+        )
+        expected_model = (
+            ScreenerReviewSettings.model_validate(
+                settings_revision.settings
+            ).fanout_shadow_model
+            if settings_revision is not None
+            else None
+        )
+        passes = payload.report.get("passes")
+        response_models: list[str] = []
+        if isinstance(passes, list):
+            response_models.extend(
+                model
+                for item in passes
+                if isinstance(item, dict)
+                for model in item.get("response_models", [])
+                if isinstance(model, str)
+            )
+        critic = payload.report.get("critic")
+        if isinstance(critic, dict):
+            response_models.extend(
+                model
+                for model in critic.get("response_models", [])
+                if isinstance(model, str)
+            )
+        model_binding_invalid = bool(
+            expected_model is None
+            or payload.report.get("requested_model") != expected_model
+            or usage.get("model_mismatch")
+            or (payload.status == "succeeded" and not response_models)
+            or any(
+                not _fanout_response_model_matches(expected_model, model)
+                for model in response_models
+            )
+        )
+        exceeded = bool(
+            reported_microusd is not None
+            and reported_microusd > row.reserved_cost_microusd
+        )
+        baseline_outcome = row.baseline.get("outcome")
+        baseline_candidate = (
+            baseline_outcome
+            in {
+                "quarantine",
+                "deterministic_reject",
+            }
+            or row.baseline.get("finding") is not None
+        )
+        fanout_candidate = payload.outcome in {
+            "candidate",
+            "unresolved_candidate",
+            "critic_also_flagged",
+        }
+        coverage_complete = _fanout_protocol_complete(payload.report, payload.outcome)
+        row.report = payload.report
+        protocol_invalid = payload.status == "succeeded" and not coverage_complete
+        invalid_result = (
+            exceeded or model_binding_invalid or unmetered or protocol_invalid
+        )
+        row.coverage_complete = coverage_complete and not invalid_result
+        row.disagrees_with_baseline = (
+            baseline_candidate != fanout_candidate
+            if row.coverage_complete and payload.status == "succeeded"
+            else None
+        )
+        row.status = "incomplete" if invalid_result else payload.status
+        row.outcome = "incomplete" if invalid_result else payload.outcome
+        row.error_code = (
+            "reported-cost-exceeded-reservation"
+            if exceeded
+            else "fanout-response-model-mismatch"
+            if model_binding_invalid
+            else "fanout-response-metering-incomplete"
+            if unmetered
+            else "fanout-review-protocol-incomplete"
+            if protocol_invalid
+            else payload.error_code
+        )
+        row.reported_cost_microusd = reported_microusd
+        row.unmetered = unmetered
+        row.completed_at = now
+        row.updated_at = now
+        row.lease_expires_at = None
+        row.job_token_hash = None
+        row.job_token_expires_at = None
+        rental_uid = row.provider_resource_id
+        provider = row.provider
+    if provider == "targon" and await _release_targon_rental(request, rental_uid):
+        async with session.begin():
+            stored = await session.get(
+                ScreenerFanoutShadowReview, shadow_id, with_for_update=True
+            )
+            if stored is not None and stored.provider_resource_id == rental_uid:
+                stored.provider_resource_id = None
+                stored.updated_at = datetime.now(UTC)
+    return FanoutShadowCompleteResponse(accepted=True)
+
+
+def _fanout_protocol_complete(report: dict, outcome: str) -> bool:
+    """Require five provisional reviews and one source-verified final decision."""
+    expected_passes = {
+        "generalist",
+        "answer_authority",
+        "benchmark_engine",
+        "tool_fidelity",
+        "evasion_scope",
+    }
+    if (
+        outcome
+        not in {
+            "no_findings",
+            "candidate",
+            "critic_also_flagged",
+            "unresolved_candidate",
+        }
+        or report.get("outcome") != outcome
+        or report.get("revision")
+        not in (
+            "fanout-source-review-v4",
+            "fanout-source-review-v5",
+            "fanout-source-review-v6",
+        )
+        or report.get("mode") != "shadow_report_only"
+        or report.get("partition") != "specialists"
+        or report.get("coverage_protocol") != "five-specialists-adjudicator-v2"
+        or report.get("coverage_scope") != "source_review"
+        or report.get("exhaustive_file_audit") is not False
+    ):
+        return False
+    passes = report.get("passes")
+    if (
+        not isinstance(passes, list)
+        or len(passes) != len(expected_passes)
+        or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("name"), str)
+            and item.get("outcome") == "provisional"
+            and isinstance(item.get("raw_review"), dict)
+            and isinstance(item.get("notes"), list)
+            and item.get("error_code") is None
+            and _fanout_models_complete(
+                item.get("response_models"), report.get("requested_model")
+            )
+            for item in passes
+        )
+        or {item["name"] for item in passes} != expected_passes
+    ):
+        return False
+    # Specialist contradictions are intentionally allowed above. Only the fresh
+    # adjudicator produces a canonical policy verdict; a majority is not a verdict.
+    critic = report.get("critic")
+    if (
+        not isinstance(critic, dict)
+        or critic.get("name") != "adjudicator"
+        or (report.get("revision"), critic.get("revision"))
+        not in (
+            ("fanout-source-review-v4", "fanout-adjudicator-v2"),
+            ("fanout-source-review-v5", "fanout-adjudicator-v3"),
+            ("fanout-source-review-v6", "fanout-adjudicator-v4"),
+        )
+        or critic.get("error_code") is not None
+        or critic.get("outcome") != outcome
+        or critic.get("pass_context_count") != len(passes)
+        or not _fanout_models_complete(
+            critic.get("response_models"), report.get("requested_model")
+        )
+        or critic.get("evidence_verified") is not True
+        or not isinstance(critic.get("final_review"), dict)
+    ):
+        return False
+    policy_version = report.get("policy_version")
+    if (
+        type(policy_version) is not int
+        or not 10 <= policy_version <= SCREENING_POLICY_VERSION
+    ):
+        return False
+    try:
+        finding = SourceReviewFinding.model_validate(critic["final_review"])
+        finding.require_policy_v10_invariants()
+    except ValueError:
+        return False
+    if (
+        finding.artifact_sha256 != report.get("artifact_sha256")
+        or re.fullmatch(
+            rf"source-review-v[0-9]+-policy-v{policy_version}", finding.prompt_revision
+        )
+        is None
+        or finding.invariant_assessment is None
+        or {item.invariant for item in finding.invariant_assessment.decisions}
+        != set(source_review_invariants_for_policy(policy_version))
+    ):
+        return False
+    risk = finding.risk_level
+    if risk == "low" and critic.get("clearance_certified") is not True:
+        return False
+    if report.get(
+        "revision"
+    ) == "fanout-source-review-v6" and not _fanout_obligations_complete(report, risk):
+        return False
+    candidates = report.get("candidates")
+    assessments = critic.get("candidate_assessments")
+    if (
+        not isinstance(candidates, list)
+        or not isinstance(assessments, list)
+        or len(assessments) != len(candidates)
+        or not all(
+            isinstance(item, dict)
+            and item.get("candidate_id") == f"candidate-{index:03d}"
+            and isinstance(item.get("source_pass"), str)
+            and item["source_pass"] in expected_passes
+            and isinstance(item.get("finding"), dict)
+            and isinstance(item.get("basis"), list)
+            and bool(item["basis"])
+            for index, item in enumerate(candidates, start=1)
+        )
+        or not all(
+            isinstance(item, dict)
+            and isinstance(item.get("candidate_id"), str)
+            and isinstance(item.get("disposition"), str)
+            and item["disposition"] in {"supported", "refuted", "unresolved"}
+            for item in assessments
+        )
+    ):
+        return False
+    by_id = {item["candidate_id"]: item for item in assessments}
+    if set(by_id) != {item["candidate_id"] for item in candidates} or any(
+        by_id[item["candidate_id"]].get("source_pass") != item["source_pass"]
+        for item in candidates
+    ):
+        return False
+    supported = any(item["disposition"] == "supported" for item in assessments)
+    unresolved = any(item["disposition"] == "unresolved" for item in assessments)
+    if supported and risk == "low":
+        return False
+    expected_outcome = (
+        "critic_also_flagged"
+        if supported
+        else "candidate"
+        if risk in {"medium", "high"}
+        else "unresolved_candidate"
+        if unresolved
+        else "no_findings"
+    )
+    return outcome == expected_outcome
+
+
+def _fanout_obligations_complete(report: dict, risk: str) -> bool:
+    """Do not let a v6 report omit structured specialist uncertainty."""
+    if report.get("policy_version") == 13 and risk == "low":
+        required = set(source_review_invariants_for_policy(13))
+        for source in report["passes"]:
+            decisions = source["raw_review"].get("invariants")
+            if (
+                not isinstance(decisions, list)
+                or len(decisions) != len(required)
+                or any(
+                    not isinstance(item, dict)
+                    or not isinstance(item.get("invariant"), str)
+                    or item.get("disposition") not in ("pass", "breach", "inconclusive")
+                    for item in decisions
+                )
+                or {item["invariant"] for item in decisions} != required
+            ):
+                return False
+    expected = []
+    for source in report["passes"]:
+        decisions = source["raw_review"].get("invariants")
+        for decision in decisions if isinstance(decisions, list) else []:
+            if (
+                isinstance(decision, dict)
+                and decision.get("disposition") == "inconclusive"
+            ):
+                expected.append(
+                    (
+                        source["name"],
+                        "inconclusive_invariant",
+                        decision.get("invariant"),
+                        decision.get("summary"),
+                    )
+                )
+        for note in source["notes"]:
+            if isinstance(note, dict) and note.get("kind") == "concern":
+                expected.append(
+                    (source["name"], "concern_note", None, note.get("summary"))
+                )
+    obligations = report.get("review_obligations")
+    critic = report["critic"]
+    resolutions = critic.get("obligation_resolutions")
+    if (
+        len(expected) > 64
+        or not isinstance(obligations, list)
+        or len(obligations) != len(expected)
+        or not isinstance(resolutions, list)
+        or len(resolutions) != len(expected)
+        or critic.get("obligation_evidence_verified") is not True
+    ):
+        return False
+    by_id = {}
+    for item in resolutions:
+        if (
+            not isinstance(item, dict)
+            or not isinstance(item.get("obligation_id"), str)
+            or item["obligation_id"] in by_id
+        ):
+            return False
+        by_id[item["obligation_id"]] = item
+    for index, (obligation, identity) in enumerate(
+        zip(obligations, expected, strict=True), start=1
+    ):
+        oid = f"obligation-{index:03d}"
+        if (
+            not isinstance(obligation, dict)
+            or obligation.get("obligation_id") != oid
+            or tuple(
+                obligation.get(key)
+                for key in ("source_pass", "kind", "invariant", "summary")
+            )
+            != identity
+        ):
+            return False
+        resolution = by_id.get(oid)
+        if not isinstance(resolution, dict) or resolution.get("disposition") not in (
+            "resolved",
+            "unresolved",
+        ):
+            return False
+        if risk == "low" and resolution["disposition"] != "resolved":
+            return False
+        summary = resolution.get("summary")
+        if not isinstance(summary, str) or not 1 <= len(summary) <= 240:
+            return False
+        anchors = obligation.get("locations")
+        evidence = resolution.get("source_evidence")
+        if (
+            not isinstance(anchors, list)
+            or not isinstance(evidence, list)
+            or len(evidence) > 16
+        ):
+            return False
+        for item in anchors + evidence:
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("path"), str)
+                or not item["path"]
+                or type(item.get("line")) is not int
+                or item["line"] < 1
+            ):
+                return False
+        locations = {
+            (item["path"].removeprefix("./"), item["line"]) for item in evidence
+        }
+        anchor_locations = {
+            (item["path"].removeprefix("./"), item["line"]) for item in anchors
+        }
+        if resolution["disposition"] == "resolved" and not (
+            bool(locations & anchor_locations)
+            if anchor_locations
+            else len(locations) >= 2
+        ):
+            return False
+    return True
+
+
+def _fanout_models_complete(models: object, expected_model: object) -> bool:
+    return (
+        expected_model == "z-ai/glm-5.3-flash"
+        and isinstance(models, list)
+        and bool(models)
+        and all(
+            isinstance(model, str)
+            and _fanout_response_model_matches("z-ai/glm-5.3-flash", model)
+            for model in models
+        )
+    )
+
+
+def _fanout_response_model_matches(
+    expected_model: str | None, response_model: object
+) -> bool:
+    """Accept only the verified request/native IDs for the bounded pilot model."""
+    return expected_model == "z-ai/glm-5.3-flash" and response_model in {
+        "z-ai/glm-5.3-flash",
+        "glm-5.3-flash",
+    }
+
+
 def _heartbeat_signing_message(payload: ScreenerHeartbeatRequest) -> bytes:
     """Canonical versioned heartbeat bytes mirrored by ``ditto-screener``."""
     if payload.protocol_version == 1:
@@ -3875,6 +4552,25 @@ async def heartbeat(
     instance_id = request_body.instance_id or _LEGACY_INSTANCE_ID
     renewed_lease_deadline: datetime | None = None
     async with session.begin():
+        replay_process: dict | None = None
+        if enrolled_node_id == "subnet-screener-2" and request.headers.get(
+            "x-replay-process-proof"
+        ):
+            from ditto.api_server.endpoints.verification_replay import (
+                verify_replay_process_request,
+            )
+
+            node = await session.get(ScreenerNode, enrolled_node_id)
+            if node is None:
+                raise ScreenerAuthError("replay process node unavailable")
+            key_sha256 = await verify_replay_process_request(
+                request,
+                session,
+                node=node,
+                instance_id=instance_id,
+                purpose="heartbeat",
+            )
+            replay_process = {"key_sha256": key_sha256}
         previous_heartbeat = await session.get(
             ScreenerHeartbeat,
             (screener_hotkey, instance_id),
@@ -3978,6 +4674,7 @@ async def heartbeat(
                 if request_body.release is not None
                 else None
             ),
+            replay_process=replay_process,
             reported_at=reported_at,
             seen_at=now,
             signature=request_body.signature,
@@ -4216,6 +4913,12 @@ async def claim(
 
     if session.get_bind().dialect.name == "postgresql":
         async with session.begin():
+            if not await try_acquire_screening_claim_lock(session):
+                return ScreenerQueueResponse(
+                    items=[],
+                    count=0,
+                    required_policy_version=required_policy,
+                )
             node_id = getattr(request.state, "screener_node_id", None)
             if node_id is None:
                 if not await _legacy_gcp_claim_is_authorized(session, now=now):
@@ -4229,11 +4932,7 @@ async def claim(
                         required_policy_version=required_policy,
                     )
             else:
-                node = await session.scalar(
-                    select(ScreenerNode)
-                    .where(ScreenerNode.node_id == node_id)
-                    .with_for_update()
-                )
+                node = await session.get(ScreenerNode, node_id)
                 if node is None:
                     raise ScreenerAuthError("screener node is not authorized")
                 _, limits = await resolve_screener_node_channel_settings(
@@ -4268,9 +4967,13 @@ async def claim(
                 limit=limit,
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
+                integrity_double_check_mode=(
+                    queue_settings.deferred_source_review.integrity_double_check_mode
+                ),
                 review_settings_binding=binding,
                 review_settings_enrolled_node_id=node_id,
                 canary_policy_version=canary_policy_version,
+                claim_lock_held=True,
             )
     else:
         # SQLite is used by local/test deployments and has no advisory locks.
@@ -4325,6 +5028,9 @@ async def claim(
                 limit=limit,
                 netuid=expected_netuid(),
                 deferred_review_mode=queue_settings.deferred_source_review.mode,
+                integrity_double_check_mode=(
+                    queue_settings.deferred_source_review.integrity_double_check_mode
+                ),
                 review_settings_binding=binding,
                 review_settings_enrolled_node_id=node_id,
                 canary_policy_version=canary_policy_version,
@@ -4332,6 +5038,16 @@ async def claim(
     bench_versions = {
         agent.agent_id: await arrival_bench_version(session, agent=agent)
         for agent, _, _ in claimed
+    }
+    runtime_leases = {
+        attempt.attempt_id: await scored_runtime_evidence_for_lease(
+            session,
+            attempt_id=attempt.attempt_id,
+            artifact_sha256=agent.sha256,
+            policy_version=attempt.policy_version,
+            bench_version=bench_versions[agent.agent_id],
+        )
+        for agent, attempt, _ in claimed
     }
     items = [
         ScreenerQueueItem(
@@ -4345,6 +5061,7 @@ async def claim(
             attempt_id=attempt.attempt_id,
             lease_deadline=attempt.deadline,
             policy_version=attempt.policy_version,
+            scored_runtime_evidence=runtime_leases[attempt.attempt_id],
             # ``precheck_reason_code`` is the exact-duplicate channel and the
             # signed queue contract requires it to be paired with
             # ``duplicate_of``. Mechanical deferred admission has its own
@@ -4517,7 +5234,34 @@ async def screened_image_upload(
     if payload.image_ref != expected_ref:
         raise AgentNotScreenableError("screened image ref does not match agent")
     now = datetime.now(UTC)
+    image_upload_id = payload.image_upload_id or uuid4()
     required_policy = (await _required_policy(session)).required_policy_version
+
+    def existing_response(upload: ScreenedImageUpload) -> ScreenedImageUploadResponse:
+        expires_at = upload.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if (
+            upload.agent_id != agent_id
+            or upload.attempt_id != payload.attempt_id
+            or upload.screener_hotkey != screener_hotkey
+            or upload.sha256 != payload.sha256
+            or upload.size_bytes != payload.size_bytes
+            or upload.image_id != payload.image_id
+            or upload.image_ref != payload.image_ref
+            or upload.status != "initiated"
+            or datetime.now(UTC) > expires_at
+        ):
+            raise AgentNotScreenableError(
+                "screened image upload ID does not match an active initiation"
+            )
+        return ScreenedImageUploadResponse(
+            image_upload_id=upload.image_upload_id,
+            storage_upload_id=upload.storage_upload_id,
+            part_size_bytes=_SCREENED_IMAGE_PART_SIZE,
+            expires_at=upload.expires_at,
+        )
+
     async with session.begin():
         attempt = await get_screening_attempt(
             session, attempt_id=payload.attempt_id, for_update=True
@@ -4537,8 +5281,10 @@ async def screened_image_upload(
             deadline = deadline.replace(tzinfo=UTC)
         if now > deadline:
             raise AgentNotScreenableError("screened image upload lease has expired")
+        existing = await session.get(ScreenedImageUpload, image_upload_id)
+        if existing is not None:
+            return existing_response(existing)
 
-    image_upload_id = uuid4()
     expires_at = min(now + _SCREENED_IMAGE_UPLOAD_TTL, deadline)
     metadata = {
         "sha256": payload.sha256,
@@ -4552,6 +5298,7 @@ async def screened_image_upload(
         key=key,
         metadata=metadata,
     )
+    reused: ScreenedImageUploadResponse | None = None
     try:
         async with session.begin():
             attempt = await get_screening_attempt(
@@ -4567,24 +5314,41 @@ async def screened_image_upload(
                 raise AgentNotScreenableError(
                     "screened image upload lease changed during initiation"
                 )
-            session.add(
-                ScreenedImageUpload(
-                    image_upload_id=image_upload_id,
-                    agent_id=agent_id,
-                    attempt_id=payload.attempt_id,
-                    screener_hotkey=screener_hotkey,
-                    storage_upload_id=storage_upload_id,
-                    sha256=payload.sha256,
-                    size_bytes=payload.size_bytes,
-                    image_id=payload.image_id,
-                    image_ref=payload.image_ref,
-                    status="initiated",
-                    expires_at=expires_at,
+            deadline = attempt.deadline
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=UTC)
+            if datetime.now(UTC) > deadline:
+                raise AgentNotScreenableError(
+                    "screened image upload lease expired during initiation"
                 )
-            )
+            # Another request with the same ID may have completed while this
+            # one was creating the storage session. The attempt row lock
+            # serializes this decision without holding it across storage I/O.
+            existing = await session.get(ScreenedImageUpload, image_upload_id)
+            if existing is not None:
+                reused = existing_response(existing)
+            else:
+                session.add(
+                    ScreenedImageUpload(
+                        image_upload_id=image_upload_id,
+                        agent_id=agent_id,
+                        attempt_id=payload.attempt_id,
+                        screener_hotkey=screener_hotkey,
+                        storage_upload_id=storage_upload_id,
+                        sha256=payload.sha256,
+                        size_bytes=payload.size_bytes,
+                        image_id=payload.image_id,
+                        image_ref=payload.image_ref,
+                        status="initiated",
+                        expires_at=expires_at,
+                    )
+                )
     except Exception:
         await storage.abort_multipart_upload(key=key, upload_id=storage_upload_id)
         raise
+    if reused is not None:
+        await storage.abort_multipart_upload(key=key, upload_id=storage_upload_id)
+        return reused
     return ScreenedImageUploadResponse(
         image_upload_id=image_upload_id,
         storage_upload_id=storage_upload_id,
@@ -4921,6 +5685,46 @@ _CONTAINER_CONTRACT_PUBLIC_REASONS = {
 }
 
 
+# Seeding-probe rejections. Screening proves an image builds and answers
+# /health; a scored run opens with POST /seed, so an image that cannot persist
+# state used to pass screening and fail on every validator. These map the
+# screener's bounded reason codes to guidance the submission owner can act on
+# without exposing a container log, a path outside the contract, or any
+# private challenge payload.
+_SEED_PROBE_PUBLIC_REASONS: Final[dict[str, str]] = {
+    "seed-readonly-write": (
+        "The application attempted to write outside the sandbox's writable /tmp "
+        "filesystem during /seed. The sandbox root is read-only; configure "
+        "runtime state under /tmp."
+    ),
+    "seed-memory-cap": (
+        "The application exceeded the sandbox memory cap during /seed. "
+        "Validators run the same cap; keep the memory store's working set "
+        "inside it."
+    ),
+    "seed-exit": (
+        "The application exited while serving /seed. The sandbox runs an "
+        "unprivileged user with a read-only root and one bounded /tmp tmpfs."
+    ),
+    "seed-ack-invalid": (
+        "POST /seed answered without acknowledging the wave it was given. The "
+        "2xx response is the ingest acknowledgement and carries the loaded "
+        "counts; return it only once every pair is embedded and queryable."
+    ),
+    "seed-http-error": (
+        "POST /seed did not return 2xx. Scoring begins with a seeding wave, so "
+        "an image that cannot ingest cannot be scored."
+    ),
+    "seed-oversized-response": (
+        "POST /seed answered with a body past the screening safety cap. The "
+        "contract's response is the loaded counts."
+    ),
+    "seed-unreachable": (
+        "POST /seed returned no response before the screening deadline."
+    ),
+}
+
+
 def _public_screening_reason(detail: str, reason_code: str | None = None) -> str:
     """Map untrusted screener detail to a stable, public-safe failure category.
 
@@ -4928,6 +5732,8 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
     code. Never persist or return it verbatim: a malicious Dockerfile could print
     the BuildKit secret mounted for private dependency access.
     """
+    if reason_code is not None and reason_code in _SEED_PROBE_PUBLIC_REASONS:
+        return _SEED_PROBE_PUBLIC_REASONS[reason_code]
     if reason_code == "exact-cross-miner-duplicate":
         return "Artifact is an exact duplicate of another miner submission"
     if reason_code == "container-harness-contract":
@@ -4965,7 +5771,8 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
     if reason_code == "docker-build-infrastructure":
         return (
             "Docker build infrastructure failed before screening completed. This "
-            "is operator-owned and requires a manual retry."
+            "is operator-owned and is retried automatically with backoff for a "
+            "limited time, then held for an operator retry."
         )
     if reason_code == "docker-build" or normalized.startswith("build failed"):
         if (
@@ -5079,6 +5886,110 @@ def _quarantine_payload_json(
     return evidence_json, finding_json
 
 
+def _court_diagnostic_json(payload: ScreenResultRequest) -> dict[str, object] | None:
+    """Copy the sanitized court trace off a verdict, if this run recorded one."""
+    adjudication = payload.adjudication
+    if adjudication is None or adjudication.run_diagnostic is None:
+        return None
+    return adjudication.run_diagnostic.model_dump(mode="json")
+
+
+def _court_completion_receipt_json(
+    payload: ScreenResultRequest,
+) -> dict[str, object] | None:
+    """Copy only the typed, text-free completed-court measurements."""
+    adjudication = payload.adjudication
+    if adjudication is None or adjudication.completion_receipt is None:
+        return None
+    return adjudication.completion_receipt.model_dump(mode="json")
+
+
+async def _queue_fanout_shadow_review(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    attempt: ScreeningAttempt,
+    payload: ScreenResultRequest,
+    settings: ScreenerReviewSettings,
+) -> None:
+    """Write the durable shadow outbox beside an accepted baseline verdict.
+
+    This insert does not call a provider or alter the attempt/agent transition.
+    The independently capped rental loop consumes it only after authoritative
+    lanes have had first refusal on compute capacity.
+    """
+    if (
+        settings.fanout_shadow_mode != "shadow"
+        or attempt.review_settings_revision is None
+        or attempt.review_settings_scope is None
+        or attempt.review_settings_checksum is None
+    ):
+        return
+    ineligible_reason = None
+    if attempt.build_only or payload.policy_only or payload.deferred_source_review:
+        ineligible_reason = "non-full-screening-attempt"
+    elif payload.outcome == ScreenResultOutcome.RETRYABLE_INFRA:
+        ineligible_reason = "authoritative-review-infrastructure-failure"
+    elif payload.reason_code == "exact-cross-miner-duplicate":
+        ineligible_reason = "deterministic-duplicate-precheck"
+    evidence, finding = _quarantine_payload_json(payload)
+    baseline = {
+        "outcome": payload.outcome.value if payload.outcome is not None else None,
+        "passed": payload.passed,
+        "reason_code": payload.reason_code,
+        "manifest_digest": payload.manifest_digest,
+        "finding_digest": payload.finding_digest,
+        "review_audit_digest": payload.review_audit_digest,
+        "review_notes_digest": payload.review_notes_digest,
+        "adjudication_digest": payload.adjudication_digest,
+        "evidence": evidence,
+        "finding": finding,
+        "review_audit": (
+            payload.review_audit.model_dump(mode="json")
+            if payload.review_audit is not None
+            else None
+        ),
+        "review_notes": (
+            [note.model_dump(mode="json") for note in payload.review_notes]
+            if payload.review_notes is not None
+            else None
+        ),
+        "adjudication": (
+            payload.adjudication.model_dump(mode="json")
+            if payload.adjudication is not None
+            else None
+        ),
+    }
+    now = datetime.now(UTC)
+    await session.execute(
+        pg_insert(ScreenerFanoutShadowReview)
+        .values(
+            shadow_id=uuid4(),
+            agent_id=agent.agent_id,
+            attempt_id=attempt.attempt_id,
+            environment="prod",
+            artifact_sha256=agent.sha256.lower(),
+            policy_version=attempt.policy_version,
+            policy_manifest_profile=settings.policy_manifest_profile,
+            policy_manifest_rotation_id=settings.policy_manifest_rotation_id,
+            policy_manifest_digest=policy_manifest_digest(
+                settings.policy_manifest_profile,
+                settings.policy_manifest_rotation_id,
+            ),
+            settings_revision=attempt.review_settings_revision,
+            settings_scope=attempt.review_settings_scope,
+            settings_checksum=attempt.review_settings_checksum,
+            status="skipped" if ineligible_reason else "queued",
+            outcome="skipped" if ineligible_reason else None,
+            baseline=baseline,
+            error_code=ineligible_reason,
+            completed_at=now if ineligible_reason else None,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(constraint="screener_fanout_shadow_reviews_attempt_key")
+    )
+
+
 async def _backfill_quarantine_payloads(
     session: AsyncSession,
     *,
@@ -5103,11 +6014,15 @@ async def _backfill_quarantine_payloads(
         if payload.review_notes is not None
         else None
     )
+    court_json = _court_diagnostic_json(payload)
+    completion_json = _court_completion_receipt_json(payload)
     if (
         evidence_json is None
         and finding_json is None
         and audit_json is None
         and notes_json is None
+        and court_json is None
+        and completion_json is None
     ):
         return
     quarantine = await session.scalar(
@@ -5145,6 +6060,15 @@ async def _backfill_quarantine_payloads(
         and quarantine.finding_digest == payload.finding_digest
     ):
         quarantine.finding = finding_json
+    if quarantine.court_diagnostic is None and court_json is not None:
+        quarantine.court_diagnostic = court_json
+    if completion_json is not None:
+        if quarantine.court_completion_receipt is None:
+            quarantine.court_completion_receipt = completion_json
+        elif quarantine.court_completion_receipt != completion_json:
+            raise AgentNotScreenableError(
+                "re-reported court completion telemetry conflicts with retained receipt"
+            )
 
 
 def _backfill_private_failure_feedback(
@@ -5195,6 +6119,31 @@ def _backfill_private_failure_feedback(
     attempt.failure_captured_at = datetime.now(UTC)
 
 
+def _require_claimed_attempt_owner(
+    attempt: ScreeningAttempt | None,
+    *,
+    agent_id: UUID,
+    screener_hotkey: str,
+    policy_version: int,
+) -> ScreeningAttempt:
+    """Return ``attempt`` only when it is the caller's claim for this verdict.
+
+    A verdict may only settle an attempt that exists, belongs to ``agent_id``,
+    was claimed by the authenticated ``screener_hotkey`` (the shared fleet
+    principal included), and was claimed under the reported policy version.
+    """
+    if (
+        attempt is None
+        or attempt.agent_id != agent_id
+        or attempt.screener_hotkey != screener_hotkey
+        or attempt.policy_version != policy_version
+    ):
+        raise AgentNotScreenableError(
+            "verdict does not match the claimed screening attempt"
+        )
+    return attempt
+
+
 @router.post(
     "/agent/{agent_id}/result",
     response_model=ScreenResultResponse,
@@ -5219,9 +6168,11 @@ async def submit_result(
     """Record the screener's verdict and advance the agent's lifecycle.
 
     Ordering is cheap-before-expensive; no DB write happens until every check
-    passes: (1) dedicated screener bearer authentication, (2) signature over
-    the versioned verdict, (3) generate the per-submission
-    dataset (pass + generation enabled), (4) one transaction that promotes
+    passes: (1) dedicated screener bearer authentication plus a named claimed
+    attempt, (2) signature over the versioned verdict and that attempt's
+    ownership (agent, claiming hotkey, policy version), (3) generate the
+    per-submission dataset (pass + generation enabled), (4) one transaction that
+    re-checks ownership under the row lock and promotes
     ``uploaded -> evaluating`` (pass, pinning the dataset) or ``uploaded ->
     screening_failed``.
 
@@ -5237,6 +6188,14 @@ async def submit_result(
 
     if payload.screener_hotkey != screener_hotkey:
         raise ScreenerAuthError("payload hotkey does not match authenticated screener")
+    # Every verdict is bound to the caller's own claimed screening attempt.
+    # Without one there is no lease to check ownership against, so refuse
+    # before any signature, storage, or database work.
+    claimed_attempt_id = payload.attempt_id
+    if claimed_attempt_id is None:
+        raise AgentNotScreenableError(
+            "verdict must name the caller's claimed screening attempt"
+        )
     if payload.policy_version >= 9 and payload.outcome is None:
         raise AgentNotScreenableError("policy-9 verdicts require a typed outcome")
     image_upload_id = payload.image_upload_id
@@ -5248,7 +6207,7 @@ async def submit_result(
         signed = verdict_signing_message(
             screener_hotkey=payload.screener_hotkey,
             agent_id=agent_id,
-            attempt_id=payload.attempt_id,
+            attempt_id=claimed_attempt_id,
             passed=payload.passed,
             policy_version=payload.policy_version,
             outcome=payload.outcome,
@@ -5272,26 +6231,28 @@ async def submit_result(
             image_ref=payload.image_ref,
             image_upload_id=image_upload_id,
         )
-    elif payload.attempt_id is not None:
-        signed = verdict_signing_message(
-            screener_hotkey=payload.screener_hotkey,
-            agent_id=agent_id,
-            attempt_id=payload.attempt_id,
-            passed=payload.passed,
-            policy_version=payload.policy_version,
-        )
-    elif payload.policy_version >= _FIRST_VERSIONED_POLICY:
-        signed = verdict_signing_message(
-            screener_hotkey=payload.screener_hotkey,
-            agent_id=agent_id,
-            passed=payload.passed,
-            policy_version=payload.policy_version,
-        )
     else:
-        signed = f"{payload.screener_hotkey}:{agent_id}:{payload.passed}".encode()
+        signed = verdict_signing_message(
+            screener_hotkey=payload.screener_hotkey,
+            agent_id=agent_id,
+            attempt_id=claimed_attempt_id,
+            passed=payload.passed,
+            policy_version=payload.policy_version,
+        )
     if not _verify_signature(payload.screener_hotkey, signed, payload.signature):
         raise ScreenerAuthError(
             f"verdict signature did not verify for hotkey {payload.screener_hotkey}"
+        )
+    if (
+        payload.policy_version >= 13
+        and payload.adjudication is not None
+        and payload.adjudication.decision in {"clear", "reject"}
+        and payload.outcome != ScreenResultOutcome.QUARANTINE
+    ):
+        # A rolling-upgrade worker may still report a v13 source-only CLEAR as
+        # PASS. Do not admit it before the private/runtime receipt gate exists.
+        raise AgentNotScreenableError(
+            "v13 source adjudication requires quarantine transport"
         )
 
     # A legacy worker may still report a failure during a rolling deploy, but it
@@ -5321,7 +6282,7 @@ async def submit_result(
             verified_upload is None
             or verified_upload.status != "verified"
             or verified_upload.agent_id != agent_id
-            or verified_upload.attempt_id != payload.attempt_id
+            or verified_upload.attempt_id != claimed_attempt_id
             or verified_upload.screener_hotkey != screener_hotkey
             or verified_upload.sha256 != payload.image_sha256
             or verified_upload.size_bytes != payload.image_size_bytes
@@ -5366,42 +6327,81 @@ async def submit_result(
     deferred_attempt_lifecycle = False
     deferred_deep_attempt = False
     restore_status = AgentStatus.SCORED
-    if payload.attempt_id is not None:
-        async with session.begin():
-            reported_attempt = await get_screening_attempt(
-                session, attempt_id=payload.attempt_id
+    effective_settings = ScreenerReviewSettings()
+    async with session.begin():
+        current_agent = await get_agent_by_id(session, agent_id=agent_id)
+        if current_agent is None:
+            raise AgentNotFoundError(f"no agent with id={agent_id}")
+        # Cheap early refusal before any dataset generation. The locked
+        # re-check inside the verdict transaction below remains authoritative.
+        reported_attempt = _require_claimed_attempt_owner(
+            await get_screening_attempt(session, attempt_id=claimed_attempt_id),
+            agent_id=agent_id,
+            screener_hotkey=screener_hotkey,
+            policy_version=payload.policy_version,
+        )
+        deferred_review = await session.scalar(
+            select(AthReview).where(
+                AthReview.agent_id == agent_id,
+                AthReview.algorithm_provenance["review_kind"].as_string()
+                == DEFERRED_REVIEW_KIND,
             )
-            current_agent = await get_agent_by_id(session, agent_id=agent_id)
-            if current_agent is not None:
-                deferred_review = await session.scalar(
-                    select(AthReview).where(
-                        AthReview.agent_id == agent_id,
-                        AthReview.algorithm_provenance["review_kind"].as_string()
-                        == DEFERRED_REVIEW_KIND,
-                    )
-                )
-            review_started_at = (
-                deferred_review.reopened_at or deferred_review.opened_at
-                if deferred_review is not None
-                else None
+        )
+        review_started_at = (
+            deferred_review.reopened_at or deferred_review.opened_at
+            if deferred_review is not None
+            else None
+        )
+        deferred_attempt_lifecycle = bool(
+            reported_attempt is not None
+            and not reported_attempt.build_only
+            and review_started_at is not None
+            and reported_attempt.started_at >= review_started_at
+        )
+        deferred_deep_attempt = bool(
+            deferred_attempt_lifecycle
+            and current_agent is not None
+            and current_agent.status == AgentStatus.ATH_PENDING_REVIEW
+            and deferred_review is not None
+            and deferred_review.status == "pending"
+        )
+        if deferred_review is not None:
+            previous = deferred_review.original_evidence.get("previous_status")
+            if previous == AgentStatus.LIVE.value:
+                restore_status = AgentStatus.LIVE
+
+    receipt = (
+        payload.adjudication.completion_receipt
+        if payload.adjudication is not None
+        else None
+    )
+    if receipt is not None:
+        if (
+            payload.adjudication_digest is None
+            or payload.completion_receipt_signature is None
+            or reported_attempt is None
+            or current_agent is None
+            or reported_attempt.agent_id != agent_id
+            or reported_attempt.artifact_sha256 is None
+            or reported_attempt.artifact_sha256.lower() != current_agent.sha256.lower()
+        ):
+            raise ScreenerAuthError(
+                "completion receipt is not bound to this screening artifact"
             )
-            deferred_attempt_lifecycle = bool(
-                reported_attempt is not None
-                and not reported_attempt.build_only
-                and review_started_at is not None
-                and reported_attempt.started_at >= review_started_at
-            )
-            deferred_deep_attempt = bool(
-                deferred_attempt_lifecycle
-                and current_agent is not None
-                and current_agent.status == AgentStatus.ATH_PENDING_REVIEW
-                and deferred_review is not None
-                and deferred_review.status == "pending"
-            )
-            if deferred_review is not None:
-                previous = deferred_review.original_evidence.get("previous_status")
-                if previous == AgentStatus.LIVE.value:
-                    restore_status = AgentStatus.LIVE
+        receipt_message = completion_receipt_signing_message(
+            screener_hotkey=screener_hotkey,
+            agent_id=agent_id,
+            attempt_id=claimed_attempt_id,
+            artifact_sha256=reported_attempt.artifact_sha256.lower(),
+            adjudication_digest=payload.adjudication_digest,
+            receipt=receipt,
+        )
+        if not _verify_signature(
+            screener_hotkey,
+            receipt_message,
+            payload.completion_receipt_signature,
+        ):
+            raise ScreenerAuthError("completion receipt signature did not verify")
 
     deferred_mechanical_admission = bool(
         reported_attempt is not None
@@ -5518,7 +6518,11 @@ async def submit_result(
         # fail-closed: the terminal attempt parks until an operator authorizes
         # one exact retry through Backroom.
         target = AgentStatus.SCREENING_FAILED
-        public_reason = "Screening was interrupted; manual retry required"
+        public_reason = (
+            _public_screening_reason(payload.detail, payload.reason_code)
+            if payload.reason_code in INFRA_AUTO_RETRY_REASON_CODES
+            else "Screening was interrupted; manual retry required"
+        )
     elif payload.outcome == ScreenResultOutcome.DETERMINISTIC_REJECT:
         target = AgentStatus.REJECTED
         public_reason = _public_screening_reason(payload.detail, payload.reason_code)
@@ -5586,7 +6590,7 @@ async def submit_result(
         agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")
-        attempt: ScreeningAttempt | None = None
+        prior_review_agent_status = agent.status
         attempt_status = (
             "passed"
             if deferred_attempt_lifecycle
@@ -5599,167 +6603,163 @@ async def submit_result(
             if payload.passed
             else ("rejected" if target == AgentStatus.REJECTED else "failed")
         )
-        if payload.attempt_id is not None:
-            attempt = await get_screening_attempt(
-                session, attempt_id=payload.attempt_id, for_update=True
-            )
-            if (
-                attempt is None
-                or attempt.agent_id != agent_id
-                or attempt.screener_hotkey != screener_hotkey
-                or attempt.policy_version != payload.policy_version
-            ):
-                raise AgentNotScreenableError(
-                    "verdict does not match the claimed screening attempt"
-                )
-            binding = (
+        attempt = _require_claimed_attempt_owner(
+            await get_screening_attempt(
+                session, attempt_id=claimed_attempt_id, for_update=True
+            ),
+            agent_id=agent_id,
+            screener_hotkey=screener_hotkey,
+            policy_version=payload.policy_version,
+        )
+        binding = (
+            payload.review_settings_revision,
+            payload.review_settings_instance_id,
+            payload.review_settings_scope,
+            payload.review_settings_checksum,
+        )
+        if all(value is not None for value in binding):
+            revision = await session.get(
+                ScreenerReviewSettingsRevision,
                 payload.review_settings_revision,
-                payload.review_settings_instance_id,
-                payload.review_settings_scope,
-                payload.review_settings_checksum,
             )
-            if all(value is not None for value in binding):
-                revision = await session.get(
-                    ScreenerReviewSettingsRevision,
-                    payload.review_settings_revision,
+            if revision is None:
+                raise AgentNotScreenableError(
+                    "verdict references an unknown reviewer settings revision"
                 )
-                if revision is None:
-                    raise AgentNotScreenableError(
-                        "verdict references an unknown reviewer settings revision"
-                    )
-                settings = ScreenerReviewSettings.model_validate(revision.settings)
-                allowed_scopes = {"*", payload.review_settings_instance_id}
-                enrolled_node_id = getattr(request.state, "screener_node_id", None)
-                if (
-                    enrolled_node_id is not None
-                    and _is_enrolled_node_heartbeat_instance(
-                        node_id=enrolled_node_id,
-                        instance_id=payload.review_settings_instance_id,
-                    )
-                ):
-                    allowed_scopes.add(enrolled_node_id)
-                if (
-                    revision.scope != payload.review_settings_scope
-                    or revision.checksum != payload.review_settings_checksum
-                    or revision.scope not in allowed_scopes
-                ):
-                    raise AgentNotScreenableError(
-                        "verdict reviewer settings binding does not match "
-                        "platform state"
-                    )
-            else:
-                settings = ScreenerReviewSettings()
-            claimed_binding = (
-                attempt.review_settings_revision,
-                attempt.review_settings_instance_id,
-                attempt.review_settings_scope,
-                attempt.review_settings_checksum,
-            )
-            if all(value is not None for value in claimed_binding):
-                if binding != claimed_binding:
-                    raise AgentNotScreenableError(
-                        "verdict reviewer settings binding does not match the claim"
-                    )
-                effective_settings = settings
-            else:
-                # Compatibility for attempts claimed by a worker that predates
-                # claim-time settings binding. Once a claim is bound, later
-                # global revisions cannot rewrite its execution contract.
-                latest_rows = (
-                    await session.scalars(
-                        select(ScreenerReviewSettingsRevision)
-                        .where(
-                            ScreenerReviewSettingsRevision.scope.in_(
-                                ("*", payload.review_settings_instance_id or "")
-                            )
-                        )
-                        .order_by(ScreenerReviewSettingsRevision.revision.desc())
-                    )
-                ).all()
-                effective_settings = ScreenerReviewSettings()
-                effective = next(
-                    (
-                        row
-                        for row in latest_rows
-                        if row.scope == payload.review_settings_instance_id
-                    ),
-                    next((row for row in latest_rows if row.scope == "*"), None),
-                )
-                if effective is not None:
-                    effective_settings = ScreenerReviewSettings.model_validate(
-                        effective.settings
-                    )
-                    if effective_settings.mode == "inherit":
-                        effective = next(
-                            (row for row in latest_rows if row.scope == "*"), None
-                        )
-                        effective_settings = (
-                            ScreenerReviewSettings.model_validate(effective.settings)
-                            if effective is not None
-                            else ScreenerReviewSettings()
-                        )
-                    if (
-                        effective is not None
-                        and effective_settings.mode == "enforce"
-                        and (
-                            payload.review_settings_revision != effective.revision
-                            or payload.review_settings_checksum != effective.checksum
-                            or settings.mode != "enforce"
-                        )
-                    ):
-                        raise AgentNotScreenableError(
-                            "enforced reviewer verdict is missing the effective "
-                            "settings binding"
-                        )
+            settings = ScreenerReviewSettings.model_validate(revision.settings)
+            allowed_scopes = {"*", payload.review_settings_instance_id}
+            if attempt.review_settings_scope == INTEGRITY_DOUBLE_CHECK_SCOPE:
+                # Platform pinned this claim to the double-check posture;
+                # the exact claimed binding is still compared below.
+                allowed_scopes.add(INTEGRITY_DOUBLE_CHECK_SCOPE)
+            enrolled_node_id = getattr(request.state, "screener_node_id", None)
+            if enrolled_node_id is not None and _is_enrolled_node_heartbeat_instance(
+                node_id=enrolled_node_id,
+                instance_id=payload.review_settings_instance_id,
+            ):
+                allowed_scopes.add(enrolled_node_id)
             if (
-                payload.adjudication is not None
-                and payload.adjudication.decision == "reject"
-                and effective_settings.adjudicator_mode == "enforce"
-            ):
-                # The worker transports a reject as a quarantine because a
-                # policy module cannot ban a miner. Platform owns the final
-                # authority boundary: execute only after verifying the exact
-                # operator posture bound to the claim and signed verdict above.
-                target = AgentStatus.REJECTED
-                public_reason = payload.adjudication.reason
-                attempt_status = "rejected"
-            if attempt.reason_code == "exact-cross-miner-duplicate" and (
-                payload.reason_code != attempt.reason_code
+                revision.scope != payload.review_settings_scope
+                or revision.checksum != payload.review_settings_checksum
+                or revision.scope not in allowed_scopes
             ):
                 raise AgentNotScreenableError(
-                    "verdict does not match the platform precheck disposition"
+                    "verdict reviewer settings binding does not match platform state"
                 )
-            deadline = attempt.deadline
-            if deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=UTC)
-            if attempt.status == attempt_status and (
-                agent.status == target
-                or (
-                    attempt_status == "passed"
-                    and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+        else:
+            settings = ScreenerReviewSettings()
+        claimed_binding = (
+            attempt.review_settings_revision,
+            attempt.review_settings_instance_id,
+            attempt.review_settings_scope,
+            attempt.review_settings_checksum,
+        )
+        if all(value is not None for value in claimed_binding):
+            if binding != claimed_binding:
+                raise AgentNotScreenableError(
+                    "verdict reviewer settings binding does not match the claim"
                 )
-            ):
-                # Idempotent re-report: nothing transitions, but a retry may
-                # carry review payloads that an earlier report (or an older
-                # platform build) did not persist. Backfill them before
-                # returning or they would be unrecoverable for this attempt.
-                if records_review_evidence:
-                    await _backfill_quarantine_payloads(
-                        session, attempt_id=attempt.attempt_id, payload=payload
+            effective_settings = settings
+        else:
+            # Compatibility for attempts claimed by a worker that predates
+            # claim-time settings binding. Once a claim is bound, later
+            # global revisions cannot rewrite its execution contract.
+            latest_rows = (
+                await session.scalars(
+                    select(ScreenerReviewSettingsRevision)
+                    .where(
+                        ScreenerReviewSettingsRevision.scope.in_(
+                            ("*", payload.review_settings_instance_id or "")
+                        )
                     )
-                _backfill_private_failure_feedback(
-                    attempt,
-                    payload=payload,
-                    provider=getattr(request.state, "screener_provider", "gcp"),
+                    .order_by(ScreenerReviewSettingsRevision.revision.desc())
                 )
-                result_status = agent.status
-                return ScreenResultResponse(
-                    agent_id=agent_id, status=result_status, accepted=True
+            ).all()
+            effective_settings = ScreenerReviewSettings()
+            effective = next(
+                (
+                    row
+                    for row in latest_rows
+                    if row.scope == payload.review_settings_instance_id
+                ),
+                next((row for row in latest_rows if row.scope == "*"), None),
+            )
+            if effective is not None:
+                effective_settings = ScreenerReviewSettings.model_validate(
+                    effective.settings
                 )
-            if attempt.status != "running" or datetime.now(UTC) > deadline:
-                raise AgentNotScreenableError(
-                    "screening attempt is expired or already completed"
+                if effective_settings.mode == "inherit":
+                    effective = next(
+                        (row for row in latest_rows if row.scope == "*"), None
+                    )
+                    effective_settings = (
+                        ScreenerReviewSettings.model_validate(effective.settings)
+                        if effective is not None
+                        else ScreenerReviewSettings()
+                    )
+                if (
+                    effective is not None
+                    and effective_settings.mode == "enforce"
+                    and (
+                        payload.review_settings_revision != effective.revision
+                        or payload.review_settings_checksum != effective.checksum
+                        or settings.mode != "enforce"
+                    )
+                ):
+                    raise AgentNotScreenableError(
+                        "enforced reviewer verdict is missing the effective "
+                        "settings binding"
+                    )
+        if (
+            payload.adjudication is not None
+            and payload.adjudication.decision == "reject"
+            and effective_settings.adjudicator_mode == "enforce"
+            and payload.policy_version < 13
+        ):
+            # The worker transports a reject as a quarantine because a
+            # policy module cannot ban a miner. Platform owns the final
+            # authority boundary: execute only after verifying the exact
+            # operator posture bound to the claim and signed verdict above.
+            target = AgentStatus.REJECTED
+            public_reason = payload.adjudication.reason
+            attempt_status = "rejected"
+        if attempt.reason_code == "exact-cross-miner-duplicate" and (
+            payload.reason_code != attempt.reason_code
+        ):
+            raise AgentNotScreenableError(
+                "verdict does not match the platform precheck disposition"
+            )
+        deadline = attempt.deadline
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if attempt.status == attempt_status and (
+            agent.status == target
+            or (
+                attempt_status == "passed"
+                and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+            )
+        ):
+            # Idempotent re-report: nothing transitions, but a retry may
+            # carry review payloads that an earlier report (or an older
+            # platform build) did not persist. Backfill them before
+            # returning or they would be unrecoverable for this attempt.
+            if records_review_evidence:
+                await _backfill_quarantine_payloads(
+                    session, attempt_id=attempt.attempt_id, payload=payload
                 )
+            _backfill_private_failure_feedback(
+                attempt,
+                payload=payload,
+                provider=getattr(request.state, "screener_provider", "gcp"),
+            )
+            result_status = agent.status
+            return ScreenResultResponse(
+                agent_id=agent_id, status=result_status, accepted=True
+            )
+        if attempt.status != "running" or datetime.now(UTC) > deadline:
+            raise AgentNotScreenableError(
+                "screening attempt is expired or already completed"
+            )
         deferred_review_active_now = False
         if deferred_attempt_lifecycle:
             deferred_review = await session.scalar(
@@ -5779,14 +6779,10 @@ async def submit_result(
         late_deferred_result = (
             deferred_attempt_lifecycle and not deferred_review_active_now
         )
-        scored_policy_release = (
-            await session.scalar(
-                select(ScoredPolicyRescreenRelease)
-                .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
-                .with_for_update()
-            )
-            if attempt is not None
-            else None
+        scored_policy_release = await session.scalar(
+            select(ScoredPolicyRescreenRelease)
+            .where(ScoredPolicyRescreenRelease.attempt_id == attempt.attempt_id)
+            .with_for_update()
         )
         if requires_isolated_canary_authorization:
             activation = (
@@ -5848,7 +6844,6 @@ async def submit_result(
                 )
             )
         ) and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
-        idempotent = agent.status == target
         if late_deferred_result:
             # An operator resolution is authoritative. A screener response that
             # was already in flight may finish after clear/reject; retain its
@@ -5876,6 +6871,20 @@ async def submit_result(
                 f"agent {agent_id} is {agent.status}, cannot apply verdict "
                 f"passed={payload.passed} (target {target})"
             )
+        if (
+            payload.outcome == ScreenResultOutcome.RETRYABLE_INFRA
+            and payload.reason_code in INFRA_AUTO_RETRY_REASON_CODES
+            and (
+                agent.status != AgentStatus.SCREENING_FAILED
+                or not await infra_retry_agent_admitted(session, agent_id)
+            )
+        ):
+            # Only a parked, admitted submission is picked up by the automatic
+            # retry. A retained scored/evaluating row, a held deferred review, or
+            # an agent withdrawn from the queue or the active era (the claim's
+            # ``prerequisite_admitted`` guard) still needs the operator, so it
+            # must not be promised one.
+            public_reason = "Screening was interrupted; manual retry required"
         if not late_deferred_result:
             agent.screening_reason = public_reason
             agent.screening_reason_code = (
@@ -5888,7 +6897,7 @@ async def submit_result(
         if late_deferred_result:
             pass
         elif payload.reason_code == "exact-cross-miner-duplicate":
-            if attempt is None or attempt.duplicate_of is None:
+            if attempt.duplicate_of is None:
                 raise AgentNotScreenableError(
                     "exact duplicate verdict requires a platform precheck"
                 )
@@ -5949,42 +6958,34 @@ async def submit_result(
                     created_at=cleared_at,
                 )
             )
-        if attempt is None and not idempotent:
-            now = datetime.now(UTC)
-            attempt = ScreeningAttempt(
-                attempt_id=payload.attempt_id or UUID(int=secrets.randbits(128)),
-                agent_id=agent_id,
-                screener_hotkey=screener_hotkey,
-                policy_version=payload.policy_version,
-                status=attempt_status,
-                started_at=now,
-                deadline=now,
-                finished_at=now,
-                public_reason=public_reason,
-            )
-            session.add(attempt)
-        elif attempt is not None:
-            attempt.status = attempt_status
-            attempt.finished_at = datetime.now(UTC)
-            attempt.public_reason = public_reason
-            if attempt.reason_code != DEFERRED_MECHANICAL_REASON and (
-                attempt.reason_code != POLICY_ONLY_RESCREEN_REASON or not payload.passed
-            ):
-                # ``policy-only-rescreen`` identifies a *running* canary's
-                # execution mode. Once it fails, retain the signed worker
-                # cause instead, so the miner's owner-only feedback and the
-                # operator retry record say why it stopped. Successful
-                # canaries keep the marker as their compact audit label.
-                attempt.reason_code = stored_reason_code
-            attempt.review_settings_revision = payload.review_settings_revision
-            attempt.review_settings_instance_id = payload.review_settings_instance_id
-            attempt.review_settings_scope = payload.review_settings_scope
-            attempt.review_settings_checksum = payload.review_settings_checksum
-            _backfill_private_failure_feedback(
-                attempt,
-                payload=payload,
-                provider=getattr(request.state, "screener_provider", "gcp"),
-            )
+        attempt.status = attempt_status
+        attempt.finished_at = datetime.now(UTC)
+        attempt.public_reason = public_reason
+        if attempt.reason_code != DEFERRED_MECHANICAL_REASON and (
+            attempt.reason_code != POLICY_ONLY_RESCREEN_REASON or not payload.passed
+        ):
+            # ``policy-only-rescreen`` identifies a *running* canary's
+            # execution mode. Once it fails, retain the signed worker
+            # cause instead, so the miner's owner-only feedback and the
+            # operator retry record say why it stopped. Successful
+            # canaries keep the marker as their compact audit label.
+            attempt.reason_code = stored_reason_code
+        attempt.review_settings_revision = payload.review_settings_revision
+        attempt.review_settings_instance_id = payload.review_settings_instance_id
+        attempt.review_settings_scope = payload.review_settings_scope
+        attempt.review_settings_checksum = payload.review_settings_checksum
+        _backfill_private_failure_feedback(
+            attempt,
+            payload=payload,
+            provider=getattr(request.state, "screener_provider", "gcp"),
+        )
+        await _queue_fanout_shadow_review(
+            session,
+            agent=agent,
+            attempt=attempt,
+            payload=payload,
+            settings=effective_settings,
+        )
         if scored_policy_release is not None:
             scored_policy_release.state = (
                 "terminal"
@@ -5992,10 +6993,6 @@ async def submit_result(
                 else "paused"
             )
         if target == AgentStatus.QUARANTINED or records_review_evidence:
-            if attempt is None:
-                raise AgentNotScreenableError(
-                    "source-review evidence requires a claimed screening attempt"
-                )
             if target == AgentStatus.QUARANTINED and (
                 payload.manifest_digest is None or payload.reason_code is None
             ):
@@ -6045,6 +7042,10 @@ async def submit_result(
                         reason_code=stored_reason_code or INCONCLUSIVE_REASON_CODE,
                         evidence=evidence_json,
                         finding=finding_json,
+                        court_diagnostic=_court_diagnostic_json(payload),
+                        court_completion_receipt=_court_completion_receipt_json(
+                            payload
+                        ),
                         status="resolved" if evidence_deferred else "active",
                         resolved_at=resolved_at,
                         resolved_by=(
@@ -6182,6 +7183,49 @@ async def submit_result(
                 agent.dataset_run_size = dataset_run_size
                 agent.dataset_seed_block = seed_block
                 agent.dataset_seed_block_hash = seed_block_hash
+        if attempt is not None and (
+            records_review_evidence
+            or (
+                deferred_deep_attempt and agent.status == AgentStatus.ATH_PENDING_REVIEW
+            )
+            or (
+                outcome_value == "pass"
+                and not attempt.build_only
+                and not payload.policy_only
+            )
+        ):
+            review_quarantine = await session.scalar(
+                select(ScreeningQuarantine).where(
+                    ScreeningQuarantine.attempt_id == attempt.attempt_id
+                )
+            )
+            await append_automated_review_event(
+                session,
+                agent=agent,
+                attempt=attempt,
+                quarantine=review_quarantine,
+                payload=payload,
+                prior_agent_status=prior_review_agent_status,
+                next_agent_status=agent.status,
+                effective_decision=(
+                    "no_change"
+                    if late_deferred_result
+                    else "reject"
+                    if agent.status == AgentStatus.REJECTED
+                    else "hold"
+                    if agent.status
+                    in {
+                        AgentStatus.QUARANTINED,
+                        AgentStatus.ATH_PENDING_REVIEW,
+                        AgentStatus.SCREENING_FAILED,
+                    }
+                    else "provisional_admission"
+                    if outcome_value == "pass_inconclusive"
+                    else "pass"
+                ),
+                reason_code=stored_reason_code,
+                reason=public_reason,
+            )
         result_status = agent.status
 
     try:

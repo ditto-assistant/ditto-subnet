@@ -7,6 +7,7 @@ set on the miner. Uses a real ORM + SQLite engine and a stub chain client.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,7 @@ from sqlalchemy.ext.asyncio import (
 
 from ditto.api_server.endpoints.validator import (
     _KING_WEIGHT_CHECK_INTERVAL,
+    _KING_WEIGHT_CHECK_TIMEOUT_SECONDS,
     _confirm_king_onchain_weights,
 )
 from ditto.chain.models import ChainWeight, ChainWeightsSnapshot, ChainWeightVector
@@ -150,3 +152,70 @@ async def test_no_chain_read_when_no_king_is_pending(
     async with maker() as session:
         reveal = (await get_king_reveal(session, agent_ids=[agent_id]))[agent_id]
     assert reveal.weight_confirmed_at == _NOW
+
+
+def _cached_public_weights(*hotkeys: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        payload=SimpleNamespace(
+            vectors=[
+                SimpleNamespace(
+                    weights=[
+                        SimpleNamespace(hotkey=hotkey, value=100) for hotkey in hotkeys
+                    ]
+                )
+            ]
+        )
+    )
+
+
+async def test_reuses_cached_public_weights_without_a_chain_read(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _crown_agent(maker, hotkey="5King")
+    chain: Any = SimpleNamespace(get_weights=AsyncMock())
+    state = _app_state(public_chain_weights=_cached_public_weights("5King"))
+
+    async with maker() as session:
+        await _confirm_king_onchain_weights(state, chain, session, now=_NOW)
+        reveal = (await get_king_reveal(session, agent_ids=[agent_id]))[agent_id]
+
+    assert reveal.weight_confirmed_at == _NOW
+    chain.get_weights.assert_not_awaited()
+
+
+async def test_cached_weights_for_someone_else_leave_the_king_unstamped(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _crown_agent(maker, hotkey="5King")
+    chain: Any = SimpleNamespace(get_weights=AsyncMock())
+    state = _app_state(public_chain_weights=_cached_public_weights("5SomeoneElse"))
+
+    async with maker() as session:
+        await _confirm_king_onchain_weights(state, chain, session, now=_NOW)
+        reveal = (await get_king_reveal(session, agent_ids=[agent_id]))[agent_id]
+
+    assert reveal.weight_confirmed_at is None
+    chain.get_weights.assert_not_awaited()
+
+
+async def test_cold_cache_refreshes_off_the_score_path(
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _crown_agent(maker, hotkey="5King")
+    chain: Any = SimpleNamespace(get_weights=AsyncMock(return_value=_snapshot("5King")))
+    state = _app_state(session_maker=maker)
+
+    async with maker() as session:
+        await _confirm_king_onchain_weights(state, chain, session, now=_NOW)
+
+    task = state.king_weight_refresh_task
+    assert isinstance(task, asyncio.Task)
+    await task
+    async with maker() as session:
+        reveal = (await get_king_reveal(session, agent_ids=[agent_id]))[agent_id]
+    assert reveal.weight_confirmed_at == _NOW
+    chain.get_weights.assert_awaited_once_with(118)
+
+
+async def test_king_weight_timeout_matches_the_measured_chain_read() -> None:
+    assert _KING_WEIGHT_CHECK_TIMEOUT_SECONDS == 30.0

@@ -41,12 +41,23 @@ function ConsentPage() {
   const [accessLevel, setAccessLevel] = useState<'read' | 'artifact' | 'write' | 'full'>('read')
   const [pending, setPending] = useState<'allow' | 'deny' | null>(null)
   const [error, setError] = useState('')
-  // The signed-in Backroom account's own access level is the only gate on which
-  // levels are offered — the human chooses what to grant, regardless of the
-  // narrower scope set the OAuth client happened to request.
-  const canGrantArtifact = user.accessLevel === 'write'
-  const canGrantWrite = user.accessLevel === 'write'
-  const canGrantFull = canGrantArtifact && canGrantWrite
+  // A level is selectable only when the OAuth client requested its scope AND
+  // the signed-in account is entitled to it. The server enforces the same
+  // intersection, so consent can narrow a request but never widen it.
+  const privilegedAccount = user.accessLevel === 'write'
+  const canGrantArtifact = privilegedAccount && details.canRequestArtifact
+  const canGrantWrite = privilegedAccount && details.canRequestWrite
+  // Every level is always shown so the operator can see what exists; a level
+  // this request cannot receive is disabled with the reason instead of hidden.
+  const unavailableReason = (requested: boolean) =>
+    !privilegedAccount
+      ? 'Requires a write-level Backroom account'
+      : !requested
+        ? `Not requested by ${details.clientName}; reconnect to request it`
+        : undefined
+  const artifactReason = unavailableReason(details.canRequestArtifact)
+  const writeReason = unavailableReason(details.canRequestWrite)
+  const fullReason = artifactReason ?? writeReason
 
   const decide = async (decision: 'allow' | 'deny') => {
     setPending(decision)
@@ -123,59 +134,56 @@ function ConsentPage() {
               ]}
             />
 
-            {canGrantArtifact ? (
-              <PermissionOption
-                selected={accessLevel === 'artifact'}
-                onSelect={() => setAccessLevel('artifact')}
-                icon={Download}
-                title="Read & download source"
-                badge="Sensitive source"
-                description="Inspect production state and read miner-submitted source: tarball downloads, file listings, and copy or baseline diffs. Cannot change any verdict or policy."
-                items={[
-                  'Read subnet policy, screening history, and scores',
-                  'Issue short-lived audited artifact URLs',
-                  'Read miner source listings, excerpts, and diffs',
-                  'No rescreen, resolve, or configuration access',
-                ]}
-              />
-            ) : null}
+            <PermissionOption
+              selected={accessLevel === 'artifact'}
+              onSelect={() => setAccessLevel('artifact')}
+              disabledReason={artifactReason}
+              icon={Download}
+              title="Read & download source"
+              badge="Sensitive source"
+              description="Inspect production state and read miner-submitted source: tarball downloads, file listings, and copy or baseline diffs. Cannot change any verdict or policy."
+              items={[
+                'Read subnet policy, screening history, and scores',
+                'Issue short-lived audited artifact URLs',
+                'Read miner source listings, excerpts, and diffs',
+                'No rescreen, resolve, or configuration access',
+              ]}
+            />
 
-            {canGrantWrite ? (
-              <PermissionOption
-                selected={accessLevel === 'write'}
-                onSelect={() => setAccessLevel('write')}
-                icon={Settings2}
-                title="Read & write"
-                badge="Production changes"
-                description="Allow the agent to change subnet policy and resolve quarantine or dispute reviews. Source downloads remain separately scoped."
-                items={[
-                  'Change queue, slot, scoring, and retest policy',
-                  'Set the emission burn — this moves TAO',
-                  'Release, rescreen, or reject quarantines',
-                  'Evict, reinstate, and retry validator work',
-                ]}
-                warning
-              />
-            ) : null}
+            <PermissionOption
+              selected={accessLevel === 'write'}
+              onSelect={() => setAccessLevel('write')}
+              disabledReason={writeReason}
+              icon={Settings2}
+              title="Read & write"
+              badge="Production changes"
+              description="Allow the agent to change subnet policy and resolve quarantine or dispute reviews. Source downloads remain separately scoped."
+              items={[
+                'Change queue, slot, scoring, and retest policy',
+                'Set the emission burn — this moves TAO',
+                'Release, rescreen, or reject quarantines',
+                'Evict, reinstate, and retry validator work',
+              ]}
+              warning
+            />
 
-            {canGrantFull ? (
-              <PermissionOption
-                selected={accessLevel === 'full'}
-                onSelect={() => setAccessLevel('full')}
-                icon={ShieldCheck}
-                title="Full requested access"
-                badge="Source & changes"
-                description="Grant both miner-source reads and production mutation access requested by this client."
-                items={[
-                  'Read subnet policy, screening history, and scores',
-                  'Read miner source and issue audited downloads',
-                  'Change subnet policy, the burn, and review verdicts',
-                ]}
-                warning
-              />
-            ) : null}
+            <PermissionOption
+              selected={accessLevel === 'full'}
+              onSelect={() => setAccessLevel('full')}
+              disabledReason={fullReason}
+              icon={ShieldCheck}
+              title="Full requested access"
+              badge="Source & changes"
+              description="Grant both miner-source reads and production mutation access requested by this client."
+              items={[
+                'Read subnet policy, screening history, and scores',
+                'Read miner source and issue audited downloads',
+                'Change subnet policy, the burn, and review verdicts',
+              ]}
+              warning
+            />
 
-            {!canGrantArtifact && !canGrantWrite ? (
+            {!privilegedAccount ? (
               <div className="flex items-start gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
                 <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-[var(--muted)]" />
                 <p className="text-xs leading-5 text-[var(--muted)]">
@@ -183,7 +191,21 @@ function ConsentPage() {
                   access. Source downloads and production changes require a write-level account.
                 </p>
               </div>
+            ) : !canGrantArtifact || !canGrantWrite ? (
+              <div className="flex items-start gap-3 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
+                <LockKeyhole className="mt-0.5 h-4 w-4 shrink-0 text-[var(--muted)]" />
+                <p className="text-xs leading-5 text-[var(--muted)]">
+                  This client requested {details.requestedScopes.join(', ')}. Only levels within
+                  that request can be granted; a client that needs more must reconnect and ask for
+                  the broader scope.
+                </p>
+              </div>
             ) : null}
+
+            <p className="text-[11px] leading-5 text-[var(--muted)]">
+              Approving replaces any earlier grant this client holds. Review or revoke every agent
+              connection on the Agent access page.
+            </p>
 
             {error ? (
               <div className="rounded-lg border border-[var(--red)]/25 bg-[var(--red-dim)] px-4 py-3 text-sm text-[var(--red)]">
@@ -223,8 +245,8 @@ function ConsentPage() {
         </section>
 
         <p className="mt-5 flex items-center justify-center gap-2 text-center text-[11px] leading-5 text-[var(--muted)]">
-          <ShieldCheck className="h-3.5 w-3.5" /> OAuth 2.1 · PKCE S256 · access can be revoked by
-          reconnecting
+          <ShieldCheck className="h-3.5 w-3.5" /> OAuth 2.1 · PKCE S256 · revoke any time from
+          Agent access
         </p>
       </div>
     </main>
@@ -240,6 +262,7 @@ function PermissionOption({
   description,
   items,
   warning = false,
+  disabledReason,
 }: {
   selected: boolean
   onSelect: () => void
@@ -249,18 +272,22 @@ function PermissionOption({
   description: string
   items: Array<string>
   warning?: boolean
+  disabledReason?: string
 }) {
   return (
     <button
       type="button"
       onClick={onSelect}
+      disabled={disabledReason !== undefined}
       aria-pressed={selected}
       className={`w-full rounded-xl border p-4 text-left transition-colors sm:p-5 ${
-        selected
-          ? warning
-            ? 'border-[var(--amber)]/55 bg-[var(--amber-dim)]'
-            : 'border-[var(--acid)]/55 bg-[var(--acid-dim)]'
-          : 'border-[var(--line)] bg-[var(--panel-soft)] hover:border-[var(--line-strong)]'
+        disabledReason !== undefined
+          ? 'cursor-not-allowed border-[var(--line)] bg-[var(--panel-soft)] opacity-55'
+          : selected
+            ? warning
+              ? 'border-[var(--amber)]/55 bg-[var(--amber-dim)]'
+              : 'border-[var(--acid)]/55 bg-[var(--acid-dim)]'
+            : 'border-[var(--line)] bg-[var(--panel-soft)] hover:border-[var(--line-strong)]'
       }`}
     >
       <div className="flex items-start gap-3.5">
@@ -287,6 +314,12 @@ function PermissionOption({
             </span>
           </div>
           <p className="mt-1.5 text-xs leading-5 text-[var(--muted)]">{description}</p>
+          {disabledReason ? (
+            <p className="mt-2 flex items-center gap-1.5 text-[11px] font-medium text-[var(--muted-strong)]">
+              <LockKeyhole className="h-3.5 w-3.5" />
+              {disabledReason}
+            </p>
+          ) : null}
           <ul className="mt-3 space-y-1.5">
             {items.map((item) => (
               <li

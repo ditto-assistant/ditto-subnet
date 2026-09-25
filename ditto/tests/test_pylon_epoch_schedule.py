@@ -240,3 +240,10 @@ def test_patch_anchor_is_unique():
 def test_dependency_adaptation_refuses_an_unreviewed_manifest():
     with pytest.raises(ValueError, match="unreviewed"):
         patcher.patch_dependencies("[project]\ndependencies=[]\n")
+
+
+@pytest.mark.parametrize("name", ["tasks", "turbobt", "extrinsic", "api"])
+def test_receipt_patcher_refuses_unreviewed_source(name):
+    receipt_patcher = load("patch_receipts")
+    with pytest.raises(ValueError, match="unreviewed"):
+        receipt_patcher.patch(name, "# drifted upstream code")

@@ -86,3 +86,11 @@ class ChainTimeoutError(ChainError):
     """
 
     pass
+
+
+class ChainEmissionReceiptUnavailable(ChainError):
+    """Finalized payout has a proven ambiguous transition; retry cannot resolve it.
+
+    Missing archive data, malformed responses and transport failures must never
+    use this error: those remain retryable to avoid discarding earning proof.
+    """

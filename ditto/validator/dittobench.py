@@ -12,6 +12,7 @@ wire contract is identical by design), so it round-trips straight back into
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import logging
@@ -35,6 +36,7 @@ from ditto.api_models.validator import (
     ScoreReport,
 )
 from ditto.api_models.validator_capabilities import (
+    ScoredRuntimeEnvEvidence,
     ScorerBenchmarkCapability,
     ScorerLivenessProbe,
     ScorerProbeOutcome,
@@ -58,6 +60,9 @@ from ditto.validator.errors import (
     LeaseDeadlineError,
     SandboxOomError,
     ValidatorInfrastructureError,
+)
+from ditto_screening_protocol.bench_v9 import (
+    SUPPORTED_BENCH_VERSIONS as _SHARED_SUPPORTED_BENCH_VERSIONS,
 )
 from ditto_screening_protocol.bench_v9 import supports_confirmation
 
@@ -172,10 +177,16 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 # track the dittobench-api ``supportedBenchVersions`` set: v11 shipped there and
 # in the Platform, but was omitted here, so validators advertised only [8, 9, 10]
 # and the Platform counted zero v11-capable validators while v8/9/10 kept working.
-# v12 (anti-KV-substrate contract + causal model-dependence score gate) is now
-# executable in the scorer, so it is advertised here too; on-chain activation
+#
+# It is therefore no longer retyped here. The shared protocol package derives it
+# from the one hand-typed epoch enumeration (``V9EvidenceBenchVersion``) and
+# ``ditto/tests/test_bench_version_pins.py`` diffs that derivation against the
+# scorer, datagen, Platform, starter-kit and Backroom pins, so a bump that
+# reaches the scorer but not this file fails CI instead of the fleet. Being
+# *ahead* of the scorer is harmless -- the intersection below drops what the
+# scorer does not offer -- being behind it is the outage. On-chain activation
 # remains a separate Platform rollout step.
-SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = (8, 9, 10, 11, 12)
+SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = _SHARED_SUPPORTED_BENCH_VERSIONS
 
 
 # Scorer identity faults. Both stop benchmark advertisement and both
@@ -1048,13 +1059,36 @@ class DittobenchClient:
             origin=payload.get("source_revision_origin"),
         )
         self.full_run_capacity = full_run_capacity
+        scored_runtime_env = None
+        if 13 in observed_versions and payload.get("scored_runtime_env") is not None:
+            try:
+                candidate = ScoredRuntimeEnvEvidence.model_validate(
+                    payload["scored_runtime_env"]
+                )
+                if candidate.source_revision == source_revision:
+                    scored_runtime_env = candidate
+            except ValueError:
+                # An invalid optional packet cannot upgrade the verified
+                # scorer identity or authorize a source review clearance.
+                pass
         try:
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
+                deterministic_v13_datasets=(
+                    13 in observed_versions
+                    and isinstance(payload.get("features"), list)
+                    and "v13-deterministic-enterprise-v1" in payload["features"]
+                ),
+                private_datasets=(
+                    13 in observed_versions
+                    and isinstance(payload.get("features"), list)
+                    and "platform-private-v1" in payload["features"]
+                ),
                 supported_bench_versions=observed_versions,
                 observed_at=observed_at,
                 software_version=software_version,
                 source_revision=source_revision,
+                scored_runtime_env=scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,
@@ -1163,6 +1197,8 @@ class DittobenchClient:
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
+        private_dataset_bytes: bytes | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -1205,6 +1241,8 @@ class DittobenchClient:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         if self._config.dittobench_mock:
             self.last_details = {}
+            if private_dataset_mode is not None or private_dataset_bytes is not None:
+                raise DittobenchError("private datasets cannot use mock scoring")
             self.last_transcript = None
             return self._mock_report()
         run_id = await self._submit(
@@ -1212,6 +1250,8 @@ class DittobenchClient:
             tarball_sha256=tarball_sha256,
             seed=seed,
             dataset_sha256=dataset_sha256,
+            private_dataset_mode=private_dataset_mode,
+            private_dataset_bytes=private_dataset_bytes,
             run_size=run_size,
             bench_version=bench_version,
             screened_image_url=screened_image_url,
@@ -1258,6 +1298,8 @@ class DittobenchClient:
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
+        private_dataset_bytes: bytes | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         screened_image_url: str | None = None,
@@ -1352,6 +1394,20 @@ class DittobenchClient:
                 f"benchmark v{bench_version} requires a pinned dataset"
             )
         body["dataset_sha256"] = dataset_sha256
+        if private_dataset_mode is not None or private_dataset_bytes is not None:
+            if (
+                private_dataset_mode != "platform-private-v1"
+                or bench_version != 13
+                or not private_dataset_bytes
+                or len(private_dataset_bytes) > 32 << 20
+            ):
+                raise DittobenchError("private dataset input is incomplete")
+            if hashlib.sha256(private_dataset_bytes).hexdigest() != dataset_sha256:
+                raise DittobenchError("private dataset digest mismatch")
+            body["private_dataset_mode"] = private_dataset_mode
+            body["private_dataset_bytes"] = base64.b64encode(
+                private_dataset_bytes
+            ).decode("ascii")
         body["bench_version"] = bench_version
         if benchmark_runtime is not None:
             body["benchmark_runtime"] = benchmark_runtime.model_dump(mode="json")

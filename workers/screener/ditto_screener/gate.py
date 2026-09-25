@@ -16,7 +16,11 @@ Flow for one agent:
    ``docker build`` is residual fallback for ``prefer``/``off`` only.
 4. **Serve smoke.** Reuse the Targon rental ``GET /health`` when that lane
    succeeded. Otherwise run the image detached with a memory + pids cap and
-   poll ``GET /health`` until it returns 2xx.
+   poll ``GET /health`` until it returns 2xx, then prove the harness can ingest
+   with one bounded ``POST /seed`` wave (``SCREENER_SEED_PROBE_MODE``:
+   ``shadow`` records the signal, ``enforce`` makes it a contract failure,
+   ``off`` skips it). The probe is served by the same isolated fake gateway, so
+   it costs no provider call.
 5. **Private policy.** The default v8 manifest performs bounded Luna source
    review after health. A rotating
    private manifest may use timing, random-control, fingerprint, and behavioral
@@ -59,15 +63,16 @@ import tarfile
 import tempfile
 import time
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, BinaryIO, Literal, cast
+from urllib.parse import urlencode
 from uuid import UUID
 
 import httpx
 
 from ditto_screener.adjudicator import build_adjudicator
-from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL
+from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL, tool_capability
 from ditto_screener.heartbeat import (
     ScreenerProgressStage,
     source_review_progress_stage,
@@ -84,6 +89,7 @@ from ditto_screener.platform import (
     RemoteSubmissionBuildRejected,
 )
 from ditto_screener.policy import (
+    _MAX_EVIDENCE,
     ChallengeObservation,
     PolicyContext,
     PolicyEngine,
@@ -91,19 +97,33 @@ from ditto_screener.policy import (
     ReviewJournal,
     ScreeningDecision,
     ScreeningOutcome,
-    core_decision,
     load_policy_engine,
+)
+from ditto_screener.policy import (
+    core_decision as make_core_decision,
 )
 from ditto_screener.preflight_audit import (
     StaticPreflightAuditError,
     StaticPreflightAuditJournal,
 )
+from ditto_screener.runtime_semantics import (
+    SemanticOutcome,
+    judge_isolation,
+    judge_memory_run,
+    judge_ordinary_run,
+    judge_tool_run,
+)
+from ditto_screener.runtime_verification import runtime_evidence_sha256
 from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     SourceReviewObservation,
     TarSourceRepository,
 )
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ScoredRuntimeEvidenceLease,
+)
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -128,6 +148,12 @@ _MAX_SCREENED_IMAGE_BYTES = 8 * 1024**3
 _IMAGE_EXPORT_DISK_RESERVE_BYTES = 256 * 1024**2
 _IMAGE_HASH_CHUNK_BYTES = 8 * 1024**2
 _MAX_CANARY_RESPONSE_BYTES = 64 * 1024
+# Sidecar exit codes. The probe script maps each failure shape to its own code
+# so a caller can tell a harness HTTP status from a transport failure without
+# parsing free text.
+_SIDECAR_HTTP_STATUS_EXIT = 22
+_SIDECAR_OVERSIZED_EXIT = 23
+_SIDECAR_TRANSPORT_EXIT = 24
 _CANARY_IMAGE = (
     "python:3.12-alpine@sha256:"
     "6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df"
@@ -135,6 +161,7 @@ _CANARY_IMAGE = (
 _GATEWAY_ALIAS = "host.docker.internal"
 _CHAT_GATEWAY_PORT = 11435
 _EMBED_GATEWAY_PORT = 11434
+_TOOL_GATEWAY_PORT = 11436
 _OPENROUTER_SHIM_HOST = "openrouter.ai"
 _OPENROUTER_SHIM_CA_BUNDLE_PATH = "/run/dittobench/openrouter-shim-ca.pem"
 _HARNESS_ALIAS = "harness"
@@ -144,11 +171,20 @@ _SYSTEM_CA_BUNDLE_CANDIDATES = (
     "/etc/ssl/cert.pem",
 )
 _VALIDATOR_SANDBOX_USER = "65532:65532"
-_VALIDATOR_SANDBOX_TMPFS = "/tmp:rw,noexec,nosuid,nodev,size=512m"
+_VALIDATOR_SANDBOX_TMPFS_SIZE = "512m"
+_VALIDATOR_SANDBOX_TMPFS = (
+    f"/tmp:rw,noexec,nosuid,nodev,size={_VALIDATOR_SANDBOX_TMPFS_SIZE}"
+)
 _VALIDATOR_SANDBOX_MEMORY = "3g"
 _VALIDATOR_SANDBOX_CPUS = "2"
 _VALIDATOR_SANDBOX_PIDS = "512"
 _VALIDATOR_SANDBOX_DB = "/tmp/dittobench.db"
+# Known harness persistence variables, locked to the one writable filesystem the
+# runtime contract offers. A harness that honours either variable then persists
+# inside the tmpfs in screening and in scoring alike; an image that writes
+# somewhere else still fails the seeding probe, which is the general case this
+# shim does not try to cover.
+_VALIDATOR_SANDBOX_MEMORY_PATH = "/tmp/dittobench-memory.json"
 _PRIMARY_HARNESS_PROVIDER: Literal["platform"] = "platform"
 _COMPAT_HARNESS_PROVIDER: Literal["chutes"] = "chutes"
 _BROKER_PLACEHOLDER_KEY = "ticket"
@@ -177,6 +213,14 @@ _DOCKER_INFRASTRUCTURE_MARKERS = (
     # so it is reported as infrastructure rather than rejecting the artifact.
     "context canceled",
     "context cancelled",
+    # The build client's session to BuildKit (which streams the stdin context)
+    # was lost, or the daemon's gRPC stream dropped mid-solve. BuildKit reports
+    # these without its own name, and the same archive builds on a retry.
+    "no http response from session",
+    "no active session for",
+    "failed to receive status",
+    "error reading from server",
+    "rpc error: code = unavailable",
     "buildkit",
     "snapshotter",
     "failed to mount",
@@ -198,12 +242,48 @@ _DOCKER_INFRASTRUCTURE_MARKERS = (
 
 
 @dataclass(frozen=True)
+class _SandboxUsage:
+    """What one smoke container actually consumed of the sandbox envelope."""
+
+    memory_peak_bytes: int | None = None
+    tmpfs_used_bytes: int | None = None
+    tmpfs_capacity_bytes: int | None = None
+
+    @property
+    def known(self) -> bool:
+        return self.memory_peak_bytes is not None or self.tmpfs_used_bytes is not None
+
+    def summary(self, memory_limit: str, tmpfs_limit: str) -> str:
+        parts = []
+        if self.memory_peak_bytes is not None:
+            parts.append(
+                f"memory peak {_mib(self.memory_peak_bytes)} of the {memory_limit} cap"
+            )
+        if self.tmpfs_used_bytes is not None:
+            parts.append(f"/tmp {_mib(self.tmpfs_used_bytes)} of {tmpfs_limit}")
+        return "; ".join(parts)
+
+
+@dataclass(frozen=True)
+class _SeedProbe:
+    """Outcome of the bounded post-health ``POST /seed`` contract probe."""
+
+    passed: bool
+    code: str
+    detail: str
+    usage: _SandboxUsage = _SandboxUsage()
+    """What the container consumed of the envelope while it served the probe."""
+
+
+@dataclass(frozen=True)
 class _StageResult:
     """Internal stable-core stage result."""
 
     passed: bool
     detail: str
     retryable: bool = False
+    code: str | None = None
+    """Stable evidence code when the stage owns one (else the caller's default)."""
 
     def __post_init__(self) -> None:
         if self.passed and self.retryable:
@@ -292,17 +372,18 @@ class _AuditRuntime:
     oracle_answer: str
     gateway_state_file: str
     provider: Literal["platform", "chutes"] = _PRIMARY_HARNESS_PROVIDER
+    seed_probe: _SeedProbe | None = None
+    """Shadow-mode ``/seed`` observation; ``None`` when the probe is off."""
+    tool_route: str = ""
+    tool_key: bytes = b""
 
 
-# The fake gateway serves a benign `/tool` sink at the same host-container alias
-# the harness already uses for the model, so a tool-shaped challenge's
-# `tool_endpoint` is reachable from inside the harness network and carries no
-# screener-specific tell (it is the same host:port the model calls go to).
-_TOOL_ENDPOINT = f"http://{_GATEWAY_ALIAS}:{_CHAT_GATEWAY_PORT}/tool"
-
-
-def _with_tool_endpoint(request: Mapping[str, object]) -> dict[str, object]:
-    """Fill a reachable ``tool_endpoint`` for a tool-declaring challenge request.
+# The isolated fake gateway serves a case-bound capability on the scorer's
+# tool host and port. The harness sees the same endpoint shape as a scored run.
+def _with_tool_endpoint(
+    request: Mapping[str, object], *, tool_route: str, tool_key: bytes
+) -> dict[str, object]:
+    """Fill the scorer-shaped tool capability for a tool-declaring request.
 
     Returns a copy so the caller's mapping is not mutated. A request that
     already carries a ``tool_endpoint``, or declares no ``tools``, is returned
@@ -316,7 +397,26 @@ def _with_tool_endpoint(request: Mapping[str, object]) -> dict[str, object]:
     """
     payload = dict(request)
     if payload.get("tools") and not payload.get("tool_endpoint"):
-        payload["tool_endpoint"] = _TOOL_ENDPOINT
+        case_id = payload.get("case_id")
+        if not isinstance(case_id, str) or not case_id:
+            raise ValueError("tool challenge requires a case_id")
+        user_id = payload.get("user_id")
+        if not isinstance(user_id, str) or not user_id:
+            # The scorer binds V13 tool calls to a projected wire user. A
+            # randomly coined user keeps the private challenge on that wire.
+            user_id = secrets.token_hex(16)
+            payload["user_id"] = user_id
+        query = urlencode(
+            {
+                "cap": tool_capability(tool_key, case_id, user_id),
+                "case_id": case_id,
+                "user_id": user_id,
+            }
+        )
+        payload["tool_endpoint"] = (
+            f"http://{_GATEWAY_ALIAS}:{_TOOL_GATEWAY_PORT}"
+            f"/v1/tools/{tool_route}/tool?{query}"
+        )
     return payload
 
 
@@ -350,6 +450,7 @@ def _gateway_runtime_env(
         "CURL_CA_BUNDLE": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
         "NODE_EXTRA_CA_CERTS": _OPENROUTER_SHIM_CA_BUNDLE_PATH,
         "DITTOBENCH_DB": _VALIDATOR_SANDBOX_DB,
+        "DITTOBENCH_MEMORY_PATH": _VALIDATOR_SANDBOX_MEMORY_PATH,
     }
 
 
@@ -466,7 +567,103 @@ def _with_image_binding_advisory(
         evidence=evidence,
         finding=decision.finding,
         review_audit=decision.review_audit,
+        adjudication=decision.adjudication,
+        review_notes=decision.review_notes,
+        policy_version=decision.policy_version,
     )
+
+
+def _seed_ack_mismatch(body: str, *, expected_pairs: int) -> str | None:
+    """Return why a seeding acknowledgement is unusable, or ``None`` if it is.
+
+    ``POST /seed`` answers with the counts it loaded (``pairs``, ``subjects``,
+    ``links``). Treating any 2xx as success would pass an image that replies
+    ``204``, ``{}``, or ``{"pairs": 0}`` while persisting nothing -- exactly the
+    class the probe exists to catch.
+    """
+    text = body.strip()
+    if not text:
+        return "the response carried no body"
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        return "the response body was not JSON"
+    if not isinstance(parsed, dict):
+        return "the response body was not a JSON object"
+    raw = parsed.get("pairs")
+    if raw is None:
+        return "the response omitted the loaded pair count"
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        return "the response reported a non-integer pair count"
+    if raw != expected_pairs:
+        return f"it reported {raw} loaded pairs for a wave of {expected_pairs}"
+    return None
+
+
+def _parse_sandbox_usage(output: str) -> _SandboxUsage:
+    """Parse the cgroup sample; mirrors the validator's parseRuntimeMetrics."""
+    section = ""
+    memory_peak: int | None = None
+    tmpfs_used: int | None = None
+    tmpfs_capacity: int | None = None
+    for raw in output.splitlines():
+        line = raw.strip()
+        if line in {"__memory_peak__", "__tmpfs__"}:
+            section = line
+            continue
+        if not line:
+            continue
+        if section == "__memory_peak__":
+            if line.isdigit():
+                memory_peak = int(line)
+        elif section == "__tmpfs__":
+            fields = line.split()
+            if len(fields) < 6:
+                continue
+            capacity, used = fields[-5], fields[-4]
+            if capacity.isdigit() and used.isdigit():
+                tmpfs_capacity = int(capacity) * 1024
+                tmpfs_used = int(used) * 1024
+    return _SandboxUsage(memory_peak, tmpfs_used, tmpfs_capacity)
+
+
+def _mib(value: int) -> str:
+    """Render a byte count in MiB for a bounded, public-safe evidence summary."""
+    return f"{value / (1024 * 1024):.0f} MiB"
+
+
+def _with_seed_probe_evidence(
+    decision: ScreeningDecision, probe: _SeedProbe | None
+) -> ScreeningDecision:
+    """Record the ``/seed`` observation without changing the outcome.
+
+    Two additive records. The failure class is what shadow mode exists for:
+    operators can see how many images would fail the seeding contract, and on
+    which class, before any deployment promotes the probe to ``enforce``. The
+    envelope sample is recorded for passing images too, because the question a
+    cap raises -- whether the fleet's images are anywhere near it -- cannot be
+    answered from rejections alone.
+    """
+    if probe is None:
+        return decision
+    records = []
+    if not probe.passed:
+        records.append(PolicyEvidence("stable-core", probe.code, probe.detail[:240]))
+    summary = probe.usage.summary(
+        _VALIDATOR_SANDBOX_MEMORY, _VALIDATOR_SANDBOX_TMPFS_SIZE
+    )
+    if summary:
+        records.append(
+            PolicyEvidence("stable-core", "seed-envelope-usage", summary[:240])
+        )
+    if not records:
+        return decision
+    # ScreeningDecision rejects more than _MAX_EVIDENCE records, so reserve the
+    # room these take instead of assuming one free slot: a saturated decision
+    # plus a failure class plus an envelope sample would otherwise raise before
+    # the worker could submit any verdict at all.
+    keep = max(0, _MAX_EVIDENCE - len(records))
+    return replace(decision, evidence=(*decision.evidence[:keep], *records))
 
 
 def _gateway_call_count(path: str) -> int:
@@ -508,10 +705,53 @@ def _prepare_gateway_state() -> tuple[str, str]:
         fd = os.open(state_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(fd)
         os.chmod(state_file, 0o622)
+        events_file = Path(state_dir) / "semantic-events"
+        fd = os.open(events_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(fd)
+        os.chmod(events_file, 0o622)
     except Exception:
         shutil.rmtree(state_dir, ignore_errors=True)
         raise
     return state_dir, state_file
+
+
+def _set_semantic_probe(state_file: str, probe: Mapping[str, object]) -> bool:
+    """Atomically stage a bounded private probe for the gateway sidecar only."""
+    path = Path(state_file).with_name("semantic-probe.json")
+    staged = path.with_suffix(".new")
+    payload = json.dumps(probe, sort_keys=True, separators=(",", ":")).encode()
+    if len(payload) > 4096:
+        return False
+    try:
+        staged.write_bytes(payload)
+        os.chmod(staged, 0o644)
+        os.replace(staged, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            staged.unlink()
+        return False
+    return True
+
+
+def _semantic_events(state_file: str, probe_id: str) -> list[str]:
+    path = Path(state_file).with_name("semantic-events")
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return []
+    if len(raw) > 64 * 1024:
+        return []
+    events: list[str] = []
+    for line in raw.splitlines():
+        try:
+            item = json.loads(line)
+        except (UnicodeError, ValueError):
+            continue
+        if isinstance(item, dict) and item.get("probe_id") == probe_id:
+            event = item.get("event")
+            if isinstance(event, str):
+                events.append(event)
+    return events
 
 
 def _write_openrouter_shim_certs(state_dir: str) -> None:
@@ -837,6 +1077,10 @@ class BuildGate:
             l3_enabled=config.l3_review_enabled,
             critic_model=config.l3_review_model,
             critic_provider=config.l3_review_provider,
+            scorer_capabilities_url=config.scorer_capabilities_url,
+            expected_scorer_revision=config.expected_scorer_revision,
+            require_signed_runtime_lease=config.require_signed_runtime_lease,
+            signed_runtime_lease_max_age_seconds=config.signed_runtime_lease_max_age_seconds,
         )
         self._source_reviewer = LayeredSourceReviewAgent(
             l1=l1_reviewer,
@@ -846,6 +1090,7 @@ class BuildGate:
             clear_min_notes=config.review_clear_min_notes,
             adjudicator=build_adjudicator(config),
             adjudicator_reserve_seconds=config.adjudicator_timeout_seconds,
+            always_escalate=config.l2_always_escalate,
         )
 
     def apply_review_settings(self, effective: EffectiveReviewSettings) -> bool:
@@ -889,14 +1134,25 @@ class BuildGate:
         progress: Callable[[ScreenerProgressStage], None] | None = None,
         deadline: Deadline = None,
         publish_image: Callable[[BuiltImageArtifact], Awaitable[None]] | None = None,
+        publish_held_image: (
+            Callable[[BuiltImageArtifact], Awaitable[None]] | None
+        ) = None,
+        record_archive_verification: Callable[[], Awaitable[None]] | None = None,
+        record_runtime_verification: (
+            Callable[[str, str], Awaitable[None]] | None
+        ) = None,
         remote_build: Callable[[], Awaitable[RemoteImageArchive | None]] | None = None,
         remote_build_consumed: Callable[[UUID], Awaitable[None]] | None = None,
         remote_source_review: Callable[[], Awaitable[SourceReviewObservation | None]]
         | None = None,
         build_only: bool = False,
+        replay_runtime_probes: bool = False,
+        preverified_image: tuple[str, str] | None = None,
+        record_preverified_image: Callable[[], Awaitable[None]] | None = None,
         policy_only: bool = False,
         deferred_source_review: bool = False,
         policy_version: int = SCREENING_POLICY_VERSION,
+        scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
 
@@ -929,6 +1185,30 @@ class BuildGate:
 
         if build_only and policy_only:
             raise ValueError("build-only and policy-only modes are mutually exclusive")
+        if replay_runtime_probes and (not build_only or policy_version != 13):
+            raise ValueError("replay runtime probes require v13 build-only mode")
+        if preverified_image is not None and (
+            not replay_runtime_probes
+            or remote_build is not None
+            or publish_image is not None
+            or record_preverified_image is None
+        ):
+            raise ValueError("preverified image requires isolated replay mode")
+
+        def core_decision(
+            outcome: ScreeningOutcome,
+            *,
+            code: str,
+            summary: str,
+            detail: str,
+        ) -> ScreeningDecision:
+            return make_core_decision(
+                outcome,
+                code=code,
+                summary=summary,
+                detail=detail,
+                policy_version=policy_version,
+            )
 
         loop = asyncio.get_running_loop()
         screen_started = loop.time()
@@ -965,7 +1245,11 @@ class BuildGate:
         remote_archive: RemoteImageArchive | None = None
         try:
             report("downloading")
-            if (exhausted := self._lease_exhausted(deadline, "download")) is not None:
+            if (
+                exhausted := self._lease_exhausted(
+                    deadline, "download", policy_version=policy_version
+                )
+            ) is not None:
                 return exhausted
             tmp_path, dl_detail = await self._download_verified(download_url, sha256)
             if tmp_path is None:
@@ -999,6 +1283,11 @@ class BuildGate:
                     detail=contract_error,
                 )
             source_digest, source_paths = self._source_metadata(tmp_path)
+            if policy_version == 13 and record_archive_verification is not None:
+                # The streamed archive digest and its bounded container
+                # contract have both been verified. Record before a later L4
+                # hold can skip the build/runtime path.
+                await record_archive_verification()
 
             # General source review is deliberately deferred until the image
             # has built and passed its runtime contract. Broken Dockerfiles and
@@ -1027,6 +1316,7 @@ class BuildGate:
                     preflight = TarSourceRepository(tmp_path).malicious_preflight(
                         artifact_sha256=sha256.lower(),
                         mode=self._config.static_preflight_v2_mode,
+                        policy_version=policy_version,
                         audit_recorder=lambda payload: (
                             self._static_preflight_audit.record(
                                 agent_id=agent_id,
@@ -1068,14 +1358,16 @@ class BuildGate:
                         ),
                         deadline=deadline,
                         policy_version=policy_version,
+                        scored_runtime_evidence=scored_runtime_evidence,
                     )
                     if resolved_preflight.ok and resolved_preflight.risk_level == "low":
                         preflight_clearance = resolved_preflight
                     elif (
-                        resolved_preflight.adjudication is not None
+                        policy_version < 13
+                        and resolved_preflight.adjudication is not None
                         and resolved_preflight.adjudication.get("decision") == "clear"
                     ):
-                        # L4 has terminally cleared the static lead, but a full
+                        # A legacy L4 clear settles the static lead, but a full
                         # screen still owes Platform a verified runtime image.
                         # Returning PASS here bypasses build/export and makes
                         # the worker correctly reject the incomplete result.
@@ -1089,7 +1381,8 @@ class BuildGate:
                         preflight_clearance = resolved_preflight
                     else:
                         decision = self._policy.preexecution_source_decision(
-                            resolved_preflight
+                            resolved_preflight,
+                            policy_version=policy_version,
                         )
 
                         async def unreachable_challenge(
@@ -1114,6 +1407,7 @@ class BuildGate:
                             health_elapsed_ms=0,
                             run_challenge=unreachable_challenge,
                             review_source=None,
+                            policy_version=policy_version,
                         )
                         self._journal.record(context=context, decision=decision)
                         return decision
@@ -1134,6 +1428,8 @@ class BuildGate:
                                     attempt_id=attempt_id,
                                     progress=report_review_progress,
                                     deadline=deadline,
+                                    policy_version=policy_version,
+                                    scored_runtime_evidence=scored_runtime_evidence,
                                 )
                             except Exception:  # noqa: BLE001 - terminal provider failure
                                 logger.warning(
@@ -1167,6 +1463,7 @@ class BuildGate:
                             progress=report_review_progress,
                             deadline=deadline,
                             policy_version=policy_version,
+                            scored_runtime_evidence=scored_runtime_evidence,
                         )
 
                     review_factory = review_with_selected_provider
@@ -1219,6 +1516,7 @@ class BuildGate:
                     health_elapsed_ms=0,
                     run_challenge=unavailable_challenge,
                     review_source=review_source,
+                    policy_version=policy_version,
                 )
                 report("validating")
                 decision = await self._policy.evaluate(context, skip_challenges=True)
@@ -1228,15 +1526,19 @@ class BuildGate:
                     and preflight_clearance.failure_disposition == "pass_inconclusive"
                 ):
                     deferred = self._policy.preexecution_source_decision(
-                        preflight_clearance
+                        preflight_clearance,
+                        policy_version=policy_version,
                     )
                     decision = ScreeningDecision(
-                        outcome=ScreeningOutcome.PASS_INCONCLUSIVE,
+                        outcome=deferred.outcome,
                         detail=deferred.detail,
                         manifest_digest=decision.manifest_digest,
                         evidence=(*deferred.evidence, *decision.evidence),
                         finding=deferred.finding,
                         review_audit=deferred.review_audit,
+                        adjudication=deferred.adjudication,
+                        review_notes=deferred.review_notes,
+                        policy_version=policy_version,
                     )
                 decision = _with_image_binding_advisory(
                     decision, self._image_binding_advisory(tmp_path)
@@ -1245,7 +1547,11 @@ class BuildGate:
                 return decision
 
             report("building")
-            if (exhausted := self._lease_exhausted(deadline, "build")) is not None:
+            if (
+                exhausted := self._lease_exhausted(
+                    deadline, "build", policy_version=policy_version
+                )
+            ) is not None:
                 return exhausted
             build_timeout = self._config.build_timeout_seconds
             remaining = self._lease_remaining(deadline)
@@ -1257,7 +1563,36 @@ class BuildGate:
             built_image_id: str | None = None
             targon_runtime_ok = False
             local_build_selected = False
-            if remote_build is not None:
+            if preverified_image is not None:
+                executor_error = await self._verify_executor()
+                if executor_error is not None:
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="executor-isolation-unavailable",
+                        summary="screener executor isolation is unavailable",
+                        detail=f"screener error: {executor_error}",
+                    )
+                used_local_docker = True
+                image_path, expected_image_id = preverified_image
+                if not self._replay_image_config_matches(image_path, expected_image_id):
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="replay-image-identity-mismatch",
+                        summary="verified replay image identity did not match",
+                        detail=(
+                            "screener error: image tar config differs from the "
+                            "pinned image ID"
+                        ),
+                    )
+                built, build_detail, built_image_id = await self._load_remote_image(
+                    image_path, expected_image_id, timeout=min(build_timeout, 120.0)
+                )
+                if built and built_image_id != expected_image_id:
+                    raise RuntimeError("preverified image ID changed during import")
+                if built:
+                    assert record_preverified_image is not None
+                    await record_preverified_image()
+            elif remote_build is not None:
                 try:
                     remote_archive = await remote_build()
                 except LocalScreeningProviderSelected:
@@ -1324,7 +1659,7 @@ class BuildGate:
                         "using local Docker",
                         _log_tail(build_detail),
                     )
-            if not built:
+            if not built and preverified_image is None:
                 executor_error = await self._verify_executor()
                 if executor_error is not None:
                     return core_decision(
@@ -1345,6 +1680,13 @@ class BuildGate:
                 (asyncio.get_running_loop().time() - started) * 1000
             )
             if not built:
+                if preverified_image is not None:
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="replay-image-load-failed",
+                        summary="verified replay image could not be loaded",
+                        detail=f"screener error: {build_detail}",
+                    )
                 retryable = _docker_infrastructure_failure(build_detail)
                 return core_decision(
                     ScreeningOutcome.RETRYABLE_INFRA
@@ -1368,7 +1710,9 @@ class BuildGate:
                 raise RuntimeError("successful Docker build did not return an image id")
 
             report("starting")
-            exhausted = self._lease_exhausted(deadline, "serve check")
+            exhausted = self._lease_exhausted(
+                deadline, "serve check", policy_version=policy_version
+            )
             if exhausted is not None:
                 return exhausted
             started = asyncio.get_running_loop().time()
@@ -1405,12 +1749,19 @@ class BuildGate:
                 )
                 return core_decision(
                     outcome,
-                    code="serve-infrastructure"
-                    if serve_result.retryable
-                    else "health-contract",
+                    code=serve_result.code
+                    or (
+                        "serve-infrastructure"
+                        if serve_result.retryable
+                        else "health-contract"
+                    ),
                     summary="screening runtime infrastructure failed"
                     if serve_result.retryable
-                    else "container did not satisfy the health contract",
+                    else (
+                        "container did not satisfy the seeding contract"
+                        if serve_result.code
+                        else "container did not satisfy the health contract"
+                    ),
                     detail=f"{prefix}: {serve_result.detail}",
                 )
             if audit_runtime is None:
@@ -1461,9 +1812,12 @@ class BuildGate:
                 # given no source-review source and never runs the selector
                 # (anti-cheat) phase.
                 review_source=None if build_only else review_source,
+                policy_version=policy_version,
             )
             report("validating")
-            exhausted = self._lease_exhausted(deadline, "policy review")
+            exhausted = self._lease_exhausted(
+                deadline, "policy review", policy_version=policy_version
+            )
             if exhausted is not None:
                 return exhausted
             decision = await self._policy.evaluate(
@@ -1473,18 +1827,19 @@ class BuildGate:
                 skip_challenges=targon_runtime_ok,
             )
             if (
-                decision.outcome == ScreeningOutcome.INCONCLUSIVE
+                policy_version < STRICT_TWO_OUTCOME_POLICY_VERSION
+                and decision.outcome == ScreeningOutcome.INCONCLUSIVE
                 and review_task is not None
                 and any(
                     evidence.code == "challenge-transport-failure"
                     for evidence in decision.evidence
                 )
             ):
-                # A no-response behavioral-oracle failure does not establish a
-                # harness defect. When the completed source review retained
-                # typed notes, ask L4 to make the terminal, decision-only call
-                # from that ledger instead of parking a clean submission for a
-                # retry that merely repeats the same evidence collection.
+                # Historical policy lets a source-only L4 decision settle an
+                # auxiliary oracle transport failure. V13 makes the runtime
+                # observation mandatory, so it remains non-passing for the
+                # retry/deadline finalizer instead of asking source review to
+                # clear a check it could not perform.
                 observation = await review_task
                 settled = await self._source_reviewer.settle_oracle_transport_failure(
                     observation,
@@ -1493,7 +1848,10 @@ class BuildGate:
                     policy_version=policy_version,
                 )
                 if settled.adjudication is not None:
-                    source_decision = self._policy.preexecution_source_decision(settled)
+                    source_decision = self._policy.preexecution_source_decision(
+                        settled,
+                        policy_version=policy_version,
+                    )
                     decision = ScreeningDecision(
                         outcome=source_decision.outcome,
                         detail=source_decision.detail,
@@ -1513,6 +1871,7 @@ class BuildGate:
                         review_notes=(
                             source_decision.review_notes or decision.review_notes
                         ),
+                        policy_version=policy_version,
                     )
             if (
                 decision.outcome == ScreeningOutcome.PASS
@@ -1520,15 +1879,19 @@ class BuildGate:
                 and preflight_clearance.failure_disposition == "pass_inconclusive"
             ):
                 deferred = self._policy.preexecution_source_decision(
-                    preflight_clearance
+                    preflight_clearance,
+                    policy_version=policy_version,
                 )
                 decision = ScreeningDecision(
-                    outcome=ScreeningOutcome.PASS_INCONCLUSIVE,
+                    outcome=deferred.outcome,
                     detail=deferred.detail,
                     manifest_digest=decision.manifest_digest,
                     evidence=(*deferred.evidence, *decision.evidence),
                     finding=deferred.finding,
                     review_audit=deferred.review_audit,
+                    adjudication=deferred.adjudication,
+                    review_notes=deferred.review_notes,
+                    policy_version=policy_version,
                 )
             # The image-binding advisory can only escalate a PASS to an
             # operator-reviewed QUARANTINE. The mechanical lane collected no
@@ -1538,35 +1901,61 @@ class BuildGate:
                 decision = _with_image_binding_advisory(
                     decision, self._image_binding_advisory(tmp_path)
                 )
+            # Shadow mode observes only: the seeding signal is recorded as
+            # evidence beside the outcome the policy already reached.
+            decision = _with_seed_probe_evidence(
+                decision, active_audit_runtime.seed_probe
+            )
             self._journal.record(context=context, decision=decision)
+            held_source_review = (
+                policy_version == 13
+                and decision.outcome == ScreeningOutcome.QUARANTINE
+                and decision.finding is None
+                and any(
+                    item.code == "adjudicated-source-review-escalate"
+                    for item in decision.evidence
+                )
+            )
+            image_publisher = (
+                publish_held_image if held_source_review else publish_image
+            )
             if (
                 decision.outcome
-                in {
-                    ScreeningOutcome.PASS,
-                    ScreeningOutcome.PASS_INCONCLUSIVE,
-                }
-                and publish_image is not None
-            ):
+                in {ScreeningOutcome.PASS, ScreeningOutcome.PASS_INCONCLUSIVE}
+                or held_source_review
+            ) and image_publisher is not None:
                 report("submitting")
+                # A held image is supplemental evidence. Keep time to submit
+                # the authoritative quarantine even if export is slow.
+                image_deadline = (
+                    deadline - 30.0
+                    if held_source_review and deadline is not None
+                    else deadline
+                )
                 if (
-                    exhausted := self._lease_exhausted(deadline, "image export")
+                    exhausted := self._lease_exhausted(
+                        image_deadline, "image export", policy_version=policy_version
+                    )
                 ) is not None:
-                    return exhausted
+                    return decision if held_source_review else exhausted
                 try:
                     if targon_runtime_ok:
                         assert remote_archive is not None
                         image = await self._export_remote_archive(
                             remote_archive,
                             image_ref=image_ref,
-                            deadline=deadline,
+                            deadline=image_deadline,
                         )
                     else:
                         image = await self._export_image(
                             built_image_id,
                             image_ref=image_ref,
-                            deadline=deadline,
+                            deadline=image_deadline,
                         )
                 except _ScreenedImageTooLargeError as error:
+                    if held_source_review:
+                        logger.warning("held image export exceeded limit: %s", error)
+                        return decision
                     return core_decision(
                         ScreeningOutcome.DETERMINISTIC_REJECT,
                         code="screened-image-too-large",
@@ -1574,8 +1963,10 @@ class BuildGate:
                         detail=str(error),
                     )
                 except _LeaseDeadlineError:
+                    if held_source_review:
+                        return decision
                     return self._lease_exhausted(
-                        deadline, "image export"
+                        deadline, "image export", policy_version=policy_version
                     ) or core_decision(
                         ScreeningOutcome.RETRYABLE_INFRA,
                         code="lease-budget-exhausted",
@@ -1585,6 +1976,9 @@ class BuildGate:
                         ),
                     )
                 except Exception as error:  # noqa: BLE001 - classify export infra
+                    if held_source_review:
+                        logger.warning("held image export failed: %s", error)
+                        return decision
                     return core_decision(
                         ScreeningOutcome.RETRYABLE_INFRA,
                         code="screened-image-export-failed",
@@ -1592,15 +1986,17 @@ class BuildGate:
                         detail=f"screener error: image export failed: {error}",
                     )
                 try:
-                    remaining = self._lease_remaining(deadline)
+                    remaining = self._lease_remaining(image_deadline)
                     if remaining is None:
-                        await publish_image(image)
+                        await image_publisher(image)
                     elif remaining <= 0:
                         raise _LeaseDeadlineError
                     else:
                         async with asyncio.timeout(remaining):
-                            await publish_image(image)
+                            await image_publisher(image)
                 except (TimeoutError, _LeaseDeadlineError):
+                    if held_source_review:
+                        return decision
                     return core_decision(
                         ScreeningOutcome.RETRYABLE_INFRA,
                         code="lease-budget-exhausted",
@@ -1610,6 +2006,9 @@ class BuildGate:
                         ),
                     )
                 except Exception as error:  # noqa: BLE001 - publish is parked infra
+                    if held_source_review:
+                        logger.warning("held image upload failed: %s", error)
+                        return decision
                     return core_decision(
                         ScreeningOutcome.RETRYABLE_INFRA,
                         code="image-upload-failed",
@@ -1619,6 +2018,44 @@ class BuildGate:
                 finally:
                     with contextlib.suppress(OSError):
                         os.unlink(image.path)
+            # Shadow probes mutate the harness's memory and model-gateway state.
+            # Run them only after the policy decision and screened-image handoff
+            # are complete, so neither their responses nor their side effects
+            # can influence the authoritative challenge or outcome. Reserve 30s
+            # for Platform's lease completion and cap the entire shadow lane at
+            # 15s, including all receipt writes; an observation is expendable.
+            if (
+                policy_version == 13
+                and not targon_runtime_ok
+                and self._config.v13_runtime_receipts_mode == "shadow"
+                and record_runtime_verification is not None
+            ):
+                remaining = self._lease_remaining(deadline)
+                # An independent replay lease has room for the complete
+                # public probe set; ordinary screening keeps its 15s
+                # expendable shadow budget.
+                probe_cap = 180.0 if replay_runtime_probes else 15.0
+                shadow_budget = (
+                    probe_cap if remaining is None else min(probe_cap, remaining - 30.0)
+                )
+                if shadow_budget > 0:
+                    try:
+                        async with asyncio.timeout(shadow_budget):
+                            await self._run_v13_runtime_observations(
+                                audit_runtime=active_audit_runtime,
+                                probe_container=gateway_container,
+                                attempt_id=attempt_id,
+                                artifact_sha256=sha256.lower(),
+                                image_id=built_image_id,
+                                bench_version=bench_version,
+                                deadline=deadline,
+                                record=record_runtime_verification,
+                                include_runs=not build_only or replay_runtime_probes,
+                            )
+                    except TimeoutError:
+                        logger.info("v13 shadow runtime observation budget expired")
+                    except Exception:  # noqa: BLE001 - never change a settled decision
+                        logger.exception("v13 shadow runtime observations unavailable")
             return decision
         except Exception as e:  # noqa: BLE001 - the loop must never die on one agent
             logger.exception("gate error for agent_id=%s", agent_id)
@@ -1677,7 +2114,11 @@ class BuildGate:
         return expires_at - asyncio.get_running_loop().time()
 
     def _lease_exhausted(
-        self, deadline: Deadline, stage: str
+        self,
+        deadline: Deadline,
+        stage: str,
+        *,
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision | None:
         """A parked infrastructure decision when the lease cannot fit ``stage``."""
         remaining = self._lease_remaining(deadline)
@@ -1688,11 +2129,12 @@ class BuildGate:
                 stage,
                 remaining,
             )
-            return core_decision(
+            return make_core_decision(
                 ScreeningOutcome.RETRYABLE_INFRA,
                 code="lease-budget-exhausted",
                 summary="screening lease budget exhausted before completion",
                 detail=f"screener error: lease budget exhausted before {stage}",
+                policy_version=policy_version,
             )
         return None
 
@@ -2503,6 +2945,41 @@ class BuildGate:
             return False, "docker image inspect returned invalid output", None
         return True, "", image_id
 
+    @staticmethod
+    def _replay_image_config_matches(path: str, expected_image_id: str) -> bool:
+        """Bind the downloaded portable tar to its Platform-pinned config ID."""
+        try:
+            with tarfile.open(path, mode="r:") as archive:
+                manifest = archive.getmember("manifest.json")
+                if not manifest.isfile() or not 0 < manifest.size <= 1 << 20:
+                    return False
+                manifest_file = archive.extractfile(manifest)
+                if manifest_file is None:
+                    return False
+                entries = json.load(manifest_file)
+                if not isinstance(entries, list) or len(entries) != 1:
+                    return False
+                config_name = entries[0].get("Config")
+                if not isinstance(config_name, str) or not re.fullmatch(
+                    r"[0-9a-f]{64}\.json", config_name
+                ):
+                    return False
+                config = archive.getmember(config_name)
+                if not config.isfile() or not 0 < config.size <= 4 << 20:
+                    return False
+                config_file = archive.extractfile(config)
+                if config_file is None:
+                    return False
+                config_bytes = config_file.read(config.size + 1)
+                digest = hashlib.sha256(config_bytes).hexdigest()
+                return (
+                    len(config_bytes) == config.size
+                    and config_name == f"{digest}.json"
+                    and expected_image_id == f"sha256:{digest}"
+                )
+        except (KeyError, OSError, tarfile.TarError, ValueError, TypeError):
+            return False
+
     async def _run_and_probe(
         self,
         tag: str,
@@ -2520,12 +2997,16 @@ class BuildGate:
         # second round-trip (the gateway-encoded correctness oracle).
         response_text = secrets.token_hex(16)
         oracle_answer = secrets.token_hex(16)
+        tool_route = secrets.token_urlsafe(18)
+        tool_key = secrets.token_bytes(32)
         started, detail = await self._start_fake_gateway(
             gateway_container=gateway_container,
             network=network,
             response_text=response_text,
             oracle_answer=oracle_answer,
             state_dir=gateway_state_dir,
+            tool_route=tool_route,
+            tool_key=tool_key,
         )
         if not started:
             return _StageResult(False, detail, retryable=True), None
@@ -2543,6 +3024,37 @@ class BuildGate:
             return serve_result, None
 
         harness_base = f"http://{_HARNESS_ALIAS}:{self._config.container_port}"
+        # The harness contract does not end at /health: the scored run opens
+        # with a seeding wave. One bounded probe proves the image can ingest,
+        # so an image that cannot persist state fails here with an actionable
+        # reason instead of on every validator's first wave.
+        seed_probe: _SeedProbe | None = None
+        if self._config.seed_probe_mode != "off":
+            seed_probe = await self._probe_seed(
+                harness_base,
+                probe_container=gateway_container,
+                harness_container=container,
+                timeout=min(
+                    self._config.seed_probe_timeout_seconds,
+                    self._config.run_timeout_seconds,
+                ),
+            )
+            usage = await self._sandbox_usage(container)
+            if usage.known:
+                seed_probe = replace(seed_probe, usage=usage)
+            if not seed_probe.passed and self._config.seed_probe_mode == "enforce":
+                return (
+                    _StageResult(
+                        False,
+                        await self._with_container_logs(
+                            self._seed_detail_with_usage(seed_probe),
+                            harness_container=container,
+                            gateway_container=gateway_container,
+                        ),
+                        code=seed_probe.code,
+                    ),
+                    None,
+                )
         # Production v6 intentionally stops here. No synthetic POST /run is
         # issued unless a private policy selector explicitly chooses an audit.
         return (
@@ -2552,6 +3064,9 @@ class BuildGate:
                 gateway_response_token=response_text,
                 oracle_answer=oracle_answer,
                 gateway_state_file=str(Path(gateway_state_dir) / "model-called"),
+                seed_probe=seed_probe,
+                tool_route=tool_route,
+                tool_key=tool_key,
             ),
         )
 
@@ -2674,6 +3189,8 @@ class BuildGate:
         response_text: str,
         oracle_answer: str,
         state_dir: str,
+        tool_route: str,
+        tool_key: bytes,
     ) -> tuple[bool, str]:
         """Start the fake gateway beside the harness on an internal network."""
         try:
@@ -2731,7 +3248,15 @@ class BuildGate:
                 "-e",
                 f"DITTO_FAKE_GATEWAY_ORACLE_ANSWER={oracle_answer}",
                 "-e",
+                f"DITTO_FAKE_GATEWAY_TOOL_ROUTE={tool_route}",
+                "-e",
+                f"DITTO_FAKE_GATEWAY_TOOL_KEY={tool_key.hex()}",
+                "-e",
                 "DITTO_FAKE_GATEWAY_STATE_FILE=/state/model-called",
+                "-e",
+                "DITTO_FAKE_GATEWAY_SEMANTIC_CONFIG=/state/semantic-probe.json",
+                "-e",
+                "DITTO_FAKE_GATEWAY_SEMANTIC_EVENTS=/state/semantic-events",
                 "-e",
                 "DITTO_FAKE_GATEWAY_TLS_CERT=/state/leaf.crt",
                 "-e",
@@ -2752,7 +3277,7 @@ class BuildGate:
         probe = """\
 import socket
 import ssl
-for port in (11434, 11435):
+for port in (11434, 11435, 11436):
     socket.create_connection(('127.0.0.1', port), 2).close()
 context = ssl.create_default_context(cafile='/state/ca.crt')
 with socket.create_connection(('127.0.0.1', 443), 2) as raw:
@@ -2767,6 +3292,162 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
                 return True, ""
             await asyncio.sleep(0.1)
         return False, "fake gateway did not become ready"
+
+    async def _probe_seed(
+        self,
+        harness_base: str,
+        *,
+        probe_container: str,
+        harness_container: str,
+        timeout: float,
+    ) -> _SeedProbe:
+        """Prove the harness can ingest one memory pair, not just answer health.
+
+        Scoring begins at ``POST /seed``: the validator installs the haystack
+        before it asks anything. An image can satisfy ``/health`` without ever
+        writing, then fail every validator's first wave on a read-only path or
+        the sandbox memory cap, so the failure surfaces as a deferred scoring
+        ticket instead of an actionable screening reason.
+
+        The probe is one minimal, idempotent wave carrying a single coined pair.
+        Its identifiers are per-attempt random tokens with no screener-specific
+        marker, so a submission cannot branch on the request, and it is served
+        by the same isolated fake gateway as the rest of the smoke -- no
+        provider call, no provider spend.
+        """
+        token = secrets.token_hex(8)
+        payload: dict[str, object] = {
+            "user_id": token,
+            "wave": 0,
+            "pairs": [
+                {
+                    "pair_id": f"p-{token}",
+                    "session_id": f"s-{token}",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "prompt": f"reference note {token}",
+                    "response": f"acknowledged reference note {token}",
+                }
+            ],
+            "subjects": [],
+            "links": [],
+        }
+        url = f"{harness_base}{self._config.seed_path}"
+        code, out = await self._request_from_sidecar(
+            probe_container, url, payload=payload, timeout=timeout
+        )
+        if code == 0:
+            mismatch = _seed_ack_mismatch(out, expected_pairs=len(payload["pairs"]))  # type: ignore[arg-type]
+            if mismatch is None:
+                return _SeedProbe(True, "seed-ok", "")
+            return _SeedProbe(
+                False,
+                "seed-ack-invalid",
+                f"{self._config.seed_path} answered without acknowledging the "
+                f"wave it was given: {mismatch}. The contract's 2xx is the "
+                f"ingest acknowledgement and carries the loaded counts, so a "
+                f"reply that omits or understates them cannot be distinguished "
+                f"from a harness that stored nothing.",
+            )
+
+        tail = _log_tail(out) or "no detail"
+        lifecycle, oom = await self._container_liveness(harness_container)
+        seed_path = self._config.seed_path
+        if oom:
+            return _SeedProbe(
+                False,
+                "seed-memory-cap",
+                f"the harness exceeded the sandbox memory cap while serving "
+                f"{seed_path} and was terminated. Validators run the same cap; "
+                f"keep the store's working set inside it.",
+            )
+        if lifecycle in {"dead", "exited"}:
+            return _SeedProbe(
+                False,
+                "seed-exit",
+                f"the harness exited while serving {seed_path} ({tail}).",
+            )
+        lowered = out.lower()
+        if "read-only file system" in lowered or "read only file system" in lowered:
+            return _SeedProbe(
+                False,
+                "seed-readonly-write",
+                f"{seed_path} failed writing outside the sandbox's writable "
+                f"filesystem. The root filesystem is read-only and /tmp is the "
+                f"only writable mount; persist state there ({tail}).",
+            )
+        if code == _SIDECAR_HTTP_STATUS_EXIT:
+            return _SeedProbe(
+                False,
+                "seed-http-error",
+                f"{seed_path} did not return 2xx ({tail}).",
+            )
+        if code == _SIDECAR_OVERSIZED_EXIT:
+            return _SeedProbe(
+                False,
+                "seed-oversized-response",
+                f"{seed_path} answered with a body past the probe's safety cap; "
+                f"the contract's reply is the loaded counts.",
+            )
+        return _SeedProbe(
+            False,
+            "seed-unreachable",
+            f"{seed_path} returned no response within {timeout:.0f}s ({tail}).",
+        )
+
+    def _seed_detail_with_usage(self, probe: _SeedProbe) -> str:
+        """The miner-facing reason, with what the container was using."""
+        summary = probe.usage.summary(
+            _VALIDATOR_SANDBOX_MEMORY, _VALIDATOR_SANDBOX_TMPFS_SIZE
+        )
+        if not summary:
+            return probe.detail
+        return f"{probe.detail} Observed at that point: {summary}."
+
+    async def _sandbox_usage(self, container: str) -> _SandboxUsage:
+        """Sample what the smoke container consumed of the sandbox envelope.
+
+        The screener runs the validator's exact resource envelope but has never
+        recorded what a submission actually uses inside it, so the only
+        published signal is the binary one: an image that crossed a cap. The
+        same cgroup files the validator already reads after a scored run
+        (``memory.peak``, ``df /tmp``) answer the operator question the caps
+        raise -- how much headroom a passing image has left -- for every
+        screened image rather than only the failures.
+
+        Best effort by construction: an image without a shell, or a runtime
+        without cgroup v2, simply reports nothing and screening is unchanged.
+        """
+        script = (
+            "printf '%s\n' __memory_peak__\n"
+            "cat /sys/fs/cgroup/memory.peak 2>/dev/null || true\n"
+            "printf '%s\n' __tmpfs__\n"
+            "df -Pk /tmp 2>/dev/null | tail -n 1 || true\n"
+        )
+        code, out = await self._run(
+            ["exec", container, "/bin/sh", "-c", script], timeout=10.0
+        )
+        if code != 0:
+            return _SandboxUsage()
+        return _parse_sandbox_usage(out)
+
+    async def _container_liveness(self, container: str) -> tuple[str, bool]:
+        """Return ``(lifecycle, oom_killed)`` for a smoke container."""
+        code, out = await self._run(
+            [
+                "container",
+                "inspect",
+                "--format",
+                "{{.State.Status}} {{.State.OOMKilled}}",
+                container,
+            ],
+            timeout=5.0,
+        )
+        if code != 0:
+            return "", False
+        parts = out.strip().lower().split()
+        if not parts:
+            return "", False
+        return parts[0], len(parts) > 1 and parts[1] == "true"
 
     async def _wait_healthy(
         self,
@@ -2819,6 +3500,400 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             waited += _PROBE_INTERVAL_SECONDS
         return False, f"/health never healthy within {deadline:g}s ({last})"
 
+    async def _run_v13_runtime_observations(
+        self,
+        *,
+        audit_runtime: _AuditRuntime,
+        probe_container: str,
+        attempt_id: UUID,
+        artifact_sha256: str,
+        image_id: str,
+        bench_version: int,
+        deadline: Deadline,
+        record: Callable[[str, str], Awaitable[None]],
+        include_runs: bool,
+    ) -> None:
+        """Sample runtime behavior relevant to v13 checks 3–7 in smoke isolation.
+
+        The isolated broker supplies model-authored tool calls and one-use
+        execution evidence; random seeded values are checked per user. Coded
+        outcomes are logged with exact attempt/artifact/image identity but are
+        report-only. A probe pass is not a full v13 check pass: coverage is
+        bounded to these prompts and observable broker traffic, with internal
+        container paths and private controls unexamined. Every Platform receipt
+        remains ``recorded_unverified`` and cannot authorize CLEAR.
+        """
+
+        async def emit(
+            code: str,
+            requests: list[str],
+            responses: list[str],
+            broker_calls: int,
+        ) -> None:
+            try:
+                digest = runtime_evidence_sha256(
+                    check_code=code,
+                    artifact_sha256=artifact_sha256,
+                    image_id=image_id,
+                    request_sha256s=requests,
+                    response_sha256s=responses,
+                    broker_calls=broker_calls,
+                )
+                await record(code, digest)
+            except Exception:  # noqa: BLE001 - shadow evidence cannot settle a screen
+                logger.warning("v13 runtime receipt unavailable check=%s", code)
+
+        def log_outcome(code: str, outcome: SemanticOutcome) -> None:
+            logger.info(
+                "v13 shadow semantic attempt_id=%s artifact_sha256=%s image_id=%s "
+                "check=%s status=%s reason=%s",
+                attempt_id,
+                artifact_sha256,
+                image_id,
+                code,
+                outcome.status,
+                outcome.reason,
+            )
+
+        await emit("health", [], [], 0)
+        if not include_runs:
+            return
+
+        # The caller has already settled policy and applies one total shadow
+        # timeout. Keep only the lease-completion reserve here.
+        def budget_available() -> bool:
+            remaining = self._lease_remaining(deadline)
+            return remaining is None or remaining > 30.0
+
+        async def post(
+            path: str, payload: dict[str, object], *, seed_pairs: int = 0
+        ) -> tuple[str, str, int, dict[str, object]] | None:
+            if not budget_available():
+                return None
+            request_bytes = json.dumps(
+                payload, sort_keys=True, separators=(",", ":")
+            ).encode()
+            calls_before = _gateway_call_count(audit_runtime.gateway_state_file)
+            try:
+                code, body = await self._request_from_sidecar(
+                    probe_container,
+                    f"{audit_runtime.harness_base}{path}",
+                    payload=payload,
+                    timeout=min(20.0, self._config.run_timeout_seconds),
+                )
+            except Exception:  # noqa: BLE001 - no decision from a failed probe
+                return None
+            if code != 0:
+                return None
+            try:
+                parsed = json.loads(body)
+            except (UnicodeError, ValueError):
+                return None
+            if not isinstance(parsed, dict):
+                return None
+            if seed_pairs and _seed_ack_mismatch(body, expected_pairs=seed_pairs):
+                return None
+            calls = max(
+                0,
+                _gateway_call_count(audit_runtime.gateway_state_file) - calls_before,
+            )
+            return (
+                hashlib.sha256(request_bytes).hexdigest(),
+                hashlib.sha256(body.encode()).hexdigest(),
+                calls,
+                parsed,
+            )
+
+        ordinary_token = secrets.token_hex(12)
+        ordinary_probe_id = secrets.token_hex(12)
+        ordinary_response_token = secrets.token_hex(16)
+        ordinary_oracle_token = secrets.token_hex(16)
+        tool_token = secrets.token_hex(12)
+        memory_a = secrets.token_hex(12)
+        user_a = f"u-{secrets.token_hex(12)}"
+        user_b = f"u-{secrets.token_hex(12)}"
+        system_prompt = (
+            "You are a helpful assistant. Follow the supplied system instructions."
+        )
+
+        def run_request(
+            user_id: str, prompt: str, *, tools: list[object] | None = None
+        ) -> dict[str, object]:
+            return {
+                "case_id": f"c-{secrets.token_hex(12)}",
+                "system_prompt": system_prompt,
+                "user_input": prompt,
+                "tools": tools or [],
+                "user_id": user_id,
+                "bench_version": bench_version,
+            }
+
+        _set_semantic_probe(
+            audit_runtime.gateway_state_file,
+            {
+                "kind": "ordinary",
+                "probe_id": ordinary_probe_id,
+                "challenge_token": ordinary_token,
+                "response_token": ordinary_response_token,
+                "oracle_token": ordinary_oracle_token,
+            },
+        )
+        ordinary = await post(
+            "/run",
+            run_request(user_a, f"Explain this ordinary request: {ordinary_token}"),
+        )
+        if ordinary is not None and ordinary[2] > 0:
+            await emit("ordinary_model_run", [ordinary[0]], [ordinary[1]], ordinary[2])
+        ordinary_outcome = judge_ordinary_run(
+            ordinary[3] if ordinary is not None else None,
+            challenge_tokens=(ordinary_response_token, ordinary_oracle_token),
+            model_calls=ordinary[2] if ordinary is not None else 0,
+            events=_semantic_events(
+                audit_runtime.gateway_state_file, ordinary_probe_id
+            ),
+        )
+        log_outcome("ordinary_model_run", ordinary_outcome)
+
+        tool_name = "search_web"
+        tool_case = f"c-{secrets.token_hex(12)}"
+        tool_probe_id = secrets.token_hex(12)
+        tool_query = f"current information about {tool_token}"
+        tool_result = secrets.token_hex(16)
+        tool_request = run_request(
+            user_a,
+            f"Search for the current information about {tool_token}.",
+            tools=[
+                {
+                    "name": tool_name,
+                    "description": "Search the public web.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                }
+            ],
+        )
+        tool_request["case_id"] = tool_case
+        try:
+            tool_request = _with_tool_endpoint(
+                tool_request,
+                tool_route=audit_runtime.tool_route,
+                tool_key=audit_runtime.tool_key,
+            )
+        except ValueError:
+            tool_request = {}
+        if tool_request:
+            tool_configured = _set_semantic_probe(
+                audit_runtime.gateway_state_file,
+                {
+                    "kind": "tool",
+                    "probe_id": tool_probe_id,
+                    "challenge_token": tool_token,
+                    "case_id": tool_case,
+                    "user_id": user_a,
+                    "name": tool_name,
+                    "args": {"query": tool_query},
+                    "result": tool_result,
+                },
+            )
+            tool = await post("/run", tool_request)
+            if tool is not None and tool[2] > 0:
+                await emit("tool_selection_run", [tool[0]], [tool[1]], tool[2])
+            if tool_configured:
+                outcome = judge_tool_run(
+                    tool[3] if tool is not None else None,
+                    expected_result=tool_result,
+                    model_calls=tool[2] if tool is not None else 0,
+                    events=_semantic_events(
+                        audit_runtime.gateway_state_file, tool_probe_id
+                    ),
+                )
+                log_outcome("tool_selection_run", outcome)
+            else:
+                log_outcome(
+                    "tool_selection_run",
+                    SemanticOutcome("inconclusive", "probe_state_unavailable"),
+                )
+
+        def seed_request(user_id: str, marker: str) -> dict[str, object]:
+            return {
+                "user_id": user_id,
+                "wave": 0,
+                "pairs": [
+                    {
+                        "pair_id": f"p-{secrets.token_hex(12)}",
+                        "session_id": f"s-{secrets.token_hex(12)}",
+                        "timestamp": "2026-01-01T00:00:00Z",
+                        "prompt": "What is the reference marker?",
+                        "response": marker,
+                    }
+                ],
+                "subjects": [],
+                "links": [],
+            }
+
+        seeded_a = await post(
+            self._config.seed_path, seed_request(user_a, memory_a), seed_pairs=1
+        )
+        if seeded_a is None:
+            log_outcome(
+                "seed_memory_run",
+                SemanticOutcome("inconclusive", "seed_ack_unavailable"),
+            )
+            return
+        memory_b = secrets.token_hex(12)
+        memory_probe_id = secrets.token_hex(12)
+        memory_challenge_token = secrets.token_hex(12)
+        memory_request_a = run_request(
+            user_a,
+            f"What is my reference marker? {memory_challenge_token}",
+        )
+        memory_configured = _set_semantic_probe(
+            audit_runtime.gateway_state_file,
+            {
+                "kind": "memory",
+                "markers": [memory_a, memory_b],
+                "challenges": [
+                    {
+                        "probe_id": memory_probe_id,
+                        "challenge_token": memory_challenge_token,
+                        "case_id": memory_request_a["case_id"],
+                        "user_id": user_a,
+                        "forbidden": memory_b,
+                    }
+                ],
+            },
+        )
+        memory_run_a = await post("/run", memory_request_a)
+        if memory_run_a is None:
+            log_outcome(
+                "seed_memory_run",
+                SemanticOutcome("inconclusive", "run_response_unavailable"),
+            )
+            return
+        await emit(
+            "seed_memory_run",
+            [seeded_a[0], memory_run_a[0]],
+            [seeded_a[1], memory_run_a[1]],
+            seeded_a[2] + memory_run_a[2],
+        )
+        if memory_configured:
+            outcome = judge_memory_run(
+                memory_run_a[3],
+                expected=memory_a,
+                forbidden=None,
+                model_calls=memory_run_a[2],
+                events=_semantic_events(
+                    audit_runtime.gateway_state_file, memory_probe_id
+                ),
+            )
+            log_outcome("seed_memory_run", outcome)
+        else:
+            log_outcome(
+                "seed_memory_run",
+                SemanticOutcome("inconclusive", "probe_state_unavailable"),
+            )
+
+        seeded_b = await post(
+            self._config.seed_path,
+            seed_request(user_b, memory_b),
+            seed_pairs=1,
+        )
+        if seeded_b is None:
+            log_outcome(
+                "two_user_isolation",
+                SemanticOutcome("inconclusive", "second_seed_ack_unavailable"),
+            )
+            return
+        isolation_a_id = secrets.token_hex(12)
+        isolation_b_id = secrets.token_hex(12)
+        isolation_a_token = secrets.token_hex(12)
+        isolation_b_token = secrets.token_hex(12)
+        isolation_request_a = run_request(
+            user_a, f"Repeat only my own reference marker. {isolation_a_token}"
+        )
+        isolation_request_b = run_request(
+            user_b, f"Repeat only my own reference marker. {isolation_b_token}"
+        )
+
+        def configure_isolation(
+            probe_id: str,
+            challenge_token: str,
+            request: Mapping[str, object],
+            user_id: str,
+            forbidden: str,
+        ) -> bool:
+            # Only one /run is active at a time. Every observable model/tool
+            # request during that window is scanned for the other user's value,
+            # even if the harness omitted the challenge from that request.
+            return _set_semantic_probe(
+                audit_runtime.gateway_state_file,
+                {
+                    "kind": "memory",
+                    "markers": [memory_a, memory_b],
+                    "challenges": [
+                        {
+                            "probe_id": probe_id,
+                            "challenge_token": challenge_token,
+                            "case_id": request["case_id"],
+                            "user_id": user_id,
+                            "forbidden": forbidden,
+                        }
+                    ],
+                },
+            )
+
+        isolation_a_configured = configure_isolation(
+            isolation_a_id,
+            isolation_a_token,
+            isolation_request_a,
+            user_a,
+            memory_b,
+        )
+        isolation_a = await post("/run", isolation_request_a)
+        isolation_b_configured = configure_isolation(
+            isolation_b_id,
+            isolation_b_token,
+            isolation_request_b,
+            user_b,
+            memory_a,
+        )
+        isolation_b = await post("/run", isolation_request_b)
+        if isolation_a is not None and isolation_b is not None:
+            await emit(
+                "two_user_isolation",
+                [seeded_a[0], seeded_b[0], isolation_a[0], isolation_b[0]],
+                [seeded_a[1], seeded_b[1], isolation_a[1], isolation_b[1]],
+                sum(item[2] for item in (seeded_a, seeded_b, isolation_a, isolation_b)),
+            )
+            if isolation_a_configured and isolation_b_configured:
+                outcome = judge_isolation(
+                    isolation_a[3],
+                    isolation_b[3],
+                    first_value=memory_a,
+                    second_value=memory_b,
+                    first_model_calls=isolation_a[2],
+                    second_model_calls=isolation_b[2],
+                    first_events=_semantic_events(
+                        audit_runtime.gateway_state_file, isolation_a_id
+                    ),
+                    second_events=_semantic_events(
+                        audit_runtime.gateway_state_file, isolation_b_id
+                    ),
+                )
+                log_outcome("two_user_isolation", outcome)
+            else:
+                log_outcome(
+                    "two_user_isolation",
+                    SemanticOutcome("inconclusive", "probe_state_unavailable"),
+                )
+        else:
+            log_outcome(
+                "two_user_isolation",
+                SemanticOutcome("inconclusive", "run_response_unavailable"),
+            )
+
     async def _run_private_challenge_with_compatibility(
         self,
         challenge_id: str,
@@ -2853,6 +3928,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             gateway_response_token=audit_runtime.gateway_response_token,
             oracle_answer=audit_runtime.oracle_answer,
             gateway_state_file=audit_runtime.gateway_state_file,
+            tool_route=audit_runtime.tool_route,
+            tool_key=audit_runtime.tool_key,
         )
         if (
             audit_runtime.provider != _PRIMARY_HARNESS_PROVIDER
@@ -2901,6 +3978,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             oracle_answer=audit_runtime.oracle_answer,
             gateway_state_file=audit_runtime.gateway_state_file,
             provider=_COMPAT_HARNESS_PROVIDER,
+            tool_route=audit_runtime.tool_route,
+            tool_key=audit_runtime.tool_key,
         )
         remaining = deadline - loop.time()
         if remaining <= 0:
@@ -2924,6 +4003,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             gateway_response_token=compatibility_runtime.gateway_response_token,
             oracle_answer=compatibility_runtime.oracle_answer,
             gateway_state_file=compatibility_runtime.gateway_state_file,
+            tool_route=compatibility_runtime.tool_route,
+            tool_key=compatibility_runtime.tool_key,
         )
         return second, compatibility_runtime
 
@@ -2971,6 +4052,8 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         gateway_response_token: str,
         gateway_state_file: str,
         oracle_answer: str | None = None,
+        tool_route: str = "",
+        tool_key: bytes = b"",
     ) -> ChallengeObservation:
         """Run one selected private challenge and retain only bounded evidence.
 
@@ -2984,7 +4067,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
         # the model returns and proceed to the second model turn. Filled here
         # (not in the policy module) because only the gate knows the network
         # topology.
-        payload = _with_tool_endpoint(request)
+        payload = _with_tool_endpoint(request, tool_route=tool_route, tool_key=tool_key)
         calls_before = _gateway_call_count(gateway_state_file)
         started = asyncio.get_running_loop().time()
         code, out = await self._request_from_sidecar(
@@ -3093,14 +4176,14 @@ except (urllib.error.URLError, OSError, TimeoutError):
     # detail. The caller only needs to distinguish no response from a harness
     # HTTP status, and the public result must not expose challenge data.
     sys.stdout.write("transport request failed")
-    raise SystemExit(24)
+    raise SystemExit({_SIDECAR_TRANSPORT_EXIT})
 output = response.read({_MAX_CANARY_RESPONSE_BYTES + 1})
 if len(output) > {_MAX_CANARY_RESPONSE_BYTES}:
     sys.stdout.write("response exceeded safety cap")
-    raise SystemExit(23)
+    raise SystemExit({_SIDECAR_OVERSIZED_EXIT})
 if not 200 <= response.status < 300:
     sys.stdout.buffer.write(f"HTTP {{response.status}}: ".encode() + output)
-    raise SystemExit(22)
+    raise SystemExit({_SIDECAR_HTTP_STATUS_EXIT})
 sys.stdout.buffer.write(output)
 """
         return await self._run(

@@ -23,3 +23,18 @@ func OpaqueCaseID(seed int64, kind string, ordinal int) string {
 	h := sha256.Sum256(fmt.Appendf(nil, "dittobench-case|%d|%s|%d", seed, kind, ordinal))
 	return "c" + hex.EncodeToString(h[:8])
 }
+
+// IsOpaqueCaseID reports whether id has the OpaqueCaseID wire shape ("c" plus
+// sixteen lowercase hex digits). It recognises the shape only; it cannot
+// recover the seed, kind, or ordinal, which is the point of the id.
+func IsOpaqueCaseID(id string) bool {
+	if len(id) != 17 || id[0] != 'c' {
+		return false
+	}
+	for _, r := range id[1:] {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}

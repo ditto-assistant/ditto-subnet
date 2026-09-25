@@ -7,6 +7,7 @@ import importlib.metadata
 import inspect
 import time
 import unittest
+from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -18,6 +19,13 @@ from pylon_service.bittensor import contact as contact_module
 from pylon_service.bittensor.contact import TurboBtContact
 from pylon_service.bittensor.contact_router import BittensorContactRouter
 from turbobt.subnet import SubnetWeights
+
+
+@asynccontextmanager
+async def legacy_receipt_context(_task_id):
+    # These epoch tests mock task persistence; receipt DB semantics are covered
+    # separately against real isolated SQLite by test_receipt_image.py.
+    yield True
 
 
 def schedule(block=9_029_448, **changes):
@@ -270,6 +278,7 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
                 AsyncMock(return_value=tasks.TaskStatus.RUNNING),
             ),
             patch.object(tasks, "update_weight_task_status", AsyncMock()) as update,
+            patch.object(tasks, "record_task", legacy_receipt_context),
         ):
             await task._single_attempt()
             task._apply_weights.assert_awaited_once_with(block)
@@ -326,6 +335,7 @@ class ImageTests(unittest.IsolatedAsyncioTestCase):
                 AsyncMock(return_value=tasks.TaskStatus.RUNNING),
             ),
             patch.object(tasks, "update_weight_task_status", AsyncMock()) as update,
+            patch.object(tasks, "record_task", legacy_receipt_context),
         ):
             await task._single_attempt()
         task._apply_weights.assert_awaited_once_with(block)

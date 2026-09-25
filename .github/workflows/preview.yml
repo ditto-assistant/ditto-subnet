@@ -90,12 +90,12 @@ jobs:
 
           [ -n "$profiles" ] || profiles="dashboard"
           if [ "$attach" = true ]; then
-            plan_json="$(uv run python -m ditto.preview compose "$profiles" \
+            plan_json="$(uv run --locked python -m ditto.preview compose "$profiles" \
               --attach-prod-api \
               --ref "${INPUT_REF:-$EVENT_REF}" \
               --sha "$actual_sha")"
           else
-            plan_json="$(uv run python -m ditto.preview compose "$profiles" \
+            plan_json="$(uv run --locked python -m ditto.preview compose "$profiles" \
               --ref "${INPUT_REF:-$EVENT_REF}" \
               --sha "$actual_sha")"
           fi
@@ -117,7 +117,7 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
 
       - name: Prove overlay cheatcodes
-        run: uv run pytest ditto/tests/preview -q
+        run: uv run --locked pytest ditto/tests/preview -q
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -192,6 +192,7 @@ jobs:
       action: ${{ github.event.action }}
       bundle_result: ${{ needs.dashboard-bundle.result }}
       pr: ${{ github.event.pull_request.number }}
+      profiles: ${{ needs.plan.outputs.profiles }}
       proof_result: ${{ needs.cheatcodes.result }}
       repo: ${{ github.event.pull_request.head.repo.full_name }}
       sha: ${{ github.event.pull_request.head.sha }}

@@ -29,6 +29,7 @@ import {
   ACTIVITY_FILTER_NAMES,
   activityStage,
   duplicateComparisonLabel,
+  deferredReviewSummary,
   reviewEvidenceNotes,
   validationProgress,
 } from "./status";
@@ -119,7 +120,7 @@ function EvidenceNote(props: { label: string; text: string; lines?: number }): J
 
 function StageCell(props: { entry: ActivityRow }): JSX.Element {
   const e = () => props.entry;
-  const stage = () => activityStage(e().status);
+  const stage = () => activityStage(e().status, e());
   const note = () => artifactReleaseNote(e().artifact_release);
   return (
     <td class="stage-cell">
@@ -137,6 +138,11 @@ function StageCell(props: { entry: ActivityRow }): JSX.Element {
           />
         )}
       </For>
+      {/* #562: why this row is held and what the automated review concluded,
+          visible without opening the drawer. */}
+      <Show when={deferredReviewSummary(e())}>
+        {(summary) => <span class="stage-note deferred-review-summary">{summary()}</span>}
+      </Show>
       <Show when={!e().review_reason && e().screening_reason}>
         {(reason) => <EvidenceNote label="Screening" text={reason()} lines={3} />}
       </Show>

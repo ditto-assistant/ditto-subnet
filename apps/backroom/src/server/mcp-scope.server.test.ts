@@ -23,6 +23,14 @@ describe('MCP scope challenges', () => {
     expect(await request.json()).toMatchObject({ method: 'tools/call' })
   })
 
+  it('requires write scope for one paid conversation retry', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+        params: { name: 'authorize_conversation_retry', arguments: {} } }),
+    })
+    expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_WRITE_SCOPE])
+  })
+
   it('does not challenge read tools', async () => {
     const request = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',
@@ -614,6 +622,20 @@ describe('MCP scope challenges', () => {
     })
     expect(await callsWriteTool(request)).toBe(false)
     expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
+  })
+
+  it('keeps the text-free L4 cohort on ordinary read scope', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'list_screening_adjudication_attempts', arguments: {} },
+      }),
+    })
+    expect(await callsWriteTool(request)).toBe(false)
+    expect(await requiredScopesForRequest(request)).toEqual([])
   })
 
   it('gates source search on the artifact scope like an excerpt read', async () => {

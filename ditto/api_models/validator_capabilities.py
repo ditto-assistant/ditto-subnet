@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Annotated, Literal
 
@@ -144,6 +145,42 @@ class V7InferenceCalibration(BaseModel):
         return self
 
 
+class ScoredRuntimeEnvEvidence(BaseModel):
+    """Keys reported by a descriptor-verified scorer for its V13 sandbox."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    bench_version: Literal[13]
+    scope: Literal["scorer-injected-env-only"]
+    source_revision: Annotated[str, Field(pattern=_REVISION_PATTERN)]
+    injected_keys: Annotated[
+        tuple[Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]*$", max_length=128)], ...],
+        BeforeValidator(
+            lambda value: tuple(value) if isinstance(value, list) else value
+        ),
+    ]
+    sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]
+
+    @model_validator(mode="after")
+    def digest_matches_keys(self) -> ScoredRuntimeEnvEvidence:
+        if (
+            not self.injected_keys
+            or tuple(sorted(set(self.injected_keys))) != self.injected_keys
+        ):
+            raise ValueError(
+                "scorer injected keys must be nonempty, sorted, and unique"
+            )
+        material = (
+            "scored-runtime-env-v1\n13\n"
+            + self.source_revision
+            + "\n"
+            + "\n".join(self.injected_keys)
+        )
+        if hashlib.sha256(material.encode()).hexdigest() != self.sha256:
+            raise ValueError("scorer injected environment digest mismatch")
+        return self
+
+
 class ScorerBenchmarkCapability(BaseModel):
     """Identity-bound benchmark support observed from the scorer sidecar."""
 
@@ -154,7 +191,14 @@ class ScorerBenchmarkCapability(BaseModel):
     observed_at: Annotated[int | None, Field(ge=0)] = None
     software_version: Annotated[str | None, Field(pattern=_VERSION_PATTERN)] = None
     source_revision: Annotated[str | None, Field(pattern=_REVISION_PATTERN)] = None
+    scored_runtime_env: ScoredRuntimeEnvEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     v7_calibration: V7InferenceCalibration | None = None
+    private_datasets: bool = Field(default=False, exclude_if=lambda value: not value)
+    deterministic_v13_datasets: bool = Field(
+        default=False, exclude_if=lambda value: not value
+    )
     # Additive and optional so a validator that predates heartbeat protocol v15
     # produces the exact same signing bytes it always did. Absent means "this
     # validator cannot report probe evidence", never "the probe succeeded".
@@ -163,6 +207,24 @@ class ScorerBenchmarkCapability(BaseModel):
     @model_validator(mode="after")
     def support_matches_verified_identity(self) -> ScorerBenchmarkCapability:
         versions = self.supported_bench_versions
+        if self.scored_runtime_env is not None and (
+            self.status != "fresh_verified"
+            or 13 not in versions
+            or self.source_revision != self.scored_runtime_env.source_revision
+        ):
+            raise ValueError(
+                "scored runtime environment requires verified V13 identity"
+            )
+        if self.deterministic_v13_datasets and (
+            self.status != "fresh_verified" or 13 not in versions
+        ):
+            raise ValueError(
+                "deterministic v13 datasets require verified v13 scorer support"
+            )
+        if self.private_datasets and (
+            self.status != "fresh_verified" or 13 not in versions
+        ):
+            raise ValueError("private datasets require verified v13 scorer support")
         if tuple(sorted(set(versions))) != versions:
             raise ValueError("supported benchmark versions must be unique and sorted")
         if self.status == "fresh_verified":

@@ -1,6 +1,7 @@
 package codinghostedruntime
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -127,6 +128,10 @@ func loadConfigChecked(path string, executable func(string) bool) (*runtimeConfi
 	}
 	defer clear(gradingBytes)
 	if codingcontract.RequireExactCanonicalJSON(gradingBytes) != nil || fmt.Sprintf("%x", sha256.Sum256(gradingBytes)) != wire.GradingProfileSHA256 || grading.Validate() != nil {
+		return nil, ErrConfig
+	}
+	// Exact re-encoding rejects unknown keys such as a stale test_manifest_sha256.
+	if exact, err := codinghostedworker.GradingProfileBytes(grading); err != nil || !bytes.Equal(exact, gradingBytes) {
 		return nil, ErrConfig
 	}
 	token, err := readPrivate(wire.ControlTokenFile, 32)

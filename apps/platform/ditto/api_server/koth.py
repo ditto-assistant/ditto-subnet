@@ -16,12 +16,13 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from ditto.api_models.validator import LedgerEntry
 from ditto.api_server.efficiency import (
     CURVE_VERSION_BOUNDED_FACTOR,
     CURVE_VERSION_UNBOUNDED_FACTOR,
     is_factor_curve,
 )
-from ditto.score_order import rank_submissions
+from ditto.score_order import rank_submissions, score_order_key
 
 # Frozen consensus constants from ditto-subnet/ditto/validator/config.py.
 KOTH_MARGIN = 0.007
@@ -73,6 +74,106 @@ class KothEntry:
     efficiency_bonus: float | None = None
     efficiency_factor: float | None = None
     efficiency_curve_version: int | None = None
+
+
+def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
+    """Lift validator-wire ledger entries into the fold's public-safe shape.
+
+    The epoch pin stores the exact ``LedgerEntry`` list validators fold, so
+    the Platform's own projection of that pin -- the recorded champion, the
+    incumbent handed to the next pin, the per-epoch history -- must be built
+    from the same bytes rather than from a fresh database read that may
+    already have moved. ``raw_rank`` is the finalized canonical-median order,
+    matching :func:`_public_koth_emissions`; quorum composites come from the
+    signed score proofs and completed-wave composites from the continual
+    aggregate the entry carries.
+    """
+    by_median = sorted(entries, key=score_order_key)
+    raw_ranks = {entry.agent_id: rank for rank, entry in enumerate(by_median, start=1)}
+    lifted: list[KothEntry] = []
+    for entry in entries:
+        receipt = entry.v9_confirmation
+        history = _confirmation_history(entry)
+        confirmations = (
+            tuple(history.values())
+            if history is not None
+            else entry.confirmation_composites
+        )
+        seeds = (
+            tuple(history.keys()) if history is not None else entry.confirmation_seeds
+        )
+        paired_composites: tuple[float, ...] | None = None
+        paired_seeds: tuple[int, ...] | None = None
+        if (
+            confirmations is not None
+            and seeds is not None
+            and len(confirmations) == len(seeds)
+            and len(confirmations) >= 2
+        ):
+            paired_composites = tuple(confirmations)
+            paired_seeds = tuple(seeds)
+        lifted.append(
+            KothEntry(
+                miner_hotkey=entry.miner_hotkey,
+                agent_id=entry.agent_id,
+                composite=(
+                    receipt.full_effective_micros / 1_000_000
+                    if receipt is not None
+                    else entry.composite
+                ),
+                first_seen=entry.first_seen,
+                raw_rank=raw_ranks[entry.agent_id],
+                bench_version=entry.bench_version or 1,
+                composite_stderr=entry.composite_stderr,
+                quorum_composites=(
+                    ()
+                    if receipt is not None
+                    else tuple(proof.composite for proof in entry.score_proofs)
+                ),
+                completed_wave_composites=(
+                    ()
+                    if receipt is not None
+                    else (
+                        tuple(history.values())
+                        if history is not None
+                        and entry.continual_aggregate_method == "mean_after_quorum"
+                        else (
+                            ()
+                            if entry.confirmation_composites is None
+                            else tuple(entry.confirmation_composites)
+                        )
+                    )
+                ),
+                confirmation_composites=paired_composites,
+                confirmation_seeds=paired_seeds,
+                efficiency_bonus=entry.efficiency_bonus,
+                efficiency_factor=entry.efficiency_factor,
+                efficiency_curve_version=entry.efficiency_curve_version,
+            )
+        )
+    return lifted
+
+
+def _confirmation_history(entry: LedgerEntry) -> dict[int, float] | None:
+    """Collapse modern continual evidence exactly as the validator fold does."""
+    records = entry.confirmation_history
+    if not records:
+        return None
+    grouped: dict[int, list[float]] = {}
+    for record in records:
+        grouped.setdefault(record.seed, []).append(record.composite)
+    collapsed = {seed: _median(values) for seed, values in grouped.items() if values}
+    if not collapsed:
+        return None
+    return dict(sorted(collapsed.items())[:TOP5_MAX_CONFIRMATION_SEEDS])
+
+
+def _median(values: Sequence[float]) -> float:
+    ordered = sorted(values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return (ordered[midpoint - 1] + ordered[midpoint]) / 2.0
 
 
 @dataclass(frozen=True)
@@ -324,6 +425,57 @@ def _distinct_ranked(entries: Sequence[KothEntry]) -> tuple[KothEntry, ...]:
     return tuple(distinct)
 
 
+@dataclass(frozen=True)
+class TieBandComparison:
+    """The arithmetic behind one tie-tolerant cohort admission decision.
+
+    Returned so a read-only operator view can show *why* an agent fell outside
+    the cutoff instead of only that it did: the score gap it has to close, the
+    band that would have forgiven it, and the resulting verdict.
+    """
+
+    gap: float
+    """``score(cutoff) - score(candidate)``; negative when already ahead."""
+
+    tolerance: float
+    """``z * sqrt(se_candidate^2 + se_cutoff^2)`` on the same score scale."""
+
+    indistinguishable: bool
+    """Whether the gap is inside the band (an exact tie or better counts)."""
+
+
+def tie_band_comparison(
+    candidate: KothEntry, cutoff: KothEntry, *, tolerance_z: float
+) -> TieBandComparison:
+    """Compare ``candidate`` against the ``cutoff`` agent's tie band.
+
+    The single expression of the band; :func:`indistinguishable_from` is the
+    boolean the fold and the cohort builder call, and this is the same
+    computation with its intermediate terms kept for diagnosis. Both must stay
+    one implementation: an operator read that derived the band separately could
+    explain an exclusion the lane did not actually make.
+    """
+    quality_primary = _quality_primary_efficiency_active((candidate, cutoff))
+    score = continual_composite if quality_primary else effective_composite
+    gap = score(cutoff) - score(candidate)
+    # Stderr lives on the pre-efficiency quality scale. Propagate it through
+    # the frozen score transform before deciding whether the cutoff is
+    # unsettled, matching both Platform's dethrone decision and the validator
+    # fold.
+    candidate_stderr = (_stderr(candidate) or 0.0) * (
+        1.0 if quality_primary else _efficiency_stderr_scale(candidate)
+    )
+    cutoff_stderr = (_stderr(cutoff) or 0.0) * (
+        1.0 if quality_primary else _efficiency_stderr_scale(cutoff)
+    )
+    tolerance = tolerance_z * math.sqrt(candidate_stderr**2 + cutoff_stderr**2)
+    return TieBandComparison(
+        gap=gap,
+        tolerance=tolerance,
+        indistinguishable=gap <= 0.0 or gap <= tolerance,
+    )
+
+
 def indistinguishable_from(
     candidate: KothEntry, cutoff: KothEntry, *, tolerance_z: float
 ) -> bool:
@@ -342,23 +494,9 @@ def indistinguishable_from(
     rank 11 holding the identical composite to rank 10 is not a ranking, it is a
     coin flip, and a fixed cutoff resolves it by arbitrary tiebreak.
     """
-    quality_primary = _quality_primary_efficiency_active((candidate, cutoff))
-    score = continual_composite if quality_primary else effective_composite
-    gap = score(cutoff) - score(candidate)
-    if gap <= 0.0:
-        return True
-    # Stderr lives on the pre-efficiency quality scale. Propagate it through
-    # the frozen score transform before deciding whether the cutoff is
-    # unsettled, matching both Platform's dethrone decision and the validator
-    # fold.
-    candidate_stderr = (_stderr(candidate) or 0.0) * (
-        1.0 if quality_primary else _efficiency_stderr_scale(candidate)
-    )
-    cutoff_stderr = (_stderr(cutoff) or 0.0) * (
-        1.0 if quality_primary else _efficiency_stderr_scale(cutoff)
-    )
-    tolerance = tolerance_z * math.sqrt(candidate_stderr**2 + cutoff_stderr**2)
-    return gap <= tolerance
+    return tie_band_comparison(
+        candidate, cutoff, tolerance_z=tolerance_z
+    ).indistinguishable
 
 
 def retest_cohort(
@@ -529,6 +667,7 @@ def project_koth(
     *,
     distinct_hotkeys: bool = False,
     ceiling_band_clamp: bool = False,
+    incumbent_agent_id: UUID | None = None,
 ) -> KothProjection | None:
     """Return the champion and participation tail for an eligible score pool.
 
@@ -551,8 +690,24 @@ def project_koth(
 
     ranked = _ranked_entries(scored)
     ordered = sorted(scored, key=lambda entry: (entry.first_seen, entry.agent_id))
-    champion = ordered[0]
-    for challenger in ordered[1:]:
+    # Crown incumbency (``crown_mode: incumbent``): the previous epoch's
+    # champion, resolved into this pool, opens the walk instead of the earliest
+    # lineage, so a senior claimant inside the band no longer retakes the crown
+    # on every read. Every other entry still has to clear the band over the
+    # running champion, in the same first-seen order. An incumbent that is not
+    # in the pool (bootstrap, lineage gone) falls back to the classic walk.
+    incumbent = next(
+        (entry for entry in scored if entry.agent_id == incumbent_agent_id), None
+    )
+    if incumbent is not None:
+        champion = incumbent
+        challengers = [
+            entry for entry in ordered if entry.agent_id != incumbent.agent_id
+        ]
+    else:
+        champion = ordered[0]
+        challengers = ordered[1:]
+    for challenger in challengers:
         if _dethrone_decision(
             challenger, champion, ceiling_band_clamp=ceiling_band_clamp
         ).dethrones:

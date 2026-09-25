@@ -321,19 +321,6 @@ class TestPaymentVerifierEnvelope:
         assert body["message"] == "payment proof already used"
 
 
-class TestAuthPassThrough:
-    """The no-op stub must not alter responses."""
-
-    async def test_does_not_change_status_or_headers(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        override_get_session(app)
-        override_get_chain_client(app)
-        response = await client.get("/health")
-        # Stub is transparent: real auth would 401 here.
-        assert response.status_code == 200
-
-
 class TestInferenceDeclineEnvelope:
     """The wire contract a broker classifies on.
 

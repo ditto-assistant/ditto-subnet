@@ -182,6 +182,37 @@ def test_scorer_benchmark_capability_fails_closed_without_verified_identity() ->
         )
 
 
+def test_deterministic_v13_capability_preserves_old_signatures_and_is_strict() -> None:
+    legacy = {
+        "status": "fresh_verified",
+        "supported_bench_versions": (13,),
+        "observed_at": 1,
+        "software_version": "1.2.3",
+        "source_revision": _REVISION,
+    }
+    baseline = ScorerBenchmarkCapability.model_validate(legacy)
+    assert "deterministic_v13_datasets" not in baseline.model_dump(mode="json")
+    assert (
+        baseline.model_dump_json()
+        == ScorerBenchmarkCapability.model_validate(
+            legacy | {"deterministic_v13_datasets": False}
+        ).model_dump_json()
+    )
+    assert ScorerBenchmarkCapability.model_validate(
+        legacy | {"deterministic_v13_datasets": True}
+    ).deterministic_v13_datasets
+    for invalid in ("true", 1, None):
+        with pytest.raises(ValidationError):
+            ScorerBenchmarkCapability.model_validate(
+                legacy | {"deterministic_v13_datasets": invalid}
+            )
+    with pytest.raises(ValidationError):
+        ScorerBenchmarkCapability.model_validate(
+            legacy
+            | {"supported_bench_versions": (12,), "deterministic_v13_datasets": True}
+        )
+
+
 def test_heartbeat_protocol_v7_requires_both_typed_identity_sections() -> None:
     payload = json.loads(_V7_VECTOR.read_text())["request"]
     payload["signature"] = "ab" * 64

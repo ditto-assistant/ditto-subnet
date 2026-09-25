@@ -28,8 +28,10 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     assert "cheatcodes" in workflow["jobs"]
     assert "dashboard-bundle" in workflow["jobs"]
     assert "dashboard-publish" in workflow["jobs"]
-    assert "uv run pytest ditto/tests/preview -q" in text
-    assert "uv run python -m ditto.preview compose" in text
+    assert "uv run --locked pytest ditto/tests/preview -q" in text
+    assert "uv run --locked python -m ditto.preview compose" in text
+    # An unlocked `uv run` would silently resolve dependencies outside uv.lock.
+    assert "uv run " not in text.replace("uv run --locked ", "")
     assert "pull-requests: read" in text
     assert "gh api --paginate" in text
     assert "ref: ${{ needs.plan.outputs.sha }}" in text
@@ -70,6 +72,10 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     )
     assert publish["with"]["bundle_result"] == "${{ needs.dashboard-bundle.result }}"
     assert publish["with"]["proof_result"] == "${{ needs.cheatcodes.result }}"
+    # The publisher only sees "bundle skipped"; the resolved profiles are the
+    # reason, and they exist only here, so a skip cannot be explained without
+    # forwarding them.
+    assert publish["with"]["profiles"] == "${{ needs.plan.outputs.profiles }}"
     assert publish["with"]["sha"] == "${{ github.event.pull_request.head.sha }}"
     assert publish["secrets"] == {
         "cloudflare_api_token": "${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}"
@@ -319,6 +325,7 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
         "action",
         "bundle_result",
         "pr",
+        "profiles",
         "proof_result",
         "repo",
         "sha",
@@ -329,10 +336,17 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
             "required": False,
         }
     }
-    assert set(workflow["jobs"]) == {"preflight", "inspect", "publish", "retire"}
+    assert set(workflow["jobs"]) == {
+        "preflight",
+        "inspect",
+        "publish",
+        "explain",
+        "retire",
+    }
     preflight = workflow["jobs"]["preflight"]
     inspect = workflow["jobs"]["inspect"]
     publish = workflow["jobs"]["publish"]
+    explain = workflow["jobs"]["explain"]
     retire = workflow["jobs"]["retire"]
     # Preflight enters the preview environment only to answer "are the Pages
     # credentials configured", so an unconfigured repository skips publication
@@ -371,6 +385,52 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
             f"needs.inspect.outputs.mode == '{mode}' && "
             "needs.preflight.outputs.configured == 'true'"
         )
+    # A silent skip reads as a broken integration, so a policy skip explains
+    # itself on the PR. Explaining needs no credentials and no PR code: no
+    # environment, no checkout, and only the comment scope.
+    assert "environment" not in explain
+    assert explain["permissions"] == {"pull-requests": "write"}
+    assert explain["needs"] == ["inspect", "preflight", "publish"]
+    # Pin the WHOLE condition. `explain` needs `publish`, which is skipped in
+    # exactly the case this feature exists for, so dropping `always()` would
+    # disable it on every policy skip -- and a substring match on the second
+    # clause alone would still pass.
+    assert explain["if"] == "always() && inputs.action != 'closed'"
+    # The script carries no `${{ }}`, so the env block is the only thing
+    # supplying these. Unpinned, deleting a mapping keeps every other
+    # assertion green while `set -u` fails the job on every PR.
+    assert explain["env"]["PREVIEW_PROFILES"] == "${{ inputs.profiles }}"
+    assert explain["env"]["PUBLISH_RESULT"] == "${{ needs.publish.result }}"
+    assert explain["env"]["CONFIGURED"] == "${{ needs.preflight.outputs.configured }}"
+    assert explain["env"]["PREVIEW_PR"] == "${{ inputs.pr }}"
+    assert explain["env"]["PREVIEW_SHA"] == "${{ inputs.sha }}"
+    assert len(explain["steps"]) == 1
+    assert "uses" not in explain["steps"][0]
+    explain_script = explain["steps"][0]["run"]
+    assert "marker='<!-- ditto-dashboard-preview-skipped -->'" in explain_script
+    # The comment must hand over the dispatch that provisions what the change
+    # needs, not merely state that nothing was published.
+    assert "gh workflow run preview-stack.yml -f pr=%s" in explain_script
+    assert "-f action=retire" in explain_script
+    # Resolving to stack because the PR changes stack paths, and resolving to
+    # stack because it changes no dashboard path and selection fails closed,
+    # are different facts. Pin both so the second is never told it touched
+    # runtime code it never went near.
+    assert "changes stack-owned paths as well as the dashboard" in explain_script
+    # Backtick-free substrings: the shell string escapes its own backticks, so
+    # matching on a Markdown-quoted term here would assert the escaping, not
+    # the wording.
+    assert "so there is no dashboard build to publish" in explain_script
+    assert "fails closed rather than guessing" in explain_script
+    # A later dashboard-only push publishes a real URL, so the stale
+    # explanation is removed rather than left to contradict it -- on the
+    # no-body branch specifically, and never at the cost of failing the run.
+    assert 'if [ -z "$body" ]' in explain_script
+    assert "-X DELETE" in explain_script
+    assert "could not remove the stale explanation comment" in explain_script
+    # Nothing a pull request controls reaches a shell word; it arrives via env.
+    assert "${{ inputs." not in explain_script
+    assert "${{ github.event." not in explain_script
     assert "workflow_run:" not in text
     assert "pull_request_target:" not in text
     assert SETUP_NODE in text

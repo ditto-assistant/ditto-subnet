@@ -462,6 +462,14 @@ caller-supplied harness URLs, so it guards against abuse:
   is bounded separately so those limits cannot overcommit the validator host
   alongside Docker, Pylon, and the worker. A request-body cap rejects oversized
   payloads.
+- `DITTOBENCH_TRUSTED_PROXY_HOPS` (default `1`, range `0`–`8`): how many
+  right-most `X-Forwarded-For` entries come from proxies this service trusts.
+  The per-IP key is the entry that many positions from the right, never the
+  left-most one, because callers can write the start of the header themselves.
+  Use `1` behind the Google front end of a `*.run.app` URL, `2` behind an
+  external Application Load Balancer (which appends client then its own
+  address), and `0` when the service is exposed directly. A missing, short, or
+  non-IP header falls back to the connection's peer address.
 - `DITTOBENCH_ALLOW_PRIVATE_HARNESS`: set truthy for local dev or the Docker
   sandbox (loopback containers) to relax the SSRF guard. Leave it unset in
   production; the guard is on by default.
@@ -469,8 +477,8 @@ caller-supplied harness URLs, so it guards against abuse:
   The prebuilt-image path is therefore rejected on the public practice API and
   is only enabled on validator-owned sandbox deployments by the narrow
   `DITTOBENCH_ALLOW_SCREENED_IMAGES=1` opt-in. The validator must keep that API
-  private. `DITTOBENCH_ALLOW_PRIVATE_HARNESS` remains separate and is only
-  needed when local source/image URLs themselves resolve to private addresses.
+  private. `DITTOBENCH_ALLOW_PRIVATE_HARNESS` is mutually exclusive with it: the
+  API refuses to start when both are truthy.
   Imported archive and local runner tags are removed after each run so validator
   disks do not accumulate submission images.
 - Benchmark v7 and v8 require the screener-built, digest- and image-ID-bound

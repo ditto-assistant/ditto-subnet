@@ -38,7 +38,7 @@ import os
 import re
 import statistics
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from datetime import time as datetime_time
@@ -104,11 +104,19 @@ from ditto.api_models import (
     PublicLeaderboardFamily,
     PublicLeaderboardFamilyMember,
     PublicLeaderboardResponse,
+    PublicLedgerActor,
+    PublicLedgerEpoch,
+    PublicLedgerEpochRecipient,
+    PublicLedgerEpochsResponse,
+    PublicLedgerPin,
     PublicMetricDoc,
     PublicModelUse,
     PublicNameHandle,
+    PublicNextPinProjection,
     PublicOperationsResponse,
+    PublicOrdinaryReview,
     PublicOrphanedSlot,
+    PublicPinAgreement,
     PublicProvisionalScore,
     PublicRolloutQueueEntry,
     PublicRunModels,
@@ -144,6 +152,7 @@ from ditto.api_models import (
     PublicValidatorScore,
     PublicValidatorSlotPolicy,
     PublicValidatorWeightVector,
+    PublicWeightsFold,
     public_validation_failure_code,
 )
 from ditto.api_models import bench_glossary as bench_glossary_data
@@ -152,11 +161,21 @@ from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
+from ditto.api_models.continual_retest_settings import (
+    CROWN_INCUMBENT_PROTOCOL as _CROWN_INCUMBENT_PROTOCOL,
+)
+from ditto.api_models.continual_retest_settings import (
+    ContinualRetestSettings,
+)
 from ditto.api_models.model_use import ModelUseVerdict
 from ditto.api_models.public import (
     BenchServiceability,
     FleetAvailability,
     FleetHealth,
+    PublicDeferredReviewTrigger,
+    PublicReviewConclusion,
+    PublicScreeningInvariantAssessment,
+    PublicScreeningReviewNote,
     ScorerLiveness,
     ValidatorAssignmentState,
 )
@@ -166,6 +185,11 @@ from ditto.api_models.screener import (
     ScreenEvidenceItem,
     SourceReviewFinding,
 )
+from ditto.api_models.screener_policy_activation import (
+    PublicV13ReviewClockRevision,
+    PublicV13ReviewClockSchedule,
+)
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import (
     SystemMetrics,
@@ -173,6 +197,7 @@ from ditto.api_models.system_health import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import (
+    LedgerEntry,
     V9BaseEvidence,
     V9ConfirmationReceipt,
     ValidatorRuntimeState,
@@ -184,13 +209,25 @@ from ditto.api_models.validator_capabilities import (
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 from ditto.api_server.artifact_audit import client_ip, request_detail
+from ditto.api_server.ath_review_state import (
+    DEFAULT_OPEN_REASON,
+    derive_ath_review_lifecycle,
+)
 from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retired
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
+    crown_incumbent_is_active,
     tie_weighting_is_active,
 )
 from ditto.api_server.datapipeline import DataPipelineError
+from ditto.api_server.deferred_source_review import (
+    DEFERRED_REVIEW_KIND,
+    deep_review_attempt_id,
+    public_deferred_review_triggers,
+    public_review_conclusion,
+    verified_review_notes,
+)
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
     ensure_current_efficiency_state,
@@ -208,6 +245,11 @@ from ditto.api_server.endpoints.scoring import (
 from ditto.api_server.endpoints.screener import GeneratorDep
 from ditto.api_server.endpoints.upload import _verify_signature
 from ditto.api_server.endpoints.validator import SessionDep, StorageDep
+from ditto.api_server.gate_evidence import (
+    GATE_NOTE_DISPUTE_STATUSES,
+    gate_note_ids_for,
+    public_gate_evidence,
+)
 from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
@@ -222,7 +264,12 @@ from ditto.api_server.koth import (
     bounded_efficiency_adjusted_quality,
     champion_defense,
     emission_allocation,
+    koth_entries_from_ledger,
     project_koth,
+)
+from ditto.api_server.ledger_pin import (
+    classify_vector_against_pins,
+    pin_expected_shares,
 )
 from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.model_use import model_use_factor, model_use_policy
@@ -244,12 +291,16 @@ from ditto.db.models import (
     ConfirmationScore,
     EvaluationPayment,
     InferenceGrant,
+    LedgerEpochSnapshot,
     Score,
     ScreenerCapacitySnapshot,
     ScreenerNode,
+    ScreenerReviewSettingsRevision,
+    ScreeningAttempt,
     ScreeningDispute,
     ScreeningQuarantine,
     ScreeningRetryOverride,
+    ScreeningReviewDeadlineActivation,
     SubmissionImageBuild,
     ValidatorHeartbeat,
     ValidatorTicket,
@@ -310,6 +361,7 @@ from ditto.db.queries.heartbeats import (
 )
 from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
+from ditto.db.queries.ledger_epochs import latest_pin, list_pins
 from ditto.db.queries.miner_avatars import get_miner_avatar, list_miner_avatars
 from ditto.db.queries.orphaned_leases import OrphanedLease, list_orphaned_leases
 from ditto.db.queries.queue_order import (
@@ -356,7 +408,18 @@ from ditto.db.queries.scores import (
 from ditto.db.queries.screening import (
     PROVIDER_BACKOFF_REASON_CODES,
     get_running_screening_attempts,
+    infra_retry_agent_admitted,
     list_screening_attempts,
+)
+from ditto.db.queries.screening_infra_retry import (
+    INFRA_AUTO_RETRY_REASON_CODES,
+    plan_infra_retries,
+)
+from ditto.db.queries.screening_retry import failed_screening_retry_authorized
+from ditto.db.queries.screening_review_deadlines import POLICY_V13_DOCUMENT_DIGEST
+from ditto.db.queries.source_review_queue_slo import (
+    ORDINARY_REVIEW_ACTIONABLE_STATUSES,
+    load_source_review_queue_slo_snapshot,
 )
 from ditto.db.queries.tickets import (
     get_score_continuation_floor,
@@ -509,6 +572,7 @@ _BENCHMARK_STALL_PER_CHECK = timedelta(seconds=60)
 _PUBLIC_ACTIVITY_STATUSES = frozenset(
     {
         "waiting_screening",
+        "screening_failed",
         "screening",
         "waiting_validator",
         "evaluating",
@@ -667,6 +731,86 @@ def _public_epoch(snapshot: ChainWeightsSnapshot) -> PublicChainEpoch | None:
     )
 
 
+def _public_weights_fold(row: ValidatorHeartbeat) -> PublicWeightsFold | None:
+    """The closed fold report off one heartbeat row, or ``None`` if absent/invalid."""
+    if row.protocol_version < 27 or not isinstance(row.weights_fold, dict):
+        return None
+    try:
+        return PublicWeightsFold.model_validate(row.weights_fold)
+    except ValidationError:
+        return None
+
+
+async def _pin_decorations(
+    request: Request,
+) -> tuple[list[LedgerEpochSnapshot], dict[str, PublicWeightsFold]]:
+    """The two newest pins and every validator's reported fold, fail-soft.
+
+    Decoration on the matrix: a database problem here degrades the agreement
+    column to ``unknown`` and the fold to null rather than taking the matrix
+    down with it.
+    """
+    session_maker = getattr(request.app.state, "session_maker", None)
+    config = getattr(request.app.state, "config", None)
+    if session_maker is None or config is None:
+        return [], {}
+    try:
+        async with session_maker() as session:
+            pins = list(await list_pins(session, netuid=config.chain.netuid, limit=2))
+            rows = (await session.scalars(select(ValidatorHeartbeat))).all()
+    except SQLAlchemyError:
+        logger.warning("pin agreement decoration unavailable", exc_info=True)
+        return [], {}
+    folds = {}
+    for row in rows:
+        fold = _public_weights_fold(row)
+        if fold is not None:
+            folds[row.validator_hotkey] = fold
+    return pins, folds
+
+
+def _decorate_vectors_with_pins(
+    vectors: list[PublicValidatorWeightVector],
+    *,
+    pins: list[LedgerEpochSnapshot],
+    folds: dict[str, PublicWeightsFold],
+    burn_hotkey: str | None,
+) -> tuple[list[PublicValidatorWeightVector], PublicPinAgreement | None]:
+    current = pins[0] if pins else None
+    previous = pins[1] if len(pins) > 1 else None
+    expected_current = pin_expected_shares(current) if current is not None else None
+    expected_previous = pin_expected_shares(previous) if previous is not None else None
+    decorated: list[PublicValidatorWeightVector] = []
+    matching = 0
+    for vector in vectors:
+        verdict = classify_vector_against_pins(
+            {weight.hotkey: weight.value for weight in vector.weights},
+            expected_current=expected_current,
+            expected_previous=expected_previous,
+            burn_hotkey=burn_hotkey,
+        )
+        matching += verdict == "current"
+        decorated.append(
+            vector.model_copy(
+                update={
+                    "fold": folds.get(vector.validator_hotkey),
+                    "matches_pin": verdict,
+                }
+            )
+        )
+    agreement = (
+        PublicPinAgreement(
+            epoch_index=current.epoch_index,
+            previous_epoch_index=previous.epoch_index if previous else None,
+            matching=matching,
+            total=len(decorated),
+        )
+        if current is not None
+        else None
+    )
+    return decorated, agreement
+
+
 async def _refresh_chain_weights(request: Request) -> _ChainWeightsSnapshot | None:
     """Read the matrix from chain and cache it, or return ``None`` on failure.
 
@@ -690,6 +834,25 @@ async def _refresh_chain_weights(request: Request) -> _ChainWeightsSnapshot | No
             _error_detail(error),
         )
         return None
+    pins, folds = await _pin_decorations(request)
+    vectors, agreement = _decorate_vectors_with_pins(
+        [
+            PublicValidatorWeightVector(
+                validator_uid=vector.validator_uid,
+                validator_hotkey=vector.validator_hotkey,
+                weights=[
+                    PublicChainWeight(
+                        uid=weight.uid, hotkey=weight.hotkey, value=weight.value
+                    )
+                    for weight in vector.weights
+                ],
+            )
+            for vector in snapshot.vectors
+        ],
+        pins=pins,
+        folds=folds,
+        burn_hotkey=snapshot.owner_hotkey,
+    )
     refreshed = _ChainWeightsSnapshot(
         payload=PublicChainWeightsResponse(
             generated_at=datetime.now(UTC),
@@ -698,19 +861,8 @@ async def _refresh_chain_weights(request: Request) -> _ChainWeightsSnapshot | No
             block=snapshot.block,
             block_hash=snapshot.block_hash,
             owner_hotkey=snapshot.owner_hotkey,
-            vectors=[
-                PublicValidatorWeightVector(
-                    validator_uid=vector.validator_uid,
-                    validator_hotkey=vector.validator_hotkey,
-                    weights=[
-                        PublicChainWeight(
-                            uid=weight.uid, hotkey=weight.hotkey, value=weight.value
-                        )
-                        for weight in vector.weights
-                    ],
-                )
-                for vector in snapshot.vectors
-            ],
+            vectors=vectors,
+            pin_agreement=agreement,
         ),
         read_at=time.monotonic(),
     )
@@ -782,6 +934,7 @@ def screening_dispute_signing_message(agent_id: UUID, message: str) -> bytes:
 
 def _public_dispute(dispute: ScreeningDispute) -> PublicScreeningDispute:
     return PublicScreeningDispute(
+        kind=dispute.kind,  # type: ignore[arg-type]
         status=dispute.status,  # type: ignore[arg-type]
         submitted_at=dispute.created_at,
         resolved_at=dispute.resolved_at,
@@ -793,19 +946,52 @@ def _public_terminal_screening_review(
     quarantine: ScreeningQuarantine | None,
     *,
     artifact_sha256: str,
-) -> tuple[list[PublicScreeningReviewEvidence], PublicScreeningReviewFinding | None]:
+    attempt: ScreeningAttempt,
+) -> tuple[
+    list[PublicScreeningReviewEvidence],
+    PublicScreeningReviewFinding | None,
+    list[PublicScreeningReviewNote],
+]:
     """Project only verified review data from a terminal cheating rejection.
 
-    Active quarantines and release/rescreen resolutions retain their private source
+    Active quarantines and released reviews retain their private source
     layout. The public projection strips evidence digests and the artifact digest,
     and never contains source snippets, prompts, transcripts, or challenge values.
+    Deferred adjudicated rejections historically store a rescreen resolution;
+    the exact rejected attempt and reason code establish that terminal decision.
     """
     if (
         quarantine is None
+        or quarantine.agent_id != attempt.agent_id
+        or quarantine.attempt_id != attempt.attempt_id
+        or quarantine.policy_version != attempt.policy_version
         or quarantine.status != "resolved"
-        or quarantine.resolution != "reject"
+        or not (
+            quarantine.resolution == "reject"
+            or (
+                quarantine.resolution == "rescreen"
+                and attempt.status == "rejected"
+                and attempt.reason_code == "adjudicated-source-review-reject"
+                and quarantine.reason_code == attempt.reason_code
+            )
+        )
     ):
-        return [], None
+        return [], None, []
+
+    # These bounded reviewer-authored summaries are public-safe by protocol.
+    # They are working observations, not additional final rejection findings.
+    notes: list[PublicScreeningReviewNote] = []
+    parsed_notes = verified_review_notes(
+        quarantine.review_notes, quarantine.review_notes_digest
+    )
+    if parsed_notes is not None:
+        try:
+            notes = [
+                PublicScreeningReviewNote.model_validate(note.model_dump())
+                for note in parsed_notes
+            ]
+        except ValueError:
+            notes = []
 
     evidence: list[PublicScreeningReviewEvidence] = []
     if isinstance(quarantine.evidence, list):
@@ -826,31 +1012,42 @@ def _public_terminal_screening_review(
         ]
 
     if not isinstance(quarantine.finding, dict):
-        return evidence, None
+        return evidence, None, notes
     try:
         finding = SourceReviewFinding.model_validate(quarantine.finding)
     except ValueError:
-        return evidence, None
+        return evidence, None, notes
     if (
         quarantine.finding_digest is None
         or finding.canonical_digest() != quarantine.finding_digest
         or finding.artifact_sha256 != artifact_sha256
     ):
-        return evidence, None
-    return evidence, PublicScreeningReviewFinding(
-        reviewer_revision=finding.prompt_revision,
-        risk_level=finding.risk_level,
-        confidence=finding.confidence,
-        categories=sorted(set(finding.categories)),
-        locations=[
-            PublicScreeningReviewLocation(
-                path=item.path,
-                line=item.line,
-                category=item.category,
-            )
-            for item in finding.evidence
-        ],
-        summary=finding.summary,
+        return evidence, None, notes
+    return (
+        evidence,
+        PublicScreeningReviewFinding(
+            reviewer_revision=finding.prompt_revision,
+            risk_level=finding.risk_level,
+            confidence=finding.confidence,
+            categories=sorted(set(finding.categories)),
+            locations=[
+                PublicScreeningReviewLocation(
+                    path=item.path,
+                    line=item.line,
+                    category=item.category,
+                )
+                for item in finding.evidence
+            ],
+            summary=finding.summary,
+            invariant_assessment=(
+                PublicScreeningInvariantAssessment.model_validate(
+                    finding.invariant_assessment.model_dump()
+                )
+                if finding.invariant_assessment is not None
+                else None
+            ),
+        ),
+        notes,
     )
 
 
@@ -870,13 +1067,9 @@ def _public_artifact_release(
 ) -> PublicArtifactRelease:
     """Project source visibility without mutating a public GET request.
 
-    Source release is **king-only** and gated by on-chain weights: an agent's
-    source is revealed only once it has (1) held the KOTH crown and (2) had
-    validators' revealed on-chain weights set on it (post commit-reveal). The
-    embargo window is measured from that on-chain confirmation
-    (``king_reveal.weight_confirmed_at``), not from the score quorum. An agent
-    that touched the crown but is not yet chain-confirmed stays ``embargoed``
-    with no unlock time; one that never reigned stays ``unavailable`` forever.
+    Source release requires a crown and verified completed winner emissions for
+    this exact submission. The embargo starts at ``emission_confirmed_at``;
+    revealed weights alone never establish earnings or an unlock time.
 
     Subnet policy short-circuits all of that. It is checked first, ahead of
     even the rejected/banned branch, because it is the one input whose answer
@@ -895,9 +1088,12 @@ def _public_artifact_release(
     weight_confirmed_at = (
         king_reveal.weight_confirmed_at if king_reveal is not None else None
     )
+    emission_confirmed_at = (
+        king_reveal.emission_confirmed_at if king_reveal is not None else None
+    )
     available_at = (
-        weight_confirmed_at + timedelta(hours=policy.embargo_hours)
-        if weight_confirmed_at is not None
+        emission_confirmed_at + timedelta(hours=policy.embargo_hours)
+        if emission_confirmed_at is not None
         else None
     )
     release_status: Literal[
@@ -913,8 +1109,7 @@ def _public_artifact_release(
         # Never held the crown: the source stays private (king-only release).
         release_status = "unavailable"
     elif available_at is None:
-        # Ever king, but on-chain weights not yet confirmed: withheld with no
-        # unlock time until commit-reveal confirms validators backed this miner.
+        # A crown or revealed weights alone do not establish completed earnings.
         release_status = "embargoed"
     else:
         release_status = "available" if now >= available_at else "embargoed"
@@ -929,6 +1124,7 @@ def _public_artifact_release(
         finalized_at=finalized_at,
         crowned_at=first_crowned_at,
         weight_confirmed_at=weight_confirmed_at,
+        emission_confirmed_at=emission_confirmed_at,
         available_at=(
             available_at if release_status in ("embargoed", "available") else None
         ),
@@ -2132,6 +2328,8 @@ def _public_entry(
     name_handle: PublicNameHandle | None = None,
     avatar_url: str | None = None,
     coding_shadow: PublicCodingShadowScore | None = None,
+    router_shadow_by_hotkey: Mapping[str, float] | None = None,
+    router_shadow_queued: bool = False,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -2256,6 +2454,12 @@ def _public_entry(
         ),
         v9_confirmation_evidence_sha256=(
             v9_confirmation.evidence_sha256 if v9_confirmation is not None else None
+        ),
+        router_shadow_composite=(router_shadow_by_hotkey or {}).get(r.miner_hotkey),
+        router_shadow_status=(
+            "measured"
+            if r.miner_hotkey in (router_shadow_by_hotkey or {})
+            else ("queued" if router_shadow_queued else None)
         ),
         pre_efficiency_composite=(
             pre_efficiency_composite
@@ -2399,6 +2603,7 @@ def _public_leaderboard_family(
             )[0],
             agent_version=member.agent_version,
             canonical_composite=member.canonical_composite,
+            official_composite=getattr(member, "official_composite", None),
             submitted_at=member.submitted_at,
             miner_hotkey=member.miner_hotkey,
             confirmation_seed_depth=depths.get(member.agent_id, 0),
@@ -2406,6 +2611,17 @@ def _public_leaderboard_family(
         for member in members
         if member.agent_id != representative_agent_id
     ]
+    children.sort(
+        key=lambda member: (
+            -(
+                member.official_composite
+                if member.official_composite is not None
+                else member.canonical_composite
+            ),
+            member.submitted_at or datetime.min.replace(tzinfo=UTC),
+            str(member.agent_id),
+        )
+    )
     return PublicLeaderboardFamily(members=children) if children else None
 
 
@@ -2424,8 +2640,16 @@ def _public_koth_emissions(
     efficiency_curve_versions: dict[UUID, int] | None = None,
     tie_weighting_active: bool = False,
     ceiling_band_clamp: bool = False,
+    ledger_pin: PublicLedgerPin | None = None,
+    crown_incumbent_active: bool = False,
 ) -> PublicKothEmissions | None:
-    """Project the caller's finalized, registration-eligible score pool."""
+    """Project the caller's finalized, registration-eligible score pool.
+
+    With incumbency active the live fold opens from the current pin's champion,
+    exactly as the next pin will, so ``champion_agent_id`` is also the crown the
+    fleet will fold at the next boundary and ``next_pin_projection`` says
+    whether that moves the 65% slot.
+    """
     quorum_values = quorum_by_agent or {}
     bonus_values = efficiency_bonuses or {}
     factor_values = efficiency_factors or {}
@@ -2505,10 +2729,16 @@ def _public_koth_emissions(
             )
         )
 
+    incumbent_id = (
+        ledger_pin.champion_agent_id
+        if crown_incumbent_active and ledger_pin is not None
+        else None
+    )
     projection = project_koth(
         fold_entries,
         distinct_hotkeys=tie_weighting_active,
         ceiling_band_clamp=ceiling_band_clamp,
+        incumbent_agent_id=incumbent_id,
     )
     if projection is None:
         return None
@@ -2600,6 +2830,44 @@ def _public_koth_emissions(
             else None
         ),
         recipients=recipients,
+        ledger_pin=ledger_pin,
+        crown_incumbent_active=crown_incumbent_active,
+        crown_incumbent_required_protocol=_CROWN_INCUMBENT_PROTOCOL,
+        crown_incumbent_agent_id=(
+            incumbent_id
+            if any(entry.agent_id == incumbent_id for entry in fold_entries)
+            else None
+        ),
+        next_pin_projection=(
+            PublicNextPinProjection(
+                champion_agent_id=projection.champion.agent_id,
+                champion_miner_hotkey=projection.champion.miner_hotkey,
+                incumbent_agent_id=ledger_pin.champion_agent_id,
+                changes_crown=(
+                    projection.champion.agent_id != ledger_pin.champion_agent_id
+                ),
+                decision=(
+                    PublicDethroneDecision(
+                        challenger_lead=defense.challenger_lead,
+                        required_lead=defense.required_lead,
+                        margin_lead=defense.margin_lead,
+                        statistical_lead=defense.statistical_lead,
+                        method=defense.method,
+                        dethrones=defense.dethrones,
+                        required_score=defense.required_score,
+                        score_ceiling=defense.score_ceiling,
+                        ceiling_deadlocked=defense.ceiling_deadlocked,
+                        paired_standard_error=defense.paired_standard_error,
+                        shared_seed_count=defense.shared_seed_count,
+                        seed_differences=defense.seed_differences,
+                    )
+                    if defense is not None
+                    else None
+                ),
+            )
+            if ledger_pin is not None
+            else None
+        ),
     )
 
 
@@ -2943,6 +3211,16 @@ async def build_public_leaderboard(
             freshness=_VALIDATOR_STALE_WINDOW,
         )
     )
+    crown_incumbent_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_CROWN_INCUMBENT_PROTOCOL,
+        bench_version=active_version,
+        now=now,
+        freshness=_VALIDATOR_STALE_WINDOW,
+    )
+    crown_incumbent_active = bench_version is None and crown_incumbent_is_active(
+        continual_settings, fleet_protocol_ready=crown_incumbent_fleet_ready
+    )
     efficiency_view: EfficiencyBoardView | None = None
     if finalized_rows:
         board_version = max(row.bench_version for row in finalized_rows)
@@ -3101,6 +3379,9 @@ async def build_public_leaderboard(
                         agent_name=member.agent_name,
                         agent_version=member.agent_version,
                         canonical_composite=member.canonical_composite,
+                        official_composite=board_official_composites.get(
+                            member.agent_id, member.canonical_composite
+                        ),
                         submitted_at=member.submitted_at,
                         miner_hotkey=member.miner_hotkey,
                     )
@@ -3187,6 +3468,40 @@ async def build_public_leaderboard(
             row.agent_id for row in rows if supports_confirmation(row.bench_version)
         ],
     )
+    # The shadow router surface is display-only and must never fail the board:
+    # read the published ledger best-effort and key its measured composites by
+    # the weight-destination hotkey. No feed configured, a failed read, or a
+    # ledger without entries all degrade to no router fields at all — the same
+    # benign default as before this surface existed. The relay clamps
+    # weight_eligible/combined_score itself; only the measured
+    # ``shadow_composite`` is consumed here, and only while the ledger holds
+    # one (rows without a real measurement stay off the board).
+    router_shadow_by_hotkey: dict[str, float] = {}
+    if bench_version is None:
+        router_reader = getattr(request.app.state, "router_ledger_reader", None)
+        if router_reader is not None:
+            try:
+                router_ledger = await router_reader.read()
+            except Exception:
+                logger.warning(
+                    "router ledger read for leaderboard failed; "
+                    "serving board without router shadow fields",
+                    exc_info=True,
+                )
+                router_ledger = None
+            if router_ledger is not None:
+                router_shadow_by_hotkey = {
+                    entry.miner_hotkey: entry.shadow_composite
+                    for entry in router_ledger.entries
+                    # A composite of exactly 0 with no measurement behind it is
+                    # the shadow default, not a score: only carry entries the
+                    # scorer actually measured. Shadow_composite defaults to
+                    # 0.0 on the wire, so a scorer that measured a genuine 0
+                    # still rounds to 0 and shows — but a placeholder entry
+                    # with every harness forfeited (operational=False) is not
+                    # a measurement.
+                    if any(result.operational for result in entry.harnesses)
+                }
     # The run ledger is append-only for its retention window, and a grant never
     # records its own outcome: ``status`` tracks budget and revocation, so it is
     # ``exhausted`` both for a run that finished and for one a stalled validator
@@ -3443,6 +3758,8 @@ async def build_public_leaderboard(
                     (row.agent_id, row.bench_version), (None, 0)
                 )[1],
                 v9_confirmation=v9_confirmations.get(row.agent_id),
+                router_shadow_by_hotkey=router_shadow_by_hotkey,
+                router_shadow_queued=bool(router_shadow_by_hotkey),
             )
         )
     for row, count in provisional_rows:
@@ -3495,17 +3812,28 @@ async def build_public_leaderboard(
                     (row.agent_id, row.bench_version), (None, 0)
                 )[1],
                 v9_confirmation=v9_confirmations.get(row.agent_id),
+                router_shadow_by_hotkey=router_shadow_by_hotkey,
+                router_shadow_queued=bool(router_shadow_by_hotkey),
             )
         )
     return PublicLeaderboardResponse(
         generated_at=now,
         count=len(entries),
         current_bench_version=display_version,
+        # One resolution, three names: the deprecated field, the clear one, and
+        # the pin that decides pay. Miners read the rollout as stalled when a
+        # board says 13 while the ledger is still paying 12, so both halves have
+        # to be present on the same response rather than inferred from it.
+        scoring_bench_version=display_version,
+        emission_bench_version=active_version,
         active_bench_version=active_version,
         desired_bench_version=desired_version,
         available_bench_versions=await list_scored_bench_versions(session),
         selection_mode="historical" if bench_version is not None else "authoritative",
         v9_confirmation_mode=v9_confirmation_mode,
+        router_shadow_mode=(
+            "shadow" if router_shadow_by_hotkey and bench_version is None else None
+        ),
         continual_aggregate_active=continual_mean_active,
         continual_aggregate_required_protocol=_CONTINUAL_MEAN_PROTOCOL,
         registration_stale=registration_stale,
@@ -3531,9 +3859,224 @@ async def build_public_leaderboard(
                 efficiency_curve_versions=board_curve_versions,
                 tie_weighting_active=tie_weighting_active,
                 ceiling_band_clamp=ceiling_band_clamp_active,
+                ledger_pin=await _current_ledger_pin(
+                    request, session, continual_settings
+                ),
+                crown_incumbent_active=crown_incumbent_active,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
+    )
+
+
+def _ledger_pin_model(
+    row: LedgerEpochSnapshot, *, mode: Literal["epoch", "live"]
+) -> PublicLedgerPin:
+    served = (
+        (row.context or {}).get("served", {}) if isinstance(row.context, dict) else {}
+    )
+    schedule = (
+        (row.context or {}).get("schedule", {}) if isinstance(row.context, dict) else {}
+    )
+    next_epoch = (
+        schedule.get("next_epoch_block") if isinstance(schedule, dict) else None
+    )
+    return PublicLedgerPin(
+        mode=mode,
+        epoch_index=row.epoch_index,
+        last_epoch_block=row.last_epoch_block,
+        pinned_block=row.pinned_block,
+        pinned_at=row.pinned_at,
+        next_epoch_block=next_epoch if isinstance(next_epoch, int) else None,
+        bench_version=row.bench_version,
+        entry_count=len(row.entries or []),
+        ledger_digest=row.ledger_digest,
+        champion_agent_id=row.champion_agent_id,
+        incumbent_agent_id=row.incumbent_agent_id,
+        crown_mode=served.get("crown_mode") if isinstance(served, dict) else None,
+    )
+
+
+async def _current_ledger_pin(
+    request: Request, session: AsyncSession, settings: ContinualRetestSettings
+) -> PublicLedgerPin | None:
+    """The pin validators fold now; ``None`` in live mode or before the first pin."""
+    if settings.ledger_pin_mode != "epoch":
+        return None
+    try:
+        row = await latest_pin(session, netuid=request.app.state.config.chain.netuid)
+    except SQLAlchemyError:
+        logger.warning(
+            "ledger pin read failed; board renders without it", exc_info=True
+        )
+        return None
+    return None if row is None else _ledger_pin_model(row, mode="epoch")
+
+
+async def _ledger_actor_names(
+    session: AsyncSession, agent_ids: set[UUID]
+) -> dict[UUID, tuple[str | None, int | None]]:
+    if not agent_ids:
+        return {}
+    from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
+    from ditto.db.queries.name_claims import active_handle_claims
+
+    rows = (
+        (
+            await session.execute(
+                select(Agent.agent_id, Agent.name, Agent.version).where(
+                    Agent.agent_id.in_(list(agent_ids))
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    return {
+        agent_id: (_public_named(name, None, claims)[0], version)
+        for agent_id, name, version in rows
+    }
+
+
+@router.get("/ledger-epochs", response_model=PublicLedgerEpochsResponse)
+async def ledger_epochs(
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 24,
+) -> PublicLedgerEpochsResponse:
+    """Per-epoch history of the pinned ledger and the crown it produced.
+
+    Newest first. Each row is one immutable pin: the fold input every validator
+    received for that chain epoch, the champion the fold derived from it under
+    its frozen markers, the incumbent it was handed, and the recipient shares.
+    ``crown_changed`` compares consecutive pins, so a quiet column across
+    retest waves is the stability the pin exists to produce. Live mode still
+    lists historical pins but reports ``mode: live``.
+    """
+    response.headers["Cache-Control"] = _CACHE_CONTROL
+    settings = await request.app.state.continual_retest_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
+    mode: Literal["epoch", "live"] = (
+        "epoch" if settings.ledger_pin_mode == "epoch" else "live"
+    )
+    netuid = request.app.state.config.chain.netuid
+    # One extra row so the oldest returned pin can still report crown_changed.
+    rows = list(await list_pins(session, netuid=netuid, limit=limit + 1))
+    shown = rows[:limit]
+    actor_ids: set[UUID] = set()
+    projections: list[tuple[LedgerEpochSnapshot, Any, Any]] = []
+    for row in shown:
+        entries = [LedgerEntry.model_validate(item) for item in (row.entries or [])]
+        served = (
+            (row.context or {}).get("served", {})
+            if isinstance(row.context, dict)
+            else {}
+        )
+        fold_entries = koth_entries_from_ledger(entries)
+        projection = project_koth(
+            fold_entries,
+            distinct_hotkeys=served.get("tie_weighting_mode") == "pool",
+            ceiling_band_clamp=served.get("dethrone_band_mode") == "headroom_capped",
+            incumbent_agent_id=(
+                row.incumbent_agent_id
+                if served.get("crown_mode") == "incumbent"
+                else None
+            ),
+        )
+        allocation = (
+            emission_allocation(
+                fold_entries,
+                projection,
+                tie_pooling=served.get("tie_weighting_mode") == "pool",
+                ceiling_band_clamp=served.get("dethrone_band_mode")
+                == "headroom_capped",
+            )
+            if projection is not None
+            else None
+        )
+        projections.append((row, projection, allocation))
+        for candidate in (row.champion_agent_id, row.incumbent_agent_id):
+            if candidate is not None:
+                actor_ids.add(candidate)
+        if allocation is not None:
+            actor_ids.update(member.agent_id for member in allocation.members)
+    names = await _ledger_actor_names(session, actor_ids)
+    hotkeys: dict[UUID, str] = {}
+    for row in shown:
+        for item in row.entries or []:
+            try:
+                hotkeys[UUID(str(item["agent_id"]))] = str(item["miner_hotkey"])
+            except (KeyError, ValueError, TypeError):
+                continue
+
+    def actor(agent_id: UUID | None) -> PublicLedgerActor | None:
+        if agent_id is None or agent_id not in hotkeys:
+            return None
+        name, version = names.get(agent_id, (None, None))
+        return PublicLedgerActor(
+            agent_id=agent_id,
+            miner_hotkey=hotkeys[agent_id],
+            agent_name=name,
+            agent_version=version,
+        )
+
+    epochs: list[PublicLedgerEpoch] = []
+    for index, (row, _projection, allocation) in enumerate(projections):
+        previous = rows[index + 1] if index + 1 < len(rows) else None
+        recipients: list[PublicLedgerEpochRecipient] = []
+        if allocation is not None:
+            total = sum(allocation.shares) or 1.0
+            for position, member in enumerate(allocation.members):
+                base = actor(member.agent_id)
+                if base is None:
+                    continue
+                recipients.append(
+                    PublicLedgerEpochRecipient(
+                        **base.model_dump(),
+                        role=(
+                            "joint_champion"
+                            if allocation.mode == "score_ceiling_pool"
+                            else "champion"
+                            if position == 0
+                            else "tail"
+                        ),
+                        share_of_miner_pool=allocation.shares[position] / total,
+                    )
+                )
+        served = (
+            (row.context or {}).get("served", {})
+            if isinstance(row.context, dict)
+            else {}
+        )
+        epochs.append(
+            PublicLedgerEpoch(
+                epoch_index=row.epoch_index,
+                last_epoch_block=row.last_epoch_block,
+                pinned_block=row.pinned_block,
+                pinned_at=row.pinned_at,
+                bench_version=row.bench_version,
+                entry_count=len(row.entries or []),
+                ledger_digest=row.ledger_digest,
+                crown_mode=served.get("crown_mode")
+                if isinstance(served, dict)
+                else None,
+                champion=actor(row.champion_agent_id),
+                incumbent=actor(row.incumbent_agent_id),
+                crown_changed=(
+                    previous is not None
+                    and previous.champion_agent_id != row.champion_agent_id
+                ),
+                recipients=recipients,
+            )
+        )
+    return PublicLedgerEpochsResponse(
+        generated_at=datetime.now(UTC),
+        mode=mode,
+        count=len(epochs),
+        epochs=epochs,
     )
 
 
@@ -3991,6 +4534,7 @@ def _validator_heartbeats_response(
                 updater_status = ValidatorUpdaterStatus.model_validate(
                     row.updater_status
                 )
+        weights_fold = _public_weights_fold(row)
         assignment_state: ValidatorAssignmentState
         if assignment is None:
             # No live lease. Reporting an agent with no assignment is a genuine
@@ -4175,6 +4719,7 @@ def _validator_heartbeats_response(
                 stack=stack,
                 stack_health=stack_health,
                 updater_status=updater_status,
+                weights_fold=weights_fold,
             )
         )
     return PublicValidatorHeartbeatsResponse(
@@ -4268,7 +4813,7 @@ def _public_handle_status(raw: str) -> Literal["reserved", "disputed", "pending"
 _SS58_HOTKEY_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")
 _INTERNAL_TO_PUBLIC_STATUS = {
     "uploaded": "waiting_screening",
-    "screening_failed": "waiting_screening",
+    "screening_failed": "screening_failed",
     "screening": "screening",
     "screening_passed": "waiting_validator",
     "evaluating": "evaluating",
@@ -4422,6 +4967,56 @@ async def public_miner_avatar(
             "ETag": etag,
             "Cache-Control": "public, max-age=30",
         },
+    )
+
+
+@router.get("/v13-review-clock", response_model=PublicV13ReviewClockSchedule)
+async def public_v13_review_clock(
+    response: Response,
+    session: SessionDep,
+) -> PublicV13ReviewClockSchedule:
+    """Publish the configured first-claim window without operator identity."""
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    rows = list(
+        await session.scalars(
+            select(ScreeningReviewDeadlineActivation)
+            .where(ScreeningReviewDeadlineActivation.policy_version == 13)
+            .order_by(ScreeningReviewDeadlineActivation.revision.desc())
+            .limit(100)
+        )
+    )
+    now = datetime.now(UTC)
+    configured = [
+        row for row in rows if row.policy_document_digest == POLICY_V13_DOCUMENT_DIGEST
+    ]
+    latest_due = await session.scalar(
+        select(ScreeningReviewDeadlineActivation)
+        .where(
+            ScreeningReviewDeadlineActivation.policy_version == 13,
+            ScreeningReviewDeadlineActivation.activate_at <= now,
+        )
+        .order_by(ScreeningReviewDeadlineActivation.revision.desc())
+        .limit(1)
+    )
+    return PublicV13ReviewClockSchedule(
+        current_policy_document_digest=POLICY_V13_DOCUMENT_DIGEST,
+        due_revision=(
+            latest_due.revision
+            if latest_due is not None
+            and latest_due.policy_document_digest == POLICY_V13_DOCUMENT_DIGEST
+            else None
+        ),
+        revisions=[
+            PublicV13ReviewClockRevision(
+                revision=row.revision,
+                policy_document_digest=cast(str, row.policy_document_digest),
+                policy_manifest_digest=row.policy_digest,
+                activate_at=row.activate_at,
+                window_seconds=row.window_seconds,
+                state="due" if _timeline_utc(row.activate_at) <= now else "pending",
+            )
+            for row in configured
+        ],
     )
 
 
@@ -4699,6 +5294,7 @@ def _public_validator_score(s) -> PublicValidatorScore:
         signature=s.signature,
         generated_at=s.generated_at,
         case_results=_safe_case_results(details),
+        gate_evidence=public_gate_evidence(getattr(s, "gate_evidence", None)),
         transcript_sha256=_safe_transcript_sha256(details),
         transform_robustness=robustness,
         audit_case_count=audit_pairs,
@@ -4734,6 +5330,7 @@ def _public_activity_status(
     score_continuation_floor: float | None = None,
     benchmark_admitted: bool = True,
     retired: bool = False,
+    screening_retry_authorized: bool = False,
 ) -> str:
     """Collapse internal moderation detail into stable public lifecycle labels."""
     needs_rescreen = (
@@ -4746,7 +5343,9 @@ def _public_activity_status(
     )
     if has_active_attempt or status == AgentStatus.SCREENING:
         return AgentStatus.SCREENING.value
-    if status in (AgentStatus.UPLOADED, AgentStatus.SCREENING_FAILED) or needs_rescreen:
+    if status == AgentStatus.SCREENING_FAILED:
+        return "waiting_screening" if screening_retry_authorized else "screening_failed"
+    if status == AgentStatus.UPLOADED or needs_rescreen:
         return "waiting_screening"
     if status in (AgentStatus.SCREENING_PASSED, AgentStatus.EVALUATING):
         # Checked before ``not_queued`` because it is the more specific and more
@@ -4909,6 +5508,34 @@ def _public_activity_statuses(
     }
 
 
+_UID_SEARCH = re.compile(r"^(?:uid\s*)?#?(\d{1,6})$")
+
+
+def _uid_search_text(uid: int | None) -> str:
+    """The searchable form of a miner UID; empty when the miner is unregistered."""
+    return "" if uid is None else f"uid {uid}"
+
+
+def _query_uid_hotkeys(
+    query: str | None, uids_by_hotkey: dict[str, int] | None
+) -> set[str]:
+    """Hotkeys currently holding the UID typed into a search box.
+
+    A UID is chain state rather than a stored column, so searching "42" (or
+    "uid 42") is resolved against the same cached registration snapshot the
+    leaderboard reads and pushed into SQL as the hotkeys holding it. An
+    unreadable snapshot, or a UID nobody holds, simply matches nothing extra
+    instead of failing the search.
+    """
+    if not query or not uids_by_hotkey:
+        return set()
+    match = _UID_SEARCH.match(query.strip().casefold())
+    if match is None:
+        return set()
+    wanted = int(match.group(1))
+    return {hotkey for hotkey, uid in uids_by_hotkey.items() if uid == wanted}
+
+
 def _public_activity_response(
     *,
     rows: list[Any],
@@ -4929,6 +5556,7 @@ def _public_activity_response(
     duplicate_metadata: dict[UUID, _DuplicateSubmissionMetadata] | None = None,
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] | None = None,
     ath_review_composite: dict[UUID, float] | None = None,
+    review_inputs: _ReviewProjectionInputs | None = None,
     retired_agent_ids: set[UUID] | None = None,
     ath_only: bool = False,
     terminal_history_limit: int | None = None,
@@ -4942,10 +5570,13 @@ def _public_activity_response(
     owner_roots: dict[UUID, str] | None = None,
     strike_colliding_names: bool = True,
     avatar_urls: dict[str, str] | None = None,
+    coding_runs: dict[UUID, CodingShadowRunBundle] | None = None,
+    miner_uids: dict[str, int] | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health."""
     claims = handle_claims or {}
     roots = owner_roots or {}
+    uids = miner_uids or {}
     active_by_agent: dict[UUID, list[PublicBenchmarkProgress]] = {}
     for work in active_work:
         active_by_agent.setdefault(work.agent.agent_id, []).append(
@@ -5006,6 +5637,10 @@ def _public_activity_response(
                     ),
                     str(row.agent.agent_id),
                     row.agent.miner_hotkey,
+                    # The SQL pass can match a row by resolved UID, so the same
+                    # text has to be searchable here or the re-filter would
+                    # drop exactly the rows the UID search just found.
+                    _uid_search_text(uids.get(row.agent.miner_hotkey)),
                     row_status,
                 )
             ).casefold()
@@ -5021,7 +5656,8 @@ def _public_activity_response(
         else sum(
             1
             for row, _ in projected
-            if artifact_releases[row.agent.agent_id].download_available
+            if artifact_releases[row.agent.agent_id].status
+            in ("available", "embargoed")
         )
     )
     if requested_statuses and not already_paginated:
@@ -5034,7 +5670,8 @@ def _public_activity_response(
         projected = [
             (row, row_status)
             for row, row_status in projected
-            if artifact_releases[row.agent.agent_id].download_available
+            if artifact_releases[row.agent.agent_id].status
+            in ("available", "embargoed")
         ]
 
     total = precomputed_total if precomputed_total is not None else len(projected)
@@ -5051,6 +5688,7 @@ def _public_activity_response(
         # remains the authoritative route for full history and search.
         board_statuses = {
             "waiting_screening",
+            "screening_failed",
             "screening",
             "waiting_validator",
             "below_score_floor",
@@ -5099,6 +5737,16 @@ def _public_activity_response(
             return None
         return matches.get(row.agent.duplicate_of)
 
+    review_projections = {
+        row.agent.agent_id: _public_review_projection(
+            row_status=row_status,
+            agent=row.agent,
+            review=_review(row),
+            inputs=review_inputs,
+        )
+        for row, row_status in page_rows
+    }
+
     return PublicActivityResponse(
         generated_at=now,
         count=len(page_rows),
@@ -5112,6 +5760,7 @@ def _public_activity_response(
             PublicActivityEntry(
                 agent_id=row.agent.agent_id,
                 miner_hotkey=row.agent.miner_hotkey,
+                miner_uid=uids.get(row.agent.miner_hotkey),
                 name=displayed[row.agent.agent_id][0],
                 name_handle=displayed[row.agent.agent_id][1],
                 avatar_url=avatars.get(row.agent.miner_hotkey),
@@ -5158,10 +5807,22 @@ def _public_activity_response(
                     if row.agent.agent_id in (ath_reviews or {})
                     else None
                 ),
+                deferred_review_triggers=review_projections[row.agent.agent_id][0],
+                review_conclusion=review_projections[row.agent.agent_id][1],
                 preserved_composite=(ath_review_composite or {}).get(
                     row.agent.agent_id
                 ),
                 score_count=row.score_count,
+                coding_shadow=(
+                    _public_coding_shadow(
+                        (coding_runs or {}).get(row.agent.agent_id),
+                        artifact_sha256=row.agent.sha256,
+                        screened_image_sha256=row.agent.screened_image_sha256,
+                        bench_version=active_bench_version,
+                    )
+                    if active_bench_version is not None
+                    else None
+                ),
                 provisional_composite=row.provisional_composite,
                 validator_queue_rank=_queue_rank(queue_preview, row.agent.agent_id),
                 validator_queue_gate=_queue_gate(queue_preview, row.agent.agent_id),
@@ -5309,6 +5970,203 @@ class _PublicAthReviewSnapshot:
     opened_at: datetime
     original_reason: str
     original_duplicate_of: UUID | None
+    # Internal only: the active deferred review's evidence, reduced to closed
+    # public enums by ``_public_review_projection``. Never serialized.
+    deferred_evidence: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _QuarantineFinding:
+    """Internal only: an active quarantine's review record, never serialized."""
+
+    attempt_id: UUID
+    finding_digest: str | None
+    finding: dict[str, Any] | None
+    review_audit: dict[str, Any] | None
+    review_notes: list[Any] | None
+    review_notes_digest: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _ReviewProjectionInputs:
+    """Internal only: per-page inputs for ``_public_review_projection``."""
+
+    quarantines: dict[UUID, _QuarantineFinding]
+    # attempt_id -> ``concern_hold_count`` from that attempt's pinned settings.
+    concern_hold_counts: dict[UUID, int]
+
+    def concern_hold_count(self, attempt_id: UUID | None) -> int:
+        """The pinned threshold, else the fail-safe floor of 1."""
+        if attempt_id is None:
+            return _FAIL_SAFE_CONCERN_HOLD_COUNT
+        return self.concern_hold_counts.get(attempt_id, _FAIL_SAFE_CONCERN_HOLD_COUNT)
+
+
+# Unknown threshold: any substantiated concern on a held budget row is adverse.
+_FAIL_SAFE_CONCERN_HOLD_COUNT = 1
+
+
+async def _pinned_concern_hold_counts(
+    session: AsyncSession, attempt_ids: set[UUID]
+) -> dict[UUID, int]:
+    """``concern_hold_count`` from the review settings each attempt ran under.
+
+    Only an attempt pinned to a settings revision whose checksum and scope
+    still match has a knowable threshold. An unbound attempt ran on the
+    worker's local bootstrap settings or predates binding, and no stored row
+    says which count it used; "the latest revision now" is not it, and an
+    operator raising the count later would soften old concern-held rows. Those
+    attempts, and any unresolvable binding, use the fail-safe floor of 1: any
+    substantiated concern on a held budget row reads ``adverse_signal``.
+    """
+    if not attempt_ids:
+        return {}
+    attempts = (
+        (
+            await session.execute(
+                select(
+                    ScreeningAttempt.attempt_id,
+                    ScreeningAttempt.review_settings_revision,
+                    ScreeningAttempt.review_settings_checksum,
+                    ScreeningAttempt.review_settings_scope,
+                ).where(ScreeningAttempt.attempt_id.in_(attempt_ids))
+            )
+        )
+        .tuples()
+        .all()
+    )
+    pinned = {revision for _, revision, _, _ in attempts if revision is not None}
+    revisions = (
+        {
+            row.revision: row
+            for row in await session.scalars(
+                select(ScreenerReviewSettingsRevision).where(
+                    ScreenerReviewSettingsRevision.revision.in_(pinned)
+                )
+            )
+        }
+        if pinned
+        else {}
+    )
+    counts: dict[UUID, int] = {}
+    for attempt_id, revision, checksum, scope in attempts:
+        row = revisions.get(revision) if revision is not None else None
+        if row is None or row.checksum != checksum or row.scope != scope:
+            continue
+        try:
+            counts[attempt_id] = ScreenerReviewSettings.model_validate(
+                row.settings
+            ).concern_hold_count
+        except ValueError:
+            continue
+    return counts
+
+
+async def _public_review_inputs(
+    session: AsyncSession,
+    rows: list[Any],
+    ath_reviews: dict[UUID, _PublicAthReviewSnapshot],
+) -> _ReviewProjectionInputs:
+    """Active quarantine records and pinned hold thresholds for this page.
+
+    At most one quarantine per agent is active
+    (``screening_quarantines_one_active_agent_idx``), and the lookup is
+    limited to rows whose agent is currently quarantined.
+    """
+    agent_ids = {
+        row.agent.agent_id
+        for row in rows
+        if row.agent.status == AgentStatus.QUARANTINED
+    }
+    quarantines: dict[UUID, _QuarantineFinding] = {}
+    if agent_ids:
+        result = await session.execute(
+            select(
+                ScreeningQuarantine.agent_id,
+                ScreeningQuarantine.attempt_id,
+                ScreeningQuarantine.finding_digest,
+                ScreeningQuarantine.finding,
+                ScreeningQuarantine.review_audit,
+                ScreeningQuarantine.review_notes,
+                ScreeningQuarantine.review_notes_digest,
+            ).where(
+                ScreeningQuarantine.agent_id.in_(agent_ids),
+                ScreeningQuarantine.status == "active",
+            )
+        )
+        quarantines = {
+            agent_id: _QuarantineFinding(
+                attempt_id=attempt_id,
+                finding_digest=digest,
+                finding=finding,
+                review_audit=review_audit,
+                review_notes=review_notes,
+                review_notes_digest=review_notes_digest,
+            )
+            for (
+                agent_id,
+                attempt_id,
+                digest,
+                finding,
+                review_audit,
+                review_notes,
+                review_notes_digest,
+            ) in result.tuples()
+        }
+    attempt_ids = {quarantine.attempt_id for quarantine in quarantines.values()}
+    for row in rows:
+        review = ath_reviews.get(row.agent.agent_id)
+        if review is not None and review.deferred_evidence is not None:
+            deep_attempt = deep_review_attempt_id(review.deferred_evidence)
+            if deep_attempt is not None:
+                attempt_ids.add(deep_attempt)
+    return _ReviewProjectionInputs(
+        quarantines=quarantines,
+        concern_hold_counts=await _pinned_concern_hold_counts(session, attempt_ids),
+    )
+
+
+def _public_review_projection(
+    *,
+    row_status: str,
+    agent: Agent,
+    review: _PublicAthReviewSnapshot | None,
+    inputs: _ReviewProjectionInputs | None,
+) -> tuple[list[PublicDeferredReviewTrigger], PublicReviewConclusion | None]:
+    """Public trigger kinds and automated-review conclusion for one row (#562)."""
+    if row_status != "under_review":
+        return [], None
+    evidence = review.deferred_evidence if review is not None else None
+    inputs = inputs or _ReviewProjectionInputs(quarantines={}, concern_hold_counts={})
+    quarantine = inputs.quarantines.get(agent.agent_id)
+    return (
+        public_deferred_review_triggers(evidence),
+        public_review_conclusion(
+            deferred_review_active=evidence is not None,
+            deferred_evidence=evidence,
+            deferred_concern_hold_count=inputs.concern_hold_count(
+                deep_review_attempt_id(evidence)
+            ),
+            quarantined=agent.status == AgentStatus.QUARANTINED,
+            screening_reason_code=agent.screening_reason_code,
+            quarantine_finding_digest=(
+                quarantine.finding_digest if quarantine is not None else None
+            ),
+            quarantine_finding=(quarantine.finding if quarantine is not None else None),
+            quarantine_review_audit=(
+                quarantine.review_audit if quarantine is not None else None
+            ),
+            quarantine_review_notes=(
+                quarantine.review_notes if quarantine is not None else None
+            ),
+            quarantine_review_notes_digest=(
+                quarantine.review_notes_digest if quarantine is not None else None
+            ),
+            quarantine_concern_hold_count=inputs.concern_hold_count(
+                quarantine.attempt_id if quarantine is not None else None
+            ),
+        ),
+    )
 
 
 _DIRECT_POLICY_V12_REJECTION = re.compile(
@@ -5366,37 +6224,28 @@ async def _ath_review_public_snapshot(
 
     snapshots: dict[UUID, _PublicAthReviewSnapshot] = {}
     for review in reviews:
-        latest = latest_actions.get(review.review_id)
-        if review.status == "pending":
-            if latest is not None and latest.action == "reopen":
-                event: Literal["opened", "reopened", "cleared", "rejected"] = "reopened"
-                reason = latest.reason
-                event_at = latest.created_at
-            else:
-                event = "opened"
-                reason = review.original_reason or "Submission routed to ATH review."
-                event_at = review.opened_at
-            opened_at = review.reopened_at or review.opened_at
-        else:
-            resolution = review.resolution or (latest.action if latest else None)
-            event = "rejected" if resolution == "reject" else "cleared"
-            reason = (
-                review.resolution_reason
-                or (latest.reason if latest is not None else None)
-                or "ATH review resolved."
-            )
-            event_at = review.resolved_at or (
-                latest.created_at if latest is not None else review.opened_at
-            )
-            opened_at = review.reopened_at or review.opened_at
+        # Shared with the operator queue and audit projections, so a reopened
+        # hold reads the same on every surface. Only the newest action is
+        # loaded here: the public page never shows what a reopen withdrew, so
+        # it does not pay for the full ledger.
+        lifecycle = derive_ath_review_lifecycle(
+            review, latest_action=latest_actions.get(review.review_id)
+        )
         snapshots[review.agent_id] = _PublicAthReviewSnapshot(
-            event=event,
-            reason=reason,
-            event_at=event_at,
-            opened_at=opened_at,
-            original_reason=review.original_reason
-            or "Submission routed to ATH review.",
+            event=lifecycle.event,
+            reason=lifecycle.reason,
+            event_at=lifecycle.event_at,
+            opened_at=lifecycle.opened_at,
+            original_reason=review.original_reason or DEFAULT_OPEN_REASON,
             original_duplicate_of=review.original_duplicate_of,
+            deferred_evidence=(
+                review.original_evidence
+                if review.status == "pending"
+                and review.algorithm_provenance.get("review_kind")
+                == DEFERRED_REVIEW_KIND
+                and isinstance(review.original_evidence, dict)
+                else None
+            ),
         )
 
     active_agent_ids = {
@@ -5521,11 +6370,17 @@ async def activity(
         quorum=SCORING_QUORUM,
         policy=release_policy,
         now=now,
+        include_pending=True,
     )
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
     from ditto.db.queries.name_claims import active_handle_claims
 
     handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    # The same cached registration snapshot the leaderboard reads: it labels
+    # each row with the miner's UID, and lets a typed UID resolve to the
+    # hotkeys holding it so "42" searches that miner's submissions.
+    registration = await _current_registration(request)
+    registered_uids = registration.uids_by_hotkey if registration else None
     activity_page = await query_public_activity_page(
         session,
         bench_version=active_version,
@@ -5538,6 +6393,7 @@ async def activity(
         reserved_name_stems={
             stem for stem, claim in handle_claims.items() if claim.status == "upheld"
         },
+        query_miner_hotkeys=_query_uid_hotkeys(q, registered_uids),
         miner_hotkey=miner,
         ath_only=review == "ath",
         active_validation_agent_ids=active_validation_agent_ids,
@@ -5553,6 +6409,7 @@ async def activity(
         policy=release_policy,
     )
     ath_reviews, ath_composite = await _ath_review_public_snapshot(session, rows)
+    review_inputs = await _public_review_inputs(session, rows, ath_reviews)
     queue_preview = await queue_preview_for_rows(
         session,
         rows=rows,
@@ -5591,6 +6448,7 @@ async def activity(
         duplicate_metadata=await _duplicate_submission_metadata(session, rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
+        review_inputs=review_inputs,
         precomputed_statuses=statuses,
         precomputed_status_counts=activity_page.status_counts,
         precomputed_downloadable_count=activity_page.downloadable_count,
@@ -5601,6 +6459,12 @@ async def activity(
         owner_roots=await _attested_owner_roots_for_rows(session, rows),
         strike_colliding_names=True,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
+        coding_runs=await latest_coding_shadow_runs(
+            session,
+            agent_ids=[row.agent.agent_id for row in rows],
+            bench_version=active_version,
+        ),
+        miner_uids=registered_uids,
     )
 
 
@@ -5811,12 +6675,15 @@ async def operations(
     ath_reviews, ath_composite = await _ath_review_public_snapshot(
         session, activity_rows
     )
+    review_inputs = await _public_review_inputs(session, activity_rows, ath_reviews)
     # Operations keeps stored agents.name; handle annotations still travel so
     # the operator board can mark a reserved or stricken stem.
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
     from ditto.db.queries.name_claims import active_handle_claims
 
     handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    registration = await _current_registration(request)
+    registered_uids = registration.uids_by_hotkey if registration else None
     owner_roots = await _attested_owner_roots_for_rows(session, activity_rows)
     avatar_rows = await list_miner_avatars(
         session, hotkeys={row.agent.miner_hotkey for row in activity_rows}
@@ -5853,6 +6720,7 @@ async def operations(
         duplicate_metadata=await _duplicate_submission_metadata(session, activity_rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
+        review_inputs=review_inputs,
         precomputed_statuses=activity_statuses,
         precomputed_status_counts=activity_page.status_counts,
         precomputed_downloadable_count=activity_page.downloadable_count,
@@ -5863,6 +6731,12 @@ async def operations(
         owner_roots=owner_roots,
         strike_colliding_names=False,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
+        coding_runs=await latest_coding_shadow_runs(
+            session,
+            agent_ids=[row.agent.agent_id for row in activity_rows],
+            bench_version=active_version,
+        ),
+        miner_uids=registered_uids,
     )
     validator_snapshot = _validator_heartbeats_response(
         rows=heartbeat_rows,
@@ -5955,7 +6829,15 @@ async def create_screening_dispute(
     agent_id: UUID,
     payload: CreateScreeningDisputeRequest,
 ) -> CreateScreeningDisputeResponse:
-    """Record the submitting hotkey's single appeal of a quarantine rejection."""
+    """Record the submitting hotkey's single appeal.
+
+    Two kinds share the one-per-submission slot. A rejected submission with a
+    rejected quarantine files a ``screening`` dispute (optionally citing gate
+    notes). A scored, live, evaluating or held submission that cites bench
+    v13+ ``gate_note_ids`` files a ``gate_notes`` dispute against those exact
+    notes -- the appeal path the shadow verdict exists for, so a would-be zero
+    can be contested before any gate enforces. Anything else is a 409.
+    """
 
     response.headers["Cache-Control"] = "no-store"
     dispute: ScreeningDispute | None = None
@@ -5992,19 +6874,53 @@ async def create_screening_dispute(
                 .order_by(ScreeningQuarantine.resolved_at.desc())
                 .with_for_update()
             )
-            if agent.status != AgentStatus.REJECTED or quarantine is None:
+            if agent.status == AgentStatus.REJECTED and quarantine is not None:
+                kind = "screening"
+            elif payload.gate_note_ids and agent.status in GATE_NOTE_DISPUTE_STATUSES:
+                kind = "gate_notes"
+                quarantine = None
+            else:
                 raise HTTPException(
                     status_code=409,
-                    detail="only a rejected quarantine decision can be disputed",
+                    detail=(
+                        "only a rejected quarantine decision, or cited bench v13+ "
+                        "gate notes on a scored submission, can be disputed"
+                    ),
                 )
+            gate_note_ids: list[str] | None = None
+            if payload.gate_note_ids:
+                # A cited gate note must re-derive from THIS submission's own
+                # accepted scores: the id is a function of the score identity
+                # and the note, so a foreign or invented id cannot be linked.
+                # Checked before anything is written, so the one dispute is
+                # not spent on a malformed appeal.
+                own_scores = list(
+                    (
+                        await session.scalars(
+                            select(Score).where(Score.agent_id == agent_id)
+                        )
+                    ).all()
+                )
+                known = gate_note_ids_for(agent_id=agent_id, scores=own_scores)
+                unknown = [nid for nid in payload.gate_note_ids if nid not in known]
+                if unknown:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="gate note id does not belong to this submission",
+                    )
+                gate_note_ids = list(dict.fromkeys(payload.gate_note_ids))
             dispute = ScreeningDispute(
                 dispute_id=uuid4(),
                 agent_id=agent.agent_id,
-                quarantine_id=quarantine.quarantine_id,
+                kind=kind,
+                quarantine_id=(
+                    quarantine.quarantine_id if quarantine is not None else None
+                ),
                 miner_hotkey=agent.miner_hotkey,
                 message=payload.message,
                 status="pending",
                 created_at=datetime.now(UTC),
+                gate_note_ids=gate_note_ids,
             )
             session.add(dispute)
     except IntegrityError as exc:
@@ -6107,6 +7023,16 @@ async def agent_summary(
         score_continuation_floor=score_floor,
         benchmark_admitted=admitted,
         retired=retired,
+        screening_retry_authorized=bool(
+            await session.scalar(
+                select(Agent.agent_id).where(
+                    Agent.agent_id == agent_id,
+                    failed_screening_retry_authorized(),
+                )
+            )
+        )
+        if row.agent.status == AgentStatus.SCREENING_FAILED
+        else False,
     )
 
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] = {}
@@ -6119,6 +7045,12 @@ async def agent_summary(
         else {}
     )
     review = ath_reviews.get(agent_id)
+    review_projection = _public_review_projection(
+        row_status=status,
+        agent=row.agent,
+        review=review,
+        inputs=await _public_review_inputs(session, [row], ath_reviews),
+    )
     show_similarity_evidence = not _supersedes_public_similarity_evidence(review)
     duplicate = (
         duplicate_metadata.get(row.agent.duplicate_of)
@@ -6173,6 +7105,8 @@ async def agent_summary(
             else None
         ),
         review_opened_at=review.opened_at if review is not None else None,
+        deferred_review_triggers=review_projection[0],
+        review_conclusion=review_projection[1],
         preserved_composite=ath_composites.get(agent_id),
         active_benchmarks=[
             _public_benchmark_progress(
@@ -6224,7 +7158,8 @@ async def agent_pipeline(
         last_failure_infrastructure = bool(
             latest_attempt is not None
             and latest_attempt.status in ("failed", "expired")
-            and (latest_attempt.reason_code or "") in PROVIDER_BACKOFF_REASON_CODES
+            and (latest_attempt.reason_code or "")
+            in (*PROVIDER_BACKOFF_REASON_CODES, *INFRA_AUTO_RETRY_REASON_CODES)
         )
         next_retry_at: datetime | None = None
         if agent.status == AgentStatus.SCREENING:
@@ -6239,10 +7174,29 @@ async def agent_pipeline(
                 .where(ScreeningRetryOverride.attempt_id == latest_attempt.attempt_id)
                 .limit(1)
             )
+            scheduled = (
+                (
+                    await plan_infra_retries(
+                        session, now=now, agent_ids=[agent_id], fleet_scan=False
+                    )
+                ).decisions.get(agent_id)
+                if latest_attempt.reason_code in INFRA_AUTO_RETRY_REASON_CODES
+                # The claim never retries an agent withdrawn from the validator
+                # queue or from the active benchmark era; do not promise it.
+                and await infra_retry_agent_admitted(session, agent_id)
+                else None
+            )
             if overridden is not None:
                 retry_state = "retry_queued"
             elif latest_attempt.reason_code == "source-review-retryable-infra":
                 retry_state = "parked"
+            elif scheduled is not None and scheduled.state != "capped":
+                # Automatic, bounded retry: the miner sees the earliest start
+                # (per-artifact backoff; the fleet breaker is not consulted on
+                # this unauthenticated path). A capped or aged-out agent falls
+                # through to ``stuck``: an operator must retry it.
+                retry_state = "retry_queued"
+                next_retry_at = scheduled.next_retry_at
             elif last_failure_infrastructure:
                 retry_state = "stuck"
             else:
@@ -6258,6 +7212,62 @@ async def agent_pipeline(
             select(ScreeningQuarantine).where(ScreeningQuarantine.agent_id == agent_id)
         )
     )
+    ordinary_review: PublicOrdinaryReview | None = None
+    # Reimplements ditto.db.queries.source_review_queue_slo's
+    # load_agent_ordinary_review_state inline (reusing the attempts/quarantines
+    # rows already fetched above, rather than a second round trip). The two are
+    # behaviourally equivalent by construction; keep them in sync by hand if
+    # either changes (or fold this into a call to that function).
+    if agent.status in ORDINARY_REVIEW_ACTIONABLE_STATUSES:
+        latest_attempt = attempts[0] if attempts else None
+        ordinary_reason: (
+            Literal[
+                "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
+            ]
+            | None
+        ) = None
+        if agent.status == AgentStatus.QUARANTINED:
+            active_quarantine = next(
+                (
+                    quarantine
+                    for quarantine in quarantines
+                    if quarantine.status == "active"
+                ),
+                None,
+            )
+            # No active quarantine row despite QUARANTINED status is the same
+            # resolved-quarantine reconciliation gap
+            # ``ditto.db.queries.source_review_queue_slo`` excludes from the
+            # operator snapshot; do not show a miner a guess here either.
+            if active_quarantine is not None:
+                ordinary_reason = "escalation"
+        elif latest_attempt is None:
+            ordinary_reason = "capacity_wait"
+        elif latest_attempt.status == "running":
+            ordinary_reason = "active_work"
+        elif latest_attempt.status in ("failed", "expired"):
+            ordinary_reason = "infrastructure_backoff"
+        if ordinary_reason is not None:
+            # Subnet-wide typical durations, not per-agent: cheap relative to
+            # the rest of this handler and bounded by the 10s response cache
+            # above; revisit with a short-TTL cache (see
+            # ``QueuePolicySettingsResolver``) if this shows up as hot.
+            typical = await load_source_review_queue_slo_snapshot(session)
+            # Stable clock: the agent's own created_at, which a retry (a new
+            # screening_attempts row) cannot reset -- see the query module's
+            # docstring. current_attempt_age_seconds separately answers "how
+            # long has the CURRENT attempt been going".
+            ordinary_review = PublicOrdinaryReview(
+                reason=ordinary_reason,
+                age_seconds=max(0.0, (now - agent.created_at).total_seconds()),
+                current_attempt_age_seconds=(
+                    max(0.0, (now - latest_attempt.started_at).total_seconds())
+                    if latest_attempt is not None
+                    else None
+                ),
+                typical_p50_seconds=typical.p50_age_seconds,
+                typical_p95_seconds=typical.p95_age_seconds,
+            )
     quarantines_by_attempt = {
         quarantine.attempt_id: quarantine for quarantine in quarantines
     }
@@ -6282,6 +7292,7 @@ async def agent_pipeline(
         attempt.attempt_id: _public_terminal_screening_review(
             quarantines_by_attempt.get(attempt.attempt_id),
             artifact_sha256=agent.sha256,
+            attempt=attempt,
         )
         for attempt in attempts
     }
@@ -6504,6 +7515,7 @@ async def agent_pipeline(
         generated_at=now,
         agent_id=agent_id,
         admission_retry=admission_retry,
+        ordinary_review=ordinary_review,
         artifact_release=(
             await _artifact_release_snapshot(
                 session,
@@ -6513,6 +7525,9 @@ async def agent_pipeline(
         )[agent_id],
         status=_public_activity_status(
             agent.status,
+            screening_retry_authorized=(
+                admission_retry is not None and admission_retry.state == "retry_queued"
+            ),
             screening_policy_version=agent.screening_policy_version,
             has_active_attempt=running_attempt is not None,
             has_active_validation=any(
@@ -6541,6 +7556,7 @@ async def agent_pipeline(
         ),
         submission_family=submission_family,
         active_bench_version=canonical_version,
+        emission_bench_version=canonical_version,
         score_bench_version=era_version,
         score_count=len(era_scores),
         quorum=SCORING_QUORUM,
@@ -6624,6 +7640,9 @@ async def agent_pipeline(
                 case_results=_safe_case_results(
                     score.details if isinstance(score.details, dict) else {}
                 ),
+                gate_evidence=public_gate_evidence(
+                    getattr(score, "gate_evidence", None)
+                ),
                 transcript_sha256=_safe_transcript_sha256(
                     score.details if isinstance(score.details, dict) else {}
                 ),
@@ -6672,6 +7691,7 @@ async def agent_pipeline(
                 )[2],
                 review_evidence=public_reviews_by_attempt[attempt.attempt_id][0],
                 review_finding=public_reviews_by_attempt[attempt.attempt_id][1],
+                review_notes=public_reviews_by_attempt[attempt.attempt_id][2],
             )
             for attempt in attempts
         ],
@@ -6857,10 +7877,10 @@ async def agent_artifact(
     )
     if release.status != "available" or score_quorum is None:
         detail = "source is awaiting a three-validator score quorum"
-        if king_reveal.weight_confirmed_at is None:
+        if king_reveal.emission_confirmed_at is None:
             detail = (
-                "source is awaiting on-chain confirmation that validator weights "
-                "were set on this king (commit-reveal)"
+                "source is awaiting confirmed winner emissions from a completed "
+                "tempo for this submission"
             )
         elif release.available_at is not None:
             detail = f"source is embargoed until {release.available_at.isoformat()}"
@@ -6946,6 +7966,12 @@ async def agent_dataset(
         if row.scores
         else await active_bench_version(session)
     )
+    if dataset_bench_version == 13:
+        raise HTTPException(
+            status_code=409,
+            detail="V13 dataset reveal requires private work-set closure",
+            headers={"Cache-Control": "no-store"},
+        )
     try:
         artifact, sha = await generator.fetch_dataset(
             row.dataset_seed, row.dataset_run_size, dataset_bench_version
@@ -7352,7 +8378,8 @@ async def benchmark_rollout_state(
     ``ranked_quorum_agents`` / ``min_ranked_quorum_agents`` answer the question
     the rest of this payload only implies: how close the desired version is to
     taking over weight-setting. Weights stay on ``active_version`` until the
-    former reaches the latter.
+    priority-cohort gate closes AND the former reaches the latter;
+    ``promotion_pending`` / ``promotion_requirement`` say so directly.
     """
     response.headers["Cache-Control"] = "public, max-age=30"
     state = await rollout_state(session)

@@ -16,10 +16,17 @@ from ditto_screener.heartbeat import (
 )
 from ditto_screener.signing import (
     heartbeat_signing_message,
+    sign_router_source_screen,
     sign_verdict,
     verdict_signing_message,
 )
-from ditto_screening_protocol import SCREENING_POLICY_VERSION, ScreenResultOutcome
+from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
+    ScreenResultOutcome,
+    build_router_source_screen_evidence,
+    router_source_screen_signing_message,
+)
+from ditto_screening_protocol.router_source_screen import RouterSourceScreenOutcome
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
@@ -220,6 +227,26 @@ def test_typed_signature_without_binding_remains_rolling_deploy_compatible() -> 
     )
     payload = json.loads(message.removeprefix(b"ditto-screen-result:v5:").decode())
     assert not any(key.startswith("review_settings_") for key in payload)
+
+
+def test_router_source_screen_signature_binds_canonical_evidence() -> None:
+    kp = _FakeKeypair()
+    evidence = build_router_source_screen_evidence(
+        agent_artifact_sha256="aa" * 32,
+        screened_image_sha256="bb" * 32,
+        analyzer_version="router-shadow-v1",
+        policy_version=SCREENING_POLICY_VERSION,
+        outcome=RouterSourceScreenOutcome.INFRASTRUCTURE,
+        findings=(),
+    )
+    sig = sign_router_source_screen(kp, screener_hotkey=_HOTKEY, evidence=evidence)
+    assert sig == ("ab" * 64)
+    # The signed bytes are exactly the protocol's canonical message: hotkey +
+    # the three content-addressed digests, never task text or the key.
+    assert kp.signed == router_source_screen_signing_message(
+        screener_hotkey=_HOTKEY, evidence=evidence
+    )
+    assert evidence.evidence_sha256.encode() in kp.signed
 
 
 def test_heartbeat_signature_binds_allowlisted_coarse_metrics() -> None:

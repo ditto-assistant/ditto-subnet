@@ -24,14 +24,19 @@
     pg_conf_path: "/etc/postgresql/{{ pg_version_cmd.stdout }}/main/postgresql.conf"
     pg_hba_path: "/etc/postgresql/{{ pg_version_cmd.stdout }}/main/pg_hba.conf"
 
+- name: Resolve the logging collector's live-file map for the discovered cluster
+  ansible.builtin.set_fact:
+    postgres_log_gc_current_logfiles: "/var/lib/postgresql/{{ pg_version }}/main/current_logfiles"
+  when: postgres_log_gc_current_logfiles | length == 0
+
 - name: Install pgvector
   ansible.builtin.apt:
     name: "postgresql-{{ pg_version }}-pgvector"
     state: present
 
-- name: Ensure /opt/ditto/logs/postgresql is owned by postgres
+- name: Ensure the logging collector directory is owned by postgres
   ansible.builtin.file:
-    path: /opt/ditto/logs/postgresql
+    path: "{{ postgres_log_gc_dir }}"
     state: directory
     owner: postgres
     group: postgres
@@ -189,3 +194,13 @@
     name: postgresql
     enabled: true
     state: started
+
+# Optional, default-off: mount the attached persistent data disk. Never relocates
+# the cluster; see the task file for both gates.
+- name: Mount the attached persistent data disk when explicitly enabled
+  ansible.builtin.import_tasks: data_disk.yml
+
+# Rotation alone never reclaims: bound the collector directory by age AND size so
+# it cannot fill the boot disk again (#1745).
+- name: Bound the logging collector directory
+  ansible.builtin.import_tasks: log_gc.yml

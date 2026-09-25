@@ -50,6 +50,7 @@ class TestCreateDbEngine:
         assert isinstance(engine, AsyncEngine)
         assert engine.url.username == "custom"
         assert engine.url.database == "other"
+        assert engine.sync_engine.hide_parameters is True
 
     def test_wraps_sqlalchemy_error_in_database_connection_error(
         self, monkeypatch: pytest.MonkeyPatch

@@ -12,6 +12,7 @@ from ditto_screening_protocol import (
     ScreenEvidenceItem,
     ScreenResultOutcome,
     ScreenResultRequest,
+    ScreenReviewAudit,
     SourceReviewFinding,
     SourceReviewNote,
     source_review_notes_digest,
@@ -19,6 +20,18 @@ from ditto_screening_protocol import (
 from ditto_screening_protocol.private_failure import private_failure_text
 
 _HOTKEY = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
+
+
+def _review_audit() -> ScreenReviewAudit:
+    return ScreenReviewAudit(
+        stage="l1",
+        reason_code="source-review-step-budget-exhausted",
+        prompt_revision="source-review-v24-policy-v13",
+        max_steps=20,
+        steps_used=20,
+        max_read_bytes=2_000_000,
+        read_bytes_used=123_456,
+    )
 
 
 def _finding() -> SourceReviewFinding:
@@ -179,6 +192,124 @@ def test_policy_v8_retains_legacy_untyped_outcome() -> None:
     assert request.outcome is None
 
 
+def test_policy_v13_rejects_pass_inconclusive_wire_outcome() -> None:
+    audit = _review_audit()
+
+    with pytest.raises(ValidationError, match="cannot admit pass-inconclusive"):
+        _pass_request(
+            outcome=ScreenResultOutcome.PASS_INCONCLUSIVE,
+            manifest_digest="ab" * 32,
+            reason_code="source-review-inconclusive",
+            review_audit=audit,
+            review_audit_digest=audit.canonical_digest(),
+        )
+
+
+def test_policy_v12_retains_pass_inconclusive_wire_compatibility() -> None:
+    audit = _review_audit()
+
+    request = _pass_request(
+        policy_version=12,
+        outcome=ScreenResultOutcome.PASS_INCONCLUSIVE,
+        manifest_digest="ab" * 32,
+        reason_code="source-review-inconclusive",
+        review_audit=audit,
+        review_audit_digest=audit.canonical_digest(),
+    )
+
+    assert request.passed is True
+    assert request.outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+
+
+def test_policy_v13_inconclusive_preserves_signed_review_audit() -> None:
+    audit = _review_audit()
+
+    request = _request(
+        outcome=ScreenResultOutcome.INCONCLUSIVE,
+        review_audit=audit,
+        review_audit_digest=audit.canonical_digest(),
+    )
+
+    assert request.passed is False
+    assert request.outcome == ScreenResultOutcome.INCONCLUSIVE
+    assert request.review_audit == audit
+
+
+def test_source_review_audit_accepts_configured_l1_step_budget() -> None:
+    audit = _review_audit().model_copy(update={"max_steps": 160, "steps_used": 159})
+    parsed = ScreenReviewAudit.model_validate(audit.model_dump(mode="json"))
+    request = _request(
+        outcome=ScreenResultOutcome.INCONCLUSIVE,
+        review_audit=parsed,
+        review_audit_digest=parsed.canonical_digest(),
+    )
+    assert request.review_audit is not None
+    assert request.review_audit.max_steps == 160
+    assert request.review_audit.steps_used == 159
+
+    with pytest.raises(ValidationError, match="less than or equal to 256"):
+        ScreenReviewAudit.model_validate(
+            {**audit.model_dump(mode="json"), "max_steps": 257}
+        )
+    with pytest.raises(ValidationError, match="review steps used exceed"):
+        ScreenReviewAudit.model_validate(
+            {**audit.model_dump(mode="json"), "steps_used": 161}
+        )
+
+
+def test_l2_review_audit_accepts_operator_budget_ceiling() -> None:
+    audit = ScreenReviewAudit(
+        stage="l2",
+        reason_code="l2-model-inconclusive",
+        prompt_revision="l2-v13",
+        max_steps=256,
+        steps_used=256,
+        max_input_tokens=1_000_000,
+        input_tokens_used=2_700_000,
+        max_output_tokens=1_000_000,
+        output_tokens_used=1_000_000,
+        max_cost_usd=25,
+        cost_usd_used=20,
+    )
+    parsed = ScreenReviewAudit.model_validate(audit.model_dump(mode="json"))
+    assert parsed.canonical_digest() == audit.canonical_digest()
+
+    with pytest.raises(ValidationError, match="less than or equal to 1000000"):
+        ScreenReviewAudit.model_validate(
+            {**audit.model_dump(mode="json"), "max_output_tokens": 1_000_001}
+        )
+
+
+def test_preflight_hold_audit_round_trips_with_signed_request() -> None:
+    audit = ScreenReviewAudit(
+        stage="l2",
+        reason_code="l2-runtime-evidence-unavailable",
+        prompt_revision="l2-v13",
+        max_steps=256,
+        steps_used=0,
+        max_input_tokens=5_000_000,
+        input_tokens_used=0,
+        max_output_tokens=1_000_000,
+        output_tokens_used=0,
+        max_cost_usd=25,
+        cost_usd_used=0,
+        requested_model="openai/gpt-6-sol",
+        final_stage="preflight",
+        cause_detail="lease_unavailable",
+        max_elapsed_ms=1_800_000,
+        elapsed_ms=0,
+    )
+    request = _request(
+        outcome=ScreenResultOutcome.INCONCLUSIVE,
+        review_audit=audit,
+        review_audit_digest=audit.canonical_digest(),
+    )
+    assert request.review_audit == audit
+    assert (
+        ScreenResultRequest.model_validate(request.model_dump(mode="json")) == request
+    )
+
+
 def test_legacy_outcome_rejects_image_metadata() -> None:
     with pytest.raises(ValidationError, match="legacy result cannot carry"):
         _request(
@@ -278,6 +409,13 @@ def test_private_failure_feedback_is_bounded_to_a_failed_attempt() -> None:
 
     with pytest.raises(ValidationError, match="passing result cannot carry"):
         _pass_request(private_failure_detail="should not be present")
+
+    with pytest.raises(ValidationError, match="requires a failure outcome"):
+        _request(
+            reason_code="seed-envelope-usage",
+            private_failure_detail="shadow seed observation is not a failure",
+            private_failure_log_tail="memory peak 120 MiB of 3072 MiB",
+        )
 
     with pytest.raises(ValidationError, match="requires attempt_id"):
         _request(attempt_id=None, private_failure_detail="missing lease")

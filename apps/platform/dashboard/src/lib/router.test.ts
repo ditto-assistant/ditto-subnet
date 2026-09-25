@@ -54,7 +54,7 @@ describe("PAGES registry", () => {
     });
     expect(PAGES.pipeline).toEqual({
       title: "Submission pipeline",
-      sub: "Every submission from upload to scored · admission, validation, and integrity review",
+      sub: "Every submission from upload to scored · admission, validation, and source review",
     });
     expect(PAGES.operations).toEqual({
       title: "Fleet",
@@ -101,6 +101,8 @@ describe("PAGES registry", () => {
     expect(ENTITY_PAGES.validator).toBe("operations");
     expect(ENTITY_PAGES.screener).toBe("operations");
     expect(PAGE_SCOPED_PARAMS).toEqual([
+      "activity_q",
+      "activity_status",
       "status",
       "downloadable",
       "q",
@@ -108,6 +110,9 @@ describe("PAGES registry", () => {
       "code",
       "login",
       "complete",
+      "ditto",
+      "reason",
+      "attempt",
     ]);
   });
 });

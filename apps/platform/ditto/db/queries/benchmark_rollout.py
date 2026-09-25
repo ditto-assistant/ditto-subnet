@@ -1421,6 +1421,10 @@ def verified_scorer_for_version(
         or version not in scorer.supported_bench_versions
     ):
         return None
+    # V13 has not activated publicly. Its corrected deterministic candidate
+    # must not be scheduled onto a scorer that only knows the earlier canary.
+    if version == 13 and not scorer.deterministic_v13_datasets:
+        return None
     if version >= 9 and not _scorer_meets_version_floor(
         heartbeat,
         scorer=scorer,
@@ -1781,6 +1785,7 @@ async def issue_rollout_ticket(
         select(func.count(ValidatorTicket.validator_hotkey))
         .where(
             ValidatorTicket.agent_id == BenchmarkRolloutMember.agent_id,
+            ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             ValidatorTicket.bench_version == rollout.desired_version,
             ValidatorTicket.status == TicketStatus.ISSUED,
             ValidatorTicket.deadline > now,
@@ -1958,11 +1963,20 @@ async def issue_rollout_ticket(
             ticket.status != TicketStatus.EXPIRED
             or (retry_after is not None and retry_after > now)
             or (
-                ticket.provider_outage_epoch is None
+                ticket.purpose != TicketPurpose.BENCHMARK_CANARY
+                and ticket.provider_outage_epoch is None
                 and ticket.attempt_count >= ticket_attempt_cap(ticket)
             )
         ):
             return None
+        if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+            ticket.attempt_count = 0
+            ticket.seed = None
+            ticket.dataset_sha256 = None
+            ticket.seed_block = None
+            ticket.seed_block_hash = None
+            ticket.provider_outage_epoch = None
+            ticket.provider_outage_attempted_epoch = None
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -2236,6 +2250,41 @@ async def maybe_activate_rollout(
     return True
 
 
+def bench_promotion_requirement(
+    *,
+    emission_version: int,
+    rollout_version: int,
+    priority_cohort_size: int,
+) -> str:
+    """The remaining condition for emission authority to move, in one sentence.
+
+    Worded from the two gates that actually implement the first flip
+    (:func:`_live_desired_authority_ready`), with their live values, so the
+    public explanation cannot drift from the code:
+
+    - :func:`rollout_cohort_score_complete` over the rollout's frozen
+      ``priority_cohort_target``: every position needs ``SCORING_QUORUM``
+      accepted desired-version scores, permanently ineligible members skipped;
+    - ``count_ranked_quorum_agents(desired) >= MIN_DESIRED_AUTHORITY_AGENTS``:
+      the emission set (champion plus participation tail) must all hold a
+      ranked desired-version quorum before any of them are ranked on it.
+
+    During the Bench 13 rollout, scoring on v13 while v12 still paid was read
+    as a stalled rollout; this is the answer to "what is it waiting for".
+    """
+    return (
+        f"Bench v{rollout_version} scoring is in progress; Bench "
+        f"v{emission_version} still controls emissions. Emission authority "
+        f"moves to v{rollout_version} only once the first {priority_cohort_size} "
+        "inherited priority-cohort positions each hold a complete "
+        f"{SCORING_QUORUM}-score v{rollout_version} quorum (permanently "
+        "ineligible members are skipped) and at least "
+        f"{MIN_DESIRED_AUTHORITY_AGENTS} agents hold a complete ranked "
+        f"v{rollout_version} quorum, the champion plus the full participation "
+        "tail. The whole ledger then flips at once."
+    )
+
+
 async def rollout_state(
     session: AsyncSession,
     *,
@@ -2315,7 +2364,11 @@ async def rollout_state(
             "max_rescore_cohort_size": MAX_PERSISTED_RESCORE_COHORT_SIZE,
             "priority_cohort_size": PRIORITY_COHORT_SIZE,
             "priority_cohort_target": None,
+            "priority_cohort_ready_count": 0,
             "priority_complete": False,
+            # Nothing is being collected, so nothing is waiting to promote.
+            "promotion_pending": False,
+            "promotion_requirement": None,
             "members": [],
         }
     count_rows = (
@@ -2370,10 +2423,22 @@ async def rollout_state(
     ]
     # Same skip-ineligible first-five barrier as rollout_cohort_score_complete,
     # computed from the member/status rows already loaded above.
-    priority_complete = len(priority_members) == priority_target and all(
+    priority_ready_count = sum(
         member_statuses.get(member.agent_id) in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
         or counts.get(member.agent_id, 0) >= SCORING_QUORUM
         for member in priority_members
+    )
+    priority_complete = (
+        len(priority_members) == priority_target
+        and priority_ready_count == priority_target
+    )
+    # Scoring has moved to the desired version but emissions have not. A
+    # collecting rollout whose desired authority is already earned resolves
+    # `active_version` to the desired version, so it is correctly NOT pending
+    # even though the row stays open for leftover cohort work.
+    promotion_pending = (
+        rollout.status in ("collecting", "blocked_ineligible")
+        and rollout.desired_version > active_version
     )
     return {
         "active_version": active_version,
@@ -2404,7 +2469,22 @@ async def rollout_state(
         # PRIORITY_COHORT_SIZE for every rollout that predates the setting.
         "priority_cohort_size": priority_target,
         "priority_cohort_target": priority_target,
+        # Gate-one PROGRESS, not just its boolean, counted exactly as the
+        # barrier counts it: a permanently ineligible member is satisfied. A
+        # client re-deriving this from `members` cannot see member status, so
+        # a banned leader read as "4 of 5" forever while the gate had closed.
+        "priority_cohort_ready_count": priority_ready_count,
         "priority_complete": priority_complete,
+        "promotion_pending": promotion_pending,
+        "promotion_requirement": (
+            bench_promotion_requirement(
+                emission_version=active_version,
+                rollout_version=rollout.desired_version,
+                priority_cohort_size=priority_target,
+            )
+            if promotion_pending
+            else None
+        ),
         "members": [
             {
                 "agent_id": str(member.agent_id),

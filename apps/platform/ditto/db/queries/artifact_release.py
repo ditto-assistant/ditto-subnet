@@ -10,7 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.db.models import Agent, AgentKingship, Score
+from ditto.db.models import Agent, AgentKingship, ArtifactFetchAudit, Score
+from ditto.db.queries.artifact_fetch_audit import ENDPOINT_PUBLIC_ARTIFACT
 from ditto.db.queries.artifact_release_settings import ArtifactReleasePolicy
 from ditto.db.queries.king_reign import get_king_reveal
 
@@ -102,15 +103,56 @@ async def list_public_source_releases(
     quorum: int,
     policy: ArtifactReleasePolicy,
 ) -> dict[UUID, datetime]:
+    """Publication evidence for anti-copy review, never download authorization.
+
+    A recorded public handoff remains publication even after policy tightens or
+    a submission is suspended. Only the exact artifact SHA and unauthenticated
+    public artifact route count; private operator/validator reads do not.
+    Callers must compare the returned time with the candidate's upload time.
+    Missing audit records do not prove publication, and legacy weight-only
+    confirmations remain insufficient without an actual public fetch receipt.
+    """
+    releases = await _list_eligible_source_releases(
+        session, agent_ids=agent_ids, quorum=quorum, policy=policy
+    )
+    if not agent_ids:
+        return releases
+    rows = (
+        await session.execute(
+            select(ArtifactFetchAudit.agent_id, func.min(ArtifactFetchAudit.fetched_at))
+            .join(Agent, Agent.agent_id == ArtifactFetchAudit.agent_id)
+            .where(
+                ArtifactFetchAudit.agent_id.in_(agent_ids),
+                ArtifactFetchAudit.endpoint == ENDPOINT_PUBLIC_ARTIFACT,
+                ArtifactFetchAudit.requester_kind == "public",
+                ArtifactFetchAudit.requester_id.is_(None),
+                ArtifactFetchAudit.artifact_sha256 == Agent.sha256,
+            )
+            .group_by(ArtifactFetchAudit.agent_id)
+        )
+    ).all()
+    for agent_id, fetched_at in rows:
+        published_at = _as_utc(fetched_at)
+        releases[agent_id] = min(releases.get(agent_id, published_at), published_at)
+    return releases
+
+
+async def _list_eligible_source_releases(
+    session: AsyncSession,
+    *,
+    agent_ids: list[UUID] | set[UUID] | tuple[UUID, ...],
+    quorum: int,
+    policy: ArtifactReleasePolicy,
+) -> dict[UUID, datetime]:
     """Return ``agent_id -> when its source became publicly downloadable``.
 
-    The same predicate the public routes serve, expressed for consumers that
+    The current predicate the public routes serve, expressed for consumers that
     need the *fact* of publication rather than a wire projection: source release
-    is **king-only** and its clock starts at on-chain weight confirmation, not at
-    upload and not at score quorum. An agent is present here only when it (1)
-    completed a same-version score quorum, (2) held the crown and had validator
-    weights confirmed on-chain, and (3) is currently ``scored`` or ``live``;
-    ``available_at`` is ``weight_confirmed_at + policy.embargo_hours``. Agents
+    is **king-only** and its clock starts at completed winner emissions, not at
+    upload or score quorum. An agent is present here only when it (1) completed
+    a same-version score quorum, (2) held the crown and earned confirmed winner
+    emissions in a completed tempo, and (3) is currently ``scored`` or ``live``;
+    ``available_at`` is ``emission_confirmed_at + policy.embargo_hours``. Agents
     that never reigned — the overwhelming majority — are simply absent.
 
     ``policy`` is passed in rather than read here so the caller controls *which*
@@ -137,9 +179,9 @@ async def list_public_source_releases(
     # have ever been published rather than to the ledger.
     reveals = await get_king_reveal(session, agent_ids=list(agent_ids))
     confirmed = {
-        agent_id: reveal.weight_confirmed_at
+        agent_id: reveal.emission_confirmed_at
         for agent_id, reveal in reveals.items()
-        if reveal.weight_confirmed_at is not None
+        if reveal.emission_confirmed_at is not None
     }
     if not confirmed:
         return {}
@@ -147,8 +189,8 @@ async def list_public_source_releases(
         session, agent_ids=list(confirmed), quorum=quorum
     )
     confirmed = {
-        agent_id: weight_confirmed_at
-        for agent_id, weight_confirmed_at in confirmed.items()
+        agent_id: emission_confirmed_at
+        for agent_id, emission_confirmed_at in confirmed.items()
         if agent_id in quorums
     }
     if not confirmed:
@@ -167,8 +209,8 @@ async def list_public_source_releases(
     )
     window = timedelta(hours=policy.embargo_hours)
     return {
-        agent_id: _as_utc(weight_confirmed_at) + window
-        for agent_id, weight_confirmed_at in confirmed.items()
+        agent_id: _as_utc(emission_confirmed_at) + window
+        for agent_id, emission_confirmed_at in confirmed.items()
         if agent_id in releasable
     }
 
@@ -179,12 +221,14 @@ async def available_public_source_agent_ids(
     quorum: int,
     policy: ArtifactReleasePolicy,
     now: datetime,
+    include_pending: bool = False,
 ) -> set[UUID]:
-    """Return currently downloadable source ids without scanning submissions.
+    """Return eligible source ids, optionally including scheduled disclosures.
 
     Kingship is intentionally the leading relation: it is the tiny eligibility
     ledger, while ``agents`` is the unbounded public activity history. Only the
-    already-confirmed, embargo-complete kings reach the score-quorum window.
+    confirmed kings reach the score-quorum window. Pending disclosures may be
+    listed without changing the download endpoint or its embargo enforcement.
     """
     if not policy.releases_publicly:
         return set()
@@ -194,8 +238,12 @@ async def available_public_source_agent_ids(
             select(AgentKingship.agent_id)
             .join(Agent, Agent.agent_id == AgentKingship.agent_id)
             .where(
-                AgentKingship.weight_confirmed_at.is_not(None),
-                AgentKingship.weight_confirmed_at <= cutoff,
+                AgentKingship.emission_confirmed_at.is_not(None),
+                *(
+                    []
+                    if include_pending
+                    else [AgentKingship.emission_confirmed_at <= cutoff]
+                ),
                 Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
             )
         )

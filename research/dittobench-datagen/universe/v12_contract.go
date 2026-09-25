@@ -267,6 +267,20 @@ func v12OperationClause(seed int64, group int, shape v11ProgramShape, schema v11
 // counterfactual), like the v10/v11 contracts. Count must be a positive
 // multiple of four.
 func GenerateV12Programs(seed int64, count int) ([]V10GeneratedCase, error) {
+	return GenerateV12ProgramsForVersion(seed, count, protocol.BenchVersionV12)
+}
+
+// GenerateV12ProgramsForVersion generates the v12 program semantics under an
+// explicit contract at or above v12. The program shapes, prose, schema, and
+// provenance are byte-identical across versions; only the wire hygiene of the
+// evidence records differs. At v13 every record timestamp comes from a seeded
+// OpaqueTimeline instead of the fixed "2026-01-0<i>T0<9+i>" pattern, which
+// leaked the record slot (and therefore the family) to a /seed reader before
+// any prose was read, and the emitted case carries the requested version.
+func GenerateV12ProgramsForVersion(seed int64, count int, benchVersion int) ([]V10GeneratedCase, error) {
+	if benchVersion < protocol.BenchVersionV12 {
+		return nil, fmt.Errorf("v12 programs require bench_version >= %d, got %d", protocol.BenchVersionV12, benchVersion)
+	}
 	if count <= 0 || count%4 != 0 {
 		return nil, fmt.Errorf("v12 program count must be a positive multiple of four, got %d", count)
 	}
@@ -353,7 +367,7 @@ func GenerateV12Programs(seed int64, count int) ([]V10GeneratedCase, error) {
 		}
 		for variant, spec := range variants {
 			renderer := v10Renderers[(group+variant)%len(v10Renderers)]
-			generated, err := materializeV12Case(seed, group, variant, groupID, schemaDigest, ontology, schema, shape, renderer, spec.scenario, spec.relation, spec.answer, spec.distract)
+			generated, err := materializeV12Case(seed, benchVersion, group, variant, groupID, schemaDigest, ontology, schema, shape, renderer, spec.scenario, spec.relation, spec.answer, spec.distract)
 			if err != nil {
 				return nil, err
 			}
@@ -365,6 +379,7 @@ func GenerateV12Programs(seed int64, count int) ([]V10GeneratedCase, error) {
 
 func materializeV12Case(
 	seed int64,
+	benchVersion int,
 	group int,
 	variant int,
 	groupID string,
@@ -387,7 +402,7 @@ func materializeV12Case(
 		protocol.OpaqueCaseID(seed, prefix+"-state-b", 0),
 		protocol.OpaqueCaseID(seed, prefix+"-state-c", 0),
 	}
-	pairs := renderV12Scenario(seed, group, renderer, schema, shape, scenario, pairIDs, includeDistractor)
+	pairs := renderV12Scenario(seed, benchVersion, group, variant, renderer, schema, shape, scenario, pairIDs, includeDistractor)
 	answer := v11Answer(shape, scenario)
 	if answer <= 0 {
 		return V10GeneratedCase{}, fmt.Errorf("v12 group %d shape %d produced non-positive answer %d", group, shape, answer)
@@ -411,7 +426,7 @@ func materializeV12Case(
 
 	caseID := protocol.OpaqueCaseID(seed, "v12-program-case", group*4+variant)
 	caseValue := protocol.MemoryCase{
-		BenchVersion:      protocol.BenchVersionV12,
+		BenchVersion:      benchVersion,
 		ID:                caseID,
 		QuestionID:        caseID,
 		QuestionType:      "v12-open-program",
@@ -479,7 +494,7 @@ func v12Distractors(answer int, scenario v11Scenario) []string {
 // clauses — are emitted in a seeded permutation so no role is bindable by row
 // position. No record carries a `label=amount` pair; the only `=` binds the
 // entity to its alias.
-func renderV12Scenario(seed int64, group int, renderer V10Renderer, schema v11Schema, shape v11ProgramShape, scenario v11Scenario, pairIDs []string, includeDistractor bool) []protocol.MemoryPair {
+func renderV12Scenario(seed int64, benchVersion int, group int, variant int, renderer V10Renderer, schema v11Schema, shape v11ProgramShape, scenario v11Scenario, pairIDs []string, includeDistractor bool) []protocol.MemoryPair {
 	b := schema.base
 	glossary := v11Glossary(seed, group, schema)
 	alias := scenario.base.Alias
@@ -504,15 +519,28 @@ func renderV12Scenario(seed int64, group int, renderer V10Renderer, schema v11Sc
 		rows = append(rows, movable[p])
 	}
 
+	// v13 (#1827): the fixed "2026-01-0<i>T0<9+i>" step named the record slot
+	// and marked every program record as this family. A seeded business-hours
+	// timeline per (group, variant) keeps chronological order without a
+	// classifiable pattern; the four variants of a group are separate cases
+	// with separate records, so they do not share one set of instants either.
+	var timeline *protocol.OpaqueTimeline
+	if benchVersion >= protocol.BenchVersionV13 {
+		timeline = protocol.NewOpaqueTimeline(seed, fmt.Sprintf("v13-program-%d-%d", group, variant))
+	}
 	pairs := make([]protocol.MemoryPair, 0, len(rows))
 	for i, row := range rows {
 		prompt, response := renderV12Record(seed, group, renderer, i, row, alias)
+		timestamp := fmt.Sprintf("2026-01-%02dT%02d:00:00Z", 2+i, 9+i)
+		if timeline != nil {
+			timestamp = timeline.Next()
+		}
 		pairs = append(pairs, protocol.MemoryPair{
 			PairID: pairIDs[i],
 			// Opaque session identifiers: no renderer family or version leaks
 			// into the wire (issues #492/#499/#537).
 			SessionID: protocol.OpaqueCaseID(seed, fmt.Sprintf("v12-session-%d", group), i),
-			Timestamp: fmt.Sprintf("2026-01-%02dT%02d:00:00Z", 2+i, 9+i),
+			Timestamp: timestamp,
 			Prompt:    prompt, Response: response,
 		})
 	}

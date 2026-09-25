@@ -9,17 +9,19 @@ const require = createRequire(import.meta.url);
 const openclawRoot = path.dirname(path.dirname(require.resolve("openclaw")));
 let memoryRuntimePromise;
 
+// Seed-free production surface (catalog.CatalogForVersion(13)); regenerate with
+// `go run ./cmd/catalogmirror -bench-version 13 -format openclaw` in
+// research/dittobench-datagen. Per-seed coined decoys arrive only on the scored
+// wire and are not registered here.
 const TOOL_NAMES = [
   "create_image", "edit_image", "read_links", "search_web",
   "search_memories", "search_subjects", "fetch_memories", "search_memories_in_subjects",
   "artifacts", "execute_agent_job", "run_code", "search_tools",
-  "execute_agent_workflow", "get_agent_job_status", "list_agent_jobs",
-  "file_feedback_for_team", "set_theme", "set_main_model", "set_reasoning_effort",
-  "set_chat_tool_preferences", "create_automation", "list_automations",
-  "create_recipe", "apply_recipe", "discover_capabilities",
-  "save_memory", "update_memory", "delete_memory",
-  "calendar_create_event", "calendar_search_events", "gmail_send",
-  "set_accent_color", "set_chat_font",
+  "list_agent_jobs", "file_feedback_for_team", "set_theme", "set_reasoning_effort",
+  "set_chat_tool_preferences", "discover_capabilities", "save_memory", "update_memory",
+  "delete_memory", "calendar_create_event", "calendar_search_events", "gmail_send",
+  "set_accent_color", "set_chat_font", "create_workflow", "list_workflows",
+  "list_schedules", "run_workflow",
 ];
 
 const MEMORY_READS = new Set([

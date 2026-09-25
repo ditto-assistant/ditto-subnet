@@ -166,6 +166,109 @@ func TestBuildProducesTypedValidEnforceEvidence(t *testing.T) {
 	}
 }
 
+func TestV13ClaimProvenanceSurvivesBaseEvidence(t *testing.T) {
+	in := validInput(t)
+	in.BenchVersion = scoregates.BenchVersionV13
+	gates, err := BuildGateEvidence(in.BenchVersion, nil, AggregateModelTelemetry{TelemetryComplete: true}, true,
+		ModelDependenceTelemetry{TelemetryComplete: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.Gates, err = scoregates.AttachClaimProvenance(gates, scoregates.ClaimProvenanceInput{
+		AdministeredCases: 5, EligibleCases: 4, NotModelEmittedCases: 2,
+		AnswerInPromptCases: 1, FlaggedCases: 2, UnattributedCallCases: 1,
+		UnsettledCases: 1, ZeroedCases: 3, Posture: scoregates.ClaimProvenanceEnforce,
+		TelemetryComplete: true, AttributionComplete: false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	details, digest, _, err := Build(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded protocol.V9BaseDetails
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	roundTrip, err := fromWireEvidence(decoded.ScoreGates)
+	if err != nil || roundTrip.ClaimProvenance != in.Gates.ClaimProvenance {
+		t.Fatalf("claim provenance lost in wire evidence: %+v, %v", roundTrip.ClaimProvenance, err)
+	}
+	if got, err := DigestHex(decoded); err != nil || got != digest {
+		t.Fatalf("base digest drift: %s, %v", got, err)
+	}
+	// A valid alternative claim summary must still invalidate the original
+	// signed digest; preserving the field must not weaken integrity checking.
+	decoded.ScoreGates.ClaimProvenance.ZeroedCases--
+	if err := ValidateWithoutDigestRecursion(decoded); err == nil || !strings.Contains(err.Error(), "score_gates_sha256 mismatch") {
+		t.Fatalf("tampered claim evidence accepted: %v", err)
+	}
+}
+
+func TestV13WireEvidenceMatchesSharedPythonVector(t *testing.T) {
+	body, err := os.ReadFile("../scoregates/testdata/v13_claim_provenance_evidence.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		Evidence       protocol.V9ScoreGateEvidence `json:"evidence"`
+		CanonicalBytes string                       `json:"canonical_bytes"`
+		Digest         string                       `json:"digest_hex"`
+	}
+	if err := json.Unmarshal(body, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	gates, err := fromWireEvidence(fixture.Evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := gates.CanonicalBytes()
+	if err != nil || string(canonical) != fixture.CanonicalBytes {
+		t.Fatalf("wire evidence differs from shared canonical bytes: %v", err)
+	}
+	if toWireEvidence(gates) != fixture.Evidence {
+		t.Fatal("shared claim evidence lost fields during conversion")
+	}
+	if digest, err := gates.DigestHex(); err != nil || digest != fixture.Digest {
+		t.Fatalf("shared gate digest drift: %s, %v", digest, err)
+	}
+}
+
+func TestPreV13WireEvidenceOmitsClaimProvenance(t *testing.T) {
+	for _, version := range []int{9, 10, 11, 12} {
+		var dependence []ModelDependenceTelemetry
+		if version >= 12 {
+			dependence = []ModelDependenceTelemetry{{TelemetryComplete: true}}
+		}
+		gates, err := BuildGateEvidence(version, nil, AggregateModelTelemetry{TelemetryComplete: true}, true,
+			dependence...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wire := toWireEvidence(gates)
+		body, err := json.Marshal(wire)
+		if err != nil || strings.Contains(string(body), "claim_provenance") {
+			t.Fatalf("v%d acquired v13 wire fields: %s, %v", version, body, err)
+		}
+		decoded, err := fromWireEvidence(wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want, err := gates.DigestHex()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := decoded.DigestHex(); err != nil || got != want {
+			t.Fatalf("v%d digest changed: %s != %s, %v", version, got, want, err)
+		}
+	}
+}
+
 func TestEnforceInsufficientAttributionPublishesAndAppliesZero(t *testing.T) {
 	perCase := []protocol.CaseScore{
 		{CaseID: "a", Expected: []string{"search"}, Called: []string{"search"}},

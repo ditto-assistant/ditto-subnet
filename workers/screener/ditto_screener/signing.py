@@ -26,6 +26,8 @@ from ditto_screener.heartbeat import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScreenResultOutcome,
+    completion_receipt_signing_message,
+    router_source_screen_signing_message,
     verdict_signing_message,
 )
 
@@ -33,6 +35,33 @@ if TYPE_CHECKING:
     from uuid import UUID
 
     from ditto_screener.config import ScreenerConfig
+    from ditto_screening_protocol import (
+        AdjudicationCompletionReceipt,
+        RouterSourceScreenEvidence,
+    )
+
+
+def sign_completion_receipt(
+    keypair: Any,
+    *,
+    screener_hotkey: str,
+    agent_id: UUID,
+    attempt_id: UUID,
+    artifact_sha256: str,
+    adjudication_digest: str,
+    receipt: AdjudicationCompletionReceipt,
+) -> str:
+    """Sign successful L4 telemetry independently of the stable verdict wire."""
+    return keypair.sign(
+        completion_receipt_signing_message(
+            screener_hotkey=screener_hotkey,
+            agent_id=agent_id,
+            attempt_id=attempt_id,
+            artifact_sha256=artifact_sha256,
+            adjudication_digest=adjudication_digest,
+            receipt=receipt,
+        )
+    ).hex()
 
 
 def load_screener_keypair(config: ScreenerConfig) -> Any:
@@ -118,6 +147,26 @@ def sign_verdict(
         image_id=image_id,
         image_ref=image_ref,
         image_upload_id=image_upload_id,
+    )
+    signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def sign_router_source_screen(
+    keypair: Any,
+    *,
+    screener_hotkey: str,
+    evidence: RouterSourceScreenEvidence,
+) -> str:
+    """Return the hex sr25519 signature over one router source-screen result.
+
+    Binds the screener's hotkey to the canonical, content-addressed evidence so
+    the shadow router-track ledger can attribute the screen without trusting the
+    transport. The evidence carries only digests (never task text or held-out
+    identities), and the message never contains the key.
+    """
+    message = router_source_screen_signing_message(
+        screener_hotkey=screener_hotkey, evidence=evidence
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()

@@ -17,6 +17,7 @@ The Worker requires these server-side bindings:
 - `GOOGLE_CLIENT_SECRET`
 - `SESSION_SECRET` (at least 32 random characters)
 - `BACKROOM_ADMIN_EMAILS` (comma-separated `@omniaura.ai` administrators)
+- `BACKROOM_BLOCKED_EMAILS` (comma-separated identities denied on every request)
 - `DITTO_ADMIN_API_TOKEN` (the Platform admin bearer token)
 
 Google's `hd` request hint is not authorization. The callback verifies the ID
@@ -26,6 +27,11 @@ domain, verified email, and exact `@omniaura.ai` suffix. Verified domain members
 addresses in `BACKROOM_ADMIN_EMAILS` receive write access. The Platform still
 enforces its admin token on every operation and receives the signed-in email as
 `X-Admin-Actor` for audit attribution.
+
+An address in `BACKROOM_BLOCKED_EMAILS` is denied before its console session or
+MCP scopes are used. The check runs on every request, so adding an address
+revokes already-issued console sessions and makes existing or refresh-derived
+MCP access tokens unusable without waiting for their normal expiry.
 
 Sessions are intentionally bounded to 7 days. Removing an address from
 `BACKROOM_ADMIN_EMAILS` revokes write access on its next request because the

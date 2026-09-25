@@ -26,7 +26,7 @@ screener_fleet_state_dir: /var/lib/ditto-screener-fleet
 screener_fleet_config_dir: /etc/ditto-screener-fleet
 screener_fleet_secret_agent_user: ditto-screener-secrets
 screener_fleet_x509_enabled: false
-screener_fleet_x509_subject: spiffe://dittobench.ai/screener/subnet-screener-1
+screener_fleet_x509_subject: "spiffe://dittobench.ai/screener/{{ screener_fleet_node_id }}"
 screener_fleet_x509_provider: ""
 screener_fleet_x509_service_account_email: ""
 screener_fleet_x509_ca_certificate_pem: ""
@@ -46,6 +46,10 @@ screener_fleet_gcp_project: ditto-app-dev
 # validators' shared validator-openrouter-key is only for an OpenRouter
 # fallback, so a ditto_inf_ key never lands in it.
 screener_fleet_source_review_secret_id: screener-review-ditto-inference-key
+# Host capability only. Backroom's audited shadow setting remains the kill switch.
+screener_fleet_conversation_enabled: false
+screener_fleet_conversation_secret_id: validator-openrouter-key
+screener_fleet_conversation_key_file: "{{ screener_fleet_secrets_dir }}/conversation-openrouter-key"
 screener_fleet_jobs_dir: "{{ screener_fleet_state_dir }}/jobs"
 screener_fleet_images_dir: "{{ screener_fleet_state_dir }}/images"
 screener_fleet_logs_dir: /var/log/ditto-screener-fleet
@@ -58,6 +62,16 @@ screener_fleet_rootless_docker_host: unix:///run/ditto-screener-docker/docker.so
 screener_fleet_executor_user: ditto-builder
 screener_fleet_executor_group: ditto-builder
 screener_fleet_executor_home: /var/lib/ditto-screener-docker
+# Keep the rootless builder's 100 GB daemon GC budget warm while reclaiming
+# unused records on a predictable cadence. The cache-only tasks are shared
+# with the legacy GCP screener role; no guest VM or rootful Docker cache is
+# pruned. Disable this when rehearsing without the runtime.
+screener_fleet_cache_gc_enabled: true
+screener_fleet_cache_gc_keep_storage: 100GB
+screener_fleet_cache_gc_min_age: 1h
+screener_fleet_cache_gc_on_calendar: hourly
+screener_fleet_cache_gc_randomized_delay: 5min
+screener_fleet_cache_gc_dry_run: false
 # The rootless daemon cannot traverse the screener's private state tree. This
 # shared parent is owned by the daemon identity while the screener has group
 # write access; each gateway invocation still creates a unique 0711 child.
@@ -92,6 +106,10 @@ screener_fleet_release_sha: ""
 # Safe first-converge/canary posture. Raise this alongside the audited
 # Backroom screening concurrency only after the lower setting is proven.
 screener_fleet_worker_processes: 1
+# Opt-in only on the independent physical node. The ordinary worker unit is
+# replaced by the signed, report-only replay entrypoint at the same instance ID.
+screener_fleet_replay_worker_enabled: false
+screener_fleet_replay_process_key_file: "{{ screener_fleet_config_dir }}/replay-process.key"
 screener_fleet_agent_workers: 12
 screener_fleet_poll_seconds: 2
 screener_fleet_build_timeout_seconds: 2400
@@ -117,3 +135,8 @@ screener_fleet_base_image: "{{ screener_fleet_images_dir }}/debian-12-docker.qco
 # The registration token is consumed and deleted by ditto-screener-enroll.
 screener_fleet_registration_token: ""
 screener_fleet_source_review_api_key: ""
+
+# Optional shared-host partition; zero admission caps retain Platform limits.
+screener_fleet_local_sandbox_slots: 0
+screener_fleet_local_source_review_slots: 0
+screener_fleet_resource_slice: ''

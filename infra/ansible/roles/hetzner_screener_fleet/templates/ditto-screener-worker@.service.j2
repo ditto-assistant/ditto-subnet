@@ -6,6 +6,9 @@ Requires=ditto-screener-enroll.service
 
 [Service]
 Type=simple
+{% if screener_fleet_resource_slice %}
+Slice={{ screener_fleet_resource_slice }}
+{% endif %}
 User={{ screener_fleet_user }}
 Group={{ screener_fleet_group }}
 WorkingDirectory={{ screener_fleet_active_worker_dir }}
@@ -22,14 +25,24 @@ Environment=SCREENER_L2_WORKSPACE_ROOT={{ screener_fleet_l2_workspace_root }}/%i
 # BuildKit persists its CLI state under DOCKER_CONFIG. Keep that state inside
 # the worker's allowed directory rather than the immutable release root.
 Environment=DOCKER_CONFIG={{ screener_fleet_state_dir }}/workers/%i/docker
+{% if screener_fleet_replay_worker_enabled %}
+# The process key is generated and retained on this independent host only.
+Environment=SCREENER_REPLAY_WORKER_ENABLED=1
+Environment=SCREENER_REPLAY_PROCESS_KEY_FILE={{ screener_fleet_replay_process_key_file }}
+Environment=SCREENER_V13_RUNTIME_RECEIPTS_MODE=shadow
+{% endif %}
 # Rootless Docker cannot bind-mount a service's PrivateTmp or traverse the
 # screener's private state tree. This parent is owned by the rootless daemon;
 # each invocation stages a unique, worker-owned child inside it.
 Environment=SCREENER_GATEWAY_STATE_ROOT={{ screener_fleet_gateway_state_root }}
-ExecStart={{ screener_fleet_active_worker_venv }}/bin/ditto-screener
+{% if screener_fleet_conversation_enabled %}
+Environment=SCREENER_CONVERSATION_OPENROUTER_KEY_FILE={{ screener_fleet_conversation_key_file }}
+Environment=SCREENER_CONVERSATION_SPOOL_DIR={{ screener_fleet_state_dir }}/workers/%i/conversation
+{% endif %}
+ExecStart={{ screener_fleet_active_worker_venv }}/bin/{{ 'ditto-screener-replay' if screener_fleet_replay_worker_enabled else 'ditto-screener' }}
 Restart=always
 RestartSec=10
-TimeoutStopSec=35min
+TimeoutStopSec=70min
 KillSignal=SIGTERM
 NoNewPrivileges=true
 PrivateTmp=true

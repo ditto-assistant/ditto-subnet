@@ -112,7 +112,7 @@ def make_api_server_config(**overrides: Any) -> ApiServerConfig:
 
 
 @pytest.fixture
-def app() -> Iterator[FastAPI]:
+def app(session_maker) -> Iterator[FastAPI]:
     """A fresh FastAPI app per test, with auto-cleared dependency overrides."""
     # Endpoint tests assert per-request behavior; the public TTL cache would
     # serve stale bodies across a test's mutate-then-refetch sequence. The
@@ -121,6 +121,7 @@ def app() -> Iterator[FastAPI]:
     a = create_api_server(make_api_server_config())
     # Lifespan does not run under ASGITransport, so set the bits the
     # health endpoint reads via app.state directly.
+    a.state.admin_activity_session_maker = session_maker
     a.state.commit_hash = "test-commit"
     # code embedder is lifespan-created; default it to the disabled null embedder so
     # upload tests get a null vector unless they override get_embedder.

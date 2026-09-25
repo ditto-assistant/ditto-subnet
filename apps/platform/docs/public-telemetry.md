@@ -15,21 +15,28 @@ SN118 publishes publicly and how. Implementation tracked per section below.
    researchers who want full per-epoch telemetry.
 3. **Public read API = yes.** Add a rate-limited, no-auth read endpoint so the
    dashboard (and anyone) can read the leaderboard without a validator hotkey.
-4. **The king's source becomes public after on-chain confirmation.** Source
-   release is **king-only** and gated on on-chain weights: a submission's source
-   becomes downloadable only once it has (1) held the KOTH crown and (2) had
-   validators' revealed on-chain weights set on it after commit-reveal. The
-   configured embargo (48 hours by default, operator-tunable anywhere from 6
-   hours to 720 hours / 30 days) is measured from that on-chain confirmation —
-   **not** from the third accepted validator score. A submission that never
-   reigned is never released, however it scored. One that held the crown but is
-   not yet chain-confirmed is withheld with no unlock time until commit-reveal
-   confirms validators backed it. A three-validator score quorum on a single
-   benchmark version remains a precondition — scores from different benchmark
-   versions never combine into a quorum — but it starts no clock, and neither
-   an operator clear nor a later re-score moves the embargo, which is anchored
-   to the on-chain confirmation alone. Quarantined, held, and rejected
-   submissions stay private regardless of rank.
+4. **The king's source becomes public only after completed winner earnings.**
+   Source release is king-only and requires proof that the exact submission
+   earned miner emissions as the winner in a completed on-chain tempo. A brief
+   crown, a pending commitment, or positive revealed weights alone is not proof
+   of earnings and starts no clock. The configured embargo (48 hours by default,
+   operator-tunable from 6 to 8760 hours) starts at `emission_confirmed_at`.
+   The legacy `weight_confirmed_at` field is telemetry only and cannot qualify a
+   release. Missing or ambiguous payout attribution leaves source private with
+   no unlock time. A three-validator score quorum on one benchmark version and
+   a cleared finalized state remain prerequisites; neither a later score nor
+   an operator clear resets the earnings-based clock. Quarantined, held, and
+   rejected submissions remain private. The subnet-wide disclosure policy can
+   withhold all source even after these prerequisites have been met.
+
+   **Current rollout stage:** the weight-only release gate is disabled and no
+   production observer writes completed-emission confirmations. Source remains
+   private until an independently verified producer binds the exact submission
+   to the consumed commit, revealed vector, and completed payout. Chain payout
+   reads and authenticated fold history are evidence groundwork, not automatic
+   attribution. Backroom's `get_source_release_policy` exposes the served gate
+   version and `automatic_confirmation_enabled: false`; its receipt counts do
+   not claim that automatic confirmation is running.
 
 ## Anti-gaming posture (the load-bearing rule)
 
@@ -205,8 +212,9 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   signed download URLs, source hashes, payments, and raw screener/build logs are
   never included in this listing.
   `downloadable=true` narrows the listing to submissions whose derived release
-  state currently permits a public source download; it composes with status and
-  search filters. `downloadable_count` reports that population after search but
+  state is available or awaiting its confirmed payout-based embargo deadline;
+  pending rows expose `artifact_release.available_at` but no download. It composes
+  with status and search filters. `downloadable_count` reports that population after search but
   before status filtering so the dashboard can label the quick filter.
   Each waiting entry also carries `validator_queue_rank` and
   `validator_queue_gate` — the queue preview, described next.
@@ -282,6 +290,16 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   block fields exist; otherwise the response labels the unpredictable CSPRNG
   fallback. Unknown historical generator pins fail closed with no command rather
   than silently using `latest`.
+- `GET /api/v1/public/bench/rollout` → rollout state with promotion progress:
+  `{ active_version, desired_version, status, promotion_pending,
+  promotion_requirement, priority_cohort_size, priority_cohort_ready_count,
+  priority_complete, ranked_quorum_agents, min_ranked_quorum_agents, members,
+  ... }`. `active_version` is the leaderboard's `emission_bench_version`; while
+  `promotion_pending` is true the board's `scoring_bench_version` is ahead of it
+  by design, and `promotion_requirement` names the two gates still holding
+  emissions (the priority-cohort quorum, counted with permanently ineligible
+  members satisfied, and the ranked quorum over the emission set). See
+  `benchmark-v3-rollout.md` for the gate semantics.
 - `GET /api/v1/public/bench/transcript/{sha256}/telemetry` → an allowlisted
   metrics projection from the immutable transcript whose digest is already
   bound into an accepted validator score. The platform reads only the
@@ -314,14 +332,14 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
 - `GET /api/v1/public/agent/{agent_id}/artifact` → `{ agent_id, bench_version,
   sha256, finalized_at, download_url, expires_at }`.
   Returns a five-minute private-bucket URL only when the agent **has held the
-  KOTH crown**, its on-chain weights have been confirmed after commit-reveal,
-  the configured embargo has elapsed since that confirmation, one benchmark
+  KOTH crown**, the exact submission has earned winner emissions in a completed
+  tempo, the configured embargo has elapsed since `emission_confirmed_at`, one benchmark
   version has three independently inserted score rows, and the agent is
   currently in a cleared finalized state (`scored` or legacy `live`). Before the
   deadline it fails with 425. An agent that has **never been king fails closed
   with 404** — `"only the king's source is released"` — as do unknown,
   held-for-review, quarantined, and rejected agents; an ever-king agent still
-  awaiting on-chain confirmation is withheld with no unlock time. The response
+  awaiting completed winner-earnings confirmation is withheld with no unlock time. The response
   is `private, no-store`. A fourth score, re-score, benchmark rollover,
   leaderboard change, or deregistration never resets the original clock.
 - `GET /api/v1/public/agent/{agent_id}/dataset` → `{ agent_id, miner_hotkey,

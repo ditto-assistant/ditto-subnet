@@ -10,6 +10,7 @@ the DB.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 
 from ditto_screener.errors import ScreenerConfigError
@@ -110,6 +111,30 @@ class ScreenerConfig:
     container_port: int
     """Port the harness serves on inside the container (contract: ``8080``)."""
 
+    seed_path: str
+    """Harness seeding path to probe after health (contract: ``/seed``)."""
+
+    seed_probe_mode: str
+    """How the post-health ``/seed`` probe participates: ``off``, ``shadow``,
+    or ``enforce``.
+
+    Screening proves the image builds and answers ``/health``; scoring starts at
+    ``/seed``. An image that boots but cannot persist state passes screening
+    today, fails on every validator's first seeding wave, and lands on an
+    operator as a deferred ticket. ``shadow`` records that signal without
+    changing any outcome; ``enforce`` turns it into a deterministic contract
+    failure with an actionable reason."""
+
+    seed_probe_timeout_seconds: float
+    """Deadline for the single post-health ``/seed`` probe."""
+
+    v13_runtime_receipts_mode: str
+    """``off`` (default) or ``shadow`` for bounded, non-decisive v13 probes.
+
+    The shadow observations are evidence-presence receipts only. They do not
+    satisfy the policy's runtime or private-verification decision bar.
+    """
+
     smoke_env: tuple[tuple[str, str], ...]
     """Env vars injected (``docker run -e K=V``) into the serve-smoke container.
 
@@ -192,6 +217,19 @@ class ScreenerConfig:
     l2_audit_retention_days: int
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
+    l2_always_escalate: bool = False
+    scorer_capabilities_url: str | None = None
+    expected_scorer_revision: str | None = None
+    require_signed_runtime_lease: bool = False
+    """Send every L1 result through L2/L3, even a certified low-risk clear.
+
+    Seeded from ``SCREENER_L2_ALWAYS_ESCALATE``; a bound reviewer revision can
+    only turn it on for one posture (the integrity double-check), never off.
+    """
+    # Only the isolated report-only canary widens this to its 45-minute lease.
+    signed_runtime_lease_max_age_seconds: int = 300
+    adjudicator_max_completion_tokens: int | None = None
+    """L4-only output cap; None inherits the existing L2 completion cap."""
     remote_build_mode: str = "off"
     """How the gate uses a prebuilt image archive.
 
@@ -221,6 +259,13 @@ def _require(name: str, value: str) -> str:
     return value
 
 
+def _parse_choice(name: str, default: str, allowed: tuple[str, ...]) -> str:
+    value = os.environ.get(name, default).strip().lower()
+    if value not in allowed:
+        raise ValueError(f"{name} must be one of {', '.join(allowed)}")
+    return value
+
+
 def _parse_float(name: str, default: str) -> float:
     raw = os.environ.get(name, default)
     try:
@@ -235,6 +280,11 @@ def _parse_int(name: str, default: str) -> int:
         return int(raw)
     except ValueError as e:
         raise ScreenerConfigError(f"{name} must be an integer, got {raw!r}") from e
+
+
+def _parse_optional_int(name: str) -> int | None:
+    raw = os.environ.get(name)
+    return None if raw is None or not raw.strip() else _parse_int(name, raw)
 
 
 def _parse_bool(name: str, default: bool) -> bool:
@@ -326,6 +376,19 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         pids_limit=_parse_int("SCREENER_PIDS_LIMIT", "512"),
         health_path=os.environ.get("SCREENER_HEALTH_PATH", "/health"),
         container_port=_parse_int("SCREENER_CONTAINER_PORT", "8080"),
+        seed_path=os.environ.get("SCREENER_SEED_PATH", "/seed"),
+        # Additive rollout: the probe observes and records by default. A
+        # deployment promotes it to ``enforce`` only after its shadow record
+        # shows the signal is stable.
+        seed_probe_mode=_parse_choice(
+            "SCREENER_SEED_PROBE_MODE", "shadow", ("off", "shadow", "enforce")
+        ),
+        seed_probe_timeout_seconds=_parse_float(
+            "SCREENER_SEED_PROBE_TIMEOUT_SECONDS", "60"
+        ),
+        v13_runtime_receipts_mode=_parse_choice(
+            "SCREENER_V13_RUNTIME_RECEIPTS_MODE", "off", ("off", "shadow")
+        ),
         smoke_env=_parse_env_pairs(
             # Compatibility key for older harness startup. The isolated fake
             # gateway separately locks provider traffic away from the internet.
@@ -434,6 +497,20 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         review_settings_max_stale_seconds=_parse_int(
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS", "900"
         ),
+        l2_always_escalate=os.environ.get("SCREENER_L2_ALWAYS_ESCALATE", "")
+        .strip()
+        .lower()
+        in {"1", "true", "yes", "on"},
+        scorer_capabilities_url=os.environ.get("SCREENER_SCORER_CAPABILITIES_URL")
+        or None,
+        expected_scorer_revision=os.environ.get("SCREENER_EXPECTED_SCORER_REVISION")
+        or None,
+        require_signed_runtime_lease=_parse_bool(
+            "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", False
+        ),
+        adjudicator_max_completion_tokens=_parse_optional_int(
+            "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS"
+        ),
         remote_build_mode=os.environ.get("SCREENER_REMOTE_BUILD_MODE", "off"),
         remote_build_timeout_seconds=_parse_float(
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS", "1500"
@@ -467,9 +544,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT must be low, medium, or high"
         )
-    if config.source_review_model != "openai/gpt-5.6-luna":
+    if config.source_review_model not in {"openai/gpt-5.6-luna", "openai/gpt-6-luna"}:
         raise ScreenerConfigError(
-            "SCREENER_SOURCE_REVIEW_MODEL must be openai/gpt-5.6-luna"
+            "SCREENER_SOURCE_REVIEW_MODEL must be openai/gpt-5.6-luna or "
+            "openai/gpt-6-luna"
         )
     if not 60 <= config.source_review_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
@@ -490,6 +568,15 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if not 60 <= config.adjudicator_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
             "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS must be between 60 and 3600"
+        )
+    if config.adjudicator_max_completion_tokens is not None and not (
+        1_000
+        <= config.adjudicator_max_completion_tokens
+        <= min(128_000, config.l2_max_output_tokens)
+    ):
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS must be between 1000 "
+            "and the L2 output budget"
         )
     if not 1 <= config.review_concern_hold_count <= 16:
         raise ScreenerConfigError(
@@ -516,11 +603,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         )
     if config.l2_review_model not in {
         "openai/gpt-5.6-terra",
+        "openai/gpt-6-sol",
         "moonshotai/kimi-k3",
     }:
         raise ScreenerConfigError(
-            "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra or "
-            "moonshotai/kimi-k3"
+            "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra, "
+            "openai/gpt-6-sol, or moonshotai/kimi-k3"
         )
     if config.review_inference_provider not in REVIEW_INFERENCE_PROVIDERS:
         raise ScreenerConfigError(
@@ -534,8 +622,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2,openai/gpt-5.6-sol"
         )
-    if config.l3_review_model != "openai/gpt-5.6-sol":
-        raise ScreenerConfigError("SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol")
+    if config.l3_review_model not in {"openai/gpt-5.6-sol", "openai/gpt-6-sol"}:
+        raise ScreenerConfigError(
+            "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol or openai/gpt-6-sol"
+        )
     if config.l3_review_provider != config.review_inference_provider:
         raise ScreenerConfigError(
             "SCREENER_L3_REVIEW_PROVIDER must match SCREENER_REVIEW_INFERENCE_PROVIDER"
@@ -544,37 +634,44 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_L2_ANALYZER_IMAGE must be ditto-screener-l2-analyzer:active"
         )
+    if config.scorer_capabilities_url or config.expected_scorer_revision:
+        if not config.scorer_capabilities_url or not config.expected_scorer_revision:
+            raise ScreenerConfigError(
+                "scorer runtime evidence requires URL and revision"
+            )
+        if not re.fullmatch(r"[0-9a-f]{40}", config.expected_scorer_revision):
+            raise ScreenerConfigError("SCREENER_EXPECTED_SCORER_REVISION must be a SHA")
     if config.l2_workspace_root is not None and not os.path.isabs(
         config.l2_workspace_root
     ):
         raise ScreenerConfigError("SCREENER_L2_WORKSPACE_ROOT must be absolute")
-    if not 1 <= config.l2_max_steps <= 20:
-        raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 20")
-    if not 30 <= config.l2_timeout_seconds <= 900:
+    if not 1 <= config.l2_max_steps <= 256:
+        raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 256")
+    if not 30 <= config.l2_timeout_seconds <= 1_800:
         raise ScreenerConfigError(
-            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 900"
+            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 1800"
         )
-    if not 1 <= config.l2_max_output_tokens <= 128_000:
+    if not 1 <= config.l2_max_output_tokens <= 1_000_000:
         raise ScreenerConfigError(
-            "SCREENER_L2_MAX_OUTPUT_TOKENS must be between 1 and 128000"
+            "SCREENER_L2_MAX_OUTPUT_TOKENS must be between 1 and 1000000"
         )
     if not 1 <= config.l2_max_completion_tokens <= config.l2_max_output_tokens:
         raise ScreenerConfigError(
             "SCREENER_L2_MAX_COMPLETION_TOKENS must be within the output budget"
         )
-    if not 1 <= config.l2_max_input_tokens <= 1_000_000:
+    if not 1 <= config.l2_max_input_tokens <= 5_000_000:
         raise ScreenerConfigError(
-            "SCREENER_L2_MAX_INPUT_TOKENS must be between 1 and 1000000"
+            "SCREENER_L2_MAX_INPUT_TOKENS must be between 1 and 5000000"
         )
-    if not 0 < config.l2_max_cost_usd <= 10:
-        raise ScreenerConfigError("SCREENER_L2_MAX_COST_USD must be in (0, 10]")
+    if not 0 < config.l2_max_cost_usd <= 25:
+        raise ScreenerConfigError("SCREENER_L2_MAX_COST_USD must be in (0, 25]")
     if config.l2_analyst_reasoning_effort != "model_default":
         raise ScreenerConfigError(
             "SCREENER_L2_ANALYST_REASONING_EFFORT must be model_default"
         )
-    if config.l2_critic_reasoning_effort not in {"low", "medium"}:
+    if config.l2_critic_reasoning_effort not in {"low", "medium", "high"}:
         raise ScreenerConfigError(
-            "SCREENER_L2_CRITIC_REASONING_EFFORT must be low or medium"
+            "SCREENER_L2_CRITIC_REASONING_EFFORT must be low, medium, or high"
         )
     if not 60 <= config.l2_cache_ttl_seconds <= 30 * 86_400:
         raise ScreenerConfigError(

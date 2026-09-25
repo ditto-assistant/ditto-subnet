@@ -37,7 +37,7 @@ jobs:
       - name: Regressions and real synthetic metadata import without container execution
         env:
           CODING_OCI_IMPORT_TEST: '1'
-        run: uv run --frozen --with pyyaml pytest -q ditto/tests/test_coding_hosted_image_import.py
+        run: uv run --locked --with pyyaml pytest -q ditto/tests/test_coding_hosted_image_import.py
       - name: Build exact public Python runtime and verify offline digest lookup
         env:
           SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}

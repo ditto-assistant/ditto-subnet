@@ -54,12 +54,21 @@ from ditto.api_models.validator_capabilities import (
 from ditto.api_models.validator_confirmation import (
     V9ConfirmationCompletionReport,
     V9ConfirmationJobResponse,
+    V9ConfirmationLongMemDiagnostics,
     V9ConfirmationScorerReadiness,
+)
+from ditto.api_models.validator_weights_fold import (
+    WeightsFold,
+    weights_vector_digest,
 )
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
 from ditto.validator.config import lease_budget_seconds
-from ditto.validator.crn import confirmation_seeds
+from ditto.validator.crn import (
+    confirmation_seeds,
+    crn_block_binding_active,
+    crn_seed,
+)
 from ditto.validator.dittobench import SUPPORTED_BENCH_VERSIONS
 from ditto.validator.errors import (
     DittobenchError,
@@ -97,6 +106,7 @@ from ditto.validator.stack_identity import (
 )
 from ditto.validator.telemetry import (
     ConfirmationFailureStat,
+    ConfirmationLongMemDiagnosticsStat,
     ScoredAgentStat,
     SweepStats,
     TelemetryConfig,
@@ -127,10 +137,12 @@ from ditto.validator.weights import (
     blend_track_weights,
     contested_confirmation_set,
     filter_weight_confirmed,
+    reign_seed_planning,
     resolve_miner_emission_share,
     resolve_track_shares,
     select_champion,
     track_allocated_share,
+    version_seed_planning,
 )
 from ditto_screening_protocol.bench_v9 import supports_confirmation
 from ditto_screening_protocol.confirmation import CAPABILITY_ORDER
@@ -162,6 +174,8 @@ if TYPE_CHECKING:
     from ditto.validator.platform import PlatformClient
     from ditto.validator.stack_health import StackHealthCollector
 
+from ditto.validator.weight_receipts import WeightReceiptRelay
+
 logger = logging.getLogger(__name__)
 
 
@@ -179,6 +193,21 @@ def _ledger_ceiling_band_clamp(ledger: LedgerResponse) -> bool:
     same epoch. Fails closed to the historical uncapped band.
     """
     return getattr(ledger, "dethrone_band_mode", None) == "headroom_capped"
+
+
+def _ledger_crown_incumbent(ledger: LedgerResponse) -> UUID | None:
+    """The served incumbent the fold defends, or ``None`` for the classic walk.
+
+    Present only on an epoch-pinned ledger whose ``crown_mode`` is
+    ``incumbent`` -- withheld until every recently-live weight setter reports
+    protocol 27 and the operator has enabled the policy. An id without the
+    marker, or a marker without an id, is treated as absent, so a partial or
+    older Platform response folds exactly as before.
+    """
+    if getattr(ledger, "crown_mode", None) != "incumbent":
+        return None
+    incumbent = getattr(ledger, "crown_incumbent_agent_id", None)
+    return incumbent if isinstance(incumbent, UUID) else None
 
 
 def _ledger_active_bench_version(ledger: LedgerResponse) -> int | None:
@@ -300,6 +329,64 @@ _UNCLASSIFIED_CONFIRMATION_FAILURE = "unclassified"
 assert set(CONFIRMATION_FAILURE_CLASSES.values()) | {
     _UNCLASSIFIED_CONFIRMATION_FAILURE
 } <= set(CONFIRMATION_FAILURE_CLASS_VALUES)
+
+
+def _ledger_seed_anchors(ledger: LedgerResponse) -> list[object]:
+    """Platform's pinned finalized-block reign anchors, or ``[]`` on an older
+    platform. Read via getattr so a stale last-known-good ledger stays valid."""
+    anchors = getattr(ledger, "confirmation_seed_anchors", None)
+    return list(anchors) if isinstance(anchors, (list, tuple)) else []
+
+
+def _binding_enforced(config: object) -> bool:
+    """Whether a missing reign pin at a binding version defers a
+    validator-derived lane (``enforce``) or falls it back to the legacy
+    unbound family with a warning (``observe``, the v13.0 default). Read
+    defensively: a config without the field is the observe posture."""
+    posture = getattr(config, "crn_block_binding_posture", "observe")
+    return isinstance(posture, str) and posture.strip().lower() == "enforce"
+
+
+def _confirmation_pin_binding_mismatch(
+    pins: Sequence[ConfirmationDatasetPin], *, bench_version: int | None
+) -> ConfirmationDatasetPin | None:
+    """The first pin whose finalized-block binding does not re-derive its seed.
+
+    A bound pin must satisfy ``seed == crn_seed([anchor_agent_id],
+    version=bench_version, k=seed_index, block_hash=seed_block_hash)``; a
+    partially bound pin (some binding fields, not all) is a mismatch too. A pin
+    with no binding fields is legacy and is not checked here. ``None`` means
+    every pin re-derives.
+
+    This proves the seed is *consistent with the pin Platform served*, the
+    same trust model as the P2 ``derive_validator_seed`` check: the validator
+    does not read ``seed_block_hash`` back from the chain, so it agrees with
+    Platform's pin, not independently with the chain. Verifying the pin
+    against the chain is a separate follow-up (see ``crn.py``).
+    """
+    for pin in pins:
+        fields = (
+            pin.anchor_agent_id,
+            pin.seed_index,
+            pin.seed_block,
+            pin.seed_block_hash,
+        )
+        if all(field is None for field in fields):
+            continue
+        if any(field is None for field in fields) or bench_version is None:
+            return pin
+        assert pin.anchor_agent_id is not None
+        assert pin.seed_index is not None
+        assert pin.seed_block_hash is not None
+        expected = crn_seed(
+            [str(pin.anchor_agent_id)],
+            version=bench_version,
+            k=pin.seed_index,
+            block_hash=pin.seed_block_hash,
+        )
+        if expected != pin.seed:
+            return pin
+    return None
 
 
 def confirmation_failure_class(error: BaseException) -> str:
@@ -460,6 +547,8 @@ class _WeightOutcome:
     weights: dict[str, float] = field(default_factory=dict)
     submitted: bool = False
     king_fingerprint: tuple[str, UUID, float, int | None] | None = None
+    fold: WeightsFold | None = None
+    """What this fold consumed and produced, echoed on the heartbeat."""
 
 
 @dataclass(frozen=True)
@@ -593,11 +682,18 @@ class ValidatorWorker:
         self._platform = platform
         self._dittobench = dittobench
         self._chain = chain
+        # The registered-neuron snapshot must be refreshed for every weight
+        # epoch. It supplies both miner eligibility and the burn destination.
+        self._registered_neurons: list[Any] | None = None
+        self._last_burn_hotkey: str | None = getattr(config, "burn_hotkey", None)
         self._keypair = keypair
         # The weight sink: the Pylon-backed ChainClient by default, or an
         # injected setter (used in tests to substitute a fake).
         # Both expose ``async def put_weights(dict[str, float])``.
         self._weight_setter: Any = weight_setter if weight_setter is not None else chain
+        self._weight_receipt_relay = WeightReceiptRelay(
+            self._weight_setter, self._platform, config.validator_hotkey, config.netuid
+        )
         # Public telemetry sink. A disabled instance is a cheap no-op, so the
         # sweep can call it unconditionally.
         self._telemetry: ValidatorTelemetry = telemetry or ValidatorTelemetry(
@@ -626,6 +722,7 @@ class ValidatorWorker:
         # so their check/set transitions are atomic within this event loop.
         self._scoring_active = False
         self._weights_active = False
+        self._last_weights_fold: WeightsFold | None = None
         self._longmem_active = False
         # A failed ticket hand-back is an ambiguous lease transition: local
         # execution is over, but Platform may still own the exact deadline.
@@ -1184,8 +1281,9 @@ class ValidatorWorker:
                 leaderboard=outcome.leaderboard,
                 weights=outcome.weights,
                 weights_submitted=outcome.submitted,
+                weights_fold=outcome.fold,
                 weights_due=set_weights,
-                burn_hotkey=self._config.burn_hotkey,
+                burn_hotkey=self._last_burn_hotkey,
                 onchain_last_update_block=onchain_last_update_block,
                 onchain_observed_block=onchain_observed_block,
             )
@@ -1261,6 +1359,7 @@ class ValidatorWorker:
         active_snapshot: tuple[UUID | None, BenchmarkProgress | None] | None = None,
     ) -> bool:
         """Coalesce callers and send at most once per wall-clock second."""
+        self._weight_receipt_relay.schedule_recovery()
         slot_id = _CURRENT_SLOT.get()
         sent_progress = active_snapshot[1] if active_snapshot is not None else None
         async with self._active_heartbeat_lock:
@@ -1430,6 +1529,7 @@ class ValidatorWorker:
                 benchmark_capacity=capacity,
                 confirmation_progress=self._confirmation_progress_snapshot(),
                 updater_status=updater_status,
+                weights_fold=self._last_weights_fold,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -1447,6 +1547,7 @@ class ValidatorWorker:
                 benchmark_capacity=capacity,
                 confirmation_progress=self._confirmation_progress_snapshot(),
                 updater_status=updater_status,
+                weights_fold=self._last_weights_fold,
                 timestamp=timestamp,
                 signature=signature,
             )
@@ -1680,6 +1781,60 @@ class ValidatorWorker:
         progress = self._confirmation_progress.get(slot_id)
         return progress.stage if progress is not None else "unknown"
 
+    def _record_confirmation_longmem_diagnostics(
+        self,
+        job: V9ConfirmationJobResponse,
+        diagnostics: V9ConfirmationLongMemDiagnostics | None,
+        case_total: int,
+    ) -> None:
+        """Surface received harness failures behind a completed LongMem run.
+
+        The signed evidence for such a run is an official zero that Platform
+        cannot distinguish from an execution outage; the scorer's allowlisted
+        histogram is the only place that says which boundary the submitted
+        harness failed at. Observational only: it never changes the report.
+        """
+        if diagnostics is None or diagnostics.received_failures <= 0:
+            return
+        kinds = dict(sorted(diagnostics.received_failure_kinds.items()))
+        logger.warning(
+            "v9 confirmation bundle %s: %d/%d LongMem cases were received harness "
+            "failures kinds=%s reader_attempts=%d reader_agent_rejections=%d "
+            "embedding_dispatches=%d",
+            job.bundle_id,
+            diagnostics.received_failures,
+            case_total,
+            kinds,
+            diagnostics.received_failure_reader_attempts,
+            diagnostics.received_failure_reader_agent_rejections,
+            diagnostics.received_failure_embedding_dispatches,
+        )
+        try:
+            self._telemetry.record_confirmation_longmem_diagnostics(
+                ConfirmationLongMemDiagnosticsStat(
+                    bundle_id=str(job.bundle_id),
+                    case_count=case_total,
+                    received_failures=diagnostics.received_failures,
+                    received_failure_kinds=kinds,
+                    received_failure_reader_attempts=(
+                        diagnostics.received_failure_reader_attempts
+                    ),
+                    received_failure_reader_agent_rejections=(
+                        diagnostics.received_failure_reader_agent_rejections
+                    ),
+                    received_failure_embedding_dispatches=(
+                        diagnostics.received_failure_embedding_dispatches
+                    ),
+                )
+            )
+        except Exception as telemetry_error:  # noqa: BLE001 - never break a slot
+            # A completed run must never be handed back as execution_failed
+            # because its observational side channel could not be published.
+            logger.warning(
+                "confirmation diagnostics telemetry failed (continuing): %s",
+                telemetry_error,
+            )
+
     def _record_confirmation_failure(
         self,
         error: BaseException,
@@ -1856,6 +2011,8 @@ class ValidatorWorker:
         # champion/tail selection lets an absent miner occupy a paid slot and
         # changes the normalized miner/burn ratio. Filter before the fold so the
         # next registered contender receives the correct role and share.
+        self._registered_neurons = None
+        self._last_burn_hotkey = self._config.burn_hotkey
         registered_entries = await self._registered_ledger_entries(weight_entries)
         if registered_entries is None:
             # Eligibility is a live-chain fact. On an indeterminate read, leave
@@ -1864,6 +2021,10 @@ class ValidatorWorker:
             return _WeightOutcome(
                 leaderboard=[(e.miner_hotkey, e.composite) for e in ledger.entries]
             )
+        burn_hotkey = await self._resolve_burn_hotkey()
+        if burn_hotkey is None:
+            return _WeightOutcome(leaderboard=leaderboard)
+        self._last_burn_hotkey = burn_hotkey
 
         # Version-rollout re-scores are ordinary platform-leased jobs. The fold
         # reads every cryptographically verified contract it supports and skips
@@ -1892,6 +2053,7 @@ class ValidatorWorker:
                 dethrone_z=self._config.koth_dethrone_z,
                 tie_pooling=ledger.tie_weighting_mode == "pool",
                 ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+                incumbent_agent_id=_ledger_crown_incumbent(ledger),
             ),
             router_entries=tuple(router_ledger.entries),
             router_rank_shares=self._config.router_rank_shares,
@@ -1939,13 +2101,14 @@ class ValidatorWorker:
         weights = apply_miner_emission_cap(
             miner_weights,
             miner_share=miner_share * allocated,
-            burn_hotkey=self._config.burn_hotkey,
+            burn_hotkey=burn_hotkey,
         )
         champion = select_champion(
             registered_entries,
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         king_fingerprint = self._king_fingerprint(champion)
         if not miner_weights:
@@ -1962,12 +2125,29 @@ class ValidatorWorker:
                 king_fingerprint=king_fingerprint,
             )
         await self._log_commit_reveal_mode()
-        submitted = await self._put_weights_with_retry(weights)
+        await self._weight_receipt_relay.recover()
+        submitted = await self._weight_receipt_relay.submit(weights, ledger, champion)
+        if submitted is None:
+            submitted = await self._put_weights_with_retry(weights)
+        # The proof of what was folded: the pin identity the ledger carried, the
+        # digest of the exact vector handed to Pylon, and the crown derived.
+        # Echoed on every heartbeat until the next accepted fold replaces it, so
+        # the Platform can show which snapshot each validator's vector came from.
+        fold = WeightsFold(
+            epoch_index=getattr(ledger, "epoch_index", None),
+            ledger_digest=getattr(ledger, "ledger_digest", None),
+            vector_digest=weights_vector_digest(weights),
+            champion_agent_id=champion.agent_id if champion is not None else None,
+            folded_at=int(time.time()),
+        )
+        if submitted:
+            self._last_weights_fold = fold
         return _WeightOutcome(
             leaderboard=leaderboard,
             weights=weights,
             submitted=submitted,
             king_fingerprint=king_fingerprint,
+            fold=fold,
         )
 
     @staticmethod
@@ -2055,6 +2235,7 @@ class ValidatorWorker:
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         return True, self._king_fingerprint(champion)
 
@@ -2100,6 +2281,7 @@ class ValidatorWorker:
             )
             return None
 
+        self._registered_neurons = list(neurons)
         registered = {neuron.hotkey for neuron in neurons}
         kept = [entry for entry in entries if entry.miner_hotkey in registered]
         absent = sorted({entry.miner_hotkey for entry in entries} - registered)
@@ -2111,6 +2293,35 @@ class ValidatorWorker:
                 absent,
             )
         return kept
+
+    async def _resolve_burn_hotkey(self) -> str | None:
+        """Resolve the chain's registered owner hotkey for this weight epoch.
+
+        Subtensor withholds incentive for the registered SubnetOwnerHotkey,
+        not for UID 0. Preserve existing weights if either read is ambiguous.
+        """
+        if self._config.burn_hotkey is not None:
+            return self._config.burn_hotkey
+        neurons = self._registered_neurons
+        read = getattr(self._chain, "get_subnet_owner_hotkey", None)
+        if neurons is None or read is None:
+            logger.error(
+                "cannot read subnet owner hotkey; weights unchanged this epoch"
+            )
+            return None
+        try:
+            owner_hotkey = await read(self._config.netuid)
+        except Exception as e:  # noqa: BLE001 - owner read must fail closed
+            logger.error("subnet owner hotkey read failed; weights unchanged: %s", e)
+            return None
+        matches = [n for n in neurons if getattr(n, "hotkey", None) == owner_hotkey]
+        if not isinstance(owner_hotkey, str) or not owner_hotkey or len(matches) != 1:
+            logger.error(
+                "cannot resolve unique registered subnet owner burn target; "
+                "weights unchanged this epoch"
+            )
+            return None
+        return owner_hotkey
 
     async def _run_v9_confirmation_lane(
         self,
@@ -2279,6 +2490,9 @@ class ValidatorWorker:
                     raise LeaseDeadlineError(
                         "v9 confirmation execution finished after its ticket deadline"
                     )
+                self._record_confirmation_longmem_diagnostics(
+                    job, result.longmem_diagnostics, case_total
+                )
                 await self._publish_confirmation_progress(
                     job,
                     "finalizing",
@@ -2505,6 +2719,48 @@ class ValidatorWorker:
                     job, "infrastructure", "confirmation_dataset_pins_duplicated"
                 )
                 return False
+            # Bench v13+ anti-grind, the confirmation-lane twin of the P2 check
+            # in ``_score_job``: a seed Platform says is bound to a finalized
+            # block must re-derive from that block here, or the lease is not
+            # even consistent with Platform's own pin. Refuse rather than lend
+            # it a signature. (Not a posture: an inconsistent pin is a defect.)
+            mismatched = _confirmation_pin_binding_mismatch(
+                job.confirmation_datasets, bench_version=job.bench_version
+            )
+            if mismatched is not None:
+                logger.warning(
+                    "top-five confirmation seed %s for agent %s does not re-derive "
+                    "from pinned block hash %r (anchor=%s k=%r); refusing to score",
+                    mismatched.seed,
+                    job.agent_id,
+                    mismatched.seed_block_hash,
+                    mismatched.anchor_agent_id,
+                    mismatched.seed_index,
+                )
+                await self._report_ticket_failed(
+                    job, "infrastructure", "confirmation_seed_binding_mismatch"
+                )
+                return False
+            if job.bench_version is not None and crn_block_binding_active(
+                job.bench_version
+            ):
+                unbound = [
+                    pin.seed
+                    for pin in job.confirmation_datasets
+                    if pin.seed_block_hash is None
+                ]
+                if unbound:
+                    # Observe posture for v13.0: a binding version handing out a
+                    # seed no pinned reign derives is logged, not refused, so a
+                    # Platform-side pin gap cannot stall the whole lane.
+                    logger.warning(
+                        "top-five confirmation issued unbound seed(s) %s for agent "
+                        "%s at binding bench_version %d; accepting under the "
+                        "observe posture",
+                        unbound,
+                        job.agent_id,
+                        job.bench_version,
+                    )
             datasets = job.confirmation_datasets
             # Set before the claim, not after: ``_begin_active_ticket`` occupies
             # the slot first, so a partial failure must still clear it below.
@@ -2657,6 +2913,7 @@ class ValidatorWorker:
                         expected_sha256,
                         seed=dataset.seed,
                         dataset_sha256=dataset.dataset_sha256,
+                        private_dataset_mode=dataset.private_dataset_mode,
                         run_size=dataset.run_size,
                         bench_version=bench_version,
                         progress_callback=self._on_dittobench_progress,
@@ -2778,6 +3035,7 @@ class ValidatorWorker:
             tail_size=self._config.koth_tail_size,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         if not stale:
             return ledger
@@ -2788,10 +3046,38 @@ class ValidatorWorker:
         # derives the same set (consensus-safe) — see ditto/validator/crn.py. With
         # K >= 2 each agent is submitted once as the median over its seeds, so a
         # dethrone must replicate across seeds, not ride one lucky draw.
+        # Bench v13+: the seeds also hash the version's oldest Platform-pinned
+        # finalized block, so nobody could have named them at submission. With
+        # no pin on the ledger yet the posture decides: ``enforce`` waits (an
+        # unbound sweep would hand a precomputable dataset to the very agents
+        # being compared); ``observe`` -- the v13.0 default -- logs and sweeps
+        # the legacy unbound family so a Platform pin gap cannot stall it.
+        sweep_block_hash, sweep_allowed = version_seed_planning(
+            _ledger_seed_anchors(ledger), version=current_version
+        )
+        if not sweep_allowed:
+            if _binding_enforced(self._config):
+                logger.info(
+                    "bench_version %d re-score sweep deferred: the ledger carries "
+                    "no pinned confirmation seed anchor yet (%d stale agent(s); "
+                    "crn_block_binding_posture=enforce)",
+                    current_version,
+                    len(stale),
+                )
+                return ledger
+            logger.warning(
+                "bench_version %d re-score sweep: the ledger carries no pinned "
+                "confirmation seed anchor yet; sweeping the legacy unbound "
+                "family under the observe posture (%d stale agent(s))",
+                current_version,
+                len(stale),
+            )
+            sweep_block_hash = None
         sweep_seeds = confirmation_seeds(
             (str(e.agent_id) for e in stale),
             version=current_version,
             count=self._config.koth_confirmation_seeds,
+            block_hash=sweep_block_hash,
         )
         logger.info(
             "bench_version %d re-score sweep: %d stale champion/tail agent(s) "
@@ -2868,17 +3154,48 @@ class ValidatorWorker:
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
+            incumbent_agent_id=_ledger_crown_incumbent(ledger),
         )
         if not contested:
             return
         champion = contested[0]
         challengers = contested[1:]
         # Champion-anchored: a pure function of the champion's identity and the
-        # version, so it is stable across sweeps and identical fleet-wide.
+        # version, so it is stable across sweeps and identical fleet-wide. From
+        # bench v13 it also hashes the finalized block Platform pinned for this
+        # reign (served on the ledger); without that pin the posture decides:
+        # ``enforce`` draws no fresh seed, ``observe`` (the v13.0 default)
+        # logs and derives the legacy unbound family.
+        block_hash, allowed = reign_seed_planning(
+            _ledger_seed_anchors(ledger),
+            champion_agent_id=champion.agent_id,
+            version=current_version,
+        )
+        if not allowed:
+            if _binding_enforced(self._config):
+                logger.info(
+                    "contested dethrone deferred: champion %s has no pinned "
+                    "confirmation seed anchor on the ledger at bench_version %d "
+                    "(%d challenger(s) in band; crn_block_binding_posture=enforce)",
+                    champion.agent_id,
+                    current_version,
+                    len(challengers),
+                )
+                return
+            logger.warning(
+                "contested dethrone: champion %s has no pinned confirmation seed "
+                "anchor on the ledger at bench_version %d; deriving the legacy "
+                "unbound family under the observe posture (%d challenger(s))",
+                champion.agent_id,
+                current_version,
+                len(challengers),
+            )
+            block_hash = None
         seeds = confirmation_seeds(
             [str(champion.agent_id)],
             version=current_version,
             count=self._config.koth_confirmation_seeds,
+            block_hash=block_hash,
         )
         logger.info(
             "contested dethrone: %d challenger(s) inside champion %s's band; "
@@ -3426,6 +3743,7 @@ class ValidatorWorker:
                 job.miner_hotkey,
                 seed=job.seed,
                 dataset_sha256=job.dataset_sha256,
+                private_dataset_mode=job.private_dataset_mode,
                 run_size=job.run_size,
                 bench_version=job.bench_version,
                 ticket_deadline=job.deadline,
@@ -3447,6 +3765,7 @@ class ValidatorWorker:
         *,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -3473,6 +3792,7 @@ class ValidatorWorker:
                 expected_sha256,
                 seed=seed,
                 dataset_sha256=dataset_sha256,
+                private_dataset_mode=private_dataset_mode,
                 run_size=run_size,
                 bench_version=bench_version,
                 progress_callback=progress_callback,
@@ -3497,6 +3817,7 @@ class ValidatorWorker:
         *,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -3538,11 +3859,25 @@ class ValidatorWorker:
                 f"benchmark v{bench_version} artifact for agent {agent_id} is "
                 "not backed by screening policy 9 and a verified image"
             )
+        private_dataset_bytes = None
+        if private_dataset_mode is not None:
+            if (
+                private_dataset_mode != "platform-private-v1"
+                or bench_version != 13
+                or not dataset_sha256
+                or ticket_deadline is None
+            ):
+                raise PlatformError("private dataset lease identity is incomplete")
+            private_dataset_bytes = await self._platform.get_private_dataset(
+                agent_id, dataset_sha256=dataset_sha256, deadline=ticket_deadline
+            )
         report = await self._dittobench.score_tarball(
             tarball_url=artifact.download_url,
             tarball_sha256=artifact.sha256,
+            private_dataset_bytes=private_dataset_bytes,
             seed=seed,
             dataset_sha256=dataset_sha256,
+            private_dataset_mode=private_dataset_mode,
             run_size=run_size,
             bench_version=bench_version,
             progress_callback=progress_callback,
@@ -3680,6 +4015,7 @@ class ValidatorWorker:
         *,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         ticket_deadline: datetime | None = None,
@@ -3696,6 +4032,7 @@ class ValidatorWorker:
                 expected_sha256,
                 seed=seed,
                 dataset_sha256=dataset_sha256,
+                private_dataset_mode=private_dataset_mode,
                 run_size=run_size,
                 bench_version=bench_version,
             )
@@ -3715,6 +4052,7 @@ class ValidatorWorker:
                 expected_sha256,
                 seed=seed,
                 dataset_sha256=dataset_sha256,
+                private_dataset_mode=private_dataset_mode,
                 run_size=run_size,
                 bench_version=bench_version,
                 progress_callback=self._on_dittobench_progress,
@@ -4030,8 +4368,9 @@ class ValidatorWorker:
                     leaderboard=outcome.leaderboard,
                     weights=outcome.weights,
                     weights_submitted=outcome.submitted,
+                    weights_fold=outcome.fold,
                     weights_due=True,
-                    burn_hotkey=self._config.burn_hotkey,
+                    burn_hotkey=self._last_burn_hotkey,
                     onchain_last_update_block=last_update,
                     onchain_observed_block=observed_block,
                     scoring_sweep=False,

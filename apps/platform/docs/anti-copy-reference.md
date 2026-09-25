@@ -144,9 +144,11 @@ that building on a released miner agent is permitted. A fired signal is
 therefore *withdrawn* — recorded, not held — in two cases.
 
 **Already published.** Release is **king-only** and the window runs from
-on-chain weight confirmation, not from upload: an artifact is downloadable only
-once it has held the crown, had validators' revealed weights confirmed, reached
-the score quorum, and waited out the embargo from `weight_confirmed_at`. Of
+completed winner earnings, not from upload or revealed weights: an artifact is
+downloadable only once the exact submission has held the crown, earned winner
+emissions in a completed tempo, reached the score quorum, and waited out the
+embargo from `emission_confirmed_at`. Missing payout proof fails closed; legacy
+`weight_confirmed_at` is not an alternative release anchor. Of
 roughly 1600 submissions, 30 have ever been served. `list_public_source_releases`
 computes that set and is pinned to the public route's own projection by test.
 The policy applied is the revision in force at the *candidate's* upload time, so

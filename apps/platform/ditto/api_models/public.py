@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ditto.api_models.benchmark_capacity import BenchmarkAdmission
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_progress import ConfirmationProgressStage
+from ditto.api_models.gate_evidence import PublicGateEvidence
 from ditto.api_models.name_claim import PublicNameHandle
 from ditto.api_models.retry_state import RetryState
 from ditto.api_models.screener import ScreenerProgressStage, ScreenerRuntimeState
@@ -465,9 +466,19 @@ class PublicArtifactRelease(BaseModel):
             default=None,
             description=(
                 "When validators' revealed on-chain weights (post commit-reveal) "
-                "were first seen set on this king. Source release is king-only and "
-                "the embargo window is measured from this instant; null while a "
-                "king still awaits on-chain confirmation."
+                "were first seen set on this king. This is not proof of earnings "
+                "and does not start the disclosure embargo."
+            ),
+        ),
+    ] = None
+    emission_confirmed_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "Finalized block time of verified winner emissions for this exact "
+                "submission in a completed tempo. The embargo starts here; null "
+                "until actual earnings are confirmed."
             ),
         ),
     ] = None
@@ -516,6 +527,22 @@ class PublicLeaderboardFamilyMember(BaseModel):
     agent_name: str
     agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
     canonical_composite: Annotated[float, Field(ge=_MIN_DISPLAY_COMPOSITE, le=1.0)]
+    official_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=_MIN_DISPLAY_COMPOSITE,
+            le=1.0,
+            description=(
+                "The same ranking composite the parent KOTH row uses: the "
+                "continual mean of the quorum scores plus shared retest seeds "
+                "when that estimator is active, otherwise the canonical "
+                "median. The expander must render this, not "
+                "``canonical_composite``, or a later upload's three-validator "
+                "median looks like it outranks the representative."
+            ),
+        ),
+    ] = None
     submitted_at: Annotated[
         datetime | None,
         Field(
@@ -865,6 +892,24 @@ class PublicLeaderboardEntry(BaseModel):
             exclude_if=lambda value: value is None,
             description="Signed full-confirmation evidence root digest.",
         ),
+    ] = None
+    router_shadow_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Display-only shadow router-track efficiency composite from the "
+                "published router ledger. Never ranked or weighted while the "
+                "router track is shadow."
+            ),
+        ),
+    ] = None
+    router_shadow_status: Annotated[
+        Literal["queued", "running", "measured"] | None,
+        Field(default=None, exclude_if=lambda value: value is None),
     ] = None
     aggregate_method: Literal["canonical_median", "continual_mean"] = "canonical_median"
     pre_efficiency_composite: Annotated[
@@ -1562,6 +1607,203 @@ class PublicKothEmissions(BaseModel):
         ),
     ] = None
     recipients: list[PublicEmissionRecipient] = Field(default_factory=list)
+    crown_incumbent_active: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether the displayed fold defends the crown from the previous "
+                "pin's champion (crown_mode incumbent) instead of re-deriving it "
+                "from the earliest lineage on every read."
+            ),
+        ),
+    ] = False
+    crown_incumbent_required_protocol: Annotated[
+        int,
+        Field(
+            default=27,
+            ge=1,
+            description="Minimum fleet heartbeat protocol for crown incumbency.",
+        ),
+    ] = 27
+    crown_incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description=(
+                "The incumbent the live fold defended, when incumbency is active "
+                "and the current pin named one. Null otherwise."
+            ),
+        ),
+    ] = None
+    next_pin_projection: Annotated[
+        PublicNextPinProjection | None,
+        Field(
+            default=None,
+            description=(
+                "What the next epoch pin would record if it were taken from the "
+                "live board right now: the fold over the current rows with the "
+                "current pin's champion as incumbent. Read changes_crown to know "
+                "whether weights will move at the next pin."
+            ),
+        ),
+    ] = None
+    ledger_pin: Annotated[
+        PublicLedgerPin | None,
+        Field(
+            default=None,
+            description=(
+                "The epoch-pinned ledger validators are folding right now. The "
+                "board above is live and can move within an epoch; weights only "
+                "move at the next pin, so this is the snapshot any on-chain "
+                "vector should be read against. Null while pinning is switched "
+                "off or before the first pin was taken."
+            ),
+        ),
+    ] = None
+
+
+class PublicNextPinProjection(BaseModel):
+    """The crown the next epoch pin would record from the live board."""
+
+    champion_agent_id: UUID
+    champion_miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description="The current pin's champion the projection defended from.",
+        ),
+    ] = None
+    changes_crown: Annotated[
+        bool,
+        Field(
+            description=(
+                "True when the projected champion differs from the current pin's "
+                "champion, i.e. the 65% slot moves at the next pin."
+            )
+        ),
+    ]
+    decision: Annotated[
+        PublicDethroneDecision | None,
+        Field(
+            default=None,
+            description=(
+                "The dethrone decision for the strongest rival against the "
+                "projected champion; null when there is no rival."
+            ),
+        ),
+    ] = None
+
+
+class PublicLedgerPin(BaseModel):
+    """Identity of one epoch-pinned validator ledger."""
+
+    mode: Annotated[
+        Literal["epoch", "live"],
+        Field(
+            description=(
+                "epoch: validators fold one frozen ledger per chain epoch; live: "
+                "the historical time-based read (the rollback)."
+            )
+        ),
+    ]
+    epoch_index: Annotated[
+        int, Field(ge=0, description="Chain SubnetEpochIndex the pin belongs to.")
+    ]
+    last_epoch_block: Annotated[int, Field(ge=0)]
+    pinned_block: Annotated[
+        int, Field(ge=0, description="Head block the pin's schedule was read at.")
+    ]
+    pinned_at: Annotated[datetime, Field(description="When the pin was taken (UTC).")]
+    next_epoch_block: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="Boundary that ends the pinned epoch, when it was known.",
+        ),
+    ] = None
+    bench_version: Annotated[int, Field(ge=1)]
+    entry_count: Annotated[int, Field(ge=0)]
+    ledger_digest: Annotated[
+        str,
+        Field(
+            pattern=r"^[0-9a-f]{64}$",
+            description=(
+                "SHA-256 of the pinned entries plus fold markers; every validator "
+                "folding this pin holds this digest."
+            ),
+        ),
+    ]
+    champion_agent_id: UUID | None = None
+    incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description=(
+                "The previous pin's champion resolved into this pool, which the "
+                "incumbency fold defends when crown_mode is incumbent."
+            ),
+        ),
+    ] = None
+    crown_mode: Annotated[
+        Literal["incumbent"] | None,
+        Field(
+            default=None,
+            description="Fold marker frozen into the pin; null means the classic walk.",
+        ),
+    ] = None
+
+
+class PublicLedgerActor(BaseModel):
+    """One agent named by a pin: the champion, the incumbent, or a recipient."""
+
+    agent_id: UUID
+    miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    agent_name: str | None = None
+    agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
+
+
+class PublicLedgerEpochRecipient(PublicLedgerActor):
+    role: Literal["champion", "joint_champion", "tail"]
+    share_of_miner_pool: Annotated[float, Field(gt=0.0, le=1.0)]
+
+
+class PublicLedgerEpoch(BaseModel):
+    """One pinned epoch and the crown decision the fold derived from it."""
+
+    epoch_index: Annotated[int, Field(ge=0)]
+    last_epoch_block: Annotated[int, Field(ge=0)]
+    pinned_block: Annotated[int, Field(ge=0)]
+    pinned_at: datetime
+    bench_version: Annotated[int, Field(ge=1)]
+    entry_count: Annotated[int, Field(ge=0)]
+    ledger_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    crown_mode: Literal["incumbent"] | None = None
+    champion: PublicLedgerActor | None = None
+    incumbent: PublicLedgerActor | None = None
+    crown_changed: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "True when this pin's champion differs from the previous pin's. "
+                "A run of false across retest waves is the stability the pin "
+                "and the incumbency mode exist to produce."
+            ),
+        ),
+    ] = False
+    recipients: list[PublicLedgerEpochRecipient] = Field(default_factory=list)
+
+
+class PublicLedgerEpochsResponse(BaseModel):
+    """Newest-first history of epoch pins: what the fleet folded, epoch by epoch."""
+
+    generated_at: datetime
+    mode: Literal["epoch", "live"]
+    count: Annotated[int, Field(ge=0)]
+    epochs: list[PublicLedgerEpoch] = Field(default_factory=list)
 
 
 class PublicEfficiencyStatus(BaseModel):
@@ -1863,15 +2105,48 @@ class PublicLeaderboardResponse(BaseModel):
         int,
         Field(
             description=(
-                "The latest DittoBench benchmark version. Entries whose "
-                "bench_version is below this were scored on a previous benchmark "
-                "and are not directly comparable; the UI marks them as such."
+                "Deprecated name for ``scoring_bench_version``, kept so existing "
+                "clients keep working. It is the version this board is scored "
+                "and ranked on, which during a rollout is the version being "
+                "collected rather than the one paying emissions. Read "
+                "``emission_bench_version`` for that."
+            )
+        ),
+    ]
+    scoring_bench_version: Annotated[
+        int,
+        Field(
+            description=(
+                "The benchmark version this board's ranking is computed on: the "
+                "version currently being collected, or the pinned version on a "
+                "historical board. Entries below it were scored on an earlier "
+                "benchmark and are not directly comparable. A submission scored "
+                "here is not yet earning on this version unless "
+                "``emission_bench_version`` equals it."
+            )
+        ),
+    ]
+    emission_bench_version: Annotated[
+        int,
+        Field(
+            description=(
+                "The benchmark version that controls emissions right now, taken "
+                "from the ledger pin. It changes only when a rollout activates, "
+                "so during a rollout it stays behind ``scoring_bench_version`` "
+                "while the new version is still being collected. Same value as "
+                "``active_bench_version``, named for what it decides."
             )
         ),
     ]
     active_bench_version: Annotated[
         int,
-        Field(description="Globally activated benchmark version."),
+        Field(
+            description=(
+                "Globally activated benchmark version: the one whose scores the "
+                "ledger pays on. Identical to ``emission_bench_version``, which "
+                "is the clearer name for the same pin."
+            )
+        ),
     ]
     desired_bench_version: Annotated[
         int,
@@ -1914,6 +2189,19 @@ class PublicLeaderboardResponse(BaseModel):
                 "LongMemEval and ablation evidence without changing ranking or "
                 "emissions. Enforce makes full confirmation authoritative and "
                 "suppresses base-only or provisional rows. Null means off."
+            ),
+        ),
+    ] = None
+    router_shadow_mode: Annotated[
+        Literal["shadow"] | None,
+        Field(
+            default=None,
+            description=(
+                "Router track measurement phase. ``shadow`` is present only "
+                "when the published router ledger carries at least one "
+                "measurement; the board's router surface is display-only and "
+                "never changes ranking or emissions. Null means the router "
+                "surface is off."
             ),
         ),
     ] = None
@@ -1979,12 +2267,60 @@ class PublicChainWeight(BaseModel):
     value: Annotated[int, Field(gt=0, le=65535)]
 
 
+PinAgreement = Literal["current", "previous", "diverged", "unknown"]
+
+
+class PublicWeightsFold(BaseModel):
+    """What a validator reported folding, from its latest signed heartbeat."""
+
+    epoch_index: Annotated[int | None, Field(default=None, ge=0)] = None
+    ledger_digest: Annotated[
+        str | None, Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    ] = None
+    vector_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    champion_agent_id: UUID | None = None
+    folded_at: Annotated[int, Field(ge=0)]
+
+
+class PublicPinAgreement(BaseModel):
+    """How many revealed vectors match the fold the current pin prescribes."""
+
+    epoch_index: Annotated[int, Field(ge=0)]
+    previous_epoch_index: Annotated[int | None, Field(default=None, ge=0)] = None
+    matching: Annotated[int, Field(ge=0)]
+    total: Annotated[int, Field(ge=0)]
+
+
 class PublicValidatorWeightVector(BaseModel):
     """One validator's latest publicly revealed on-chain weights."""
 
     validator_uid: Annotated[int, Field(ge=0)]
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     weights: list[PublicChainWeight] = Field(default_factory=list)
+    fold: Annotated[
+        PublicWeightsFold | None,
+        Field(
+            default=None,
+            description=(
+                "The pinned ledger this validator reported folding on its latest "
+                "heartbeat; null for validators that do not heartbeat to the "
+                "Platform or predate heartbeat protocol v27."
+            ),
+        ),
+    ] = None
+    matches_pin: Annotated[
+        PinAgreement,
+        Field(
+            default="unknown",
+            description=(
+                "Whether this revealed vector's recipients and shares match the "
+                "fold prescribed by the current epoch pin (current), the previous "
+                "pin (previous: one epoch behind, the normal reveal lag), neither "
+                "(diverged), or could not be compared (unknown: no pin yet or an "
+                "empty vector)."
+            ),
+        ),
+    ] = "unknown"
 
 
 class PublicChainEpoch(BaseModel):
@@ -2122,6 +2458,16 @@ class PublicChainWeightsResponse(BaseModel):
     block_hash: Annotated[str, Field(pattern=r"^0x[0-9a-fA-F]{64}$")]
     owner_hotkey: Annotated[str | None, Field(default=None, pattern=_SS58_PATTERN)]
     vectors: list[PublicValidatorWeightVector] = Field(default_factory=list)
+    pin_agreement: Annotated[
+        PublicPinAgreement | None,
+        Field(
+            default=None,
+            description=(
+                "Count of revealed vectors matching the current pin's fold, or "
+                "null when no pin exists to compare against."
+            ),
+        ),
+    ] = None
     stale: Annotated[
         bool,
         Field(
@@ -2311,6 +2657,19 @@ class PublicValidatorScore(BaseModel):
             ),
         ),
     ]
+    gate_evidence: Annotated[
+        PublicGateEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ gate verdict for this run: posture, composite with "
+                "and without the gates, the gate-induced loss and per-gate "
+                "counts. Aggregates only -- the per-case notes are owner-only "
+                "(``GET /me/agents/{agent_id}/gate-notes``). Null below v13 "
+                "and for a scorer that emitted no gate telemetry."
+            ),
+        ),
+    ] = None
 
 
 class PublicSubmissionScores(BaseModel):
@@ -2544,6 +2903,40 @@ class PublicConfirmationProgress(BaseModel):
     subjects: list[PublicConfirmationSubject] = Field(default_factory=list)
 
 
+PublicDeferredReviewTrigger = Literal["top_five", "anomaly"]
+"""Why an active hold entered deferred source review (coarse, public-safe)."""
+
+PublicReviewConclusion = Literal[
+    "pending", "not_completed", "no_finding", "budget_exhausted", "adverse_signal"
+]
+"""What the automated source review concluded for a held submission."""
+
+_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION = (
+    "Why an active deferred source review hold was opened: ``top_five`` when "
+    "the canonical score placed the submission in the top five, ``anomaly`` "
+    "when a robust score anomaly check fired. Empty when the submission is not "
+    "held for deferred source review. Ranks, thresholds, and evidence are not "
+    "exposed."
+)
+_REVIEW_CONCLUSION_DESCRIPTION = (
+    "What the automated source review concluded for a held (``under_review``) "
+    "submission. ``pending``: the automated deep review has not reported yet, "
+    "or it was interrupted and awaits a retry. ``not_completed``: no automated "
+    "review completed with a recorded conclusion (there is no recorded review "
+    "audit, or the review stopped before its model stage, for example because "
+    "a runtime lease was unavailable or review was disabled), and no finding "
+    "was recorded; an operator decision is pending. ``no_finding``: a recorded "
+    "audit shows a model review ran and ended without a decision or finding. "
+    "``budget_exhausted``: a recorded audit shows a model review ran and "
+    "exhausted its read, step, tool, or model budget without a finding, and "
+    "its recorded concerns did not reach the hold threshold. "
+    "``adverse_signal``: it reported a concern that an operator must "
+    "adjudicate, including a budget-terminated review held because of its "
+    "recorded concerns. Null when the hold has no automated review conclusion "
+    "(for example a copy review) or the submission is not held."
+)
+
+
 class PublicActivityEntry(BaseModel):
     """One submission's safe, public lifecycle state."""
 
@@ -2551,6 +2944,19 @@ class PublicActivityEntry(BaseModel):
     miner_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Submitting miner's SS58 hotkey.")
     ]
+    miner_uid: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Submitting miner's current UID on this subnet; null when the "
+                "hotkey is not registered or the chain snapshot is unavailable. "
+                "Registration decorates the submission: it never changes the "
+                "row's status or score."
+            ),
+        ),
+    ] = None
     name: Annotated[str, Field(description="Miner-provided agent display name.")]
     name_handle: PublicNameHandle | None = Field(
         default=None,
@@ -2665,6 +3071,12 @@ class PublicActivityEntry(BaseModel):
             ),
         ),
     ] = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     review_opened_at: Annotated[
         datetime | None,
         Field(
@@ -2685,6 +3097,15 @@ class PublicActivityEntry(BaseModel):
         int,
         Field(ge=0, description="Independent validator scores recorded so far."),
     ]
+    coding_shadow: PublicCodingShadowScore | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Latest aggregate Coding-shadow status for this exact submission "
+            "artifact, screened image, and active benchmark. Display-only; never "
+            "changes pipeline state, rank, score, weights, or emissions."
+        ),
+    )
     provisional_composite: Annotated[
         float | None,
         Field(
@@ -2901,6 +3322,34 @@ class PublicScreeningReviewLocation(BaseModel):
     category: Annotated[str, Field(min_length=1, max_length=64)]
 
 
+class PublicScreeningReviewNote(BaseModel):
+    """Allowlisted public fields; future private protocol fields stay private."""
+
+    model_config = ConfigDict(extra="ignore")
+    kind: Literal["concern", "cleared", "observation"]
+    category: str
+    path: str | None = None
+    line: int | None = None
+    summary: str
+    confidence: float | None = None
+    stage: Literal["l1", "l2", "l3"]
+
+
+class PublicScreeningInvariantDecision(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    invariant: str
+    disposition: Literal["pass", "breach", "inconclusive"]
+    pass_clause: str | None = None
+    summary: str
+    evidence_indices: list[int]
+
+
+class PublicScreeningInvariantAssessment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    schema_version: int
+    decisions: list[PublicScreeningInvariantDecision]
+
+
 class PublicScreeningReviewFinding(BaseModel):
     """Digest-verified final finding safe for public rejected-attempt feedback."""
 
@@ -2915,6 +3364,7 @@ class PublicScreeningReviewFinding(BaseModel):
         list[PublicScreeningReviewLocation], Field(default_factory=list, max_length=16)
     ]
     summary: Annotated[str, Field(min_length=1, max_length=240)]
+    invariant_assessment: PublicScreeningInvariantAssessment | None = None
 
 
 class PublicScreeningAttempt(BaseModel):
@@ -2936,29 +3386,89 @@ class PublicScreeningAttempt(BaseModel):
     quarantine_resolution_reason: str | None = None
     review_evidence: list[PublicScreeningReviewEvidence] = Field(default_factory=list)
     review_finding: PublicScreeningReviewFinding | None = None
+    review_notes: list[PublicScreeningReviewNote] = Field(default_factory=list)
 
 
 class PublicAdmissionRetry(BaseModel):
     """Live admission state for a submission still in build & admission.
 
-    Failed cost-bearing attempts never retry automatically. ``parked`` names a
-    source-review/provider failure (including OpenRouter throttling), while
-    ``stuck`` names another Ditto-owned infrastructure failure. Both require a
-    guarded Backroom retry. ``retry_queued`` means that exact retry has already
-    been authorized and is waiting for a screener slot.
+    Failed cost-bearing attempts never retry automatically, except a Docker build
+    infrastructure failure. ``parked`` names a source-review/provider failure
+    (including OpenRouter throttling), while ``stuck`` names another Ditto-owned
+    infrastructure failure. Both require a guarded Backroom retry.
+    ``retry_queued`` means a retry is waiting for a screener slot: either that
+    exact retry was authorized, or (with ``next_retry_at`` set) a Docker build
+    infrastructure failure is retried automatically with backoff, no earlier than
+    that time. After too many consecutive failures, or a long park, it reports
+    ``stuck`` and needs a guarded retry like any other.
     """
 
     state: Literal["queued", "running", "parked", "stuck", "retry_queued"]
     attempt_count: Annotated[int, Field(ge=0)]
     # Kept nullable for rolling compatibility with the pre-fail-once contract.
-    # Manual retries do not have a scheduled retry time.
+    # Manual retries do not have a scheduled retry time; an automatic
+    # infrastructure retry reports the earliest time it may start.
     next_retry_at: datetime | None = None
     last_failure_infrastructure: bool = False
+
+
+class PublicOrdinaryReview(BaseModel):
+    """Source-safe ordinary source-review clock (ditto-subnet#2042, slice 1).
+
+    Deliberately thin: a miner learns why their own submission is waiting and
+    roughly how long that kind of wait typically takes, never the operator
+    detail behind it (no quarantine evidence, no reason codes, no other
+    miner's data). ``typical_p50_seconds``/``typical_p95_seconds`` are
+    subnet-wide statistics, not a promise about this specific submission.
+    Null on the pipeline response whenever the submission is not currently in
+    ordinary review (covers both "never entered it" and "already resolved").
+    """
+
+    reason: Literal[
+        "active_work", "capacity_wait", "infrastructure_backoff", "escalation"
+    ]
+    age_seconds: Annotated[
+        float,
+        Field(
+            ge=0,
+            description=(
+                "Time since this submission entered ordinary review (its own "
+                "created_at). Stable across retries: a rescreen does not "
+                "reset it."
+            ),
+        ),
+    ]
+    current_attempt_age_seconds: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Time since the CURRENT screening attempt started, separate "
+                "from age_seconds above. Null when there is no attempt yet "
+                "(capacity_wait)."
+            ),
+        ),
+    ]
+    typical_p50_seconds: Annotated[float | None, Field(default=None, ge=0)]
+    typical_p95_seconds: Annotated[float | None, Field(default=None, ge=0)]
 
 
 class PublicScreeningDispute(BaseModel):
     """Public-safe appeal state; the miner's private message is never exposed."""
 
+    kind: Annotated[
+        Literal["screening", "gate_notes"],
+        Field(
+            default="screening",
+            description=(
+                "``screening``: appeals a rejected quarantine decision (release "
+                "returns the submission to evaluation). ``gate_notes``: appeals "
+                "cited bench v13+ gate notes on a scored submission; either "
+                "resolution only records the operator's verdict."
+            ),
+        ),
+    ] = "screening"
     status: Literal["pending", "resolved"]
     submitted_at: datetime
     resolved_at: datetime | None = None
@@ -2966,12 +3476,26 @@ class PublicScreeningDispute(BaseModel):
 
 
 class CreateScreeningDisputeRequest(BaseModel):
-    """One signed appeal of a rejected screening decision."""
+    """One signed appeal: of a rejected screening decision, or -- for a scored,
+    live, evaluating or held submission -- of the bench v13+ gate notes cited
+    in ``gate_note_ids``. A submission gets exactly one either way."""
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     message: Annotated[str, Field(min_length=20, max_length=1000)]
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
+    gate_note_ids: Annotated[
+        list[Annotated[str, Field(pattern=r"^[0-9a-f]{16}$")]] | None,
+        Field(
+            default=None,
+            max_length=64,
+            description=(
+                "Bench v13+ gate ``note_id`` values this dispute contests, as "
+                "listed on ``GET /me/agents/{agent_id}/gate-notes``. Every id "
+                "must belong to this submission's own accepted scores."
+            ),
+        ),
+    ] = None
 
 
 class CreateScreeningDisputeResponse(BaseModel):
@@ -3223,6 +3747,16 @@ class PublicProvisionalScore(BaseModel):
             ),
         ),
     ]
+    gate_evidence: Annotated[
+        PublicGateEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ run-level gate verdict (aggregates only); see "
+                "``PublicValidatorScore.gate_evidence``."
+            ),
+        ),
+    ] = None
     transcript_sha256: Annotated[
         str | None,
         Field(
@@ -3293,6 +3827,12 @@ class PublicAgentSummary(BaseModel):
     review_event_at: datetime | None = None
     review_original_reason: str | None = None
     review_opened_at: datetime | None = None
+    deferred_review_triggers: list[PublicDeferredReviewTrigger] = Field(
+        default_factory=list, description=_DEFERRED_REVIEW_TRIGGERS_DESCRIPTION
+    )
+    review_conclusion: PublicReviewConclusion | None = Field(
+        default=None, description=_REVIEW_CONCLUSION_DESCRIPTION
+    )
     preserved_composite: Annotated[
         float | None, Field(default=None, ge=0.0, le=1.0)
     ] = None
@@ -3313,6 +3853,14 @@ class PublicSubmissionPipeline(BaseModel):
             "build & admission; null once admission is terminal."
         ),
     )
+    ordinary_review: PublicOrdinaryReview | None = Field(
+        default=None,
+        description=(
+            "Ordinary source-review clock and reason while the submission is "
+            "in the pre-score screening pipeline; null once it leaves that "
+            "pipeline (whichever way)."
+        ),
+    )
     submission_family: PublicSubmissionFamily | None = Field(
         default=None,
         description=(
@@ -3321,7 +3869,29 @@ class PublicSubmissionPipeline(BaseModel):
         ),
     )
     active_bench_version: Annotated[
-        int, Field(ge=1, description="Benchmark version currently being scored.")
+        int,
+        Field(
+            ge=1,
+            description=(
+                "The benchmark version that controls emissions: the ledger pin, "
+                "not the version this submission is being scored on. During a "
+                "rollout the fleet scores the version being collected while this "
+                "stays on the version that still pays, so the two differ until "
+                "the rollout activates. ``score_bench_version`` is the era this "
+                "submission's own scores belong to."
+            ),
+        ),
+    ]
+    emission_bench_version: Annotated[
+        int,
+        Field(
+            ge=1,
+            description=(
+                "Same pin as ``active_bench_version``, named for what it decides. "
+                "A submission finalized at a different ``score_bench_version`` is "
+                "not earning on this version's ledger."
+            ),
+        ),
     ]
     score_bench_version: Annotated[
         int,
@@ -3978,6 +4548,17 @@ class PublicValidatorHeartbeat(BaseModel):
             ),
         ),
     ] = None
+    weights_fold: Annotated[
+        PublicWeightsFold | None,
+        Field(
+            default=None,
+            description=(
+                "Which pinned ledger this validator last folded and the digest of "
+                "the vector it committed. Null before the first fold or for "
+                "validators older than heartbeat protocol v27."
+            ),
+        ),
+    ] = None
 
 
 class PublicValidatorHeartbeatsResponse(BaseModel):
@@ -4332,11 +4913,19 @@ class PublicBenchRolloutResponse(BaseModel):
     """Benchmark-version rollout state (``GET /public/bench/rollout``).
 
     Two versions matter here and they are not the same number:
-    ``active_version`` is the one that currently drives on-chain weights, and
-    ``desired_version`` is the one being rolled out. The whole ledger switches
-    at once, and only once ``ranked_quorum_agents`` reaches
-    ``min_ranked_quorum_agents``: that gate is what guarantees the emission set
-    (champion plus tail) is never short at the moment authority moves.
+    ``active_version`` is the one that currently drives on-chain weights (the
+    leaderboard's ``emission_bench_version``), and ``desired_version`` is the
+    one being rolled out and scored. ``desired_version`` leading
+    ``active_version`` is the normal mid-rollout state, not a stall.
+
+    The whole ledger switches at once, and only once BOTH gates close: every
+    position in the frozen priority cohort holds a complete per-agent quorum at
+    ``desired_version`` (``priority_cohort_ready_count`` of
+    ``priority_cohort_size``), and ``ranked_quorum_agents`` reaches
+    ``min_ranked_quorum_agents``, which guarantees the emission set (champion
+    plus tail) is never short at the moment authority moves.
+    ``promotion_pending`` / ``promotion_requirement`` state that in one flag
+    and one sentence.
 
     Extra keys are preserved rather than dropped: this model documents the shape
     without becoming a filter on it.
@@ -4352,6 +4941,24 @@ class PublicBenchRolloutResponse(BaseModel):
     )
     status: str = Field(
         description="inactive | collecting | superseded | activated | blocked."
+    )
+    promotion_pending: bool = Field(
+        default=False,
+        description=(
+            "True while desired_version is being collected and has not yet "
+            "taken emission authority. The normal mid-rollout state, not a "
+            "stall."
+        ),
+    )
+    promotion_requirement: str | None = Field(
+        default=None,
+        description=(
+            "The gates that must close before emission authority moves to "
+            "desired_version, in one sentence built from their live values: "
+            "the priority-cohort quorum over the frozen inherited prefix and "
+            "the ranked quorum over the emission set. Null when nothing is "
+            "pending."
+        ),
     )
     blocked_reason: str | None = None
     capability_bench_version: int
@@ -4391,6 +4998,14 @@ class PublicBenchRolloutResponse(BaseModel):
     priority_cohort_size: int = Field(
         default=5,
         description="Inherited leaders that must finish before later cohort work.",
+    )
+    priority_cohort_ready_count: int = Field(
+        default=0,
+        description=(
+            "Priority-cohort members that already satisfy the barrier, out of "
+            "priority_cohort_size: a complete desired-version quorum, or "
+            "permanently ineligible (skipped exactly as the gate skips them)."
+        ),
     )
     priority_complete: bool = Field(
         default=False,

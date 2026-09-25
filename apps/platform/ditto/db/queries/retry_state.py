@@ -15,14 +15,16 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import (
     Agent,
     BenchmarkRollout,
     BenchmarkRolloutMember,
+    ProviderOutageCircuit,
     Score,
     SubmissionRetirement,
     ValidatorHeartbeat,
@@ -52,6 +54,14 @@ AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
 )
 AGENT_ATTRIBUTABLE_WITHDRAW_REASON = (
     "exhausted on agent-attributable failures; withdraw rather than retry"
+)
+# Written by ``park_scoring_leases`` when the relay's provider circuit parks a
+# live scoring lease. Infrastructure, never the agent's fault.
+PROVIDER_OUTAGE_PARKED_DETAIL = "provider_outage_parked"
+PROVIDER_OUTAGE_RETRY_BLOCKING_REASON = (
+    "inference provider outage circuit is still open; every scoring lease is "
+    "parked while it is, so a restored slot would be parked again. Wait for "
+    "the circuit to close, or retry with acknowledge_provider_outage=true"
 )
 
 
@@ -108,6 +118,7 @@ def resolve_bench_version(
         ticket
         for ticket in all_tickets
         if ticket.status in (TicketStatus.ISSUED, TicketStatus.EXPIRED)
+        and ticket.purpose != TicketPurpose.BENCHMARK_CANARY
     ]
     if work_tickets:
         return max(
@@ -192,16 +203,54 @@ def dominant_agent_failure_detail(
     return detail if detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS else None
 
 
+def provider_outage_parked_exhaustion(
+    *, scores: list[Score], tickets: list[ValidatorTicket]
+) -> bool:
+    """Whether a remaining exhausted slot was last parked by the provider circuit."""
+    return any(
+        current_failure_detail(ticket) == PROVIDER_OUTAGE_PARKED_DETAIL
+        for ticket in remaining_exhausted_tickets(scores=scores, tickets=tickets)
+    )
+
+
+def provider_outage_blocks_retry(*, circuit: ProviderOutageCircuit | None) -> bool:
+    """Whether a retry grant would restore a slot the outage parks again.
+
+    Scoped to the circuit alone, deliberately matching what the lease path
+    actually does rather than what the slot last failed on.
+    ``park_scoring_leases`` selects **every** ``ISSUED`` validator ticket while
+    the circuit is open — no filter on purpose, benchmark version, or prior
+    failure cause — and exempts only the one live half-open scoring probe. So a
+    grant made in that window cannot be consumed safely whatever killed the
+    slot before: the first claim the gate admits is that probe, the next
+    provider failure re-parks it, and because the ticket has already spent its
+    one no-fault resume the park charges the operator's new grant. That is the
+    ditto-subnet#2087 loop, and it does not depend on the failure detail being
+    ``provider_outage_parked``.
+
+    There is no safe subset to exempt. Every scoring lease carries an inference
+    grant that ``park_scoring_leases`` revokes, so a version or purpose that
+    made no hosted-inference call would still lose the lease.
+
+    A ``closed`` circuit restores the ordinary retry path. That is a
+    current-state guard, not a healthy-route proof: the relay reopens the
+    circuit on the next qualifying failure, so a grant can still be spent in a
+    window that closes and reopens seconds later.
+    """
+    return circuit is not None and circuit.state == "open"
+
+
 def recommended_retry_action(
     *,
     scores: list[Score],
     tickets: list[ValidatorTicket],
     recovery_allowed: bool,
+    provider_outage_blocked: bool = False,
 ) -> RecommendedRetryAction | None:
     """Operator next step for a below-quorum row, or ``None`` when none applies."""
     if is_agent_attributable_exhaustion(scores=scores, tickets=tickets):
         return "withdraw"
-    if recovery_allowed:
+    if recovery_allowed and not provider_outage_blocked:
         return "retry"
     return None
 
@@ -563,13 +612,20 @@ async def classify_agent_retry_states(
     tickets_by_agent: dict[UUID, list[ValidatorTicket]] = {}
     for ticket in (
         await session.scalars(
-            select(ValidatorTicket).where(ValidatorTicket.agent_id.in_(id_subq))
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id.in_(id_subq),
+                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
+            )
         )
     ).all():
         tickets_by_agent.setdefault(ticket.agent_id, []).append(ticket)
     scores_by_agent: dict[UUID, list[Score]] = {}
     for score in (
-        await session.scalars(select(Score).where(Score.agent_id.in_(id_subq)))
+        await session.scalars(
+            select(Score)
+            .options(defer(Score.details, raiseload=True))
+            .where(Score.agent_id.in_(id_subq))
+        )
     ).all():
         scores_by_agent.setdefault(score.agent_id, []).append(score)
     withdrawals = set(

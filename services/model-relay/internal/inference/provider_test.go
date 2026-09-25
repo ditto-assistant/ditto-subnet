@@ -431,6 +431,22 @@ func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 	}
 }
 
+func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *testing.T) {
+	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "")
+	if aggregate["sort"] != "throughput" || aggregate["allow_fallbacks"] != true ||
+		aggregate["data_collection"] != "deny" || aggregate["zdr"] != true {
+		t.Fatalf("aggregate provider preferences: %v", aggregate)
+	}
+	ignored, ok := aggregate["ignore"].([]string)
+	if !ok || len(ignored) != 1 || ignored[0] != "coreweave" {
+		t.Fatalf("aggregate ignored providers: %v", aggregate["ignore"])
+	}
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8")
+	if adaptive["allow_fallbacks"] != false {
+		t.Fatalf("adaptive provider unexpectedly gained fallbacks: %v", adaptive)
+	}
+}
+
 func TestProviderErrorEnvelopePrecedesIdentityValidation(t *testing.T) {
 	var calls int
 	var slept time.Duration
@@ -506,6 +522,60 @@ func TestRecoverableGenerationErrorRemainsMinerOwnedAtHTTP502(t *testing.T) {
 	}
 	if got := chatProviderFailure(exhausted).headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
 		t.Fatalf("failure class=%q want %q", got, minerRecoverableGeneration)
+	}
+}
+
+func TestGenerationErrorWithReceiptMetadataIsClassifiedWithoutReplay(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusBadGateway} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			calls := 0
+			body := `{"id":"gen-fixture","error":{"code":502,"message":"Upstream error from Groq: Tool choice is none, but model called a tool","metadata":{"provider_name":"Groq","raw":"private diagnostic"}}}`
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(body))
+			}))
+			defer upstream.Close()
+			completed, exhausted := completeChatWithRecovery(
+				context.Background(), upstream.Client(), aggregateChatConfig(upstream.URL),
+				map[string]any{"model": "openai/gpt-oss-20b", "messages": []any{}},
+				"openai/gpt-oss-20b", "openrouter", "", nil, nil,
+				func(context.Context, time.Duration) { t.Fatal("must not sleep or replay") },
+			)
+			if completed != nil || exhausted == nil || calls != 1 {
+				t.Fatalf("completion=%v exhausted=%v calls=%d", completed, exhausted, calls)
+			}
+			if exhausted.terminalErrorCode != providerGenerationInvalidCode {
+				t.Fatalf("terminal code=%q", exhausted.terminalErrorCode)
+			}
+			if got := chatProviderFailure(exhausted).headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
+				t.Fatalf("failure class=%q", got)
+			}
+			if providerFailureIsReceiptFree(&providerHTTPResult{status: status, body: []byte(body)}, "openai/gpt-oss-20b", "openrouter") {
+				t.Fatal("receipt-bearing failure must never authorize replay")
+			}
+		})
+	}
+}
+
+func TestDecoratedErrorEnvelopeRejectsCompletionAndMalformedMetadata(t *testing.T) {
+	for _, extra := range []map[string]any{
+		{"choices": []any{}}, {"usage": map[string]any{}}, {"model": "wrong-model"},
+		{"id": 1},
+	} {
+		payload := map[string]any{"error": map[string]any{"code": json.Number("502"), "message": "failure"}}
+		for key, value := range extra {
+			payload[key] = value
+		}
+		if _, _, ok := providerErrorEnvelope(payload); ok {
+			t.Fatalf("accepted mixed envelope: %v", extra)
+		}
+	}
+	payload := map[string]any{"id": "gen-fixture", "error": map[string]any{
+		"code": json.Number("502"), "message": "failure", "metadata": "not-an-object",
+	}}
+	if _, _, ok := providerErrorEnvelope(payload); ok {
+		t.Fatal("accepted malformed metadata")
 	}
 }
 

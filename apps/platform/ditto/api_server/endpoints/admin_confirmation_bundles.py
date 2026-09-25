@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
 from uuid import UUID
@@ -30,6 +31,7 @@ from ditto.api_models.confirmation_bundles import (
     ConfirmationDimension,
     ConfirmationDimensionEvidenceView,
     ConfirmationEvidenceRoot,
+    ConfirmationProfileIdentity,
     ConfirmationResultStatus,
     ConfirmationShadowCalibrationView,
     EffectiveConfirmationBundleSettings,
@@ -38,6 +40,7 @@ from ditto.api_models.confirmation_bundles import (
 )
 from ditto.api_server.confirmation_candidate_reconciliation import (
     reconcile_confirmation_candidates,
+    registered_confirmation_profile,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -96,16 +99,50 @@ def _settings_revision(
     )
 
 
-def _effective_settings(
+def _installed_profiles(registry: object) -> list[ConfirmationProfileIdentity]:
+    """List the exact (revision, checksum) identities this release installed."""
+    if not isinstance(registry, Mapping):
+        return []
+    identities: list[ConfirmationProfileIdentity] = []
+    for key in registry:
+        if not isinstance(key, tuple) or len(key) != 2:
+            continue
+        revision, checksum = key
+        if not isinstance(revision, str) or not isinstance(checksum, str):
+            continue
+        identities.append(
+            ConfirmationProfileIdentity(revision=revision, checksum=checksum)
+        )
+    return sorted(identities, key=lambda item: (item.revision, item.checksum))
+
+
+def _latest_settings(
     latest: SettingsRevisionRow | None,
-) -> EffectiveConfirmationBundleSettings:
-    settings = (
+) -> ConfirmationBundleSettings:
+    return (
         ConfirmationBundleSettings.model_validate_json(json.dumps(latest.settings))
         if latest is not None
         else DEFAULT_SETTINGS
     )
+
+
+def _effective_settings(
+    latest: SettingsRevisionRow | None,
+    registry: object,
+) -> EffectiveConfirmationBundleSettings:
+    settings = _latest_settings(latest)
     configured = (
         settings.profile_revision is not None and settings.profile_checksum is not None
+    )
+    # Same exact-identity resolution the reconciler and the claim path use, so
+    # this view cannot say "active" for a profile that never issues.
+    profile_installed = (
+        registered_confirmation_profile(
+            registry,
+            revision=settings.profile_revision,
+            checksum=settings.profile_checksum,
+        )
+        is not None
     )
     return EffectiveConfirmationBundleSettings(
         revision=latest.revision if latest is not None else 0,
@@ -114,7 +151,13 @@ def _effective_settings(
         checksum=latest.checksum if latest is not None else None,
         source="revision" if latest is not None else "default",
         configured=configured,
-        issuance_active=settings.mode != ConfirmationBundleMode.OFF and configured,
+        profile_installed=profile_installed,
+        installed_profiles=_installed_profiles(registry),
+        issuance_active=(
+            settings.mode != ConfirmationBundleMode.OFF
+            and configured
+            and profile_installed
+        ),
     )
 
 
@@ -329,7 +372,7 @@ async def _bundle_view(
     response_model=AdminConfirmationBundleSettingsResponse,
 )
 async def get_confirmation_bundle_settings(
-    _admin: AdminDep, session: SessionDep
+    request: Request, _admin: AdminDep, session: SessionDep
 ) -> AdminConfirmationBundleSettingsResponse:
     latest = await latest_confirmation_bundle_settings_revision(session)
     history = await list_confirmation_bundle_settings_revisions(session)
@@ -337,7 +380,10 @@ async def get_confirmation_bundle_settings(
         current=[_settings_revision(latest)] if latest is not None else [],
         history=[_settings_revision(row) for row in history],
         default=DEFAULT_SETTINGS,
-        effective=_effective_settings(latest),
+        effective=_effective_settings(
+            latest,
+            getattr(request.app.state, "confirmation_verification_profiles", {}),
+        ),
     )
 
 
@@ -447,7 +493,7 @@ async def get_confirmation_bundles(
     today = now.date()
     budget = await confirmation_budget_day(session, utc_day=today)
     latest_settings = await latest_confirmation_bundle_settings_revision(session)
-    effective_settings = _effective_settings(latest_settings).settings
+    effective_settings = _latest_settings(latest_settings)
     return AdminConfirmationBundleListResponse(
         items=[await _bundle_view(session, row) for row in rows],
         count=count,

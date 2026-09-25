@@ -9,7 +9,12 @@
 // global search.
 import type { ChipState } from "../ui/StatusChip";
 import { agentLabel, fx } from "../../lib/format";
-import type { ActivityEntry, ValidationAttempt } from "../../types/pipeline";
+import type {
+  ActivityEntry,
+  DeferredReviewTrigger,
+  ReviewConclusion,
+  ValidationAttempt,
+} from "../../types/pipeline";
 
 /** One page of the paged activity table (monolith 3123). */
 export const ACTIVITY_PAGE_SIZE = 10;
@@ -18,6 +23,7 @@ export const ACTIVITY_PAGE_SIZE = 10;
  * filter state are always re-ordered against this list. */
 export const ACTIVITY_STATUSES: readonly string[] = [
   "waiting_screening",
+  "screening_failed",
   "screening",
   "waiting_validator",
   "evaluating",
@@ -53,27 +59,34 @@ export const ACTIVITY_FILTER_NAMES: readonly string[] = [
 export const ACTIVITY_FILTER_LABELS: Record<string, string> = {
   all: "All",
   rejected: "Rejected",
-  under_review: "Integrity review",
+  under_review: "Deferred review",
   waiting_validator: "Waiting for validators",
   queued: "Queued work",
-  downloadable: "Downloadable",
+  downloadable: "Source releases",
 };
+
+/** Screening failures may be infrastructure, reviewer-budget, or other
+ * operator-owned outcomes. The public status alone does not identify which. */
+export const SCREENING_INCOMPLETE_LABEL = "Screening incomplete";
 
 /**
  * Stage pill per status (activityStage 6832–6850). Terminal states for a
  * closed benchmark generation (#462) read as history, not failure:
  * not_queued/retired are neutral, never "bad". #623 renamed the screening
  * stages to the mechanical-admission vocabulary: screening builds a verified
- * image, and "Source integrity review" is the conditional later branch —
+ * image, and "Deferred source review" is the conditional later branch —
  * deep source review is deferred until a score qualifies.
  */
-export function activityStage(status: string | null | undefined): ChipState {
+export function activityStage(
+  status: string | null | undefined,
+  entry?: DeferredReviewFields,
+): ChipState {
   const stages: Record<string, ChipState> = {
     uploaded: ["Waiting for admission", "progress"],
     waiting_screening: ["Waiting for admission", "progress"],
     screening: ["Image build & admission", "progress"],
     screening_passed: ["Admitted", "good"],
-    screening_failed: ["Admission interrupted", "warn"],
+    screening_failed: [SCREENING_INCOMPLETE_LABEL, "warn"],
     waiting_validator: ["Waiting for validators", "progress"],
     evaluating: ["Scoring", "progress"],
     below_score_floor: ["Low-priority completion", "warn"],
@@ -81,10 +94,77 @@ export function activityStage(status: string | null | undefined): ChipState {
     retired: ["Retired · earlier benchmark", ""],
     scored: ["Scored", "good"],
     live: ["Live", "good"],
-    under_review: ["Source integrity review", "warn"],
+    under_review: ["Deferred source review", "warn"],
     rejected: ["Rejected", "bad"],
   };
+  // #562: entering the branch is not a finding. Only an adverse automated
+  // signal (or a hold with no automated conclusion, e.g. a copy review) keeps
+  // "warn"; a review that ended without a finding is neutral, and one that
+  // has not reported yet is in progress.
+  if (status === "under_review") {
+    const conclusion = entry?.review_conclusion;
+    if (
+      conclusion === "no_finding" ||
+      conclusion === "budget_exhausted" ||
+      conclusion === "not_completed"
+    ) {
+      return ["Deferred source review", ""];
+    }
+    if (conclusion === "pending") return ["Deferred source review", "progress"];
+  }
   return (status != null && stages[status]) || ["Pending", ""];
+}
+
+/** Public deferred-review fields Platform projects onto a held row (#562). */
+export interface DeferredReviewFields {
+  status?: string | null;
+  deferred_review_triggers?: readonly DeferredReviewTrigger[] | null;
+  review_conclusion?: ReviewConclusion | null;
+}
+
+/** Why a submission entered the deferred branch, in the miner's words. */
+export const DEFERRED_REVIEW_TRIGGER_LABELS: Record<DeferredReviewTrigger, string> = {
+  top_five: "Score qualified (top 5)",
+  anomaly: "Anomaly hold",
+};
+
+/** What the automated source review concluded, as a short clause. */
+export const REVIEW_CONCLUSION_LABELS: Record<ReviewConclusion, string> = {
+  pending: "automated review pending",
+  // No review completed with a recorded conclusion (no recorded audit, or a
+  // preflight hold). Claim only that: not whether or how far review ran, and
+  // never a budget.
+  not_completed: "automated review did not complete \u2014 no finding recorded",
+  no_finding: "automated review inconclusive \u2014 no finding",
+  // Only for an exact recorded budget-exhaustion audit.
+  budget_exhausted: "automated review ran out of budget \u2014 no finding",
+  adverse_signal: "automated review raised a concern",
+};
+
+/** True when a recorded automated review ran and ended with no finding. */
+export function isSourceReviewIncomplete(entry: DeferredReviewFields): boolean {
+  return (
+    entry.status === "under_review" &&
+    (entry.review_conclusion === "no_finding" || entry.review_conclusion === "budget_exhausted")
+  );
+}
+
+/**
+ * The trigger and automated conclusion shown beside the chip without opening
+ * the drawer (#562), e.g. "Score qualified (top 5) · automated review
+ * incomplete — no finding". Empty for rows that are not held or that carry
+ * neither field (older API, copy holds).
+ */
+export function deferredReviewSummary(entry: DeferredReviewFields): string {
+  if (entry.status !== "under_review") return "";
+  const parts = (entry.deferred_review_triggers ?? [])
+    .map((trigger) => DEFERRED_REVIEW_TRIGGER_LABELS[trigger])
+    .filter(Boolean);
+  const conclusion = entry.review_conclusion
+    ? REVIEW_CONCLUSION_LABELS[entry.review_conclusion]
+    : undefined;
+  if (conclusion) parts.push(conclusion);
+  return parts.join(" \u00b7 ");
 }
 
 // ── Review-event evidence (#622/#636; monolith 6852–6881) ───────────────────
@@ -172,7 +252,7 @@ export function duplicateComparisonLabel(entry: ReviewEventFields): string {
  * build-only screening pass IS the active build stage — calling the image
  * "verified" before that build finishes was both redundant and temporally
  * false, so it renders nothing; a full review during screening names the
- * deferred branch, "Source integrity review".
+ * deferred branch, "Deferred source review".
  */
 export function policyScreeningLabel(entry: {
   status?: string | null;
@@ -182,7 +262,7 @@ export function policyScreeningLabel(entry: {
 }): string {
   if (entry.screening_build_only === true) return "";
   if (entry.screening_build_only === false && entry.status === "screening") {
-    return "Source integrity review";
+    return "Deferred source review";
   }
   const completed = Number(entry.screening_policy_version);
   const required = Number(entry.required_screening_policy_version);
@@ -290,24 +370,6 @@ export function validationDetail(e: ActivityStatusEntry): string {
       attempt.status === "issued" &&
       benchmarkVersionKey(attempt.bench_version) === benchmarkVersionKey(e.active_bench_version),
   ).length;
-  if (count >= quorum) {
-    const retests = retestAttemptCounts(
-      (e.validation_attempts || []).filter(
-        (attempt) =>
-          benchmarkVersionKey(attempt.bench_version) ===
-          benchmarkVersionKey(e.active_bench_version),
-      ),
-    );
-    const retestCopy: string[] = [];
-    if (retests.running) retestCopy.push(retests.running + " running");
-    if (retests.assigned) retestCopy.push(retests.assigned + " assigned");
-    return (
-      "Canonical validation complete. The official result uses the median of " +
-      quorum +
-      " independent scores." +
-      (retestCopy.length ? " Continual top-five retesting: " + retestCopy.join(", ") + "." : "")
-    );
-  }
   if (e.status === "below_score_floor") {
     const provisionalScores = e.provisional_scores || [];
     const scoreFloor = Number(e.score_floor);
@@ -346,8 +408,79 @@ export function validationDetail(e: ActivityStatusEntry): string {
   if (e.status === "waiting_screening")
     return "Queued for a screener to claim under the current policy.";
   if (e.status === "screening") return "A screener is currently checking this submission.";
-  if (e.status === "under_review")
-    return "Automated processing is paused while an operator reviews this submission. No screener or validator is currently working on it.";
+  if (e.status === "under_review") {
+    const held =
+      "This submission is held for deferred source review. Existing scores do not clear the hold. ";
+    const why = e.deferred_review_triggers?.length
+      ? "It entered review because " +
+        e.deferred_review_triggers
+          .map((trigger) =>
+            trigger === "top_five"
+              ? "its score placed it in the top five"
+              : "a score anomaly check fired",
+          )
+          .join(" and ") +
+        "; entering review is not a finding. "
+      : "";
+    if (e.review_conclusion === "budget_exhausted") {
+      return (
+        held +
+        why +
+        "The automated review ran out of budget before finishing, which is not a finding; an operator decision is pending."
+      );
+    }
+    if (e.review_conclusion === "no_finding") {
+      return (
+        held +
+        why +
+        "The automated review finished without reaching a decision and made no finding; an operator decision is pending."
+      );
+    }
+    if (e.review_conclusion === "not_completed") {
+      return (
+        held +
+        why +
+        "The automated review did not complete and recorded no finding; an operator decision is pending."
+      );
+    }
+    if (e.review_conclusion === "pending") {
+      return held + why + "The automated deep review has not reported yet.";
+    }
+    if (e.review_conclusion === "adverse_signal") {
+      return (
+        held +
+        why +
+        "The automated review raised a concern that an operator must adjudicate; an operator decision is pending."
+      );
+    }
+    return (
+      held +
+      why +
+      "The screening history below shows whether a deep review is running or an operator decision is pending."
+    );
+  }
+  if (e.status === "rejected")
+    return "Screening or source review rejected this submission. Existing scores remain as history; see the review result for the policy version and reason.";
+  if (e.status === "screening_failed")
+    return "Screening could not complete. This is not a submission rejection. Check the admission retry status below for whether a retry is authorized or operator action is needed.";
+  if (count >= quorum) {
+    const retests = retestAttemptCounts(
+      (e.validation_attempts || []).filter(
+        (attempt) =>
+          benchmarkVersionKey(attempt.bench_version) ===
+          benchmarkVersionKey(e.active_bench_version),
+      ),
+    );
+    const retestCopy: string[] = [];
+    if (retests.running) retestCopy.push(retests.running + " running");
+    if (retests.assigned) retestCopy.push(retests.assigned + " assigned");
+    return (
+      "Canonical validation complete. The official result uses the median of " +
+      quorum +
+      " independent scores." +
+      (retestCopy.length ? " Continual top-five retesting: " + retestCopy.join(", ") + "." : "")
+    );
+  }
   if (e.status === "waiting_validator") {
     const waiting = Math.max(0, quorum - count - assignments);
     const assignmentCopy =
@@ -378,10 +511,6 @@ export function validationDetail(e: ActivityStatusEntry): string {
       "."
     );
   }
-  if (e.status === "rejected")
-    return "Screening completed and rejected this submission. See the screener result for the policy version and reason.";
-  if (e.status === "screening_failed")
-    return "Screening could not complete reliably. This is retryable and is distinct from a submission rejection.";
   return "Validation starts after the submission passes screening.";
 }
 
@@ -400,7 +529,7 @@ export interface AdmissionRetryState {
  */
 export function admissionRetryLine(
   retry: AdmissionRetryState | null | undefined,
-  _now: Date = new Date(),
+  now: Date = new Date(),
 ): string {
   if (!retry) return "";
   const attempts = Number(retry.attempt_count) || 0;
@@ -409,6 +538,19 @@ export function admissionRetryLine(
   }
   if (retry.state === "queued") {
     return "Waiting for a screener slot; no attempt has started yet.";
+  }
+  if (retry.state === "retry_queued" && retry.next_retry_at) {
+    const infra =
+      "A Ditto build infrastructure failure, not a miner failure. It retries automatically with backoff";
+    const due = new Date(retry.next_retry_at);
+    if (Number.isNaN(due.getTime())) return infra + ".";
+    if (due.getTime() <= now.getTime()) {
+      return infra + " and is due for another attempt.";
+    }
+    // Fixed UTC rendering: never the viewer's locale or timezone.
+    return (
+      infra + ", no earlier than " + due.toISOString().slice(0, 16).replace("T", " ") + " UTC."
+    );
   }
   if (retry.state === "retry_queued") {
     return (

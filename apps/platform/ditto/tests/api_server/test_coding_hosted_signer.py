@@ -233,6 +233,7 @@ def mock_dependencies(monkeypatch, session_maker):
         "create_generator",
         "ProviderRouteRefresher",
         "ValidatorNonceJanitor",
+        "ScreenerCapacityEventJanitor",
     ):
         monkeypatch.setattr(factory, name, lambda *_a, **_kw: resource)
     monkeypatch.setattr(factory, "create_payment_verifier", MagicMock())

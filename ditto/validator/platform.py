@@ -8,6 +8,7 @@ signature. It never touches the platform DB directly.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
@@ -70,6 +71,14 @@ from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
 )
+from ditto.api_models.private_dataset import PrivateDatasetRequest
+from ditto.api_models.receipt_diagnostics import (
+    ReceiptDiagnosticObservation,
+    ReceiptDiagnosticReport,
+    SubmitReceiptDiagnostics,
+    diagnostic_signing_message,
+)
+from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.validator import (
     ArtifactResponse,
     FailJobReason,
@@ -96,6 +105,13 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationScorerResult,
     V9ConfirmationSubmitRequest,
     V9ConfirmationSubmitResponse,
+)
+from ditto.api_models.weight_receipt import (
+    FinalizedWeightReceipt,
+    SubmitWeightReceiptRequest,
+    SubmitWeightReceiptResponse,
+    weight_receipt_digest,
+    weight_receipt_signing_message,
 )
 from ditto.validator.coding_publication import (
     PreparedCodingPublication,
@@ -287,6 +303,63 @@ class PlatformClient:
             or config.platform_api_url
         ).rstrip("/")
         self._headers = {"X-Validator-Hotkey": config.validator_hotkey}
+
+    async def submit_receipt_diagnostics(
+        self, observation: ReceiptDiagnosticObservation
+    ) -> None:
+        report = ReceiptDiagnosticReport(
+            validator_hotkey=self._config.validator_hotkey,
+            netuid=self._config.netuid,
+            timestamp=int(datetime.now(UTC).timestamp()),
+            observation=observation,
+        )
+        body = SubmitReceiptDiagnostics(
+            report=report,
+            signature="0x"
+            + bytes(self._keypair.sign(diagnostic_signing_message(report))).hex(),
+        )
+        response = await self._client.post(
+            f"{self._base}{_PREFIX}/receipt-diagnostics",
+            json=body.model_dump(mode="json"),
+            headers=self._headers,
+            timeout=3.0,
+        )
+        if response.status_code not in (200, 404):
+            raise PlatformError(
+                f"receipt diagnostics rejected ({response.status_code})"
+            )
+
+    async def submit_weight_receipt(
+        self, receipt: FinalizedWeightReceipt
+    ) -> SubmitWeightReceiptResponse:
+        """Persist immutable commit provenance and require an exact signed-body ACK."""
+        timestamp = int(datetime.now(UTC).timestamp())
+        signature = self._keypair.sign(
+            weight_receipt_signing_message(receipt, timestamp)
+        )
+        request = SubmitWeightReceiptRequest(
+            receipt=receipt,
+            timestamp=timestamp,
+            signature="0x" + bytes(signature).hex(),
+        )
+        try:
+            response = await self._client.post(
+                f"{self._base}{_PREFIX}/weight-submission-receipt",
+                json=request.model_dump(mode="json"),
+                headers=self._headers,
+            )
+        except httpx.HTTPError as exc:
+            raise PlatformError("weight receipt persistence outcome unknown") from exc
+        if response.status_code != 200:
+            raise PlatformError(f"weight receipt rejected ({response.status_code})")
+        result = SubmitWeightReceiptResponse.model_validate(response.json())
+        if (
+            result.request_id != receipt.request_id
+            or result.attempt_id != receipt.attempt.attempt_id
+            or result.receipt_digest != weight_receipt_digest(receipt)
+        ):
+            raise PlatformError("weight receipt acknowledgement mismatch")
+        return result
 
     async def submit_heartbeat(
         self, request: ValidatorHeartbeatRequest
@@ -1935,6 +2008,81 @@ class PlatformClient:
                 f"{len(invalid)} entr{'y' if len(invalid) == 1 else 'ies'}: {sample}"
             )
         return ledger
+
+    async def get_router_ledger(self) -> RouterLedgerResponse:
+        """Pull the shadow router-track ledger the validator folds each epoch.
+
+        The router eval runs on one trusted, offloaded ``dittobench-api`` scorer
+        that publishes a ledger; the platform relays it here behind the same
+        signed proof-of-possession as :meth:`get_ledger` (``GET
+        /scoring/router-ledger``). The validator only reads and folds it, so no
+        provider secret or harness container ever touches a validator.
+
+        The read is best-effort by contract: :class:`PlatformRouterLedgerSource`
+        wraps this and degrades any failure to an empty ledger (zero router
+        emission), so a scorer outage or malformed publish cannot distort the
+        ``put_weights`` fold. In v1 the whole track is shadow
+        (``weight_eligible=False``), so even a served ledger contributes zero.
+        """
+        url = f"{self._base}{_SCORING_PREFIX}/router-ledger"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Ledger-Nonce": str(nonce),
+            "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
+            "X-Validator-Ledger-Signature": sign_ledger_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
+        try:
+            resp = await self._client.get(url, headers=proof_headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"router ledger fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"router ledger rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            return RouterLedgerResponse.model_validate(resp.json())
+        except (ValidationError, ValueError) as e:
+            raise PlatformError("router ledger response was invalid") from e
+
+    async def get_private_dataset(
+        self, agent_id: UUID, *, dataset_sha256: str, deadline: datetime
+    ) -> bytes:
+        payload = PrivateDatasetRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            dataset_sha256=dataset_sha256,
+            deadline=deadline,
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+            signature="0" * 128,
+        )
+        payload.signature = self._keypair.sign(payload.signing_message(agent_id)).hex()
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/private-dataset"
+        try:
+            async with self._client.stream(
+                "POST", url, headers=self._headers, json=payload.model_dump(mode="json")
+            ) as response:
+                if response.status_code != 200:
+                    raise PlatformError("private dataset download rejected")
+                parts = []
+                total = 0
+                async for chunk in response.aiter_bytes(65536):
+                    total += len(chunk)
+                    if total > 32 << 20:
+                        raise PlatformError("private dataset exceeds size limit")
+                    parts.append(chunk)
+                body = b"".join(parts)
+        except httpx.HTTPError:
+            raise PlatformError("private dataset transport failed") from None
+        if not body or hashlib.sha256(body).hexdigest() != dataset_sha256:
+            raise PlatformError("private dataset digest mismatch")
+        return body
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
         """Get a presigned tarball URL with fresh proof of hotkey ownership.

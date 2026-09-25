@@ -35,6 +35,7 @@ DispatchDeclineReason = Literal[
     "disk_breaker",
     "slot_cap",
     "validator_paused",
+    "v13_scorer_cohort_pin",
     "inference_slot_cap",
     "provider_outage",
     "slot_occupied",
@@ -69,6 +70,30 @@ VALIDATOR_NONCE_JANITOR_RUNS = Counter(
 VALIDATOR_NONCE_JANITOR_DELETED = Counter(
     "ditto_validator_nonce_janitor_deleted_total",
     "Expired validator replay guards deleted by the periodic janitor.",
+)
+SCREENER_CAPACITY_EVENT_JANITOR_RUNS = Counter(
+    "ditto_screener_capacity_event_janitor_runs_total",
+    "Bounded screener capacity event retention sweeps, by outcome.",
+    ("outcome",),
+)
+SCREENER_CAPACITY_EVENT_JANITOR_DELETED = Counter(
+    "ditto_screener_capacity_event_janitor_deleted_total",
+    "Expired screener capacity audit events deleted by the periodic janitor.",
+)
+SCREENER_CAPACITY_EVENT_JANITOR_DURATION_SECONDS = Histogram(
+    "ditto_screener_capacity_event_janitor_duration_seconds",
+    "Duration of screener capacity event retention sweeps.",
+)
+LEDGER_PIN_MATERIALIZATIONS = Counter(
+    "ditto_ledger_pin_materializations_total",
+    "Epoch-pinned validator ledger builds, by outcome "
+    "(pinned, loaded, raced, db_error, error).",
+    ("outcome",),
+)
+LEDGER_PIN_LOOP_RUNS = Counter(
+    "ditto_ledger_pin_loop_runs_total",
+    "Background ledger pin sweeps, by outcome (pinned, unavailable, disabled).",
+    ("outcome",),
 )
 VALIDATOR_NONCE_JANITOR_DURATION_SECONDS = Histogram(
     "ditto_validator_nonce_janitor_duration_seconds",

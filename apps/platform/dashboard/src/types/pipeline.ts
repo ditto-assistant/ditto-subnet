@@ -3,9 +3,26 @@
 // /public/agent/{id}/pipeline, and the digest-verified transcript telemetry
 // sidecar).
 
-import type { CaseResult, NameHandle, V9BaseEvidence } from "./leaderboard";
+import type {
+  CaseResult,
+  CodingShadowScore,
+  GateEvidence,
+  NameHandle,
+  V9BaseEvidence,
+} from "./leaderboard";
 
 // ── Activity / submissions (/public/activity) ────────────────
+
+/** Coarse public reason a submission entered deferred source review. */
+export type DeferredReviewTrigger = "top_five" | "anomaly";
+
+/** Public automated-review conclusion for a held submission. */
+export type ReviewConclusion =
+  | "pending"
+  | "not_completed"
+  | "no_finding"
+  | "budget_exhausted"
+  | "adverse_signal";
 
 export interface ActivityEntry {
   agent_id?: string;
@@ -14,14 +31,25 @@ export interface ActivityEntry {
   avatar_url?: string | null;
   version?: number | null;
   miner_hotkey?: string;
+  /** Submitting miner's current SN118 UID; null when unregistered or when the
+   * chain snapshot was unavailable. Decoration only — never a status or score. */
+  miner_uid?: number | null;
   /** Submission status slug, e.g. "waiting_screening" | "scored" | "rejected". */
   status?: string;
   submitted_at?: string;
   score_count?: number | null;
+  /** Exact-artifact aggregate only; parallel shadow work never gates this lifecycle. */
+  coding_shadow?: CodingShadowScore | null;
   quorum?: number | null;
   score_floor?: number | null;
   review_reason?: string | null;
   screening_reason?: string | null;
+  /** Why an active deferred-source-review hold was opened (#562). Empty when
+   * the row is not held for deferred review. */
+  deferred_review_triggers?: DeferredReviewTrigger[] | null;
+  /** What the automated source review concluded for a held row (#562); null
+   * when the hold has no automated conclusion (e.g. a copy review). */
+  review_conclusion?: ReviewConclusion | null;
   duplicate_of?: string | null;
   duplicate_name?: string | null;
   duplicate_version?: number | null;
@@ -133,6 +161,14 @@ export interface ScreeningReviewFinding {
   categories?: string[];
   locations?: ScreeningReviewLocation[];
   reviewer_revision?: string;
+  invariant_assessment?: {
+    decisions: {
+      invariant: string;
+      disposition: string;
+      summary: string;
+      evidence_indices: number[];
+    }[];
+  } | null;
 }
 
 export interface ScreeningReviewEvidence {
@@ -155,6 +191,15 @@ export interface ScreeningAttempt {
   quarantine_resolved_at?: string | null;
   review_finding?: ScreeningReviewFinding | null;
   review_evidence?: ScreeningReviewEvidence[] | null;
+  review_notes?:
+    | {
+        kind: "concern" | "cleared" | "observation";
+        stage: string;
+        summary: string;
+        path?: string | null;
+        line?: number | null;
+      }[]
+    | null;
 }
 
 export interface ValidationAttempt {
@@ -217,6 +262,8 @@ export interface AcceptedScore {
   transcript_sha256?: string | null;
   v9_base?: V9BaseEvidence | null;
   case_results?: CaseResult[];
+  /** Bench v13+ run-level gate verdict (aggregates only). */
+  gate_evidence?: GateEvidence | null;
 }
 
 /** A shared-seed continual top-five retest result. */
@@ -229,6 +276,10 @@ export interface ConfirmationScore {
 }
 
 export interface Dispute {
+  /** "screening" appeals a rejected quarantine; "gate_notes" appeals cited
+   * bench v13+ gate notes on a scored submission (either resolution only
+   * records the verdict). Absent on pre-v13 records: screening. */
+  kind?: "screening" | "gate_notes";
   /** "pending" or resolved. */
   status?: string;
   /** "release" means accepted; anything else reads as upheld. */

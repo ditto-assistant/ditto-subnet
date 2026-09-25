@@ -5,6 +5,7 @@ on:
     paths:
       - infra/**
       - scripts/test-coding-hosted-connectivity-kernel.py
+      - workers/screener/scripts/bootstrap-screener.sh
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
   push:
@@ -12,6 +13,7 @@ on:
     paths:
       - infra/**
       - scripts/test-coding-hosted-connectivity-kernel.py
+      - workers/screener/scripts/bootstrap-screener.sh
       - .github/workflows/infra-ci.yml
       - .github/workflows/infra-plan-apply.yml
 
@@ -95,9 +97,22 @@ jobs:
 
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/hetzner-screener-fleet.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-screener-fleet-dev.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml playbooks/gcp-coding-executor.yml playbooks/gcp-coding-hosted.yml playbooks/gcp-coding-hosted-image.yml playbooks/gcp-coding-hosted-connectivity.yml playbooks/gcp-coding-hosted-postgres-admission.yml playbooks/gcp-coding-hosted-custody-key.yml playbooks/gcp-coding-hosted-custody-service.yml playbooks/gcp-coding-hosted-postgres-environment.yml playbooks/hetzner-screener-fleet.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
+
+      - name: Prove the screener BuildKit cache cleanup stays bounded and tunable
+        run: |
+          python3 tests/test_screener_cache_gc.py
+          uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/screener-cache-gc.yml
+
+      - name: Prove the PostgreSQL collector logs stay bounded and the data disk stays off
+        run: |
+          python3 tests/test_postgres_log_gc.py
+          uvx --from ansible-core==2.21.2 ansible-playbook --check -i localhost, tests/postgres-log-gc.yml
+
+      - name: Prove every Docker apt key fetch is integrity-pinned
+        run: python3 tests/test_docker_apt_key_pin.py
 
       - name: Check native PostgreSQL admission rendering without host mutations
         run: >-
@@ -114,3 +129,13 @@ jobs:
         run: >-
           uvx --from ansible-core==2.21.2 ansible-playbook --check
           -i localhost, tests/coding-hosted-custody-key.yml
+
+      - name: Prove the native custody service stays disabled and its templates agree
+        run: >-
+          uvx --from ansible-core==2.21.2 ansible-playbook --check
+          -i localhost, tests/coding-hosted-custody-service.yml
+
+      - name: Prove native PostgreSQL environment materialization stays disabled
+        run: >-
+          uvx --from ansible-core==2.21.2 ansible-playbook --check
+          -i localhost, tests/coding-hosted-postgres-environment.yml

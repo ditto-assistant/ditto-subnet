@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import logging
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
+
+import httpx
 
 from ditto.chain.errors import (
     ChainAuthError,
@@ -48,6 +51,7 @@ _WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
 _COMMIT_REVEAL_ENABLED_STORAGE = "CommitRevealWeightsEnabled"
 _REVEAL_PERIOD_STORAGE = "RevealPeriodEpochs"
 _LAST_EPOCH_BLOCK_STORAGE = "LastEpochBlock"
+_SUBNET_OWNER_HOTKEY_STORAGE = "SubnetOwnerHotkey"
 
 
 class ChainClient:
@@ -276,6 +280,16 @@ class ChainClient:
         raw = await self._query_subtensor_storage(_LAST_EPOCH_BLOCK_STORAGE, netuid)
         return None if raw is None else int(raw)
 
+    async def get_subnet_owner_hotkey(self, netuid: int) -> str | None:
+        """Read the chain's owner hotkey, whose registered incentive is withheld.
+
+        UID 0 is not an ownership signal: it can be occupied by another miner
+        after a deregistration. The caller must also verify this hotkey is in
+        the current registered-neuron snapshot before setting burn weights.
+        """
+        raw = await self._query_subtensor_storage(_SUBNET_OWNER_HOTKEY_STORAGE, netuid)
+        return str(raw) if raw else None
+
     async def get_commit_reveal_enabled(self, netuid: int) -> bool | None:
         """Read the subnet's ``CommitRevealWeightsEnabled`` hyperparameter.
 
@@ -415,6 +429,75 @@ class ChainClient:
         logger.info(
             f"put_weights submitted for netuid={self._config.netuid} "
             f"with {len(weights)} entries"
+        )
+
+    async def _weight_receipt_request(
+        self,
+        method: str,
+        suffix: str = "",
+        *,
+        body: dict[str, Any] | None = None,
+        params: dict[str, int] | None = None,
+    ) -> dict[str, Any] | None:
+        """None means known unsupported/rejected-before-create, never timeout."""
+        identity = self._config.identity_name
+        token = self._config.identity_token
+        if not identity or not token:
+            return None
+        url = (
+            f"{self._config.pylon_url.rstrip('/')}/api/_unstable/identity/"
+            f"{quote(identity, safe='')}/subnet/{self._config.netuid}"
+            f"/ditto/weight-receipts{suffix}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.request(
+                    method,
+                    url,
+                    json=body,
+                    params=params,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if response.status_code in (404, 405, 501):
+                return None
+            payload = response.json()
+            if (
+                response.status_code == 503
+                and isinstance(payload, dict)
+                and payload.get("detail") == "unacknowledged receipt capacity reached"
+            ):
+                return None
+            if response.status_code != 200 or not isinstance(payload, dict):
+                raise ChainConnectionError(
+                    f"Pylon weight receipt request failed ({response.status_code})"
+                )
+            return payload
+        except httpx.TimeoutException as exc:
+            raise ChainTimeoutError(
+                "Pylon receipt outcome unknown after timeout"
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ChainConnectionError("Pylon receipt outcome unknown") from exc
+
+    async def put_weights_with_receipt(
+        self, request_id: str, body: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        return await self._weight_receipt_request(
+            "PUT", f"/{quote(request_id, safe='')}", body=body
+        )
+
+    async def list_weight_receipts(
+        self, *, after_task_id: int = 0, limit: int = 20
+    ) -> dict[str, Any] | None:
+        return await self._weight_receipt_request(
+            "GET", params={"after_task_id": after_task_id, "limit": limit}
+        )
+
+    async def acknowledge_weight_receipt(
+        self, request_id: str, body: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        return await self._weight_receipt_request(
+            "POST", f"/{quote(request_id, safe='')}/ack", body=body
         )
 
     # --- Success status (Pylon gap) ---

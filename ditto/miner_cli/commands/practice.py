@@ -69,6 +69,25 @@ def add_subparser(
         help="Write the combined Bench and optional LongMemEval report as JSON.",
     )
     parser.add_argument(
+        "--gates",
+        action="store_true",
+        help=(
+            "Replay the public Bench v13 gates (catalog-present + safe harbor, "
+            "swallowed call, provenance normaliser, causal gate, twin/pair "
+            "post-pass) against the run and print per-case notes. Shadow only: "
+            "no local score moves."
+        ),
+    )
+    parser.add_argument(
+        "--keep-artifacts",
+        type=Path,
+        help=(
+            "With --gates: copy the pass-off dataset artifact, transcript, "
+            "completion log, and gate result into this directory for an offline "
+            "re-run with miners/dittobench-starter-kit/scripts/rehearsal_gates.py."
+        ),
+    )
+    parser.add_argument(
         "--longmem-eval",
         action="store_true",
         help=(
@@ -111,6 +130,10 @@ def rehearsal_argv(args: argparse.Namespace) -> list[str]:
         command.extend(("--seed", str(args.seed)))
     if args.report is not None:
         command.extend(("--report", str(args.report)))
+    if getattr(args, "gates", False):
+        command.append("--gates")
+        if getattr(args, "keep_artifacts", None) is not None:
+            command.extend(("--keep-artifacts", str(args.keep_artifacts)))
     if args.longmem_eval:
         command.extend(("--longmem-eval", "--longmem-shards", str(args.longmem_shards)))
         if args.longmem_limit is not None:

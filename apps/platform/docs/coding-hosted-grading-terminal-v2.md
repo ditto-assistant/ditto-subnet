@@ -14,9 +14,10 @@ private canary remain unverified. No score, weight or emission path is activated
 ## Approved grader profile
 
 `GradingProfile` is a canonical, digest-bound template with the pinned image,
-native grader contract, exact grader-bundle digest, reviewed test-manifest
-commitment, resource envelope, build command, two required test groups and
-execution timeout. Groups are sorted `hidden`, `visible`; execution is `visible`
+native grader contract, exact grader-bundle digest, resource envelope, build
+command, two required test groups and execution timeout. It has no test-manifest
+field: hosted v2 has no such object, and Platform rejects a profile or evidence
+that names one. Groups are sorted `hidden`, `visible`; execution is `visible`
 then `hidden`. Counts and commands are explicit reviewed inputs, not inferred
 from candidate stdout or fabricated from the corpus size.
 

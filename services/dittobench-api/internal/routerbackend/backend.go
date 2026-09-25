@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/routerharness"
+	"github.com/ditto-assistant/dittobench-api/internal/routerreplay"
 	"github.com/ditto-assistant/dittobench-api/internal/routerscore"
 )
 
@@ -86,49 +87,51 @@ func (d Dispatcher) Run(
 	return incl, entry, err
 }
 
-// LocalBackend is the in-process implementation: it drives the harness adapters
-// in this process and folds their outcomes through routerscore. In v1 shadow the
-// adapters' RunTask methods are the errNotImplemented scaffold stubs, so every
-// harness comes back non-operational and the entry folds to combined_score 0 —
-// the honest shadow state. It is never weight-eligible (WeightEligible=false);
-// the validator's SHADOW track state stays the authority.
+// LocalBackend is the in-process implementation: it replays the embedded offline
+// corpus (internal/routerreplay) through routerscore's token-dominant blend and
+// folds a shadow ledger entry. No live provider is called — v1 shadow is offline
+// determinism/prefix replay — so the entry is a real, non-zero shadow composite
+// while remaining never weight-eligible (WeightEligible=false). The validator's
+// SHADOW track state stays the authority. If the corpus fails to load the backend
+// degrades safely to an all-forfeit entry (combined 0), never a scoring fault.
 type LocalBackend struct {
-	Weights routerscore.HarnessWeights
-	Gate    routerscore.FloorGate
-	opts    []routerharness.Option
+	Weights   routerscore.HarnessWeights
+	AxisWeights routerscore.EffAxisWeights
+	Gate      routerscore.FloorGate
+	corpus    routerreplay.Corpus
+	corpusErr error
 }
 
 // NewLocalBackend builds the in-process backend with the default per-harness
-// weights and the shadow floor gate. Options (e.g. WithCommandRunner) are
-// forwarded to the adapters so tests can inject a fake toolchain.
-func NewLocalBackend(opts ...routerharness.Option) *LocalBackend {
+// weights, the token-dominant axis weights, and the shadow floor gate, loading
+// the embedded reference replay corpus. A corpus load error is retained and
+// surfaces as a safe all-forfeit entry, never a panic.
+func NewLocalBackend() *LocalBackend {
+	corpus, err := routerreplay.Default()
 	return &LocalBackend{
-		Weights: routerscore.DefaultHarnessWeights,
-		Gate:    routerscore.ShadowFloorGate(),
-		opts:    opts,
+		Weights:     routerscore.DefaultHarnessWeights,
+		AxisWeights: routerscore.DefaultEffAxisWeights,
+		Gate:        routerscore.ShadowFloorGate(),
+		corpus:      corpus,
+		corpusErr:   err,
 	}
 }
 
-// Score drives every harness adapter against the submission's router and folds
-// the outcomes into a shadow ledger entry. This is the reachable caller that
-// wires routerscore.BuildEntry into a real path; in v1 the adapter stubs make
-// every slice forfeit, so the combined score is 0 and the entry is shadow-only.
+// Score replays the offline corpus and folds the outcomes into a shadow ledger
+// entry. The measured aggregate lands in ShadowComposite; CombinedScore (the only
+// number the validator folds) stays 0 because the entry is never weight-eligible.
 func (b *LocalBackend) Score(
-	ctx context.Context, sub RouterSubmission,
+	_ context.Context, sub RouterSubmission,
 ) (routerscore.LedgerEntry, error) {
 	weights := b.Weights
 	if weights == nil {
 		weights = routerscore.DefaultHarnessWeights
 	}
-	var task routerharness.Task
-	if len(sub.Tasks) > 0 {
-		task = sub.Tasks[0]
+	axis := b.AxisWeights
+	if (axis == routerscore.EffAxisWeights{}) {
+		axis = routerscore.DefaultEffAxisWeights
 	}
-	adapters := routerharness.Adapters(b.opts...)
-	outcomes := make([]routerscore.HarnessOutcome, 0, len(adapters))
-	for _, adapter := range adapters {
-		outcomes = append(outcomes, b.runOne(ctx, adapter, task))
-	}
+	outcomes := b.outcomes(axis)
 	// weightEligible is a defensive echo; the router track is SHADOW, so v1 is
 	// always false. Promotion is a validator-side decision, never taken here.
 	return routerscore.BuildEntry(
@@ -136,27 +139,19 @@ func (b *LocalBackend) Score(
 	), nil
 }
 
-// runOne drives a single harness. In v1 the RunTask stub returns
-// errNotImplemented, which yields a non-operational (forfeited) slice rather
-// than a scoring fault, so a shadow run always produces a well-formed entry.
-func (b *LocalBackend) runOne(
-	ctx context.Context, adapter routerharness.HarnessAdapter, task routerharness.Task,
-) routerscore.HarnessOutcome {
-	h := adapter.Harness()
-	operational, artifact, err := adapter.RunTask(ctx, task)
-	if err != nil {
-		// errNotImplemented (shadow scaffold) or any real fault: the slice
-		// forfeits. Combine ignores a non-operational harness.
-		return routerscore.HarnessOutcome{Harness: h, Operational: false}
+// outcomes returns the replayed per-harness outcomes, or — when the corpus failed
+// to load — one non-operational (forfeited) slice per harness so the entry stays
+// well-formed and folds to a combined 0.
+func (b *LocalBackend) outcomes(axis routerscore.EffAxisWeights) []routerscore.HarnessOutcome {
+	if b.corpusErr == nil && len(b.corpus.Harnesses) > 0 {
+		return b.corpus.Outcomes(axis, b.Gate)
 	}
-	floor := b.Gate.FloorPass(operational, artifact.Operational)
-	return routerscore.HarnessOutcome{
-		Harness:                 h,
-		Operational:             operational,
-		Floor:                   floor,
-		Efficiency:              0,
-		UpstreamTokenCostMicros: artifact.UpstreamTokenCostMicros,
+	harnesses := routerharness.Harnesses()
+	forfeit := make([]routerscore.HarnessOutcome, 0, len(harnesses))
+	for _, h := range harnesses {
+		forfeit = append(forfeit, routerscore.HarnessOutcome{Harness: h, Operational: false})
 	}
+	return forfeit
 }
 
 // OffloadedBackend is the documented seam for the default heavy path: scoring

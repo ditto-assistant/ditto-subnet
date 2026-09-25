@@ -200,7 +200,7 @@ export interface PipelineColumnDef {
 export const PIPELINE_COLUMNS: readonly PipelineColumnDef[] = [
   {
     status: "admission",
-    statuses: ["waiting_screening", "screening"],
+    statuses: ["waiting_screening", "screening", "screening_failed"],
     bodyId: "pipeline-admission",
     countId: "pipeline-admission-count",
     titleId: "pipeline-admission-title",
@@ -284,15 +284,15 @@ export function pipelineColumnViews(
     } else if (def.status === "waiting_validator") {
       indexed = indexed.slice().sort(validatorQueueCompare);
     } else if (def.status === "admission") {
-      // Active screener work first, queued submissions after — the board's
+      // Active screener work first, queued submissions then parked failures — the board's
       // lane divider marks where the waiting group starts. Stable within
       // each group, so the snapshot order still holds inside them.
       indexed = indexed
         .slice()
         .sort(
           (a, b) =>
-            Number(a.entry.status === "waiting_screening") -
-            Number(b.entry.status === "waiting_screening"),
+            ["screening", "waiting_screening", "screening_failed"].indexOf(a.entry.status || "") -
+            ["screening", "waiting_screening", "screening_failed"].indexOf(b.entry.status || ""),
         );
     }
     const stuckCount = indexed.reduce(
@@ -348,7 +348,7 @@ export function pipelineAgentVersionLabel(version: number | string | null | unde
   return version == null ? "Legacy" : "v" + version;
 }
 
-// ── Source integrity review branch (weekend drift: #623/#635) ───────────────
+// ── Deferred source review branch (weekend drift: #623/#635) ───────────────
 
 export interface IntegrityReviewView {
   /** Authoritative status_counts.under_review, falling back to the rows the

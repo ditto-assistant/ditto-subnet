@@ -36,6 +36,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/ablation"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/google/uuid"
 )
@@ -197,7 +198,18 @@ type brokerSession struct {
 	// attribution evidence for the inference trace capture only -- never an
 	// admission or accounting input -- and it is what lets a concurrent v10+
 	// run still tell the relay which cases a call could belong to.
-	runCases map[string]int
+	runCases      map[string]int
+	harnessBase   string
+	urlCases      map[string]string
+	urlCaseTokens map[string]string
+	// caseCosts is the Bench v13 per-case inference cost ledger (issue #1850):
+	// successful completions, sampled choices, and output tokens bound to one
+	// /run case exactly (case-scoped capability route or a serial /run window).
+	// unattributedCost collects the completions that overlapped several
+	// in-flight cases; they are reported at run level, never guessed onto a
+	// case. Shadow evidence: never an admission or accounting input.
+	caseCosts        map[string]brokerCaseCost
+	unattributedCost brokerCaseCost
 	// Session-scoped v10+ tool provenance. Concurrent /run opens no exclusive
 	// case windows, so every ordinary chat completion is admitted at
 	// caseGeneration 0: its model-emitted tool calls are recorded here,
@@ -216,12 +228,37 @@ type brokerSession struct {
 	// the SAME pointers keyed by wire case id so the scorer can read one case's
 	// log post-run. Both are populated only for bench_version>=12, so v9..v11 are
 	// byte-identical and unaffected.
-	answerIO              map[uint64]*caseModelIOLog
-	answerIOByCaseID      map[string]*caseModelIOLog
-	embeddingPhaseStarted bool
-	embeddingPhaseActive  bool
-	embeddingInFlight     int
-	embeddingConcurrency  int
+	answerIO         map[uint64]*caseModelIOLog
+	answerIOByCaseID map[string]*caseModelIOLog
+	// Bench v13 claim-span capture (claim_span_capture.go): per wire case, the
+	// value-token hashes of every harness-authored request span and every
+	// model-emitted completion span the relay attributed to the case, plus the
+	// tool_endpoint results it served the case, and the run-wide completion
+	// counts. Populated only for bench_version>=13, so v9..v12 are
+	// byte-identical and unaffected.
+	claimSpanCases        map[string]*brokerClaimSpanLedger
+	claimSpanCompletions  uint64
+	claimSpanUnattributed uint64
+	// claimSpanSessionCompletion is the union of every v13 completion's value
+	// tokens across the whole session (all cases, attributed or not); it exempts
+	// assistant-role prompt spans from the causal gate.
+	claimSpanSessionCompletion scoregates.TokenSet
+	// Optional, trusted-process-only V13 private verifier binding. Ordinary
+	// scoring never installs this and its ledger semantics remain unchanged.
+	privateVerifier *privateVerifierCaseBinding
+	// Bench v13 catalog capture (catalog_capture.go): per wire case, what the
+	// harness OFFERED the model on each attributed chat completion, plus the
+	// run-wide counters. Populated only for bench_version>=13, so v9..v12 are
+	// byte-identical and unaffected.
+	catalogCases                   map[string]*brokerCatalogLedger
+	catalogCompletions             uint64
+	catalogCompletionsWithCatalog  uint64
+	catalogUnattributedCompletions uint64
+	catalogUnattributedAdmitted    uint64
+	embeddingPhaseStarted          bool
+	embeddingPhaseActive           bool
+	embeddingInFlight              int
+	embeddingConcurrency           int
 	// embeddingQueueChanged wakes calls waiting behind this session's local
 	// lane whenever capacity is released or the phase is revoked. Excess
 	// harness concurrency is queued inside the trusted broker instead of being
@@ -494,8 +531,9 @@ func (b *inferenceBroker) beginAblationCase(
 	// confirmation session is never a counterfactual even at v12 — otherwise its
 	// embedding ablation lane (below) would be rejected. A confirmation session
 	// runs the paired inference+embedding ablation under the frozen v9-named
-	// contract at any supported confirmation version ({9, 12}); the v9 branch's
-	// admission is unchanged (v9 short-circuits before the confirmation clause).
+	// contract at any supported confirmation instrument version (v9, >= v12 up
+	// to the accepted set); the v9 branch's admission is unchanged (v9
+	// short-circuits before the confirmation clause).
 	counterfactual := session.benchVersion >= ablation.BenchVersionV12 && !session.confirmationSession
 	allowedVersion := session.benchVersion == ablation.BenchVersionV9 || counterfactual ||
 		(session.confirmationSession && ablation.ConfirmationBenchVersionSupported(session.benchVersion))
@@ -1603,7 +1641,45 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 	forwarded := r.Clone(r.Context())
 	forwarded.URL.Path = "/tool"
 	forwarded.URL.RawQuery = ""
-	route.handler.ServeHTTP(w, forwarded)
+	if !b.claimSpanCaptureEnabledFor(route.provenanceSessionID) {
+		// v9..v12 sessions (and routes with no provenance session) stream the
+		// tool response through untouched: nothing is allocated below v13.
+		route.handler.ServeHTTP(w, forwarded)
+		return
+	}
+	// Bench v13 claim-span capture: the result the validator serves this case is
+	// exempt from the causal answer_in_prompt gate, so book its value tokens on
+	// the case ledger. The recorder is bounded.
+	recorder := &toolResultRecorder{ResponseWriter: w, limit: claimSpanMaxToolResultBytes}
+	route.handler.ServeHTTP(recorder, forwarded)
+	if recorder.status == 0 || recorder.status == http.StatusOK {
+		b.recordClaimSpanToolResult(route.provenanceSessionID, caseID, recorder.body.Bytes())
+	}
+}
+
+// toolResultRecorder mirrors a bounded prefix of a tool_endpoint response body
+// while passing every byte through to the harness unchanged.
+type toolResultRecorder struct {
+	http.ResponseWriter
+	body   bytes.Buffer
+	limit  int
+	status int
+}
+
+func (r *toolResultRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *toolResultRecorder) Write(p []byte) (int, error) {
+	if remaining := r.limit - r.body.Len(); remaining > 0 {
+		if len(p) > remaining {
+			r.body.Write(p[:remaining])
+		} else {
+			r.body.Write(p)
+		}
+	}
+	return r.ResponseWriter.Write(p)
 }
 
 func (r registeredToolRoute) endpoint(baseURL, caseID, userID string) string {
@@ -1741,6 +1817,7 @@ func (b *inferenceBroker) consumeModelToolCall(
 		session.caseToolCalls[generation] = calls
 		snapshot.MatchedToolCalls++
 		session.caseSnapshots[generation] = snapshot
+		recordCatalogToolResultLocked(session, caseID, call.Name)
 		return true
 	}
 	snapshot.UnmatchedToolCalls++
@@ -1842,6 +1919,7 @@ func consumeSessionModelToolCallLocked(
 		candidate.consumed = true
 		session.sessionToolConsumed++
 		ledger.MatchedToolCalls++
+		recordCatalogToolResultLocked(session, caseID, name)
 		return true
 	}
 	ledger.UnmatchedToolCalls++
@@ -2087,7 +2165,7 @@ func (a brokerConfirmationAuthorizer) Authorize(
 	session.mu.Lock()
 	grant, ok := session.confirmationGrants[lane]
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
-	traceCtx := traceContextLocked(session, session.activeCaseGeneration, lane, "")
+	traceCtx := traceContextLocked(session, session.activeCaseGeneration, lane, "", "")
 	active := session.confirmationSession && session.expiresAt.After(time.Now())
 	session.mu.Unlock()
 	if !ok || !active || request.URL.String() != grant.ProxyURL || len(privateKey) != ed25519.PrivateKeySize {
@@ -2818,6 +2896,7 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 	session := lease.session
 	rest := "/" + strings.TrimLeft(r.PathValue("rest"), "/")
 	caseGeneration := uint64(0)
+	urlCaseID := ""
 	if strings.HasPrefix(rest, "/cases/") {
 		parts := strings.SplitN(strings.TrimPrefix(rest, "/cases/"), "/", 2)
 		if len(parts) != 2 {
@@ -2826,12 +2905,25 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		session.mu.Lock()
 		caseGeneration = session.caseCapabilities[parts[0]]
+		urlCaseID = session.urlCases[parts[0]]
 		session.mu.Unlock()
-		if caseGeneration == 0 {
+		if caseGeneration == 0 && urlCaseID == "" {
 			writeError(w, http.StatusUnauthorized, "inference case capability unavailable")
 			return
 		}
 		rest = "/" + strings.TrimLeft(parts[1], "/")
+	}
+	// Bench v13 case-scoped inference_base_url: `/run/<case_id>/...` names the
+	// case the completion serves. It is the same advisory claim as
+	// X-Ditto-Case-Id (verified only against the cases in flight; never an
+	// admission, scoring, or accounting input), so a header-less client built
+	// from the per-run URL stays attributable under concurrent /run.
+	if claimedCase, remainder, ok := splitClaimSpanCasePath(rest); ok {
+		rest = remainder
+		if r.Header.Get(harnessCaseHeader) == "" {
+			r = r.Clone(r.Context())
+			r.Header.Set(harnessCaseHeader, claimedCase)
+		}
 	}
 	if rest == "/health" && r.Method == http.MethodGet {
 		b.health(w, session)
@@ -2845,7 +2937,7 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "inference route not found")
 		return
 	}
-	b.handleChat(w, r, lease, caseGeneration)
+	b.handleChat(w, r, lease, urlCaseID, caseGeneration)
 }
 
 // handleOpenRouterShim is the HTTPS compatibility door for harnesses that
@@ -2869,11 +2961,11 @@ func (b *inferenceBroker) handleOpenRouterShim(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusUnauthorized, "inference session unavailable")
 		return
 	}
-	b.handleChat(w, r, lease)
+	b.handleChat(w, r, lease, "")
 }
 
 func (b *inferenceBroker) handleChat(
-	w http.ResponseWriter, r *http.Request, lease brokerSourceLease, explicitGeneration ...uint64,
+	w http.ResponseWriter, r *http.Request, lease brokerSourceLease, urlCaseID string, explicitGeneration ...uint64,
 ) {
 	session := lease.session
 	session.mu.Lock()
@@ -2977,7 +3069,7 @@ func (b *inferenceBroker) handleChat(
 		}
 		session.mu.Unlock()
 	}()
-	b.proxy(w, r, session, caseGeneration)
+	b.proxy(w, r, session, caseGeneration, urlCaseID)
 }
 
 type embeddingRequest struct {
@@ -3498,7 +3590,7 @@ func (b *inferenceBroker) forwardPlatformEmbedding(
 		dimensions = embeddingDimensions
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
-	traceCtx := traceContextLocked(session, session.activeCaseGeneration, "", "")
+	traceCtx := traceContextLocked(session, session.activeCaseGeneration, "", "", "")
 	session.mu.Unlock()
 	body, err := json.Marshal(platformEmbeddingRequest{
 		Model: model, Input: inputs,
@@ -3800,6 +3892,7 @@ func (b *inferenceBroker) proxy(
 	r *http.Request,
 	session *brokerSession,
 	caseGeneration uint64,
+	urlCaseID string,
 ) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, brokerBodyLimit+1))
 	if err != nil || len(body) > brokerBodyLimit {
@@ -3909,7 +4002,16 @@ func (b *inferenceBroker) proxy(
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	currentChargeUpperBound := platformChatChargeUpperBound(body, maxOutputTokens)
-	traceCtx := traceContextLocked(session, caseGeneration, "", r.Header.Get(harnessCaseHeader))
+	claimedCaseID := boundedHarnessCaseClaim(r.Header.Get(harnessCaseHeader))
+	traceCtx := traceContextLocked(session, caseGeneration, "", claimedCaseID, urlCaseID)
+	// Bench v13 claim-span capture resolves WHICH case this completion serves at
+	// admission, from the same evidence the trace context uses; the booking
+	// itself happens on the success path below. No-op for bench_version<13.
+	claimSpanAttribution := beginClaimSpanCompletionLocked(session, caseGeneration, claimedCaseID)
+	// Bench v13 catalog capture resolves WHICH case this completion serves at
+	// admission, from the same evidence the trace context uses; the booking
+	// itself happens on the success path below. No-op for bench_version<13.
+	catalogAttribution := beginCatalogCompletionLocked(session, caseGeneration, claimedCaseID)
 	session.requests++
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
@@ -4149,6 +4251,13 @@ func (b *inferenceBroker) proxy(
 		Usage *struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
+			// Bench v13 cost ledger: OpenRouter folds reasoning tokens into
+			// completion_tokens on the agent-selected reasoning route and
+			// reports them here; the ledger books them separately from the
+			// answer output. Absent on providers/routes without reasoning.
+			CompletionTokensDetails *struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 	}
 	usageOK := json.Unmarshal(responseBody, &decoded) == nil && decoded.Usage != nil && decoded.Usage.PromptTokens >= 0 && decoded.Usage.CompletionTokens >= 0
@@ -4181,14 +4290,35 @@ func (b *inferenceBroker) proxy(
 	// input and completion value tokens in call order. `body` is the normalized
 	// model INPUT; `responseBody` is the COMPLETION. No-op for bench_version<12.
 	recordAnswerIOLocked(session, caseGeneration, body, responseBody)
+	// Bench v13 claim-span capture: the harness-authored request spans and the
+	// model-emitted completion spans, as value-token hashes on the attributed
+	// case. No-op for bench_version<13.
+	recordClaimSpanCompletionLocked(session, claimSpanAttribution, body, responseBody)
+	// Bench v13 catalog capture: what the harness OFFERED (request tools[],
+	// tool_choice, system-span digest) paired with what the model CHOSE.
+	// Metadata only; no-op for bench_version<13.
+	recordCatalogCompletionLocked(session, catalogAttribution, body, responseBody)
 	session.providerLatency += totalLatency
+	completionTokens, reasoningTokens := uint64(0), uint64(0)
 	if usageOK {
 		session.usageAvailable++
 		session.promptTokens += uint64(decoded.Usage.PromptTokens)
 		session.completionTokens += uint64(decoded.Usage.CompletionTokens)
+		completionTokens = uint64(decoded.Usage.CompletionTokens)
+		if details := decoded.Usage.CompletionTokensDetails; details != nil && details.ReasoningTokens > 0 {
+			reasoningTokens = uint64(details.ReasoningTokens)
+			if reasoningTokens > completionTokens {
+				reasoningTokens = completionTokens
+			}
+		}
 	} else {
 		session.usageUnavailable++
 	}
+	// Bench v13 cost ledger: book this successful completion's choices and
+	// answer output tokens (reasoning tokens recorded separately) on the case
+	// it can be bound to -- capability route, verified X-Ditto-Case-Id claim,
+	// or serial window. No-op for bench_version<13.
+	recordInferenceCostLocked(session, caseGeneration, claimedCaseID, responseBody, usageOK, completionTokens, reasoningTokens)
 	session.mu.Unlock()
 	if injectedDelay > 0 {
 		// Hold the completed upstream response for the scheduled fingerprint
@@ -4228,7 +4358,7 @@ func (b *inferenceBroker) trustedProbe(ctx context.Context, id string) error {
 	req.RemoteAddr = net.JoinHostPort(session.expectedSourceIP, "1")
 	session.mu.Unlock()
 	recorder := httptest.NewRecorder()
-	b.proxy(recorder, req, session, 0)
+	b.proxy(recorder, req, session, 0, "")
 	if recorder.Code < 200 || recorder.Code >= 300 {
 		return fmt.Errorf("ticket inference probe returned %d", recorder.Code)
 	}
@@ -4351,7 +4481,7 @@ type traceContext struct {
 	BenchVersion   int      `json:"bench_version,omitempty"`
 	Lane           string   `json:"lane,omitempty"` // confirmation lane when applicable
 	CaseID         string   `json:"case_id,omitempty"`
-	CaseSource     string   `json:"case_source,omitempty"` // window | claim | in_flight
+	CaseSource     string   `json:"case_source,omitempty"` // window | url | claim | in_flight
 	CaseVerified   bool     `json:"case_verified"`
 	ClaimedCaseID  string   `json:"claimed_case_id,omitempty"`
 	CaseGeneration uint64   `json:"case_generation,omitempty"`
@@ -4359,7 +4489,7 @@ type traceContext struct {
 }
 
 // traceContextLocked builds the header value. Caller holds session.mu.
-func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, claimed string) string {
+func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, claimed, urlCase string) string {
 	tc := traceContext{
 		Version:        1,
 		RunID:          session.boundRunID,
@@ -4388,6 +4518,8 @@ func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, cla
 	switch {
 	case caseGeneration != 0 && session.activeCaseGeneration == caseGeneration && session.activeCaseID != "":
 		tc.CaseID, tc.CaseSource, tc.CaseVerified = session.activeCaseID, "window", true
+	case urlCase != "":
+		tc.CaseID, tc.CaseSource, tc.CaseVerified = urlCase, "url", true
 	case claimed != "" && session.runCases[claimed] > 0:
 		tc.CaseID, tc.CaseSource, tc.CaseVerified = claimed, "claim", true
 	case claimed != "":
@@ -4404,29 +4536,56 @@ func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, cla
 	return string(encoded)
 }
 
-// beginRunCase marks caseID in flight on the session for trace attribution.
-// Returns false when the session is unknown (the scorer ignores that: the
-// run proceeds, the traces are merely less attributed).
-func (b *inferenceBroker) beginRunCase(id, caseID string) bool {
+func (b *inferenceBroker) beginRunCase(id, caseID string) (caseURL string, started bool) {
 	if caseID == "" {
-		return false
+		return "", false
 	}
 	b.mu.RLock()
 	session := b.sessions[id]
 	b.mu.RUnlock()
 	if session == nil {
-		return false
+		return "", false
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if binding := session.privateVerifier; binding != nil {
+		if caseID != binding.caseID || binding.started {
+			binding.crossCaseStarts++
+			return "", false
+		}
+		binding.started = true
+	}
 	if session.runCases == nil {
 		session.runCases = make(map[string]int)
 	}
 	session.runCases[caseID]++
-	return true
+	// Bench v13: a registered case owns a ledger from registration, so a case
+	// whose harness never calls the model settles as an empty, complete ledger
+	// (no_model_completion) rather than reading as "no capture". No-op below v13.
+	if claimSpanCaptureEnabled(session) {
+		ensureClaimSpanLedgerLocked(session, caseID)
+	}
+	// v13 already supplies a claim-bearing route used by provenance capture.
+	// Keep that route intact; opaque URLs below are trace-only.
+	if session.benchVersion >= protocol.BenchVersionV13 {
+		return "", true
+	}
+	token := session.urlCaseTokens[caseID]
+	if token == "" {
+		token = randomCaseToken()
+		if session.urlCases == nil {
+			session.urlCases = make(map[string]string)
+			session.urlCaseTokens = make(map[string]string)
+		}
+		session.urlCases[token] = caseID
+		session.urlCaseTokens[caseID] = token
+	}
+	if session.harnessBase != "" {
+		caseURL = session.harnessBase + "/cases/" + token
+	}
+	return caseURL, true
 }
 
-// endRunCase releases one beginRunCase.
 func (b *inferenceBroker) endRunCase(id, caseID string) {
 	b.mu.RLock()
 	session := b.sessions[id]
@@ -4436,11 +4595,42 @@ func (b *inferenceBroker) endRunCase(id, caseID string) {
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	if binding := session.privateVerifier; binding != nil && caseID == binding.caseID {
+		binding.ended = true
+	}
 	if session.runCases[caseID] <= 1 {
 		delete(session.runCases, caseID)
+		if token := session.urlCaseTokens[caseID]; token != "" {
+			delete(session.urlCases, token)
+			delete(session.urlCaseTokens, caseID)
+		}
 		return
 	}
 	session.runCases[caseID]--
+}
+
+func (b *inferenceBroker) setHarnessBase(id, base string) {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return
+	}
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return
+	}
+	session.mu.Lock()
+	session.harnessBase = base
+	session.mu.Unlock()
+}
+
+func randomCaseToken() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("t%dx%d", time.Now().UnixNano(), len(raw))
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 func (b *inferenceBroker) beginCaseSnapshot(id string, caseIDs ...string) (uint64, brokerCaseSnapshot, error) {

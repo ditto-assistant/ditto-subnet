@@ -20,7 +20,7 @@ parameter:
 |---|---|
 | `copy` | the anti-copy gate at quorum, or a manual operator hold |
 | `benchmark_overfit` | the transform audit |
-| `deferred_source_review` | the score-qualified source review, in enforce mode |
+| `deferred_source_review` | the score-qualified source review, in enforce mode, or the top-five integrity double-check (`algorithm_provenance.trigger = integrity_double_check`) |
 | `anomalous_score` | the out-of-band composite escalation at finalization (bench v12+), in enforce mode |
 
 `review_kind` postdates the holds it describes, so the oldest rows carry no key
@@ -28,6 +28,91 @@ at all and both the projection and the filter treat a missing or unrecognized
 value as `copy`. Those two rules must stay in step: a filter matching only the
 literal string would drop legacy rows while every row it returned still said
 `copy`, which is an omission with nothing on its face to reveal it.
+
+## The top-five integrity double-check
+
+`queue_policy_settings.deferred_source_review.integrity_double_check_mode`
+(`off` / `observe` / `enforce`, independent of `mode`) gives every top-five
+row one stronger deep review. It covers rows that already passed the full
+pre-score screen:
+
+```
+eval -> top five -> integrity double-check -> clear or reject
+```
+
+- **Trigger.** Every canonical ledger mutation re-reads the same-version
+  ledger (`_evaluate_and_record_integrity_double_check`,
+  `endpoints/validator.py`). A top-five row is skipped if its agent already
+  has a `deferred_source_review` lifecycle or an enforced
+  `audit_kind: integrity_double_check` score-audit marker. The marker survives
+  a later copy reopen of the agent's single review row. Rows already held for a
+  post-score deep review keep their rank slot through their evidence
+  composites, so holds cannot cascade down the board. `observe` appends one
+  unenforced audit record per agent and holds nothing.
+- **Hold.** `enforce` opens the normal pending `deferred_source_review` hold
+  with the double-check reason and `trigger: integrity_double_check`, and
+  appends the enforced marker. Reason, actor
+  (`platform:integrity-double-check`), and algorithm version
+  (`integrity-double-check-v1`) differ; the lifecycle does not.
+- **Stronger posture.** `claim_screening_attempts` binds the deep pass to the
+  latest screener review revision in scope `integrity-double-check`. No worker
+  heartbeats under that scope, so writing it never changes the fleet posture.
+  The screener reads it through `review_settings_override`, and
+  `submit_screen_result` accepts only that exact binding. Set a stronger
+  `l2_model`, `l2_always_escalate: true` (L2/L3 run even when L1 certifies a
+  clear), and larger budgets there. With `enforce`, a mechanically admitted
+  top-five row's deferred pass takes the same posture.
+- **Fail closed.** Platform refuses `integrity_double_check_mode=enforce` (409)
+  until that scope holds an `enforce` revision with `l2_always_escalate`,
+  `l3_enabled`, and the `l1_l2` manifest. Worker compatibility also requires
+  `timeout_seconds <= 900`, `max_steps <= 20`, and low or medium critic
+  reasoning. If the posture later becomes unusable, or the claimant
+  cannot bind one (a legacy worker or the platform-owned Targon lane), the
+  claim query leaves double-check holds unselected. They stay pending and
+  visible here and cannot starve other screening work.
+- **Exit.** This is the same deferred lifecycle: a clean pass restores
+  `scored`/`live` and resolves the review as `clear`, an adjudicated reject on
+  an enforcing posture rejects, and anything else stays a pending operator hold
+  carrying `deep_review_result`.
+
+## A reopened hold's active reason is not its original reason
+
+`ath_reviews` keeps **one row per agent** for its whole life, and the reopen
+path cannot rewrite what it supersedes:
+
+- `original_reason` is immutable. `resolve_copy_review` compares it against
+  `agents.review_reason` and answers `409 agent hold reason no longer matches
+  review` when they disagree, so a reopen that edited it would break its own
+  exit.
+- `resolution` / `resolution_reason` must be NULLed on reopen to satisfy
+  `ath_reviews_lifecycle_check`, which forbids a resolution on a `pending` row.
+
+So after a guarded reopen the only durable record of the *current* reason, and
+of the decision that was withdrawn, is the append-only `ath_review_actions`
+ledger: the newest `reopen` action carries the reconsideration reason, and the
+`clear` / `reject` action before it carries the decision it withdrew.
+
+`ditto/api_server/ath_review_state.py` is the single projection rule. Both the
+public activity page and the operator queue / audit endpoints derive through
+it, so a pending appeal reads the same on every surface:
+
+| Field on `original` (`hold` in Backroom) | Meaning |
+|---|---|
+| `reason` | Why the submission is under review **now** |
+| `reason_source` | `original_hold`, or `reconsideration` after a reopen |
+| `superseded_reason` | The original hold reason, preserved |
+| `superseded_resolution` | `clear` / `reject` — the decision the reopen withdrew |
+| `superseded_resolution_reason` | That decision's own public reason |
+| `superseded_at` | When the reopen superseded it |
+
+A `pending` row never carries a live `resolution`, and the `superseded_*`
+fields are history. Quoting one back to a miner as a standing finding is a
+factual error: `get_screening_review_queue` published exactly that for
+lets_635 v1, whose I5 rejection had been withdrawn as unsupported.
+
+Nothing is deleted or rewritten to produce this. `original_reason`,
+`agents.review_reason`, and the full action history are unchanged, and the
+audit endpoint still returns the whole `action_history` chain.
 
 ## Precedents are the resolved holdings
 

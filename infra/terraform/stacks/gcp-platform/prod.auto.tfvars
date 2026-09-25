@@ -14,13 +14,12 @@ coding_executor_host_count = 0
 # Native v2 qualification foundation only, with the explicitly nominated custodian.
 # Requires a reviewed protected plan/apply; no runtime or private-data authority.
 enable_coding_hosted_host     = true
-coding_hosted_operators       = ["user:brian@omniaura.ai"]
+coding_hosted_operators       = ["user:peyton@omniaura.ai"]
 enable_coding_hosted_postgres = true
 # The generator VM must never become persistent production intent. The
 # protected plan workflow overrides this only for a supervised bootstrap/armed
 # window, then seals a teardown plan returning it to absent.
 validator_hotkey_admin_phase = "absent"
-enable_screener              = true
 # The static ditto-screener-prod pet is retired. Hetzner is primary and the
 # independently managed GCE MIG remains the bounded overflow path.
 enable_screener_prod = false
@@ -33,9 +32,10 @@ enable_screener_fleet               = true
 enable_screener_capacity_controller = true
 # Rehearsal VM is opt-in through the protected workflow and absent otherwise.
 enable_screener_fleet_dev_host = false
-# The bare-metal X.509 identity is enabled only during a protected apply after
-# its public CA trust anchor has been reviewed and supplied.
-enable_screener_fleet_x509_identity = false
+# The bare-metal X.509 identity is live on subnet-screener-1. Preserve its
+# pool, provider, service account, and one-secret grants on routine plans.
+enable_screener_fleet_x509_identity       = true
+enable_screener_fleet_x509_node2_identity = false
 
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6

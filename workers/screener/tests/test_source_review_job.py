@@ -25,15 +25,36 @@ def test_build_reviewer_runs_l1_l2_l3_in_process(
     monkeypatch.setenv("SCREENER_L3_REVIEW_ENABLED", "true")
     monkeypatch.setenv("SCREENER_ADJUDICATOR_MODE", "enforce")
     monkeypatch.setenv("SCREENER_L2_MAX_COMPLETION_TOKENS", "16384")
+    monkeypatch.setenv("SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", "true")
     reviewer = source_review_job._build_reviewer(
         key_file=str(key_path), timeout_seconds=60
     )
     assert isinstance(reviewer, LayeredSourceReviewAgent)
     assert reviewer._mode == "enforce"
     assert reviewer._l2._l3_enabled is True
+    assert reviewer._l2._require_signed_runtime_lease is True
     assert isinstance(reviewer._l2._harness, InProcessAnalyzerHarness)
     assert reviewer._adjudicator is not None
     assert reviewer._adjudicator._max_completion_tokens == 16_384
+
+
+def test_one_shot_job_uses_l4_cap_without_lowering_l2(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key_path = tmp_path / "source-review-key"
+    key_path.write_text("provider-key\n")
+    monkeypatch.setenv("SCREENER_NODE_CREDENTIAL_FILE", str(tmp_path / "node.json"))
+    monkeypatch.setenv("SCREENER_ADJUDICATOR_MODE", "enforce")
+    monkeypatch.setenv("SCREENER_L2_MAX_COMPLETION_TOKENS", "16000")
+    monkeypatch.setenv("SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS", "4000")
+
+    reviewer = source_review_job._build_reviewer(
+        key_file=str(key_path), timeout_seconds=60
+    )
+
+    assert reviewer._adjudicator is not None
+    assert reviewer._adjudicator._max_completion_tokens == 4_000
+    assert reviewer._l2._max_completion_tokens == 16_000
 
 
 def test_stage_source_review_secret_copies_group_readable_mount(
@@ -114,6 +135,7 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
             return Response(
                 {
                     "artifact_sha256": artifact_sha256,
+                    "policy_version": 12,
                     "source_url_b64": base64.b64encode(
                         b"https://storage.example/source.tgz"
                     ).decode(),
@@ -138,6 +160,7 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
             assert path == str(archive_path)
             assert values["artifact_sha256"] == artifact_sha256
             assert values["attempt_id"] == UUID(attempt_id)
+            assert values["policy_version"] == 12
             return SourceReviewObservation(
                 ok=True,
                 risk_level="low",

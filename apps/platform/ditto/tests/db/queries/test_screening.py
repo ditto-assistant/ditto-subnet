@@ -6,14 +6,20 @@ tests) so the attempt/quarantine rows and the agent transition are real.
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ditto.api_models.screener_review_settings import (
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
+    ScreenerReviewSettings,
+    review_settings_checksum,
+)
 from ditto.db.models import (
     Agent,
     AgentStatus,
@@ -24,9 +30,11 @@ from ditto.db.models import (
     ScoredPolicyRescreenRelease,
     ScreenerHeartbeat,
     ScreenerPolicyActivation,
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningRetryOverride,
+    ScreeningReviewEvent,
     SubmissionImageBuild,
 )
 from ditto.db.queries.screening import (
@@ -35,6 +43,8 @@ from ditto.db.queries.screening import (
     POLICY_ONLY_RESCREEN_REASON,
     claim_screening_attempts,
     expire_screening_attempts,
+    fail_orphaned_screening_attempts,
+    try_acquire_screening_claim_lock,
 )
 from ditto.screener_policy_state import update_effective_screener_policy
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
@@ -51,6 +61,255 @@ _SCREENER = "5GScreenerHotkeyForClaimTests000000000000000000000"
 # real ones: nothing at or below v6 can be a rollout target any more.
 _ACTIVE_VERSION = 7
 _DESIRED_VERSION = 8
+
+
+async def test_busy_claim_gate_returns_without_waiting(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with (
+        session_maker() as owner,
+        session_maker() as contender,
+        owner.begin(),
+        contender.begin(),
+    ):
+        assert await try_acquire_screening_claim_lock(owner) is True
+        assert (
+            await asyncio.wait_for(
+                try_acquire_screening_claim_lock(contender), timeout=0.5
+            )
+            is False
+        )
+
+
+async def test_four_concurrent_claims_are_unique_and_capacity_bounded(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    agent_ids = [uuid4() for _ in range(6)]
+    async with session_maker() as session, session.begin():
+        session.add_all(
+            [
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=f"5HK-concurrent-{index}",
+                    name=f"concurrent-{index}",
+                    sha256=uuid4().hex * 2,
+                    status=AgentStatus.UPLOADED,
+                    created_at=now + timedelta(seconds=index),
+                )
+                for index, agent_id in enumerate(agent_ids)
+            ]
+            + [_heartbeat(instance_id=f"worker-{index}", now=now) for index in range(4)]
+        )
+
+    async def claim_one() -> list:
+        async with session_maker() as session, session.begin():
+            claimed = await claim_screening_attempts(
+                session,
+                screener_hotkey=_SCREENER,
+                now=now,
+                ttl=timedelta(minutes=45),
+                limit=1,
+            )
+            return [agent.agent_id for agent, _, _ in claimed]
+
+    claimed = [
+        agent_id
+        for rows in await asyncio.gather(*(claim_one() for _ in range(4)))
+        for agent_id in rows
+    ]
+
+    assert len(claimed) == 4
+    assert len(set(claimed)) == 4
+    async with session_maker() as session:
+        running = list(
+            await session.scalars(
+                select(ScreeningAttempt).where(ScreeningAttempt.status == "running")
+            )
+        )
+        for attempt in running:
+            agent = await session.get(Agent, attempt.agent_id)
+            assert agent is not None
+            assert attempt.artifact_sha256 == agent.sha256
+    assert len(running) == 4
+
+
+async def test_concurrent_same_hash_claims_choose_one_owner(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    shared_hash = "ab" * 32
+    async with session_maker() as session, session.begin():
+        session.add_all(
+            [
+                Agent(
+                    agent_id=uuid4(),
+                    miner_hotkey=f"5HK-duplicate-{index}",
+                    name=f"duplicate-{index}",
+                    sha256=shared_hash,
+                    status=AgentStatus.UPLOADED,
+                    created_at=now + timedelta(seconds=index),
+                )
+                for index in range(4)
+            ]
+            + [
+                _heartbeat(instance_id=f"duplicate-worker-{index}", now=now)
+                for index in range(4)
+            ]
+        )
+
+    async def claim_one() -> list:
+        async with session_maker() as session, session.begin():
+            claimed = await claim_screening_attempts(
+                session,
+                screener_hotkey=_SCREENER,
+                now=now,
+                ttl=timedelta(minutes=45),
+                limit=1,
+            )
+            return [agent.agent_id for agent, _, _ in claimed]
+
+    claimed = [
+        agent_id
+        for rows in await asyncio.gather(*(claim_one() for _ in range(4)))
+        for agent_id in rows
+    ]
+
+    assert len(claimed) == 1
+
+
+async def test_attempt_maintenance_skips_rows_owned_by_verdicts(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    expired_agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-expired-locked",
+        name="expired-locked",
+        sha256="c1" * 32,
+        status=AgentStatus.SCREENING,
+    )
+    orphan_agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-orphan-locked",
+        name="orphan-locked",
+        sha256="d2" * 32,
+        status=AgentStatus.SCREENING,
+    )
+    expired_attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=expired_agent.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=60),
+        deadline=now - timedelta(minutes=1),
+    )
+    orphan_attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=orphan_agent.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=10),
+        deadline=now + timedelta(minutes=35),
+    )
+    async with session_maker() as session, session.begin():
+        session.add_all(
+            [
+                expired_agent,
+                orphan_agent,
+                expired_attempt,
+                orphan_attempt,
+                _heartbeat(instance_id="maintenance-worker", now=now),
+            ]
+        )
+
+    async with (
+        session_maker() as verdict,
+        session_maker() as maintenance,
+        verdict.begin(),
+        maintenance.begin(),
+    ):
+        await verdict.execute(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.attempt_id.in_(
+                    (expired_attempt.attempt_id, orphan_attempt.attempt_id)
+                )
+            )
+            .with_for_update()
+        )
+        expired = await asyncio.wait_for(
+            expire_screening_attempts(maintenance, now=now), timeout=0.5
+        )
+        orphaned = await asyncio.wait_for(
+            fail_orphaned_screening_attempts(
+                maintenance, screener_hotkey=_SCREENER, now=now
+            ),
+            timeout=0.5,
+        )
+
+    assert expired == 0
+    assert orphaned == 0
+
+
+async def test_attempt_maintenance_does_not_lock_healthy_old_attempts(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-healthy-old-attempt",
+        name="healthy-old-attempt",
+        sha256="e3" * 32,
+        status=AgentStatus.SCREENING,
+    )
+    attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=agent.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=10),
+        deadline=now + timedelta(minutes=35),
+    )
+    async with session_maker() as session, session.begin():
+        session.add_all(
+            [
+                agent,
+                attempt,
+                _heartbeat(
+                    instance_id="healthy-worker",
+                    now=now,
+                    state="screening",
+                    active_agent_id=agent.agent_id,
+                ),
+            ]
+        )
+
+    async with session_maker() as maintenance, maintenance.begin():
+        assert await expire_screening_attempts(maintenance, now=now) == 0
+        assert (
+            await fail_orphaned_screening_attempts(
+                maintenance, screener_hotkey=_SCREENER, now=now
+            )
+            == 0
+        )
+
+        # Keep the maintenance transaction open. A verdict must still be able
+        # to acquire this attempt immediately; otherwise the sweep retained a
+        # row lock while merely observing positive liveness evidence.
+        async with session_maker() as verdict, verdict.begin():
+            locked = await asyncio.wait_for(
+                verdict.scalar(
+                    select(ScreeningAttempt)
+                    .where(ScreeningAttempt.attempt_id == attempt.attempt_id)
+                    .with_for_update()
+                ),
+                timeout=0.5,
+            )
+            assert locked is not None
 
 
 async def _seed_failed_agent(session: AsyncSession) -> Agent:
@@ -290,6 +549,8 @@ async def _claim(
     *,
     limit: int = 10,
     deferred_review_mode: str = "off",
+    integrity_double_check_mode: str = "off",
+    review_settings_binding: tuple[int, str, str, str] | None = None,
     now: datetime | None = None,
     canary_policy_version: int | None = None,
 ) -> list:
@@ -301,6 +562,8 @@ async def _claim(
             ttl=timedelta(minutes=45),
             limit=limit,
             deferred_review_mode=deferred_review_mode,
+            integrity_double_check_mode=integrity_double_check_mode,
+            review_settings_binding=review_settings_binding,
             canary_policy_version=canary_policy_version,
         )
 
@@ -1780,6 +2043,13 @@ async def test_evaluating_agent_missing_screened_image_is_reclaimed(
     # It already cleared the anti-cheat review (it was EVALUATING on the current
     # policy), so this is a BUILD-ONLY pass — rebuild the image, do not re-review.
     assert attempt.build_only is True
+    historical = await session.scalar(
+        select(ScreeningAttempt).where(
+            ScreeningAttempt.agent_id == agent.agent_id,
+            ScreeningAttempt.status == "passed",
+        )
+    )
+    assert historical is not None and historical.artifact_sha256 is None
 
 
 async def test_release_after_expiry_cap_gets_build_only_attempt(
@@ -1862,6 +2132,27 @@ async def test_expiries_after_release_still_exhaust(session: AsyncSession) -> No
     assert refreshed is not None
     assert refreshed.status == AgentStatus.QUARANTINED
     assert refreshed.screening_reason_code == "repeatedly-inconclusive"
+    parked = await session.scalar(
+        select(ScreeningAttempt).where(
+            ScreeningAttempt.agent_id == agent.agent_id,
+            ScreeningAttempt.reason_code == "repeatedly-inconclusive",
+            ScreeningAttempt.status == "quarantined",
+        )
+    )
+    assert parked is not None and parked.artifact_sha256 is None
+    event = await session.scalar(
+        select(ScreeningReviewEvent).where(
+            ScreeningReviewEvent.attempt_id == parked.attempt_id
+        )
+    )
+    assert event is not None
+    assert event.outcome == "synthetic_hold"
+    assert event.effective_decision == "hold"
+    assert event.actor == "platform:lease-expiry-park"
+    assert event.artifact_sha256 == agent.sha256
+    assert event.prior_agent_status == AgentStatus.EVALUATING
+    assert event.next_agent_status == AgentStatus.QUARANTINED
+    assert event.evidence["signed_artifact_bound_verdict"] is None
 
 
 async def test_fresh_upload_claim_is_not_build_only(
@@ -2233,3 +2524,181 @@ async def test_scheduled_rescreen_does_not_requeue_unadmitted_historical_scored(
     assert agent.agent_id not in {a.agent_id for a, _, _ in claimed}
     refreshed = await session.get(Agent, agent.agent_id)
     assert refreshed is not None and refreshed.status == AgentStatus.SCORED
+
+
+_NORMAL_BINDING = (1, "worker-instance-1", "*", "a" * 64)
+
+
+async def _seed_double_check_posture(
+    session: AsyncSession, *, mode: str = "enforce"
+) -> ScreenerReviewSettingsRevision:
+    settings = ScreenerReviewSettings(
+        mode=mode,  # type: ignore[arg-type]
+        l2_model="openai/gpt-5.6-sol",
+        l2_fallback_models=("openai/gpt-5.6-terra",),
+        l2_always_escalate=True,
+        timeout_seconds=900,
+        max_steps=20,
+        policy_manifest_profile="l1_l2",
+    )
+    row = ScreenerReviewSettingsRevision(
+        parent_revision=0,
+        scope=INTEGRITY_DOUBLE_CHECK_SCOPE,
+        settings=settings.model_dump(mode="json"),
+        checksum=review_settings_checksum(settings),
+        reason="stronger top-five posture",
+        actor="test",
+    )
+    async with session.begin():
+        session.add(row)
+    return row
+
+
+async def _seed_double_check_hold(
+    session: AsyncSession, *, name: str, trigger: str | None = "integrity_double_check"
+) -> Agent:
+    """A top-five row that already passed its full pre-score deep screen."""
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey=f"5HK-{name}",
+        name=name,
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.ATH_PENDING_REVIEW,
+    )
+    provenance: dict[str, object] = {"review_kind": "deferred_source_review"}
+    if trigger is not None:
+        provenance["trigger"] = trigger
+    async with session.begin():
+        session.add(agent)
+        await session.flush()
+        session.add(
+            ScreeningAttempt(
+                attempt_id=uuid4(),
+                agent_id=agent.agent_id,
+                screener_hotkey=_SCREENER,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="passed",
+                started_at=now - timedelta(days=1),
+                deadline=now - timedelta(days=1) + timedelta(minutes=45),
+                finished_at=now - timedelta(days=1) + timedelta(minutes=20),
+                build_only=trigger is None,
+                reason_code=(
+                    "deferred-mechanical-admission" if trigger is None else None
+                ),
+            )
+        )
+        session.add(
+            AthReview(
+                review_id=uuid4(),
+                agent_id=agent.agent_id,
+                status="pending",
+                opened_at=now - timedelta(minutes=1),
+                original_reason="integrity double-check",
+                original_policy_version=SCREENING_POLICY_VERSION,
+                original_evidence={"previous_status": AgentStatus.SCORED.value},
+                algorithm_provenance=provenance,
+            )
+        )
+    return agent
+
+
+async def test_double_check_hold_after_full_screen_is_pinned_to_stronger_posture(
+    session: AsyncSession,
+) -> None:
+    """The row's latest attempt is its full pre-score screen, not build-only.
+
+    It is claimable because nothing has started since the hold opened, and the
+    deep pass is bound to the double-check posture rather than the worker's
+    normal one, so the verdict provably came from the stronger models.
+    """
+    posture = await _seed_double_check_posture(session)
+    agent = await _seed_double_check_hold(session, name="double-check")
+
+    claimed = await _claim(session, review_settings_binding=_NORMAL_BINDING)
+    deep, _duplicate = _claimed_duplicate(claimed, agent)
+
+    assert deep.build_only is False
+    assert deep.reason_code is None
+    assert (
+        deep.review_settings_revision,
+        deep.review_settings_instance_id,
+        deep.review_settings_scope,
+        deep.review_settings_checksum,
+    ) == (
+        posture.revision,
+        _NORMAL_BINDING[1],
+        INTEGRITY_DOUBLE_CHECK_SCOPE,
+        posture.checksum,
+    )
+
+    async with session.begin():
+        deep.status = "passed"
+        deep.finished_at = datetime.now(UTC)
+    # One deep pass per hold; afterwards only an operator retry re-leases it.
+    assert await _claim(session, review_settings_binding=_NORMAL_BINDING) == []
+
+
+@pytest.mark.parametrize("posture_mode", [None, "shadow"])
+async def test_double_check_hold_without_usable_posture_does_not_starve_queue(
+    session: AsyncSession, posture_mode: str | None
+) -> None:
+    """An unrunnable double-check is never selected, so it cannot hog a slot."""
+    if posture_mode is not None:
+        await _seed_double_check_posture(session, mode=posture_mode)
+    held = await _seed_double_check_hold(session, name=f"waiting-{posture_mode}")
+    fresh = Agent(
+        agent_id=uuid4(),
+        miner_hotkey=f"5HK-fresh-{posture_mode}",
+        name="fresh",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.UPLOADED,
+    )
+    async with session.begin():
+        session.add(fresh)
+
+    claimed = await _claim(session, limit=1, review_settings_binding=_NORMAL_BINDING)
+
+    assert [claimed_agent.agent_id for claimed_agent, _, _ in claimed] == [
+        fresh.agent_id
+    ]
+    assert held.status == AgentStatus.ATH_PENDING_REVIEW
+
+
+async def test_double_check_hold_is_not_claimed_without_a_worker_binding(
+    session: AsyncSession,
+) -> None:
+    """Lanes that cannot bind a posture (legacy workers, Targon) leave it alone."""
+    await _seed_double_check_posture(session)
+    held = await _seed_double_check_hold(session, name="unbound")
+
+    assert held.agent_id not in {
+        claimed_agent.agent_id for claimed_agent, _, _ in await _claim(session)
+    }
+
+
+@pytest.mark.parametrize(
+    ("integrity_mode", "expect_posture"), [("enforce", True), ("observe", False)]
+)
+async def test_mechanical_deferred_hold_takes_posture_only_when_enforced(
+    session: AsyncSession, integrity_mode: str, expect_posture: bool
+) -> None:
+    posture = await _seed_double_check_posture(session)
+    agent = await _seed_double_check_hold(
+        session, name=f"mechanical-{integrity_mode}", trigger=None
+    )
+
+    claimed = await _claim(
+        session,
+        integrity_double_check_mode=integrity_mode,
+        review_settings_binding=_NORMAL_BINDING,
+    )
+    deep, _duplicate = _claimed_duplicate(claimed, agent)
+
+    assert deep.build_only is False
+    if expect_posture:
+        assert deep.review_settings_scope == INTEGRITY_DOUBLE_CHECK_SCOPE
+        assert deep.review_settings_revision == posture.revision
+    else:
+        assert deep.review_settings_scope == "*"
+        assert deep.review_settings_revision == _NORMAL_BINDING[0]

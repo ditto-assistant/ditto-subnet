@@ -123,7 +123,8 @@ def ticket_attempt_cap(ticket: ValidatorTicket) -> int:
 def ticket_retry_budget_spent(ticket: ValidatorTicket) -> bool:
     """Whether an expired lease has no ordinary or parked reissue left."""
     return (
-        ticket.provider_outage_epoch is None
+        ticket.purpose != TicketPurpose.BENCHMARK_CANARY
+        and ticket.provider_outage_epoch is None
         and ticket.attempt_count >= ticket_attempt_cap(ticket)
     )
 
@@ -138,6 +139,7 @@ def retry_budget_spent() -> ColumnElement[bool]:
     backlog gate, owner reachability -- spells the sum exactly once.
     """
     return and_(
+        ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
         ValidatorTicket.provider_outage_epoch.is_(None),
         ValidatorTicket.attempt_count
         >= (MAX_ATTEMPTS_PER_VERSION + ValidatorTicket.manual_retry_grants),
@@ -396,7 +398,11 @@ async def expire_overdue_tickets(session: AsyncSession, *, now: datetime) -> int
         ticket.status = TicketStatus.EXPIRED
         # Cooldown begins at the lease deadline, not whenever a later sweep
         # happens to notice it.
-        ticket.retry_after = _as_utc(ticket.deadline) + RETRY_COOLDOWN
+        ticket.retry_after = (
+            None
+            if ticket.purpose == TicketPurpose.BENCHMARK_CANARY
+            else _as_utc(ticket.deadline) + RETRY_COOLDOWN
+        )
     return len(overdue)
 
 
@@ -492,6 +498,13 @@ async def issue_ticket(
         return None
     if bench_version is None:
         raise ValueError("benchmark version is required for ticket issuance")
+    if bench_version == 13:
+        from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+
+        if not await pinned_validator_allowed(
+            session, hotkey=validator_hotkey, now=now
+        ):
+            return None
     activated_rollout = await activated_rollout_for_version(
         session, bench_version=bench_version
     )
@@ -842,6 +855,7 @@ async def issue_ticket(
                 ValidatorTicket.agent_id == agent_id,
                 ValidatorTicket.bench_version == bench_version,
                 ValidatorTicket.status.in_(_LIVE_TICKET_STATUSES),
+                ValidatorTicket.purpose != TicketPurpose.BENCHMARK_CANARY,
             )
         )
         if (occupied or 0) >= SCORING_QUORUM:
@@ -921,6 +935,15 @@ async def issue_ticket(
     else:
         # The composite PK preserves one validator slot per agent. Reuse the
         # expired row with a fresh lease rather than inserting a duplicate.
+        was_canary = ticket.purpose == TicketPurpose.BENCHMARK_CANARY
+        if was_canary:
+            ticket.attempt_count = 0
+            ticket.seed = None
+            ticket.dataset_sha256 = None
+            ticket.seed_block = None
+            ticket.seed_block_hash = None
+            ticket.provider_outage_epoch = None
+            ticket.provider_outage_attempted_epoch = None
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1
@@ -1006,6 +1029,16 @@ async def issue_confirmation_ticket(
         session, validator_hotkey=validator_hotkey, slot_id=slot_id
     )
     await expire_overdue_tickets(session, now=now)
+    # Maintenance leases must obey the same immutable V13 packet pin as
+    # canonical leases. Otherwise a validator can start a costly retest that
+    # score submission must later reject during a mixed-version rollout.
+    if bench_version == 13:
+        from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+
+        if not await pinned_validator_allowed(
+            session, hotkey=validator_hotkey, now=now
+        ):
+            return None
     if (
         await live_v9_confirmation_slot_ticket(
             session,
@@ -1116,6 +1149,14 @@ async def issue_confirmation_ticket(
         session.add(ticket)
     else:
         same_version = ticket.bench_version == bench_version
+        if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+            ticket.attempt_count = 0
+            ticket.manual_retry_grants = 0
+            ticket.failure_reason = None
+            ticket.failure_detail = None
+            ticket.failed_at = None
+            ticket.provider_outage_epoch = None
+            ticket.provider_outage_attempted_epoch = None
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CONTINUAL_RETEST
         ticket.purpose_revision += 1

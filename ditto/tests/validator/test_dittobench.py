@@ -50,6 +50,11 @@ from ditto.validator.errors import (
 )
 from ditto.validator.signing import score_signing_message
 
+# The next epoch after the ceiling is the canonical *unsupported* version. It
+# moves with the shared derivation instead of being retyped each bump, which
+# is how ``12`` sat here as "the invalid version" while v12 shipped.
+_UNSHIPPED_BENCH_VERSION = max(SUPPORTED_BENCH_VERSIONS) + 1
+
 _REVISION = "ab" * 20
 _V9_CONTRACT_VECTOR = (
     Path(__file__).resolve().parents[3]
@@ -324,7 +329,19 @@ async def test_v044_rolling_upgrade_negotiates_v8_and_preserves_capacity() -> No
 
 
 @pytest.mark.asyncio
-async def test_current_scorer_preserves_versions_and_run_capacity() -> None:
+@pytest.mark.parametrize(
+    "features,private,deterministic",
+    [
+        ([], False, False),
+        (["platform-private-v1"], True, False),
+        (["platform-fact-world-v1"], False, False),
+        (["platform-private-v1", "platform-fact-world-v1"], True, False),
+        (["v13-deterministic-enterprise-v1"], False, True),
+    ],
+)
+async def test_current_scorer_preserves_versions_and_run_capacity(
+    features, private, deterministic
+) -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -333,6 +350,7 @@ async def test_current_scorer_preserves_versions_and_run_capacity() -> None:
                 "source_revision": _REVISION,
                 "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
                 "full_run_capacity": 2,
+                "features": features,
             },
         )
 
@@ -346,6 +364,8 @@ async def test_current_scorer_preserves_versions_and_run_capacity() -> None:
         observed = await client.scorer_benchmark_capability(_stack())
 
     assert observed.status == "fresh_verified"
+    assert observed.private_datasets is private
+    assert observed.deterministic_v13_datasets is deterministic
     # The validator keeps the scorer's advertised set in the intersection: a
     # current scorer advertising v12 must reach the signed heartbeat, or the
     # Platform counts zero v12-capable validators (regression when
@@ -785,6 +805,44 @@ async def test_binary_derived_revision_matching_the_pin_is_verified() -> None:
 
 
 @pytest.mark.asyncio
+async def test_verified_v13_scorer_packet_enters_signed_capability() -> None:
+    keys = ["DITTOBENCH_DB", "DITTOBENCH_MODEL"]
+    material = "scored-runtime-env-v1\n13\n" + _REVISION + "\n" + "\n".join(keys)
+    packet = {
+        "bench_version": 13,
+        "scope": "scorer-injected-env-only",
+        "source_revision": _REVISION,
+        "injected_keys": keys,
+        "sha256": hashlib.sha256(material.encode()).hexdigest(),
+    }
+    client, http = _capability_client(
+        {
+            **_STAMPED,
+            "supported_bench_versions": [13],
+            "features": ["v13-deterministic-enterprise-v1"],
+            "scored_runtime_env": packet,
+        }
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+    assert observed.status == "fresh_verified"
+    assert observed.scored_runtime_env is not None
+    assert observed.scored_runtime_env.sha256 == packet["sha256"]
+    assert (
+        observed.model_dump(mode="json")["scored_runtime_env"]["injected_keys"] == keys
+    )
+
+    bad = {**packet, "sha256": "0" * 64}
+    client, http = _capability_client(
+        {**_STAMPED, "supported_bench_versions": [13], "scored_runtime_env": bad}
+    )
+    async with http:
+        observed = await client.scorer_benchmark_capability(_stack())
+    assert observed.status == "fresh_verified"
+    assert observed.scored_runtime_env is None
+
+
+@pytest.mark.asyncio
 async def test_a_pin_that_cannot_stamp_keeps_the_previous_behaviour() -> None:
     """The requirement is committed beside the pin and must move with it.
 
@@ -930,7 +988,7 @@ async def test_v10_submit_forwards_platform_stamped_runtime_policy() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [None, 0, 1, 6, 13])
+@pytest.mark.parametrize("bench_version", [None, 0, 1, 6, _UNSHIPPED_BENCH_VERSION])
 async def test_submit_rejects_missing_or_unsupported_benchmark_version(
     bench_version: int | None,
 ) -> None:
@@ -1404,7 +1462,9 @@ async def test_current_poll_returns_v8_version_bound_report() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 6, 13])
+@pytest.mark.parametrize(
+    "expected_bench_version", [None, 0, 1, 6, _UNSHIPPED_BENCH_VERSION]
+)
 async def test_poll_rejects_missing_or_unsupported_expected_version(
     expected_bench_version: int | None,
 ) -> None:
@@ -2096,6 +2156,22 @@ def _done_zero_inference_job(bench_version: int) -> dict[str, object]:
             "dependence_bps": 10000,
             "threshold_bps": 1,
             "result": "passed",
+            "factor_bps": 10000,
+        }
+    if bench_version >= 13:
+        evidence["score_gates"]["claim_provenance"] = {
+            "administered_cases": 0,
+            "eligible_cases": 0,
+            "not_model_emitted_cases": 0,
+            "answer_in_prompt_cases": 0,
+            "flagged_cases": 0,
+            "unattributed_call_cases": 0,
+            "unsettled_cases": 0,
+            "zeroed_cases": 0,
+            "attribution_complete": True,
+            "posture": "shadow",
+            "flagged_bps": 0,
+            "result": "not_applicable",
             "factor_bps": 10000,
         }
     model_use = evidence["score_gates"]["model_use"]

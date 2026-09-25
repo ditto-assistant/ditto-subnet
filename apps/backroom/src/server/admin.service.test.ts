@@ -12,6 +12,8 @@ import {
   fetchScreenedImageRebuild,
   fetchBenchmarkContractMigration,
   fetchScreeningFailureDiagnostic,
+  fetchAdjudicationAttempts,
+  fetchScreeningVerificationReadiness,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
@@ -62,6 +64,7 @@ import {
   fetchValidatorFleet,
   fetchValidatorFleetObservability,
   fetchAgentScores,
+  fetchContinualRetestDiagnostic,
   fetchAgentScoreHistory,
   fetchScoreLeaderboard,
   fetchOwnerFootprint,
@@ -812,7 +815,12 @@ describe('screening submission admin service', () => {
         { agentId, attemptId },
         'peyton@omniaura.ai',
       ),
-    ).resolves.toEqual(diagnostic)
+    ).resolves.toEqual({
+      ...diagnostic,
+      l2_review_diagnostic: null,
+      court_diagnostic: null,
+      court_completion_receipt: null,
+    })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/attempts/${attemptId}/failure-diagnostic`,
       expect.objectContaining({
@@ -822,6 +830,221 @@ describe('screening submission admin service', () => {
         }),
       }),
     )
+  })
+
+  it('reads a bounded text-free L4 cohort without filling missing success telemetry', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const item = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      artifact_sha256: 'ab'.repeat(32),
+      policy_version: 13,
+      manifest_digest: 'cd'.repeat(32),
+      started_at: '2026-09-23T04:00:00Z',
+      finished_at: '2026-09-23T04:03:00Z',
+      attempt_status: 'passed',
+      adjudication_decision: 'clear',
+      review_settings_revision: 4,
+      review_settings_checksum: 'ef'.repeat(32),
+      configured_model: 'z-ai/glm-5.3-flash',
+      configured_timeout_seconds: 600,
+      configured_completion_ceiling: 2400,
+      observed_model: null,
+      observed_provider: null,
+      observed_upstream: null,
+      failure_code: null,
+      elapsed_ms: null,
+      first_tool_call_ms: null,
+      first_tool_observation: null,
+      request_count: null,
+      request_prompt_bytes: null,
+      request_wire_bytes: null,
+      request_event_count: null,
+      prompt_tokens: null,
+      completion_tokens: null,
+    }
+    const payload = { limit: 5, offset: 0, lookback_hours: 24, items: [item] }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchAdjudicationAttempts({ limit: 5, lookbackHours: 24 })).resolves.toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-adjudication-attempts?limit=5&offset=0&lookback_hours=24',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('passes a sanitized court diagnostic through and drops model text', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const court = {
+      error_class: 'ValueError',
+      failure_code: 'stream-no-tool-call',
+      escalation_code: 'adjudicator-failed',
+      timeout_stage: 'response',
+      http_status: null,
+      elapsed_ms: 42,
+      prompt_tokens: 10,
+      completion_tokens: 3,
+      final_tool_call_returned: true,
+      model: 'z-ai/glm-5.3-flash',
+      provider: 'openrouter',
+      request_count: 1,
+      request_attempts: [{
+        ordinal: 1,
+        started_ms: 4,
+        elapsed_ms: 38,
+        stage: 'event',
+        stream_requested: true,
+        prompt_bytes: 923,
+        http_status: 200,
+        headers_ms: 8,
+        first_byte_ms: 11,
+        last_byte_ms: 30,
+        first_event_ms: 13,
+        last_event_ms: 30,
+        event_count: 2,
+        wire_bytes: 650,
+        upstream: 'together',
+      }],
+    }
+    const diagnostic = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'quarantined',
+      attempt_id: attemptId,
+      policy_version: 13,
+      attempt_status: 'quarantined',
+      started_at: '2026-09-22T08:00:00Z',
+      deadline: '2026-09-22T08:10:00Z',
+      finished_at: '2026-09-22T08:06:00Z',
+      reason: 'Submission held for anti-cheat review',
+      reason_code: 'source-review-adjudication-refused',
+      private_failure_detail: null,
+      private_failure_log_tail: null,
+      court_diagnostic: {
+        ...court,
+        exception: 'prompt text that must not be stored',
+        request_attempts: court.request_attempts.map((attempt) => ({
+          ...attempt,
+          prompt: 'source text that must not be stored',
+        })),
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(diagnostic)))
+
+    await expect(
+      fetchScreeningFailureDiagnostic(
+        { agentId, attemptId },
+        'peyton@omniaura.ai',
+      ),
+    ).resolves.toEqual({
+      ...diagnostic,
+      l2_review_diagnostic: null,
+      court_diagnostic: court,
+      court_completion_receipt: null,
+    })
+  })
+
+  it('returns only typed successful L4 completion measurements', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const receipt = {
+      elapsed_ms: 4300,
+      first_tool_call_ms: 2000,
+      first_tool_observation: 'stream_delta',
+      observed_model: 'z-ai/glm-5.3-flash',
+      gateway_provider: 'openrouter',
+      observed_upstream: 'together',
+      request_count: 1,
+      final_request_prompt_bytes: 8000,
+      final_request_wire_bytes: 700,
+      final_request_event_count: 4,
+      prompt_tokens: 200,
+      completion_tokens: 80,
+    }
+    const response = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'evaluating',
+      attempt_id: attemptId,
+      policy_version: 13,
+      attempt_status: 'passed',
+      started_at: '2026-09-23T04:00:00Z',
+      deadline: '2026-09-23T04:10:00Z',
+      finished_at: '2026-09-23T04:00:04Z',
+      reason: null,
+      reason_code: 'adjudicated-source-review-clear',
+      private_failure_detail: null,
+      private_failure_log_tail: null,
+      court_diagnostic: null,
+      court_completion_receipt: {
+        ...receipt,
+        tool_arguments: 'source text that must not leave Platform',
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(response)))
+    await expect(
+      fetchScreeningFailureDiagnostic({ agentId, attemptId }, 'reviewer@example.com'),
+    ).resolves.toEqual({
+      ...response,
+      l2_review_diagnostic: null,
+      court_completion_receipt: receipt,
+    })
+  })
+
+  it('reads exact v13 receipt absence without implying completed verification', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const checks = Array.from({ length: 20 }, (_, index) => ({
+      check_code: `check_${index}`,
+      record_status: 'not_recorded',
+      receipt_count: 0,
+    }))
+    const payload = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      attempt_id: attemptId,
+      policy_version: 13,
+      attempt_status: 'quarantined',
+      verified_image_sha256s: [],
+      verified_image_count: 0,
+      verified_images_truncated: false,
+      checks,
+      private_metamorphic_applicability: 'not_recorded',
+      receipts: [],
+      receipt_count: 0,
+      receipts_truncated: false,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      fetchScreeningVerificationReadiness({ agentId, attemptId }, 'peyton@omniaura.ai'),
+    ).resolves.toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(`/screening-submissions/${agentId}/attempts/${attemptId}/verification-readiness`),
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+      }),
+    )
+    const withPrivatePackage = {
+      ...payload,
+      private_package: {
+        registration_status: 'registered_unverified',
+        prerequisites: [
+          { code: 'target_artifact_commitment', status: 'mechanically_verified' },
+          { code: 'protected_blueprint_bank', status: 'not_observed' },
+        ],
+        clear_authorized: false,
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(withPrivatePackage)))
+    await expect(
+      fetchScreeningVerificationReadiness({ agentId, attemptId }, 'peyton@omniaura.ai'),
+    ).resolves.toEqual(withPrivatePackage)
   })
 
   it('passes the payment coldkey through on a submission read', async () => {
@@ -1148,6 +1371,40 @@ describe('artifact release administration', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/artifact-release-settings',
       expect.objectContaining({ method: 'GET' }),
     )
+  })
+
+  it('preserves served gate evidence without inventing it for older releases', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const release_gate = {
+      version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
+      receipt_diagnostics: [{ report: {
+        schema_version: 1, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
+        observation: { submission_status: 'accepted', submission_observed_at: 90,
+          recovery_status: 'forwarding_platform_failed', recovery_observed_at: 100,
+          page_receipts: 1, page_finalized: 1, page_forwarded: 0, page_deferred: 1 },
+      }, received_at: '2026-09-18T00:00:00Z', stale: false }],
+      receipt_diagnostics_has_more: false,
+      pending_kings: 2,
+      confirmed_kings: 1,
+      rows_limit: 25,
+      rows_has_more: false,
+      rows: [{
+        agent_id: '11111111-1111-4111-8111-111111111111',
+        artifact_sha256: 'ab'.repeat(32),
+        crowned_at: '2026-09-17T00:00:00Z',
+        weight_confirmed_at: '2026-09-17T00:01:00Z',
+        emission_confirmed_at: '2026-09-17T01:00:00Z',
+        emission_block: 9000000,
+        emission_block_hash: '0x' + '12'.repeat(32),
+        emission_epoch_index: 25000,
+        emission_ledger_digest: '34'.repeat(32),
+      }],
+    }
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ ...control, release_gate }))
+      .mockResolvedValueOnce(Response.json(control)))
+    expect((await fetchArtifactReleaseControl()).release_gate).toEqual(release_gate)
+    expect((await fetchArtifactReleaseControl()).release_gate).toBeUndefined()
   })
 
   it('writes CAS, reason, confirmation, and operator attribution before refreshing', async () => {
@@ -1597,13 +1854,19 @@ describe('continual retest administration', () => {
   // wave_membership predates #489 and is folding `strict`.
   const readDefaults = {
     tie_weighting_mode: 'disabled' as const,
+    ledger_pin_mode: 'epoch' as const,
+    crown_incumbent_mode: 'disabled' as const,
     wave_membership: 'participants',
     retest_cohort_size: 5,
     retest_eligibility_mode: 'fixed',
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
   }
-  const legacyEquivalent = { ...readDefaults, wave_membership: 'strict' }
+  const legacyEquivalent = {
+    ...readDefaults,
+    wave_membership: 'strict',
+    ledger_pin_mode: 'live' as const,
+  }
   const settings = {
     aggregate_mode: 'fleet_ready',
     idle_retests_enabled: false,
@@ -1624,6 +1887,10 @@ describe('continual retest administration', () => {
       aggregate_active: false,
       tie_weighting_fleet_ready: false,
       tie_weighting_active: false,
+      crown_incumbent_fleet_ready: false,
+      crown_incumbent_active: false,
+      crown_incumbent_required_protocol: 27,
+      ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
       rollout_standdown_active: false,
@@ -1636,6 +1903,8 @@ describe('continual retest administration', () => {
   }
   const supportFor = (carried: boolean) => ({
     tie_weighting_mode: carried,
+    ledger_pin_mode: carried,
+    crown_incumbent_mode: carried,
     retest_cohort_size: carried,
     wave_membership: carried,
     retest_eligibility_mode: carried,
@@ -1654,6 +1923,8 @@ describe('continual retest administration', () => {
     const nextSettings = {
       aggregate_mode: 'enabled',
       tie_weighting_mode: 'disabled' as const,
+      ledger_pin_mode: 'epoch' as const,
+      crown_incumbent_mode: 'disabled' as const,
       idle_retests_enabled: true,
       rollout_standdown: 'all',
       wave_membership: 'participants',
@@ -1859,6 +2130,7 @@ describe('queue policy administration', () => {
     },
     deferred_source_review: {
       mode: 'off',
+      integrity_double_check_mode: 'off',
       min_cohort_size: 8,
       composite_mad_multiplier: 6,
       axis_mad_multiplier: 6,
@@ -2566,6 +2838,36 @@ describe('copy review admin service', () => {
           request_id: derivedRetryId,
           expected_snapshot: snapshot,
           reason: 'Verified validator OOM',
+          acknowledge_provider_outage: false,
+        }),
+      }),
+    )
+
+    // An acknowledged retry into a still-open provider outage says so on the
+    // wire; the platform refuses it otherwise (ditto-subnet#2087).
+    fetchMock.mockResolvedValueOnce(Response.json({ recovery, idempotent: false }))
+    await retryValidation(
+      {
+        agentId,
+        expectedSnapshot: snapshot,
+        reason: 'Provider lane verified healthy',
+        acknowledgeProviderOutage: true,
+      },
+      'operator@example.com',
+    )
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/retry`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          request_id: await deriveRequestId('validation-retry', [
+            agentId,
+            'operator@example.com',
+            'Provider lane verified healthy',
+            snapshot,
+          ]),
+          expected_snapshot: snapshot,
+          reason: 'Provider lane verified healthy',
+          acknowledge_provider_outage: true,
         }),
       }),
     )
@@ -3358,6 +3660,155 @@ describe('production score reads', () => {
   const provisionalAgentId = '22222222-2222-4222-8222-222222222222'
   const supersededAgentId = '33333333-3333-4333-8333-333333333333'
 
+  // The live #2105 shape: a newer generation whose canonical median beats its
+  // owner's 15-seed representative, with no shared-seed evidence of its own.
+  const retestDiagnosticPayload = {
+    generated_at: '2026-09-22T23:51:00Z',
+    agent_id: provisionalAgentId,
+    agent_status: 'scored',
+    active_bench_version: 13,
+    canonical_composite: 0.54072,
+    official_composite: 0.54072,
+    owner_representative_id: topAgentId,
+    family: [
+      {
+        agent_id: provisionalAgentId,
+        canonical_composite: 0.54072,
+        official_composite: 0.54072,
+        representative: false,
+        effective_composite: 0.54072,
+        canonical_sample_count: 3,
+        completed_wave_depth: 0,
+        first_seen: '2026-09-22T22:51:00Z',
+      },
+      {
+        agent_id: topAgentId,
+        canonical_composite: 0.479032,
+        official_composite: 0.5965,
+        representative: true,
+        effective_composite: 0.5965,
+        canonical_sample_count: 3,
+        completed_wave_depth: 15,
+        first_seen: '2026-09-12T23:51:00Z',
+      },
+    ],
+    raw_confirmation_seeds: ['9223372036854775001'],
+    folded_confirmation_seeds: [],
+    in_raw_wave: false,
+    in_emission_set: false,
+    in_retest_cohort: true,
+    is_same_owner_challenger: true,
+    cohort_position: 7,
+    cohort_size: 7,
+    configured_cohort_size: 5,
+    eligibility_mode: 'fixed',
+    eligibility_z: 1.64,
+    configured_max_size: 25,
+    ticket_status_counts: { issued: 1, scored: 2 },
+    active_ticket_count: 1,
+    seed_anchor_champion_id: topAgentId,
+    seed_anchor_block: 123456,
+    seed_anchor_pinned: true,
+    admission_reason: 'same_owner_challenger',
+    ledger_eligible: true,
+    canonical_sample_count: 3,
+    completed_wave_depth: 0,
+    official_sample_count: 3,
+    raw_confirmation_depth: 1,
+    composite_stderr: 0.01,
+    aggregate_mode: 'fleet_ready',
+    wave_membership: 'participants',
+    owner_key: 'owner:gryffindor',
+    representative_canonical_composite: 0.479032,
+    representative_official_composite: 0.5965,
+    representative_margin: 0.05578,
+    representative_selection: 'official_composite',
+    cohort_cutoff: {
+      agent_id: topAgentId,
+      composite: 0.30444,
+      gap: -0.23628,
+      tie_band: 0,
+      within_tie_band: true,
+    },
+    emission_cutoff: {
+      agent_id: topAgentId,
+      composite: 0.30444,
+      gap: -0.23628,
+      tie_band: 0,
+      within_tie_band: true,
+    },
+    claim: {
+      lane_enabled: true,
+      latest_block: 1000,
+      champion_agent_id: topAgentId,
+      champion_crown_block: 900,
+      scheduled_round: false,
+      spare_capacity_window: false,
+      idle_retests_enabled: false,
+      in_catchup_set: true,
+      route_priority: 'catchup',
+      route_position: 2,
+      pending_seed_count: 2,
+      claimable_seed_available: true,
+      live_lease_count: 0,
+      newer_canonical_work_pending: false,
+      least_covered_admitted: true,
+      decision: 'claimable',
+    },
+    latest_ticket_status: 'issued',
+    latest_ticket_validator_hotkey: '5Validator1',
+    latest_ticket_updated_at: '2026-09-22T23:40:00Z',
+    latest_ticket_failure_reason: null,
+    terminal_ticket_count: 2,
+    latest_confirmation_composite: 0.5412,
+    latest_confirmation_recorded_at: '2026-09-22T23:45:00Z',
+  }
+
+  it('reads exact retest admission and preserves int63 seed strings', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(retestDiagnosticPayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result).toEqual(retestDiagnosticPayload)
+    expect(result.raw_confirmation_seeds).toEqual(['9223372036854775001'])
+    // Suppressed by its owner's deeper evidence while outscoring the cutoff it
+    // sits behind: a structural exclusion, not a score it failed to reach.
+    expect(result.representative_margin).toBeGreaterThan(0)
+    expect(result.cohort_cutoff.gap).toBeLessThan(0)
+    expect(result.claim?.decision).toBe('claimable')
+    // Outstanding work is a count. No seed value may reach the claim payload.
+    expect(JSON.stringify(result.claim)).not.toContain('9223372036854775')
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/agents/${provisionalAgentId}/continual-retest-diagnostic`,
+      expect.anything(),
+    )
+  })
+
+  it('still reads a retest diagnostic from a platform without the newer fields', async () => {
+    const { claim, cohort_cutoff, emission_cutoff, ...legacy } = retestDiagnosticPayload
+    void claim
+    void cohort_cutoff
+    void emission_cutoff
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({
+      ...legacy,
+      family: legacy.family.map(({ agent_id, canonical_composite, official_composite, representative }) => ({
+        agent_id, canonical_composite, official_composite, representative,
+      })),
+    })))
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result.claim).toBeNull()
+    expect(result.cohort_cutoff).toEqual({
+      agent_id: null,
+      composite: null,
+      gap: null,
+      tie_band: null,
+      within_tie_band: null,
+    })
+    expect(result.family[0].completed_wave_depth).toBe(0)
+    expect(result.family[0].first_seen).toBeNull()
+  })
+
   const breakdown = {
     formula:
       '(0.5 * tool_mean + 0.5 * memory_mean) * benchmark_quality_multiplier * token_efficiency_multiplier',
@@ -3525,6 +3976,54 @@ describe('production score reads', () => {
     generated_at: '2026-07-23T00:00:00Z',
   }
 
+  // Bench v13+ rows carry the run-level gate verdict (#1852); aggregates only.
+  function gateEvidence(overrides: Record<string, unknown> = {}) {
+    return {
+      bench_version: 13,
+      posture: 'shadow',
+      catalog_gate: {
+        posture: 'shadow',
+        tool_cases: 2,
+        attributed_cases: 2,
+        catalog_absent_cases: 1,
+        catalog_suppression_rate: 0.5,
+        restraint_without_offer: 1,
+        swallowed_model_call: 1,
+        attribution_coverage_bps: 10000,
+      },
+      claim_provenance: null,
+      twin_post_pass: {
+        posture: 'observe',
+        rule_requested: 'concordant_zero',
+        rule: 'concordant_zero',
+        twin_groups: 1,
+        twin_groups_concordant: 1,
+        counterfactual_pairs: 1,
+        counterfactual_insensitive: 1,
+        cases_affected: 3,
+        cases_affected_share: 0.6,
+      },
+      inference_cost: null,
+      catalog_suppression_rate: 0.5,
+      flagged_case_count: 4,
+      flagged_case_share: 0.75,
+      gate_counts: { answer_in_prompt: 1, restraint_without_offer: 2 },
+      ...overrides,
+    }
+  }
+
+  const gatedAgentScores = {
+    ...agentScores,
+    score_count: 9,
+    scores: [
+      ...agentScores.scores,
+      scoreRow({ validator_hotkey: '5ValA', composite: 0.87, bench_version: 13, seed: 999, run_id: 'run-a13', generated_at: '2026-09-13T00:00:00Z', gate_evidence: gateEvidence() }),
+      scoreRow({ validator_hotkey: '5ValB', composite: 0.88, bench_version: 13, seed: 999, run_id: 'run-b13', generated_at: '2026-09-13T01:00:00Z', gate_evidence: gateEvidence({ flagged_case_count: 1, flagged_case_share: 0.25 }) }),
+      // A v13 row from a scorer that emitted no gate telemetry.
+      scoreRow({ validator_hotkey: '5ValC', composite: 0.86, bench_version: 13, seed: 999, run_id: 'run-c13', generated_at: '2026-09-13T02:00:00Z', gate_evidence: null }),
+    ],
+  }
+
   it('reads the public leaderboard when no admin token is configured', async () => {
     delete process.env.DITTO_ADMIN_API_TOKEN
     const fetchMock = vi.fn().mockResolvedValue(Response.json(leaderboard))
@@ -3553,6 +4052,95 @@ describe('production score reads', () => {
       raw_leader_decision: { required_lead: 0.011, dethrones: false },
       recipients: [{ shared_seed_confirmations: 7 }],
     })
+  })
+
+  // #2079 follow-up: #2098 named the board's scoring and emission versions.
+  // An operator asked why the newer one is not paying needs both, plus
+  // Platform's own sentence for the gates still holding emissions.
+  it('relays the scoring and emission versions with the rollout promotion gates', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const requirement =
+      'Bench v13 scoring is in progress; Bench v12 still controls emissions. ' +
+      'Emission authority moves to v13 only once the first 5 inherited ' +
+      'priority-cohort positions each hold a complete 3-score v13 quorum.'
+    const rolling = {
+      ...leaderboard,
+      current_bench_version: 13,
+      scoring_bench_version: 13,
+      emission_bench_version: 12,
+      active_bench_version: 12,
+      desired_bench_version: 13,
+    }
+    const rollout = {
+      active_version: 12,
+      desired_version: 13,
+      status: 'collecting',
+      promotion_pending: true,
+      promotion_requirement: requirement,
+      priority_cohort_size: 5,
+      priority_cohort_ready_count: 3,
+      ranked_quorum_agents: 2,
+      min_ranked_quorum_agents: 5,
+      members: [],
+    }
+    const fetchMock = vi.fn(async (url: string) =>
+      Response.json(url.endsWith('/api/v1/public/bench/rollout') ? rollout : rolling),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const page = await fetchScoreLeaderboard({ status: 'all', limit: 2, offset: 0 })
+
+    expect(page.scoring_bench_version).toBe(13)
+    expect(page.emission_bench_version).toBe(12)
+    expect(page.current_bench_version).toBe(13)
+    expect(page.active_bench_version).toBe(12)
+    expect(page.rollout_promotion).toEqual({
+      active_version: 12,
+      desired_version: 13,
+      status: 'collecting',
+      promotion_pending: true,
+      promotion_requirement: requirement,
+      priority_cohort_size: 5,
+      priority_cohort_ready_count: 3,
+      ranked_quorum_agents: 2,
+      min_ranked_quorum_agents: 5,
+    })
+  })
+
+  it('still reads a board from a Platform that predates these fields', async () => {
+    // One release unit, two non-atomic deploys: an older Platform omits the
+    // #2098 names and the promotion keys, and a rollout read that fails must
+    // not fail the board an operator asked for.
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const olderRollout = { active_version: 7, desired_version: 7, status: 'inactive' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        Response.json(url.endsWith('/api/v1/public/bench/rollout') ? olderRollout : leaderboard),
+      ),
+    )
+    const page = await fetchScoreLeaderboard({ status: 'all', limit: 2, offset: 0 })
+    expect(page.scoring_bench_version).toBeNull()
+    expect(page.emission_bench_version).toBeNull()
+    expect(page.active_bench_version).toBe(7)
+    expect(page.rollout_promotion).toMatchObject({
+      status: 'inactive',
+      promotion_pending: null,
+      promotion_requirement: null,
+      priority_cohort_ready_count: null,
+    })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.endsWith('/api/v1/public/bench/rollout')
+          ? new Response('upstream unavailable', { status: 503 })
+          : Response.json(leaderboard),
+      ),
+    )
+    const degraded = await fetchScoreLeaderboard({ status: 'all', limit: 2, offset: 0 })
+    expect(degraded.rollout_promotion).toBeNull()
+    expect(degraded.entries).toHaveLength(2)
   })
 
   it('filters provisional entries and forwards a historical bench version', async () => {
@@ -3899,6 +4487,59 @@ describe('production score reads', () => {
     })
     expect(history.versions[1]?.composite_delta_vs_previous).toBeCloseTo(0.047, 10)
     expect(history.versions[1]?.validators).toEqual(['5ValA', '5ValB', '5ValC'])
+  })
+
+  it('carries the bench v13 gate verdict through get_agent_scores and folds it into history', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(leaderboard))
+      .mockResolvedValueOnce(Response.json(gatedAgentScores))
+      .mockResolvedValueOnce(Response.json(gatedAgentScores))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: topAgentId })
+    const gated = detail.scores.filter((score) => score.bench_version === 13)
+    expect(gated).toHaveLength(3)
+    expect(gated[0]?.gate_evidence).toMatchObject({
+      posture: 'shadow',
+      flagged_case_share: 0.75,
+      catalog_gate: { catalog_suppression_rate: 0.5, posture: 'shadow' },
+      twin_post_pass: { posture: 'observe', rule: 'concordant_zero' },
+      gate_counts: { answer_in_prompt: 1, restraint_without_offer: 2 },
+    })
+    expect(gated[2]?.gate_evidence).toBeNull()
+    // Pre-v13 rows never carry one.
+    expect(detail.scores.find((score) => score.bench_version === 7)?.gate_evidence).toBeUndefined()
+    // Aggregates only: the per-case notes never cross the Backroom boundary.
+    expect(JSON.stringify(detail)).not.toContain('note_id')
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    const v13 = history.versions.find((version) => version.bench_version === 13)
+    expect(v13).toMatchObject({ score_count: 3, gate_posture: 'shadow' })
+    expect(v13?.median_flagged_case_share).toBeCloseTo(0.5, 10)
+    expect(history.versions.find((version) => version.bench_version === 7)).toMatchObject({
+      gate_posture: null,
+      median_flagged_case_share: null,
+    })
+  })
+
+  it('reports a mixed bench v13 gate posture as null instead of picking one', async () => {
+    const mixed = {
+      ...gatedAgentScores,
+      scores: gatedAgentScores.scores.map((score) =>
+        score.run_id === 'run-b13'
+          ? { ...score, gate_evidence: gateEvidence({ posture: 'enforce', flagged_case_share: 0.25 }) }
+          : score,
+      ),
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(mixed))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    expect(history.versions.find((version) => version.bench_version === 13)).toMatchObject({
+      gate_posture: null,
+      median_flagged_case_share: 0.5,
+    })
   })
 
   // Regression: production agent 454a09ad (lihai) on 2026-07-25. Every seed

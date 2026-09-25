@@ -113,6 +113,7 @@ def test_shared_verification_shards_the_complete_suite_without_deselection() -> 
         entry["suite"]: (entry["pytest_args"], entry["object_storage"])
         for entry in test_job["strategy"]["matrix"]["include"]
     }
+    endpoint_root = "ditto/tests/api_server/endpoints/"
 
     assert shards == {
         "public-validator-endpoints": (
@@ -125,14 +126,37 @@ def test_shared_verification_shards_the_complete_suite_without_deselection() -> 
             "ditto/tests/api_server/endpoints/test_inference.py",
             False,
         ),
-        # Every file split into its own shard above must be ignored here, so
-        # the union stays complete and no test runs twice.
-        "other-endpoints": (
+        "other-endpoints-large": (
+            f"{endpoint_root}test_validator_v9_confirmation_transport.py "
+            "ditto/tests/api_server/endpoints/test_upload.py "
+            "ditto/tests/api_server/endpoints/test_admin_validation_retry.py "
+            "ditto/tests/api_server/endpoints/test_scoring.py "
+            "ditto/tests/api_server/endpoints/test_admin_copy_review.py "
+            "ditto/tests/api_server/endpoints/test_validator_slot_cap.py "
+            "ditto/tests/api_server/endpoints/test_admin_queue_policy_settings.py "
+            "ditto/tests/api_server/endpoints/test_admin_validator_slot_settings.py "
+            "ditto/tests/api_server/endpoints/test_admin_confirmation_bundles.py "
+            "ditto/tests/api_server/endpoints/test_gate_notes.py",
+            False,
+        ),
+        # Every file split into another shard must be ignored here, so the
+        # union remains complete and no endpoint test runs twice.
+        "other-endpoints-remaining": (
             "ditto/tests/api_server/endpoints "
             "--ignore=ditto/tests/api_server/endpoints/test_public.py "
             "--ignore=ditto/tests/api_server/endpoints/test_validator.py "
             "--ignore=ditto/tests/api_server/endpoints/test_screener.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_inference.py",
+            "--ignore=ditto/tests/api_server/endpoints/test_inference.py "
+            f"--ignore={endpoint_root}test_validator_v9_confirmation_transport.py "
+            "--ignore=ditto/tests/api_server/endpoints/test_upload.py "
+            "--ignore=ditto/tests/api_server/endpoints/test_admin_validation_retry.py "
+            "--ignore=ditto/tests/api_server/endpoints/test_scoring.py "
+            "--ignore=ditto/tests/api_server/endpoints/test_admin_copy_review.py "
+            "--ignore=ditto/tests/api_server/endpoints/test_validator_slot_cap.py "
+            f"--ignore={endpoint_root}test_admin_queue_policy_settings.py "
+            f"--ignore={endpoint_root}test_admin_validator_slot_settings.py "
+            f"--ignore={endpoint_root}test_admin_confirmation_bundles.py "
+            "--ignore=ditto/tests/api_server/endpoints/test_gate_notes.py",
             False,
         ),
         "api-server": (
@@ -214,3 +238,32 @@ def test_migration_order_retries_status_publish_without_failing_a_clean_check() 
     assert "max_attempts=6" in text
     assert "leaving that context pending" in text
     assert 'exit "$exit_code"' in text
+
+
+def test_migration_order_sweeps_share_one_lane_and_checks_stay_isolated() -> None:
+    workflow = _load(ROOT / ".github/workflows/platform-migration-order.yml")
+    # A workflow-level group would put per-ref checks and sweeps in one lane.
+    assert "concurrency" not in workflow
+    check = workflow["jobs"]["migration-order"]
+    sweep = workflow["jobs"]["recheck-open-prs"]
+
+    # Push and a manual dispatch on main run the sweep under one constant group.
+    # A branch dispatch (anti-copy refresh) must not: it would run that branch's
+    # older copy of the sweep and could rewrite every open PR's status last.
+    assert " ".join(sweep["if"].split()) == (
+        "github.event_name == 'push' || "
+        "(github.event_name == 'workflow_dispatch' && "
+        "github.ref == 'refs/heads/main')"
+    )
+    assert sweep["concurrency"] == {
+        "group": "platform-migration-order-main-sweep",
+        "cancel-in-progress": False,
+    }
+
+    # PR, merge_group and dispatch checks are keyed by head/ref, never the sweep.
+    assert check["if"] == "github.event_name != 'push'"
+    assert check["concurrency"] == {
+        "group": "platform-migration-order-${{ github.head_ref || github.ref }}",
+        "cancel-in-progress": True,
+    }
+    assert "main-sweep" not in check["concurrency"]["group"]

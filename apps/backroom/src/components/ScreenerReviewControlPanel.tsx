@@ -6,7 +6,7 @@ import type {
   ScreenerReviewControl,
   ScreenerReviewSettings,
 } from '../lib/admin.schemas'
-import { QUEUE_POLICY_CONFIRMATION } from '../lib/admin.schemas'
+import { INTEGRITY_DOUBLE_CHECK_SCOPE, QUEUE_POLICY_CONFIRMATION } from '../lib/admin.schemas'
 import {
   getScreenerReviewControl,
   getQueuePolicyControl,
@@ -31,6 +31,20 @@ const defaults: ScreenerReviewSettings = {
   adjudicator_model: 'z-ai/glm-5.3-flash' as const,
   adjudicator_max_steps: 128,
   adjudicator_timeout_seconds: 600,
+  adjudicator_max_completion_tokens: null,
+  fanout_shadow_mode: 'off',
+  fanout_shadow_image_source_sha: '0'.repeat(40),
+  fanout_shadow_model: 'z-ai/glm-5.3-flash',
+  fanout_shadow_concurrency: 2,
+  fanout_shadow_max_steps: 4,
+  fanout_shadow_max_groups: 4,
+  fanout_shadow_max_requests: 40,
+  fanout_shadow_max_total_tokens: 1_500_000,
+  fanout_shadow_timeout_seconds: 900,
+  fanout_shadow_max_cost_usd: 3,
+  fanout_shadow_daily_cost_usd: 20,
+  fanout_shadow_global_concurrency: 1,
+  fanout_shadow_reserved_targon_slots: 1,
   source_review_reasoning_effort: 'high',
   source_review_model: 'openai/gpt-5.6-luna',
   source_review_timeout_seconds: 1_800,
@@ -40,6 +54,7 @@ const defaults: ScreenerReviewSettings = {
   max_cost_usd: 2,
   critic_reasoning_effort: 'medium',
   cache_ttl_seconds: 604_800,
+  l2_always_escalate: false,
   audit_retention_days: 30,
   policy_manifest_profile: 'l1',
   policy_manifest_rotation_id: 'v8-luna-source-review-behavioral-oracle',
@@ -96,6 +111,12 @@ const DEFERRED_MODE_DESCRIPTION = {
     'Cheap admission and prescoring run first; top-five entrants and configured score anomalies then receive deep source review.',
   bypass:
     'No source review at all: cheap admission only, no post-score qualification, no holds. Copy/plagiarism enforcement is a separate path and stays armed.',
+} as const
+
+const INTEGRITY_DOUBLE_CHECK_DESCRIPTION = {
+  off: 'No second review. Top-five rows keep the review they were admitted on.',
+  observe: 'Records which top-five rows would be double-checked, once per agent, without holding them.',
+  enforce: `Holds each new top-five row once for a deep review pinned to the ${INTEGRITY_DOUBLE_CHECK_SCOPE} reviewer posture. A clean pass restores it; anything else is an operator hold.`,
 } as const
 
 function DeferredSourceReviewPolicy({
@@ -239,6 +260,38 @@ function DeferredSourceReviewPolicy({
           </div>
         </div>
 
+        <div>
+          <p className="text-xs font-semibold">Top-five integrity double-check</p>
+          <p className="mt-1 max-w-[80ch] text-xs leading-5 text-[var(--muted)]">
+            A second, stronger review for top-five rows that already passed the full pre-score
+            screen, independent of the mode above. Platform refuses enforce until the
+            {' '}<code>{INTEGRITY_DOUBLE_CHECK_SCOPE}</code> screener review scope holds an enforce
+            posture with L3 and the l1_l2 manifest.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-3" aria-label="Integrity double-check mode">
+            {(['off', 'observe', 'enforce'] as const).map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                aria-label={`double-check ${mode}`}
+                disabled={readOnly || loading}
+                aria-pressed={deferred.integrity_double_check_mode === mode}
+                onClick={() => changeDeferred({ integrity_double_check_mode: mode })}
+                className={`min-h-11 rounded-lg border p-3 text-left text-xs disabled:cursor-not-allowed disabled:opacity-40 ${
+                  deferred.integrity_double_check_mode === mode
+                    ? 'border-[var(--acid)] bg-[var(--acid-dim)] text-[var(--acid)]'
+                    : 'border-[var(--line)] text-[var(--muted-strong)] hover:bg-white/5'
+                }`}
+              >
+                <span className="block font-semibold capitalize">{mode}</span>
+                <span className="mt-1 block font-normal leading-4 text-[var(--muted)]">
+                  {INTEGRITY_DOUBLE_CHECK_DESCRIPTION[mode]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
         <fieldset className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3" disabled={readOnly || loading}>
           <NumericField
             label="Minimum scored cohort"
@@ -342,6 +395,7 @@ function DeferredSourceReviewPolicy({
             <span className="text-[var(--muted)]">Effective revision <strong className="text-white">{state.effective.revision}</strong></span>
             <span className="text-[var(--muted)]">Source <strong className="capitalize text-white">{state.effective.source}</strong></span>
             <span className="text-[var(--muted)]">Mode <strong className="capitalize text-white">{state.effective.settings.deferred_source_review.mode}</strong></span>
+            <span className="text-[var(--muted)]">Double-check <strong className="capitalize text-white">{state.effective.settings.deferred_source_review.integrity_double_check_mode}</strong></span>
           </div>
           {state.history.length > 0 ? (
             <div className="mt-4 overflow-x-auto">
@@ -403,12 +457,14 @@ export function ScreenerReviewControlPanel({
   const [error, setError] = useState('')
   const expectedConfirmation = `APPLY SCREENER REVIEW ${scope} ${settings.mode.toUpperCase()}`
   const ready = reason.trim().length >= 8 && confirmation === expectedConfirmation
-  const scopes = ['*', ...new Set(state.known_instances)]
+  // The double-check posture has no worker heartbeating under it, so offer it
+  // before its first revision exists.
+  const scopes = ['*', ...new Set([INTEGRITY_DOUBLE_CHECK_SCOPE, ...state.known_instances])]
   const appliedWorkers = state.applied_instances.filter((item) => {
     const selectedWorker = scope === '*' ? item.expected_scope === '*' : item.instance_id === scope
     return selectedWorker && item.fresh && item.matches_effective
   })
-  const availableModes = scope === '*'
+  const availableModes = scope === '*' || scope === INTEGRITY_DOUBLE_CHECK_SCOPE
     ? (['off', 'shadow', 'enforce'] as const)
     : (['off', 'shadow', 'inherit', 'enforce'] as const)
 
@@ -497,7 +553,11 @@ export function ScreenerReviewControlPanel({
               >
                 {scopes.map((item) => (
                   <option key={item} value={item}>
-                    {item === '*' ? 'Global default' : item}
+                    {item === '*'
+                      ? 'Global default'
+                      : item === INTEGRITY_DOUBLE_CHECK_SCOPE
+                        ? 'Top-five double-check posture'
+                        : item}
                   </option>
                 ))}
               </select>
@@ -558,6 +618,7 @@ export function ScreenerReviewControlPanel({
                   className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
                 >
                   <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
+                  <option value="openai/gpt-6-sol">GPT-6 Sol</option>
                   <option value="moonshotai/kimi-k3">Kimi K3</option>
                   <option value="z-ai/glm-5.2">GLM 5.2</option>
                   <option value="openai/gpt-5.6-sol">GPT-5.6 SOL</option>
@@ -576,6 +637,7 @@ export function ScreenerReviewControlPanel({
                     className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
                   >
                     <option value="openai/gpt-5.6-terra">GPT-5.6 Terra</option>
+                    <option value="openai/gpt-6-sol">GPT-6 Sol</option>
                     <option value="moonshotai/kimi-k3">Kimi K3</option>
                     <option value="z-ai/glm-5.2">GLM 5.2</option>
                     <option value="openai/gpt-5.6-sol">GPT-5.6 SOL</option>
@@ -597,6 +659,7 @@ export function ScreenerReviewControlPanel({
                   className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
                 >
                   <option value="openai/gpt-5.6-luna">GPT-5.6 Luna</option>
+                  <option value="openai/gpt-6-luna">GPT-6 Luna</option>
                 </select>
               </label>
               <NumericField label="L1 timeout seconds" value={settings.source_review_timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, source_review_timeout_seconds: value }))} />
@@ -625,6 +688,23 @@ export function ScreenerReviewControlPanel({
               <NumericField label="Adjudicator steps" value={settings.adjudicator_max_steps} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_max_steps: value }))} />
               <NumericField label="Adjudicator timeout (s)" value={settings.adjudicator_timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_timeout_seconds: value }))} />
               <label className="block text-xs text-[var(--muted)]">
+                Adjudicator completion budget (L4)
+                <select
+                  value={settings.adjudicator_max_completion_tokens === null ? 'inherit' : 'custom'}
+                  onChange={(event) => setSettings((current) => ({
+                    ...current,
+                    adjudicator_max_completion_tokens: event.target.value === 'inherit' ? null : current.max_completion_tokens,
+                  }))}
+                  className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
+                >
+                  <option value="inherit">Inherit L2 cap ({settings.max_completion_tokens.toLocaleString()} tokens)</option>
+                  <option value="custom">Set L4 cap separately</option>
+                </select>
+              </label>
+              {settings.adjudicator_max_completion_tokens !== null && (
+                <NumericField label="L4 completion tokens" value={settings.adjudicator_max_completion_tokens} onChange={(value) => setSettings((current) => ({ ...current, adjudicator_max_completion_tokens: value }))} />
+              )}
+              <label className="block text-xs text-[var(--muted)]">
                 L1 Luna reasoning
                 <select
                   value={settings.source_review_reasoning_effort}
@@ -636,7 +716,7 @@ export function ScreenerReviewControlPanel({
                   <option value="high">High</option>
                 </select>
               </label>
-              <NumericField label="Max input tokens" value={settings.max_input_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_input_tokens: value }))} />
+              <NumericField label="Max effective input tokens (cached counts 10%)" value={settings.max_input_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_input_tokens: value }))} />
               <NumericField label="Max output tokens" value={settings.max_output_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_output_tokens: value }))} />
               <NumericField label="Completion cap" value={settings.max_completion_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_completion_tokens: value }))} />
               <NumericField label="Max cost (USD)" value={settings.max_cost_usd} step={0.05} onChange={(value) => setSettings((current) => ({ ...current, max_cost_usd: value }))} />
@@ -661,10 +741,25 @@ export function ScreenerReviewControlPanel({
                 <p className="text-xs font-semibold">Independent L3 verification</p>
                 <p className="mt-1 max-w-[70ch] text-xs leading-5 text-[var(--muted)]">
                   {settings.l3_enabled
-                    ? 'GPT-5.6 SOL independently critiques or adjudicates the Terra result. This adds paid model calls when L2 escalates.'
+                    ? 'The selected L3 model independently critiques or adjudicates the L2 result. This adds paid model calls when L2 escalates.'
                     : 'L3 is disabled. The L2 analyst becomes the final paid reviewer; L1 routing, L2 budgets, caching, and audit evidence stay active.'}
                 </p>
               </div>
+              <label className="block text-xs text-[var(--muted)]">
+                L3 model
+                <select
+                  value={settings.l3_model}
+                  onChange={(event) => setSettings((current) => ({
+                    ...current,
+                    l3_model: event.target.value as ScreenerReviewSettings['l3_model'],
+                  }))}
+                  disabled={readOnly || loading || settings.mode === 'inherit'}
+                  className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white disabled:opacity-40"
+                >
+                  <option value="openai/gpt-5.6-sol">GPT-5.6 Sol</option>
+                  <option value="openai/gpt-6-sol">GPT-6 Sol</option>
+                </select>
+              </label>
               <button
                 type="button"
                 role="switch"
@@ -679,6 +774,35 @@ export function ScreenerReviewControlPanel({
                 }`}
               >
                 L3 {settings.l3_enabled ? 'enabled' : 'disabled'}
+              </button>
+            </div>
+
+            <div className="flex flex-col gap-4 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <p className="text-xs font-semibold">Always escalate to L2/L3</p>
+                <p className="mt-1 max-w-[70ch] text-xs leading-5 text-[var(--muted)]">
+                  {settings.l2_always_escalate
+                    ? 'Every review runs the L2/L3 models, even when L1 certifies a low-risk clear. Workers whose environment already escalates are unaffected.'
+                    : 'L2/L3 run only when L1 raises risk or cannot certify a clear, unless the worker environment escalates every review.'}
+                  {scope === INTEGRITY_DOUBLE_CHECK_SCOPE
+                    ? ' Turn this on for the double-check posture so a top-five review always reaches the stronger models.'
+                    : ''}
+                </p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={settings.l2_always_escalate}
+                aria-label="Always escalate to L2/L3"
+                disabled={readOnly || loading || settings.mode === 'inherit'}
+                onClick={() => setSettings((current) => ({ ...current, l2_always_escalate: !current.l2_always_escalate }))}
+                className={`inline-flex min-h-11 shrink-0 items-center rounded-lg border px-4 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${
+                  settings.l2_always_escalate
+                    ? 'border-[var(--acid)] bg-[var(--acid-dim)] text-[var(--acid)]'
+                    : 'border-[var(--line)] text-[var(--muted-strong)] hover:bg-white/5'
+                }`}
+              >
+                {settings.l2_always_escalate ? 'Always' : 'On risk'}
               </button>
             </div>
 

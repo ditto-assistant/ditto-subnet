@@ -95,11 +95,3 @@ func RequestIDMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 		)
 	})
 }
-
-// AuthPassThroughMiddleware is a literal no-op, mirroring the Python
-// AuthPassThroughMiddleware: no authentication happens in middleware; every
-// endpoint authenticates itself. It exists so the middleware stack shape (and
-// any future cross-cutting auth concern) has a named home.
-func AuthPassThroughMiddleware(next http.Handler) http.Handler {
-	return next
-}

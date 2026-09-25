@@ -20,6 +20,10 @@ type prop struct {
 	name string
 	typ  string
 	desc string
+	// enum, when set, closes the property to exactly these values (a JSON-schema
+	// "enum"). Only bench_version 13+ definitions set it, so every earlier
+	// catalog serializes byte-identically (the key is emitted only when present).
+	enum []string
 }
 
 // schema builds a JSON-schema object from ordered property definitions.
@@ -34,10 +38,14 @@ func schema(required []string, props ...prop) json.RawMessage {
 			}
 			continue
 		}
-		properties[p.name] = map[string]any{
+		property := map[string]any{
 			"type":        p.typ,
 			"description": p.desc,
 		}
+		if len(p.enum) > 0 {
+			property["enum"] = append([]string(nil), p.enum...)
+		}
+		properties[p.name] = property
 	}
 	s := map[string]any{
 		"type":       "object",
@@ -76,46 +84,46 @@ func Catalog() []protocol.ToolDefinition {
 			Name:        "read_links",
 			Description: "Read one or more URLs and return markdown text content.",
 			Parameters: schema([]string{"urls"},
-				prop{"urls", "string[]", "URLs to read"},
+				prop{name: "urls", typ: "string[]", desc: "URLs to read"},
 			),
 		},
 		{
 			Name:        "search_web",
 			Description: "Search live sources for one or more queries.",
 			Parameters: schema([]string{"queries"},
-				prop{"queries", "string[]", "Search queries"},
-				prop{"num_results", "integer", "Number of results per query, default 10"},
-				prop{"search_mode", "string", "Optional source filter, default all"},
+				prop{name: "queries", typ: "string[]", desc: "Search queries"},
+				prop{name: "num_results", typ: "integer", desc: "Number of results per query, default 10"},
+				prop{name: "search_mode", typ: "string", desc: "Optional source filter, default all"},
 			),
 		},
 		{
 			Name:        "search_memories",
 			Description: "Search past conversations and return compact memory summaries. Use fetch_memories for selected IDs that need full text. For named entities/topics, prefer search_subjects -> search_memories_in_subjects.",
 			Parameters: schema([]string{"queries"},
-				prop{"queries", "string[]", "Memory search queries"},
+				prop{name: "queries", typ: "string[]", desc: "Memory search queries"},
 			),
 		},
 		{
 			Name:        "search_subjects",
 			Description: "Search the user's subject graph and return subject objects with id, name, description, and similarity.",
 			Parameters: schema([]string{"queries"},
-				prop{"queries", "string[]", "Subject search queries"},
+				prop{name: "queries", typ: "string[]", desc: "Subject search queries"},
 			),
 		},
 		{
 			Name:        "fetch_memories",
 			Description: "Fetch full conversation text for selected memory pair IDs.",
 			Parameters: schema([]string{"pairIds"},
-				prop{"pairIds", "string[]", "Memory pair IDs to fetch"},
-				prop{"stripImages", "boolean", "Exclude images, default true"},
+				prop{name: "pairIds", typ: "string[]", desc: "Memory pair IDs to fetch"},
+				prop{name: "stripImages", typ: "boolean", desc: "Exclude images, default true"},
 			),
 		},
 		{
 			Name:        "search_memories_in_subjects",
 			Description: "Semantic memory search inside one subject. Use focused queries; fetch selected IDs for full text.",
 			Parameters: schema([]string{"subject_id", "queries"},
-				prop{"subject_id", "string", "Subject ID from search_subjects or the prompt"},
-				prop{"queries", "string[]", "Focused queries within the subject"},
+				prop{name: "subject_id", typ: "string", desc: "Subject ID from search_subjects or the prompt"},
+				prop{name: "queries", typ: "string[]", desc: "Focused queries within the subject"},
 			),
 		},
 		{
@@ -142,8 +150,8 @@ func Catalog() []protocol.ToolDefinition {
 			Name:        "execute_agent_workflow",
 			Description: "Plan a complex task as multiple parallel sub-agents. Use only when the task has clear independent parts (multi-angle research, audits across dimensions); for single one-shot tasks use execute_agent_job instead.",
 			Parameters: schema([]string{"goal"},
-				prop{"goal", "string", "High-level intent; the planner decomposes this into 2-6 parallel sub-tasks."},
-				prop{"max_parallel", "integer", "Cap on concurrent workers (default 4, max 8)."},
+				prop{name: "goal", typ: "string", desc: "High-level intent; the planner decomposes this into 2-6 parallel sub-tasks."},
+				prop{name: "max_parallel", typ: "integer", desc: "Cap on concurrent workers (default 4, max 8)."},
 			),
 		},
 		{
@@ -155,8 +163,8 @@ func Catalog() []protocol.ToolDefinition {
 			Name:        "list_agent_jobs",
 			Description: "List the user's recent agent jobs.",
 			Parameters: schema(nil,
-				prop{"status", "string", "Filter by status: pending, running, completed, failed, cancelled (optional)"},
-				prop{"limit", "integer", "Max results to return (default 20, max 50)"},
+				prop{name: "status", typ: "string", desc: "Filter by status: pending, running, completed, failed, cancelled (optional)"},
+				prop{name: "limit", typ: "integer", desc: "Max results to return (default 20, max 50)"},
 			),
 		},
 		{
@@ -262,7 +270,33 @@ func Catalog() []protocol.ToolDefinition {
 // consolidated those concepts for v8: workflows own reusable steps and their
 // schedules, while the old names remain dispatch-only compatibility shims in
 // the backend and must not be advertised to a new benchmark.
+//
+// From bench_version 13 the catalog is a per-seed surface (CatalogForSeed):
+// this seed-free form is the v13 PRODUCTION surface — set_main_model retired,
+// closed enums on set_theme/set_reasoning_effort, runtime-described option
+// lists on the discovery-grounded setters, canonical descriptions — with no
+// coined decoys. It is what the catalog mirrors (starter kit, screener oracle,
+// OpenClaw plugin) are regenerated from.
 func CatalogForVersion(benchVersion int) []protocol.ToolDefinition {
+	if benchVersion >= protocol.BenchVersionV13 {
+		return v13ProductionCatalog()
+	}
+	return catalogV8ToV12(benchVersion)
+}
+
+// CatalogForSeed returns the tool surface a harness sees on every RunRequest of
+// one run. Below bench_version 13 the catalog is seed-independent and this is
+// exactly CatalogForVersion; from v13 the descriptions are drawn per seed from
+// each tool's paraphrase bank and three to five coined decoy tools are spliced
+// in at seeded positions (see DecoysForSeed).
+func CatalogForSeed(benchVersion int, seed int64) []protocol.ToolDefinition {
+	if benchVersion < protocol.BenchVersionV13 {
+		return CatalogForVersion(benchVersion)
+	}
+	return v13SeededCatalog(seed)
+}
+
+func catalogV8ToV12(benchVersion int) []protocol.ToolDefinition {
 	legacy := Catalog()
 	if benchVersion < protocol.BenchVersionV8 {
 		return legacy
@@ -286,9 +320,9 @@ func CatalogForVersion(benchVersion int) []protocol.ToolDefinition {
 			Name:        "create_workflow",
 			Description: "Propose a reusable workflow made of one or more inspectable steps. A schedule, when requested, is part of this same proposal.",
 			Parameters: schema([]string{"name", "steps"},
-				prop{"name", "string", "Short workflow name"},
-				prop{"steps", "array", "Workflow steps"},
-				prop{"schedule", "string", "Optional JSON schedule for the workflow"},
+				prop{name: "name", typ: "string", desc: "Short workflow name"},
+				prop{name: "steps", typ: "array", desc: "Workflow steps"},
+				prop{name: "schedule", typ: "string", desc: "Optional JSON schedule for the workflow"},
 			),
 		},
 		protocol.ToolDefinition{
@@ -305,8 +339,8 @@ func CatalogForVersion(benchVersion int) []protocol.ToolDefinition {
 			Name:        "run_workflow",
 			Description: "Propose running one saved workflow now.",
 			Parameters: schema(nil,
-				prop{"recipe_id", "string", "Workflow id from list_workflows"},
-				prop{"name", "string", "Workflow name when its id is unknown"},
+				prop{name: "recipe_id", typ: "string", desc: "Workflow id from list_workflows"},
+				prop{name: "name", typ: "string", desc: "Workflow name when its id is unknown"},
 			),
 		},
 	)

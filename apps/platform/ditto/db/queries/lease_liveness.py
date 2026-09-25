@@ -87,8 +87,9 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import ValidatorHeartbeat, ValidatorLeaseAudit, ValidatorTicket
+from ditto.db.queries.benchmark_canaries import canary_for_lease, finish_canary
 
 if TYPE_CHECKING:
     from sqlalchemy import Select
@@ -571,6 +572,26 @@ async def force_expire_lease(
         requested_bench_version=requested_bench_version,
     )
     del compensate
+    if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+        canary = await canary_for_lease(
+            session,
+            agent_id=ticket.agent_id,
+            validator_hotkey=ticket.validator_hotkey,
+            deadline=ticket.deadline,
+        )
+        if canary is not None and canary.status == "issued" and ticket.deadline > now:
+            await finish_canary(
+                session,
+                canary=canary,
+                ticket=ticket,
+                now=now,
+                failure=f"{action}: {liveness.reason}",
+            )
+        else:
+            ticket.status = TicketStatus.EXPIRED
+            ticket.retry_after = None
+        await session.flush()
+        return audit
     ticket.status = TicketStatus.EXPIRED
     ticket.deadline = now
     ticket.retry_after = now

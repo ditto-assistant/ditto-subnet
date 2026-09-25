@@ -931,6 +931,56 @@ func TestEmbeddingsBackpressure(t *testing.T) {
 	if status != "failed" || terminal != "embedding_provider_backpressure_429" || prompt != 0 {
 		t.Fatalf("backpressure settle: %s %s %d/%d", status, terminal, prompt, reserved)
 	}
+	var circuitCount int
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM provider_outage_circuits WHERE provider = 'openrouter'`,
+	).Scan(&circuitCount); err != nil {
+		t.Fatalf("read provider circuit: %v", err)
+	}
+	if circuitCount != 0 {
+		t.Fatalf("embedding backpressure opened shared chat circuit: count=%d", circuitCount)
+	}
+}
+
+func TestEmbeddingSuccessDoesNotCloseChatCircuit(t *testing.T) {
+	vector := make([]float64, 768)
+	router := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "perplexity/pplx-embed-v1-0.6b",
+			"data":  []any{map[string]any{"index": 0, "embedding": vector}},
+			"usage": map[string]any{"prompt_tokens": 5},
+		})
+	}))
+	defer router.Close()
+
+	cfg := testConfig(t, map[string]string{"DITTO_INFERENCE_TIMEOUT_SECONDS": "5"})
+	cfg.Inference.EmbeddingUpstreamURL = router.URL
+	f := newPGFixture(t, cfg)
+	now := time.Now().UTC()
+	if _, err := f.pool.Exec(t.Context(),
+		`INSERT INTO provider_outage_circuits
+		 (provider, state, epoch, opened_at, retry_at, last_failure_at,
+		  failure_count, last_status, last_error_code)
+		 VALUES ('openrouter', 'open', $1, $2, $3, $2, 1, 429, 'chat_backpressure')`,
+		uuid.New(), now, now.Add(2*time.Minute)); err != nil {
+		t.Fatalf("seed chat circuit: %v", err)
+	}
+
+	body := []byte(embeddingBody())
+	w := serve(f.deps, proxyRequest("/api/v1/inference/embeddings", string(body),
+		f.signedProxyHeaders(1, uuid.New(), body)))
+	if w.Code != http.StatusOK {
+		t.Fatalf("embedding status=%d: %s", w.Code, w.Body.String())
+	}
+	var state string
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT state FROM provider_outage_circuits WHERE provider = 'openrouter'`,
+	).Scan(&state); err != nil {
+		t.Fatalf("read chat circuit: %v", err)
+	}
+	if state != "open" {
+		t.Fatalf("embedding success healed unrelated chat circuit: state=%s", state)
+	}
 }
 
 func TestEmbeddingsFullLaneIsBackpressureNotALostLease(t *testing.T) {

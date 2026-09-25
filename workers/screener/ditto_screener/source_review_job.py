@@ -34,6 +34,9 @@ from ditto_screener.l2_review import (
 from ditto_screener.review_provider import default_review_base_url
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import (
+    SCREENING_FLOOR_POLICY_VERSION,
+    SCREENING_POLICY_VERSION,
+    ScoredRuntimeEvidenceLease,
     SourceReviewAdjudication,
     SourceReviewNote,
     SourceReviewObservationPayload,
@@ -231,6 +234,13 @@ def _build_reviewer(
         critic_provider=os.environ.get(
             "SCREENER_L3_REVIEW_PROVIDER", inference_provider
         ),
+        scorer_capabilities_url=os.environ.get("SCREENER_SCORER_CAPABILITIES_URL")
+        or None,
+        expected_scorer_revision=os.environ.get("SCREENER_EXPECTED_SCORER_REVISION")
+        or None,
+        require_signed_runtime_lease=_parse_bool(
+            "SCREENER_REQUIRE_SIGNED_RUNTIME_LEASE", "false"
+        ),
     )
     adjudicator_mode = os.environ.get("SCREENER_ADJUDICATOR_MODE", "off")
     adjudicator = (
@@ -246,7 +256,8 @@ def _build_reviewer(
             ),
             max_steps=int(os.environ.get("SCREENER_ADJUDICATOR_MAX_STEPS", "128")),
             max_completion_tokens=int(
-                os.environ.get("SCREENER_L2_MAX_COMPLETION_TOKENS", "6000")
+                os.environ.get("SCREENER_ADJUDICATOR_MAX_COMPLETION_TOKENS")
+                or os.environ.get("SCREENER_L2_MAX_COMPLETION_TOKENS", "6000")
             ),
         )
     )
@@ -298,6 +309,15 @@ async def _amain() -> int:
             source = source_response.json()
             if source.get("artifact_sha256") != expected_sha256:
                 raise ValueError("Platform source binding changed")
+            policy_version = source.get("policy_version")
+            if (
+                not isinstance(policy_version, int)
+                or isinstance(policy_version, bool)
+                or not SCREENING_FLOOR_POLICY_VERSION
+                <= policy_version
+                <= SCREENING_POLICY_VERSION
+            ):
+                raise ValueError("Platform source policy is unsupported")
             source_url = base64.b64decode(
                 str(source["source_url_b64"]), validate=True
             ).decode()
@@ -311,6 +331,14 @@ async def _amain() -> int:
                 artifact_sha256=expected_sha256,
                 attempt_id=attempt_id,
                 deadline=asyncio.get_running_loop().time() + timeout_seconds,
+                policy_version=policy_version,
+                scored_runtime_evidence=(
+                    ScoredRuntimeEvidenceLease.model_validate(
+                        source["scored_runtime_evidence"]
+                    )
+                    if source.get("scored_runtime_evidence") is not None
+                    else None
+                ),
             )
             payload = SourceReviewObservationPayload(
                 ok=observation.ok,

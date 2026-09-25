@@ -76,6 +76,7 @@ from ditto.validator.weights import (
     resolve_miner_emission_share,
 )
 from ditto.validator.worker import ValidatorWorker
+from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
 
 _VALIDATOR_HOTKEY = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
 _BURN_HOTKEY = "5Burn" + "x" * 43
@@ -222,8 +223,16 @@ class TestComputeWeights:
         assert filter_weight_confirmed([receipt_bearing_v9]) == [receipt_bearing_v9]
 
     def test_v10_ordinary_quorum_is_payable_without_a_v9_receipt(self) -> None:
+        """v10 pays on its ordinary quorum while confirmation is off or shadowing.
+
+        The lane follows the live bench, so v10 carries the receipt contract
+        too: only an explicit Platform ``enforce`` marker withholds it, and the
+        served marker has never been enforce (PR #841 shipped v10 under
+        shadow).
+        """
         v10 = _entry("v10", 0.9, bench_version=10)
-        assert filter_weight_confirmed([v10]) == [v10]
+        assert filter_weight_confirmed([v10], enforce=False) == [v10]
+        assert filter_weight_confirmed([v10], enforce=True) == []
 
     @pytest.mark.parametrize("bench_version", SUPPORTED_BENCH_VERSIONS)
     def test_every_executable_version_is_payable(self, bench_version: int) -> None:
@@ -239,21 +248,40 @@ class TestComputeWeights:
         assert filter_weight_confirmed([entry], enforce=False) == [entry]
 
     def test_receipt_contract_versions_gate_withholding_not_payability(self) -> None:
-        """Adding a version to RECEIPT_CONTRACT_VERSIONS must withhold, not drop.
+        """A receipt-contract version is withheld under enforce, never dropped.
 
-        This is the seam the confirmation system returns through at v12: a
-        version listed there is withheld under enforce when its receipt is
-        missing, and pays normally the moment the receipt arrives. A version
-        *not* listed is always payable. Enumerating withholding is safe because
-        it fails open; enumerating payability is what froze the fleet at v11.
+        A listed version is withheld under enforce when its receipt is missing,
+        and pays normally the moment the receipt arrives. A version *not* listed
+        (v8, which predates the evidence stack) is always payable. Enumerating
+        withholding is safe because it fails open; enumerating payability is
+        what froze the fleet at v11.
         """
         assert 9 in RECEIPT_CONTRACT_VERSIONS
-        assert not RECEIPT_CONTRACT_VERSIONS & {10, 11}
+        assert 8 not in RECEIPT_CONTRACT_VERSIONS
         v9 = _entry("v9", 0.9, bench_version=9)
         assert filter_weight_confirmed([v9], enforce=True) == []
         assert filter_weight_confirmed([v9], enforce=False) == [v9]
         with_receipt = v9.model_copy(update={"v9_confirmation": object()})
         assert filter_weight_confirmed([with_receipt], enforce=True) == [with_receipt]
+        v8 = _entry("v8", 0.9, bench_version=8)
+        assert filter_weight_confirmed([v8], enforce=True) == [v8]
+
+    def test_receipt_contract_versions_follow_the_confirmation_lane(self) -> None:
+        """The fold's receipt set is the lane's epoch set, not a second copy.
+
+        The lane follows the live bench (#894); a hand-written ``{9}`` here meant
+        an enforce marker on a v12 ledger could act on nothing, stranding the
+        receipt system at v9 for a second time. Every confirmable epoch is
+        withheld under enforce until its receipt arrives, and every executable
+        epoch below the evidence floor stays payable.
+        """
+        assert frozenset(CONFIRMATION_BENCH_VERSIONS) == RECEIPT_CONTRACT_VERSIONS
+        confirmable = {version for version in SUPPORTED_BENCH_VERSIONS if version >= 9}
+        assert confirmable == RECEIPT_CONTRACT_VERSIONS
+        for bench_version in SUPPORTED_BENCH_VERSIONS:
+            entry = _entry(f"v{bench_version}", 0.9, bench_version=bench_version)
+            withheld = filter_weight_confirmed([entry], enforce=True)
+            assert withheld == ([] if bench_version >= 9 else [entry])
 
     def test_future_version_is_payable_on_ordinary_quorum(self) -> None:
         """A version newer than this binary must not be dropped.
@@ -267,12 +295,17 @@ class TestComputeWeights:
         assert filter_weight_confirmed([future]) == [future]
 
     def test_v11_only_ledger_still_produces_a_weight_vector(self) -> None:
-        """The end-to-end shape of the outage: a healthy ledger must fold."""
+        """The end-to-end shape of the outage: a healthy ledger must fold.
+
+        The Platform served ``v9_confirmation_mode=shadow`` throughout, which
+        is what the worker passes as ``enforce=False``; the fold dropped the
+        ledger anyway because payability was enumerated.
+        """
         entries = [
             _entry("champ", 0.993028, bench_version=11, first_seen=_T0),
             _entry("r1", 0.987052, bench_version=11, first_seen=_T0 + timedelta(1)),
         ]
-        payable = filter_weight_confirmed(entries)
+        payable = filter_weight_confirmed(entries, enforce=False)
         assert payable == entries
         assert compute_weights(payable, **_KOTH) == {"champ": 0.65, "r1": 0.14}
 
@@ -812,6 +845,7 @@ def _config() -> MagicMock:
     cfg.koth_rank_shares = (0.65, 0.14, 0.10, 0.07, 0.04)
     cfg.koth_dethrone_z = 1.64
     cfg.koth_confirmation_seeds = 3
+    cfg.crn_block_binding_posture = "observe"
     cfg.top5_max_confirmation_seeds = 15
     cfg.top5_catch_up_rate = 2
     cfg.top5_max_cohort_size = 25
@@ -4198,6 +4232,122 @@ class TestRunOnce:
 
         await worker.run_once()
         chain.put_weights.assert_awaited_once_with({registered: 1.0})
+
+    @pytest.mark.parametrize("burn_share", [0.4, 1.0])
+    async def test_registered_owner_replaces_rotated_burn_hotkey(
+        self, burn_share: float
+    ) -> None:
+        miner = "5Champion" + "x" * 39
+        owner = "5CurrentOwner" + "x" * 35
+        platform = _platform_with_ledger(jobs=[], ledger=[_entry(miner, 0.90)])
+        platform.get_ledger.return_value.burn_share = burn_share
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[
+                SimpleNamespace(uid=0, hotkey=miner),
+                SimpleNamespace(uid=1, hotkey=owner),
+            ]
+        )
+        chain.get_subnet_owner_hotkey = AsyncMock(return_value=owner)
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None  # Finney: derive target from live metagraph
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.get_recent_neurons.assert_awaited_once_with(cfg.netuid)
+        chain.get_subnet_owner_hotkey.assert_awaited_once_with(cfg.netuid)
+        chain.put_weights.assert_awaited_once()
+        weights = chain.put_weights.await_args.args[0]
+        assert weights[owner] == pytest.approx(burn_share)
+        assert weights.get(miner, 0) == pytest.approx(1.0 - burn_share)
+        assert "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz" not in weights
+
+    @pytest.mark.parametrize(
+        "neurons",
+        [
+            [SimpleNamespace(uid=1, hotkey="5Miner")],
+            [SimpleNamespace(uid=0, hotkey="")],
+            [
+                SimpleNamespace(uid=0, hotkey="5OwnerA"),
+                SimpleNamespace(uid=1, hotkey="5OwnerA"),
+            ],
+        ],
+    )
+    async def test_unresolved_owner_preserves_existing_weights(
+        self, neurons: list[SimpleNamespace]
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(return_value=neurons)
+        chain.get_subnet_owner_hotkey = AsyncMock(return_value="5OwnerA")
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.put_weights.assert_not_awaited()
+
+    async def test_uid_zero_without_owner_identity_is_not_burned(self) -> None:
+        miner = "5UnrelatedMiner" + "x" * 33
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[SimpleNamespace(uid=0, hotkey=miner)]
+        )
+        chain.get_subnet_owner_hotkey = AsyncMock(return_value="5AbsentOwner")
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.put_weights.assert_not_awaited()
+
+    async def test_empty_ledger_burns_to_registered_owner(self) -> None:
+        owner = "5CurrentOwner" + "x" * 35
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        chain = MagicMock()
+        chain.get_recent_neurons = AsyncMock(
+            return_value=[SimpleNamespace(uid=0, hotkey=owner)]
+        )
+        chain.get_subnet_owner_hotkey = AsyncMock(return_value=owner)
+        chain.put_weights = AsyncMock()
+        cfg = _config()
+        cfg.burn_hotkey = None
+        worker = ValidatorWorker(
+            config=cfg,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        chain.put_weights.assert_awaited_once_with({owner: 1.0})
 
     async def test_chain_registration_read_failure_leaves_weights_unchanged(
         self, caplog: pytest.LogCaptureFixture

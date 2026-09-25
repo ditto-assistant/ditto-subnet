@@ -73,11 +73,10 @@ TOP5_MAX_COHORT_SIZE = 25
 # platform so the whole fleet folds the same number without agreeing about
 # clocks -- see ``weights.resolve_miner_emission_share``. Releasing everything is
 # the right fallback precisely because it is what the subnet did before the field
-# existed, so an omission is never a change. The burn hotkey is retained in
-# either case as the safe idle vector: with no eligible miners the whole vector
-# still routes to burn rather than zeroing the chain.
+# existed, so an omission is never a change. The burn destination is resolved
+# from on-chain SubnetOwnerHotkey and the current subnet metagraph at each
+# weight epoch, including the idle vector. UID 0 alone is not an owner signal.
 MINER_EMISSION_SHARE = 1.0
-FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
 
 # --- Competition-track emission split (scalable, retirable registry) ---
 # The subnet is splitting from a single competition into several independent
@@ -348,6 +347,24 @@ class ValidatorConfig:
     like ``koth_margin`` (every validator must run the same K to derive the same
     seed set). ``1`` reproduces the single-seed pre-P4 sweep, byte-identical."""
 
+    crn_block_binding_posture: str
+    """How the validator-derived confirmation lanes (version-bump re-score
+    sweep, contested dethrone) behave at a **binding** bench version
+    (``crn_block_binding_active``) when the ledger carries no pinned
+    finalized-block anchor for the reign they would hash:
+
+    * ``observe`` (default, v13.0): log the missing pin and fall back to the
+      legacy unbound family, exactly as every version below the floor derives.
+      A Platform pin gap can then never stall the lanes.
+    * ``enforce``: defer the lane until a pin lands. An unbound family at a
+      binding version is one a miner could have precomputed from public ids.
+
+    A **consensus knob** like ``koth_confirmation_seeds``: validators on
+    different postures derive different seed sets for the same ledger. Read
+    from ``VALIDATOR_CRN_BLOCK_BINDING_POSTURE``. The pin *mismatch* refusal
+    (a bound seed that does not re-derive) is not a posture; it always
+    refuses."""
+
     top5_max_confirmation_seeds: int
     """Hard ceiling on the variance-sized continual shared-seed target."""
 
@@ -369,9 +386,9 @@ class ValidatorConfig:
     ledger's ``burn_share``; this is what the fold uses when that field is absent
     or invalid."""
 
-    burn_hotkey: str
-    """Owner-associated hotkey whose miner incentive Subtensor burns. Used for
-    the idle vector (no eligible miners) and for any residual share below 1.0."""
+    burn_hotkey: str | None
+    """Local-network burn target, or None to resolve the registered owner each
+    epoch on Finney. Never submit with an unresolved production destination."""
 
     min_stake_tao: float
     """Minimum stake (TAO) this validator expects on its own hotkey before it
@@ -499,6 +516,20 @@ class ValidatorConfig:
     track's bps share — so these need not sum to one. Inert while the router
     track is shadow / not eligible."""
 
+    router_ledger_read_enabled: bool = False
+    """Whether the worker reads the published router ledger from the platform.
+
+    ``False`` (default) keeps the worker on :class:`EmptyRouterLedgerSource`, so
+    the fold is byte-identical to folding no router track at all — the safe v1
+    shadow default. Setting ``VALIDATOR_ROUTER_LEDGER_READ_ENABLED=true`` swaps in
+    :class:`PlatformRouterLedgerSource`, which reads the shadow ledger the
+    offloaded scorer publishes (via ``GET /scoring/router-ledger``) and folds it.
+    This flips *reading* on only; the track stays shadow
+    (``router_weight_eligible=False``), so a read ledger still contributes zero
+    emission. It is intentionally env-tunable — unlike the consensus-critical
+    ``router_track_state`` — because turning the read on changes no chain output,
+    only which ledger the (already zero-weighted) router fold logs and measures."""
+
     def __post_init__(self) -> None:
         """Fail loud at boot on a genuinely misconfigured router split.
 
@@ -528,6 +559,24 @@ def _require(name: str, value: str) -> str:
     if not value:
         raise ValidatorConfigError(f"{name} is required")
     return value
+
+
+CRN_BLOCK_BINDING_POSTURES: frozenset[str] = frozenset({"observe", "enforce"})
+"""Accepted ``VALIDATOR_CRN_BLOCK_BINDING_POSTURE`` values."""
+
+
+def _parse_crn_block_binding_posture() -> str:
+    """``observe`` unless the operator explicitly opts the validator into
+    ``enforce``; anything else is a typed configuration error, not a silent
+    fallback to either posture."""
+    raw = os.environ.get("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", "observe")
+    posture = raw.strip().lower()
+    if posture not in CRN_BLOCK_BINDING_POSTURES:
+        raise ValidatorConfigError(
+            "VALIDATOR_CRN_BLOCK_BINDING_POSTURE must be one of "
+            f"{sorted(CRN_BLOCK_BINDING_POSTURES)}, got {raw!r}"
+        )
+    return posture
 
 
 def _parse_float(name: str, default: str) -> float:
@@ -630,13 +679,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         "VALIDATOR_HOTKEY", os.environ.get("VALIDATOR_HOTKEY", "")
     )
     subtensor_network = os.environ.get("SUBTENSOR_NETWORK", "finney")
-    # Finney SN118 has a fixed owner hotkey at UID 0. Production validators may
-    # use a named network or a custom non-loopback endpoint, so only explicit
-    # local aliases/endpoints self-target the local owner validator.
+    # Production owner hotkeys can rotate. Verify the chain's owner hotkey is in
+    # the metagraph used to filter registered miners. Only explicit local aliases
+    # or loopback endpoints self-target the local owner validator.
     burn_hotkey = (
-        validator_hotkey
-        if _is_local_subtensor_network(subtensor_network)
-        else FINNEY_BURN_HOTKEY
+        validator_hotkey if _is_local_subtensor_network(subtensor_network) else None
     )
 
     # All KOTH + ATH mechanism values are frozen (the KOTH_* module constants),
@@ -759,6 +806,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_rank_shares=KOTH_RANK_SHARES,
         koth_dethrone_z=KOTH_DETHRONE_Z,
         koth_confirmation_seeds=KOTH_CONFIRMATION_SEEDS,
+        crn_block_binding_posture=_parse_crn_block_binding_posture(),
         top5_max_confirmation_seeds=TOP5_MAX_CONFIRMATION_SEEDS,
         top5_catch_up_rate=TOP5_CATCH_UP_RATE,
         top5_max_cohort_size=TOP5_MAX_COHORT_SIZE,
@@ -793,6 +841,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_executor_timeout_seconds=coding_executor_timeout_seconds,
         coding_canary_enabled=coding_canary_enabled,
         coding_canary_poll_seconds=coding_canary_poll_seconds,
+        router_ledger_read_enabled=(
+            os.environ.get("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", "false").lower()
+            in _truthy
+        ),
     )
     if not config.signing_source_present():
         raise ValidatorConfigError(

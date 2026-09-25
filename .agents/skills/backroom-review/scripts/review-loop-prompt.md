@@ -29,8 +29,18 @@ by the saved scheduled-task prompt per the backroom-review skill.
    `get_screening_review_queue` (generation=all).
 3. Read the adjudication standards before deciding:
    `.agents/skills/backroom-review/references/review-rules.md` and
-   `references/review-bar.md` (policy v10: I1–I7 independent; I3/I4/I5/I7
-   fatal; a known-false-positive class releases with a cited refutation).
+   `.agents/skills/backroom-review/references/review-bar.md`, starting with
+   **Policy-version routing**. Record each exact submission's policy version;
+   do not infer it from the benchmark version or a repository default.
+   For policy v13, read `workers/screener/docs/policy-v13.md` and
+   `workers/screener/docs/policy-v13-opaque-verification.md`; evaluate I1–I8,
+   S1–S3, applicable verification requirements, and their safe harbors.
+   Historical v10-v12 rulings and false-positive examples do not override
+   v13. Refuting one finding does not certify the whole artifact.
+   Read `.agents/skills/backroom-review/references/decision-path-review.md`:
+   trace all effective engines, every deciding call, semantic retry predicate,
+   finalized-field writer and execution guard. Record unread paths explicitly.
+   V14 is a draft, not current authority; reviewer record gaps are not cheating.
 4. Per row: `get_screening_quarantine_context(s)` (note lineage, duplicates,
    shadow_review), then read every decisive cited line with
    `read_screening_source_file` / `search_screening_source`, and
@@ -41,7 +51,9 @@ by the saved scheduled-task prompt per the backroom-review skill.
 5. Resolve per item with `resolve_screening_quarantine` /
    `resolve_ath_review`: the reason names the policy category, the minimal
    file:line set actually read, and the cited precedent. No challenge values.
-6. Re-read each resolved row to verify the write landed. A timeout is
+6. Re-read each resolved row to verify the write landed. Refresh the leaderboard
+   after ATH rulings and report predecessor re-entry without widening the batch.
+   A timeout is
    ambiguous — verify before retrying.
 
 ## Report

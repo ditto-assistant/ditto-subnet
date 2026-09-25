@@ -11,8 +11,13 @@ import { entityHref } from "../../lib/router";
 import { pushEntityRoute } from "../../stores/routeStore";
 import { HandleBadge } from "../ui/HandleBadge";
 import { MinerAvatar } from "../ui/MinerAvatar";
-import { policyScreeningLabel } from "../pipeline/status";
+import {
+  deferredReviewSummary,
+  policyScreeningLabel,
+  SCREENING_INCOMPLETE_LABEL,
+} from "../pipeline/status";
 import type { FleetReport } from "../../types/fleet";
+import type { CodingShadowScore } from "../../types/leaderboard";
 import type { BenchmarkProgress } from "../../types/pipeline";
 import {
   AdmissionStepTrack,
@@ -111,6 +116,72 @@ function cardClick(ev: MouseEvent, agentId: string): void {
   pushEntityRoute("agent", agentId);
 }
 
+function codingShadowStatus(coding: CodingShadowScore): string {
+  if (coding.status === "complete" && coding.score != null) {
+    return coding.score === 0 ? "0.000 measured" : fx(coding.score);
+  }
+  if (coding.status === "collecting") {
+    return "Collecting " + coding.result_count + "/" + coding.score_quorum;
+  }
+  if (coding.status === "scheduled") return "Scheduled";
+  return "Stale";
+}
+
+function CodingShadowPipelineItem(props: { coding: CodingShadowScore }): JSX.Element {
+  const result = () => props.coding;
+  return (
+    <span class="pipeline-coding-shadow" data-coding-status={result().status}>
+      <span class="pipeline-coding-shadow-heading">
+        <strong>Coding shadow</strong>
+        <span>{codingShadowStatus(result())}</span>
+      </span>
+      <span class="pipeline-coding-shadow-detail">
+        {result().result_count}/{result().score_quorum} validators · Coding v
+        {result().coding_contract_version} · Bench v{result().bench_version}
+        {result().status === "stale" ? " · not carried forward" : ""}
+      </span>
+      <span class="pipeline-coding-shadow-boundary">
+        Parallel display only · does not delay Scored &amp; live
+      </span>
+    </span>
+  );
+}
+
+function CodingShadowLane(props: {
+  entries: PipelineEntryExt[];
+  unavailable: boolean;
+  loading: boolean;
+}): JSX.Element {
+  const results = createMemo(() =>
+    props.entries.flatMap((entry) => (entry.coding_shadow ? [entry.coding_shadow] : [])),
+  );
+  const active = createMemo(
+    () =>
+      results().filter((result) => result.status === "scheduled" || result.status === "collecting")
+        .length,
+  );
+  const complete = createMemo(
+    () => results().filter((result) => result.status === "complete").length,
+  );
+  const stale = createMemo(() => results().filter((result) => result.status === "stale").length);
+  const status = (): string => {
+    if (props.unavailable) return "Coding shadow status unavailable.";
+    if (props.loading) return "Loading Coding shadow status…";
+    if (!results().length) return "No Coding shadow evaluations in this snapshot.";
+    return active() + " active · " + complete() + " complete · " + stale() + " stale";
+  };
+  return (
+    <div class="pipeline-coding-lane" role="status" aria-live="polite">
+      <span class="pipeline-coding-lane-heading">
+        <strong>Coding shadow</strong>
+        <span>Parallel · weight zero</span>
+      </span>
+      <span class="pipeline-coding-lane-status">{status()}</span>
+      <span class="pipeline-coding-lane-boundary">Never blocks the core scoring pipeline.</span>
+    </div>
+  );
+}
+
 function PipelineCard(props: {
   item: IndexedEntry;
   column: string;
@@ -168,6 +239,7 @@ function PipelineCard(props: {
   const admissionLabel = () => {
     if (props.column !== "admission") return "";
     if (entry().status === "waiting_screening") return "Waiting for admission";
+    if (entry().status === "screening_failed") return SCREENING_INCOMPLETE_LABEL;
     return screeningLabel() || "Building image & admission";
   };
   const policyLabel = () => (props.column === "admission" ? policyScreeningLabel(entry()) : "");
@@ -176,6 +248,13 @@ function PipelineCard(props: {
       ? "Provisional " + fx(Number(entry().provisional_composite))
       : "";
   const accessibleName = () => agentName(entry().name) + ", " + agentVersionLabel(entry().version);
+  const codingAria = () => {
+    if (props.column !== "evaluating" && props.column !== "scored") return "";
+    const coding = entry().coding_shadow;
+    return coding
+      ? ", Coding shadow " + codingShadowStatus(coding) + ", parallel display only"
+      : "";
+  };
   const ariaLabel = () =>
     "View " +
     accessibleName() +
@@ -183,14 +262,15 @@ function PipelineCard(props: {
     (isUpNext() ? ", up next for validator assignment" : "") +
     (queueGate() ? ", " + queueGate()?.aria : "") +
     (rescore()?.isQualification ? ", inherited benchmark cohort qualification in progress" : "") +
-    (admissionLabel() ? ", " + admissionLabel() : "");
+    (admissionLabel() ? ", " + admissionLabel() : "") +
+    codingAria();
   const benchmarks = (): BenchmarkProgress[] =>
     props.column === "evaluating" ? entry().active_benchmarks || [] : [];
   // Waiting vs in-progress is a state the card must wear, not just say: the
   // attribute drives the muted queued treatment and the active gold rail.
   const admissionState = () =>
     props.column === "admission"
-      ? entry().status === "waiting_screening"
+      ? entry().status !== "screening"
         ? "waiting"
         : "active"
       : undefined;
@@ -219,7 +299,7 @@ function PipelineCard(props: {
         <AdmissionStepTrack
           steps={admissionSteps(entry().screening_build_only)}
           stage={screener()?.screening_progress?.stage ?? null}
-          waiting={entry().status === "waiting_screening"}
+          waiting={entry().status !== "screening"}
         />
         {/* Source review is one segment of the track above and most of its
             wall-clock; the ladder opens that segment into the four stages
@@ -282,6 +362,13 @@ function PipelineCard(props: {
       </Show>
       <Show when={provisionalScore()}>
         <span class="pipeline-item-priority-detail">{provisionalScore()}</span>
+      </Show>
+      <Show
+        when={
+          props.column === "evaluating" || props.column === "scored" ? entry().coding_shadow : null
+        }
+      >
+        {(coding) => <CodingShadowPipelineItem coding={coding()} />}
       </Show>
       {/* One stage line per card: when a screener is reporting, the progress
           view below says the same thing plus how long it has been there, so
@@ -382,8 +469,15 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
             }
             const active = Number(props.statusCounts.screening || 0);
             const queued = Number(props.statusCounts.waiting_screening || 0);
-            if (active + queued <= 0) return "";
-            return active + " in progress · " + queued + " queued";
+            const incomplete = Number(props.statusCounts.screening_failed || 0);
+            if (active + queued + incomplete <= 0) return "";
+            return (
+              active +
+              " in progress · " +
+              queued +
+              " queued" +
+              (incomplete > 0 ? " · " + incomplete + " incomplete" : "")
+            );
           };
           // The count and the item window are reconciled independently. Keep
           // active admission work visible if a delayed snapshot has the count
@@ -439,6 +533,13 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
                 </Show>
               </div>
               <div class="pipeline-items" id={column().def.bodyId}>
+                <Show when={column().def.status === "evaluating"}>
+                  <CodingShadowLane
+                    entries={props.entries}
+                    unavailable={props.unavailable}
+                    loading={props.loading}
+                  />
+                </Show>
                 <Show
                   when={!props.unavailable}
                   fallback={<div class="pipeline-empty">Queue unavailable.</div>}
@@ -499,7 +600,7 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
   );
 }
 
-/** The conditional post-scoring source-integrity branch (weekend drift
+/** The conditional post-scoring deferred source-review branch (weekend drift
  * #623/#635; markup 2833–2838, renderIntegrityReviewBranch 8330–8359). Only
  * leaderboard qualifiers and robust anomaly holds enter it — the aside says
  * so instead of implying every submission passes through review. */
@@ -519,7 +620,7 @@ export function IntegrityReviewBranch(props: {
         <span>
           <span class="pipeline-review-eyebrow">Conditional after scoring</span>
           <strong class="pipeline-review-title" id="pipeline-review-title">
-            Source integrity review
+            Deferred source review
           </strong>
         </span>
         <span class="pipeline-review-count" id="pipeline-review-count">
@@ -527,8 +628,9 @@ export function IntegrityReviewBranch(props: {
         </span>
       </summary>
       <p class="pipeline-review-copy">
-        Only leaderboard qualifiers and robust anomaly holds enter this branch. Other admitted
-        submissions go directly through validator scoring.
+        Only leaderboard qualifiers and robust anomaly holds enter this branch, and entering it is
+        not a finding. Each row names its trigger and what the automated review concluded; only a
+        raised concern is flagged. Other admitted submissions go directly through validator scoring.
       </p>
       <div class="pipeline-review-items" id="pipeline-review-items">
         <Show
@@ -539,7 +641,9 @@ export function IntegrityReviewBranch(props: {
             <Show
               when={shown().length > 0}
               fallback={
-                <div class="pipeline-empty">No submissions are held for integrity review.</div>
+                <div class="pipeline-empty">
+                  No submissions are held for deferred source review.
+                </div>
               }
             >
               <For each={shown()}>
@@ -554,7 +658,7 @@ export function IntegrityReviewBranch(props: {
                       agentName(item.entry.name) +
                       ", " +
                       agentVersionLabel(item.entry.version) +
-                      " integrity review details"
+                      " deferred source review details"
                     }
                     onClick={(ev) => cardClick(ev, String(item.entry.agent_id || ""))}
                   >
@@ -575,6 +679,13 @@ export function IntegrityReviewBranch(props: {
                     <span class="pipeline-item-priority-detail">
                       {integrityReviewReason(item.entry)}
                     </span>
+                    <Show when={deferredReviewSummary(item.entry)}>
+                      {(summary) => (
+                        <span class="pipeline-item-priority-detail deferred-review-summary">
+                          {summary()}
+                        </span>
+                      )}
+                    </Show>
                   </a>
                 )}
               </For>

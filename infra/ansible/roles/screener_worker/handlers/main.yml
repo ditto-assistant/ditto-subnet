@@ -17,3 +17,12 @@
   when:
     - screener_hotkey | length > 0
     - screener_entrypoint.stat.exists | default(false)
+
+# A running timer keeps its old schedule until restarted; re-arm it after the
+# unit is rewritten (runs after "reload systemd (screener)", in listen order).
+- name: restart screener cache cleanup timer
+  ansible.builtin.systemd:
+    name: "{{ screener_cache_gc_unit }}.timer"
+    state: restarted
+    daemon_reload: true
+  when: screener_cache_gc_enabled | bool

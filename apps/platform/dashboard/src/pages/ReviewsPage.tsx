@@ -14,7 +14,8 @@ import {
   sessionAuthHeader,
   setMinerSession,
 } from "../stores/sessionStore";
-import type { NameHandle } from "../types/leaderboard";
+import { gateNoteLabel, percentage, postureState } from "../components/evidence/GateEvidence";
+import type { GatePosture, NameHandle } from "../types/leaderboard";
 
 const SCOPES: Array<{ id: string; label: string; hint: string }> = [
   { id: "read", label: "Read", hint: "Required. Profile, my submissions, reviews, harness logs" },
@@ -82,6 +83,29 @@ interface MinerMe {
   commands: Array<{ action: string; command: string; reason: string }>;
 }
 
+interface DittoLinkView {
+  miner_hotkey: string;
+  ditto_user_id: string;
+  ditto_email?: string | null;
+  linked_via: "dashboard" | "cli";
+  created_at: string;
+}
+
+interface DittoLinkStatus {
+  enabled: boolean;
+  link: DittoLinkView | null;
+}
+
+interface DittoLinkAttempt {
+  attempt_id: string;
+  status: "pending" | "identity_verified" | "authenticated" | "linked" | "failed" | "expired";
+  error?: string | null;
+  ditto_user_id?: string | null;
+  ditto_email?: string | null;
+  miner_hotkey?: string | null;
+  link?: DittoLinkView | null;
+}
+
 interface MinerSubmission {
   agent_id: string;
   name: string;
@@ -108,6 +132,47 @@ interface MinerScreeningFeedback {
   agent_id: string;
   agent_status: string;
   attempts: MinerScreeningFailure[];
+}
+
+interface MinerGateNote {
+  note_id: string;
+  gate: string;
+  /** Whether the finding zeroes the case when its gate runs in enforce. */
+  zeroing?: boolean;
+}
+
+interface MinerGateNoteCase {
+  case_index?: number | null;
+  case_id?: string | null;
+  category?: string | null;
+  kind?: string | null;
+  score?: number | null;
+  notes: MinerGateNote[];
+  relation?: string | null;
+  cost_factor?: number | null;
+  tools_offered?: number | null;
+  catalog_present?: boolean | null;
+}
+
+interface MinerGateNotesRun {
+  validator_hotkey: string;
+  run_id: string;
+  bench_version: number;
+  composite: number;
+  posture?: GatePosture | null;
+  catalog_suppression_rate?: number | null;
+  flagged_case_count?: number;
+  flagged_case_share?: number | null;
+  gate_counts?: Record<string, number>;
+  cases: MinerGateNoteCase[];
+}
+
+/** Owner-only bench v13+ per-case gate notes (`/me/agents/{id}/gate-notes`). */
+interface MinerGateNotes {
+  agent_id: string;
+  agent_status: string;
+  runs: MinerGateNotesRun[];
+  dispute_submit_url?: string;
 }
 
 interface MinerReview {
@@ -176,6 +241,26 @@ function readPollGrant(): StoredPollGrant | null {
   } catch {
     return null;
   }
+}
+
+/** The OIDC callback lands on `#/reviews?ditto=linked|error&reason=…`, which
+ * boot canonicalizes to `/reviews?ditto=…` (both are page-scoped params). Read
+ * it once, then drop it from the URL so a reload does not repeat the notice. */
+function readDittoResult(): { ok: boolean; text: string; attempt?: string } | null {
+  const params = loginParams();
+  const outcome = params.get("ditto");
+  if (!outcome) return null;
+  const reason = params.get("reason") || "";
+  const attempt = params.get("attempt") || "";
+  params.delete("ditto");
+  params.delete("reason");
+  params.delete("attempt");
+  history.replaceState(history.state ?? {}, "", spaHref("reviews", params));
+  if (outcome === "linked") return { ok: true, text: "Ditto account linked." };
+  if (outcome === "confirm" && attempt) {
+    return { ok: true, text: "Ditto signed you in. Confirm the link below.", attempt };
+  }
+  return { ok: false, text: "Ditto sign-in did not complete" + (reason ? ": " + reason : ".") };
 }
 
 function writeLoginHash(userCode: string, completeToken?: string): void {
@@ -449,15 +534,129 @@ function AccountPanel(): JSX.Element {
   const [screeningAgent, setScreeningAgent] = createSignal<string | null>(null);
   const [screening, setScreening] = createSignal<MinerScreeningFeedback | null>(null);
   const [screeningError, setScreeningError] = createSignal("");
+  const [gateAgent, setGateAgent] = createSignal<string | null>(null);
+  const [gateNotes, setGateNotes] = createSignal<MinerGateNotes | null>(null);
+  const [gateError, setGateError] = createSignal("");
   const [xUrl, setXUrl] = createSignal("");
   const [github, setGithub] = createSignal("");
   const [discord, setDiscord] = createSignal("");
   const [error, setError] = createSignal("");
   const [saved, setSaved] = createSignal("");
+  const [dittoLink, setDittoLink] = createSignal<DittoLinkStatus | null>(null);
+  const [dittoNotice, setDittoNotice] = createSignal(readDittoResult());
+  const [dittoBusy, setDittoBusy] = createSignal(false);
+  const [dittoAttempt, setDittoAttempt] = createSignal<DittoLinkAttempt | null>(null);
 
   createEffect(() => {
     void loadMe();
+    void loadDittoLink();
+    const pending = dittoNotice()?.attempt;
+    if (pending) void loadDittoAttempt(pending);
   });
+
+  /** The callback only parks who signed in on Ditto; the pairing with this
+   * hotkey is written when the signed-in miner confirms it here. */
+  async function loadDittoAttempt(attemptId: string): Promise<void> {
+    try {
+      const attempt = await authJSON<DittoLinkAttempt>(
+        "/me/ditto-link/attempts/" + encodeURIComponent(attemptId),
+        { headers: sessionAuthHeader() },
+      );
+      setDittoAttempt(attempt);
+      if (attempt.status === "identity_verified") {
+        setDittoNotice({
+          ok: true,
+          text: "Ditto verified the sign-in. Approve linking this hotkey on the Ditto page first, then confirm here.",
+        });
+      } else if (attempt.status !== "authenticated") {
+        setDittoNotice({
+          ok: attempt.status === "linked",
+          text:
+            attempt.status === "linked"
+              ? "Ditto account linked."
+              : "That Ditto sign-in is " +
+                attempt.status +
+                (attempt.error ? ": " + attempt.error : "."),
+        });
+      }
+    } catch (err) {
+      setDittoAttempt(null);
+      setDittoNotice({
+        ok: false,
+        text: err instanceof Error ? err.message : "Could not load the Ditto sign-in.",
+      });
+    }
+  }
+
+  async function confirmDittoLink(): Promise<void> {
+    const attempt = dittoAttempt();
+    if (!attempt) return;
+    setDittoBusy(true);
+    setError("");
+    try {
+      const confirmed = await authJSON<DittoLinkAttempt>(
+        "/me/ditto-link/attempts/" + encodeURIComponent(attempt.attempt_id) + "/confirm",
+        { method: "POST", headers: sessionAuthHeader() },
+      );
+      setDittoAttempt(null);
+      setDittoNotice({ ok: confirmed.status === "linked", text: "Ditto account linked." });
+      await loadDittoLink();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not confirm the Ditto link.");
+    } finally {
+      setDittoBusy(false);
+    }
+  }
+
+  function declineDittoLink(): void {
+    setDittoAttempt(null);
+    setDittoNotice({ ok: false, text: "Not linked. The sign-in expires on its own." });
+  }
+
+  async function loadDittoLink(): Promise<void> {
+    try {
+      setDittoLink(
+        await authJSON<DittoLinkStatus>("/me/ditto-link", { headers: sessionAuthHeader() }),
+      );
+    } catch {
+      // An older Platform has no link endpoint; the card simply stays hidden.
+      setDittoLink(null);
+    }
+  }
+
+  async function startDittoLink(): Promise<void> {
+    setDittoBusy(true);
+    setError("");
+    try {
+      const started = await authJSON<{ authorize_url: string }>("/me/ditto-link/start", {
+        method: "POST",
+        headers: { ...sessionAuthHeader(), "content-type": "application/json" },
+        body: JSON.stringify({
+          client: "dashboard",
+          return_to: location.origin + location.pathname + "#/reviews",
+        }),
+      });
+      location.assign(started.authorize_url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not start Sign in with Ditto.");
+      setDittoBusy(false);
+    }
+  }
+
+  async function unlinkDitto(): Promise<void> {
+    setDittoBusy(true);
+    setDittoNotice(null);
+    setError("");
+    try {
+      await authJSON<unknown>("/me/ditto-link", { method: "DELETE", headers: sessionAuthHeader() });
+      setSaved("Ditto account unlinked.");
+      await loadDittoLink();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not unlink the Ditto account.");
+    } finally {
+      setDittoBusy(false);
+    }
+  }
 
   async function loadMe(): Promise<boolean> {
     try {
@@ -519,6 +718,20 @@ function AccountPanel(): JSX.Element {
       setScreening(body);
     } catch (err) {
       setScreeningError(err instanceof Error ? err.message : "Could not load screening feedback.");
+    }
+  }
+
+  async function loadGateNotes(agentId: string): Promise<void> {
+    setGateAgent(agentId);
+    setGateNotes(null);
+    setGateError("");
+    try {
+      const body = await authJSON<MinerGateNotes>(`/me/agents/${agentId}/gate-notes`, {
+        headers: sessionAuthHeader(),
+      });
+      setGateNotes(body);
+    } catch (err) {
+      setGateError(err instanceof Error ? err.message : "Could not load gate notes.");
     }
   }
 
@@ -654,6 +867,93 @@ function AccountPanel(): JSX.Element {
             Save profile
           </button>
         </div>
+        <Show when={dittoLink()}>
+          {(status) => (
+            <div class="account-card" data-testid="ditto-account-card">
+              <h3>Ditto account</h3>
+              <Show when={dittoNotice()}>
+                {(notice) => <p class={notice().ok ? "muted" : "account-error"}>{notice().text}</p>}
+              </Show>
+              <Show when={dittoAttempt()?.status === "authenticated" && dittoAttempt()}>
+                {(attempt) => (
+                  <div data-testid="ditto-link-confirm">
+                    <p>
+                      Link hotkey <span class="mono">{attempt().miner_hotkey}</span> to Ditto
+                      account <strong>{attempt().ditto_email || attempt().ditto_user_id}</strong>?
+                    </p>
+                    <p class="muted">
+                      Only confirm if this is the account you just signed in with and accepted on
+                      the Ditto page. Both sides agree before anything is written: the Ditto account
+                      holder accepts this hotkey there, and you confirm here.
+                    </p>
+                    <button
+                      class="btn"
+                      disabled={dittoBusy()}
+                      onClick={() => void confirmDittoLink()}
+                    >
+                      Confirm link
+                    </button>{" "}
+                    <button class="btn ghost" disabled={dittoBusy()} onClick={declineDittoLink}>
+                      Not me
+                    </button>
+                  </div>
+                )}
+              </Show>
+              <Show
+                when={status().link}
+                fallback={
+                  <>
+                    <p class="muted">
+                      Sign in with Ditto to attach your Ditto account to this hotkey. The link lets
+                      DittoBench attribute Router inference to your consenting account and credit
+                      Feedback Track contributions to it. Nothing is signed and no TAO moves; the
+                      hotkey is proven by this session, the account by Ditto.
+                    </p>
+                    <Show
+                      when={status().enabled}
+                      fallback={<p class="muted">Linking is not enabled on this deployment yet.</p>}
+                    >
+                      <button
+                        class="btn"
+                        disabled={dittoBusy()}
+                        onClick={() => void startDittoLink()}
+                      >
+                        Sign in with Ditto
+                      </button>
+                    </Show>
+                    <p class="muted">
+                      From a terminal: <code>ditto link-ditto</code> (uses your saved{" "}
+                      <code>ditto login</code> session).
+                    </p>
+                  </>
+                }
+              >
+                {(link) => (
+                  <>
+                    <p>
+                      Linked to <strong>{link().ditto_email || link().ditto_user_id}</strong>
+                      <span class="muted">
+                        {" "}
+                        · via {link().linked_via} · {link().created_at}
+                      </span>
+                    </p>
+                    <p class="muted">
+                      Other hotkeys can link to the same Ditto account; each one signs in on its
+                      own. Unlinking here stops attribution for this hotkey only.
+                    </p>
+                    <button
+                      class="btn ghost"
+                      disabled={dittoBusy()}
+                      onClick={() => void unlinkDitto()}
+                    >
+                      Unlink Ditto account
+                    </button>
+                  </>
+                )}
+              </Show>
+            </div>
+          )}
+        </Show>
       </Show>
       <Show when={tab() === "submissions"}>
         <div class="account-card">
@@ -672,6 +972,9 @@ function AccountPanel(): JSX.Element {
                     </button>
                     <button class="btn ghost" onClick={() => void loadScreening(item.agent_id)}>
                       Screening feedback
+                    </button>
+                    <button class="btn ghost" onClick={() => void loadGateNotes(item.agent_id)}>
+                      Gate notes
                     </button>
                     <Show when={logAgent() === item.agent_id}>
                       <Show when={logsError()}>
@@ -705,6 +1008,110 @@ function AccountPanel(): JSX.Element {
                             )}
                           </For>
                         </ul>
+                      </Show>
+                    </Show>
+                    <Show when={gateAgent() === item.agent_id}>
+                      <Show when={gateError()}>
+                        <p class="account-error">{gateError()}</p>
+                      </Show>
+                      <Show when={gateNotes()}>
+                        {(notes) => (
+                          <Show
+                            when={notes().runs.length}
+                            fallback={
+                              <p class="muted">
+                                No bench v13+ gate notes yet. Runs scored before v13, or before the
+                                scorer reported gate telemetry, carry none.
+                              </p>
+                            }
+                          >
+                            <ul class="account-logs account-gate-notes">
+                              <For each={notes().runs}>
+                                {(run) => (
+                                  <li>
+                                    <p>
+                                      v{run.bench_version} · {run.validator_hotkey.slice(0, 8)}… ·{" "}
+                                      {postureState(run.posture)[0].toLowerCase()} · composite{" "}
+                                      {run.composite.toFixed(3)}
+                                      <span class="muted">
+                                        {" "}
+                                        · {run.flagged_case_count ?? 0} flagged{" "}
+                                        {(run.flagged_case_count ?? 0) === 1 ? "case" : "cases"}
+                                        {typeof run.flagged_case_share === "number"
+                                          ? ` (${percentage(run.flagged_case_share)})`
+                                          : ""}
+                                      </span>
+                                    </p>
+                                    <Show
+                                      when={run.cases.length}
+                                      fallback={<p class="muted">No case tripped a gate.</p>}
+                                    >
+                                      <ul class="account-gate-cases">
+                                        <For each={run.cases}>
+                                          {(c) => (
+                                            <li>
+                                              <p>
+                                                <span class="muted">
+                                                  case {c.case_index ?? "?"}
+                                                  {c.case_id ? ` (${c.case_id})` : ""} ·{" "}
+                                                  {[c.kind, c.category].filter(Boolean).join(" / ")}
+                                                  {typeof c.score === "number"
+                                                    ? ` · scored ${c.score.toFixed(2)}`
+                                                    : ""}
+                                                </span>
+                                              </p>
+                                              <For each={c.notes}>
+                                                {(note) => (
+                                                  <p>
+                                                    {gateNoteLabel(note.gate)}
+                                                    {note.zeroing ? (
+                                                      <span class="muted"> (would zero)</span>
+                                                    ) : null}{" "}
+                                                    <code
+                                                      class="account-gate-note-id"
+                                                      title="Cite this id in a dispute"
+                                                    >
+                                                      {note.note_id}
+                                                    </code>
+                                                  </p>
+                                                )}
+                                              </For>
+                                              <Show when={c.relation}>
+                                                <p class="muted">relation {c.relation}</p>
+                                              </Show>
+                                              <Show
+                                                when={
+                                                  typeof c.cost_factor === "number" ||
+                                                  typeof c.tools_offered === "number"
+                                                }
+                                              >
+                                                <p class="muted">
+                                                  {[
+                                                    typeof c.cost_factor === "number"
+                                                      ? `cost factor ${c.cost_factor.toFixed(2)}`
+                                                      : "",
+                                                    typeof c.tools_offered === "number"
+                                                      ? `${c.tools_offered} tools offered`
+                                                      : "",
+                                                    c.catalog_present === false
+                                                      ? "no catalog offered"
+                                                      : "",
+                                                  ]
+                                                    .filter(Boolean)
+                                                    .join(" · ")}
+                                                </p>
+                                              </Show>
+                                            </li>
+                                          )}
+                                        </For>
+                                      </ul>
+                                    </Show>
+                                  </li>
+                                )}
+                              </For>
+                            </ul>
+                          </Show>
+                        )}
                       </Show>
                     </Show>
                     <Show when={screeningAgent() === item.agent_id}>

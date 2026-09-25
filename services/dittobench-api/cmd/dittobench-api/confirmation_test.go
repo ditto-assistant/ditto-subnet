@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 )
 
 const (
@@ -412,7 +413,9 @@ func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testi
 		{
 			name: "future version",
 			mutate: func(request *confirmationExecutionRequest) {
-				request.BenchVersion = 13
+				// The first version the scorer does not accept yet; v13 is a
+				// supported subject epoch.
+				request.BenchVersion = scoregates.BenchVersionV13 + 1
 			},
 			message: "confirmation execution requires a supported confirmation bench version",
 		},
@@ -1178,8 +1181,8 @@ func TestConfirmationExecutorDoesNotControlOrdinaryV9Capability(t *testing.T) {
 	if err := json.Unmarshal(qualifiedRecorder.Body.Bytes(), &capabilities); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(capabilities.SupportedBenchVersions, []int{8, 9, 10, 11, 12}) {
-		t.Fatalf("supported versions = %v, want ordinary v8 through v12", capabilities.SupportedBenchVersions)
+	if !reflect.DeepEqual(capabilities.SupportedBenchVersions, supportedBenchVersions()) {
+		t.Fatalf("supported versions = %v, want ordinary capabilities %v", capabilities.SupportedBenchVersions, supportedBenchVersions())
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(qualifiedRecorder.Body.Bytes(), &raw); err != nil {

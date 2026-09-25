@@ -182,6 +182,12 @@ resource "google_cloud_run_v2_service" "datapipeline" {
   lifecycle {
     ignore_changes = [
       scaling[0].manual_instance_count,
+      # Semantic release deploys an immutable candidate revision, then moves
+      # traffic to latest. Terraform owns the service shape, not that revision
+      # or the release client's metadata; clearing it would redeploy Cloud Run.
+      client,
+      client_version,
+      template[0].revision,
       template[0].containers[0].image,
     ]
   }

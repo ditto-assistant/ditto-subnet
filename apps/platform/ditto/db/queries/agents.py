@@ -31,6 +31,7 @@ from ditto.db.queries.benchmark_admission import (
     benchmark_admission_predicate,
     validator_queue_admission_predicate,
 )
+from ditto.db.queries.screening_retry import failed_screening_retry_authorized
 from ditto.screener_policy_state import effective_screening_policy_version
 
 if TYPE_CHECKING:
@@ -366,6 +367,7 @@ async def query_public_activity_page(
     downloadable_agent_ids: set[UUID],
     query: str | None,
     reserved_name_stems: set[str] | None = None,
+    query_miner_hotkeys: set[str] | None = None,
     miner_hotkey: str | None = None,
     ath_only: bool,
     active_validation_agent_ids: set[UUID],
@@ -436,6 +438,7 @@ async def query_public_activity_page(
         & (Agent.screening_policy_version < effective_screening_policy_version())
         & admitted
     )
+    failed_retry_authorized = failed_screening_retry_authorized()
     below_floor = (
         (Agent.status == AgentStatus.EVALUATING)
         & ~live_assignment
@@ -456,9 +459,14 @@ async def query_public_activity_page(
             literal(AgentStatus.SCREENING.value),
         ),
         (
-            Agent.status.in_((AgentStatus.UPLOADED, AgentStatus.SCREENING_FAILED))
+            (Agent.status == AgentStatus.UPLOADED)
+            | ((Agent.status == AgentStatus.SCREENING_FAILED) & failed_retry_authorized)
             | needs_rescreen,
             literal("waiting_screening"),
+        ),
+        (
+            Agent.status == AgentStatus.SCREENING_FAILED,
+            literal("screening_failed"),
         ),
         (waiting_state & retired, literal("retired")),
         (
@@ -509,6 +517,12 @@ async def query_public_activity_page(
                 projected.c.public_status,
             )
         ).contains(normalized_query)
+        # A miner UID is chain state, not a column here, so the caller resolves
+        # the typed UID against the registration snapshot and passes the
+        # hotkeys holding it. Searching "42" therefore finds that miner's
+        # submissions without this query having to read the chain.
+        if query_miner_hotkeys:
+            haystack = haystack | Agent.miner_hotkey.in_(query_miner_hotkeys)
         if query_hits_stricken and stems:
             stem_match = or_(*[func.lower(Agent.name).contains(stem) for stem in stems])
             base_filters.append(haystack | stem_match)
@@ -569,6 +583,7 @@ async def query_public_activity_page(
     else:
         board_statuses = (
             "waiting_screening",
+            "screening_failed",
             "screening",
             "waiting_validator",
             "below_score_floor",

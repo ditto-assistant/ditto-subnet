@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { refreshAllEndpoints } from "../data/useEndpoint";
 import { syncFromLocation } from "../stores/routeStore";
-import { installFixtureFetch } from "../test-fixtures";
+import { installFixtureFetch, loadFixture } from "../test-fixtures";
 import { PipelinePage } from "./PipelinePage";
 
 let restoreFetch: (() => void) | null = null;
@@ -140,15 +140,67 @@ describe("weekend drift: board reshape and refresh resilience", () => {
       "Conditional after scoring",
     );
     expect(aside?.querySelector("#pipeline-review-title")?.textContent).toBe(
-      "Source integrity review",
+      "Deferred source review",
     );
     // Only qualifiers and anomaly holds enter — the copy says so, and the
     // fixture window carries none, so the branch states that rather than
     // implying review of everything.
     expect(aside?.textContent).toContain("Only leaderboard qualifiers and robust anomaly holds");
     expect(container.querySelector("#pipeline-review-items")?.textContent).toContain(
-      "No submissions are held for integrity review.",
+      "No submissions are held for deferred source review.",
     );
+  });
+
+  it("marks a review-budget hold on the branch card as no finding (#562)", async () => {
+    const ops = loadFixture<{ activity: { entries: Record<string, unknown>[] } }>("operations");
+    const base = ops.activity.entries[0] as Record<string, unknown>;
+    const held = (
+      review_conclusion: string,
+      deferred_review_triggers: string[],
+      agent_id: string,
+    ) => ({
+      ...base,
+      agent_id,
+      status: "under_review",
+      review_reason: "Score qualified this submission for deferred source review",
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers,
+      review_conclusion,
+    });
+    const inner = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (!new URL(raw, "http://fixtures.test").pathname.endsWith("/public/operations")) {
+        return inner(input, init);
+      }
+      const body = {
+        ...ops,
+        activity: {
+          ...ops.activity,
+          entries: [
+            held("budget_exhausted", ["top_five"], "11111111-1111-4111-8111-111111111111"),
+            held("adverse_signal", ["anomaly"], "22222222-2222-4222-8222-222222222222"),
+          ],
+        },
+      };
+      return Promise.resolve(new Response(JSON.stringify(body), { status: 200 }));
+    }) as typeof fetch;
+    try {
+      const { container } = render(() => <PipelinePage />);
+      await waitFor(() =>
+        expect(container.querySelectorAll("#pipeline-review-items .pipeline-item").length).toBe(2),
+      );
+      const cards = Array.from(container.querySelectorAll("#pipeline-review-items .pipeline-item"));
+      expect(cards[0]?.querySelector(".deferred-review-summary")?.textContent).toBe(
+        "Score qualified (top 5) \u00b7 automated review ran out of budget \u2014 no finding",
+      );
+      expect(cards[1]?.querySelector(".deferred-review-summary")?.textContent).toBe(
+        "Anomaly hold \u00b7 automated review raised a concern",
+      );
+      expect(cards[1]?.textContent).not.toContain("no finding");
+    } finally {
+      globalThis.fetch = inner;
+    }
   });
 
   it("keeps the last reconciled snapshot when a refresh fails", async () => {

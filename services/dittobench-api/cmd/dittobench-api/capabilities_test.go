@@ -52,14 +52,17 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 	if got.MemoryPhaseCapacity != maxConcurrentMemoryPhases {
 		t.Fatalf("memory-phase capacity = %d, want %d", got.MemoryPhaseCapacity, maxConcurrentMemoryPhases)
 	}
-	if len(got.Features) != 1 || got.Features[0] != "git_subdir" {
+	if len(got.Features) != 2 || got.Features[0] != "git_subdir" || got.Features[1] != "v13-deterministic-enterprise-v1" {
 		t.Fatalf("wrong feature set: %v", got.Features)
 	}
 	want := []int{}
-	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12} {
-		if efficiency.ProductionReadyForVersion(version) {
+	for _, version := range protocol.SupportedBenchVersions() {
+		if version >= protocol.BenchVersionV8 && efficiency.ProductionReadyForVersion(version) {
 			want = append(want, version)
 		}
+	}
+	if want[len(want)-1] != protocol.BenchVersionV13 {
+		t.Fatalf("newest advertised candidate = %d, want v13 (issue #1519 scorer half)", want[len(want)-1])
 	}
 	if len(got.SupportedBenchVersions) != len(want) {
 		t.Fatalf("wrong supported versions: %v (want %v)", got.SupportedBenchVersions, want)
@@ -71,6 +74,56 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 	}
 	if rr.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("capabilities response must not be cached")
+	}
+}
+
+func TestScoredRuntimeEnvEvidenceUsesRunningScorerContract(t *testing.T) {
+	s := &server{
+		softwareVersion: "0.308.0", sourceRevision: testSourceRevision,
+		sourceRevisionOrigin: release.OriginBinary,
+		allowScreenedImages:  true,
+	}
+	evidence := s.scoredRuntimeEnvEvidence()
+	if evidence == nil || evidence.BenchVersion != 13 || evidence.SourceRevision != testSourceRevision {
+		t.Fatalf("missing bound environment evidence: %+v", evidence)
+	}
+	want := harnessSandboxEnv(map[string]string{"DITTOBENCH_COMPLETION_LOG": "/tmp/leak"}, protocol.BenchVersionV13)
+	if _, present := want["DITTOBENCH_COMPLETION_LOG"]; present {
+		t.Fatal("V13 allowed caller environment into scored sandbox")
+	}
+	if len(evidence.InjectedKeys) != len(want) {
+		t.Fatalf("injected key count = %d, want %d", len(evidence.InjectedKeys), len(want))
+	}
+	for _, key := range evidence.InjectedKeys {
+		if _, present := want[key]; !present {
+			t.Fatalf("reported key %q absent from scored sandbox", key)
+		}
+	}
+	if evidence.SHA256 == "" {
+		t.Fatal("environment evidence digest missing")
+	}
+	encoded, err := json.Marshal(evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"/tmp/dittobench.db", brokerPlaceholderKey, "sk-"} {
+		if strings.Contains(string(encoded), value) {
+			t.Fatalf("runtime evidence disclosed a sandbox value: %q", value)
+		}
+	}
+	s.sourceRevisionMismatch = true
+	if s.scoredRuntimeEnvEvidence() != nil {
+		t.Fatal("mismatched binary/environment must not issue evidence")
+	}
+	s.sourceRevisionMismatch = false
+	s.sourceRevisionOrigin = release.OriginEnv
+	if s.scoredRuntimeEnvEvidence() != nil {
+		t.Fatal("environment-asserted revision must not issue evidence")
+	}
+	s.sourceRevisionOrigin = release.OriginBinary
+	s.allowScreenedImages = false
+	if s.scoredRuntimeEnvEvidence() != nil {
+		t.Fatal("practice-only scorer must not attest to a scored sandbox")
 	}
 }
 
@@ -111,7 +164,7 @@ func TestV9AndV10CapabilitiesShareQualityAuthorityWithoutChangingCurrentVersion(
 		}
 	}
 	got := capabilitiesOf(t, &server{softwareVersion: "0.10.0", sourceRevision: testSourceRevision})
-	want := []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12}
+	want := []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12, protocol.BenchVersionV13}
 	if !reflect.DeepEqual(got.SupportedBenchVersions, want) {
 		t.Fatalf("supported versions = %v, want %v", got.SupportedBenchVersions, want)
 	}

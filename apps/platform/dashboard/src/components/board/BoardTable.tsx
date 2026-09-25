@@ -5,7 +5,7 @@
 // (3876–3887). Solid's keyed <For> replaces the sectionChanged innerHTML
 // gate: an unchanged slice never rebuilds, so focus survives background
 // refreshes by construction.
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 
 import {
@@ -25,6 +25,7 @@ import {
   crownHeldRowLabel,
   crownHeldRowTip,
   displayComposite,
+  familyMemberDisplayComposite,
   chainWeightLabel,
   errBandBounds,
   foldArrival,
@@ -44,6 +45,7 @@ import { Pager } from "../ui/Pager";
 import { EmptyRow } from "../ui/States";
 import {
   boardDir,
+  boardCodingFilter,
   boardPage,
   boardPageSize,
   boardQuery,
@@ -52,6 +54,7 @@ import {
   expandedFamilies,
   persistRanks,
   setBoardDir,
+  setBoardCodingFilter,
   setBoardPage,
   setBoardQuery,
   setBoardSort,
@@ -60,7 +63,7 @@ import {
   navigateBoardPage,
   writeBoardPage,
 } from "./board-state";
-import type { BoardSortKey, BoardTab as BoardTabName } from "./board-state";
+import type { BoardSortKey, BoardTab as BoardTabName, CodingShadowFilter } from "./board-state";
 import {
   ContinualScoreChip,
   EfficiencyBonusChip,
@@ -68,6 +71,7 @@ import {
   RankMove,
   RetestSeedChip,
   RolloutChip,
+  RouterShadowChip,
   TokenPenaltyChip,
   V9ConfirmationChip,
 } from "./chips";
@@ -77,6 +81,7 @@ import { HandleBadge } from "../ui/HandleBadge";
 import { TipTarget } from "../ui/Tooltip";
 import { MinerAvatar } from "../ui/MinerAvatar";
 import { ChainWeightsPanel } from "./ChainWeightsPanel";
+import { codingShadowCounts, codingShadowState } from "./CodingShadowSummary";
 
 // Matching agent name, UID, and hotkey covers how people actually look a
 // miner up: by what they called it, by the number on the board, or by
@@ -150,6 +155,13 @@ function boardSortDirection(): string {
 function restoreBoardRankOrder(): void {
   setBoardSort("rank");
   setBoardDir(1);
+  setBoardPage(1);
+  writeBoardPage(false);
+}
+
+function chooseCodingFilter(filter: CodingShadowFilter): void {
+  if (filter === boardCodingFilter()) return;
+  setBoardCodingFilter(filter);
   setBoardPage(1);
   writeBoardPage(false);
 }
@@ -270,12 +282,15 @@ function emissionsColTip(store: LeaderboardStore): string {
 }
 
 function Bar(props: {
-  kind: "tool" | "memory" | "longmem" | "coding";
+  kind: "tool" | "memory" | "longmem" | "coding" | "router";
   value: number;
 }): JSX.Element {
   return (
     <div class="metric">
-      <div class="barwrap">
+      <div
+        class="barwrap"
+        classList={{ "coding-measured-zero": props.kind === "coding" && props.value === 0 }}
+      >
         <div
           class={"bar " + props.kind}
           style={{ width: (Math.max(0, Math.min(1, props.value)) * 100).toFixed(1) + "%" }}
@@ -346,6 +361,10 @@ function codingShadowCopy(entry: BoardEntry): { value: number | null; label: str
 // second line carrying the trend sparkline and the chip vocabulary
 // (compositeCell 5582–5601).
 function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): JSX.Element {
+  const [codingDetailsOpen, setCodingDetailsOpen] = createSignal(false);
+  createEffect(() => {
+    if (!props.entry.coding_shadow && codingDetailsOpen()) setCodingDetailsOpen(false);
+  });
   const value = (): number => displayComposite(props.entry, props.store.settledView());
   const longmemScore = (): number | null | undefined => props.entry.v9_longmem_mean_composite;
   const longmemPlaceholder = (): string | null => {
@@ -361,7 +380,22 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
     }
   };
   const showsEfficiencyTieBreak = (): boolean => props.entry.efficiency_factor != null;
+  const routerScore = (): number | null | undefined => props.entry.router_shadow_composite;
+  const routerPlaceholder = (): string | null => {
+    if (routerScore() != null) return null;
+    if (props.store.payload()?.router_shadow_mode !== "shadow") return null;
+    switch (props.entry.router_shadow_status) {
+      case "running":
+        return "running";
+      case "queued":
+        return "queued";
+      default:
+        return null;
+    }
+  };
   const coding = (): ReturnType<typeof codingShadowCopy> => codingShadowCopy(props.entry);
+  const codingDetailsId = (): string =>
+    "coding-shadow-details-" + (props.entry.agent_id || props.entry.miner_hotkey);
   const band = (): { lo: number; hi: number; width: number } | null =>
     showsCompositeErrBand(props.entry, props.store.settledView())
       ? errBandBounds(value(), props.entry.composite_stderr)
@@ -410,13 +444,80 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
             <span>Coding</span>
             <small>Shadow</small>
           </TipTarget>
-          <Show
-            when={coding().value != null}
-            fallback={<span class="coding-shadow-placeholder muted">{coding().label}</span>}
-          >
-            <Bar kind="coding" value={coding().value as number} />
-          </Show>
+          <div class="coding-shadow-value">
+            <Show
+              when={coding().value != null}
+              fallback={<span class="coding-shadow-placeholder muted">{coding().label}</span>}
+            >
+              <Bar kind="coding" value={coding().value as number} />
+            </Show>
+            <Show when={props.entry.coding_shadow}>
+              <button
+                type="button"
+                class="coding-shadow-details-toggle"
+                data-coding-details="toggle"
+                aria-expanded={codingDetailsOpen() ? "true" : "false"}
+                aria-controls={codingDetailsId()}
+                aria-label={
+                  (codingDetailsOpen() ? "Hide" : "Show") +
+                  " Coding shadow details for " +
+                  agentLabel(props.entry.agent_name, props.entry.agent_version)
+                }
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  setCodingDetailsOpen((open) => !open);
+                }}
+              >
+                {codingDetailsOpen() ? "Hide" : "Details"}
+              </button>
+            </Show>
+          </div>
         </div>
+        <Show when={codingDetailsOpen()}>
+          <div
+            class="coding-shadow-details"
+            id={codingDetailsId()}
+            data-coding-details="panel"
+            role="region"
+            aria-label="Coding shadow details"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <span>
+              <strong>Status</strong> {coding().label}
+            </span>
+            <Show when={props.entry.coding_shadow}>
+              {(result) => (
+                <>
+                  <span>
+                    <strong>Evidence</strong> {result().result_count}/{result().score_quorum}{" "}
+                    validators
+                  </span>
+                  <span>
+                    <strong>Contract</strong> Coding v{result().coding_contract_version} · Bench v
+                    {result().bench_version}
+                  </span>
+                  <span>
+                    <strong>Artifact</strong>{" "}
+                    {result().status === "stale"
+                      ? "stale; not carried forward"
+                      : "exact current match"}
+                  </span>
+                  <Show when={result().completed_at}>
+                    {(completedAt) => (
+                      <span title={completedAt()}>
+                        <strong>Completed</strong> {relTime(completedAt())}
+                      </span>
+                    )}
+                  </Show>
+                </>
+              )}
+            </Show>
+            <span class="coding-shadow-details-boundary">
+              Display only · never ranking, weight, or emission authority
+            </span>
+          </div>
+        </Show>
         <Show when={longmemScore() != null || longmemPlaceholder() != null}>
           <div class="score-stack-row">
             <span class="score-stack-label">LongMem</span>
@@ -425,6 +526,17 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
               fallback={<span class="mval muted">{longmemPlaceholder()}</span>}
             >
               <Bar kind="longmem" value={longmemScore() as number} />
+            </Show>
+          </div>
+        </Show>
+        <Show when={routerScore() != null || routerPlaceholder() != null}>
+          <div class="score-stack-row">
+            <span class="score-stack-label">Router</span>
+            <Show
+              when={routerScore() != null}
+              fallback={<span class="mval muted">{routerPlaceholder()}</span>}
+            >
+              <Bar kind="router" value={routerScore() as number} />
             </Show>
           </div>
         </Show>
@@ -438,6 +550,7 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
             entry={props.entry}
             mode={props.store.payload()?.v9_confirmation_mode}
           />
+          <RouterShadowChip entry={props.entry} mode={props.store.payload()?.router_shadow_mode} />
           <ContinualScoreChip entry={props.entry} />
           <EfficiencyBonusChip entry={props.entry} />
           <QualityGateChip entry={props.entry} />
@@ -550,7 +663,8 @@ function BoardRow(props: {
     if (
       target.closest(".copy") ||
       target.closest("[data-entity-link]") ||
-      target.closest("[data-family-toggle]")
+      target.closest("[data-family-toggle]") ||
+      target.closest("[data-coding-details]")
     ) {
       return;
     }
@@ -574,7 +688,8 @@ function BoardRow(props: {
           if (
             target.closest(".copy") ||
             target.closest("[data-entity-link]") ||
-            target.closest("[data-family-toggle]")
+            target.closest("[data-family-toggle]") ||
+            target.closest("[data-coding-details]")
           ) {
             return;
           }
@@ -846,8 +961,11 @@ function BoardRow(props: {
                   />
                   <span class="submission-version">{agentVersionLabel(member.agent_version)}</span>
                 </span>
-                <span class="family-member-score" title="Canonical three-validator median">
-                  {fxScore(member.canonical_composite)}
+                <span
+                  class="family-member-score"
+                  title="Official composite (same estimator as KOTH). Includes shared retest seeds when the continual mean is active."
+                >
+                  {fxScore(familyMemberDisplayComposite(member))}
                 </span>
                 <Show when={member.submitted_at}>
                   <span class="family-member-submitted" title={"Upload " + member.submitted_at}>
@@ -878,9 +996,16 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
     scored: scored().length,
     provisional: provisional().length,
   });
+  const tabRows = createMemo(() =>
+    boardTab() === "all" ? all() : boardTab() === "provisional" ? provisional() : scored(),
+  );
+  const codingCounts = createMemo(() => codingShadowCounts(tabRows()));
   const rows = createMemo(() => {
+    const filter = boardCodingFilter();
     const source =
-      boardTab() === "all" ? all() : boardTab() === "provisional" ? provisional() : scored();
+      filter === "all"
+        ? tabRows()
+        : tabRows().filter((entry) => codingShadowState(entry) === filter);
     return source.slice().sort((a, b) => boardCompare(a, b, store.settledView()));
   });
   const pageCount = (): number => Math.max(1, Math.ceil(rows().length / boardPageSize));
@@ -993,6 +1118,41 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
                 {tabName === "all" ? "All " : tabName === "scored" ? "Scored " : "Provisional "}
                 <span class="activity-filter-count" data-board-count={tabName}>
                   {store.payload() || store.entries().length ? counts()[tabName] : "–"}
+                </span>
+              </button>
+            )}
+          </For>
+        </div>
+        <div
+          class="coding-board-filters activity-filter-list"
+          role="group"
+          aria-label="Coding shadow status"
+        >
+          <span class="coding-board-filter-label" aria-hidden="true">
+            Coding
+          </span>
+          <For
+            each={
+              [
+                ["all", "All"],
+                ["complete", "Complete"],
+                ["in_progress", "In progress"],
+                ["not_evaluated", "Not evaluated"],
+                ["stale", "Stale"],
+              ] as const
+            }
+          >
+            {([filter, label]) => (
+              <button
+                class="activity-filter"
+                type="button"
+                data-coding-filter={filter}
+                aria-pressed={boardCodingFilter() === filter ? "true" : "false"}
+                onClick={() => chooseCodingFilter(filter)}
+              >
+                {label}{" "}
+                <span class="activity-filter-count">
+                  {store.payload() || store.entries().length ? codingCounts()[filter] : "–"}
                 </span>
               </button>
             )}
@@ -1152,9 +1312,11 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
                   <EmptyRow colspan={6}>
                     {needle()
                       ? "No miner matches that filter."
-                      : boardTab() === "provisional"
-                        ? "No provisional runs right now. Pre-quorum scores appear here as validators report them."
-                        : "No miners have been scored yet. As soon as a submission clears scoring it appears here."}
+                      : boardCodingFilter() !== "all"
+                        ? "No miners have that Coding shadow status in this view."
+                        : boardTab() === "provisional"
+                          ? "No provisional runs right now. Pre-quorum scores appear here as validators report them."
+                          : "No miners have been scored yet. As soon as a submission clears scoring it appears here."}
                   </EmptyRow>
                 }
               >

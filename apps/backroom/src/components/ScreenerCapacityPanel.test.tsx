@@ -66,6 +66,7 @@ function capacity(overrides: Partial<ScreenerCapacityView> = {}): ScreenerCapaci
     },
     nodes: [],
     events: [],
+    event_retention_days: 30,
     builds: [],
     provider_jobs: [],
     provider_control: {
@@ -101,6 +102,9 @@ describe('ScreenerCapacityPanel', () => {
     expect(screen.queryByText(/5 CPU rentals advertised/)).toBeNull()
     expect(screen.getByText(/Trusted screener release-image builds remain separate/)).toBeTruthy()
     expect(screen.getByText(/Hetzner handles normal work/)).toBeTruthy()
+    expect(screen.getByText('Last GCE fleet read')).toBeTruthy()
+    expect(screen.getByText(/Aug 13, 2026, 9:40 PM UTC/)).toBeTruthy()
+    expect(screen.getByText(/does not mean Targon recovered/)).toBeTruthy()
   })
 
   it('renders one-shot cleanup timestamps in an explicit server-safe timezone', () => {

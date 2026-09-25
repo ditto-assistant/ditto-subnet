@@ -189,6 +189,37 @@ probe supplies a deterministic Platform/model mock and a fake probe-only model
 key; production Secret Manager bootstrap remains covered by the controller and
 worker contract tests.
 
+## Capacity event retention
+
+`screener_capacity_events` is an append-only audit table, so Platform prunes it
+instead of letting reconciliation and provider lifecycle events accumulate.
+
+- **Window:** 30 days by default, set with
+  `SCREENER_CAPACITY_EVENT_RETENTION_DAYS`. `0` keeps every event and disables
+  pruning; any other value must be at least 7, so a typo cannot erase incident
+  history. The window in effect is returned as `event_retention_days` by
+  `GET /api/v1/admin/screener-capacity` (and therefore `get_screener_capacity`),
+  with `null` meaning pruning is off.
+- **Mechanism:** a Platform-role janitor sweeps hourly. Each sweep is **one
+  transaction** that takes a transaction-scoped advisory lock, lists the
+  environments holding events once, then runs up to 20 batches inside it, each
+  deleting at most 1,000 expired events **per environment** against the
+  `(environment, created_at)` index. Because the lock lives as long as that one
+  transaction, another Platform replica cannot start a sweep of its own between
+  batches, so replicas share a single deletion budget per sweep. Every
+  environment has its own budget, so a backlog in one cannot starve another, and
+  an environment stops being visited once a batch comes back short. Readers keep
+  seeing recent history while it runs (MVCC). An event exactly at the cutoff is
+  kept. A failure rolls back the whole sweep, so nothing is half-deleted, and the
+  next sweep retries it.
+- **Signals:** `ditto_screener_capacity_event_janitor_runs_total{outcome}`
+  (`deleted`, `busy`, `error`), `ditto_screener_capacity_event_janitor_deleted_total`
+  and `ditto_screener_capacity_event_janitor_duration_seconds`. The deleted
+  counter moves only after the sweep commits, so it never counts rows that a
+  failed sweep rolled back; a `busy` outcome means another replica owns the
+  sweep. Alert on a sustained `error` rate; failures are also logged as
+  `screener capacity event janitor sweep failed`.
+
 ## Stand-up order
 
 No repository merge deploys or mutates production. Keep the existing GCE MIG
@@ -225,6 +256,88 @@ After `subnet-screener-1` is converged, use Backroom to:
 
 The exact Debian, inventory, vault, Ansible, activation, verification, and drain
 commands live in [`docs/hetzner-screener-fleet.md`](../../docs/hetzner-screener-fleet.md).
+
+## BuildKit cache cleanup on dedicated screener hosts
+
+The `screener_worker` role installs `ditto-screener-cache-gc.timer` and its
+oneshot service. The active `hetzner_screener_fleet` role now includes the
+same cache-only tasks for its persistent full screening workers, using their
+rootless executor socket and `ditto-screener` service identity. The disposable
+KVM build guests keep isolated per-job caches; this timer does not enter those
+guests or touch the host's rootful Docker daemon. It backs up the rootless
+executor's own builder GC
+(`workers/screener/deploy/rootless-daemon.json`, `defaultKeepStorage` 40GB) by
+running `docker builder prune --force --keep-storage <budget> [--filter
+until=<age>]` against the rootless executor socket only. BuildKit skips records
+used by an in-flight build, so a timer firing mid-build does not interrupt it.
+The job never uses `--all`, `docker system prune`, or image/volume/container
+pruning.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `screener_cache_gc_enabled` | `true` | `false` stops and disables the timer |
+| `screener_cache_gc_on_calendar` | `hourly` | systemd cadence (plus `screener_cache_gc_randomized_delay: 5min`) |
+| `screener_cache_gc_keep_storage` | `40GB` | retained cache budget; keep equal to the daemon budget |
+| `screener_cache_gc_min_age` | `1h` | records younger than this are never pruned; empty (`""`) means no age floor, by design |
+| `screener_cache_gc_df_path` | executor home | filesystem logged with `df -h`; the executor home (`/var/lib/ditto-screener-docker`) holds the daemon's data root, so it is the cache's mount. `df` of the home itself works for the unit user despite mode 0700; a path beneath it would not |
+| `screener_cache_gc_dry_run` | `false` | log policy and disk state, skip the prune |
+
+This timer is the second pass, not the only one: `update-screener.sh`
+(`maintain_cache`, ~line 313) already runs `docker builder prune --keep-storage`
+against the same rootless executor, and the daemon's builder GC is the
+continuous limit. The keep-storage budget therefore lives in THREE places
+(`rootless-daemon.json`, the updater's `SCREENER_CACHE_KEEP_STORAGE`, and
+`screener_cache_gc_keep_storage`) and must stay equal. The age floor is small
+on purpose: `update-screener.sh` (~line 324) uses no age filter because a floor
+exempts burst-created cache, which is exactly what overruns the budget; 1h only
+protects records from the current burst's in-flight builds, and `""` removes it.
+The timer's unit orders `After=` the executor but never `Wants=` it, so it can
+never start the daemon; an unreachable executor fails the run visibly.
+
+The 40GB budget deliberately preserves warm layers so requeued and resubmitted
+builds stay fast (cold builds exceed nine minutes, see #429); lowering it trades
+throughput for headroom. The host disk must leave room above the budget. Each
+run logs `docker system df` and `df -h` before and after to journald under
+`ditto-screener-cache-gc`; a failed prune or unreachable executor exits nonzero,
+leaving the unit in `failed` state.
+
+On Hetzner, `screener_fleet_cache_gc_*` controls this same policy. It is enabled
+only when `screener_fleet_runtime_enabled` is true, so a disposable rehearsal
+host never starts the timer. The persistent full workers use a 100GB budget in
+both the rootless daemon and the timer. A changed daemon budget restarts the
+rootless Docker service during converge, so drain builds first. A warm-cache
+speedup must be measured from actual full-worker build durations afterward.
+
+Inspect and operate manually (as an operator, against the rootless socket):
+
+```bash
+systemctl list-timers ditto-screener-cache-gc.timer
+systemctl status ditto-screener-cache-gc.service
+journalctl -u ditto-screener-cache-gc.service --since -1d
+export DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock
+docker system df; docker system df -v | sed -n '/Build cache/,$p'; df -h /
+sudo systemctl start ditto-screener-cache-gc.service   # run the bounded policy now
+docker builder prune --keep-storage 40GB --filter until=1h  # manual, same policy (asks for confirmation)
+```
+
+Emergency reclaim (interrupts warm-cache performance, never while a build is
+active: check `docker ps` first): `docker builder prune --all --force`.
+
+Coverage and UNVERIFIED items. CI runs the script's unit tests (fake `docker`),
+renders the units, and runs `tasks/cache_gc.yml` in `--check` mode for the
+enabled and disabled policy. That is not an idempotency or systemd test; a real
+idempotent second apply cannot be exercised in CI. Nothing here is proven on a
+real host. Before #541 can close, a dev host must confirm: `docker builder prune
+--keep-storage ... --filter until=...` behavior on the executor's Docker
+version; `systemd-analyze verify` on the units; the unit running as the deploy
+user with `SupplementaryGroups` under the hardened sandbox; that editing the
+cadence variables re-arms the running timer (a handler restarts it); and the
+before/after `docker system df`, `df -h`, timer status, and heartbeat health.
+
+Rollout: converge the host with the existing screener Ansible path (protected
+workflow, `--check --diff` first). Production verification records, before and
+after: `docker system df`, `df -h`, `systemctl status
+ditto-screener-cache-gc.timer`, and the screener heartbeat health in Backroom.
 
 ## Rollback
 

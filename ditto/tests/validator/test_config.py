@@ -7,7 +7,7 @@ from uuid import UUID
 
 import pytest
 
-from ditto.validator.config import FINNEY_BURN_HOTKEY, parse_validator_config_from_env
+from ditto.validator.config import parse_validator_config_from_env
 from ditto.validator.errors import ValidatorConfigError
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -36,11 +36,31 @@ class TestKothConfig:
         assert cfg.koth_confirmation_seeds == 3
         assert cfg.top5_max_confirmation_seeds == 15
         assert cfg.miner_emission_share == 1.0
-        assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
+        assert cfg.burn_hotkey is None  # resolved from registered UID 0 each epoch
         # Cadence knobs stay env-driven, with these defaults.
         assert cfg.sweep_seconds == 30
         assert cfg.epoch_seconds == 3600
         assert cfg.dittobench_timeout_seconds == 9900
+
+    def test_crn_block_binding_posture_defaults_to_observe(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Owner default for v13.0: every new gate ships observe, never enforce.
+        A missing pin logs and falls back; it does not stall the lanes."""
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", raising=False)
+        assert parse_validator_config_from_env().crn_block_binding_posture == "observe"
+
+    def test_crn_block_binding_posture_is_an_explicit_opt_in(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", " Enforce ")
+        assert parse_validator_config_from_env().crn_block_binding_posture == "enforce"
+        # A consensus knob never silently falls back to either posture.
+        monkeypatch.setenv("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", "shadow")
+        with pytest.raises(ValidatorConfigError, match="CRN_BLOCK_BINDING_POSTURE"):
+            parse_validator_config_from_env()
 
     def test_env_cannot_override_frozen_knobs(
         self, monkeypatch: pytest.MonkeyPatch
@@ -64,7 +84,7 @@ class TestKothConfig:
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
         assert cfg.miner_emission_share == 1.0
-        assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
+        assert cfg.burn_hotkey is None
 
     def test_localnet_burns_to_local_owner_validator(
         self, monkeypatch: pytest.MonkeyPatch
@@ -78,12 +98,12 @@ class TestKothConfig:
         "network",
         ["wss://archive.chain.opentensor.ai:443", "wss://finney.example.com/ws"],
     )
-    def test_custom_finney_endpoint_burns_to_fixed_owner(
+    def test_custom_finney_endpoint_resolves_live_owner(
         self, monkeypatch: pytest.MonkeyPatch, network: str
     ) -> None:
         _base_env(monkeypatch)
         monkeypatch.setenv("SUBTENSOR_NETWORK", network)
-        assert parse_validator_config_from_env().burn_hotkey == FINNEY_BURN_HOTKEY
+        assert parse_validator_config_from_env().burn_hotkey is None
 
     @pytest.mark.parametrize(
         "network", ["localhost", "127.0.0.1", "ws://127.0.0.1:9944", "ws://[::1]:9944"]
@@ -452,3 +472,27 @@ class TestRouterRankSharesValidation:
         cfg = parse_validator_config_from_env()
         with pytest.raises(ValidatorConfigError, match="router_rank_shares"):
             replace(cfg, router_rank_shares=bad)
+
+
+class TestRouterLedgerReadFlag:
+    def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", raising=False)
+        # Default-off keeps the fold byte-identical to v1 (EmptyRouterLedgerSource).
+        assert parse_validator_config_from_env().router_ledger_read_enabled is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "TRUE", "Yes"])
+    def test_truthy_values_enable(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", value)
+        assert parse_validator_config_from_env().router_ledger_read_enabled is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", ""])
+    def test_non_truthy_values_stay_off(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", value)
+        assert parse_validator_config_from_env().router_ledger_read_enabled is False

@@ -3,14 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 from importlib import metadata
+from typing import Literal
+from uuid import uuid4
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from ditto_screening_protocol import (
+    AdjudicationCompletionReceipt,
+    AdjudicationRunDiagnostic,
+    SourceReviewAdjudication,
     SourceReviewAuthorityTransition,
     SourceReviewCausalEvidence,
     SourceReviewCausalRoleBinding,
+    SourceReviewCitation,
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
@@ -18,9 +24,12 @@ from ditto_screening_protocol import (
     SourceReviewInvariantAssessment,
     SourceReviewInvariantDecision,
     SourceReviewInvariantDisposition,
+    SourceReviewObservationPayload,
     SourceReviewPassClause,
     SourceReviewScorerVisibleEffect,
+    completion_receipt_signing_message,
 )
+from ditto_screening_protocol.models import source_review_invariants_for_policy
 
 _SHA256 = "ab" * 32
 _LEGACY_CANONICAL = (
@@ -49,6 +58,9 @@ _PASS_CLAUSES = {
         SourceReviewPassClause.MODEL_SELECTED_EXECUTED_TOOL
     ),
     SourceReviewInvariant.MODEL_TOOL_PLANNING: SourceReviewPassClause.NO_TOOL_PLANNING,
+    SourceReviewInvariant.EVALUATION_INDEPENDENCE: (
+        SourceReviewPassClause.EVALUATION_INDEPENDENT_RUNTIME
+    ),
 }
 
 
@@ -124,7 +136,7 @@ def _policy_v10_assessment(
     evidence_indices: list[int] | None = None,
 ) -> SourceReviewInvariantAssessment:
     decisions = []
-    for invariant in SourceReviewInvariant:
+    for invariant in source_review_invariants_for_policy(10):
         if invariant == breach:
             decisions.append(
                 SourceReviewInvariantDecision(
@@ -143,7 +155,7 @@ def _policy_v10_assessment(
                     summary="The reviewed path satisfies the published pass clause.",
                 )
             )
-    return SourceReviewInvariantAssessment(decisions=decisions)
+    return SourceReviewInvariantAssessment(schema_version=1, decisions=decisions)
 
 
 def _v2_finding(
@@ -696,6 +708,272 @@ def test_policy_v10_requires_all_invariants_exactly_once() -> None:
         SourceReviewInvariantAssessment.model_validate(raw)
 
 
+def test_policy_v13_adds_i8_without_invalidating_policy_v10_assessments() -> None:
+    legacy = _policy_v10_assessment()
+    assert legacy.schema_version == 1
+    assert len(legacy.decisions) == 7
+
+    decisions = [
+        SourceReviewInvariantDecision(
+            invariant=invariant,
+            disposition=SourceReviewInvariantDisposition.PASS,
+            pass_clause=_PASS_CLAUSES[invariant],
+            summary="The reviewed path satisfies the published pass clause.",
+        )
+        for invariant in SourceReviewInvariant
+    ]
+    current = SourceReviewInvariantAssessment(decisions=decisions)
+    assert current.schema_version == 2
+    assert len(current.decisions) == 8
+
+    with pytest.raises(ValidationError, match="every invariant"):
+        SourceReviewInvariantAssessment(schema_version=1, decisions=decisions)
+
+
+def test_adjudication_reject_invariant_is_bound_to_policy_version() -> None:
+    values = {
+        "decision": "reject",
+        "reason": "A reachable evaluation-identity branch controls the answer.",
+        "reject_invariant": SourceReviewInvariant.EVALUATION_INDEPENDENCE,
+        "citations": [SourceReviewCitation(path="src/main.rs", line=7)],
+        "model": "test-court",
+        "prompt_revision": "adjudicator-v3-policy-v13",
+    }
+
+    with pytest.raises(ValidationError, match="unavailable under the applied policy"):
+        SourceReviewAdjudication(policy_version=12, **values)
+
+    current = SourceReviewAdjudication(policy_version=13, **values)
+    assert current.reject_invariant == SourceReviewInvariant.EVALUATION_INDEPENDENCE
+
+
+def test_run_diagnostic_stays_out_of_the_signed_adjudication() -> None:
+    base = {
+        "decision": "escalate",
+        "reason": "Automated adjudication did not complete; held for operator review",
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v3-policy-v13",
+        "escalation_code": "adjudicator-failed",
+    }
+    diagnostic = AdjudicationRunDiagnostic(
+        error_class="HTTPStatusError",
+        failure_code="provider-http-error",
+        escalation_code="adjudicator-failed",
+        timeout_stage="response",
+        http_status=503,
+        elapsed_ms=600_000,
+        prompt_tokens=12,
+        completion_tokens=1,
+        final_tool_call_returned=False,
+        model="z-ai/glm-5.3-flash",
+        provider="openrouter",
+        request_count=1,
+        request_attempts=[
+            {
+                "ordinal": 1,
+                "started_ms": 4,
+                "elapsed_ms": 38,
+                "stage": "event",
+                "stream_requested": True,
+                "prompt_bytes": 923,
+                "http_status": 200,
+                "headers_ms": 8,
+                "first_byte_ms": 11,
+                "last_byte_ms": 30,
+                "first_event_ms": 13,
+                "last_event_ms": 30,
+                "event_count": 2,
+                "wire_bytes": 650,
+                "upstream": "together",
+                "prompt": "source text ignored by schema",
+            }
+        ],
+    )
+    plain = SourceReviewAdjudication(**base)
+    diagnosed = SourceReviewAdjudication(**base, run_diagnostic=diagnostic)
+
+    assert diagnosed.canonical_digest() == plain.canonical_digest()
+    restored = AdjudicationRunDiagnostic.model_validate(
+        {
+            **diagnostic.model_dump(mode="json"),
+            "exception": "prompt text must not become authoritative",
+        }
+    )
+    assert "exception" not in restored.model_dump(mode="json")
+    assert "prompt" not in restored.model_dump(mode="json")["request_attempts"][0]
+    with pytest.raises(ValidationError):
+        AdjudicationRunDiagnostic(
+            elapsed_ms=1,
+            model="the model replied with screening instructions",
+        )
+    with pytest.raises(ValidationError):
+        AdjudicationRunDiagnostic(elapsed_ms=1, failure_code="private provider text")
+    with pytest.raises(ValidationError, match="run diagnostic requires an escalation"):
+        SourceReviewAdjudication(
+            decision="clear",
+            reason="the served model writes the reply",
+            clear_clause="model_authors_graded_slot",
+            citations=[SourceReviewCitation(path="src/main.rs", line=6)],
+            model="test-court",
+            prompt_revision="adjudicator-v3-policy-v13",
+            run_diagnostic=AdjudicationRunDiagnostic(elapsed_ms=1),
+        )
+
+
+def test_completion_receipt_is_text_free_and_does_not_change_signed_verdict() -> None:
+    base = {
+        "decision": "clear",
+        "reason": "The served model authors the graded response",
+        "clear_clause": "model_authors_graded_slot",
+        "citations": [SourceReviewCitation(path="src/main.rs", line=6)],
+        "model": "z-ai/glm-5.3-flash",
+        "prompt_revision": "adjudicator-v7-policy-v13",
+    }
+    receipt = AdjudicationCompletionReceipt.model_validate(
+        {
+            "elapsed_ms": 4300,
+            "first_tool_call_ms": 2000,
+            "first_tool_observation": "stream_delta",
+            "observed_model": "z-ai/glm-5.3-flash",
+            "gateway_provider": "openrouter",
+            "observed_upstream": "together",
+            "request_count": 1,
+            "final_request_prompt_bytes": 8000,
+            "final_request_wire_bytes": 700,
+            "final_request_event_count": 4,
+            "prompt_tokens": 200,
+            "completion_tokens": 80,
+            "tool_arguments": "private source and response text",
+        }
+    )
+    assert "tool_arguments" not in receipt.model_dump(mode="json")
+    plain = SourceReviewAdjudication(**base)
+    measured = SourceReviewAdjudication(**base, completion_receipt=receipt)
+    assert measured.canonical_digest() == plain.canonical_digest()
+    agent_id, attempt_id = uuid4(), uuid4()
+    message = completion_receipt_signing_message(
+        screener_hotkey="screener",
+        agent_id=agent_id,
+        attempt_id=attempt_id,
+        artifact_sha256="ab" * 32,
+        adjudication_digest=measured.canonical_digest(),
+        receipt=receipt,
+    )
+    assert message.startswith(b"ditto-screen-adjudication-completion:v1:")
+    assert message != completion_receipt_signing_message(
+        screener_hotkey="screener",
+        agent_id=agent_id,
+        attempt_id=uuid4(),
+        artifact_sha256="ab" * 32,
+        adjudication_digest=measured.canonical_digest(),
+        receipt=receipt,
+    )
+    assert message != completion_receipt_signing_message(
+        screener_hotkey="screener",
+        agent_id=agent_id,
+        attempt_id=attempt_id,
+        artifact_sha256="cd" * 32,
+        adjudication_digest=measured.canonical_digest(),
+        receipt=receipt,
+    )
+    assert message != completion_receipt_signing_message(
+        screener_hotkey="screener",
+        agent_id=agent_id,
+        attempt_id=attempt_id,
+        artifact_sha256="ab" * 32,
+        adjudication_digest=measured.canonical_digest(),
+        receipt=receipt.model_copy(update={"elapsed_ms": 4301}),
+    )
+    refused = SourceReviewAdjudication(
+        decision="escalate",
+        reason="Host could not verify every retained source lead",
+        escalation_code="adjudicator-evidence-incomplete",
+        model="z-ai/glm-5.3-flash",
+        prompt_revision="adjudicator-v7-policy-v13",
+        completion_receipt=receipt,
+    )
+    assert refused.completion_receipt == receipt
+    assert (
+        refused.canonical_digest()
+        == refused.model_copy(update={"completion_receipt": None}).canonical_digest()
+    )
+    operator_requested = refused.model_copy(
+        update={"escalation_code": "adjudicator-operator-requested"}
+    )
+    assert (
+        SourceReviewAdjudication.model_validate(
+            operator_requested.model_dump()
+        ).completion_receipt
+        == receipt
+    )
+    with pytest.raises(ValidationError, match="requires a completed model call"):
+        SourceReviewAdjudication(
+            decision="escalate",
+            reason="Court failed",
+            escalation_code="adjudicator-failed",
+            model="z-ai/glm-5.3-flash",
+            prompt_revision="adjudicator-v7-policy-v13",
+            completion_receipt=receipt,
+        )
+    with pytest.raises(ValidationError, match="must be paired"):
+        AdjudicationCompletionReceipt(
+            elapsed_ms=1, first_tool_call_ms=1, request_count=1
+        )
+
+
+def test_response_bound_detail_is_safe_for_an_older_platform_consumer() -> None:
+    class OldDiagnostic(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+
+        failure_code: Literal["response-too-large"]
+
+    current = AdjudicationRunDiagnostic(
+        elapsed_ms=1,
+        failure_code="response-too-large",
+        response_bound_kind="wire",
+    )
+    older = OldDiagnostic.model_validate(current.model_dump(mode="json"))
+    assert older.failure_code == "response-too-large"
+    assert "response_bound_kind" not in older.model_dump()
+
+
+def test_completion_ceiling_detail_is_safe_for_an_older_platform_consumer() -> None:
+    class OldDiagnostic(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+
+        failure_code: Literal["stream-no-tool-call"]
+
+    current = AdjudicationRunDiagnostic(
+        elapsed_ms=100_000,
+        failure_code="stream-no-tool-call",
+        completion_tokens=16_000,
+        final_tool_call_returned=False,
+        completion_ceiling_reached=True,
+    )
+    older = OldDiagnostic.model_validate(current.model_dump(mode="json"))
+    assert older.failure_code == "stream-no-tool-call"
+    assert "completion_ceiling_reached" not in older.model_dump()
+
+
+def test_observation_decision_fields_are_bound_to_the_finding() -> None:
+    finding = _v2_finding()
+    values = {
+        "ok": True,
+        "risk_level": finding.risk_level,
+        "categories": finding.categories,
+        "finding_digest": finding.canonical_digest(),
+        "finding": finding,
+    }
+
+    SourceReviewObservationPayload.model_validate(values)
+    with pytest.raises(ValidationError, match="risk does not match"):
+        SourceReviewObservationPayload.model_validate({**values, "risk_level": "low"})
+    with pytest.raises(ValidationError, match="categories do not match"):
+        SourceReviewObservationPayload.model_validate(
+            {**values, "categories": ["none"]}
+        )
+
+
 def test_policy_v10_pass_clause_is_invariant_specific() -> None:
     with pytest.raises(ValidationError, match="incompatible"):
         SourceReviewInvariantDecision(
@@ -786,7 +1064,7 @@ def test_policy_v10_maximum_invariant_projection_fits_worker_bound() -> None:
             SourceReviewInvariantDecision(
                 invariant=invariant,
                 disposition=SourceReviewInvariantDisposition.BREACH,
-                summary="s" * 240,
+                summary="s" * 210,
                 evidence_indices=list(range(16)),
             )
             for invariant in SourceReviewInvariant

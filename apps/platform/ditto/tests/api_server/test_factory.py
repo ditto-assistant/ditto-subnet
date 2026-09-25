@@ -10,10 +10,7 @@ from fastapi import FastAPI
 from ditto.api_server import create_api_server
 from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.errors import ApiServerConfigError, ApiServerLifespanError
-from ditto.api_server.middleware import (
-    AuthPassThroughMiddleware,
-    RequestIDMiddleware,
-)
+from ditto.api_server.middleware import RequestIDMiddleware
 from ditto.tests.api_server.conftest import make_api_server_config
 
 
@@ -39,10 +36,14 @@ class TestCreateApiServer:
         app = create_api_server(make_api_server_config())
         classes = [m.cls for m in app.user_middleware]
         assert classes[0] is RequestIDMiddleware
-        assert AuthPassThroughMiddleware in classes
-        assert classes.index(RequestIDMiddleware) < classes.index(
-            AuthPassThroughMiddleware
-        )
+
+    def test_no_middleware_poses_as_an_auth_gate(self):
+        """Auth is enforced per endpoint. A no-op stack entry named for auth
+        (the former AuthPassThroughMiddleware) would only mislead a reader
+        into thinking requests are authenticated before routing."""
+        app = create_api_server(make_api_server_config())
+        names = [m.cls.__name__ for m in app.user_middleware]
+        assert not [name for name in names if "auth" in name.lower()], names
 
     def test_redoc_disabled(self):
         app = create_api_server(make_api_server_config())
@@ -143,6 +144,7 @@ class TestRouteDiscoveryIsSingleton:
         monkeypatch,
         *,
         coding_private_catalog: CodingPrivateCatalogConfig | None = None,
+        capacity_event_janitor: MagicMock | None = None,
     ) -> tuple[MagicMock, MagicMock, object | None, MagicMock]:
         if role is None:
             monkeypatch.delenv("DITTO_ROLE", raising=False)
@@ -152,6 +154,10 @@ class TestRouteDiscoveryIsSingleton:
         refresher = MagicMock()
         refresher.start = AsyncMock()
         refresher.aclose = AsyncMock()
+        if capacity_event_janitor is None:
+            capacity_event_janitor = MagicMock()
+            capacity_event_janitor.start = AsyncMock()
+            capacity_event_janitor.aclose = AsyncMock()
         engine = MagicMock()
         engine.dispose = AsyncMock()
         chain_ctx = MagicMock()
@@ -198,6 +204,10 @@ class TestRouteDiscoveryIsSingleton:
                 "ditto.api_server.factory.ProviderRouteRefresher",
                 return_value=refresher,
             ),
+            patch(
+                "ditto.api_server.factory.ScreenerCapacityEventJanitor",
+                return_value=capacity_event_janitor,
+            ),
         ):
             app = create_api_server(
                 make_api_server_config(
@@ -211,6 +221,25 @@ class TestRouteDiscoveryIsSingleton:
                 observed_evidence = app.state.coding_hippius_evidence_runtime
         evidence_factory.observed_runtime = observed_evidence
         return refresher, catalog_factory, observed_source, evidence_factory
+
+    @pytest.mark.parametrize(
+        "role,expected", [("relay", False), ("platform", True), (None, True)]
+    )
+    async def test_only_platform_role_starts_capacity_event_retention(
+        self, monkeypatch, role: str | None, expected: bool
+    ) -> None:
+        janitor = MagicMock()
+        janitor.start = AsyncMock()
+        janitor.aclose = AsyncMock()
+        await self._refresher_for_role(
+            role, monkeypatch, capacity_event_janitor=janitor
+        )
+        if expected:
+            janitor.start.assert_awaited_once()
+        else:
+            janitor.start.assert_not_awaited()
+        # Registered for cleanup on every role, so shutdown stays symmetric.
+        janitor.aclose.assert_awaited_once()
 
     async def test_relay_does_not_start_route_discovery(self, monkeypatch):
         (

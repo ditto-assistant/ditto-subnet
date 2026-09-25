@@ -35,15 +35,30 @@ const settings = {
   adjudicator_model: 'z-ai/glm-5.3-flash' as const,
   adjudicator_max_steps: 24,
   adjudicator_timeout_seconds: 600,
+  fanout_shadow_mode: 'off' as const,
+  fanout_shadow_image_source_sha: '0'.repeat(40),
+  fanout_shadow_model: 'z-ai/glm-5.3-flash' as const,
+  fanout_shadow_concurrency: 2,
+  fanout_shadow_max_steps: 4,
+  fanout_shadow_max_groups: 4,
+  fanout_shadow_max_requests: 40,
+  fanout_shadow_max_total_tokens: 1_500_000,
+  fanout_shadow_timeout_seconds: 900,
+  fanout_shadow_max_cost_usd: 3,
+  fanout_shadow_daily_cost_usd: 20,
+  fanout_shadow_global_concurrency: 1 as const,
+  fanout_shadow_reserved_targon_slots: 1,
   source_review_reasoning_effort: 'high' as const,
   source_review_model: 'openai/gpt-5.6-luna' as const,
   source_review_timeout_seconds: 1_800,
   max_input_tokens: 425_000,
   max_output_tokens: 20_000,
   max_completion_tokens: 2_400,
+  adjudicator_max_completion_tokens: null,
   max_cost_usd: 2,
   critic_reasoning_effort: 'medium' as const,
   cache_ttl_seconds: 604_800,
+  l2_always_escalate: false,
   audit_retention_days: 30,
   policy_manifest_profile: 'l1' as const,
   policy_manifest_rotation_id: 'v8-luna-source-review-behavioral-oracle',
@@ -102,6 +117,7 @@ const queueSettings = {
   },
   deferred_source_review: {
     mode: 'off' as const,
+    integrity_double_check_mode: 'off' as const,
     min_cohort_size: 8,
     composite_mad_multiplier: 6,
     axis_mad_multiplier: 6,
@@ -251,6 +267,63 @@ describe('ScreenerReviewControlPanel', () => {
     })
     expect(screen.getByText('Top-five integrity rail')).toBeTruthy()
     expect(screen.queryByLabelText(/disable top-five/i)).toBeNull()
+  })
+
+  it('enables the top-five integrity double-check without changing the deferred mode', async () => {
+    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
+
+    const modes = within(screen.getByLabelText('Integrity double-check mode'))
+    fireEvent.click(modes.getByRole('button', { name: 'double-check enforce' }))
+    fireEvent.change(screen.getAllByLabelText('Audit reason')[0]!, {
+      target: { value: 'double-check every top-five entrant on the stronger posture' },
+    })
+    fireEvent.change(screen.getAllByLabelText(/^Type to confirm/)[0]!, {
+      target: { value: 'APPLY QUEUE POLICY SETTINGS' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Append queue-policy revision' }))
+
+    await waitFor(() => expect(updateQueuePolicy).toHaveBeenCalledTimes(1))
+    expect(updateQueuePolicy).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        settings: {
+          ...queueSettings,
+          deferred_source_review: {
+            ...queueSettings.deferred_source_review,
+            integrity_double_check_mode: 'enforce',
+          },
+        },
+      }),
+    })
+  })
+
+  it('writes an always-escalating posture to the double-check scope before any worker uses it', async () => {
+    render(<ScreenerReviewControlPanel initialState={state} initialQueuePolicy={queuePolicy} readOnly={false} />)
+
+    fireEvent.change(screen.getByLabelText('Scope'), {
+      target: { value: 'integrity-double-check' },
+    })
+    expect(screen.queryByRole('button', { name: 'inherit' })).toBeNull()
+    fireEvent.click(
+      within(screen.getByLabelText('Agentic review mode')).getByRole('button', { name: 'enforce' }),
+    )
+    fireEvent.click(screen.getByRole('switch', { name: 'Always escalate to L2/L3' }))
+    fireEvent.change(screen.getAllByLabelText('Audit reason')[1]!, {
+      target: { value: 'stronger reviewer for top-five double-checks' },
+    })
+    const confirmation = 'APPLY SCREENER REVIEW integrity-double-check ENFORCE'
+    fireEvent.change(screen.getAllByLabelText(/^Type to confirm/)[1]!, {
+      target: { value: confirmation },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Append settings revision' }))
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1))
+    expect(updateSettings).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        scope: 'integrity-double-check',
+        confirmation,
+        settings: expect.objectContaining({ mode: 'enforce', l2_always_escalate: true }),
+      }),
+    })
   })
 
   it('describes observe as legacy pre-score review plus would-trigger audit only', () => {

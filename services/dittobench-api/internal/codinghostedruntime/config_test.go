@@ -76,7 +76,7 @@ func fixture(t *testing.T) (configWire, string) {
 	cmd := func(id string) codingrunner.CommandSpec {
 		return codingrunner.CommandSpec{ID: id, Argv: []string{"dittobench-test-driver", id}, Timeout: time.Minute}
 	}
-	g := codinghostedworker.GradingProfile{Schema: "dittobench-coding-hosted-grading-profile-v2", ImageDigest: p.ImageDigest, GraderContractSHA256: codinggrader.HostedGraderContractSHA256(), GraderBundleSHA256: strings.Repeat("b", 64), TestManifestSHA256: strings.Repeat("c", 64), ResourcePolicy: policy, Build: codinggrader.BuildSpec{Command: cmd("build")}, TestGroups: []codinggrader.TestGroupSpec{{Group: "hidden", Command: cmd("hidden"), ExpectedTotal: 1}, {Group: "visible", Command: cmd("visible"), ExpectedTotal: 1}}, ExecutionTimeout: time.Minute}
+	g := codinghostedworker.GradingProfile{Schema: "dittobench-coding-hosted-grading-profile-v2", ImageDigest: p.ImageDigest, GraderContractSHA256: codinggrader.HostedGraderContractSHA256(), GraderBundleSHA256: strings.Repeat("b", 64), ResourcePolicy: policy, Build: codinggrader.BuildSpec{Command: cmd("build")}, TestGroups: []codinggrader.TestGroupSpec{{Group: "hidden", Command: cmd("hidden"), ExpectedTotal: 1}, {Group: "visible", Command: cmd("visible"), ExpectedTotal: 1}}, ExecutionTimeout: time.Minute}
 	if g.Validate() != nil {
 		t.Fatal("bad grading fixture")
 	}
@@ -197,7 +197,7 @@ func TestConfigRejectsDriftBeforeConsumingAttempt(t *testing.T) {
 }
 
 func TestConfigRejectsMalformedProfilesSecretsAndJSON(t *testing.T) {
-	for _, name := range []string{"duplicate", "null", "missing_catalog_index", "null_catalog_index", "missing_model_budget", "grading_count", "grading_driver", "grading_noncanonical", "token_zero", "postgres_extra", "permissive_docker_socket"} {
+	for _, name := range []string{"duplicate", "null", "missing_catalog_index", "null_catalog_index", "missing_model_budget", "grading_count", "grading_driver", "grading_noncanonical", "grading_test_manifest", "token_zero", "postgres_extra", "permissive_docker_socket"} {
 		t.Run(name, func(t *testing.T) {
 			wire, path := fixture(t)
 			writeConfig(t, path, wire)
@@ -260,6 +260,17 @@ func TestConfigRejectsMalformedProfilesSecretsAndJSON(t *testing.T) {
 					p.TestGroups[0].Command.Argv = []string{"echo", "PASS"}
 				}
 				body = canonical(t, p)
+				if name == "grading_test_manifest" {
+					// A stale profile that still names a test manifest is not re-encodable.
+					var object map[string]any
+					decoder := json.NewDecoder(bytes.NewReader(body))
+					decoder.UseNumber()
+					if decoder.Decode(&object) != nil {
+						t.Fatal("profile object")
+					}
+					object["test_manifest_sha256"] = p.GraderBundleSHA256
+					body = canonical(t, object)
+				}
 				if name == "grading_noncanonical" {
 					body = append([]byte(" "), body...)
 				}

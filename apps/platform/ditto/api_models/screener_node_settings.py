@@ -111,3 +111,21 @@ def node_channel_settings_confirmation(
 
 def node_status_confirmation(node_id: str, status: str) -> str:
     return f"SET SCREENER NODE {node_id} STATUS={status.upper()}"
+
+
+class ScreenerNodeReplayCapacityWriteRequest(BaseModel):
+    """Explicit, single-node report-only replay admission switch."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    environment: Literal["prod"] = "prod"
+    expected_hotkey: Annotated[str, Field(min_length=1)]
+    expected_status: Literal["active", "draining", "quarantined", "revoked"]
+    expected_capacity: Annotated[int, Field(ge=0, le=4)]
+    capacity: Literal[0, 1]
+    reason: Annotated[str, Field(min_length=8)]
+    confirmation: str
+
+
+def node_replay_capacity_confirmation(node_id: str, hotkey: str, capacity: int) -> str:
+    return f"SET SCREENER NODE {node_id} HOTKEY={hotkey} REPLAY_CAPACITY={capacity}"

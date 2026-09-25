@@ -24,6 +24,9 @@ from ditto.api_models.confirmation_bundles import (
 )
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_server.confirmation_profile_installation import (
+    installed_confirmation_verification_profiles,
+)
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints import admin_confirmation_bundles
 from ditto.db.models import (
@@ -338,6 +341,18 @@ class TestSettingsPermissionsAndDefaults:
         assert effective["revision"] == 0
         assert effective["source"] == "default"
         assert effective["configured"] is False
+        assert effective["profile_installed"] is False
+        # The factory installs the release's frozen profile assets, so the
+        # default (unconfigured) policy still reports what an operator could
+        # freeze on, sorted by exact identity.
+        assert effective["installed_profiles"] == sorted(
+            (
+                {"revision": revision, "checksum": checksum}
+                for revision, checksum in installed_confirmation_verification_profiles()
+            ),
+            key=lambda item: (item["revision"], item["checksum"]),
+        )
+        assert effective["installed_profiles"]
         assert effective["issuance_active"] is False
         assert effective["checksum"] is None
         assert effective["max_top_n"] == 10
@@ -381,7 +396,16 @@ class TestSettingsWrites:
         self, app: FastAPI, client: httpx.AsyncClient, settings_maker
     ) -> None:
         install(app, settings_maker)
-        payload = request_payload()
+        installed = verification_profile()
+        app.state.confirmation_verification_profiles = {
+            (installed.revision, installed.checksum()): installed
+        }
+        payload = request_payload(
+            settings_overrides={
+                "profile_revision": installed.revision,
+                "profile_checksum": installed.checksum(),
+            }
+        )
         response = await client.post(_SETTINGS_URL, headers=_HEADERS, json=payload)
         assert response.status_code == 200, response.text
         body = response.json()
@@ -403,8 +427,71 @@ class TestSettingsWrites:
         effective = read.json()["effective"]
         assert effective["revision"] == 1
         assert effective["configured"] is True
+        assert effective["profile_installed"] is True
+        assert effective["installed_profiles"] == [
+            {"revision": installed.revision, "checksum": installed.checksum()}
+        ]
         assert effective["issuance_active"] is True
         assert effective["settings"]["mode"] == "shadow"
+
+    async def test_pinned_profile_missing_from_release_reads_inactive(
+        self, app: FastAPI, client: httpx.AsyncClient, settings_maker
+    ) -> None:
+        """A shadow policy frozen on a profile this release no longer ships.
+
+        Production revision 39 pinned the v7 profile after the release had moved
+        to v8: the mode read "shadow" while every validator claim returned no
+        work. The effective view must resolve the pinned identity against the
+        installed registry exactly as reconciliation does, and name what is
+        installed so the operator can re-freeze on it.
+        """
+        install(app, settings_maker)
+        installed = verification_profile()
+        app.state.confirmation_verification_profiles = {
+            (installed.revision, installed.checksum()): installed
+        }
+        # profile-1 / "a"*64 is the default payload identity: never installed.
+        response = await client.post(
+            _SETTINGS_URL, headers=_HEADERS, json=request_payload()
+        )
+        assert response.status_code == 200, response.text
+
+        read = await client.get(_SETTINGS_URL, headers=_HEADERS)
+        assert read.status_code == 200
+        effective = read.json()["effective"]
+        assert effective["settings"]["mode"] == "shadow"
+        assert effective["configured"] is True
+        assert effective["profile_installed"] is False
+        assert effective["issuance_active"] is False
+        assert effective["installed_profiles"] == [
+            {"revision": installed.revision, "checksum": installed.checksum()}
+        ]
+
+    async def test_installed_profile_with_matching_revision_but_other_checksum(
+        self, app: FastAPI, client: httpx.AsyncClient, settings_maker
+    ) -> None:
+        """Identity is the exact (revision, checksum) pair, never the name alone."""
+        install(app, settings_maker)
+        installed = verification_profile()
+        app.state.confirmation_verification_profiles = {
+            (installed.revision, installed.checksum()): installed
+        }
+        response = await client.post(
+            _SETTINGS_URL,
+            headers=_HEADERS,
+            json=request_payload(
+                settings_overrides={
+                    "profile_revision": installed.revision,
+                    "profile_checksum": "f" * 64,
+                }
+            ),
+        )
+        assert response.status_code == 200, response.text
+        effective = (await client.get(_SETTINGS_URL, headers=_HEADERS)).json()[
+            "effective"
+        ]
+        assert effective["profile_installed"] is False
+        assert effective["issuance_active"] is False
 
     @pytest.mark.parametrize("mode", ["off", "shadow", "enforce"])
     async def test_confirmation_phrase_names_resulting_mode(

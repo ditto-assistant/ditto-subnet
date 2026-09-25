@@ -136,10 +136,10 @@ describe("server-backed quick filters (row 10)", () => {
     expect(buttons).toEqual([
       ["all", "All 927", "true"],
       ["rejected", "Rejected 164", "false"],
-      ["under_review", "Integrity review 53", "false"],
+      ["under_review", "Deferred review 53", "false"],
       ["waiting_validator", "Waiting for validators 3", "false"],
       ["queued", "Queued work 3", "false"],
-      ["downloadable", "Downloadable 0", "false"],
+      ["downloadable", "Source releases 0", "false"],
     ]);
     // The summary is a live region; the clear affordance hides until a
     // filter is active.
@@ -189,6 +189,36 @@ describe("server-backed quick filters (row 10)", () => {
     expect(last.get("downloadable")).toBe("true");
     expect(last.get("page")).toBe("1");
     expect(location.pathname + location.search).toBe("/submissions?downloadable=true");
+  });
+
+  it("shows the exact pending disclosure deadline in the source releases view", async () => {
+    history.replaceState(null, "", "/submissions?downloadable=true");
+    syncFromLocation();
+    stubActivityFetch(() => ({
+      ...activity,
+      entries: [
+        {
+          ...activity.entries![0],
+          artifact_release: {
+            status: "embargoed",
+            emission_confirmed_at: "2026-07-31T12:00:00Z",
+            available_at: "2026-08-01T12:00:00Z",
+            embargo_hours: 24,
+            download_available: false,
+          },
+        },
+      ],
+      total: 1,
+      downloadable_count: 1,
+    }));
+    render(() => <SubmissionsPage />);
+    await waitFor(() =>
+      expect(document.querySelector(".source-release-note.embargoed")?.textContent).toBe(
+        "Pending disclosure · Downloadable Aug 1, 2026, 12:00 UTC",
+      ),
+    );
+    expect(activityRequests().pop()?.get("downloadable")).toBe("true");
+    expect(document.querySelector('[data-activity-count="downloadable"]')?.textContent).toBe("1");
   });
 
   it("states unavailability outright — never sample rows", async () => {
@@ -656,6 +686,63 @@ describe("terminal screening review cards (row 23)", () => {
     expect(SUBMISSIONS_CSS).toContain(".screening-review-location code");
     expect(SUBMISSIONS_CSS).toContain("grid-column: 1 / -1");
   });
+
+  it("restores historical v13 observations without presenting them as final findings", () => {
+    render(() => (
+      <ScreeningReview
+        attempt={{
+          status: "rejected",
+          policy_version: 13,
+          quarantine_resolution: "rescreen",
+          review_finding: null,
+          review_notes: [
+            {
+              kind: "concern",
+              stage: "l1",
+              path: "src/answer.rs",
+              line: 37,
+              summary: "The fallback replaces the model-authored answer.",
+            },
+            { kind: "cleared", stage: "l2", summary: "The retrieval path keeps complete records." },
+          ],
+        }}
+      />
+    ));
+    const card = document.querySelector(".screening-review");
+    expect(card?.textContent).toContain("Review observations");
+    expect(card?.textContent).toContain("not separate rejection findings");
+    expect(card?.textContent).toContain("L1 · concern");
+    expect(card?.textContent).toContain("L2 · cleared");
+    expect(card?.textContent).toContain("src/answer.rs:37");
+    expect(card?.textContent).not.toContain("Verified finding");
+  });
+
+  it("links each policy check to its own cited source locations", () => {
+    render(() => (
+      <ScreeningReview
+        attempt={{
+          ...attempt,
+          review_finding: {
+            ...attempt.review_finding,
+            invariant_assessment: {
+              decisions: [
+                {
+                  invariant: "I3_model_dissent",
+                  disposition: "breach",
+                  summary: "The response ignores model dissent.",
+                  evidence_indices: [0],
+                },
+              ],
+            },
+          },
+        }}
+      />
+    ));
+    const card = document.querySelector(".screening-review");
+    expect(card?.textContent).toContain("Policy checks");
+    expect(card?.textContent).toContain("The response ignores model dissent.");
+    expect(card?.textContent).toContain("agent/main.py:42");
+  });
 });
 
 describe("screening policy summary badges", () => {
@@ -815,6 +902,31 @@ describe("screening dispute form", () => {
 describe("async agent evidence", () => {
   const summary = loadFixture<AgentSummaryPayload>("agent-top-summary");
 
+  it.each([
+    ["rejected", 2, "rejected this submission"],
+    ["rejected", 3, "rejected this submission"],
+    ["screening_failed", 3, "not a submission rejection"],
+    ["under_review", 3, "held for deferred source review"],
+    ["screening", 3, "currently checking"],
+  ])("shows %s ahead of %i historical scores", async (status, score_count, expected) => {
+    render(() => (
+      <AgentEvidence
+        entry={{ ...summary, status, score_count }}
+        pipeline={() => undefined}
+        pipelineLoading={() => true}
+        pipelineFetching={() => true}
+        pipelineError={() => null}
+        retryPipeline={() => undefined}
+      />
+    ));
+    await waitFor(() => {
+      const text = document.querySelector(".pipeline-current-message")?.textContent;
+      expect(text).toContain(expected);
+      expect(text).not.toContain("Canonical validation complete");
+      expect(text).not.toContain("Waiting for");
+    });
+  });
+
   function body(): HTMLElement {
     return document.querySelector("[data-agent-history-body]") as HTMLElement;
   }
@@ -832,6 +944,38 @@ describe("async agent evidence", () => {
       { status: 200, headers: { "content-type": "application/json" } },
     );
   }
+
+  it("does not describe a historical adjudicated rejection as a new rescreen", async () => {
+    stubPipelineFetch(() =>
+      Promise.resolve(
+        pipelineResponse({
+          screening_attempts: [
+            {
+              policy_version: 13,
+              status: "rejected",
+              quarantine_resolution: "rescreen",
+              reason: "The served fallback overrides the model answer.",
+              quarantine_resolution_reason: "The served fallback overrides the model answer.",
+              review_notes: [
+                {
+                  kind: "concern",
+                  stage: "l1",
+                  summary: "A host override is reachable.",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+    render(() => <AgentEvidence entry={summary} />);
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("A host override is reachable."),
+    );
+    expect(document.body.textContent).toContain("Screening rejected this submission.");
+    expect(document.body.textContent).not.toContain("sent this submission through screening again");
+    expect(document.body.textContent).toContain("Review reason:");
+  });
 
   it("paints the summary while the evidence record loads automatically", async () => {
     let resolvePipeline: ((response: Response) => void) | undefined;
@@ -1027,13 +1171,93 @@ describe("async agent evidence", () => {
     await waitFor(() => expect(document.getElementById("pipeline-current-title")).toBeTruthy());
     expect(document.querySelector(".artifact-release-card")?.textContent).toContain("Awaiting 3/3");
     resolvePipeline?.(
-      pipelineResponse({ artifact_release: { status: "available", embargo_hours: 48 } }),
+      pipelineResponse({
+        artifact_release: {
+          status: "available",
+          embargo_hours: 48,
+          emission_confirmed_at: "2026-09-15T12:00:00Z",
+        },
+      }),
     );
     await waitFor(() =>
       expect(document.querySelector(".artifact-release-card")?.textContent).toContain(
         "Source public",
       ),
     );
+  });
+});
+
+// ── #562: a review-budget hold must not read as a finding ────────────────────
+describe("deferred source review chip (#562)", () => {
+  async function renderHeld(fields: Record<string, unknown>): Promise<HTMLElement> {
+    const base = (activity.entries ?? [])[0] as Record<string, unknown>;
+    stubActivityFetch(() => ({
+      entries: [{ ...base, status: "under_review", ...fields }],
+      status_counts: { under_review: 1 },
+      page: 1,
+      total_pages: 1,
+      total: 1,
+    }));
+    render(() => <SubmissionsPage />);
+    await waitFor(() => expect(document.querySelector(".stage-cell .stage")).toBeTruthy());
+    return document.querySelector(".stage-cell") as HTMLElement;
+  }
+
+  it("shows a recorded budget hold as neutral with its trigger and the budget copy", async () => {
+    const cell = await renderHeld({
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers: ["top_five"],
+      review_conclusion: "budget_exhausted",
+    });
+    const chip = cell.querySelector(".stage") as HTMLElement;
+    expect(chip.textContent).toBe("Deferred source review");
+    expect(chip.classList.contains("warn")).toBe(false);
+    expect(cell.querySelector(".deferred-review-summary")?.textContent).toBe(
+      "Score qualified (top 5) \u00b7 automated review ran out of budget \u2014 no finding",
+    );
+  });
+
+  it("claims neither a review nor a budget for a preflight or auditless hold", async () => {
+    const cell = await renderHeld({
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers: ["top_five"],
+      review_conclusion: "not_completed",
+    });
+    const chip = cell.querySelector(".stage") as HTMLElement;
+    expect(chip.classList.contains("warn")).toBe(false);
+    const summary = cell.querySelector(".deferred-review-summary")?.textContent ?? "";
+    expect(summary).toBe(
+      "Score qualified (top 5) \u00b7 automated review did not complete \u2014 no finding recorded",
+    );
+    expect(cell.textContent).not.toContain("budget");
+  });
+
+  it("uses inconclusive copy for an audited review that exhausted nothing", async () => {
+    const cell = await renderHeld({
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers: ["top_five"],
+      review_conclusion: "no_finding",
+    });
+    expect(cell.querySelector(".stage")?.classList.contains("warn")).toBe(false);
+    expect(cell.querySelector(".deferred-review-summary")?.textContent).toBe(
+      "Score qualified (top 5) \u00b7 automated review inconclusive \u2014 no finding",
+    );
+    expect(cell.textContent).not.toContain("budget");
+  });
+
+  it("keeps the warn chip for an adverse signal and names the anomaly trigger", async () => {
+    const cell = await renderHeld({
+      screening_reason: "Deferred source review requires operator adjudication",
+      deferred_review_triggers: ["anomaly"],
+      review_conclusion: "adverse_signal",
+    });
+    const chip = cell.querySelector(".stage") as HTMLElement;
+    expect(chip.textContent).toBe("Deferred source review");
+    expect(chip.classList.contains("warn")).toBe(true);
+    expect(cell.querySelector(".deferred-review-summary")?.textContent).toBe(
+      "Anomaly hold \u00b7 automated review raised a concern",
+    );
+    expect(cell.textContent).not.toContain("no finding");
   });
 });
 
@@ -1066,7 +1290,7 @@ describe("review-event evidence in the table (#622/#636)", () => {
     render(() => <SubmissionsPage />);
     await waitFor(() => expect(document.querySelector(".stage-cell .stage")).toBeTruthy());
     const cell = document.querySelector(".stage-cell") as HTMLElement;
-    expect(cell.querySelector(".stage")?.textContent).toBe("Source integrity review");
+    expect(cell.querySelector(".stage")?.textContent).toBe("Deferred source review");
     const notes = Array.from(cell.querySelectorAll(".stage-note"), (note) => note.textContent);
     expect(notes[0]).toBe("Review reopened: manual re-check of tool-call provenance");
     expect(notes[1]).toBe("Initial hold: content near-duplicate of agent abc");

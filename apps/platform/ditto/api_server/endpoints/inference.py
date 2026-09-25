@@ -797,11 +797,10 @@ def _provider_preferences(
         return {
             # Normal traffic optimizes for the throughput miners actually feel.
             # CoreWeave is excluded because its reviewed route is 4-bit. A
-            # separate bounded recovery phase below deliberately switches
-            # objectives after this fast path has failed.
+            # OpenRouter tries the next eligible provider if the fastest fails.
             "sort": "throughput",
             "ignore": ["coreweave"],
-            "allow_fallbacks": False,
+            "allow_fallbacks": True,
             "data_collection": "deny",
             "zdr": True,
         }
@@ -1381,6 +1380,9 @@ def _validate_request_schema(payload: dict[str, Any]) -> None:
             raise HTTPException(status_code=400, detail="invalid message")
         allowed = {
             "system": {"role", "content"},
+            # The v13 broker records developer messages as harness-authored
+            # spans. Keep them distinct from the validator's system prompt.
+            "developer": {"role", "content"},
             "user": {"role", "content"},
             "assistant": {
                 "role",

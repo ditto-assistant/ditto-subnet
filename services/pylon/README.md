@@ -157,3 +157,61 @@ is not epoch-deterministic; a dip whose split follows commit phase rather than
 Pylon version is the ledger-sampling gap, not a scheduling regression. Local
 tests and builds do not establish live fleet convergence or delegator return
 recovery.
+
+## Durable weight receipts
+
+The additive identity-authenticated receipt API lives under
+`/api/_unstable/identity/{identity_name}/subnet/{netuid}/ditto/weight-receipts`.
+PUT `/{request_id}` stores a canonical weight request and immutable ledger/artifact
+provenance with the Pylon task in one transaction. Identical retries return the
+same task; conflicting reuse returns 409. The validator derives the UUID from
+its identity, subnet, and canonical request digest. Identical vectors for two
+artifacts remain distinct requests.
+
+A prepared attempt records the normalized UID vector, encrypted payload and its
+Blake2b-256 hash before submission. The patched TurboBT finalization handler adds
+the exact block/hash/extrinsic/index only after matching a successful commit
+event to that payload, hotkey, subnet and reveal round. A crash after preparing
+but before proof of finalization remains uncertain and is never silently retried;
+a new epoch may create a fresh request. None of these states proves reveal or
+payment. Platform separately verifies the finalized chain lifecycle.
+
+GET the collection with `after_task_id` and `limit` (1–100) recovers unacknowledged
+receipts after validator restart. GET `/{request_id}` retrieves one receipt.
+POST `/{request_id}/ack` requires the request digest, attempt ID and exact
+immutable receipt digest acknowledged by Platform. Only then does the record
+leave recovery pages. Acknowledged payloads compact after 90 days while permanent
+request identity/digest/task tombstones prevent recreation; unacknowledged
+records are never discarded. At 4,096 outstanding records per identity the new
+receipt route explicitly rejects before creating work. Existing ordinary weight
+submission remains available. A timeout or lost response is ambiguous, so the
+validator must retry the same request ID rather than submit a second legacy job.
+
+`patch_receipts.py` accepts only the exact pinned service/TurboBT sources after
+the epoch patch. `test_receipt_image.py` exercises real isolated SQLite storage,
+identity guards, restart/idempotency behavior and the installed finalization
+hook without a wallet or network. The existing image-check script runs both
+receipt and epoch suites, so release checks cover the actual built adapter.
+
+Receipt-capable Pylon is only one part of source eligibility. Platform verifies
+exact submission-to-commit-to-reveal provenance against an audited runtime,
+requires more than two thirds of conservative effective validator stake, and
+checks a positive maximal miner payout (including exact ties). Only that first
+verified paid tempo starts the 48-hour disclosure clock. Legacy observations
+are not backfilled into proof. Keep public disclosure paused until the deployed
+fleet completes live validation; the network-disabled image tests are not live
+payment proof. Before reverting any source-release code, set and verify
+`disclosure=never` through Backroom. See
+[`source-release-remediation.md`](../../apps/platform/docs/source-release-remediation.md)
+for the full deployment and rollback boundaries.
+
+Pylon image rollback also has a database-version step. Stop the new Pylon process,
+back up its database, and run the **new image's** Alembic downgrade to
+`daab35a40458` against that same database before starting the older image. This
+only rewinds the Alembic version marker; the additive receipt table and linked
+tasks remain intact. The old image cannot interpret `ditto_receipts_v1` itself.
+A later upgrade recognizes the retained table without dropping or duplicating
+its evidence. The installed-image migration test rehearses a populated legacy
+task database, repeated upgrade, version-marker downgrade, and re-upgrade.
+This does not replace the required Backroom `disclosure=never` containment
+before reverting source-release behavior.

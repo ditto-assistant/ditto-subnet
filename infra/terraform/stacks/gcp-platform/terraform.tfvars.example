@@ -34,7 +34,6 @@ cloudflare_zone_id = "TODO_HEYDITTO_ZONE_ID"
 # them a full plan proposes destroying the running embedder/screener/validator.
 # enable_embedder      = true
 # enable_validator     = true
-# enable_screener      = true
 # enable_screener_prod = true
 
 # Autoscaled prod screener fleet (regional MIG + queue-depth autoscaler; see

@@ -21,6 +21,8 @@ vi.mock('../server/admin.functions', () => ({
 const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   aggregate_mode: 'fleet_ready',
   tie_weighting_mode: 'disabled',
+  ledger_pin_mode: 'epoch',
+  crown_incumbent_mode: 'disabled',
   idle_retests_enabled: false,
   rollout_standdown: 'capable_validators',
   wave_membership: 'participants',
@@ -47,6 +49,10 @@ function control(
       aggregate_active: true,
       tie_weighting_fleet_ready: true,
       tie_weighting_active: false,
+      crown_incumbent_fleet_ready: false,
+      crown_incumbent_active: false,
+      crown_incumbent_required_protocol: 27,
+      ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
       rollout_standdown_active: false,
@@ -59,6 +65,8 @@ function control(
     },
     field_support: {
       tie_weighting_mode: true,
+      ledger_pin_mode: true,
+      crown_incumbent_mode: true,
       retest_cohort_size: true,
       wave_membership: true,
       retest_eligibility_mode: true,
@@ -267,6 +275,8 @@ describe('ContinualRetestControlPanel', () => {
     expect(updateContinualRetestSettings.mock.calls[0][0].data.settings).toEqual({
       aggregate_mode: 'fleet_ready',
       tie_weighting_mode: 'disabled',
+      ledger_pin_mode: 'live',
+      crown_incumbent_mode: 'disabled',
       idle_retests_enabled: false,
       rollout_standdown: 'all',
       wave_membership: 'strict',

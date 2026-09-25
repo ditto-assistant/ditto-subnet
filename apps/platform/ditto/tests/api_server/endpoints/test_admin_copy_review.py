@@ -485,7 +485,13 @@ async def test_resolved_review_reopens_without_rewriting_original_evidence(
     assert reopened.json()["reopened"] is True
     assert reopened.json()["idempotent"] is False
     assert reopened.json()["review"]["review_id"] == str(review_id)
-    assert reopened.json()["review"]["original"]["reason"] == first_reason
+    # The active reason is the reconsideration; the reason the hold was first
+    # opened with is preserved beside it, labelled as what it is.
+    reopened_hold = reopened.json()["review"]["original"]
+    assert reopened_hold["reason"] == reopen_payload["reason"]
+    assert reopened_hold["reason_source"] == "reconsideration"
+    assert reopened_hold["superseded_reason"] == first_reason
+    assert reopened_hold["superseded_resolution"] == "clear"
     retry = await client.post(
         f"/api/v1/admin/copy-reviews/{agent_id}/open",
         json=reopen_payload,
@@ -612,6 +618,143 @@ async def test_rejected_review_reopens_and_clear_restores_previous_status(
         )
         assert agent is not None and agent.status == previous_status
         assert len(scores) == 3
+
+
+async def test_reopened_queue_row_shows_the_reconsideration_not_the_withdrawn_reject(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A pending appeal must not advertise the finding that was withdrawn.
+
+    Reproduces the lets_635 v1 report: ``get_ath_review`` showed ``pending``
+    and carried the corrective reopen reason in action history while the
+    operator queue still published the original I5 REJECT prose as the live
+    ``hold.reason``, which reads as an active violation finding.
+    """
+    agent_id, sha256 = await _seed_scored_agent(maker)
+    _install(app, maker)
+    hold_reason = "Deferred source review qualified this submission for I5 inspection"
+    reject_reason = "Reject under policy v13 for I5: benchmark-shaped answer assembly"
+    reopen_reason = "I5 rejection withdrawn as unsupported; reconsidering under v13"
+    guards = {"expected_sha256": sha256, "expected_score_count": 3}
+
+    assert (
+        await client.post(
+            f"/api/v1/admin/copy-reviews/{agent_id}/open",
+            json={**guards, "reason": hold_reason},
+            headers=_HEADERS,
+        )
+    ).status_code == 200
+    assert (
+        await client.post(
+            f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+            json={"resolution": "reject", "reason": reject_reason},
+            headers=_HEADERS,
+        )
+    ).status_code == 200
+    assert (
+        await client.post(
+            f"/api/v1/admin/copy-reviews/{agent_id}/open",
+            json={**guards, "reason": reopen_reason},
+            headers=_HEADERS,
+        )
+    ).status_code == 200
+
+    # The queue exactly as Backroom's get_screening_review_queue asks for it.
+    queue = await client.get(
+        "/api/v1/admin/copy-reviews?status=pending&generation=all",
+        headers=_HEADERS,
+    )
+    assert queue.status_code == 200
+    row = next(
+        item for item in queue.json()["items"] if item["agent_id"] == str(agent_id)
+    )
+    hold = row["original"]
+    assert hold["reason"] == reopen_reason
+    assert hold["reason_source"] == "reconsideration"
+    assert hold["superseded_reason"] == hold_reason
+    assert hold["superseded_resolution"] == "reject"
+    assert hold["superseded_resolution_reason"] == reject_reason
+    assert hold["superseded_at"] is not None
+    # Nothing on a pending row may read as a live decision.
+    assert row["status"] == "pending"
+    assert row["resolution"] is None and row["resolution_reason"] is None
+    assert reject_reason not in (hold["reason"] or "")
+
+    detail = await client.get(
+        f"/api/v1/admin/copy-reviews/{agent_id}", headers=_HEADERS
+    )
+    assert detail.status_code == 200
+    assert detail.json()["original"] == hold
+
+    audit = await client.get(
+        f"/api/v1/admin/copy-reviews/{agent_id}/audit", headers=_HEADERS
+    )
+    assert audit.status_code == 200
+    assert audit.json()["review"]["original"] == hold
+    # History is preserved verbatim, not rewritten, on both sides.
+    assert [event["action"] for event in audit.json()["action_history"]] == [
+        "reject",
+        "reopen",
+    ]
+    assert audit.json()["action_history"][0]["reason"] == reject_reason
+    assert audit.json()["action_history"][1]["reason"] == reopen_reason
+    async with maker() as session:
+        review = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == agent_id)
+        )
+        agent = await session.get(Agent, agent_id)
+        assert review is not None and agent is not None
+        # The immutable columns the lifecycle guards compare are untouched.
+        assert review.original_reason == hold_reason
+        assert agent.review_reason == hold_reason
+
+
+async def test_active_rejection_and_open_hold_keep_their_own_reason(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """The unreopened cases must be byte-identical to before this projection."""
+    agent_id, sha256 = await _seed_scored_agent(maker)
+    _install(app, maker)
+    hold_reason = "Manual benchmark-overfit review of the champion artifact"
+    assert (
+        await client.post(
+            f"/api/v1/admin/copy-reviews/{agent_id}/open",
+            json={
+                "expected_sha256": sha256,
+                "expected_score_count": 3,
+                "reason": hold_reason,
+            },
+            headers=_HEADERS,
+        )
+    ).status_code == 200
+
+    queue = await client.get(
+        "/api/v1/admin/copy-reviews?status=pending&generation=all",
+        headers=_HEADERS,
+    )
+    row = next(
+        item for item in queue.json()["items"] if item["agent_id"] == str(agent_id)
+    )
+    assert row["original"]["reason"] == hold_reason
+    assert row["original"]["reason_source"] == "original_hold"
+    assert row["original"]["superseded_reason"] is None
+    assert row["original"]["superseded_resolution"] is None
+    assert row["original"]["superseded_resolution_reason"] is None
+    assert row["original"]["superseded_at"] is None
+
+    reject_reason = "Reject under policy v13 for I5: transform-audited overfit"
+    rejected = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={"resolution": "reject", "reason": reject_reason},
+        headers=_HEADERS,
+    )
+    assert rejected.status_code == 200
+    resolved = rejected.json()["review"]
+    assert resolved["resolution"] == "reject"
+    assert resolved["resolution_reason"] == reject_reason
+    assert resolved["original"]["reason"] == hold_reason
+    assert resolved["original"]["reason_source"] == "original_hold"
+    assert resolved["original"]["superseded_reason"] is None
 
 
 async def test_rejected_score_finalization_copy_hold_reopens_without_previous_status(
