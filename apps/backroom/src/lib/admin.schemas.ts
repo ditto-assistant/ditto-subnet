@@ -7053,7 +7053,7 @@ export const screenReviewAuditSchema = z.object({
   max_read_bytes: z.number().int().positive().nullish().default(null),
   read_bytes_used: z.number().int().nonnegative().nullish().default(null),
   max_input_tokens: z.number().int().positive().nullish().default(null),
-  input_tokens_used: z.number().int().min(0).max(20_000_000).nullish().default(null),
+  input_tokens_used: z.number().int().min(0).max(100_000_000).nullish().default(null),
   max_output_tokens: z.number().int().min(1).max(1_000_000).nullish().default(null),
   output_tokens_used: z.number().int().min(0).max(1_000_000).nullish().default(null),
   max_cost_usd: z.number().positive().nullish().default(null),
@@ -7063,6 +7063,12 @@ export const screenReviewAuditSchema = z.object({
   model_steps_observed: z.number().int().min(0).max(10_000).nullish().default(null),
   tool_calls_observed: z.number().int().min(0).max(10_000).nullish().default(null),
   budget_stop_reason: z.enum(['none', 'step', 'tool', 'aggregate', 'token', 'cost', 'time']).nullish().default(null),
+  requested_model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9/._:-]{0,127}$/).nullish().default(null),
+  response_provider: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}$/).nullish().default(null),
+  final_stage: z.enum(['preflight', 'analyst', 'critic', 'adjudicator']).nullish().default(null),
+  cause_detail: z.enum(['lease_unavailable', 'review_disabled']).nullish().default(null),
+  max_elapsed_ms: z.number().int().min(1).max(3_600_000).nullish().default(null),
+  elapsed_ms: z.number().int().min(0).max(3_600_000).nullish().default(null),
 })
 
 export const deferredReviewEvidenceSchema = z.object({

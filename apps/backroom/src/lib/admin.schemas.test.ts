@@ -39,6 +39,7 @@ import {
   screenerReviewControlSchema,
   screenerReviewSettingsSchema,
   screenReviewAuditSchema,
+  screeningFailureDiagnosticSchema,
   applyScreenerReviewSettingsInputSchema,
   efficiencyBonusConfirmation,
   efficiencyBonusSettingsControlSchema,
@@ -2098,6 +2099,37 @@ describe('screen review audit schema', () => {
     expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
     expect(() => screenReviewAuditSchema.parse({ ...audit, max_steps: 257 })).toThrow()
     expect(() => screenReviewAuditSchema.parse({ ...audit, output_tokens_used: 1_000_001 })).toThrow()
+  })
+
+  it('preserves exact V13 preflight cause and budgets in Backroom diagnostics', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-runtime-evidence-unavailable', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 0,
+      max_input_tokens: 5_000_000, input_tokens_used: 0,
+      max_output_tokens: 1_000_000, output_tokens_used: 0,
+      max_cost_usd: 25, cost_usd_used: 0,
+      requested_model: 'openai/gpt-6-sol', response_provider: null,
+      final_stage: 'preflight', cause_detail: 'lease_unavailable',
+      max_elapsed_ms: 1_800_000, elapsed_ms: 0,
+    }
+    const diagnostic = screeningFailureDiagnosticSchema.parse({
+      agent_id: '4e35f415-2c3c-4a47-a32f-b62754537174',
+      artifact_sha256: 'a'.repeat(64),
+      agent_status: 'screening_failed',
+      attempt_id: '2e4a13f9-ff60-49c8-9a06-07b0684ba717',
+      policy_version: 13,
+      attempt_status: 'expired',
+      started_at: '2026-09-25T09:36:28Z',
+      deadline: '2026-09-25T09:53:54Z',
+      finished_at: '2026-09-25T09:45:19Z',
+      reason: 'Screening was inconclusive; manual retry required',
+      reason_code: 'behavioral-oracle-passed',
+      private_failure_detail: 'private policy audit inconclusive',
+      private_failure_log_tail: 'private policy audit inconclusive',
+      l2_review_diagnostic: audit,
+    })
+    expect(diagnostic.l2_review_diagnostic).toMatchObject(audit)
+    expect(JSON.stringify(diagnostic)).not.toContain('source_text')
   })
 })
 

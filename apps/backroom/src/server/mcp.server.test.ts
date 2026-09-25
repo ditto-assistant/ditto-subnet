@@ -5720,7 +5720,7 @@ describe('Backroom MCP tools', () => {
       artifact_sha256: 'ab'.repeat(32),
       agent_status: 'screening_failed',
       attempt_id: attemptId,
-      policy_version: 11,
+      policy_version: 13,
       attempt_status: 'failed',
       started_at: '2026-09-02T16:53:47Z',
       deadline: '2026-09-02T17:07:22Z',
@@ -5729,6 +5729,17 @@ describe('Backroom MCP tools', () => {
       reason_code: 'worker-result-processing-failed',
       private_failure_detail: 'screener error: ValidationError: malformed finding',
       private_failure_log_tail: 'source_review: ValidationError: malformed finding',
+      l2_review_diagnostic: {
+        stage: 'l2', reason_code: 'l2-runtime-evidence-unavailable',
+        prompt_revision: 'l2-v13', max_steps: 256, steps_used: 0,
+        max_input_tokens: 5_000_000, input_tokens_used: 0,
+        max_output_tokens: 1_000_000, output_tokens_used: 0,
+        max_cost_usd: 25, cost_usd_used: 0,
+        requested_model: 'openai/gpt-6-sol', response_provider: null,
+        final_stage: 'preflight', cause_detail: 'lease_unavailable',
+        max_elapsed_ms: 1_800_000, elapsed_ms: 0,
+        source_text: 'private source must never reach the MCP result',
+      },
     }
     const fetchMock = vi.fn().mockResolvedValue(Response.json(diagnostic))
     vi.stubGlobal('fetch', fetchMock)
@@ -5754,12 +5765,19 @@ describe('Backroom MCP tools', () => {
       arguments: { agentId, attemptId },
     })
     expect(allowed.isError).not.toBe(true)
-    expect(readJsonResult(allowed)).toEqual({
-      ...diagnostic,
-      l2_review_diagnostic: null,
+    const observed = readJsonResult(allowed)
+    expect(observed).toMatchObject({
+      l2_review_diagnostic: {
+        reason_code: 'l2-runtime-evidence-unavailable',
+        requested_model: 'openai/gpt-6-sol',
+        final_stage: 'preflight', cause_detail: 'lease_unavailable',
+        max_steps: 256, steps_used: 0,
+        max_elapsed_ms: 1_800_000, elapsed_ms: 0,
+      },
       court_diagnostic: null,
       court_completion_receipt: null,
     })
+    expect(JSON.stringify(observed)).not.toContain('private source must never reach')
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/attempts/${attemptId}/failure-diagnostic`,
       expect.objectContaining({
