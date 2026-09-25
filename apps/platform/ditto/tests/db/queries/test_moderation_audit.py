@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from datetime import UTC, datetime
-from uuid import uuid4
+from typing import TypedDict
+from uuid import UUID, uuid4
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -42,23 +44,46 @@ def _install(
     configure_moderation_signer(private, previous=previous)
 
 
-def _kwargs(**overrides: object) -> dict[str, object]:
-    base: dict[str, object] = {
-        "action_type": ACTION_REJECT,
-        "agent_id": uuid4(),
-        "miner_hotkey": "5MinerHotkey",
+class _ModerationArgs(TypedDict):
+    action_type: str
+    agent_id: UUID
+    miner_hotkey: str | None
+    artifact_sha256: str
+    screened_image_sha256: str | None
+    previous_status: str
+    resulting_status: str
+    recorded_at: datetime
+    related_action_id: str | None
+    action_id: UUID | None
+
+
+def _kwargs(
+    *,
+    action_type: str = ACTION_REJECT,
+    agent_id: UUID | None = None,
+    miner_hotkey: str | None = "5MinerHotkey",
+    previous_status: str = "quarantined",
+    resulting_status: str = "rejected",
+    recorded_at: datetime = _T0,
+    related_action_id: str | None = None,
+    action_id: UUID | None = None,
+) -> _ModerationArgs:
+    return {
+        "action_type": action_type,
+        "agent_id": agent_id or uuid4(),
+        "miner_hotkey": miner_hotkey,
         "artifact_sha256": _ARTIFACT,
         "screened_image_sha256": "cd" * 32,
-        "previous_status": "quarantined",
-        "resulting_status": "rejected",
-        "recorded_at": _T0,
+        "previous_status": previous_status,
+        "resulting_status": resulting_status,
+        "recorded_at": recorded_at,
+        "related_action_id": related_action_id,
+        "action_id": action_id,
     }
-    base.update(overrides)
-    return base
 
 
 @pytest.fixture(autouse=True)
-def _signer() -> None:
+def _signer() -> Iterator[None]:
     reset_moderation_signer()
     _install(Ed25519PrivateKey.generate())
     yield
