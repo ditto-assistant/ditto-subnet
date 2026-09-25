@@ -506,6 +506,7 @@ export const l2ReportCanaryViewSchema = z.object({
   review_label: z.string(),
   status: z.string(),
   claimed_instance_id: z.string().nullable(),
+  lease_expires_at: z.string().nullable().optional(),
   report: z.record(z.string(), z.unknown()).nullable(),
   error_code: z.string().nullable(),
   created_at: z.string(),

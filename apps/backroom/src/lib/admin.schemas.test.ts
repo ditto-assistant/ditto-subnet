@@ -40,6 +40,7 @@ import {
   validatorAssignmentListSchema,
   screenerReviewControlSchema,
   screenerReviewSettingsSchema,
+  l2ReportCanaryViewSchema,
   screenReviewAuditSchema,
   screeningFailureDiagnosticSchema,
   applyScreenerReviewSettingsInputSchema,
@@ -2022,6 +2023,33 @@ describe('source review causal evidence schema', () => {
         role_bindings: [{ ...generatedFinding.causal_evidence.role_bindings[0], line: 999 }],
       },
     })).toThrow(/does not reference/)
+  })
+})
+
+describe('L2 report canary read schema', () => {
+  const view = {
+    canary_id: '797a187d-61ae-46c5-9cc1-7bc310ad0c22',
+    request_id: 'f79ff91e-8132-4bcf-88e9-8c6ca4fa1a12',
+    agent_id: '68129524-aeea-4383-98cd-f74753b61b55',
+    source_attempt_id: '03a15469-3200-46ed-8eb5-3baf234e7918',
+    artifact_sha256: 'a'.repeat(64),
+    target_node_id: 'subnet-screener-1',
+    expected_agent_status: 'rejected',
+    expected_score_count: 0,
+    review_label: 'known_reject',
+    status: 'leased',
+    claimed_instance_id: 'subnet-screener-1-worker-1',
+    report: null,
+    error_code: null,
+    created_at: '2026-09-25T15:15:44Z',
+    completed_at: null,
+  }
+
+  it('preserves the live lease deadline and accepts older responses without it', () => {
+    const lease_expires_at = '2026-09-25T16:00:44Z'
+    expect(l2ReportCanaryViewSchema.parse({ ...view, lease_expires_at }).lease_expires_at)
+      .toBe(lease_expires_at)
+    expect(l2ReportCanaryViewSchema.parse(view).lease_expires_at).toBeUndefined()
   })
 })
 
