@@ -86,6 +86,7 @@ async def test_l1_notes_reach_l2_and_report_stays_non_authoritative(
         ]
     )
     requests: list[dict[str, object]] = []
+    progress: list[dict[str, object]] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/v1/responses"
@@ -101,6 +102,7 @@ async def test_l1_notes_reach_l2_and_report_stays_non_authoritative(
         identity=identity,
         api_key="test-only",
         transport=httpx.MockTransport(respond),
+        on_progress=progress.append,
     )
     assert report["authority"] == "none"
     assert report["l1"]["result"]["note_count"] == 1
@@ -116,6 +118,11 @@ async def test_l1_notes_reach_l2_and_report_stays_non_authoritative(
     assert "read_l1_notes" in l2_tools
     assert "submit_candidate_review" in l2_tools
     assert "Entrypoint inspected" in json.dumps(requests[-1]["input"])
+    assert [
+        snapshot["phase"] for snapshot in progress if snapshot["event"] == "started"
+    ] == ["l1", "l2"]
+    assert progress[-1]["tool_counts"]["submit_candidate_review"] == 1
+    assert "Entrypoint inspected" not in json.dumps(progress)
 
 
 @pytest.mark.asyncio

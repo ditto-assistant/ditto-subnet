@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -382,6 +383,7 @@ async def _phase(
     total_usage: dict[str, float],
     l1_notes: list[dict[str, Any]] | None = None,
     l1_complete: bool = True,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     l1 = phase == "l1"
     l1_notes = l1_notes or []
@@ -440,6 +442,18 @@ async def _phase(
     model_names: list[str] = []
     started = time.monotonic()
     boundary_reason = "step_cap"
+    tool_counts: dict[str, int] = {}
+    touched_paths: set[str] = set()
+    if on_progress is not None:
+        on_progress(
+            {
+                "phase": phase,
+                "event": "started",
+                "step": 0,
+                "usage": dict(usage),
+                "note_count": len(notes) if l1 else len(l1_notes),
+            }
+        )
     for step in range(_MAX_STEPS):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -553,9 +567,31 @@ async def _phase(
             name, call_id = call.get("name"), call.get("call_id")
             if not isinstance(name, str) or not isinstance(call_id, str):
                 raise ValueError("invalid model tool call")
+            safe_name = (
+                name
+                if name
+                in {
+                    "list_files",
+                    "read_file",
+                    "search",
+                    "verify_syntax",
+                    "record_note",
+                    "finish_notes",
+                    "list_l1_notes",
+                    "search_l1_notes",
+                    "read_l1_notes",
+                    "submit_candidate_review",
+                }
+                else "unknown_tool"
+            )
+            tool_counts[safe_name] = tool_counts.get(safe_name, 0) + 1
             args = json.loads(call.get("arguments", "{}"))
             if not isinstance(args, dict):
                 raise ValueError("invalid model tool arguments")
+            if name in {"read_file", "verify_syntax"} and isinstance(
+                args.get("path"), str
+            ):
+                touched_paths.add(args["path"])
             if name in {"list_files", "read_file", "search", "verify_syntax"}:
                 result = workspace.call(name, args)
             elif l1 and name == "record_note":
@@ -683,6 +719,19 @@ async def _phase(
                     "output": json.dumps(result, separators=(",", ":")),
                 }
             )
+        if on_progress is not None:
+            on_progress(
+                {
+                    "phase": phase,
+                    "event": "step",
+                    "step": step + 1,
+                    "elapsed_seconds": round(time.monotonic() - started, 3),
+                    "usage": dict(usage),
+                    "note_count": len(notes) if l1 else len(l1_notes),
+                    "source_paths_touched_count": len(touched_paths),
+                    "tool_counts": dict(tool_counts),
+                }
+            )
         if final is not None:
             result_report = {
                 "result": final,
@@ -753,6 +802,7 @@ async def run_report_candidate(
     api_key: str,
     timeout_seconds: float = 1800,
     transport: httpx.AsyncBaseTransport | None = None,
+    on_progress: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Evaluate one verified archive; return a report with authority=none."""
     identity.validate()
@@ -792,6 +842,7 @@ async def run_report_candidate(
                 notes_path=notes_path,
                 deadline=l1_deadline,
                 total_usage=total_usage,
+                on_progress=on_progress,
             )
             l2 = await _phase(
                 client,
@@ -804,6 +855,7 @@ async def run_report_candidate(
                 total_usage=total_usage,
                 l1_notes=l1["notes"],
                 l1_complete=bool(l1["result"].get("complete")),
+                on_progress=on_progress,
             )
         notes_sha = hashlib.sha256(notes_path.read_bytes()).hexdigest()
         return {
