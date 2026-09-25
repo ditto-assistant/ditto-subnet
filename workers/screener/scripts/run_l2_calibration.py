@@ -207,6 +207,7 @@ async def _main() -> None:
         cache_ttl_seconds=7 * 86_400,
         max_completion_request_seconds=args.turn_timeout_seconds,
         independent_analyst=args.omit_l1,
+        terminal_verdict_required=args.single_layer_sol,
         model=analyst_model,
         fallback_models=() if args.single_layer_sol else L2_FALLBACK_MODELS,
         l3_enabled=not args.single_layer_sol,
@@ -247,6 +248,7 @@ async def _main() -> None:
             if args.single_layer_sol
             else "production_multilayer"
         ),
+        "terminal_verdict_required": args.single_layer_sol,
         "revisions": {
             "analyst_prompt": l2_prompt_revision(SCREENING_POLICY_VERSION),
             "critic_prompt": l2_critic_prompt_revision(SCREENING_POLICY_VERSION),

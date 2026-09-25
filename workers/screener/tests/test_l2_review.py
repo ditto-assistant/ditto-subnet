@@ -4418,6 +4418,59 @@ async def test_http_failure_is_single_shot_before_deadline(
     assert requests == 1
 
 
+async def test_report_only_terminal_schema_is_local_to_single_layer(
+    tmp_path: Path,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(500)
+
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(None, retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+        transport=httpx.MockTransport(handler),
+    )
+    async with httpx.AsyncClient(transport=agent._transport) as client:
+        with pytest.raises(httpx.HTTPStatusError, match="500"):
+            await agent._post(
+                client,
+                "test-key",
+                [],
+                artifact_sha256="d" * 64,
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider=None,
+                deadline=asyncio.get_running_loop().time() + 1,
+            )
+
+    tools = captured["tools"]
+    assert isinstance(tools, list)
+    final = tools[-1]["parameters"]["properties"]
+    assert final["disposition"]["enum"] == ["safe", "violation"]
+    assert "insufficient_static_evidence" not in final["resolution_basis"]["enum"]
+    ordinary = l2_review._l2_tools_for_policy(SCREENING_POLICY_VERSION)
+    assert ordinary[-1]["parameters"]["properties"]["disposition"]["enum"] == [
+        "safe",
+        "violation",
+        "inconclusive",
+    ]
+
+
 async def test_model_turn_has_an_aggregate_wall_clock_deadline(
     tmp_path: Path,
 ) -> None:

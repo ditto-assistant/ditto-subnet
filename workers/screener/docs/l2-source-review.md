@@ -293,9 +293,10 @@ cache, audit, and result paths. This runs GPT-6 Sol as the sole autonomous
 coding analyst against the same isolated analyzers, with no fallback model or
 L3 critic. Compare two inputs for each label: retained exact L1 evidence, and
 `--omit-l1`, which supplies no L1 finding and tasks Sol to review the entire
-served artifact independently. The strict gate requires a terminal,
-label-matching safe or violation outcome; a provider fault or inconclusive
-response fails it. This comparator
+served artifact independently. The comparator's final tool schema permits only
+safe or violation, and the strict gate requires a terminal, label-matching
+outcome. A provider fault or invalid response fails it; the model is explicitly
+told not to invent evidence to satisfy the terminal requirement. This comparator
 does not change production decisions or replace signed live evidence. The
 `--turn-timeout-seconds` override is local: production currently caps individual
 Responses API turns at 45 seconds even when its whole review lease is longer.

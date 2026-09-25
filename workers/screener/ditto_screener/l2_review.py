@@ -2307,6 +2307,7 @@ class TerraSolSourceReviewAgent:
         cache_ttl_seconds: float,
         max_completion_request_seconds: float | None = None,
         independent_analyst: bool = False,
+        terminal_verdict_required: bool = False,
         analyst_reasoning_effort: str = "model_default",
         critic_reasoning_effort: str = "medium",
         model: str = L2_MODEL,
@@ -2344,6 +2345,9 @@ class TerraSolSourceReviewAgent:
             raise ValueError("L2 completion request timeout must be 30-600 seconds")
         self._max_completion_request_seconds = max_completion_request_seconds
         self._independent_analyst = independent_analyst
+        if terminal_verdict_required and l3_enabled:
+            raise ValueError("terminal-only comparator cannot enable L3")
+        self._terminal_verdict_required = terminal_verdict_required
         if analyst_reasoning_effort != "model_default":
             raise ValueError("L2 analyst reasoning effort must be model_default")
         if critic_reasoning_effort not in {"low", "medium", "high"}:
@@ -3772,6 +3776,13 @@ class TerraSolSourceReviewAgent:
                 else "Resolve the L1 quarantine lead using the dossier and "
                 "targeted tools."
             )
+            if self._terminal_verdict_required:
+                task += (
+                    " This report-only comparator requires a terminal verdict. "
+                    "Inspect more source before deciding; submit safe or violation "
+                    "only with grounded causal evidence. Never invent a finding "
+                    "to satisfy the terminal requirement."
+                )
         elif role == "critic":
             task = (
                 "Adversarially falsify the provisional safe result, then try to "
@@ -4128,11 +4139,27 @@ class TerraSolSourceReviewAgent:
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> httpx.Response:
+        tools = _l2_tools_for_policy(policy_version)
+        if self._terminal_verdict_required:
+            parameters = tools[-1]["parameters"]
+            assert isinstance(parameters, dict)
+            properties = parameters["properties"]
+            assert isinstance(properties, dict)
+            disposition = properties["disposition"]
+            assert isinstance(disposition, dict)
+            disposition["enum"] = ["safe", "violation"]
+            resolution_basis = properties["resolution_basis"]
+            assert isinstance(resolution_basis, dict)
+            resolution_basis["enum"] = [
+                value
+                for value in resolution_basis["enum"]
+                if value != "insufficient_static_evidence"
+            ]
         request: dict[str, object] = {
             "model": model,
             "instructions": _l2_review_system_prompt(policy_version),
             "input": items,
-            "tools": _l2_tools_for_policy(policy_version),
+            "tools": tools,
             "tool_choice": "required",
             "max_output_tokens": self._max_completion_tokens,
             "store": False,
@@ -4304,6 +4331,7 @@ class TerraSolSourceReviewAgent:
             "l1_finding_digest": l1_observation.finding_digest,
             "model": self._model,
             "independent_analyst": self._independent_analyst,
+            "terminal_verdict_required": self._terminal_verdict_required,
             "fallback_models": list(self._fallback_models),
             "critic_model": self._critic_model,
             "critic_provider": self._critic_provider,
