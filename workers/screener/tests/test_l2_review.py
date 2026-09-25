@@ -2230,10 +2230,37 @@ async def test_signed_lease_must_match_exact_attempt_and_artifact_before_model(
     )
     assert len(seen) == 2
 
+    standard_stale = lease.model_copy(update={"observed_at": int(time.time()) - 301})
+    result = await agent.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+        scored_runtime_evidence=standard_stale,
+    )
+    assert result.observation.error_code == "l2-runtime-evidence-unavailable"
+
+    # Source preparation may take several minutes before the report-only L2
+    # review begins. The exact signed packet remains valid within its lease.
+    agent._signed_runtime_lease_max_age_seconds = 45 * 60
+    delayed = lease.model_copy(update={"observed_at": int(time.time()) - 12 * 60})
+    result = await agent.review(
+        str(tmp_path / "unused.tar"),
+        artifact_sha256="ab" * 32,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=None,
+        scored_runtime_evidence=delayed,
+    )
+    assert result.observation.error_code == "l2-model-inconclusive"
+    assert len(seen) == 2  # same exact packet may hit the isolated L2 cache
+
     for wrong in (
         lease.model_copy(update={"attempt_id": UUID(int=1)}),
         lease.model_copy(update={"artifact_sha256": "cd" * 32}),
-        lease.model_copy(update={"observed_at": int(time.time()) - 301}),
+        lease.model_copy(update={"observed_at": int(time.time()) - 45 * 60 - 1}),
+        lease.model_copy(update={"observed_at": int(time.time()) + 301}),
     ):
         result = await agent.review(
             str(tmp_path / "unused.tar"),

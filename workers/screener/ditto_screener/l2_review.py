@@ -2152,15 +2152,17 @@ def _signed_runtime_lease_matches(
     artifact_sha256: str,
     policy_version: int,
     required: bool,
+    max_age_seconds: int = 300,
 ) -> bool:
     if lease is None:
         return not (policy_version == 13 and required)
+    age_seconds = int(time.time()) - lease.observed_at
     return (
         policy_version == 13
         and lease.attempt_id == attempt_id
         and lease.artifact_sha256 == artifact_sha256
         and lease.policy_version == policy_version
-        and abs(int(time.time()) - lease.observed_at) <= 300
+        and -300 <= age_seconds <= max_age_seconds
     )
 
 
@@ -2197,6 +2199,7 @@ class TerraSolSourceReviewAgent:
         expected_scorer_revision: str | None = None,
         scorer_transport: httpx.AsyncBaseTransport | None = None,
         require_signed_runtime_lease: bool = False,
+        signed_runtime_lease_max_age_seconds: int = 300,
     ) -> None:
         self._api_key_file = api_key_file
         self._base_url = base_url.rstrip("/")
@@ -2232,6 +2235,9 @@ class TerraSolSourceReviewAgent:
         self._expected_scorer_revision = expected_scorer_revision
         self._scorer_transport = scorer_transport
         self._require_signed_runtime_lease = require_signed_runtime_lease
+        self._signed_runtime_lease_max_age_seconds = (
+            signed_runtime_lease_max_age_seconds
+        )
         self._starter_revisions = tuple(
             str(json.loads(path.read_text())["revision"])
             for path in L2_STARTER_MANIFESTS
@@ -2269,6 +2275,7 @@ class TerraSolSourceReviewAgent:
             artifact_sha256=artifact_sha256,
             policy_version=policy_version,
             required=self._require_signed_runtime_lease,
+            max_age_seconds=self._signed_runtime_lease_max_age_seconds,
         ):
             result = L2RunResult(
                 observation=_failure(
@@ -4517,6 +4524,9 @@ class LayeredSourceReviewAgent:
             artifact_sha256=artifact_sha256,
             policy_version=policy_version,
             required=requires_lease,
+            max_age_seconds=getattr(
+                self._l2, "_signed_runtime_lease_max_age_seconds", 300
+            ),
         )
         if (not lease_matches and not (requires_lease and self._mode == "shadow")) or (
             policy_version == 13 and requires_lease and self._mode == "off"
@@ -4573,6 +4583,9 @@ class LayeredSourceReviewAgent:
             artifact_sha256=artifact_sha256,
             policy_version=policy_version,
             required=requires_lease,
+            max_age_seconds=getattr(
+                self._l2, "_signed_runtime_lease_max_age_seconds", 300
+            ),
         )
         if (not lease_matches and not (requires_lease and self._mode == "shadow")) or (
             policy_version == 13 and requires_lease and self._mode == "off"

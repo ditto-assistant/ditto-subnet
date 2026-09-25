@@ -168,6 +168,9 @@ async def consume(
         l2_review_mode="shadow",
         l2_always_escalate=True,
         require_signed_runtime_lease=True,
+        # L1 preparation may outlast the ordinary five-minute packet window.
+        # The job's 45-minute lease still bounds this exact signed packet.
+        signed_runtime_lease_max_age_seconds=45 * 60,
         remote_build_mode="off",
         l2_cache_dir=str(canary_root / "cache"),
         l2_audit_journal_file=str(canary_root / "l2-audit.jsonl"),

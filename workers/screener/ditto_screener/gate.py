@@ -1072,6 +1072,7 @@ class BuildGate:
             scorer_capabilities_url=config.scorer_capabilities_url,
             expected_scorer_revision=config.expected_scorer_revision,
             require_signed_runtime_lease=config.require_signed_runtime_lease,
+            signed_runtime_lease_max_age_seconds=config.signed_runtime_lease_max_age_seconds,
         )
         self._source_reviewer = LayeredSourceReviewAgent(
             l1=l1_reviewer,

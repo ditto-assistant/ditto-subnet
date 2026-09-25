@@ -226,6 +226,8 @@ class ScreenerConfig:
     Seeded from ``SCREENER_L2_ALWAYS_ESCALATE``; a bound reviewer revision can
     only turn it on for one posture (the integrity double-check), never off.
     """
+    # Only the isolated report-only canary widens this to its 45-minute lease.
+    signed_runtime_lease_max_age_seconds: int = 300
     adjudicator_max_completion_tokens: int | None = None
     """L4-only output cap; None inherits the existing L2 completion cap."""
     remote_build_mode: str = "off"

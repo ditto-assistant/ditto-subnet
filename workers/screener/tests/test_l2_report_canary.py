@@ -76,6 +76,7 @@ async def test_report_only_l2_uses_policy_only_shadow_and_no_verdict(
             assert canary_config.l2_review_mode == "shadow"
             assert canary_config.l2_always_escalate
             assert canary_config.require_signed_runtime_lease
+            assert canary_config.signed_runtime_lease_max_age_seconds == 45 * 60
             assert str(canary_id) in canary_config.l2_cache_dir
             assert canary_config.l2_cache_dir != config.l2_cache_dir
             assert canary_config.l2_audit_journal_file != config.l2_audit_journal_file
