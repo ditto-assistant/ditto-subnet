@@ -175,3 +175,161 @@ run "iap_follows_resolved_private_address" {
     error_message = "IAP must follow the resolved private IP, not a hardcoded address, hostname, or unrestricted port."
   }
 }
+
+run "workflow_operator_absent_by_default" {
+  command = plan
+  override_module {
+    target = module.host[0]
+    outputs = {
+      hostname    = "ditto-coding-hosted-v2"
+      id          = "123456789"
+      internal_ip = "10.33.0.2"
+    }
+  }
+  variables {
+    enabled   = true
+    operators = ["user:owner@example.com"]
+  }
+  assert {
+    condition = (
+      length(google_compute_instance_iam_member.workflow_osadmin) == 0 &&
+      length(google_project_iam_member.workflow_ssh) == 0 &&
+      length(google_project_iam_custom_role.workflow_project_get) == 0 &&
+      length(google_project_iam_member.workflow_project_get) == 0 &&
+      length(google_service_account_iam_member.workflow_actas) == 0
+    )
+    error_message = "No workflow identity may hold host access unless explicitly configured."
+  }
+}
+
+run "disabled_workflow_operator_grants_nothing" {
+  command = plan
+  variables {
+    workflow_operator = "serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"
+  }
+  assert {
+    condition = (
+      length(google_compute_instance_iam_member.workflow_osadmin) == 0 &&
+      length(google_project_iam_member.workflow_ssh) == 0 &&
+      length(google_project_iam_custom_role.workflow_project_get) == 0 &&
+      length(google_project_iam_member.workflow_project_get) == 0 &&
+      length(google_service_account_iam_member.workflow_actas) == 0
+    )
+    error_message = "Naming a workflow identity must not activate IAM on a disabled host."
+  }
+}
+
+run "reject_user_workflow_operator" {
+  command = plan
+  variables {
+    workflow_operator = "user:owner@example.com"
+  }
+  expect_failures = [var.workflow_operator]
+}
+
+run "reject_group_workflow_operator" {
+  command = plan
+  variables {
+    workflow_operator = "group:operators@example.com"
+  }
+  expect_failures = [var.workflow_operator]
+}
+
+run "reject_public_workflow_operator" {
+  command = plan
+  variables {
+    workflow_operator = "allUsers"
+  }
+  expect_failures = [var.workflow_operator]
+}
+
+run "reject_multiple_workflow_operators" {
+  command = plan
+  variables {
+    workflow_operator = "serviceAccount:first-operator@synthetic-coding-project.iam.gserviceaccount.com,serviceAccount:second-operator@synthetic-coding-project.iam.gserviceaccount.com"
+  }
+  expect_failures = [var.workflow_operator]
+}
+
+run "workflow_operator_is_destination_scoped_and_never_a_custodian" {
+  command = plan
+  override_module {
+    target = module.host[0]
+    outputs = {
+      hostname    = "ditto-coding-hosted-v2"
+      id          = "123456789"
+      internal_ip = "10.33.0.2"
+    }
+  }
+  variables {
+    enabled           = true
+    operators         = ["user:owner@example.com"]
+    workflow_operator = "serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"
+  }
+  assert {
+    condition = (
+      length(google_compute_instance_iam_member.workflow_osadmin) == 1 &&
+      google_compute_instance_iam_member.workflow_osadmin["serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"].role == "roles/compute.osAdminLogin" &&
+      google_project_iam_member.workflow_ssh["serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"].role == "roles/iap.tunnelResourceAccessor" &&
+      google_project_iam_member.workflow_ssh["serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"].condition[0].expression == "destination.ip == '10.33.0.2' && destination.port == 22" &&
+      length(google_service_account_iam_member.workflow_actas) == 1 &&
+      length(google_project_iam_member.workflow_project_get) == 1 &&
+      !can(google_project_iam_member.workflow_project_get["serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"].condition[0]) &&
+      length(google_compute_instance_iam_member.osadmin) == 1 &&
+      !contains(keys(google_compute_instance_iam_member.osadmin), "serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com")
+    )
+    error_message = "The workflow identity must be destination-scoped to this host and must never join the custodian set."
+  }
+}
+
+run "workflow_project_read_is_one_custom_permission" {
+  command = plan
+  override_module {
+    target = module.host[0]
+    outputs = {
+      hostname    = "ditto-coding-hosted-v2"
+      id          = "123456789"
+      internal_ip = "10.33.0.2"
+    }
+  }
+  variables {
+    enabled           = true
+    operators         = ["user:owner@example.com"]
+    workflow_operator = "serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"
+  }
+  assert {
+    condition = (
+      length(google_project_iam_custom_role.workflow_project_get) == 1 &&
+      google_project_iam_custom_role.workflow_project_get[0].project == "synthetic-coding-project" &&
+      google_project_iam_custom_role.workflow_project_get[0].role_id == "codingHostedWorkflowProjectGet" &&
+      toset(google_project_iam_custom_role.workflow_project_get[0].permissions) == toset(["compute.projects.get"]) &&
+      length(google_project_iam_custom_role.workflow_project_get[0].permissions) == 1 &&
+      google_project_iam_member.workflow_project_get["serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"].project == "synthetic-coding-project" &&
+      google_project_iam_member.workflow_project_get["serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"].member == "serviceAccount:github-coding-hosted-operate@synthetic-coding-project.iam.gserviceaccount.com"
+    )
+    error_message = "The workflow's only project-level grant must be a custom role holding exactly compute.projects.get."
+  }
+}
+
+run "custodians_do_not_receive_workflow_project_read" {
+  command = plan
+  override_module {
+    target = module.host[0]
+    outputs = {
+      hostname    = "ditto-coding-hosted-v2"
+      id          = "123456789"
+      internal_ip = "10.33.0.2"
+    }
+  }
+  variables {
+    enabled   = true
+    operators = ["user:owner@example.com", "user:second@example.com"]
+  }
+  assert {
+    condition = (
+      length(google_project_iam_custom_role.workflow_project_get) == 0 &&
+      length(google_project_iam_member.workflow_project_get) == 0
+    )
+    error_message = "The project-read custom role follows only the workflow identity, never the custodian set."
+  }
+}

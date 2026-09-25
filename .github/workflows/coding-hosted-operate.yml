@@ -1,0 +1,126 @@
+name: Operate native coding host
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Fixed reviewed operation
+        required: true
+        type: choice
+        options:
+          - verify
+      confirmation:
+        description: Type OPERATE CODING HOST followed by the operation
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: coding-hosted-operate
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    # Root-capable on one host: requires the protected environment, whose
+    # reviewers cannot approve their own dispatch (prevent_self_review).
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      inputs.operation == 'verify' &&
+      inputs.confirmation == 'OPERATE CODING HOST verify'
+    environment: coding-hosted-operate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Verify exact clean source before authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_CODING_HOSTED_OPERATE_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_CODING_HOSTED_OPERATE_SA }}
+
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      - name: Register a short-lived OS Login key
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          ssh-keygen -t ed25519 -N '' -q \
+            -C "gha-coding-host-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            -f ~/.ssh/google_compute_engine
+          gcloud compute os-login ssh-keys add \
+            --key-file ~/.ssh/google_compute_engine.pub --ttl 30m >/dev/null
+
+      - name: Run the fixed read-only host verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          report="$RUNNER_TEMP/coding-host-verify.json"
+          errors="$RUNNER_TEMP/coding-host-verify.stderr"
+          # Retry only the runner-side OS Login propagation refusal, which happens
+          # before anything reaches the host (see platform-deploy.yml).
+          attempt=1
+          while :; do
+            status=0
+            gcloud compute ssh ditto-coding-hosted-v2 \
+              --project=ditto-app-dev \
+              --zone=us-central1-a \
+              --tunnel-through-iap \
+              --quiet \
+              --command='sudo -n /usr/bin/python3 -I -' \
+              < infra/scripts/coding-hosted-verify.py \
+              > "$report" 2> "$errors" || status=$?
+            if [ "$status" -eq 0 ] || [ "$attempt" -ge 3 ] ||
+              ! grep -Eq '@compute\.[0-9]+: Permission denied \(publickey\)' "$errors"; then
+              break
+            fi
+            echo "::warning::attempt $attempt/3: OS Login has not accepted this run's key yet; retrying in 15s"
+            attempt=$((attempt + 1))
+            sleep 15
+          done
+          tail -n 20 "$errors" >&2
+          python3 -I - "$report" <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          import pathlib
+          import sys
+
+          body = pathlib.Path(sys.argv[1]).read_text()
+          try:
+              report = json.loads(body)
+          except json.JSONDecodeError:
+              print("### Coding host verify\n\nVerifier produced no JSON report.")
+              raise SystemExit(0)
+          print("### Coding host verify\n")
+          print(f"- Overall: {'ok' if report.get('ok') else 'FAILED'}")
+          for check in report.get("checks", []):
+              mark = "ok" if check.get("ok") else "FAIL"
+              scope = "" if check.get("required") else " (informational)"
+              print(f"- {mark}: {check.get('name')}{scope} — `{json.dumps(check.get('detail'), sort_keys=True)}`")
+          PY
+          exit "$status"
+
+      - name: Remove the short-lived OS Login key
+        if: always()
+        shell: bash
+        run: |
+          if [ -f ~/.ssh/google_compute_engine.pub ]; then
+            gcloud compute os-login ssh-keys remove \
+              --key-file ~/.ssh/google_compute_engine.pub >/dev/null 2>&1 || true
+          fi
