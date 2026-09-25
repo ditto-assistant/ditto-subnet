@@ -1,7 +1,7 @@
 """Policy v13 screening decision records (review_timed_out finalizer).
 
 Revision ID: 5e1f7a9c2b04
-Revises: b87d2e4f10a9
+Revises: c47d8b9e204a
 """
 
 import sqlalchemy as sa
@@ -10,7 +10,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "5e1f7a9c2b04"
-down_revision = "b87d2e4f10a9"
+down_revision = "c47d8b9e204a"
 branch_labels = None
 depends_on = None
 
