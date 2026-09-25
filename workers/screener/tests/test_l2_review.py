@@ -4542,6 +4542,69 @@ def test_compact_history_replaces_consumed_source_with_reloadable_digest() -> No
     assert items[1]["output"] == "{}"
 
 
+async def test_report_only_audit_records_turn_timeout_and_tool_names_without_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    audit_path = tmp_path / "turn-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=None,
+        base_url="https://openrouter.test/api/v1",
+        harness=_FakeHarness(),  # type: ignore[arg-type]
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit_path), retention_days=30),
+        timeout_seconds=30,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=1.5,
+        cache_ttl_seconds=86_400,
+        l3_enabled=False,
+        terminal_verdict_required=True,
+    )
+    calls = 0
+
+    async def post(*_args: object, **_kwargs: object) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _response(
+                [_tool_call("1", "workspace_index", {})], model="openai/gpt-6-sol"
+            )
+        raise TimeoutError
+
+    monkeypatch.setattr(agent, "_post", post)
+    async with httpx.AsyncClient() as client:
+        with pytest.raises(TimeoutError):
+            await agent._run_trajectory(
+                client,
+                "test-key",
+                tmp_path,
+                None,  # type: ignore[arg-type]
+                artifact_sha256="d" * 64,
+                dossier={"source": "private-source-marker"},
+                role="analyst",
+                reasoning_effort="model_default",
+                model="openai/gpt-6-sol",
+                fallback_models=(),
+                provider="azure",
+                usage_before=l2_review.L2Usage(),
+                deadline=None,
+                dossier_complete=True,
+            )
+    events = [json.loads(line) for line in audit_path.read_text().splitlines()]
+    assert [event["event_type"] for event in events] == [
+        "report_only_turn_start",
+        "report_only_turn_usage",
+        "report_only_turn_tools",
+        "report_only_turn_start",
+        "report_only_turn_timeout",
+    ]
+    assert events[2]["tool_names"] == ["workspace_index"]
+    assert events[-1]["step"] == 2
+    assert "private-source-marker" not in audit_path.read_text()
+
+
 async def test_report_only_provider_body_fault_retries_exact_turn_once(
     tmp_path: Path,
 ) -> None:

@@ -4056,18 +4056,51 @@ class TerraSolSourceReviewAgent:
 
         for _step in range(max_steps or self._max_steps):
             steps_used = _step + 1
-            response = await self._post(
-                client,
-                api_key,
-                items,
-                artifact_sha256=artifact_sha256,
-                reasoning_effort=reasoning_effort,
-                model=model,
-                fallback_models=fallback_models,
-                provider=provider,
-                deadline=deadline,
-                policy_version=policy_version,
-            )
+            turn_started = time.monotonic()
+            if self._terminal_verdict_required:
+                self._audit.record(
+                    {
+                        "recorded_at": time.time(),
+                        "event_type": "report_only_turn_start",
+                        "artifact_sha256": artifact_sha256,
+                        "role": role,
+                        "step": steps_used,
+                        "request_items": len(items),
+                        "request_bytes": len(
+                            json.dumps(items, separators=(",", ":")).encode()
+                        ),
+                        "model": model,
+                        "requested_provider": provider,
+                    }
+                )
+            try:
+                response = await self._post(
+                    client,
+                    api_key,
+                    items,
+                    artifact_sha256=artifact_sha256,
+                    reasoning_effort=reasoning_effort,
+                    model=model,
+                    fallback_models=fallback_models,
+                    provider=provider,
+                    deadline=deadline,
+                    policy_version=policy_version,
+                )
+            except (TimeoutError, httpx.TimeoutException):
+                if self._terminal_verdict_required:
+                    self._audit.record(
+                        {
+                            "recorded_at": time.time(),
+                            "event_type": "report_only_turn_timeout",
+                            "artifact_sha256": artifact_sha256,
+                            "role": role,
+                            "step": steps_used,
+                            "elapsed_seconds": round(
+                                time.monotonic() - turn_started, 3
+                            ),
+                        }
+                    )
+                raise
             payload: object | None = None
             try:
                 payload = response.json()
@@ -4116,6 +4149,26 @@ class TerraSolSourceReviewAgent:
                 _compact_consumed_tool_outputs(items)
             items.extend(output)
             calls = [item for item in output if item.get("type") == "function_call"]
+            if self._terminal_verdict_required:
+                allowed_tool_names = {
+                    str(tool["name"]) for tool in _l2_tools_for_policy(policy_version)
+                }
+                if self._compact_review_packet:
+                    allowed_tool_names.add("dossier_section")
+                self._audit.record(
+                    {
+                        "recorded_at": time.time(),
+                        "event_type": "report_only_turn_tools",
+                        "artifact_sha256": artifact_sha256,
+                        "role": role,
+                        "step": steps_used,
+                        "tool_names": [
+                            name if (name := call.get("name")) in allowed_tool_names
+                            else "unknown"
+                            for call in calls
+                        ],
+                    }
+                )
             if not calls:
                 if role == "analyst" and no_call_corrections < 2:
                     no_call_corrections += 1
