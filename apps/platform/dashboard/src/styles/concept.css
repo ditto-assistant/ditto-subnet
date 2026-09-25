@@ -1,0 +1,4662 @@
+/* ── Concept layer ─────────────────────────────────────────────────────────
+   The UI-concept direction from the design mockups: a deep navy instrument
+   ground, bordered cards with luminous accent edges, a gold brand thread
+   (wordmark, active navigation, primary action, held-for-review), violet for
+   live work in progress, and per-stage accent rings on the pipeline.
+
+   Scope and rules:
+   - The mockups depict Carbon + dark, so that is the only palette whose kit
+     ground is re-tuned (navy instead of neutral). Every rule below reads role
+     tokens, so the other palettes and both modes keep working.
+   - Data encodings are never reassigned. tool = gold and memory = plum stay
+     exactly as tokens.css fixes them, so the Benchmark pillars agree with
+     every chart, legend and score bar elsewhere (the mockup had them swapped).
+   - Violet (--c-progress) is chrome for "work is running". It is not the
+     memory encoding and is never used for a score.
+
+   Imported last. Removing the @import in index.css reverts the direction. */
+
+/* ── Ground: Carbon dark re-tuned to the concept's navy ────────────────── */
+[data-ditto-theme="carbon"][data-ditto-mode="dark"] {
+  --ditto-canvas: oklch(14.2% 0.013 248);
+  --ditto-surface: oklch(17.4% 0.015 248);
+  --ditto-raised: oklch(21% 0.017 248);
+  --ditto-ink: oklch(95.5% 0.005 248);
+  --ditto-muted: oklch(74% 0.012 248);
+  --ditto-rule: oklch(28% 0.018 248);
+  --ditto-island: oklch(11.5% 0.012 248);
+  --ditto-island-raised: oklch(19% 0.015 248);
+  --ditto-selection: oklch(30% 0.03 248);
+}
+
+:root {
+  /* Surface ladder. */
+  --c-ground: var(--bg);
+  --c-surface: var(--bg-elev);
+  --c-raised: var(--bg-elev-2);
+  --c-line: var(--border);
+  --c-line-soft: color-mix(in oklab, var(--border) 60%, transparent);
+  --c-card: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--bg-elev) 88%, var(--ditto-ink)) 0%,
+    var(--bg-elev) 42%
+  );
+
+  /* Accent hues, each tied to one meaning. */
+  --c-gold: var(--gold);
+  --c-progress: oklch(52% 0.16 292);
+  --c-progress-hi: oklch(60% 0.15 300);
+  --c-wait: var(--ref-openclaw);
+  --c-live: var(--good);
+  --c-hold: var(--warn);
+  --c-fault: var(--danger);
+
+  --c-radius-card: 14px;
+  --c-radius-row: 10px;
+  --c-shadow-card:
+    0 1px 0 color-mix(in oklab, var(--ditto-ink) 5%, transparent) inset,
+    0 18px 40px -28px color-mix(in oklab, #000 70%, transparent);
+}
+[data-ditto-mode="dark"] {
+  --c-progress: oklch(66% 0.16 292);
+  --c-progress-hi: oklch(76% 0.13 302);
+}
+
+/* A glow is always the accent at low alpha; one helper per strength. */
+:root {
+  --c-glow-sm: 0 0 12px -2px;
+  --c-glow-md: 0 0 22px -4px;
+}
+
+/* ── Page ground ───────────────────────────────────────────────────────── */
+body {
+  background:
+    radial-gradient(
+      1200px 520px at 62% -12%,
+      color-mix(in oklab, var(--c-gold) 5%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      900px 600px at 0% 100%,
+      color-mix(in oklab, var(--c-wait) 4%, transparent),
+      transparent 70%
+    ),
+    var(--bg);
+  background-attachment: fixed;
+}
+.wrap {
+  max-width: 1320px;
+  padding: 30px 40px 72px;
+}
+
+/* ── Header ────────────────────────────────────────────────────────────── */
+header.top {
+  align-items: flex-start;
+  margin-bottom: 26px;
+}
+.page-title h1 {
+  font: 800 44px/1.04 var(--display);
+  letter-spacing: -0.035em;
+}
+.page-title .sub,
+#page-sub {
+  margin-top: 8px;
+  font: 400 16px/1.5 var(--sans);
+  color: var(--text-dim);
+}
+.global-search .search-field {
+  height: 44px;
+  min-width: 340px;
+  padding: 0 14px 0 16px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-surface) 80%, transparent);
+}
+.global-search .search-field:focus-within {
+  border-color: color-mix(in oklab, var(--c-gold) 55%, var(--c-line));
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--c-gold) 14%, transparent);
+}
+.global-search .search-input {
+  font: 400 15px/1 var(--sans);
+}
+.global-search .search-shortcut {
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  height: 24px;
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  background: var(--c-raised);
+  color: var(--text-dim);
+  font: 500 12px/1 var(--mono);
+}
+#status.pill,
+header.top .pill {
+  align-self: center;
+  gap: 10px;
+  font: 400 15px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+#status.pill .dot {
+  width: 10px;
+  height: 10px;
+  background: var(--c-live);
+  box-shadow: var(--c-glow-sm) var(--c-live);
+}
+
+/* ── Rail ──────────────────────────────────────────────────────────────── */
+.sidebar {
+  flex-basis: 250px;
+  gap: 20px;
+  padding: 26px 18px 22px;
+  border-right: 1px solid var(--c-line);
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--c-surface) 70%, var(--bg)) 0%,
+    color-mix(in oklab, var(--c-surface) 45%, var(--bg)) 100%
+  );
+}
+.sidebar .brand {
+  gap: 6px;
+  padding: 0 6px;
+}
+.wordmark {
+  --wordmark-width: 116px;
+  color: var(--c-gold);
+  filter: drop-shadow(0 0 14px color-mix(in oklab, var(--c-gold) 22%, transparent));
+}
+.sidebar .brand .sub {
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+/* The payout clock is the rail's instrument: a boxed gauge. */
+.sidebar .epoch-clock {
+  gap: 6px;
+  padding: 14px 16px 16px;
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: var(--c-card);
+}
+.sidebar .epoch-clock-label,
+.sidebar .epoch-clock-label-text {
+  font: 400 14px/1.3 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.sidebar .epoch-clock-time {
+  font: 600 32px/1.05 var(--sans);
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.sidebar .epoch-clock-foot,
+.sidebar .epoch-clock-block,
+.sidebar .epoch-clock-tempo {
+  font: 400 13px/1.45 var(--sans);
+  color: var(--text-dim);
+}
+
+/* Navigation: icon + label, the active page a lit gold plate. */
+.nav {
+  gap: 6px;
+}
+.nav-item .ni-icon {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  color: inherit;
+  font-size: 22px;
+}
+.nav-item .ni-icon .ic {
+  stroke-width: 1.7;
+}
+.nav-item,
+.sidebar .nav-item {
+  gap: 14px;
+  min-height: 46px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--text-dim);
+  font: 400 16px/1.3 var(--sans);
+  transition:
+    background-color 0.15s var(--ease-out-quart),
+    color 0.15s var(--ease-out-quart);
+}
+.nav-item:hover,
+.sidebar .nav-item:hover {
+  background: color-mix(in oklab, var(--c-raised) 60%, transparent);
+  color: var(--text);
+}
+.nav-item.active,
+.sidebar .nav-item.active {
+  border-color: color-mix(in oklab, var(--c-gold) 62%, transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--c-gold) 16%, transparent),
+    color-mix(in oklab, var(--c-gold) 5%, transparent)
+  );
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--c-gold) 12%, transparent),
+    var(--c-glow-md) color-mix(in oklab, var(--c-gold) 28%, transparent);
+  color: var(--text);
+  font-weight: 500;
+}
+.nav-item.active .ni-icon {
+  color: var(--c-gold);
+}
+
+/* Appearance: a rule above, lit tile for the active choice. */
+.side-theme,
+.sidebar .side-theme {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 20px 6px 0;
+  border-top: 1px solid var(--c-line);
+}
+.theme-switch {
+  gap: 10px;
+}
+.theme-option {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--text-dim);
+}
+.theme-option[aria-pressed="true"],
+.theme-option[aria-checked="true"],
+.theme-option.active {
+  border-color: color-mix(in oklab, var(--c-gold) 55%, transparent);
+  background: color-mix(in oklab, var(--c-gold) 12%, transparent);
+  color: var(--c-gold);
+}
+.palette-switch {
+  gap: 12px;
+}
+.palette-option {
+  width: 26px;
+  height: 26px;
+}
+
+/* Footer links: a vertical list with their icons back. */
+.side-foot {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 0 8px;
+}
+.side-foot .btn,
+.side-foot #refresh {
+  gap: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: 400 15px/1.3 var(--sans);
+}
+.side-foot .btn:hover {
+  color: var(--text);
+}
+.side-foot .btn .ic {
+  display: inline-block;
+  font-size: 18px;
+}
+.side-foot .btn .ic.ext {
+  display: none;
+}
+
+/* ── Cards: every panel on the concept is a bordered card ──────────────── */
+.card,
+.snapshot,
+.harness-comparison,
+.board,
+.koth-standing,
+.leaderboard-notice,
+.emissions-strip,
+.chain-observation,
+.rollout-strip,
+.operations-panel,
+.fleet-slot-overview,
+.fleet-retired,
+.artifact-release-card,
+.run-telemetry-panel,
+.activity,
+.pipeline-history-region,
+.retest-summary {
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+  box-shadow: var(--c-shadow-card);
+}
+.board,
+.activity {
+  overflow: hidden;
+}
+.harness-comparison {
+  padding: var(--s-5);
+}
+/* The overview masthead stays one open band. */
+.overview-masthead,
+.overview-masthead .snapshot,
+.overview-masthead .champion-box,
+.overview-masthead .epoch-clock {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ── Status chips ──────────────────────────────────────────────────────── */
+.stage[class] {
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid;
+  border-radius: 7px;
+  font: 500 13px/1.3 var(--sans);
+}
+.stage.progress[class] {
+  color: var(--c-progress-hi);
+  border-color: color-mix(in oklab, var(--c-progress) 45%, transparent);
+  background: color-mix(in oklab, var(--c-progress) 16%, transparent);
+}
+.stage.good[class] {
+  border-color: color-mix(in oklab, var(--good) 42%, transparent);
+  background: color-mix(in oklab, var(--good) 14%, transparent);
+}
+.stage.warn[class] {
+  border-color: color-mix(in oklab, var(--warn) 45%, transparent);
+  background: color-mix(in oklab, var(--warn) 14%, transparent);
+}
+.stage.bad[class] {
+  color: color-mix(in oklab, var(--danger) 80%, var(--text));
+  border-color: color-mix(in oklab, var(--danger) 45%, transparent);
+  background: color-mix(in oklab, var(--danger) 15%, transparent);
+}
+.stage.paused[class] {
+  border-color: var(--c-line);
+  background: var(--c-raised);
+}
+
+/* ── Progress primitives ───────────────────────────────────────────────── */
+/* Native <progress> is the live bar everywhere work runs; style it once. */
+.pipeline-map progress,
+.fleet-table progress,
+.scoring-detail progress {
+  appearance: none;
+  width: 100%;
+  height: 7px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--ditto-ink) 12%, transparent);
+  overflow: hidden;
+}
+.pipeline-map progress::-webkit-progress-bar,
+.fleet-table progress::-webkit-progress-bar,
+.scoring-detail progress::-webkit-progress-bar {
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--ditto-ink) 12%, transparent);
+}
+.pipeline-map progress::-webkit-progress-value,
+.fleet-table progress::-webkit-progress-value,
+.scoring-detail progress::-webkit-progress-value {
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--c-progress), var(--c-progress-hi));
+  box-shadow: 0 0 10px color-mix(in oklab, var(--c-progress) 60%, transparent);
+}
+.pipeline-map progress::-moz-progress-bar,
+.fleet-table progress::-moz-progress-bar,
+.scoring-detail progress::-moz-progress-bar {
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--c-progress), var(--c-progress-hi));
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Pipeline
+   ═════════════════════════════════════════════════════════════════════════ */
+.pipeline-map .atlas-label {
+  margin-bottom: 22px;
+}
+.pipeline-map .atlas-note {
+  display: block;
+  font: 400 15px/1.65 var(--sans);
+  color: var(--text-dim);
+}
+
+.pipeline-overview {
+  --stage: var(--c-line);
+  gap: 22px;
+  align-items: stretch;
+}
+.pipeline-column[data-pipeline-stage="admission"] {
+  --stage: var(--c-gold);
+}
+.pipeline-column[data-pipeline-stage="waiting_validator"] {
+  --stage: var(--c-wait);
+}
+.pipeline-column[data-pipeline-stage="evaluating"] {
+  --stage: var(--c-progress);
+}
+.pipeline-column[data-pipeline-stage="scored"] {
+  --stage: var(--c-live);
+}
+
+/* operations.css pins `border: 0 !important` on the bare grid cell. */
+.pipeline-overview .pipeline-column,
+.pipeline-overview .pipeline-column:first-child,
+.pipeline-overview .pipeline-column:last-child {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  grid-auto-rows: min-content;
+  column-gap: 14px;
+  align-content: start;
+  min-height: 460px;
+  padding: 18px 16px 16px;
+  border: 1px solid color-mix(in oklab, var(--stage) 42%, var(--c-line)) !important;
+  border-radius: var(--c-radius-card);
+  background:
+    radial-gradient(
+      420px 160px at 20% 0%,
+      color-mix(in oklab, var(--stage) 9%, transparent),
+      transparent 70%
+    ),
+    var(--c-card);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, var(--stage) 38%, transparent),
+    0 -2px 22px -14px color-mix(in oklab, var(--stage) 70%, transparent),
+    var(--c-shadow-card);
+}
+/* Chevrons live in the gutter between stage cards. */
+.pipeline-column:not(:last-child)::after {
+  display: none;
+}
+.pipeline-column:not(:last-child)::before {
+  content: "";
+  top: 40px;
+  right: -17px;
+  width: 10px;
+  height: 10px;
+  border-top: 1.5px solid var(--text-dim);
+  border-right: 1.5px solid var(--text-dim);
+  transform: rotate(45deg);
+}
+
+.pipeline-node {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  width: 56px;
+  height: 56px;
+  margin: 0;
+  border: 2px solid color-mix(in oklab, var(--stage) 80%, transparent);
+  border-radius: 50%;
+  background:
+    radial-gradient(
+      circle at 50% 35%,
+      color-mix(in oklab, var(--stage) 22%, transparent),
+      transparent 70%
+    ),
+    var(--c-raised);
+  color: var(--text);
+  font: 600 19px/1 var(--sans);
+  letter-spacing: 0;
+  box-shadow:
+    0 0 0 4px color-mix(in oklab, var(--c-surface) 90%, transparent),
+    0 0 20px -2px color-mix(in oklab, var(--stage) 55%, transparent);
+}
+.pipeline-column[data-active="true"] .pipeline-node,
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-node {
+  border-color: color-mix(in oklab, var(--stage) 80%, transparent);
+  background:
+    radial-gradient(
+      circle at 50% 35%,
+      color-mix(in oklab, var(--stage) 26%, transparent),
+      transparent 70%
+    ),
+    var(--c-raised);
+  color: var(--text);
+}
+.pipeline-column-head {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  min-height: 0;
+  margin: 0 0 16px;
+  text-align: left;
+}
+.pipeline-column h3 {
+  min-height: 0;
+  margin: 4px 0 0;
+  font: 600 18px/1.25 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+.pipeline-count {
+  margin: 8px 0 0;
+  font: 600 36px/1 var(--display);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+.pipeline-column[data-pipeline-stage="admission"] .pipeline-count {
+  color: var(--c-gold);
+}
+.pipeline-count-detail {
+  margin-top: 8px;
+  font: 400 14px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.pipeline-stuck-count[class] {
+  margin-left: 8px;
+  font: 500 13px/1 var(--sans);
+  vertical-align: middle;
+}
+.pipeline-items-caption {
+  grid-column: 1 / -1;
+  margin: 0 0 10px;
+  font: 400 14px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.pipeline-items {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 400px;
+  padding: 0;
+  scrollbar-width: thin;
+}
+
+/* Queue cards. */
+.pipeline-item,
+.pipeline-overview .pipeline-item {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px 14px;
+  border: 1px solid var(--c-line-soft);
+  border-radius: var(--c-radius-row);
+  background: color-mix(in oklab, var(--c-raised) 55%, transparent);
+  color: var(--text);
+  text-decoration: none;
+  transition:
+    border-color 0.15s var(--ease-out-quart),
+    background-color 0.15s var(--ease-out-quart);
+}
+.pipeline-item:hover {
+  border-color: color-mix(in oklab, var(--stage) 45%, var(--c-line));
+  background: color-mix(in oklab, var(--c-raised) 80%, transparent);
+}
+.pipeline-item-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.pipeline-item-identity {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.pipeline-item-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font: 600 15px/1.3 var(--sans);
+  color: var(--text);
+}
+.pipeline-item .miner-avatar {
+  width: 34px;
+  height: 34px;
+}
+.pipeline-item-version {
+  font: 400 13px/1 var(--sans);
+  color: var(--text-dim);
+}
+.pipeline-item-meta {
+  flex: none;
+  font: 400 13px/1.2 var(--sans);
+  color: var(--text-dim);
+}
+.pipeline-admission-state,
+.screener-progress-stage {
+  font: 400 14px/1.35 var(--sans);
+  color: var(--text-dim);
+}
+.pipeline-item-policy {
+  font: 500 13px/1.3 var(--mono);
+  color: var(--c-progress-hi);
+}
+
+/* The admission step track: five lit or hollow segments. */
+.admission-steps {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 7px;
+}
+.admission-step {
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--ditto-ink) 16%, transparent);
+}
+.admission-step.done {
+  background: var(--c-gold);
+}
+.admission-step.current {
+  background: var(--c-gold);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--c-gold) 70%, transparent);
+}
+
+/* Scoring cards: compact progress, one line per running slot. */
+.pipeline-column[data-pipeline-stage="evaluating"] .benchmark-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 10px;
+  align-items: center;
+}
+.pipeline-column[data-pipeline-stage="evaluating"] .benchmark-stage-label {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 400 13px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.pipeline-column[data-pipeline-stage="evaluating"] .benchmark-progress progress,
+.pipeline-column[data-pipeline-stage="evaluating"] .benchmark-progress .bench-bar {
+  grid-column: 1 / -1;
+}
+.pipeline-column[data-pipeline-stage="evaluating"] .benchmark-progress-text {
+  grid-column: 1 / -1;
+  font: 500 13px/1.3 var(--sans);
+  color: var(--text);
+}
+.benchmark-version-chip[class] {
+  padding: 2px 7px;
+  border: 1px solid color-mix(in oklab, var(--c-progress) 40%, var(--c-line));
+  border-radius: 6px;
+  color: var(--c-progress-hi);
+  font: 500 12px/1.3 var(--sans);
+}
+.pipeline-item[aria-current="true"] {
+  border-color: color-mix(in oklab, var(--c-progress) 75%, transparent);
+  background: color-mix(in oklab, var(--c-progress) 11%, var(--c-raised));
+  box-shadow: var(--c-glow-md) color-mix(in oklab, var(--c-progress) 35%, transparent);
+}
+.pipeline-selected-chip {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in oklab, var(--c-progress) 65%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-progress) 18%, transparent);
+  color: var(--text);
+  font: 500 12px/1.3 var(--sans);
+}
+
+/* Scored & live: a completion timeline, not a stack of cards. */
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-items {
+  gap: 0;
+  padding-left: 22px;
+  position: relative;
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item {
+  position: relative;
+  padding: 11px 12px;
+  border-color: transparent;
+  background: transparent;
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item:hover {
+  background: color-mix(in oklab, var(--c-raised) 55%, transparent);
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -18px;
+  width: 9px;
+  height: 9px;
+  margin-top: -4.5px;
+  border-radius: 50%;
+  background: var(--c-live);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--c-live) 70%, transparent);
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -14px;
+  width: 1px;
+  background: color-mix(in oklab, var(--c-live) 25%, var(--c-line));
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item:first-child::after {
+  top: 50%;
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item:last-of-type::after {
+  bottom: 50%;
+}
+
+/* An empty lane is a quiet dotted field with a clock, not a blank card. */
+.pipeline-items:has(> .pipeline-empty:only-child) {
+  display: grid;
+  place-items: center;
+  min-height: 300px;
+  border: 1px solid var(--c-line-soft);
+  border-radius: var(--c-radius-row);
+  background:
+    radial-gradient(
+        circle,
+        color-mix(in oklab, var(--ditto-ink) 14%, transparent) 1px,
+        transparent 1.4px
+      )
+      0 0 / 18px 18px,
+    color-mix(in oklab, var(--c-raised) 25%, transparent);
+}
+.pipeline-empty {
+  display: grid;
+  justify-items: center;
+  gap: 18px;
+  padding: 16px;
+  font: 400 15px/1.4 var(--sans);
+  color: var(--text);
+  text-align: center;
+}
+.pipeline-items > .pipeline-empty:only-child::before {
+  content: "";
+  width: 66px;
+  height: 66px;
+  border: 1px dashed color-mix(in oklab, var(--ditto-ink) 30%, transparent);
+  border-radius: 50%;
+  background:
+    no-repeat center / 30px 30px
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c9ced6' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M12 7v5l3 2'/%3E%3C/svg%3E"),
+    color-mix(in oklab, var(--c-surface) 90%, transparent);
+}
+.pipeline-more {
+  margin-top: 6px;
+  padding: 10px;
+  border: 1px solid var(--c-line);
+  border-radius: 8px;
+  font: 500 14px/1.3 var(--sans);
+  color: var(--text);
+  text-align: center;
+}
+.pipeline-lane-divider {
+  font: 400 13px/1.3 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+
+/* The selected submission's run panel. */
+.scoring-detail {
+  margin-top: 24px;
+  padding: 22px 24px 24px;
+  border: 1px solid color-mix(in oklab, var(--c-progress) 50%, var(--c-line));
+  border-radius: var(--c-radius-card);
+  background:
+    radial-gradient(
+      600px 180px at 10% 0%,
+      color-mix(in oklab, var(--c-progress) 9%, transparent),
+      transparent 70%
+    ),
+    var(--c-card);
+  box-shadow:
+    0 0 0 1px color-mix(in oklab, var(--c-progress) 10%, transparent),
+    0 0 36px -18px color-mix(in oklab, var(--c-progress) 70%, transparent);
+}
+.scoring-detail-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto auto;
+  align-items: center;
+  gap: 22px;
+  padding-bottom: 20px;
+}
+.scoring-detail-head .miner-avatar {
+  width: 64px;
+  height: 64px;
+}
+.scoring-detail-identity h3 {
+  margin: 0;
+  font: 700 30px/1.1 var(--display);
+  letter-spacing: -0.02em;
+}
+.scoring-detail-sub {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 6px;
+  font: 400 15px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.scoring-detail-bench {
+  padding-left: 12px;
+  border-left: 1px solid var(--c-line);
+  color: var(--c-progress-hi);
+}
+.scoring-detail-stage {
+  padding: 0 22px;
+  border-left: 1px solid var(--c-line);
+  border-right: 1px solid var(--c-line);
+  font: 500 16px/1.3 var(--sans);
+  color: var(--c-progress-hi);
+}
+.scoring-detail-quorum {
+  display: grid;
+  gap: 4px;
+}
+.scoring-detail-quorum span {
+  font: 400 14px/1.2 var(--sans);
+  color: var(--text-dim);
+}
+.scoring-detail-quorum strong {
+  font: 600 24px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.scoring-detail-open {
+  font: 500 14px/1 var(--sans);
+  color: var(--text-dim);
+}
+.scoring-detail-open:hover {
+  color: var(--text);
+}
+.scoring-detail-close {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid var(--c-line);
+  border-radius: 9px;
+  background: var(--c-raised);
+  color: var(--text);
+  font-size: 18px;
+  cursor: pointer;
+}
+.scoring-detail-close:hover {
+  border-color: color-mix(in oklab, var(--c-progress) 55%, var(--c-line));
+}
+.scoring-detail-runs {
+  display: grid;
+  margin: 0;
+  padding: 6px 20px;
+  border: 1px solid var(--c-line-soft);
+  border-radius: var(--c-radius-row);
+  background: color-mix(in oklab, var(--c-raised) 40%, transparent);
+  list-style: none;
+}
+.scoring-run {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1.2fr) 70px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 22px;
+  padding: 14px 0;
+}
+.scoring-run + .scoring-run {
+  border-top: 1px solid var(--c-line-soft);
+}
+.scoring-run progress,
+.scoring-run .bench-bar {
+  height: 10px;
+}
+.scoring-run-label,
+.scoring-run-checks,
+.scoring-run-elapsed {
+  font: 400 15px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.scoring-run-label {
+  color: var(--text);
+}
+.scoring-run-pct {
+  font: 600 16px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.scoring-run-elapsed {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+}
+.scoring-detail-empty {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.pipeline-review-branch {
+  margin: 0;
+  padding: 0;
+  border: 1px solid color-mix(in oklab, var(--c-gold) 58%, transparent);
+  border-radius: var(--c-radius-card);
+  background:
+    radial-gradient(
+      560px 180px at 0% 0%,
+      color-mix(in oklab, var(--c-gold) 11%, transparent),
+      transparent 70%
+    ),
+    var(--c-card);
+  box-shadow: 0 0 34px -20px color-mix(in oklab, var(--c-gold) 80%, transparent);
+}
+.pipeline-review-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  align-items: center;
+  gap: 4px 20px;
+  padding: 22px 24px;
+  list-style: none;
+  cursor: pointer;
+}
+.pipeline-review-summary::-webkit-details-marker {
+  display: none;
+}
+.pipeline-review-mark {
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  color: var(--c-gold);
+  font-size: 34px;
+}
+.pipeline-review-heading {
+  grid-row: 1 / span 2;
+  display: grid;
+  gap: 6px;
+}
+.pipeline-review-eyebrow {
+  font: 400 15px/1.2 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--c-gold);
+}
+.pipeline-review-title {
+  font: 700 26px/1.15 var(--display);
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.pipeline-review-count {
+  justify-self: end;
+  font: 600 32px/1 var(--display);
+  font-variant-numeric: tabular-nums;
+  color: var(--c-gold);
+}
+.pipeline-review-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  justify-self: end;
+  padding: 9px 16px;
+  border: 1px solid var(--c-line);
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--c-raised) 70%, transparent);
+  font: 500 15px/1 var(--sans);
+  color: var(--text);
+}
+.pipeline-review-toggle .ic {
+  transition: transform 0.2s var(--ease-out-quart);
+}
+.pipeline-review-toggle-close,
+.pipeline-review-branch[open] .pipeline-review-toggle-open {
+  display: none;
+}
+.pipeline-review-branch[open] .pipeline-review-toggle-close {
+  display: inline;
+}
+.pipeline-review-branch[open] .pipeline-review-toggle .ic {
+  transform: rotate(90deg);
+}
+.pipeline-review-copy,
+.pipeline-review-items {
+  margin: 0;
+  padding: 0 24px 22px;
+}
+.pipeline-review-copy {
+  font: 400 15px/1.5 var(--sans);
+  color: var(--text-dim);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Submissions
+   ═════════════════════════════════════════════════════════════════════════ */
+.activity {
+  padding: 0;
+}
+.activity-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 0 18px;
+  border: 0;
+  background: transparent;
+}
+.activity-filter-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.activity-filter,
+.leaderboard-version-switch .activity-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 18px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-surface) 85%, transparent);
+  color: var(--text);
+  font: 400 15px/1 var(--sans);
+}
+.activity-filter:hover {
+  border-color: color-mix(in oklab, var(--ditto-ink) 30%, var(--c-line));
+}
+.activity-filter[aria-pressed="true"],
+.activity-filter.active {
+  border-color: color-mix(in oklab, var(--c-gold) 70%, transparent);
+  background: color-mix(in oklab, var(--c-gold) 10%, var(--c-surface));
+  box-shadow: var(--c-glow-md) color-mix(in oklab, var(--c-gold) 28%, transparent);
+}
+.activity-filter-count {
+  margin: 0;
+  padding: 3px 9px;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--ditto-ink) 12%, transparent);
+  color: var(--text);
+  font: 500 13px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.activity-filter-summary,
+.activity-filter-meta {
+  font: 400 15px/1.3 var(--sans);
+  letter-spacing: 0;
+  color: var(--text-dim);
+}
+.activity .pager,
+.pager {
+  justify-content: center;
+  gap: 40px;
+  font: 400 15px/1 var(--sans);
+}
+.activity table {
+  border-collapse: collapse;
+}
+.activity thead th {
+  padding: 16px 22px;
+  border-bottom: 1px solid var(--c-line);
+  font: 400 15px/1.2 var(--sans);
+  color: var(--text-dim);
+  text-align: left;
+}
+.activity tbody td {
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--c-line-soft);
+  vertical-align: top;
+}
+.activity tbody tr:last-child td {
+  border-bottom: 0;
+}
+.activity tbody tr[data-activity-i] {
+  cursor: pointer;
+  transition: background-color 0.12s var(--ease-out-quart);
+}
+.activity tbody tr[data-activity-i]:hover {
+  background: color-mix(in oklab, var(--c-raised) 50%, transparent);
+}
+/* A submission held for integrity review is the row to look at. */
+.activity tbody tr[data-activity-i]:has(.stage.warn) {
+  background: color-mix(in oklab, var(--c-gold) 6%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c-gold) 62%, transparent);
+}
+.activity tbody tr[data-activity-i]:focus-visible {
+  background: color-mix(in oklab, var(--c-gold) 9%, transparent);
+  outline: 1px solid var(--c-gold);
+  outline-offset: -1px;
+}
+.submission-identity {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+.submission-identity .miner-avatar,
+.submission-avatar-blank {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+}
+.submission-avatar-blank {
+  border: 1px solid color-mix(in oklab, var(--ditto-ink) 26%, transparent);
+  background: color-mix(in oklab, var(--c-raised) 50%, transparent);
+}
+.submission-identity-main {
+  display: grid;
+  gap: 4px;
+}
+.submission-identity-main .agent-name {
+  font: 600 16px/1.3 var(--sans);
+  color: var(--text);
+}
+.submission-version {
+  font: 400 14px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.submission-identity-main .agent-id,
+.miner-cell .hotkey {
+  font: 400 14px/1.3 var(--mono);
+  color: var(--text-dim);
+}
+.stage-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+}
+.stage-note {
+  font: 400 14px/1.5 var(--sans);
+  color: var(--text-dim);
+}
+.stage-note b {
+  color: var(--text);
+  font-weight: 600;
+}
+.validation-cell {
+  white-space: nowrap;
+}
+.validation-progress {
+  display: block;
+  font: 500 15px/1.3 var(--sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.validation-progress.pending {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+.quorum-dots {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.quorum-dots i {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid color-mix(in oklab, var(--ditto-ink) 32%, transparent);
+  border-radius: 50%;
+}
+.quorum-dots i.filled {
+  border-color: transparent;
+  background: var(--c-live);
+  box-shadow: 0 0 9px color-mix(in oklab, var(--c-live) 60%, transparent);
+}
+.submitted-cell {
+  font: 400 15px/1.3 var(--sans);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Fleet
+   ═════════════════════════════════════════════════════════════════════════ */
+.operations-tabs {
+  display: flex;
+  gap: 36px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--c-line);
+}
+.operations-tab {
+  position: relative;
+  padding: 10px 0 16px;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: 400 17px/1 var(--sans);
+}
+.operations-tab[aria-selected="true"],
+.operations-tab.active {
+  color: var(--text);
+  font-weight: 500;
+}
+.operations-tab[aria-selected="true"]::after,
+.operations-tab.active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--c-gold);
+  box-shadow: 0 0 12px color-mix(in oklab, var(--c-gold) 70%, transparent);
+}
+.fleet-ledger-row {
+  padding: 8px 14px;
+  border: 1px solid var(--c-line);
+  border-radius: 10px;
+  background: var(--c-surface);
+  font: 400 15px/1 var(--sans);
+}
+.fleet-ledger-row.warning {
+  border-color: color-mix(in oklab, var(--c-hold) 65%, transparent);
+}
+.fleet-ledger-row.critical {
+  border-color: color-mix(in oklab, var(--c-fault) 60%, transparent);
+}
+.fleet-table,
+.operations-panel {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.fleet-table table {
+  border-collapse: separate;
+  border-spacing: 0 12px;
+}
+.fleet-table thead th {
+  padding: 14px 22px;
+  border-top: 1px solid var(--c-line);
+  border-bottom: 1px solid var(--c-line);
+  background: var(--c-surface);
+  font: 400 15px/1.2 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.fleet-table thead th:first-child {
+  border-left: 1px solid var(--c-line);
+  border-radius: 12px 0 0 12px;
+}
+.fleet-table thead th:last-child {
+  border-right: 1px solid var(--c-line);
+  border-radius: 0 12px 12px 0;
+}
+.fleet-table tbody td {
+  padding: 22px;
+  border-top: 1px solid var(--c-line);
+  border-bottom: 1px solid var(--c-line);
+  background: var(--c-card);
+  vertical-align: top;
+}
+.fleet-table tbody td:first-child {
+  border-left: 1px solid var(--c-line);
+  border-radius: 12px 0 0 12px;
+}
+.fleet-table tbody td:last-child {
+  border-right: 1px solid var(--c-line);
+  border-radius: 0 12px 12px 0;
+}
+.fleet-host-cell {
+  border-left: 1px solid var(--c-line-soft);
+}
+.fleet-node {
+  font: 600 18px/1.3 var(--sans);
+}
+.fleet-node-dot {
+  width: 11px;
+  height: 11px;
+  box-shadow: 0 0 10px color-mix(in oklab, currentColor 60%, transparent);
+}
+.fleet-node-identity,
+.fleet-node-name {
+  font: 600 18px/1.3 var(--sans);
+  color: var(--text);
+}
+.fleet-id-cell .copyable,
+.fleet-id-cell code {
+  font: 400 15px/1.4 var(--mono);
+  color: var(--text-dim);
+}
+.fleet-node-state,
+.fleet-node-status[class],
+.fleet-node-status,
+.fleet-time {
+  font: 400 15px/1.4 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.fleet-slot-line {
+  grid-template-columns: 22px 34px minmax(80px, 1fr) minmax(120px, 1.6fr) auto 54px 72px 70px;
+  gap: 14px;
+  align-items: center;
+  padding: 5px 0;
+  font: 400 14px/1.3 var(--mono);
+}
+.fleet-slot-id,
+.fleet-slot-bench,
+.fleet-slot-count,
+.fleet-slot-elapsed {
+  color: var(--text-dim);
+}
+.fleet-slot-bench .benchmark-version-chip[class] {
+  padding: 0;
+  border: 0;
+  color: var(--text-dim);
+  font: 400 14px/1.3 var(--mono);
+}
+.fleet-slot-agent {
+  color: var(--text);
+}
+.fleet-slot-pct {
+  color: var(--text);
+  text-align: right;
+}
+.fleet-slot-summary,
+.fleet-slot-overview {
+  font: 400 15px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.fleet-chain-weights-label {
+  font: 400 15px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.chain-weights-stale,
+.fleet-chain-weights .stage.bad {
+  padding: 3px 10px;
+  border: 1px solid color-mix(in oklab, var(--c-fault) 60%, transparent);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-fault) 14%, transparent);
+  color: color-mix(in oklab, var(--c-fault) 82%, var(--text));
+  font: 600 12px/1.2 var(--sans);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.fleet-version[class] {
+  font: 500 16px/1.3 var(--sans);
+  color: var(--text);
+}
+.fleet-updater-mode[class],
+.fleet-host-specs,
+.fleet-worker-capacity {
+  font: 400 14px/1.45 var(--sans);
+  color: var(--text-dim);
+}
+/* Host load: horizontal label / value / bar rows, as in the concept. */
+.fleet-resources {
+  grid-template-columns: 1fr;
+  gap: 9px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--c-line-soft);
+}
+.fleet-resource {
+  grid-template-columns: 46px 44px minmax(0, 1fr);
+  grid-template-rows: auto;
+  align-items: center;
+  justify-items: stretch;
+  gap: 10px;
+}
+.fleet-resource-label {
+  grid-column: 1;
+  grid-row: 1;
+  font: 400 13px/1 var(--sans);
+  letter-spacing: 0.02em;
+  color: var(--text-dim);
+}
+.fleet-resource-value {
+  grid-column: 2;
+  grid-row: 1;
+  font: 500 13px/1 var(--sans);
+  color: var(--text);
+  text-align: right;
+}
+.fleet-resource-track {
+  grid-column: 3;
+  grid-row: 1;
+  max-width: none;
+  height: 7px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--ditto-ink) 12%, transparent);
+}
+.fleet-resource-track::before {
+  display: none;
+}
+.fleet-resource-track i {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: auto;
+  width: calc(var(--value) * 1%);
+  height: auto;
+  border-radius: var(--r-pill);
+  background: var(--c-gold);
+}
+.fleet-resource.warn .fleet-resource-track i {
+  background: var(--c-fault);
+}
+.fleet-retired {
+  padding: 18px 22px;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Benchmark
+   ═════════════════════════════════════════════════════════════════════════ */
+.about .lead {
+  max-width: 88ch;
+  margin: 0 0 26px;
+  font: 400 17px/1.65 var(--sans);
+  color: var(--text-dim);
+}
+.pillars {
+  gap: 22px;
+  margin-bottom: 26px;
+}
+.about .pillar,
+.pillar {
+  --pillar: var(--c-line);
+  padding: 26px 28px;
+  border: 1px solid color-mix(in oklab, var(--pillar) 55%, var(--c-line));
+  border-radius: var(--c-radius-card);
+  background:
+    radial-gradient(
+      520px 200px at 0% 0%,
+      color-mix(in oklab, var(--pillar) 12%, transparent),
+      transparent 72%
+    ),
+    var(--c-card);
+  box-shadow: 0 0 34px -22px color-mix(in oklab, var(--pillar) 80%, transparent);
+}
+.pillar.mem {
+  --pillar: var(--memory);
+}
+.pillar.tool {
+  --pillar: var(--tool);
+}
+.pillar h2 {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  margin: 0 0 18px;
+  font: 600 26px/1.2 var(--display);
+  letter-spacing: -0.015em;
+}
+.pillar-icon {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  flex: none;
+  border: 1px solid color-mix(in oklab, var(--pillar) 55%, transparent);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--pillar) 14%, transparent);
+  color: var(--pillar);
+  font-size: 28px;
+}
+.about .pillar h2 .tag[class] {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--pillar);
+  font: 600 38px/1 var(--display);
+  letter-spacing: -0.02em;
+}
+.pillar p {
+  margin: 0;
+  font: 400 16px/1.6 var(--sans);
+  color: var(--text-dim);
+}
+.benchmark-reference {
+  display: grid;
+  gap: 12px;
+}
+.bench-disclosure {
+  padding: 0;
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: var(--c-card);
+}
+.bench-disclosure + .bench-disclosure {
+  margin-top: 0;
+}
+.bench-disclosure > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 20px;
+  padding: 18px 24px;
+}
+.bench-disclosure-glyph {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  color: var(--text);
+  font-size: 26px;
+}
+.bench-disclosure-glyph .ic {
+  stroke-width: 1.5;
+}
+.bench-disclosure-title strong {
+  font: 600 18px/1.3 var(--sans);
+  color: var(--text);
+}
+.bench-disclosure-title span {
+  font: 400 15px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.bench-disclosure .tag[class] {
+  padding: 5px 14px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  background: var(--c-raised);
+  font: 500 14px/1 var(--sans);
+}
+.bench-disclosure-icon {
+  width: 22px;
+  height: 22px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.bench-disclosure-body {
+  padding: 0 24px 22px 88px;
+}
+/* The open-source stack: a grid of link tiles. */
+.page[data-page="benchmark"] footer {
+  margin-top: 30px;
+  padding-top: 26px;
+  border-top: 1px solid var(--c-line);
+}
+.page[data-page="benchmark"] .foot-links {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.page[data-page="benchmark"] .foot-label {
+  grid-column: 1 / -1;
+  font: 600 21px/1.2 var(--display);
+  color: var(--text);
+}
+.page[data-page="benchmark"] .foot-links a {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 18px;
+  border: 1px solid var(--c-line);
+  border-radius: 10px;
+  background: var(--c-card);
+  color: var(--text);
+  font: 400 15px/1.3 var(--sans);
+  text-decoration: none;
+}
+.page[data-page="benchmark"] .foot-links a:hover {
+  border-color: color-mix(in oklab, var(--c-gold) 50%, var(--c-line));
+}
+.foot-ic {
+  flex: none;
+  font-size: 22px;
+  color: var(--text-dim);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   ATH reviews
+   ═════════════════════════════════════════════════════════════════════════ */
+.ath-intro {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 48px;
+  margin-bottom: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.ath-intro .ath-eyebrow {
+  font: 400 16px/1.3 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.ath-intro h2 {
+  margin: 8px 0 14px;
+  font: 700 40px/1.1 var(--display);
+  letter-spacing: -0.03em;
+}
+.ath-intro p {
+  margin: 0;
+  font: 400 17px/1.6 var(--sans);
+  color: var(--text-dim);
+}
+.ath-outcomes {
+  display: grid;
+  align-content: start;
+  gap: 0;
+  padding-left: 32px;
+  border-left: 1px solid var(--c-line);
+}
+.ath-outcome {
+  display: grid;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 16px;
+  padding: 16px 0;
+  border: 0;
+  border-top: 1px solid var(--c-line);
+  border-radius: 0;
+  background: transparent;
+}
+.ath-outcome b {
+  font: 600 16px/1.4 var(--sans);
+}
+.ath-outcome span {
+  font: 400 16px/1.45 var(--sans);
+  color: var(--text-dim);
+}
+.ath-metrics {
+  gap: 18px;
+  margin-bottom: 30px;
+}
+.ath-metric {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 20px;
+  align-items: center;
+  padding: 20px 22px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+}
+.ath-metric-icon {
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  border: 1px solid var(--c-line);
+  border-radius: 11px;
+  background: color-mix(in oklab, var(--c-raised) 70%, transparent);
+  color: var(--c-gold);
+  font-size: 28px;
+}
+.ath-metric-icon .ic {
+  stroke-width: 1.5;
+}
+.ath-metric > span:not(.ath-metric-icon) {
+  align-self: end;
+  font: 400 16px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.ath-metric strong {
+  align-self: start;
+  font: 600 32px/1.15 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.ath-review-head h2 {
+  font: 600 24px/1.2 var(--display);
+}
+.ath-snapshot {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font: 400 15px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.ath-review-list {
+  display: grid;
+  gap: 16px;
+}
+.ath-review-card {
+  padding: 0 26px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+  box-shadow: var(--c-shadow-card);
+  transition: border-color 0.15s var(--ease-out-quart);
+}
+.ath-review-card:hover,
+.ath-review-card:focus-within {
+  border-color: color-mix(in oklab, var(--c-gold) 70%, transparent);
+  box-shadow: 0 0 30px -18px color-mix(in oklab, var(--c-gold) 80%, transparent);
+}
+.ath-review-main {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 28px;
+  padding: 22px 0 18px;
+}
+.ath-agent-name {
+  font: 600 19px/1.3 var(--sans);
+}
+.ath-id-line,
+.ath-hotkey {
+  font: 400 14px/1.6 var(--mono);
+  color: var(--text-dim);
+}
+.ath-review-status {
+  font: 500 16px/1.4 var(--sans);
+  color: var(--c-gold);
+}
+.ath-time-grid {
+  font: 400 15px/1.6 var(--sans);
+}
+.ath-time-grid dt {
+  color: var(--text-dim);
+}
+.ath-score {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding-left: 28px;
+  border-left: 1px solid var(--c-line);
+}
+.ath-score > div + div {
+  padding-left: 22px;
+  border-left: 1px solid var(--c-line);
+}
+.ath-score span {
+  font: 400 14px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.ath-score strong {
+  font: 600 24px/1.3 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.ath-hold-reason {
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 20px;
+  padding: 16px 0 20px;
+  border-top: 1px solid var(--c-line-soft);
+  font: 400 15px/1.55 var(--sans);
+}
+.ath-hold-reason b {
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Miner sign-in
+   ═════════════════════════════════════════════════════════════════════════ */
+.account-sign-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  margin-bottom: 22px;
+  border: 1px solid var(--c-line);
+  border-radius: 18px;
+  background:
+    radial-gradient(
+      700px 400px at 18% 70%,
+      color-mix(in oklab, var(--c-gold) 6%, transparent),
+      transparent 70%
+    ),
+    var(--c-card);
+  box-shadow: var(--c-shadow-card);
+  overflow: hidden;
+}
+.account-sign-card .account-hero {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 720px;
+  margin: 0;
+  padding: 44px 44px 40px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.account-hero-head {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  margin-bottom: 32px;
+}
+.account-hero-mark {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border: 1px solid color-mix(in oklab, var(--ditto-ink) 26%, transparent);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--c-raised) 60%, transparent);
+  color: var(--c-gold);
+  font-size: 34px;
+}
+.account-hero-mark .ic {
+  stroke-width: 1.5;
+}
+.account-hero-head .ath-eyebrow {
+  margin: 0;
+  font: 500 14px/1 var(--sans);
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--c-gold);
+}
+.account-sign-card .account-hero h2 {
+  margin: 0 0 22px;
+  font: 700 38px/1.12 var(--display);
+  letter-spacing: -0.025em;
+}
+.account-sign-card .account-hero > p:not(.account-hero-tagline) {
+  max-width: 34em;
+  margin: 0;
+  font: 400 19px/1.75 var(--sans);
+  color: var(--text-dim);
+}
+.account-sign-card .account-hero code {
+  padding: 2px 8px;
+  border: 1px solid var(--c-line);
+  border-radius: 7px;
+  background: color-mix(in oklab, var(--c-raised) 80%, transparent);
+  color: var(--text);
+  font: 400 17px/1.4 var(--mono);
+}
+.account-hero-art {
+  width: 100%;
+  height: 280px;
+  margin: auto 0 18px;
+  color: var(--c-gold);
+}
+.account-hero-art-dots {
+  fill: url(#account-art-dots);
+}
+.account-hero-art pattern circle {
+  fill: color-mix(in oklab, var(--ditto-ink) 32%, transparent);
+}
+.account-hero-art-waves {
+  fill: none;
+  stroke-width: 1.3;
+  opacity: 0.85;
+}
+.account-hero-tagline {
+  margin: 0;
+  font: 500 14px/1.9 var(--sans);
+  letter-spacing: 0.34em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--c-gold) 85%, var(--text-dim));
+  white-space: pre-line;
+}
+.account-sign-form {
+  display: flex;
+  flex-direction: column;
+  gap: 34px;
+  margin: 44px 0;
+  padding: 0 44px;
+  border-left: 1px solid var(--c-line);
+}
+.account-sign-form .account-card {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.account-sign-form h3 {
+  margin: 0 0 18px;
+  font: 600 22px/1.2 var(--display);
+}
+.account-scope {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 20px;
+  padding: 16px 22px;
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--c-raised) 45%, transparent);
+}
+.account-scope + .account-scope {
+  margin-top: 12px;
+}
+.account-scope input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--c-wait);
+}
+.account-scope strong {
+  display: block;
+  font: 500 17px/1.3 var(--sans);
+  color: var(--text);
+}
+.account-scope em {
+  display: block;
+  margin-top: 3px;
+  font: 400 15px/1.35 var(--sans);
+  font-style: normal;
+  color: var(--text-dim);
+}
+.account-hours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 26px;
+}
+.account-hours .btn {
+  height: 48px;
+  padding: 0 24px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-surface) 80%, transparent);
+  color: var(--text);
+  font: 400 16px/1 var(--sans);
+}
+.account-hours .btn.active,
+.account-hours .btn[aria-pressed="true"] {
+  border-color: color-mix(in oklab, var(--c-gold) 75%, transparent);
+  background: color-mix(in oklab, var(--c-gold) 13%, var(--c-surface));
+  box-shadow: var(--c-glow-md) color-mix(in oklab, var(--c-gold) 30%, transparent);
+}
+.account-start,
+.btn.account-start {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: 100%;
+  height: 58px;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklab, var(--c-gold) 88%, white),
+    color-mix(in oklab, var(--c-gold) 92%, black)
+  );
+  color: oklch(20% 0.02 60);
+  font: 600 19px/1 var(--sans);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, white 35%, transparent),
+    0 12px 30px -16px color-mix(in oklab, var(--c-gold) 80%, transparent);
+  cursor: pointer;
+}
+.account-start:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.account-start:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.account-start .ic {
+  font-size: 22px;
+  stroke-width: 2;
+}
+.account-sign > p.muted {
+  font: 400 16px/1.5 var(--sans);
+  color: var(--text-dim);
+}
+.account-sign > p.muted a {
+  color: var(--c-progress-hi);
+}
+
+/* ── Narrow screens: the concept's grids fold to one column ───────────── */
+@media (max-width: 1180px) {
+  .account-sign-card,
+  .ath-intro {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .account-sign-form {
+    margin: 0 0 36px;
+    border-left: 0;
+  }
+  .ath-outcomes {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .page[data-page="benchmark"] .foot-links {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .scoring-detail-head {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .scoring-detail-stage {
+    padding: 0;
+    border: 0;
+  }
+}
+@media (max-width: 720px) {
+  .page[data-page="benchmark"] .foot-links {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .scoring-run {
+    grid-template-columns: 64px minmax(0, 1fr) auto;
+  }
+  .scoring-run-checks,
+  .scoring-run-elapsed {
+    grid-column: 2 / -1;
+  }
+}
+
+/* shell.css pins the nav glyph at 17px; the concept draws it at 22px. */
+.nav-item .ni-icon .ic {
+  width: 22px;
+  height: 22px;
+}
+
+/* ── Pipeline card headings: one line, the name truncates first ────────── */
+/* operations.css lets the heading and the name wrap, which in a 230px lane
+   put the version under the name and the age on a third line. The concept
+   reads name · version · age on one row, so the name gives way instead. */
+.pipeline-item-heading {
+  flex-wrap: nowrap;
+}
+.pipeline-item-identity {
+  align-items: center;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.pipeline-item-identity .pipeline-item-name {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pipeline-item-name .miner-avatar {
+  display: inline-block;
+  margin-right: 10px;
+  vertical-align: middle;
+}
+.pipeline-item-name .handle-badge {
+  vertical-align: middle;
+}
+
+/* ── Scoring cards: the first run speaks, the rest are a stack of bars ─── */
+/* The run panel below the board carries every run's numbers, so a card only
+   needs to show that its runs are moving. Every run keeps its progress
+   element (and its accessible label); only the repeated prose is folded. */
+.pipeline-column[data-pipeline-stage="evaluating"] .pipeline-item {
+  gap: 7px;
+}
+.pipeline-column[data-pipeline-stage="evaluating"]
+  .benchmark-progress
+  + .benchmark-progress
+  .benchmark-stage-label,
+.pipeline-column[data-pipeline-stage="evaluating"]
+  .benchmark-progress
+  + .benchmark-progress
+  .benchmark-progress-text {
+  display: none;
+}
+.pipeline-column[data-pipeline-stage="evaluating"]
+  .benchmark-progress
+  + .benchmark-progress
+  progress {
+  height: 4px;
+  opacity: 0.8;
+}
+.pipeline-column[data-pipeline-stage="evaluating"] .benchmark-stage-label > span,
+.pipeline-column[data-pipeline-stage="evaluating"] .benchmark-progress-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* operations.css draws the old "Expand"/"Collapse" words as summary::after;
+   the concept's toggle button replaces them. */
+.pipeline-review-summary::after,
+.pipeline-review-branch[open] .pipeline-review-summary::after {
+  content: none;
+  display: none;
+}
+
+/* The completion timeline is the narrowest lane: a smaller avatar and less
+   padding give the name the width, before it has to truncate. */
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-items {
+  padding-left: 18px;
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item {
+  padding: 9px 6px 9px 8px;
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item .miner-avatar {
+  width: 28px;
+  height: 28px;
+  margin-right: 8px;
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item-heading {
+  gap: 8px;
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item::before {
+  left: -15px;
+}
+.pipeline-column[data-pipeline-stage="scored"] .pipeline-item::after {
+  left: -11px;
+}
+
+/* ── Submissions: filters and pager sit on the canvas, the table is the card */
+.board.activity {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.activity-table-frame {
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+  box-shadow: var(--c-shadow-card);
+  overflow: hidden;
+}
+.activity-filter-list {
+  flex: 1 1 auto;
+}
+.activity-filter-meta {
+  margin-left: auto;
+}
+.activity-filter[aria-pressed="true"] {
+  color: var(--text);
+}
+.activity .pager {
+  display: flex;
+  align-items: center;
+  margin: 0 0 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* ── Fleet: each validator its own card, readable slot rows ────────────── */
+/* The <table> itself carries .fleet-table, and widgets.css collapses every
+   table's borders, so the separated-row cards need the element selector. */
+table.fleet-table {
+  border-collapse: separate;
+  border-spacing: 0 12px;
+  margin-top: -12px;
+}
+/* The host column is set to 176px inline; the concept's load bars need room. */
+table.fleet-table > thead > tr > th:last-child {
+  width: 270px !important;
+}
+.fleet-table .fleet-slot-overview,
+.operations-panel .fleet-slot-overview {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.fleet-table .fleet-slot-overview .fleet-slot-summary,
+.fleet-table .fleet-slot-summary {
+  margin-top: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--c-line-soft);
+  border-bottom: 1px solid var(--c-line-soft);
+  font: 400 15px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.fleet-table .fleet-slot-line > span,
+.fleet-table .fleet-slot-line .fleet-slot-agent,
+.fleet-table .fleet-slot-line .fleet-slot-id {
+  font: 400 14px/1.35 var(--mono);
+}
+.fleet-table .fleet-slot-line .fleet-slot-pct,
+.fleet-table .fleet-slot-line .fleet-slot-count,
+.fleet-table .fleet-slot-line .fleet-slot-note,
+.fleet-table .fleet-slot-line .fleet-slot-elapsed {
+  font: 400 14px/1.35 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.fleet-table .fleet-slot-line .fleet-slot-pct {
+  color: var(--text);
+}
+.fleet-table .fleet-slot-line .fleet-slot-count,
+.fleet-table .fleet-slot-line .fleet-slot-elapsed,
+.fleet-table .fleet-slot-line .fleet-slot-note {
+  color: var(--text-dim);
+}
+.fleet-table .fleet-node-state .fleet-time,
+.fleet-table .fleet-node-state .fleet-node-status[class] {
+  font: 400 15px/1.4 var(--sans);
+}
+.fleet-table .fleet-host-cell .fleet-version[class] {
+  font: 500 16px/1.4 var(--sans);
+  color: var(--text);
+}
+.fleet-table .fleet-host-cell .fleet-worker-capacity,
+.fleet-table .fleet-host-cell .fleet-updater-mode[class],
+.fleet-table .fleet-host-cell .fleet-host-specs,
+.fleet-table .fleet-host-cell .fleet-unreported {
+  font: 400 14px/1.5 var(--sans);
+  color: var(--text-dim);
+}
+.fleet-table .fleet-resource .fleet-resource-label,
+.fleet-table .fleet-resource .fleet-resource-value {
+  font-size: 14px;
+}
+.fleet-table .fleet-chain-weights,
+.fleet-table .fleet-chain-weights-set > * {
+  font: 400 14px/1.5 var(--sans);
+}
+
+/* Slot summary (a disclosure when some slots are inactive), host line, pager. */
+.fleet-table .fleet-slot-overview .fleet-slot-disclosure > summary,
+.fleet-table .fleet-slot-overview .fleet-slot-summary {
+  margin-top: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--c-line-soft);
+  border-bottom: 1px solid var(--c-line-soft);
+  font: 400 15px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.fleet-table .fleet-host-cell .fleet-protocol {
+  font: 400 14px/1.5 var(--sans);
+  color: var(--text-dim);
+}
+.activity .pager .page-status {
+  font: 400 15px/1 var(--sans);
+  color: var(--text-dim);
+}
+.activity .pager .btn {
+  font: 400 15px/1 var(--sans);
+}
+
+/* ── Specificity catch-ups found in the rendered pages ─────────────────── */
+/* reviews.css sizes every `.ath-metric span` for the label, which also hit
+   the icon tile; the tile needs its own box and glyph size back. */
+.ath-metric .ath-metric-icon {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 58px;
+  font-size: 28px;
+  line-height: 1;
+}
+.ath-metric .ath-metric-icon .ic {
+  width: 28px;
+  height: 28px;
+}
+.ath-review-card .ath-hold-reason,
+.ath-review-card .ath-hold-reason span {
+  font: 400 15px/1.55 var(--sans);
+}
+.ath-review-card .ath-hold-reason b {
+  font: 400 15px/1.55 var(--sans);
+  color: var(--text-dim);
+}
+.about .lead[class] {
+  max-width: 92ch;
+  font: 400 17px/1.65 var(--sans);
+  color: var(--text-dim);
+}
+.about .pillar p {
+  font: 400 16px/1.65 var(--sans);
+  color: var(--text-dim);
+}
+.pillar .pillar-icon .ic {
+  width: 28px;
+  height: 28px;
+}
+.bench-disclosure .bench-disclosure-icon {
+  font-size: 22px;
+}
+.account-sign-form .account-hours {
+  flex-wrap: nowrap;
+  gap: 10px;
+}
+.account-sign-form .account-hours .btn {
+  flex: 1 1 auto;
+  padding: 0 14px;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+/* The leaderboard's version switch shares .activity-filter with the
+   Submissions chips but lives in a narrow rail; it stays compact. */
+.leaderboard-version-switch .activity-filter-list {
+  flex-wrap: nowrap;
+  gap: 8px;
+}
+.leaderboard-version-switch .activity-filter,
+.leaderboard-version-switch .activity-filter[aria-pressed] {
+  height: 34px;
+  padding: 0 14px;
+  gap: 8px;
+  font: 400 14px/1 var(--sans);
+  white-space: nowrap;
+}
+.leaderboard-version-switch .activity-filter-count {
+  padding: 2px 7px;
+  font-size: 12px;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Overview: vitals, then the timeline beside crown and clock, then the board
+   ═════════════════════════════════════════════════════════════════════════ */
+/* overview.css turns the page into a fixed 100vh two-pane shell with rails
+   that scroll on their own. The redesign is a normal scrolling page. */
+@media (min-width: 1181px) {
+  .page.active[data-page="overview"] {
+    display: block;
+    height: auto;
+    min-height: 0;
+  }
+  .wrap:has(.page.active[data-page="overview"]) {
+    padding-bottom: 72px;
+  }
+  .overview-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+    gap: 18px;
+    align-items: stretch;
+  }
+}
+.overview-rail,
+.overview-main {
+  max-height: none;
+  min-height: 0;
+  padding-right: 0;
+  overflow: visible;
+}
+.overview-split {
+  margin: 18px 0 0;
+}
+.overview-side {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 18px;
+  min-width: 0;
+}
+.overview-main {
+  margin-top: 18px;
+}
+/* The phone's sticky top bar keeps its compact clock; this one steps aside. */
+@media (max-width: 960px) {
+  .overview-side > .overview-clock {
+    display: none;
+  }
+}
+
+/* Vitals: four count cards over one strip of score readings. */
+.overview-vitals .snapshot {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.overview-vitals .stat-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  margin: 0 0 14px;
+}
+.overview-vitals .stat-cards .ledger-line {
+  position: relative;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 34px;
+  align-items: center;
+  padding: 18px 22px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+  box-shadow: var(--c-shadow-card);
+}
+.overview-vitals .stat-cards .ledger-line::before {
+  content: "";
+  grid-row: 1 / span 2;
+  width: 40px;
+  height: 40px;
+  background: var(--c-gold);
+  -webkit-mask: var(--vital-icon) center / contain no-repeat;
+  mask: var(--vital-icon) center / contain no-repeat;
+}
+/* The rule between glyph and reading. */
+.overview-vitals .stat-cards .ledger-line::after {
+  content: "";
+  position: absolute;
+  top: 18px;
+  bottom: 18px;
+  left: 83px;
+  width: 1px;
+  background: var(--c-line-soft);
+}
+.overview-vitals .stat-cards .ledger-line:has(#h-miners) {
+  --vital-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='9' cy='8' r='3.2'/%3E%3Cpath d='M3 20a6 6 0 0 1 12 0'/%3E%3Ccircle cx='17' cy='9' r='2.6'/%3E%3Cpath d='M16 14.2a5 5 0 0 1 6 4.8'/%3E%3C/svg%3E");
+}
+.overview-vitals .stat-cards .ledger-line:has(#c-miners) {
+  --vital-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 3h8l4 4v14H6Z'/%3E%3Cpath d='M14 3v4h4'/%3E%3Cpath d='M9 12h6M9 16h6'/%3E%3C/svg%3E");
+}
+.overview-vitals .stat-cards .ledger-line:has(#h-agents) {
+  --vital-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='12' cy='7.5' r='3'/%3E%3Cpath d='M6.5 20a5.5 5.5 0 0 1 11 0'/%3E%3Ccircle cx='5' cy='10' r='2.2'/%3E%3Cpath d='M1.5 19a3.8 3.8 0 0 1 4.5-3.7'/%3E%3Ccircle cx='19' cy='10' r='2.2'/%3E%3Cpath d='M22.5 19a3.8 3.8 0 0 0-4.5-3.7'/%3E%3C/svg%3E");
+}
+.overview-vitals .stat-cards .ledger-line:has(#h-validators) {
+  --vital-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 3 4 6v6c0 4.6 3.3 7.8 8 9 4.7-1.2 8-4.4 8-9V6Z'/%3E%3Cpath d='m8.5 12 2.5 2.5 4.5-5'/%3E%3C/svg%3E");
+}
+.overview-vitals .stat-cards .ledger-label {
+  grid-column: 2;
+  align-self: end;
+  font: 400 15px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.overview-vitals .stat-cards .ledger-value {
+  grid-column: 2;
+  align-self: start;
+  margin: 2px 0 0;
+  font: 600 30px/1.1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.overview-vitals .stat-strip {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: var(--c-card);
+}
+.overview-vitals .stat-strip .ledger-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 14px;
+  padding: 15px 18px;
+}
+.overview-vitals .stat-strip .ledger-line + .ledger-line {
+  border-left: 1px solid var(--c-line-soft);
+}
+.overview-vitals .stat-strip .ledger-label {
+  font: 400 15px/1.3 var(--sans);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.overview-vitals .stat-strip .ledger-value {
+  margin: 0;
+  font: 600 21px/1.2 var(--sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+/* Timeline card. */
+.overview-rail .harness-comparison {
+  height: 100%;
+  margin: 0;
+  padding: 22px 24px;
+  border: 1px solid color-mix(in oklab, var(--c-gold) 38%, var(--c-line));
+  box-shadow:
+    0 0 34px -22px color-mix(in oklab, var(--c-gold) 70%, transparent),
+    var(--c-shadow-card);
+}
+.overview-rail .harness-comparison-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  padding: 0 0 14px;
+}
+.harness-comparison-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: var(--c-gold);
+  font-size: 30px;
+}
+.overview-rail .harness-comparison h2,
+.overview-rail .harness-comparison-title h2 {
+  font: 600 26px/1.15 var(--display);
+  letter-spacing: -0.02em;
+}
+.overview-rail .harness-comparison-lead,
+.overview-rail .harness-comparison-summary {
+  font: 400 15px/1.55 var(--sans);
+  color: var(--text-dim);
+}
+.overview-rail .harness-comparison-summary strong {
+  color: var(--text);
+}
+.overview-rail .memory-timeline-frame {
+  border-color: var(--c-line-soft);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--c-raised) 30%, transparent);
+}
+.timeline-header-band {
+  fill: color-mix(in oklab, var(--c-raised) 55%, transparent);
+}
+.timeline-axis-title {
+  fill: var(--text-dim);
+  font: 400 12px var(--sans);
+}
+.timeline-era-label {
+  font: 600 15px var(--sans);
+}
+.timeline-era-date {
+  fill: var(--text-dim);
+  font: 400 12px var(--sans);
+}
+
+/* KOTH card. */
+.overview-side .champion-box {
+  display: flex;
+  flex-direction: column;
+  padding: 20px 22px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background:
+    radial-gradient(
+      420px 220px at 30% 20%,
+      color-mix(in oklab, var(--c-gold) 8%, transparent),
+      transparent 70%
+    ),
+    var(--c-card);
+  box-shadow: var(--c-shadow-card);
+}
+.overview-side .champion-kicker,
+.overview-side #champion-box-kicker {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font: 400 15px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.overview-side .champion-kicker .crown {
+  color: var(--c-gold);
+  font-size: 24px;
+  line-height: 1;
+  filter: drop-shadow(0 0 8px color-mix(in oklab, var(--c-gold) 45%, transparent));
+}
+.overview-side .champion-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 18px;
+  align-items: center;
+  margin: 18px 0 16px;
+}
+.overview-side .champion-row:has(.miner-avatar) {
+  grid-template-columns: 84px minmax(0, 1fr);
+}
+.overview-side .champion-name {
+  display: contents;
+}
+.overview-side .champion-name .miner-avatar {
+  grid-row: 1 / span 2;
+  width: 84px;
+  height: 84px;
+  padding: 3px;
+  border: 2px solid color-mix(in oklab, var(--c-gold) 85%, transparent);
+  border-radius: 50%;
+  box-shadow: 0 0 22px -4px color-mix(in oklab, var(--c-gold) 55%, transparent);
+}
+.overview-side .champion-name .entity-link,
+.overview-side .champion-name > button {
+  align-self: end;
+  min-width: 0;
+  overflow: hidden;
+  font: 700 26px/1.15 var(--display);
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.overview-side .champion-score,
+.overview-side .champion-score.tip-chip {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  align-self: start;
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--c-gold);
+  font: 600 24px/1.1 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.overview-side .champion-score-label {
+  display: inline;
+  font: 400 15px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.overview-side .champion-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 18px;
+  margin: 0;
+  padding: 14px 0;
+  border-top: 1px solid var(--c-line-soft);
+  border-bottom: 1px solid var(--c-line-soft);
+  font: 400 15px/1.35 var(--sans);
+  color: var(--text-dim);
+}
+.overview-side .champion-meta b {
+  color: var(--text);
+  font-weight: 600;
+}
+.overview-side .champion-fold summary {
+  font: 400 14px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.overview-side .champion-state {
+  margin-top: 14px;
+  font: 400 15px/1.5 var(--sans);
+  color: var(--text-dim);
+}
+
+/* Payout card. */
+.overview-side .overview-clock {
+  padding: 20px 22px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+  box-shadow: var(--c-shadow-card);
+}
+.overview-side .overview-clock .epoch-clock {
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.overview-side .overview-clock .epoch-clock-label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.overview-side .overview-clock .epoch-clock-label-text {
+  font: 400 16px/1.2 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+}
+.overview-side .overview-clock .epoch-clock-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 0;
+  background: var(--c-gold);
+  box-shadow: none;
+  animation: none;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Ccircle cx='12' cy='13' r='8'/%3E%3Cpath d='M12 9v4l2.5 2M10 2h4M12 2v3'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.8' stroke-linecap='round'%3E%3Ccircle cx='12' cy='13' r='8'/%3E%3Cpath d='M12 9v4l2.5 2M10 2h4M12 2v3'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.overview-side .overview-clock .epoch-clock-time {
+  padding-left: 34px;
+  font: 600 46px/1 var(--sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.overview-side .overview-clock .epoch-clock-gauge {
+  display: grid;
+  grid-template-columns: repeat(24, minmax(0, 1fr));
+  gap: 3px;
+  height: 12px;
+  padding: 2px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  opacity: 1;
+}
+.overview-side .overview-clock .epoch-clock-gauge i {
+  height: 100%;
+  border-radius: 2px;
+  background: color-mix(in oklab, var(--ditto-ink) 12%, transparent);
+}
+.overview-side .overview-clock .epoch-clock-gauge i.on {
+  background: var(--c-gold);
+}
+.overview-side .overview-clock .epoch-clock-gauge i.head {
+  box-shadow: 0 0 10px color-mix(in oklab, var(--c-gold) 80%, transparent);
+}
+.overview-side .overview-clock .epoch-clock-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font: 400 14px/1.45 var(--sans);
+  color: var(--text-dim);
+}
+
+/* The board: one full-width card, title and version switch on one row. */
+.overview-main #leaderboard-block {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 20px;
+  padding: 20px 24px 12px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+  box-shadow: var(--c-shadow-card);
+}
+.overview-main #leaderboard-block > * {
+  grid-column: 1 / -1;
+}
+.overview-main #leaderboard-block > .section-head {
+  grid-column: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+}
+.overview-main #leaderboard-block > .leaderboard-version-switch {
+  grid-column: 2;
+  grid-row: 1;
+  margin: 0;
+}
+.overview-main #leaderboard-title {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 0;
+  font: 600 26px/1.15 var(--display);
+  letter-spacing: -0.02em;
+}
+.overview-main #leaderboard-title::before {
+  content: "";
+  width: 30px;
+  height: 30px;
+  flex: none;
+  background: var(--c-gold);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0Z'/%3E%3Cpath d='M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0Z'/%3E%3Cpath d='M17 5h3v2a3 3 0 0 1-3 3M7 5H4v2a3 3 0 0 0 3 3'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+/* The hint stays in the accessibility tree; the concept's header is title-only. */
+.overview-main #leaderboard-hint {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.overview-main .board {
+  margin-top: 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* Board rows on the overview. */
+.overview-main #board th[data-sort="rank"] {
+  width: 36% !important;
+}
+.overview-main #board thead th:nth-child(2) {
+  width: 17% !important;
+}
+.overview-main #board th[data-sort="composite"] {
+  width: 29% !important;
+}
+.overview-main #board th.coding-col {
+  width: 18% !important;
+}
+.overview-main #board th[data-sort="cost"] {
+  width: 0 !important;
+}
+.overview-main #board thead th {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--c-line);
+  font: 400 15px/1.2 var(--sans);
+  color: var(--text-dim);
+}
+.overview-main #board tbody td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--c-line-soft);
+}
+.overview-main #board tbody tr.champion {
+  background: color-mix(in oklab, var(--c-gold) 7%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c-gold) 70%, transparent);
+}
+.overview-main #board tbody tr.champion .rank {
+  color: var(--c-gold);
+}
+.coding-status-cell {
+  vertical-align: middle;
+}
+.coding-status.tip-chip {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: 600 12px/1.3 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.coding-status-cell[data-coding-status="complete"] .coding-status {
+  color: var(--c-live);
+}
+.coding-status-cell[data-coding-status="collecting"] .coding-status,
+.coding-status-cell[data-coding-status="scheduled"] .coding-status {
+  color: var(--c-progress-hi);
+}
+.coding-status-cell[data-coding-status="stale"] .coding-status {
+  color: var(--c-hold);
+}
+@media (max-width: 1180px) {
+  .overview-vitals .stat-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .overview-vitals .stat-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ── Overview refinements from the rendered page ───────────────────────── */
+/* .ledger-line stacks its pair in the older sheets; the strip reads inline. */
+.overview-vitals .stat-strip .ledger-line {
+  flex-direction: row;
+}
+/* The KOTH card's body sat indented under the kicker; the concept aligns it. */
+.overview-side .champion-body,
+.overview-side .champion-row,
+.overview-side .champion-meta {
+  margin-left: 0;
+  padding-left: 0;
+}
+.overview-side .champion-body {
+  display: block;
+}
+.overview-side .champion-meta span {
+  white-space: nowrap;
+}
+/* Board rows: an empty chip line under every score stack added a blank 16px
+   row to each rank; it only shows when a chip actually renders. */
+.overview-main #board .score-stack-context:not(:has(*)) {
+  display: none;
+}
+.overview-main #board tbody td {
+  padding-block: 11px;
+  vertical-align: middle;
+}
+.overview-main #board .rank {
+  font: 500 18px/1 var(--sans);
+}
+.overview-main #board .winner-name,
+.overview-main #board .winner-name .entity-link {
+  font: 600 17px/1.3 var(--sans);
+}
+.overview-main #board .emission-badge,
+.overview-main #board .emissions-cell {
+  font-size: 15px;
+}
+.overview-main #board .miner-avatar {
+  width: 40px;
+  height: 40px;
+}
+.overview-main #board .score-stack .metric .mval {
+  font-size: 14px;
+}
+
+/* The context line's only chip on most rows is the seed count, which the
+   overview already hides; an otherwise-empty line should not add a row. */
+.overview-main #board .score-stack-context:not(:has(> :not(.seed-rounds-chip, .retest-seed-chip))) {
+  display: none;
+}
+.overview-main #board .score-stack {
+  gap: 6px;
+}
+.overview-main #board .score-stack .barwrap {
+  height: 5px;
+}
+/* Avatar beside the name and UID lines rather than above the UID. */
+.overview-main #board .winner-identity:has(.miner-avatar) {
+  position: relative;
+  min-height: 42px;
+  padding-left: 56px;
+}
+.overview-main #board .winner-identity:has(.miner-avatar) .winner-name-lead .miner-avatar {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 42px;
+  height: 42px;
+  margin: -21px 0 0;
+}
+
+/* Vertical rhythm: the concept fits vitals, timeline and the head of the
+   board in one laptop screen. */
+.overview-vitals .stat-cards .ledger-line {
+  padding: 14px 22px;
+}
+.overview-vitals .stat-cards .ledger-line::after {
+  top: 14px;
+  bottom: 14px;
+}
+.overview-vitals .stat-cards .ledger-value {
+  font-size: 28px;
+}
+.overview-vitals .stat-strip .ledger-line {
+  padding: 12px 18px;
+}
+.overview-rail .harness-comparison {
+  padding: 18px 22px 14px;
+}
+.overview-rail .harness-comparison-head {
+  padding-bottom: 8px;
+}
+.overview-rail .harness-comparison details {
+  margin: 0;
+}
+.overview-rail .harness-comparison details > summary {
+  padding: 5px 0;
+  font: 400 14px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.overview-side .champion-box {
+  padding: 18px 20px;
+}
+.overview-side .champion-row {
+  margin: 14px 0 12px;
+}
+.overview-side .champion-row:has(.miner-avatar) {
+  grid-template-columns: 72px minmax(0, 1fr);
+}
+.overview-side .champion-name .miner-avatar {
+  width: 72px;
+  height: 72px;
+}
+.overview-side .champion-meta {
+  padding: 12px 0;
+}
+.overview-side .overview-clock {
+  padding: 16px 20px;
+}
+.overview-side .overview-clock .epoch-clock-time {
+  font-size: 42px;
+}
+
+/* Folded strip: readings pair up left to right, ruled between rows. */
+@media (max-width: 1180px) {
+  .overview-vitals .stat-strip .ledger-line {
+    justify-content: space-between;
+  }
+  .overview-vitals .stat-strip .ledger-line + .ledger-line {
+    border-left: 0;
+  }
+  .overview-vitals .stat-strip .ledger-line:nth-child(even) {
+    border-left: 1px solid var(--c-line-soft);
+  }
+  .overview-vitals .stat-strip .ledger-line:nth-child(n + 3) {
+    border-top: 1px solid var(--c-line-soft);
+  }
+  .overview-vitals .stat-strip .ledger-line:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Memory chart: one version at a time, with an All versions toggle
+   ═════════════════════════════════════════════════════════════════════════ */
+.harness-comparison-head:has(.harness-comparison-modes) {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.harness-comparison-modes {
+  display: inline-flex;
+  align-self: start;
+  padding: 3px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-raised) 55%, transparent);
+}
+.harness-comparison-mode {
+  height: 32px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: transparent;
+  color: var(--text-dim);
+  font: 500 14px/1 var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.harness-comparison-mode:hover {
+  color: var(--text);
+}
+.harness-comparison-mode[aria-pressed="true"] {
+  background: color-mix(in oklab, var(--c-gold) 16%, var(--c-surface));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--c-gold) 60%, transparent);
+  color: var(--text);
+}
+.harness-comparison-summary .collecting {
+  color: var(--accent-2);
+}
+/* Time axis. */
+.timeline-time-grid {
+  stroke: color-mix(in oklab, var(--border) 55%, transparent);
+  stroke-width: 1;
+  stroke-dasharray: 2 4;
+  vector-effect: non-scaling-stroke;
+}
+.timeline-time-label {
+  fill: var(--text-dim);
+  font: 500 12px var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.timeline-axis-unit {
+  fill: var(--text-faint);
+  font: 500 10px var(--mono);
+  letter-spacing: 0.08em;
+}
+/* The record: a step while it is beaten, a lighter hold after the last one. */
+.timeline-path.record-step {
+  stroke-width: 3;
+}
+.timeline-path.record-hold {
+  stroke-width: 2;
+  stroke-dasharray: 2 5;
+  opacity: 0.7;
+}
+/* Flat reference levels and their labels. */
+.timeline-reference {
+  cursor: help;
+}
+.timeline-reference:focus {
+  outline: none;
+}
+.timeline-reference:focus .timeline-reference-label,
+.timeline-reference:hover .timeline-reference-label {
+  text-decoration: underline;
+}
+.timeline-reference-label {
+  font: 600 12px var(--sans);
+  paint-order: stroke;
+  stroke: var(--bg-elev);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+.timeline-reference.hermes .timeline-reference-label {
+  fill: var(--ref-hermes);
+}
+.timeline-reference.openclaw .timeline-reference-label {
+  fill: var(--ref-openclaw);
+}
+.timeline-successor line {
+  stroke: var(--text-dim);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+.timeline-successor text {
+  fill: var(--text-dim);
+  font: 500 12px var(--sans);
+}
+.timeline-unmeasured text {
+  font: 500 12px var(--sans);
+}
+/* Legend swatches for the single-version chart. */
+.memory-timeline-legend .field-dot i {
+  width: 9px;
+  height: 9px;
+  border: 0;
+  border-radius: 50%;
+  opacity: 0.75;
+}
+.memory-timeline-legend .record-line i {
+  width: 22px;
+  border-top: 3px solid;
+}
+.overview-rail .memory-timeline-legend {
+  gap: 8px 18px;
+  font: 400 13px/1.4 var(--sans);
+}
+@media (max-width: 720px) {
+  .harness-comparison-head:has(.harness-comparison-modes) {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .harness-comparison-modes {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Top bar (≤960px): the rail becomes one bar; undo the rail-only stacking
+   ═════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 960px) {
+  .sidebar {
+    flex-basis: auto;
+    gap: 10px 14px;
+    padding: 12px 18px 10px;
+    background: color-mix(in oklab, var(--c-surface) 92%, var(--bg));
+  }
+  .wordmark {
+    --wordmark-width: 88px;
+  }
+  .sidebar .epoch-clock {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 12px;
+    border-radius: 10px;
+  }
+  .sidebar .epoch-clock-time {
+    font-size: 20px;
+  }
+  .sidebar .epoch-clock-gauge {
+    width: 76px;
+  }
+  .side-foot {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px 16px;
+    padding: 0;
+  }
+  .side-foot .btn,
+  .side-foot #refresh {
+    font-size: 14px;
+  }
+  .side-theme,
+  .sidebar .side-theme {
+    flex-direction: row;
+    align-items: center;
+    gap: 14px;
+    order: 3;
+    width: 100%;
+    padding: 6px 0 0;
+    border-top: 0;
+  }
+  .nav {
+    gap: 6px;
+  }
+  .nav-item,
+  .sidebar .nav-item {
+    min-height: 40px;
+    padding: 6px 12px;
+  }
+}
+@media (max-width: 560px) {
+  .side-foot .btn .btn-label {
+    display: none;
+  }
+  .side-foot #refresh {
+    font-size: 0;
+  }
+  .side-foot #refresh .ic {
+    font-size: 18px;
+  }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Leaderboard: readable inline text, balanced columns, cards ≤1024px
+   ═════════════════════════════════════════════════════════════════════════ */
+/* Toolbar: view tabs on the left, the filter as a real field on the right. */
+.board-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--c-line-soft);
+}
+.board-toolbar .board-tabs {
+  flex: 0 1 auto;
+  justify-content: flex-start;
+}
+.board-search {
+  flex: 0 1 320px;
+  margin-left: auto;
+}
+.board-search .search-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-surface) 85%, transparent);
+}
+.board-search .search-field:focus-within {
+  border-color: color-mix(in oklab, var(--c-gold) 55%, var(--c-line));
+}
+.board-search .search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 400 15px/1 var(--sans);
+}
+.chain-weights-toggle,
+#chain-weights-toggle {
+  padding: 12px 20px;
+  font: 400 14px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+
+/* Minimum sizes for every inline reading in a row (both mounts). */
+#board thead th {
+  font: 500 14px/1.3 var(--sans);
+  white-space: nowrap;
+}
+#board .rank {
+  font: 600 18px/1 var(--sans);
+}
+#board .winner-name,
+#board .winner-name .entity-link {
+  font: 600 16px/1.3 var(--sans);
+}
+#board .submission-version,
+#board .family-toggle,
+#board .winner-miner-label,
+#board .miner-uid {
+  font-size: 14px;
+}
+#board .hotkey,
+#board .hotkey span {
+  font-size: 13px;
+}
+#board .emission-badge,
+#board .emission-badge[class] {
+  font-size: 14px;
+}
+#board .above-champion-note,
+#board .above-champion-note[class],
+#board .chain-weight-note,
+#board .chain-weight-meter-value {
+  font-size: 13px;
+}
+#board .chain-weight-meter-track {
+  height: 5px;
+}
+#board .score-stack-label {
+  font-size: 13px;
+}
+#board .score-stack .metric .mval,
+#board .metric .mval {
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+#board .score-stack .barwrap {
+  height: 5px;
+}
+#board .coding-shadow-label {
+  font-size: 13px;
+}
+#board .coding-shadow-label small {
+  font: 600 10px/1.2 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+#board .coding-shadow-placeholder {
+  font-size: 13px;
+}
+#board .score-stack-context .rollout-chip[class],
+#board .score-stack-context .tip-chip[class],
+#board .prov[class],
+#board .quorum-badge[class] {
+  font-size: 13px;
+}
+#board td.lat {
+  font-size: 15px;
+}
+#board .cases,
+#board .tarball-upload,
+#board .run-cost-cell span {
+  font: 400 13px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+#board .run-cost-cell strong {
+  font-size: 15px;
+}
+#board td.first-seen-cell {
+  font-size: 14px;
+}
+
+/* Desktop table on the Leaderboard page: columns sized to their content. */
+@media (min-width: 1025px) {
+  .page[data-page="leaderboard"] #board {
+    table-layout: fixed;
+    width: 100%;
+  }
+  .page[data-page="leaderboard"] #board thead th[data-sort="rank"] {
+    width: 25% !important;
+  }
+  .page[data-page="leaderboard"] #board thead th:nth-child(2) {
+    width: 21% !important;
+  }
+  .page[data-page="leaderboard"] #board thead th[data-sort="composite"] {
+    width: 27% !important;
+  }
+  .page[data-page="leaderboard"] #board thead th[data-sort="cost"] {
+    width: 9% !important;
+  }
+  .page[data-page="leaderboard"] #board thead th[data-sort="latency"] {
+    width: 8% !important;
+  }
+  .page[data-page="leaderboard"] #board thead th[data-sort="first_seen"] {
+    width: 10% !important;
+  }
+  .page[data-page="leaderboard"] #board thead th,
+  .page[data-page="leaderboard"] #board tbody td {
+    padding: 16px 14px;
+  }
+  .page[data-page="leaderboard"] #board .score-stack-row {
+    grid-template-columns: 62px minmax(0, 1fr);
+  }
+}
+
+/* Cards at tablet and phone widths: one card per ranked agent. */
+@media (max-width: 1024px) {
+  .board-sort-mobile {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1 1 220px;
+  }
+  .board-sort-mobile-label {
+    font: 500 13px/1.2 var(--sans);
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-dim);
+  }
+  .board-sort-select {
+    flex: 1 1 auto;
+    min-height: 42px;
+    padding: 0 12px;
+    border: 1px solid var(--c-line);
+    border-radius: 10px;
+    background: var(--c-surface);
+    color: var(--text);
+    font: 400 15px/1.3 var(--sans);
+  }
+  .board-search {
+    flex: 1 1 260px;
+    margin-left: 0;
+  }
+  .board,
+  .overview-main .board {
+    overflow: visible;
+  }
+  .board #board,
+  .overview-main #board {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    table-layout: auto;
+  }
+  .board #board thead {
+    display: none;
+  }
+  .board #board tbody {
+    display: grid;
+    gap: 14px;
+    padding: 14px 0 4px;
+  }
+  .board #board tbody tr,
+  .overview-main #board tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 16px 18px;
+    padding: 18px 20px;
+    border: 1px solid var(--c-line);
+    border-radius: var(--c-radius-card);
+    background: var(--c-card);
+    box-shadow: var(--c-shadow-card);
+  }
+  .board #board tbody tr.champion,
+  .overview-main #board tbody tr.champion {
+    border-color: color-mix(in oklab, var(--c-gold) 70%, transparent);
+    background:
+      linear-gradient(color-mix(in oklab, var(--c-gold) 7%, transparent), transparent 60%),
+      var(--c-card);
+    box-shadow: 0 0 28px -18px color-mix(in oklab, var(--c-gold) 80%, transparent);
+  }
+  .board #board tbody td,
+  .overview-main #board tbody td {
+    display: block;
+    width: auto !important;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    overflow: visible;
+    text-align: left;
+  }
+  /* Row 1: who and what they earn. */
+  .board #board td.ranked-agent-cell {
+    grid-column: 1 / span 2;
+  }
+  .board #board td.emissions-cell {
+    grid-column: 3;
+    justify-self: end;
+    text-align: right;
+  }
+  .board #board td.emissions-cell .chain-weight-meter {
+    margin-left: auto;
+  }
+  /* Row 2: the scores, full width and labeled. */
+  .board #board td.scores-cell,
+  .board #board td.coding-status-cell {
+    grid-column: 1 / -1;
+  }
+  .board #board td.scores-cell {
+    padding: 14px 0 0;
+    border-top: 1px solid var(--c-line-soft);
+  }
+  .overview-main #board .score-stack-label,
+  .board #board .score-stack-label {
+    display: block;
+  }
+  .overview-main #board .score-stack-row,
+  .board #board .score-stack-row {
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 12px;
+  }
+  .board #board .score-stack {
+    gap: 8px;
+  }
+  .board #board .score-stack .metric .mval {
+    font-size: 15px;
+  }
+  .board #board td.coding-status-cell::before {
+    content: "Coding";
+    margin-right: 12px;
+    font: 400 13px/1.2 var(--sans);
+    color: var(--text-dim);
+  }
+  /* Row 3: the three run readings, labeled. */
+  .board #board td.run-cost-cell,
+  .board #board td.lat,
+  .board #board td.first-seen-cell {
+    padding-top: 12px;
+    border-top: 1px solid var(--c-line-soft);
+  }
+  .board #board td.run-cost-cell::before,
+  .board #board td.lat::before,
+  .board #board td.first-seen-cell::before {
+    display: block;
+    margin-bottom: 4px;
+    font: 400 13px/1.2 var(--sans);
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-dim);
+  }
+  .board #board td.run-cost-cell::before {
+    content: "Avg run cost";
+  }
+  .board #board td.lat::before {
+    content: "Latency";
+  }
+  .board #board td.first-seen-cell::before {
+    content: "Crown since";
+  }
+  .page[data-page="leaderboard"] #board td.hide-sm,
+  .page[data-page="leaderboard"] #board td.hide-md {
+    display: block;
+  }
+  /* Family children tuck under their parent card. */
+  .board #board tr.family-child {
+    grid-template-columns: minmax(0, 1fr);
+    margin: -6px 0 0 18px;
+    padding: 12px 16px;
+  }
+  .board #board tr.family-child[hidden] {
+    display: none;
+  }
+  .board #board .family-branch {
+    display: none;
+  }
+  .board #board td.empty {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 560px) {
+  .board #board tbody tr,
+  .overview-main #board tbody tr {
+    gap: 14px 12px;
+    padding: 16px;
+  }
+  .board #board td.ranked-agent-cell,
+  .board #board td.emissions-cell {
+    grid-column: 1 / -1;
+  }
+  .board #board td.emissions-cell {
+    justify-self: start;
+    text-align: left;
+  }
+  .board #board td.emissions-cell .chain-weight-meter {
+    margin-left: 0;
+  }
+  .board-toolbar {
+    padding: 14px;
+  }
+  .board-toolbar .board-tabs {
+    width: 100%;
+    flex-wrap: nowrap;
+  }
+  .board-toolbar .board-tabs .activity-filter {
+    flex: 1 1 0;
+    justify-content: center;
+    padding: 0 10px;
+  }
+}
+
+/* Toolbar stays a wrapping row at every width; leaderboard.css turns it into
+   a column at phone widths, where a flex-basis would become a height. */
+@media (max-width: 1024px) {
+  .board-toolbar {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
+#board .coding-shadow-label {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  line-height: 1.15;
+}
+@media (max-width: 560px) {
+  .wrap {
+    padding: 22px 16px 56px;
+  }
+  .page-title h1 {
+    font-size: 36px;
+  }
+  .board-toolbar .board-tabs {
+    gap: 6px;
+  }
+  .board-toolbar .board-tabs .activity-filter {
+    min-width: 0;
+    height: 38px;
+    gap: 6px;
+    padding: 0 8px;
+    font-size: 14px;
+  }
+  .board-toolbar .board-tabs .activity-filter-count {
+    padding: 2px 6px;
+    font-size: 12px;
+  }
+  .board-sort-mobile,
+  .board-search {
+    flex: 1 1 100%;
+  }
+}
+.board #board .score-stack-label.coding-shadow-label,
+#board .score-stack-label.coding-shadow-label {
+  display: inline-flex;
+  flex-direction: column;
+}
+#board .coding-shadow-label small {
+  display: block;
+}
+
+/* ── Phone fixes found in the full review ─────────────────────────────── */
+@media (max-width: 720px) {
+  /* operations.css bleeds the atlas to the screen edge for the old flat
+     board; the concept's cards need the page gutter or their borders clip. */
+  .fleet-atlas {
+    margin-inline: 0;
+  }
+  .pipeline-map {
+    padding-inline: 0;
+  }
+  /* Fleet: the table is already one card per validator here; undo the
+     desktop per-cell card edges and hand the slot lines back to the
+     stacked subgrid operations.css lays out. */
+  table.fleet-table {
+    margin-top: 0;
+    border-spacing: 0;
+  }
+  .fleet-table tbody tr {
+    gap: 16px;
+    padding: 18px;
+    border: 1px solid var(--c-line);
+    border-radius: var(--c-radius-card);
+    background: var(--c-card);
+  }
+  .fleet-table tbody td,
+  .fleet-table tbody td:first-child,
+  .fleet-table tbody td:last-child {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+  }
+  .fleet-table tbody td.fleet-host-cell,
+  .fleet-table tbody td.fleet-work-col {
+    padding-top: 14px;
+    border-top: 1px solid var(--c-line-soft);
+  }
+  .fleet-table td.fleet-work-col::before,
+  .fleet-table td.fleet-host-cell::before {
+    margin-bottom: 8px;
+    font: 400 13px/1.2 var(--sans);
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text-dim);
+  }
+  .fleet-table .fleet-slot-line {
+    grid-template-columns: subgrid;
+  }
+}
+@media (max-width: 560px) {
+  .overview-vitals .stat-cards {
+    gap: 12px;
+  }
+  .overview-vitals .stat-cards .ledger-line {
+    grid-template-columns: 30px minmax(0, 1fr);
+    column-gap: 14px;
+    padding: 14px;
+  }
+  .overview-vitals .stat-cards .ledger-line::before {
+    width: 28px;
+    height: 28px;
+  }
+  .overview-vitals .stat-cards .ledger-line::after {
+    display: none;
+  }
+  .overview-vitals .stat-cards .ledger-label {
+    font-size: 13px;
+    line-height: 1.2;
+  }
+  .overview-vitals .stat-cards .ledger-value {
+    font-size: 24px;
+  }
+  .overview-vitals .stat-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .overview-vitals .stat-strip .ledger-line,
+  .overview-vitals .stat-strip .ledger-line:nth-child(even),
+  .overview-vitals .stat-strip .ledger-line:nth-child(n + 3) {
+    border-left: 0;
+  }
+  .overview-vitals .stat-strip .ledger-line + .ledger-line {
+    border-top: 1px solid var(--c-line-soft);
+  }
+  .overview-rail .harness-comparison,
+  .overview-side .champion-box,
+  .overview-side .overview-clock,
+  .overview-main #leaderboard-block {
+    padding-inline: 16px;
+  }
+  .overview-rail .harness-comparison-head {
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 12px;
+  }
+  .overview-rail .harness-comparison h2,
+  .overview-rail .harness-comparison-title h2 {
+    font-size: 22px;
+  }
+}
+
+/* The copy control draws its own icon: the "⧉" glyph it used has no font on
+   many Linux installs and rendered as an empty box. */
+.copy .copy-ic {
+  width: 14px;
+  height: 14px;
+  stroke-width: 1.8;
+  vertical-align: -2px;
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Surfaces shipped alongside the redesign (pin, Coding summary, crown
+   history, Coding filters, pipeline Coding lane)
+   ═════════════════════════════════════════════════════════════════════════ */
+/* Champion card: the pin lines are long; they take the full card width and
+   wrap instead of pushing the side column off the page. */
+.overview-side .champion-meta span {
+  white-space: normal;
+}
+.overview-side .champion-meta #champion-pin,
+.overview-side .champion-meta #champion-next-pin {
+  grid-column: 1 / -1;
+}
+.overview-side .champion-meta #champion-next-pin b {
+  color: var(--c-gold);
+}
+.overview-side {
+  min-width: 0;
+}
+.overview-side .champion-box,
+.overview-side .overview-clock {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.epoch-clock-pin {
+  font: 400 13px/1.45 var(--sans);
+  color: var(--text-dim);
+}
+.overview-side .overview-clock .epoch-clock-pin {
+  font-size: 14px;
+}
+
+/* Coding Bench coverage strip. */
+.coding-shadow-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) auto;
+  align-items: center;
+  gap: 18px 28px;
+  margin: 16px 0 10px;
+  padding: 16px 22px;
+  border: 1px solid color-mix(in oklab, var(--c-wait) 45%, var(--c-line));
+  border-radius: 12px;
+  background:
+    radial-gradient(
+      500px 120px at 0% 0%,
+      color-mix(in oklab, var(--c-wait) 8%, transparent),
+      transparent 70%
+    ),
+    color-mix(in oklab, var(--c-raised) 40%, transparent);
+}
+.coding-shadow-summary-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.coding-shadow-summary h3 {
+  margin: 0;
+  font: 600 17px/1.2 var(--sans);
+  color: var(--text);
+}
+.coding-shadow-summary .coding-shadow-mode {
+  padding: 3px 10px;
+  border: 1px solid color-mix(in oklab, var(--c-wait) 60%, transparent);
+  border-radius: 6px;
+  color: var(--c-wait);
+  font: 600 11px/1.3 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.coding-shadow-summary-copy p {
+  margin: 6px 0 0;
+  max-width: 70ch;
+  font: 400 14px/1.5 var(--sans);
+  color: var(--text-dim);
+}
+.coding-shadow-summary-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, auto);
+  margin: 0;
+}
+.coding-shadow-summary-metrics > div {
+  padding: 2px 16px;
+  border-left: 1px solid var(--c-line-soft);
+}
+.coding-shadow-summary-metrics dt {
+  font: 500 11px/1.3 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+.coding-shadow-summary-metrics dd {
+  margin: 6px 0 0;
+  font: 500 16px/1.2 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: nowrap;
+}
+@media (max-width: 1180px) {
+  .coding-shadow-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .coding-shadow-summary-metrics {
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+    row-gap: 12px;
+  }
+  .coding-shadow-summary-metrics > div:first-child {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+/* Leaderboard toolbar: view tabs and search on the first row, the Coding
+   filter as its own quieter row beneath. */
+.board-toolbar .board-tabs {
+  order: 0;
+}
+.board-toolbar .board-search {
+  order: 1;
+}
+.board-toolbar .coding-board-filters {
+  order: 2;
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 8px;
+}
+.coding-board-filter-label {
+  margin-right: 6px;
+  font: 500 13px/1 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.board-toolbar .coding-board-filters .activity-filter {
+  height: 34px;
+  padding: 0 14px;
+  gap: 8px;
+  font-size: 14px;
+}
+.board-toolbar .coding-board-filters .activity-filter-count {
+  padding: 2px 7px;
+  font-size: 12px;
+}
+.coding-shadow-details-toggle {
+  font: 500 13px/1 var(--sans);
+}
+.coding-shadow-details {
+  font: 400 13px/1.5 var(--sans);
+}
+
+/* Pinned ledger history: its own card under the board. */
+.crown-history {
+  margin-top: 18px;
+  padding: 20px 24px 12px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+  box-shadow: var(--c-shadow-card);
+}
+.crown-history-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 16px;
+  margin-bottom: 8px;
+}
+.crown-history-head h2,
+.crown-history-head h3,
+.crown-history-head strong {
+  margin: 0;
+  font: 600 20px/1.2 var(--display);
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.crown-history-sub {
+  font: 400 14px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.crown-history-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.crown-history-table th {
+  padding: 12px 12px;
+  border-bottom: 1px solid var(--c-line);
+  font: 500 13px/1.2 var(--sans);
+  letter-spacing: 0;
+  text-align: left;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.crown-history-table td {
+  padding: 12px 12px;
+  border-bottom: 1px solid var(--c-line-soft);
+  font: 400 14px/1.35 var(--sans);
+  color: var(--text);
+}
+.crown-history-table td.mono {
+  font: 400 14px/1.35 var(--mono);
+}
+.crown-history-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.crown-history .pin-badge {
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font: 600 11px/1.3 var(--sans);
+  letter-spacing: 0.06em;
+}
+.overview-main .crown-history {
+  margin-top: 18px;
+}
+
+/* Pipeline: the Coding shadow lane at the head of the Scoring column. */
+.pipeline-coding-lane {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in oklab, var(--c-wait) 45%, var(--c-line));
+  border-radius: var(--c-radius-row);
+  background: color-mix(in oklab, var(--c-wait) 7%, var(--c-raised));
+}
+.pipeline-coding-lane-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 10px;
+}
+.pipeline-coding-lane-heading strong {
+  font: 600 12px/1.3 var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--c-wait);
+}
+.pipeline-coding-lane-heading span {
+  padding: 2px 8px;
+  border: 1px solid color-mix(in oklab, var(--c-wait) 55%, transparent);
+  border-radius: var(--r-pill);
+  font: 400 12px/1.3 var(--sans);
+  color: var(--c-wait);
+}
+.pipeline-coding-lane-status {
+  font: 500 14px/1.4 var(--sans);
+  color: var(--text);
+}
+.pipeline-coding-lane-boundary {
+  font: 400 13px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.pipeline-coding-shadow {
+  display: grid;
+  gap: 3px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--c-line-soft);
+  font: 400 13px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.pipeline-coding-shadow-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.pipeline-coding-shadow-heading strong {
+  font-weight: 600;
+  color: var(--c-wait);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Leaderboard context strips (emissions, chain, efficiency, rollout)
+   ═════════════════════════════════════════════════════════════════════════ */
+.emissions-strip.show,
+.chain-observation.show,
+.efficiency-strip,
+.rollout-strip,
+.leaderboard-notice.show {
+  margin-top: 16px;
+  padding: 18px 22px;
+  font: 400 14px/1.55 var(--sans);
+}
+.emissions-title,
+.efficiency-title,
+.rollout-head {
+  font: 500 15px/1.45 var(--sans);
+  color: var(--text);
+}
+.emissions-recipients,
+.emissions-reason,
+.efficiency-detail,
+.rollout-note,
+.chain-observation {
+  font: 400 14px/1.55 var(--sans);
+  color: var(--text-dim);
+}
+.emissions-why summary {
+  font: 400 14px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+.efficiency-param {
+  padding: 3px 10px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  font: 400 12px/1.3 var(--mono);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Global search results
+   ═════════════════════════════════════════════════════════════════════════ */
+.search-popover {
+  padding: 6px;
+  border: 1px solid var(--c-line);
+  border-radius: 14px;
+  background: color-mix(in oklab, var(--c-surface) 96%, var(--ditto-ink));
+  box-shadow: 0 24px 60px -24px color-mix(in oklab, #000 80%, transparent);
+}
+.search-meta {
+  padding: 8px 12px 6px;
+  font: 400 13px/1.3 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.search-result {
+  gap: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+.search-result:hover,
+.search-result[aria-selected="true"] {
+  background: color-mix(in oklab, var(--c-gold) 10%, var(--c-raised));
+}
+.search-result-kind {
+  padding: 3px 8px;
+  border: 1px solid var(--c-line);
+  border-radius: 6px;
+  font: 600 11px/1.2 var(--sans);
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+}
+.search-result-title {
+  font: 600 15px/1.3 var(--sans);
+  color: var(--text);
+}
+.search-result-detail {
+  font: 400 13px/1.35 var(--sans);
+  color: var(--text-dim);
+}
+.search-empty {
+  padding: 14px 12px;
+  font: 400 14px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Entity drawer and full entity pages (agent, miner, validator, screener)
+   ═════════════════════════════════════════════════════════════════════════ */
+.modal-back.open {
+  background: color-mix(in oklab, var(--ditto-island) 72%, transparent);
+  backdrop-filter: blur(6px);
+}
+.modal {
+  padding: 30px 32px 32px;
+  border: 1px solid var(--c-line);
+  border-radius: 18px;
+  background:
+    radial-gradient(
+      700px 220px at 20% 0%,
+      color-mix(in oklab, var(--c-gold) 5%, transparent),
+      transparent 70%
+    ),
+    var(--bg-elev);
+  box-shadow: 0 40px 100px -30px color-mix(in oklab, #000 85%, transparent);
+  scrollbar-width: thin;
+}
+.modal-actions {
+  top: 20px;
+  right: 20px;
+  gap: 10px;
+}
+.modal-actions .btn,
+.modal-actions .open-full,
+.modal-actions .back-dashboard {
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-raised) 60%, transparent);
+  color: var(--text);
+  font: 500 14px/1 var(--sans);
+}
+.modal-actions .close {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  padding: 0;
+}
+.modal .dhead {
+  gap: 12px;
+  padding-right: 190px;
+}
+.modal .dhead .miner-avatar {
+  width: 56px;
+  height: 56px;
+  border: 2px solid color-mix(in oklab, var(--c-gold) 70%, transparent);
+  box-shadow: 0 0 18px -4px color-mix(in oklab, var(--c-gold) 45%, transparent);
+}
+.modal h3,
+.modal #d-title {
+  font: 700 30px/1.15 var(--display);
+  letter-spacing: -0.02em;
+}
+.modal .d-version {
+  font: 400 15px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.modal #d-bench {
+  font-size: 13px;
+}
+.modal .dk {
+  margin-top: 8px;
+  gap: 10px;
+}
+.modal .dk-label {
+  font: 400 14px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.modal #d-hotkey,
+.modal #d-hotkey button {
+  font: 400 14px/1.3 var(--mono);
+}
+/* Headline score. */
+.modal .score-headline {
+  gap: 14px;
+  margin: 22px 0 0;
+}
+.modal .score-headline-item {
+  padding: 16px 20px;
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--c-raised) 55%, transparent);
+}
+.modal .score-headline-item.primary {
+  border-color: color-mix(in oklab, var(--c-gold) 55%, var(--c-line));
+  background: color-mix(in oklab, var(--c-gold) 8%, var(--c-raised));
+}
+.modal .score-headline-bench {
+  font: 500 12px/1.3 var(--sans);
+}
+.modal .score-headline-value {
+  font: 600 40px/1.05 var(--sans);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.modal .score-headline-state {
+  font: 400 14px/1.3 var(--sans);
+}
+.modal .family-standing {
+  padding: 16px 20px;
+  border: 1px solid color-mix(in oklab, var(--memory) 45%, var(--c-line));
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--memory) 7%, var(--c-raised));
+}
+.modal .family-standing strong {
+  font: 600 15px/1.35 var(--sans);
+}
+.modal .family-standing p {
+  font: 400 14px/1.55 var(--sans);
+  color: var(--text-dim);
+}
+/* Summary, facts, and the history sections. */
+.modal .pipeline-summary h4,
+.modal .pipeline-section-heading h4,
+.modal .pipeline-section-heading {
+  font: 600 18px/1.3 var(--display);
+  letter-spacing: -0.01em;
+  text-transform: none;
+  color: var(--text);
+}
+.modal .pipeline-current-message,
+.modal .pipeline-detail-state {
+  font: 400 17px/1.5 var(--sans);
+  color: var(--text);
+}
+.modal .pipeline-key-facts dt,
+.modal .pipeline-meta dt,
+.modal .stat-row .k {
+  font: 400 13px/1.35 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.modal .pipeline-key-facts dd,
+.modal .pipeline-meta dd,
+.modal .stat-row .v {
+  font: 500 15px/1.4 var(--sans);
+  color: var(--text);
+}
+.modal .pipeline-history-region {
+  padding: 20px 22px;
+  border: 1px solid var(--c-line);
+  border-radius: 14px;
+  background: color-mix(in oklab, var(--c-raised) 45%, transparent);
+}
+.modal .attempt,
+.modal .accepted-score,
+.modal .inference-run {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--c-line-soft);
+  font: 400 14px/1.45 var(--sans);
+}
+.modal .attempt:last-child,
+.modal .accepted-score:last-child,
+.modal .inference-run:last-child {
+  border-bottom: 0;
+}
+.modal .accepted-score-value {
+  font: 600 18px/1.2 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.modal .accepted-score-command,
+.modal code,
+.modal pre {
+  font-size: 13px;
+}
+/* Disclosure sections (validator and screener drawers, miner profile). */
+.modal details > summary,
+.modal .cgsum {
+  padding: 12px 0;
+  font: 600 16px/1.3 var(--sans);
+  color: var(--text);
+  cursor: pointer;
+}
+.modal .stat-group,
+.modal .vdetail {
+  padding: 4px 0 8px 18px;
+}
+.modal .stat-row {
+  padding: 11px 0;
+  border-bottom: 1px solid var(--c-line-soft);
+}
+.modal .subhead {
+  font: 500 14px/1.3 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.modal progress {
+  appearance: none;
+  width: 100%;
+  height: 7px;
+  border: 0;
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--ditto-ink) 12%, transparent);
+  overflow: hidden;
+}
+.modal progress::-webkit-progress-bar {
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--ditto-ink) 12%, transparent);
+}
+.modal progress::-webkit-progress-value {
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--c-progress), var(--c-progress-hi));
+}
+.modal progress::-moz-progress-bar {
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--c-progress), var(--c-progress-hi));
+}
+.modal .benchmark-agent,
+.modal .benchmark-agent button,
+.modal .current-agent,
+.modal .current-agent button {
+  font: 600 14px/1.3 var(--sans);
+  color: var(--text);
+}
+.modal .benchmark-progress-text,
+.modal .benchmark-stage-label {
+  font: 400 13px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+/* Miner profile. */
+.modal .miner-profile-links {
+  gap: 10px;
+}
+.modal .miner-profile-links a,
+.modal .miner-profile-links span {
+  padding: 6px 14px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-raised) 55%, transparent);
+  color: var(--text);
+  font: 500 14px/1.2 var(--sans);
+  text-decoration: none;
+}
+.modal .miner-subs-filters {
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.modal .miner-sub {
+  padding: 12px 14px;
+  border: 1px solid var(--c-line-soft);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--c-raised) 40%, transparent);
+}
+.modal .miner-sub + .miner-sub {
+  margin-top: 8px;
+}
+.modal .miner-sub-main {
+  gap: 12px;
+  font: 600 15px/1.3 var(--sans);
+}
+.modal .miner-sub-time {
+  font: 400 13px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.modal .miner-subs-more {
+  margin-top: 12px;
+}
+/* Full entity page: the card sits on the navy ground with room around it. */
+body.entity-page {
+  background:
+    radial-gradient(
+      1100px 500px at 50% -10%,
+      color-mix(in oklab, var(--c-gold) 5%, transparent),
+      transparent 70%
+    ),
+    var(--bg);
+}
+body.entity-page .modal {
+  width: min(1120px, calc(100vw - 48px));
+  margin: 40px auto 64px;
+  padding: 36px 40px 40px;
+}
+@media (max-width: 720px) {
+  .modal,
+  body.entity-page .modal {
+    padding: 22px 18px 24px;
+    border-radius: 14px;
+  }
+  .modal .dhead {
+    padding-right: 0;
+    padding-top: 44px;
+  }
+  .modal h3,
+  .modal #d-title {
+    font-size: 24px;
+  }
+  .modal .score-headline-value {
+    font-size: 32px;
+  }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Fleet: Screeners and Targon builds tabs
+   ═════════════════════════════════════════════════════════════════════════ */
+/* A screener host row is one card spanning the table; the per-cell card
+   edges from the validator table must not apply to its single cell. */
+.fleet-table tbody tr.screener-host-row > td {
+  padding: 0;
+  border: 1px solid var(--c-line);
+  border-radius: 12px;
+  background: var(--c-card);
+}
+.screener-host-group {
+  border-radius: 12px;
+  background: transparent;
+}
+.screener-host-summary {
+  grid-template-columns: minmax(220px, 1.1fr) minmax(160px, 1fr) minmax(220px, 1.2fr) auto;
+  padding: 18px 22px;
+  cursor: pointer;
+}
+.screener-host-identity strong {
+  font: 600 17px/1.3 var(--sans);
+  color: var(--text);
+}
+.screener-host-state,
+.screener-host-state .fleet-node-status[class] {
+  font: 400 14px/1.4 var(--sans);
+}
+.screener-host-capacity .fleet-host-specs,
+.screener-host-capacity .fleet-unreported,
+.screener-host-load .fleet-unreported {
+  font: 400 14px/1.4 var(--sans);
+  color: var(--text-dim);
+}
+/* The host's load reads as three compact bars on one line of columns. */
+.screener-host-load .fleet-resources {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.screener-host-load .fleet-resource {
+  grid-template-columns: auto auto;
+  grid-template-rows: auto auto;
+  gap: 4px 8px;
+  align-items: center;
+}
+.screener-host-load .fleet-resource-label {
+  grid-column: 1;
+  grid-row: 1;
+}
+.screener-host-load .fleet-resource-value {
+  grid-column: 2;
+  grid-row: 1;
+  text-align: right;
+}
+.screener-host-load .fleet-resource-track {
+  grid-column: 1 / -1;
+  grid-row: 2;
+}
+.screener-host-toggle {
+  font: 500 13px/1 var(--sans);
+  color: var(--text-dim);
+}
+.screener-workers-board {
+  border-top: 1px solid var(--c-line-soft);
+}
+.screener-worker-table thead th {
+  border-radius: 0 !important;
+  background: transparent;
+  border-left: 0 !important;
+  border-right: 0 !important;
+}
+.screener-worker-table tbody td {
+  border-radius: 0 !important;
+  border-left: 0 !important;
+  border-right: 0 !important;
+  background: transparent;
+}
+.screener-worker-table {
+  border-spacing: 0 !important;
+  margin-top: 0 !important;
+}
+
+/* Targon builds. */
+.submission-builds {
+  padding: 24px 26px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+  box-shadow: var(--c-shadow-card);
+}
+.submission-builds-eyebrow {
+  font: 500 13px/1.3 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--c-gold);
+}
+.submission-builds h2 {
+  margin: 6px 0 8px;
+  font: 600 24px/1.2 var(--display);
+  letter-spacing: -0.015em;
+}
+.submission-builds-head p {
+  max-width: 80ch;
+  font: 400 15px/1.55 var(--sans);
+  color: var(--text-dim);
+}
+.submission-builds-window {
+  font: 500 13px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+.submission-builds-ledger {
+  gap: 12px;
+  margin: 18px 0;
+}
+.submission-builds-ledger > * {
+  padding: 12px 16px;
+  border: 1px solid var(--c-line);
+  border-radius: 10px;
+  background: color-mix(in oklab, var(--c-raised) 45%, transparent);
+  font: 400 14px/1.4 var(--sans);
+}
+.submission-builds-table th {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--c-line);
+  font: 500 13px/1.2 var(--sans);
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text-dim);
+}
+.submission-builds-table td {
+  padding: 14px;
+  border-bottom: 1px solid var(--c-line-soft);
+  font: 400 14px/1.4 var(--sans);
+}
+.submission-builds-empty,
+.submission-builds-none {
+  padding: 22px 14px;
+  font: 400 15px/1.5 var(--sans);
+  color: var(--text-dim);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Signed-in miner console
+   ═════════════════════════════════════════════════════════════════════════ */
+.account-console {
+  display: grid;
+  gap: 18px;
+}
+.account-console .account-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding: 22px 24px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+}
+.account-console .account-head h2 {
+  font: 700 28px/1.15 var(--display);
+  letter-spacing: -0.02em;
+}
+.account-console .account-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  border: 0;
+}
+.account-console .account-tabs .btn {
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--r-pill);
+  background: color-mix(in oklab, var(--c-surface) 85%, transparent);
+  font: 400 15px/1 var(--sans);
+}
+.account-console .account-tabs .btn.active {
+  border-color: color-mix(in oklab, var(--c-gold) 70%, transparent);
+  background: color-mix(in oklab, var(--c-gold) 12%, var(--c-surface));
+  color: var(--text);
+}
+.account-console .account-card {
+  padding: 22px 24px;
+  border: 1px solid var(--c-line);
+  border-radius: var(--c-radius-card);
+  background: var(--c-card);
+}
+.account-console .account-field input,
+.account-console .account-field textarea {
+  min-height: 42px;
+  padding: 8px 12px;
+  border: 1px solid var(--c-line);
+  border-radius: 10px;
+  background: var(--c-surface);
+  color: var(--text);
+  font: 400 15px/1.4 var(--sans);
+}
+.account-console .account-list li,
+.account-console .account-list > * {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--c-line-soft);
+  font: 400 14px/1.45 var(--sans);
+}
+.account-console .account-logs,
+.account-console pre {
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+/* ── Review fixes: drawer header chip, screener load, build ledger ────── */
+/* modal.css paints #d-bench plum for every state (an ID outranks the tone
+   class), so a healthy validator read in the memory encoding's colour. The
+   chip follows its tone like every other status chip. */
+.modal #d-bench {
+  padding: 3px 10px;
+  border-radius: var(--r-pill);
+  font: 600 13px/1.3 var(--sans);
+}
+.modal #d-bench.good {
+  color: var(--good);
+  border-color: color-mix(in oklab, var(--good) 45%, transparent);
+  background: color-mix(in oklab, var(--good) 13%, transparent);
+}
+.modal #d-bench.warn {
+  color: var(--warn);
+  border-color: color-mix(in oklab, var(--warn) 48%, transparent);
+  background: color-mix(in oklab, var(--warn) 13%, transparent);
+}
+.modal #d-bench.bad {
+  color: color-mix(in oklab, var(--danger) 80%, var(--text));
+  border-color: color-mix(in oklab, var(--danger) 48%, transparent);
+  background: color-mix(in oklab, var(--danger) 13%, transparent);
+}
+.modal #d-bench.progress {
+  color: var(--c-progress-hi);
+  border-color: color-mix(in oklab, var(--c-progress) 50%, transparent);
+  background: color-mix(in oklab, var(--c-progress) 15%, transparent);
+}
+.modal #d-bench.paused,
+.modal #d-bench.unknown {
+  color: var(--text-dim);
+  border-color: var(--c-line);
+  background: transparent;
+}
+
+/* Screener host load: three compact label/value/bar rows, like the
+   validator host cell, instead of three columns that ran into each other. */
+.screener-host-summary {
+  grid-template-columns: minmax(220px, 1.1fr) minmax(160px, 1fr) minmax(240px, 1fr) auto;
+}
+.screener-host-load .fleet-resources {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+.screener-host-load .fleet-resource {
+  grid-template-columns: 46px 44px minmax(0, 1fr);
+  grid-template-rows: auto;
+  gap: 10px;
+}
+.screener-host-load .fleet-resource-label,
+.screener-host-load .fleet-resource-value,
+.screener-host-load .fleet-resource-track {
+  grid-row: 1;
+}
+.screener-host-load .fleet-resource-label {
+  grid-column: 1;
+}
+.screener-host-load .fleet-resource-value {
+  grid-column: 2;
+}
+.screener-host-load .fleet-resource-track {
+  grid-column: 3;
+}
+.fleet-table .current-agent,
+.fleet-table .current-agent button,
+.screener-progress-stage {
+  font: 500 14px/1.4 var(--sans);
+  color: var(--text);
+}
+
+/* Build ledger: the count leads, the label sits under it. */
+.submission-builds-ledger > div {
+  display: grid;
+  gap: 2px;
+}
+.submission-builds-ledger strong {
+  font: 600 22px/1.2 var(--sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.submission-builds-ledger span {
+  font: 400 13px/1.3 var(--sans);
+  color: var(--text-dim);
+}
+
+/* Held-crown callout on the Leaderboard page. */
+.koth-standing-metrics dt {
+  font: 400 13px/1.3 var(--sans);
+}
+.koth-standing-metrics dd {
+  font: 600 16px/1.3 var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.koth-standing-title {
+  font: 600 16px/1.4 var(--sans);
+}
+.emissions-strip .emissions-next-pin,
+.emissions-strip .emissions-next-pin *,
+.rollout-strip .rollout-note,
+.rollout-strip .rollout-note *,
+.chain-observation .chain-observation-label {
+  font-size: 14px;
+  line-height: 1.55;
+}
+.rollout-strip .rollout-status[class] {
+  padding: 2px 10px;
+  border-radius: var(--r-pill);
+  font-size: 12px;
+}
