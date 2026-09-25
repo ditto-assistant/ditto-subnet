@@ -7,6 +7,8 @@ ignored_paths = [
   "preview/**",
   "scripts/preview",
   "scripts/hippius-probe/**", # Operator-only probe dependencies; no service release
+  "ditto/treasury/**", # Operator-only, read-only treasury prototype; no service runtime
+  "scripts/treasury_*.py", # Manual treasury ceremony and observation tools
   "scripts/preview-restore-snapshot.sh",
   ".env.example",
   ".agents/**",

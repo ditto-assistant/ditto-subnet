@@ -7,6 +7,8 @@ enable_datapipeline   = true
 enable_embedder       = true
 enable_validator      = true
 enable_validator_prod = true
+# Treasury signer remains physically absent until a separately reviewed apply.
+enable_treasury_host = false
 # Shadow coding remains physically absent until a separately reviewed protected
 # apply creates the complete three-host executor cohort. No worker, daemon, or
 # provider route is activated by this default.
