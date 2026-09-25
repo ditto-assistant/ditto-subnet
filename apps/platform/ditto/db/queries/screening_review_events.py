@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -20,6 +21,22 @@ from ditto_screening_protocol import ScreenResultRequest
 
 def _status(value: object) -> str:
     return str(getattr(value, "value", value))
+
+
+MANUAL_RESOLUTION_BASIS = {
+    "reject": "manual-reject",
+    "release": "manual-release",
+    "rescreen": "manual-rescreen",
+}
+
+
+def manual_resolution_basis(
+    resolution: str | None,
+) -> Literal["manual-reject", "manual-release", "manual-rescreen"] | None:
+    """Stable operator ruling. Never a screening-origin code."""
+    if resolution is None:
+        return None
+    return MANUAL_RESOLUTION_BASIS.get(resolution)
 
 
 async def _previous_event_id(session: AsyncSession, agent_id: UUID) -> UUID | None:
@@ -203,6 +220,9 @@ async def append_manual_review_event(
         next_agent_status=_status(next_agent_status),
         evidence={
             "reason": reason,
+            "screening_reason_code": quarantine.reason_code,
+            "manual_resolution_basis": manual_resolution_basis(resolution),
+            "reason_code_role": "inherited_screening_reason",
             "manifest_digest": quarantine.manifest_digest,
             "finding_digest": quarantine.finding_digest,
             "finding": quarantine.finding,

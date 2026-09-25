@@ -10568,6 +10568,8 @@ export interface components {
             finding_verified: boolean;
             /** Manifest Digest */
             manifest_digest: string;
+            /** Manual Resolution Basis */
+            manual_resolution_basis?: ("manual-reject" | "manual-release" | "manual-rescreen") | null;
             /** Miner Coldkey */
             miner_coldkey?: string | null;
             /** Miner Hotkey */
@@ -10581,6 +10583,11 @@ export interface components {
             quarantine_id: string;
             /** Reason Code */
             reason_code: string;
+            /**
+             * Reason Code Role
+             * @enum {string}
+             */
+            reason_code_role: "screening_decision" | "inherited_screening_reason";
             /** Resolution */
             resolution: ("release" | "rescreen" | "reject") | null;
             /** Resolution History */
@@ -10598,6 +10605,8 @@ export interface components {
             review_notes?: components["schemas"]["SourceReviewNote"][] | null;
             /** Review Notes Digest */
             review_notes_digest?: string | null;
+            /** Screening Reason Code */
+            screening_reason_code: string;
             /**
              * Status
              * @enum {string}
@@ -11679,6 +11688,8 @@ export interface components {
             evidence: {
                 [key: string]: unknown;
             };
+            /** Manual Resolution Basis */
+            manual_resolution_basis?: ("manual-reject" | "manual-release" | "manual-rescreen") | null;
             /** Next Agent Status */
             next_agent_status: string;
             /** Outcome */
@@ -11695,10 +11706,18 @@ export interface components {
             reason: string | null;
             /** Reason Code */
             reason_code: string | null;
+            /**
+             * Reason Code Role
+             * @default screening_decision
+             * @enum {string}
+             */
+            reason_code_role: "screening_decision" | "inherited_screening_reason";
             /** Resolution Id */
             resolution_id: string | null;
             /** Reviewer Model */
             reviewer_model: string | null;
+            /** Screening Reason Code */
+            screening_reason_code?: string | null;
         };
         /** AdminScreeningReviewEventList */
         AdminScreeningReviewEventList: {
@@ -11733,6 +11752,8 @@ export interface components {
              * @default []
              */
             image_builds: components["schemas"]["AdminScreeningImageBuild"][];
+            /** Manual Resolution Basis */
+            manual_resolution_basis?: ("manual-reject" | "manual-release" | "manual-rescreen") | null;
             /** Miner Coldkey */
             miner_coldkey?: string | null;
             /** Miner Hotkey */
@@ -11743,6 +11764,8 @@ export interface components {
             screening_reason: string | null;
             /** Screening Reason Code */
             screening_reason_code: string | null;
+            /** Screening Reason Code Role */
+            screening_reason_code_role?: ("screening_decision" | "inherited_screening_reason") | null;
             /**
              * Submitted At
              * Format: date-time

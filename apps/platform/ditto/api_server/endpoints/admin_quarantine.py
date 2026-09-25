@@ -198,7 +198,10 @@ from ditto.db.queries.payments import (
     get_miner_coldkeys_for_agents,
 )
 from ditto.db.queries.screening_review_deadlines import review_deadline_binding
-from ditto.db.queries.screening_review_events import append_manual_review_event
+from ditto.db.queries.screening_review_events import (
+    append_manual_review_event,
+    manual_resolution_basis,
+)
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol import (
@@ -244,6 +247,33 @@ async def require_admin(
 AdminDep = Annotated[None, Depends(require_admin)]
 
 
+def _project_review_event(row: ScreeningReviewEvent) -> AdminScreeningReviewEvent:
+    """Label an inherited screening code without rewriting the stored event."""
+    event = AdminScreeningReviewEvent.model_validate(row, from_attributes=True)
+    if row.event_kind != "manual":
+        return event.model_copy(
+            update={
+                "screening_reason_code": row.reason_code,
+                "reason_code_role": "screening_decision",
+                "manual_resolution_basis": None,
+            }
+        )
+    evidence = row.evidence if isinstance(row.evidence, dict) else {}
+    origin = evidence.get("screening_reason_code")
+    if not isinstance(origin, str):
+        origin = row.reason_code
+    basis = evidence.get("manual_resolution_basis")
+    if basis not in {"manual-reject", "manual-release", "manual-rescreen"}:
+        basis = manual_resolution_basis(row.effective_decision)
+    return event.model_copy(
+        update={
+            "screening_reason_code": origin,
+            "manual_resolution_basis": basis,
+            "reason_code_role": "inherited_screening_reason",
+        }
+    )
+
+
 @router.get("/screening-review-events", response_model=AdminScreeningReviewEventList)
 async def list_screening_review_events(
     _admin: AdminDep,
@@ -273,10 +303,7 @@ async def list_screening_review_events(
     ).all()
     count = int(await session.scalar(count_statement) or 0)
     return AdminScreeningReviewEventList(
-        items=[
-            AdminScreeningReviewEvent.model_validate(row, from_attributes=True)
-            for row in rows
-        ],
+        items=[_project_review_event(row) for row in rows],
         count=count,
         limit=limit,
         offset=offset,
@@ -358,6 +385,13 @@ def _item(
         manifest_digest=row.manifest_digest,
         finding_digest=row.finding_digest,
         reason_code=row.reason_code,
+        screening_reason_code=row.reason_code,
+        reason_code_role=(
+            "inherited_screening_reason"
+            if row.resolution is not None
+            else "screening_decision"
+        ),
+        manual_resolution_basis=manual_resolution_basis(row.resolution),
         review_audit_digest=(
             row.review_audit_digest if review_audit is not None else None
         ),
@@ -1861,7 +1895,17 @@ def _screening_submission(
     attempts: list[AdminScreeningAttempt],
     miner_coldkey: str | None = None,
     image_builds: list[AdminScreeningImageBuild] | None = None,
+    quarantine_resolution: tuple[str, str] | None = None,
 ) -> AdminScreeningSubmission:
+    basis = None
+    role: Literal["screening_decision", "inherited_screening_reason"] | None = (
+        "screening_decision" if agent.screening_reason_code is not None else None
+    )
+    if quarantine_resolution is not None:
+        resolution, origin = quarantine_resolution
+        basis = manual_resolution_basis(resolution)
+        if agent.screening_reason_code == origin:
+            role = "inherited_screening_reason"
     return AdminScreeningSubmission(
         agent_id=agent.agent_id,
         miner_hotkey=agent.miner_hotkey,
@@ -1873,10 +1917,42 @@ def _screening_submission(
         screening_policy_version=agent.screening_policy_version,
         screening_reason=agent.screening_reason,
         screening_reason_code=agent.screening_reason_code,
+        screening_reason_code_role=role,
+        manual_resolution_basis=basis,
         submitted_at=agent.created_at,
         attempts=attempts,
         image_builds=image_builds or [],
     )
+
+
+async def _latest_quarantine_resolution(
+    session: AsyncSession, agent_ids: list[UUID]
+) -> dict[UUID, tuple[str, str]]:
+    """Newest operator resolution and the screening code it inherited."""
+    if not agent_ids:
+        return {}
+    rows = (
+        await session.execute(
+            select(
+                ScreeningQuarantine.agent_id,
+                ScreeningQuarantine.resolution,
+                ScreeningQuarantine.reason_code,
+            )
+            .where(
+                ScreeningQuarantine.agent_id.in_(agent_ids),
+                ScreeningQuarantine.resolution.is_not(None),
+            )
+            .order_by(
+                ScreeningQuarantine.resolved_at.desc(),
+                ScreeningQuarantine.quarantine_id.desc(),
+            )
+        )
+    ).all()
+    found: dict[UUID, tuple[str, str]] = {}
+    for agent_id, resolution, reason_code in rows:
+        if agent_id not in found and isinstance(resolution, str):
+            found[agent_id] = (resolution, reason_code)
+    return found
 
 
 @router.get("/screening-submissions", response_model=AdminScreeningSubmissionList)
@@ -1918,6 +1994,9 @@ async def list_screening_submissions(
     coldkeys = await get_miner_coldkeys_for_agents(
         session, agent_ids={agent.agent_id for agent in agents}
     )
+    resolutions = await _latest_quarantine_resolution(
+        session, [agent.agent_id for agent in agents]
+    )
     return AdminScreeningSubmissionList(
         count=total,
         generation=generation,
@@ -1927,6 +2006,7 @@ async def list_screening_submissions(
                 agent,
                 attempts_by_agent[agent.agent_id],
                 coldkeys.get(agent.agent_id),
+                quarantine_resolution=resolutions.get(agent.agent_id),
             )
             for agent in agents
         ],
@@ -2046,8 +2126,13 @@ async def get_screening_submission(
         )
         for row in builds
     ]
+    resolutions = await _latest_quarantine_resolution(session, [agent_id])
     return _screening_submission(
-        agent, attempts_by_agent[agent_id], coldkey, image_builds
+        agent,
+        attempts_by_agent[agent_id],
+        coldkey,
+        image_builds,
+        quarantine_resolution=resolutions.get(agent_id),
     )
 
 

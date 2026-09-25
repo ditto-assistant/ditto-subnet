@@ -6362,6 +6362,93 @@ class TestClaim:
 
 
 class TestQuarantineAdmin:
+    async def test_manual_reject_keeps_behavioral_oracle_as_screening_origin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A manual reject must not look like an oracle pass."""
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        claimed = await client.post(_CLAIM_URL)
+        attempt_id = UUID(claimed.json()["items"][0]["attempt_id"])
+        held = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/result",
+            json=_result_payload(
+                agent_id,
+                passed=False,
+                attempt_id=attempt_id,
+                outcome="quarantine",
+                manifest_digest="56" * 32,
+                finding_digest="78" * 32,
+                reason_code="behavioral-oracle-passed",
+            ),
+        )
+        assert held.status_code == 200, held.text
+        admin_headers = {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+            "X-Admin-Actor": "backroom:test-user",
+        }
+        listing = await client.get(
+            "/api/v1/admin/screening-quarantines", headers=admin_headers
+        )
+        item = listing.json()["items"][0]
+        resolved = await client.post(
+            f"/api/v1/admin/screening-quarantines/{item['quarantine_id']}/resolve",
+            headers=admin_headers,
+            json={
+                "resolution": "reject",
+                "reason": "I3 and I4 source review rejected this artifact.",
+            },
+        )
+        assert resolved.status_code == 200, resolved.text
+        body = resolved.json()
+        assert body["agent_status"] == AgentStatus.REJECTED
+        quarantine = body["quarantine"]
+        assert quarantine["reason_code"] == "behavioral-oracle-passed"
+        assert quarantine["screening_reason_code"] == "behavioral-oracle-passed"
+        assert quarantine["reason_code_role"] == "inherited_screening_reason"
+        assert quarantine["manual_resolution_basis"] == "manual-reject"
+        assert quarantine["resolution"] == "reject"
+        audit = await client.get(
+            f"/api/v1/admin/screening-review-events?agent_id={agent_id}",
+            headers=admin_headers,
+        )
+        manual = next(
+            event
+            for event in audit.json()["items"]
+            if event["event_kind"] == "manual"
+        )
+        assert manual["reason_code"] == "behavioral-oracle-passed"
+        assert manual["screening_reason_code"] == "behavioral-oracle-passed"
+        assert manual["reason_code_role"] == "inherited_screening_reason"
+        assert manual["manual_resolution_basis"] == "manual-reject"
+        assert manual["effective_decision"] == "reject"
+        assert manual["evidence"]["screening_reason_code"] == "behavioral-oracle-passed"
+        submission = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}",
+            headers=admin_headers,
+        )
+        assert submission.status_code == 200
+        agent_body = submission.json()
+        assert agent_body["agent_status"] == AgentStatus.REJECTED
+        assert agent_body["screening_reason_code"] == "behavioral-oracle-passed"
+        assert agent_body["screening_reason_code_role"] == "inherited_screening_reason"
+        assert agent_body["manual_resolution_basis"] == "manual-reject"
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            stored = await session.get(ScreeningReviewEvent, UUID(manual["event_id"]))
+            assert agent is not None and stored is not None
+            assert agent.status == AgentStatus.REJECTED
+            assert agent.screening_reason_code == "behavioral-oracle-passed"
+            assert stored.reason_code == "behavioral-oracle-passed"
+
     async def test_list_sorts_oldest_by_default_and_accepts_newest(
         self,
         app: FastAPI,

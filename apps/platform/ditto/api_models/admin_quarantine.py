@@ -78,6 +78,19 @@ class AdminQuarantineItem(BaseModel):
     manifest_digest: str
     finding_digest: str | None
     reason_code: str
+    """Screening-origin code that opened the quarantine.
+
+    After an operator resolution this is still that origin, not the ruling.
+    Read ``manual_resolution_basis`` and ``resolution`` for the verdict.
+    ``reason_code_role`` is ``inherited_screening_reason`` once resolved.
+    """
+    screening_reason_code: str
+    """Same origin as ``reason_code``, named so it cannot be read as the ruling."""
+    reason_code_role: Literal["screening_decision", "inherited_screening_reason"]
+    manual_resolution_basis: (
+        Literal["manual-reject", "manual-release", "manual-rescreen"] | None
+    ) = None
+    """Operator ruling. Null while the quarantine is still active."""
     review_audit_digest: str | None = None
     review_audit: ScreenReviewAudit | None = None
     review_notes_digest: str | None = None
@@ -121,6 +134,19 @@ class AdminScreeningReviewEvent(BaseModel):
     outcome: str
     effective_decision: str
     reason_code: str | None
+    """On a manual event this remains the inherited screening origin.
+
+    ``reason_code_role`` is ``inherited_screening_reason`` in that case.
+    The operator ruling is ``manual_resolution_basis``, not this field.
+    """
+    screening_reason_code: str | None = None
+    """Screening-origin code. Equal to ``reason_code`` on automated events."""
+    reason_code_role: Literal["screening_decision", "inherited_screening_reason"] = (
+        "screening_decision"
+    )
+    manual_resolution_basis: (
+        Literal["manual-reject", "manual-release", "manual-rescreen"] | None
+    ) = None
     reason: str | None
     prior_agent_status: str
     next_agent_status: str
@@ -446,6 +472,15 @@ class AdminScreeningSubmission(BaseModel):
     screening_policy_version: int
     screening_reason: str | None
     screening_reason_code: str | None
+    """Screening-origin code. After a quarantine resolution this can still be
+    the code that opened the hold, such as ``behavioral-oracle-passed``.
+    The operator ruling is ``manual_resolution_basis``."""
+    screening_reason_code_role: (
+        Literal["screening_decision", "inherited_screening_reason"] | None
+    ) = None
+    manual_resolution_basis: (
+        Literal["manual-reject", "manual-release", "manual-rescreen"] | None
+    ) = None
     submitted_at: datetime
     attempts: list[AdminScreeningAttempt]
     image_builds: list[AdminScreeningImageBuild] = []

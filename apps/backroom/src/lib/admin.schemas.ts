@@ -4454,6 +4454,15 @@ export const screeningQuarantineSchema = z.object({
   manifest_digest: z.string(),
   finding_digest: z.string().nullable(),
   reason_code: z.string(),
+  // The screening origin that opened the hold. After resolution it is not the
+  // operator verdict; manual_resolution_basis is.
+  screening_reason_code: z.string().nullish().default(null),
+  reason_code_role: z.enum([
+    'screening_decision', 'inherited_screening_reason',
+  ]).nullish().default('screening_decision'),
+  manual_resolution_basis: z.enum([
+    'manual-reject', 'manual-release', 'manual-rescreen',
+  ]).nullish().default(null),
   // Nullish with defaults so Backroom keeps working against a platform that
   // has not deployed the review payloads yet.
   evidence: z.array(screeningEvidenceItemSchema).nullish().default(null),
@@ -4490,6 +4499,13 @@ export const screeningReviewEventListSchema = z.object({
     outcome: z.string(),
     effective_decision: z.string(),
     reason_code: z.string().nullable(),
+    screening_reason_code: z.string().nullable().optional(),
+    reason_code_role: z.enum([
+      'screening_decision', 'inherited_screening_reason',
+    ]).optional(),
+    manual_resolution_basis: z.enum([
+      'manual-reject', 'manual-release', 'manual-rescreen',
+    ]).nullable().optional(),
     reason: z.string().nullable(),
     prior_agent_status: z.string(),
     next_agent_status: z.string(),
@@ -4821,6 +4837,12 @@ export const screeningSubmissionSchema = z.object({
   screening_policy_version: z.number().int().nonnegative(),
   screening_reason: z.string().nullable(),
   screening_reason_code: z.string().nullable().optional(),
+  screening_reason_code_role: z.enum([
+    'screening_decision', 'inherited_screening_reason',
+  ]).nullish().default(null),
+  manual_resolution_basis: z.enum([
+    'manual-reject', 'manual-release', 'manual-rescreen',
+  ]).nullish().default(null),
   submitted_at: z.string(),
   attempts: z.array(screeningAttemptSchema),
   image_builds: z.array(screeningImageBuildSchema).optional().default([]),
