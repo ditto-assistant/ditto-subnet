@@ -5112,6 +5112,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/treasury-activity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Treasury Activity */
+        get: operations["list_treasury_activity_api_v1_public_treasury_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/v13-review-clock": {
         parameters: {
             query?: never;
@@ -26554,6 +26571,94 @@ export interface components {
             /** Usage Unavailable */
             usage_unavailable: number;
         };
+        /** PublicTreasuryEvent */
+        PublicTreasuryEvent: {
+            /** Accepted Work Ref */
+            accepted_work_ref: string | null;
+            /** Actor Provenance */
+            actor_provenance: string;
+            /** Actor Public Id */
+            actor_public_id: string;
+            /** Allocated Alpha Rao */
+            allocated_alpha_rao: string;
+            /** Allocation Bps */
+            allocation_bps: number;
+            /** Block Hash */
+            block_hash: string;
+            /** Bounty Award Id */
+            bounty_award_id: string | null;
+            /** Burn Revision */
+            burn_revision: number;
+            /** Burn Share Micros */
+            burn_share_micros: number;
+            /** Credited Usd Nano */
+            credited_usd_nano: string | null;
+            /**
+             * Denominator
+             * @enum {string}
+             */
+            denominator: "miner_emission" | "released_miner_emission";
+            /** Deposit Amount Atomic */
+            deposit_amount_atomic: string;
+            /**
+             * Deposit Asset
+             * @enum {string}
+             */
+            deposit_asset: "TAO" | "SN28_ALPHA" | "SN118_ALPHA";
+            /**
+             * Event At
+             * Format: date-time
+             */
+            event_at: string;
+            /** Event Index */
+            event_index: number;
+            /**
+             * Event Kind
+             * @enum {string}
+             */
+            event_kind: "gm_token_deposit" | "gm_credit_purchase" | "maintenance_bounty";
+            /** Extrinsic Index */
+            extrinsic_index: number;
+            /** Finalized Event Id */
+            finalized_event_id: number | null;
+            /** Gm Bps */
+            gm_bps: number;
+            /** Id */
+            id: number;
+            /** Maintenance Bps */
+            maintenance_bps: number;
+            /** Payment Id */
+            payment_id: string;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Public Recipient */
+            public_recipient: string;
+            /** Public Sender */
+            public_sender: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Route */
+            route: string;
+            /** Source Alpha Rao */
+            source_alpha_rao: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "chain_finalized" | "reconciled";
+            /** Verification Source */
+            verification_source: string;
+        };
+        /** PublicTreasuryEventPage */
+        PublicTreasuryEventPage: {
+            /** Items */
+            items: components["schemas"]["PublicTreasuryEvent"][];
+            /** Next Before */
+            next_before: number | null;
+        };
         /**
          * PublicV13ReviewClockRevision
          * @description One public notice, without private operator identity or reason text.
@@ -43561,6 +43666,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicSubmissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_treasury_activity_api_v1_public_treasury_activity_get: {
+        parameters: {
+            query?: {
+                before?: number | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicTreasuryEventPage"];
                 };
             };
             /** @description Validation Error */

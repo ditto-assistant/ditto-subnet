@@ -1425,6 +1425,16 @@ def test_generalized_evidence_fixtures_are_artifact_bound(
     if disposition == "inconclusive":
         assert not observation.ok
         assert observation.failure_disposition == "inconclusive"
+        audit = observation.inconclusive_model_audit
+        assert audit is not None
+        assert audit["artifact_sha256"] == artifact_sha
+        assert (
+            audit["summary_sha256"]
+            == hashlib.sha256(result["summary"].encode()).hexdigest()
+        )
+        assert "model text is discarded" not in str(audit)
+        assert audit["submitted_invariant_count"] == 8
+        assert all("summary" not in decision for decision in audit["invariants"])
     else:
         assert observation.ok
         assert observation.risk_level == risk

@@ -4978,6 +4978,7 @@ class TerraSolSourceReviewAgent:
                 "failure_disposition": result.observation.failure_disposition,
                 "clearance_certified": result.observation.clearance_certified,
                 "review_audit": result.observation.review_audit,
+                "inconclusive_model_audit": result.observation.inconclusive_model_audit,
             },
             "analyzed_files": list(result.analyzed_files),
             "causal_path": list(result.causal_path),
@@ -5778,6 +5779,90 @@ def _validate_violation_invariant_binding(
         raise ValueError("L2 invariant breach is not bound to authority evidence")
 
 
+def _inconclusive_model_audit(
+    *,
+    artifact_sha256: str,
+    prompt_revision: str,
+    policy_version: int,
+    risk: str,
+    categories: list[str],
+    summary: str,
+    evidence: list[Mapping[str, object]],
+    causal: list[Mapping[str, object]],
+    invariants: object,
+) -> Mapping[str, object]:
+    """Keep bounded, artifact-bound model choices without source or free text."""
+    allowed_invariants = {item.value for item in SourceReviewInvariant}
+    allowed_dispositions = {item.value for item in SourceReviewInvariantDisposition}
+    allowed_pass_clauses = {item.value for item in SourceReviewPassClause}
+    decisions: list[dict[str, object]] = []
+    if isinstance(invariants, list):
+        for item in invariants[:8]:
+            if not isinstance(item, dict):
+                continue
+            invariant = item.get("invariant")
+            disposition = item.get("disposition")
+            pass_clause = item.get("pass_clause")
+            indices = item.get("evidence_indices")
+            if (
+                not isinstance(invariant, str)
+                or invariant not in allowed_invariants
+                or not isinstance(disposition, str)
+                or disposition not in allowed_dispositions
+                or (
+                    pass_clause is not None
+                    and (
+                        not isinstance(pass_clause, str)
+                        or pass_clause not in allowed_pass_clauses
+                    )
+                )
+                or not isinstance(indices, list)
+            ):
+                continue
+            item_summary = item.get("summary")
+            decisions.append(
+                {
+                    "invariant": invariant,
+                    "disposition": disposition,
+                    "pass_clause": pass_clause,
+                    "evidence_indices": [
+                        index
+                        for index in indices[:16]
+                        if isinstance(index, int)
+                        and not isinstance(index, bool)
+                        and 0 <= index < len(evidence)
+                    ],
+                    "summary_sha256": hashlib.sha256(
+                        (item_summary if isinstance(item_summary, str) else "").encode()
+                    ).hexdigest(),
+                }
+            )
+    return {
+        "artifact_sha256": artifact_sha256,
+        "prompt_revision": prompt_revision,
+        "policy_version": policy_version,
+        "disposition": "inconclusive",
+        "risk_level": risk,
+        "categories": list(categories),
+        "summary_sha256": hashlib.sha256(summary.encode()).hexdigest(),
+        "evidence": [
+            {
+                "path": item["path"],
+                "line": item["line"],
+                "file_sha256": item["file_sha256"],
+                "category": item["category"],
+                "role": item["role"],
+            }
+            for item in evidence
+        ],
+        "causal_path": list(causal),
+        "invariants": decisions,
+        "submitted_invariant_count": (
+            len(invariants) if isinstance(invariants, list) else None
+        ),
+    }
+
+
 def _parse_l2_review(
     value: object,
     *,
@@ -6023,7 +6108,20 @@ def _parse_l2_review(
             raise ValueError("L2 causal evidence has no elevated causal category")
     else:
         return (
-            _failure("l2-model-inconclusive", "inconclusive"),
+            replace(
+                _failure("l2-model-inconclusive", "inconclusive"),
+                inconclusive_model_audit=_inconclusive_model_audit(
+                    artifact_sha256=artifact_sha256,
+                    prompt_revision=prompt_revision,
+                    policy_version=policy_version,
+                    risk=risk,
+                    categories=categories,
+                    summary=submitted_summary,
+                    evidence=normalized_evidence,
+                    causal=normalized_causal,
+                    invariants=invariants,
+                ),
+            ),
             normalized_analyzed,
             tuple(normalized_causal),
             "insufficient_static_evidence",

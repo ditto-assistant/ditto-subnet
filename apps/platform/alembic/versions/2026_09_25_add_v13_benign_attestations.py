@@ -1,7 +1,7 @@
 """Append-only authenticated human attestations for V13 benign controls.
 
 Revision ID: c8e4b1a97d20
-Revises: b7e2a4d961c0
+Revises: d18b0f5a72c9
 """
 
 from collections.abc import Sequence
@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "c8e4b1a97d20"
-down_revision: str | Sequence[str] | None = "b7e2a4d961c0"
+down_revision: str | Sequence[str] | None = "d18b0f5a72c9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
