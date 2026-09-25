@@ -13,8 +13,8 @@ variable "treasury_operator_email" {
   default     = ""
 
   validation {
-    condition     = !var.enable_treasury_host || can(regex("^[^@]+@[^@]+$", var.treasury_operator_email))
-    error_message = "An explicit operator email is required to enable the treasury host."
+    condition     = !(var.enable_treasury_host || var.enable_treasury_planner_host) || can(regex("^[^@]+@[^@]+$", var.treasury_operator_email))
+    error_message = "An explicit operator email is required to enable either treasury host."
   }
 }
 

@@ -2,8 +2,40 @@
 
 This is a proposed operator sequence for the four draft PRs. **None of these
 activation steps has been performed.** The Platform policy is shadow-only, the
-Terraform signer host is disabled in `prod.auto.tfvars`, and the daily timer is
+Terraform signer and planner hosts are disabled in `prod.auto.tfvars`, and the daily timer is
 only a template. A review of this runbook does not authorize a chain transfer.
+
+## Initial allocation proposal for economic review
+
+Propose **25 basis points of the released miner vector for maintenance bounties
+and 25 basis points for GM credits**: 0.25% each, 0.50% together. The separate
+budgets are not interchangeable. This is 50 bps of the code's 500 bps hard
+ceiling and, at the usual 41% miner share, about **0.205% of total SN118 alpha
+emission**. Publish this proposal before any policy write or weight routing.
+It gives miners 99.5% of the released miner vector, subject to any separate
+burn setting and eligibility rules.
+
+Backroom burn revision **8** (read 2026-09-25) currently has `burn_share=1` and
+`miner_emission_share=0`. Under that live setting, both proposed budgets accrue
+**zero**. Do not change the burn setting as part of treasury activation. A
+separate emission-recovery decision must establish what portion of the miner
+vector is released, then remeasure actual finalized treasury receipts before
+setting any spending cap.
+
+For scale only: finalized Finney block 9,147,019 showed `alpha_out_emission`
+of 1 DITTO alpha per block. At the observed 12-second block interval, 7,200
+blocks/day and a 41% miner share would produce about 2,952 DITTO alpha/day in
+the miner vector **if fully released**. Each 25 bps budget would then receive
+about **7.38 DITTO alpha/day** (14.76 together). At finalized block 9,147,038,
+the read-only SDK quote for a single 7.38 DITTO alpha sale returned
+**0.053972522 TAO**; routing that TAO through SN28 returned
+**2.397199384 GM alpha**. These are alternative paths for the GM budget,
+not additive proceeds. The price, block rate, emission, 41% split, and GM
+deposit conversion can change. These figures omit network fees and the USD
+credit credited by GM at confirmation. The 7.38 DITTO example fits below the
+signer's hard 10 DITTO alpha source cap, but an actual payment remains bounded
+by finalized GM allocation, current billing instructions, a fresh quote,
+separate review, and the live policy's tighter limits.
 
 ## 1. Approve the funding source and custody
 
@@ -24,8 +56,9 @@ only a template. A review of this runbook does not authorize a chain transfer.
 
 The protected `Infrastructure plan or apply` workflow checks out **main** and
 seals its binary plan in private GCS. It cannot plan an unmerged draft. A
-follow-on activation PR must set `enable_treasury_host = true` and the exact
-reviewed `treasury_operator_email` in `infra/terraform/stacks/gcp-platform/prod.auto.tfvars`.
+follow-on activation PR must set `enable_treasury_host = true`,
+`enable_treasury_planner_host = true`, and the exact reviewed
+`treasury_operator_email` in `infra/terraform/stacks/gcp-platform/prod.auto.tfvars`.
 Keeping that intent in the file prevents the next routine plan from proposing
 host deletion. After that PR is reviewed and merged, run the protected
 `gcp-platform` **plan** without `-target`; compare every proposed resource,
@@ -33,20 +66,47 @@ IAM binding, route, and unexpected deletion. Only a separately approved
 `infra-apply` run may apply the exact sealed plan SHA and run ID. Do not use a
 local `-backend=false` plan as evidence against production state.
 
-The plan creates a private Shielded signer VM, one dedicated service account,
-one dedicated Secret Manager container, a secret-scoped accessor grant, and an
-**unbound** key-provisioner role. It creates no secret version or wallet. No
-Platform, Backroom, CI, or planner account may read the mnemonic. Host runtime
+The plan creates two private Shielded VMs with separate service accounts. The
+signer alone can access the signing-key secret; the planner alone can access a
+GM read-key secret. The plan also creates an **unbound** key-provisioner role.
+It creates no secret version, wallet, GM credential, or timer. No Platform,
+Backroom, CI, or planner account may read the mnemonic. Host runtime
 installation and image pinning need their own reviewed deployment procedure.
 
 ## 3. Create and link the wallet once
 
 On the named signer VM, temporarily bind the provisioner role **only on the
 treasury secret** to its service account, run `scripts/treasury_create_key.py`
-with its exact confirmation, independently verify the printed public address,
-and remove the temporary binding. The signing runner pins Secret Manager
+with its exact confirmation, then run `scripts/treasury_verify_key.py` with
+`--project PROJECT --expected-address PRINTED_SS58_ADDRESS` **on the same
+signer host**. It reads pinned Secret Manager version 1 and re-derives the
+public address without printing the mnemonic. Independently check that the
+reviewed address is registered and owned on the finalized SN118 chain; record
+only that public address and finalized identity evidence. Remove the temporary
+provisioner binding and re-read the secret IAM policy to prove the adder grant
+is gone. The signing runner pins Secret Manager
 version **1**; rotation needs a separate code/config review. Never copy the
 mnemonic into a PR, terminal transcript, plan, Backroom setting, or GM account.
+
+The one-time ceremony uses these exact command shapes after substituting the
+reviewed project and public address. `PROJECT` is the GCP project ID. The
+secret IAM change is deliberately scoped to the **one secret**, and the
+temporary role must be absent from its final policy:
+
+```bash
+gcloud secrets add-iam-policy-binding sn118-treasury-signing-key --project=PROJECT --member=serviceAccount:sn118-treasury-signer@PROJECT.iam.gserviceaccount.com --role=projects/PROJECT/roles/sn118TreasuryKeyProvisioner
+uv run python scripts/treasury_create_key.py --project PROJECT --confirmation 'CREATE SN118 TREASURY KEY'
+uv run python scripts/treasury_verify_key.py --project PROJECT --expected-address PRINTED_SS58_ADDRESS
+gcloud secrets remove-iam-policy-binding sn118-treasury-signing-key --project=PROJECT --member=serviceAccount:sn118-treasury-signer@PROJECT.iam.gserviceaccount.com --role=projects/PROJECT/roles/sn118TreasuryKeyProvisioner
+gcloud secrets get-iam-policy sn118-treasury-signing-key --project=PROJECT --format=json
+```
+
+The `gcloud` binding commands run as the reviewed IAM operator. The two Python
+commands run **on the signer VM**; do not copy the mnemonic or secret payload
+through SSH. Inspect the final IAM JSON for the absence of the temporary role
+and retain only the public address, version number, policy evidence, and chain
+ownership proof. If any step fails after version 1 is written, stop and review
+recovery; never run `create_key.py` again to make version 2.
 
 The GM account owner signs in to [GM Billing](https://saygm.com/dashboard/credits),
 selects CLI wallet, links that exact public sender through Taostats Auth, and
