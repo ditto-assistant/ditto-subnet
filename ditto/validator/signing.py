@@ -1473,6 +1473,29 @@ def sign_artifact_request(
     return signature.hex()
 
 
+def transcript_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    run_id: str,
+    transcript_sha256: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    """Bind one transcript upload to its validator, run, and exact bytes."""
+    requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return (
+        f"validator-transcript:v1:{validator_hotkey}:{agent_id}:{run_id}:"
+        f"{transcript_sha256}:{nonce}:{requested}"
+    ).encode()
+
+
+def sign_transcript_request(keypair: Any, **kwargs: Any) -> str:
+    """Return the sr25519 proof for a fresh transcript upload."""
+    signature: bytes = keypair.sign(transcript_signing_message(**kwargs))
+    return signature.hex()
+
+
 def ledger_signing_message(
     *, validator_hotkey: str, nonce: UUID, requested_at: datetime
 ) -> bytes:

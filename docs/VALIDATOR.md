@@ -528,7 +528,10 @@ platform ticket. Each scored run starts with a reachability preflight that
 requires the miner harness to call the mock tool endpoint; if the probe is
 never observed the run fails and the ticket reopens — a zeroed report is never
 signed. After the platform accepts a score, the worker publishes the run's
-graded transcript for public verification.
+graded transcript to Platform storage using a fresh, signed request bound to
+the agent, run, and transcript digest. Deploy the validator update before the
+Platform API enforces this request proof; an older validator's transcript PUT
+will be rejected even though its accepted score still stands.
 
 The validator computes the deterministic weight vector from the public
 finalized ledger, and Pylon handles UID resolution, commit-reveal, retries, and

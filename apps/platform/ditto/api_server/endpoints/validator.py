@@ -7900,6 +7900,22 @@ def _score_transcript_sha256(score: Score) -> str | None:
     return None
 
 
+def _transcript_signing_message(
+    validator_hotkey: str,
+    agent_id: UUID,
+    run_id: str,
+    transcript_sha256: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    """Mirror the validator client's versioned transcript upload proof."""
+    requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return (
+        f"validator-transcript:v1:{validator_hotkey}:{agent_id}:{run_id}:"
+        f"{transcript_sha256}:{nonce}:{requested}"
+    ).encode()
+
+
 @router.put(
     "/agent/{agent_id}/transcript/{run_id}",
     response_model=SubmitTranscriptResponse,
@@ -7909,9 +7925,14 @@ async def submit_transcript(
     run_id: str,
     request: Request,
     response: Response,
+    chain: ChainDep,
     session: SessionDep,
-    validator: ValidatorDep,
     storage: StorageDep,
+    x_validator_hotkey: Annotated[str | None, Header()] = None,
+    x_validator_transcript_sha256: Annotated[str | None, Header()] = None,
+    x_validator_transcript_nonce: Annotated[UUID | None, Header()] = None,
+    x_validator_transcript_requested_at: Annotated[datetime | None, Header()] = None,
+    x_validator_transcript_signature: Annotated[str | None, Header()] = None,
 ) -> SubmitTranscriptResponse:
     """Publish the transcript artifact behind a signed score (finding 3).
 
@@ -7920,41 +7941,100 @@ async def submit_transcript(
     ``details["transcript_sha256"]`` and bound into its score signature. The
     platform accepts the bytes only when their SHA-256 equals that declared
     digest, then stores them content-addressed in authoritative storage and
-    mirrors them publicly when configured. Because the binding is *content*
-    equality against an already-signed digest, a
-    caller spoofing another validator's hotkey can only ever upload the exact
-    bytes that validator attested — so the header + permit check is sufficient
-    auth here. Idempotent: re-uploading an existing digest is a no-op.
+    mirrors them publicly when configured. The fresh, one-time request proof
+    binds the validator, agent, run and digest before any body bytes are read.
+    Idempotent: re-uploading an existing digest with a fresh proof is a no-op.
     """
     response.headers["Cache-Control"] = "no-store"
-    body = await request.body()
-    if len(body) > _TRANSCRIPT_MAX_BYTES:
-        raise HTTPException(status_code=413, detail="transcript exceeds size cap")
+    if (
+        x_validator_hotkey is None
+        or not re.fullmatch(_SS58_PATTERN, x_validator_hotkey)
+        or x_validator_transcript_sha256 is None
+        or not _SHA256_HEX.fullmatch(x_validator_transcript_sha256)
+        or x_validator_transcript_nonce is None
+        or x_validator_transcript_requested_at is None
+        or x_validator_transcript_requested_at.tzinfo is None
+        or x_validator_transcript_signature is None
+    ):
+        raise ValidatorAuthError("transcript request proof is missing or malformed")
+    signed = _transcript_signing_message(
+        x_validator_hotkey,
+        agent_id,
+        run_id,
+        x_validator_transcript_sha256,
+        x_validator_transcript_nonce,
+        x_validator_transcript_requested_at,
+    )
+    if not _verify_signature(
+        x_validator_hotkey, signed, x_validator_transcript_signature
+    ):
+        raise ValidatorAuthError("transcript request signature did not verify")
+    now = datetime.now(UTC)
+    if (
+        abs(now - x_validator_transcript_requested_at.astimezone(UTC))
+        > _JOB_REQUEST_MAX_AGE
+    ):
+        raise HTTPException(
+            status_code=409, detail="transcript request timestamp is stale"
+        )
+    await _assert_validator_permitted(
+        chain,
+        request.app.state.config.chain.netuid,
+        x_validator_hotkey,
+        network=request.app.state.config.chain.subtensor_network,
+    )
+    async with session.begin():
+        score = await get_score_for_validator(
+            session, agent_id=agent_id, validator_hotkey=x_validator_hotkey
+        )
+        if score is None or score.run_id != run_id:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "no recorded score by this validator for this agent and run; "
+                    "submit the score (with details.transcript_sha256) first"
+                ),
+            )
+        declared = _score_transcript_sha256(score)
+        if declared is None:
+            raise HTTPException(
+                status_code=409,
+                detail="the recorded score declares no transcript_sha256",
+            )
+        if x_validator_transcript_sha256 != declared:
+            raise HTTPException(
+                status_code=409,
+                detail="signed transcript digest does not match the recorded score",
+            )
+        try:
+            await consume_validator_nonce(
+                session,
+                nonce=x_validator_transcript_nonce,
+                validator_hotkey=x_validator_hotkey,
+                now=now,
+                expires_at=max(
+                    now + _JOB_REQUEST_MAX_AGE,
+                    x_validator_transcript_requested_at.astimezone(UTC)
+                    + _JOB_REQUEST_MAX_AGE,
+                ),
+            )
+        except ValidatorRequestReplayError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="transcript request nonce has already been used",
+            ) from exc
+
+    chunks = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > _TRANSCRIPT_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="transcript exceeds size cap")
+        chunks.append(chunk)
+    body = b"".join(chunks)
     if not body:
         raise HTTPException(status_code=400, detail="empty transcript body")
     digest = hashlib.sha256(body).hexdigest()
-
-    score = await get_score_for_validator(
-        session, agent_id=agent_id, validator_hotkey=validator
-    )
-    if score is None or score.run_id != run_id:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                "no recorded score by this validator for this agent and run; "
-                "submit the score (with details.transcript_sha256) first"
-            ),
-        )
-    declared = (
-        score.details.get("transcript_sha256")
-        if isinstance(score.details, dict)
-        else None
-    )
-    if not isinstance(declared, str) or not _SHA256_HEX.fullmatch(declared):
-        raise HTTPException(
-            status_code=409,
-            detail="the recorded score declares no transcript_sha256",
-        )
     if digest != declared:
         raise HTTPException(
             status_code=409,
