@@ -333,6 +333,8 @@ def test_configuration_budget_and_routes_must_match_approval(monkeypatch):
                         docker_executable="/usr/bin/docker",
                         docker_socket=str(runtime.SOCKET),
                         router_listen=f"10.30.0.4:{18080 + i}",
+                        router_namespace="host",
+                        router_expires_at_unix=None,
                         egress_proxy="http://10.30.0.4:18090",
                     ),
                 ),
@@ -360,6 +362,96 @@ def test_configuration_budget_and_routes_must_match_approval(monkeypatch):
         runtime.configurations(chosen, chosen.connectivity_sha256)
     configs[0].policy.max_cost_usd_micros = 100
     configs[1].wire.runtime_root = configs[0].wire.runtime_root + "/"
+    with pytest.raises(RolloutError):
+        runtime.configurations(chosen, chosen.connectivity_sha256)
+    configs[1].wire.runtime_root = "/private/run-1"
+    assert runtime.configurations(chosen, chosen.connectivity_sha256) == configs
+    # Host mode requires each router endpoint in the candidate grant.
+    network["candidate_tcp"] = [{"address": "10.30.0.4", "port": 18090}]
+    with pytest.raises(RolloutError):
+        runtime.configurations(chosen, chosen.connectivity_sha256)
+
+
+def rootless_rollout(monkeypatch, router_ports, *, attempts=2):
+    from ditto.api_server import coding_bounded_rollout as runtime
+
+    data = approval_data(attempts, attempts)
+    network = {
+        "schema": "dittobench-coding-hosted-connectivity-v3",
+        "expires_at_unix": data["expires_at_unix"] + 3600,
+        "candidate_tcp": [
+            {"address": address, "port": port}
+            for address, port in (("10.30.0.4", 18090), *router_ports)
+        ],
+    }
+    data["connectivity_sha256"] = hashlib.sha256(
+        json.dumps(network, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    chosen = BoundedRolloutApproval.model_validate_json(json.dumps(data))
+    prefix = "/opt/ditto-coding-hosted/" + chosen.runtime_revision
+    configs = [
+        SimpleNamespace(
+            wire=SimpleNamespace(
+                evaluation_id=item.evaluation_id,
+                attempt_id=item.attempt_id,
+                worker_id=item.worker_id,
+                assignment_sha256=item.assignment_sha256,
+                worker_executable=prefix + "/bin/dittobench-coding-hosted-worker",
+                python_executable=prefix + "/apps/platform/.venv/bin/python",
+                runtime_root=f"/private/run-{i}",
+                host=SimpleNamespace(
+                    docker_executable="/usr/bin/docker",
+                    docker_socket=str(runtime.SOCKET),
+                    # The same in-namespace gateway listener serves each attempt
+                    # in turn; the governor excludes overlapping use.
+                    router_listen="172.17.0.1:18080",
+                    router_namespace="rootless-netns",
+                    router_expires_at_unix=network["expires_at_unix"],
+                    egress_proxy="http://10.30.0.4:18090",
+                ),
+            ),
+            policy=SimpleNamespace(digest=lambda: "2" * 64, max_cost_usd_micros=100),
+            postgres="synthetic-db",
+        )
+        for i, item in enumerate(chosen.attempts)
+    ]
+    monkeypatch.setattr(runtime, "read_json", lambda *_args: network)
+
+    def load(path, *, expected_sha256):
+        index = next(
+            i
+            for i, item in enumerate(chosen.attempts)
+            if Path(item.config_file) == path
+        )
+        assert expected_sha256 == chosen.attempts[index].config_sha256
+        return configs[index]
+
+    monkeypatch.setattr(runtime, "load_runtime_config", load)
+    return runtime, chosen, configs, network
+
+
+def test_rootless_rollout_grants_only_the_proxy_and_binds_the_profile_expiry(
+    monkeypatch,
+):
+    runtime, chosen, configs, network = rootless_rollout(monkeypatch, ())
+    assert runtime.configurations(chosen, chosen.connectivity_sha256) == configs
+    configs[1].wire.host.router_expires_at_unix = network["expires_at_unix"] - 1
+    with pytest.raises(RolloutError):
+        runtime.configurations(chosen, chosen.connectivity_sha256)
+    configs[1].wire.host.router_expires_at_unix = network["expires_at_unix"]
+    # One worker unit cannot mix router namespaces.
+    configs[1].wire.host.router_namespace = "host"
+    configs[1].wire.host.router_listen = "10.30.0.4:18090"
+    with pytest.raises(RolloutError):
+        runtime.configurations(chosen, chosen.connectivity_sha256)
+
+
+def test_rootless_rollout_refuses_a_host_grant_for_the_in_namespace_router(
+    monkeypatch,
+):
+    runtime, chosen, _configs, _network = rootless_rollout(
+        monkeypatch, (("172.17.0.1", 18080),)
+    )
     with pytest.raises(RolloutError):
         runtime.configurations(chosen, chosen.connectivity_sha256)
 
