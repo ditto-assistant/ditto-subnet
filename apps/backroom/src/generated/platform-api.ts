@@ -27944,14 +27944,22 @@ export interface components {
         ScreenReviewAudit: {
             /** Budget Stop Reason */
             budget_stop_reason?: ("none" | "step" | "tool" | "aggregate" | "token" | "cost" | "time") | null;
+            /** Cause Detail */
+            cause_detail?: ("lease_unavailable" | "review_disabled") | null;
             /** Cost Usd Used */
             cost_usd_used?: number | null;
+            /** Elapsed Ms */
+            elapsed_ms?: number | null;
+            /** Final Stage */
+            final_stage?: ("preflight" | "analyst" | "critic" | "adjudicator") | null;
             /** Harness Revision */
             harness_revision?: string | null;
             /** Input Tokens Used */
             input_tokens_used?: number | null;
             /** Max Cost Usd */
             max_cost_usd?: number | null;
+            /** Max Elapsed Ms */
+            max_elapsed_ms?: number | null;
             /** Max Input Tokens */
             max_input_tokens?: number | null;
             /** Max Output Tokens */
@@ -27972,8 +27980,12 @@ export interface components {
             read_bytes_used?: number | null;
             /** Reason Code */
             reason_code: string;
+            /** Requested Model */
+            requested_model?: string | null;
             /** Resolution Basis */
             resolution_basis?: "insufficient_static_evidence" | null;
+            /** Response Provider */
+            response_provider?: string | null;
             /**
              * Stage
              * @enum {string}

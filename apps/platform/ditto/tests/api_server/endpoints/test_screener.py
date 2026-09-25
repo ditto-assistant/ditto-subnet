@@ -7612,15 +7612,21 @@ class TestQuarantineAdmin:
         other_attempt_id = uuid4()
         l2_audit = ScreenReviewAudit(
             stage="l2",
-            reason_code="l2-model-inconclusive",
+            reason_code="l2-runtime-evidence-unavailable",
             prompt_revision="l2-v13",
-            max_steps=160,
-            steps_used=2,
-            model_disposition="inconclusive",
-            resolution_basis="insufficient_static_evidence",
-            model_steps_observed=2,
-            tool_calls_observed=7,
-            budget_stop_reason="none",
+            max_steps=256,
+            steps_used=0,
+            max_input_tokens=5_000_000,
+            input_tokens_used=0,
+            max_output_tokens=1_000_000,
+            output_tokens_used=0,
+            max_cost_usd=25,
+            cost_usd_used=0,
+            requested_model="openai/gpt-6-sol",
+            final_stage="preflight",
+            cause_detail="lease_unavailable",
+            max_elapsed_ms=1_800_000,
+            elapsed_ms=0,
         )
         now = datetime.now(UTC)
         async with session_maker() as session, session.begin():
@@ -7658,7 +7664,7 @@ class TestQuarantineAdmin:
                     screener_hotkey=_SCREENER_HOTKEY,
                     policy_version=SCREENING_POLICY_VERSION,
                     manifest_digest=_SHA256,
-                    reason_code="l2-model-inconclusive",
+                    reason_code="source-review-inconclusive",
                     review_audit_digest=l2_audit.canonical_digest(),
                     review_audit=l2_audit.model_dump(mode="json"),
                     status="active",

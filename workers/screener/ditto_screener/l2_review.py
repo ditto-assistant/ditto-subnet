@@ -4469,6 +4469,38 @@ class LayeredSourceReviewAgent:
         self._adjudicator_reserve_seconds = max(0.0, float(adjudicator_reserve_seconds))
         self._shadow_results: dict[UUID, L2RunResult] = {}
 
+    def _runtime_evidence_hold(
+        self, *, policy_version: int, review_disabled: bool
+    ) -> SourceReviewObservation:
+        """Account for a V13 hold before either paid review stage starts."""
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-runtime-evidence-unavailable",
+            prompt_revision=l2_prompt_revision(policy_version),
+            harness_revision=L2_HARNESS_REVISION,
+            max_steps=self._l2._max_steps,
+            steps_used=0,
+            max_input_tokens=self._l2._max_input_tokens,
+            input_tokens_used=0,
+            max_output_tokens=self._l2._max_output_tokens,
+            output_tokens_used=0,
+            max_cost_usd=self._l2._max_cost_usd,
+            cost_usd_used=0,
+            model_steps_observed=0,
+            tool_calls_observed=0,
+            requested_model=self._l2._model,
+            final_stage="preflight",
+            cause_detail=(
+                "review_disabled" if review_disabled else "lease_unavailable"
+            ),
+            max_elapsed_ms=round(self._l2._timeout_seconds * 1000),
+            elapsed_ms=0,
+        )
+        return replace(
+            _failure("l2-runtime-evidence-unavailable", "pass_inconclusive"),
+            review_audit=audit.model_dump(mode="json"),
+        )
+
     def _exploration_deadline(self, deadline: float | None) -> float | None:
         """Reserve court time without zeroing exploration on a short lease."""
         if deadline is None or self._adjudicator is None:
@@ -4618,7 +4650,12 @@ class LayeredSourceReviewAgent:
         if (not lease_matches and not (requires_lease and self._mode == "shadow")) or (
             policy_version == 13 and requires_lease and self._mode == "off"
         ):
-            return _failure("l2-runtime-evidence-unavailable", "pass_inconclusive")
+            return self._runtime_evidence_hold(
+                policy_version=policy_version,
+                review_disabled=policy_version == 13
+                and requires_lease
+                and self._mode == "off",
+            )
 
         def report_l1(completed: int, total: int) -> None:
             if progress is not None:
@@ -4677,7 +4714,12 @@ class LayeredSourceReviewAgent:
         if (not lease_matches and not (requires_lease and self._mode == "shadow")) or (
             policy_version == 13 and requires_lease and self._mode == "off"
         ):
-            return _failure("l2-runtime-evidence-unavailable", "pass_inconclusive")
+            return self._runtime_evidence_hold(
+                policy_version=policy_version,
+                review_disabled=policy_version == 13
+                and requires_lease
+                and self._mode == "off",
+            )
         l1 = l1_observation
         if review_deadline is None and deadline is not None and self._adjudicator:
             review_deadline = self._exploration_deadline(deadline)

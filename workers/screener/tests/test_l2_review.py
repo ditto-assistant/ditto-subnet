@@ -773,6 +773,12 @@ class _FakeL2:
     def __init__(self, result: L2RunResult) -> None:
         self.result = result
         self._require_signed_runtime_lease = False
+        self._model = "openai/gpt-6-sol"
+        self._max_steps = 256
+        self._max_input_tokens = 5_000_000
+        self._max_output_tokens = 1_000_000
+        self._max_cost_usd = 25.0
+        self._timeout_seconds = 1_800.0
         self.calls = 0
         self.deadline: float | None = None
 
@@ -802,6 +808,35 @@ async def test_required_lease_holds_before_l1_or_l4_can_clear() -> None:
 
     assert result.error_code == "l2-runtime-evidence-unavailable"
     assert result.failure_disposition == "pass_inconclusive"
+    audit = ScreenReviewAudit.model_validate(result.review_audit)
+    assert audit.reason_code == "l2-runtime-evidence-unavailable"
+    assert audit.cause_detail == "lease_unavailable"
+    assert audit.final_stage == "preflight"
+    assert audit.max_steps == 256 and audit.steps_used == 0
+    assert audit.max_input_tokens == 5_000_000 and audit.input_tokens_used == 0
+    assert audit.max_output_tokens == 1_000_000 and audit.output_tokens_used == 0
+    assert audit.max_cost_usd == 25 and audit.cost_usd_used == 0
+    assert audit.max_elapsed_ms == 1_800_000 and audit.elapsed_ms == 0
+
+
+async def test_v13_disabled_review_reports_preflight_cause() -> None:
+    l1 = _FakeL1(_l1("low", clearance_certified=True))
+    l2 = _FakeL2(_model_result(_safe()))
+    l2._require_signed_runtime_lease = True
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="off")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused",
+        artifact_sha256="c" * 64,
+        attempt_id=ATTEMPT,
+        scored_runtime_evidence=None,
+        policy_version=13,
+    )
+
+    audit = ScreenReviewAudit.model_validate(result.review_audit)
+    assert audit.cause_detail == "review_disabled"
+    assert audit.final_stage == "preflight"
+    assert l1.calls == l2.calls == 0
     assert l1.calls == 0
     assert l2.calls == 0
 
