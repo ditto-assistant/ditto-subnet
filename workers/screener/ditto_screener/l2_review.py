@@ -331,6 +331,11 @@ _SUBMISSION_VALIDATION_HINTS = {
         "Re-read exact source. Put every cited file and its SHA-256 in "
         "analyzed_files, then cite real artifact paths and line numbers."
     ),
+    "invariant_sweep": (
+        "Submit each V13 invariant I1-I8 exactly once. A passing invariant "
+        "needs a compatible pass_clause and no evidence indices; a breach needs "
+        "null pass_clause and valid source-evidence indices."
+    ),
     "causal_link": (
         "Bind the trigger, authority decision, and observed effect to exact "
         "source locations and satisfy the required causal roles."
@@ -351,8 +356,29 @@ def _submission_validation_subcode(error: ValueError) -> str:
     message = str(error)
     if "multi-location evidence" in message:
         return "multi_location"
-    if "not artifact-bound" in message or "did not analyze every L1" in message:
+    if any(
+        phrase in message
+        for phrase in (
+            "not artifact-bound",
+            "not evidence-bound",
+            "did not analyze every L1",
+            "analyzed-file digest does not match artifact",
+            "evidence line is invalid",
+        )
+    ):
         return "artifact_citation"
+    if any(
+        phrase in message
+        for phrase in (
+            "SourceReviewInvariantAssessment",
+            "invariant pass clause",
+            "invariant decisions",
+            "invariant breach requires source evidence",
+            "invariant evidence indices",
+            "policy-v10 invariant",
+        )
+    ):
+        return "invariant_sweep"
     if any(
         phrase in message
         for phrase in (

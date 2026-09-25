@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import fcntl
 import hashlib
 import io
@@ -76,6 +77,7 @@ from ditto_screening_protocol import (
     ScreenReviewAudit,
     SourceReviewAdjudication,
     SourceReviewCitation,
+    SourceReviewFinding,
 )
 from scripts.generate_starter_provenance import _tracked_files
 
@@ -4547,6 +4549,11 @@ def test_compact_history_replaces_consumed_source_with_reloadable_digest() -> No
     [
         ("L2 result has unexpected fields", "schema"),
         ("L2 evidence is not artifact-bound", "artifact_citation"),
+        ("L2 analyzed-file digest does not match artifact", "artifact_citation"),
+        (
+            "1 validation error for SourceReviewInvariantAssessment",
+            "invariant_sweep",
+        ),
         ("L2 violation lacks a causal trigger/effect path", "causal_link"),
         ("L2 violation is missing category evidence", "basis_category"),
         ("L2 violation lacks multi-location evidence", "multi_location"),
@@ -4556,6 +4563,262 @@ def test_submission_validation_subcode_is_fixed_and_source_free(
     message: str, expected: str
 ) -> None:
     assert l2_review._submission_validation_subcode(ValueError(message)) == expected
+
+
+def _logan_v13_certificate(
+    repository: TarSourceRepository, *, path: str
+) -> dict[str, object]:
+    digest = repository.member_sha256(path)
+    assert digest is not None
+    category = "scorer_contract_manipulation"
+    locations = [
+        (90, "context"),
+        (2468, "trigger"),
+        (2475, "decision"),
+        (2476, "effect"),
+    ]
+    evidence = [
+        {
+            "path": path,
+            "line": line,
+            "file_sha256": digest,
+            "category": category,
+            "role": role,
+        }
+        for line, role in locations
+    ]
+    breached = {"i3_model_dissent", "i4_derived_value_authority"}
+    invariants = [
+        {
+            "invariant": invariant,
+            "disposition": "breach" if invariant in breached else "pass",
+            "pass_clause": None if invariant in breached else clause,
+            "summary": (
+                "The served response rewrites scorer-visible abstention."
+                if invariant in breached
+                else "The reviewed path satisfies the published pass clause."
+            ),
+            "evidence_indices": [3] if invariant in breached else [],
+        }
+        for invariant, clause in _PASS_CLAUSES.items()
+    ]
+    bindings = [
+        {
+            "path": path,
+            "line": line,
+            "file_sha256": digest,
+            "category": category,
+            "role": role,
+        }
+        for line, role in (
+            (2468, "served_trigger"),
+            (2476, "authority_bypass"),
+            (2476, "scorer_visible_effect"),
+            (2475, "reachability_link"),
+        )
+    ]
+    return {
+        "disposition": "violation",
+        "risk_level": "high",
+        "confidence": 0.99,
+        "resolution_basis": "scorer_field_manipulation",
+        "categories": [category],
+        "analyzed_files": [{"path": path, "sha256": digest}],
+        "evidence": evidence,
+        "causal_path": [
+            {"path": path, "line": 2468, "role": "trigger"},
+            {"path": path, "line": 2476, "role": "effect"},
+        ],
+        "generator_components": [],
+        "causal_evidence": {
+            "schema_version": 2,
+            "authority_transition": "derived_value_authoritative",
+            "scorer_visible_effect": "abstain",
+            "role_bindings": bindings,
+        },
+        "invariants": invariants,
+        "summary": "Served response derives scorer-visible abstain from final prose.",
+    }
+
+
+def _assert_logan_certificate_contract(
+    repository: TarSourceRepository, artifact_sha256: str, path: str
+) -> None:
+    certificate = _logan_v13_certificate(repository, path=path)
+    observation, analyzed, causal, basis = l2_review._parse_l2_review(
+        certificate,
+        artifact_sha256=artifact_sha256,
+        repository=repository,
+        prompt_revision="l2-terra-source-review-v41-policy-v13-sol-independent-compact-v1",
+        policy_version=13,
+    )
+    assert observation.ok and observation.risk_level == "high"
+    assert basis == "scorer_field_manipulation"
+    assert observation.finding is not None
+    assert (
+        observation.finding_digest
+        == SourceReviewFinding.model_validate(observation.finding).canonical_digest()
+    )
+    assert len(analyzed) == 1 and len(causal) == 2
+    for mutation, expected in (
+        (
+            lambda item: item["analyzed_files"][0].update(sha256="0" * 64),
+            "artifact_citation",
+        ),
+        (
+            lambda item: item["invariants"][0].update(pass_clause="no_derived_value"),
+            "invariant_sweep",
+        ),
+        (lambda item: item.pop("summary"), "schema"),
+    ):
+        bad = copy.deepcopy(certificate)
+        mutation(bad)
+        with pytest.raises(ValueError) as raised:
+            l2_review._parse_l2_review(
+                bad,
+                artifact_sha256=artifact_sha256,
+                repository=repository,
+                policy_version=13,
+            )
+        assert l2_review._submission_validation_subcode(raised.value) == expected
+
+
+def test_logan_certificate_contract_with_synthetic_archive(tmp_path: Path) -> None:
+    lines = ["// fixture" for _ in range(2476)]
+    lines[89] = "fn inferred_abstain(final_text: &str) -> Option<bool> { None }"
+    lines[2467] = "let abstain = inferred_abstain(&final_text);"
+    lines[2474] = "Ok(RunResponse {"
+    lines[2475] = "abstain: inferred_abstain(&final_text),"
+    archive, artifact_sha256 = _tar(tmp_path, "\n".join(lines) + "\n")
+    _assert_logan_certificate_contract(
+        TarSourceRepository(str(archive)), artifact_sha256, "src/main.rs"
+    )
+
+
+def test_submit_tool_schema_has_host_only_artifact_and_invariant_checks() -> None:
+    submit = next(tool for tool in _TOOLS if tool["name"] == "submit_l2_review")
+    properties = submit["parameters"]["properties"]
+    analyzed_digest = properties["analyzed_files"]["items"]["properties"]["sha256"]
+    assert analyzed_digest == {"type": "string"}
+    invariant = properties["invariants"]["items"]["properties"]
+    clauses = invariant["pass_clause"]["anyOf"][1]["enum"]
+    assert "no_derived_value" in clauses
+    assert "i1_model_invocation" in invariant["invariant"]["enum"]
+    # The host checks archive digest equality and per-invariant pass clauses.
+    # The tool schema cannot express either check for these candidate values.
+
+
+def test_logan_certificate_contract_with_exact_private_archive() -> None:
+    value = os.environ.get("DITTO_PRIVATE_LOGAN_ARCHIVE")
+    if not value:
+        pytest.skip("set DITTO_PRIVATE_LOGAN_ARCHIVE for the exact local artifact")
+    archive = Path(value)
+    artifact_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert (
+        artifact_sha256
+        == "d07f953dc18a3e6ee198fc2bd61fa38e025661ce86fe4fd8642a989a6a9dd74b"
+    )
+    _assert_logan_certificate_contract(
+        TarSourceRepository(str(archive)), artifact_sha256, "src/baseline.rs"
+    )
+
+
+async def test_exact_logan_local_tool_trajectory_reaches_terminal_violation(
+    tmp_path: Path,
+) -> None:
+    archive_value = os.environ.get("DITTO_PRIVATE_LOGAN_ARCHIVE")
+    cohort_value = os.environ.get("DITTO_PRIVATE_LOGAN_COHORT_PACKET")
+    image = os.environ.get("DITTO_PRIVATE_L2_ANALYZER_IMAGE")
+    if not (archive_value and cohort_value and image):
+        pytest.skip("set exact Logan archive, cohort packet, and analyzer image")
+    archive = Path(archive_value)
+    artifact_sha256 = hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert (
+        artifact_sha256
+        == "d07f953dc18a3e6ee198fc2bd61fa38e025661ce86fe4fd8642a989a6a9dd74b"
+    )
+    repository = TarSourceRepository(str(archive))
+    certificate = _logan_v13_certificate(repository, path="src/baseline.rs")
+    cohort = json.loads(Path(cohort_value).read_text())
+    packet = cohort["packet"]
+    attempt = UUID("43adb1ce-7fa4-4d53-941e-41efda150402")
+    lease = ScoredRuntimeEvidenceLease.model_validate(
+        {
+            "attempt_id": attempt,
+            "artifact_sha256": artifact_sha256,
+            "policy_version": 13,
+            "bench_version": cohort["bench_version"],
+            "scorer_source_revision": packet["source_revision"],
+            "release_descriptor_digest": packet["release_descriptor_digest"],
+            "scorer_image_digest": packet["scorer_image_digest"],
+            "scorer_env_sha256": packet["scorer_env_sha256"],
+            "injected_keys": packet["injected_keys"],
+            "validator_count": len(cohort["hotkeys"]),
+            "observed_at": int(time.time()),
+        }
+    )
+    calls = [
+        _tool_call("index", "workspace_index", {}),
+        _tool_call(
+            "source",
+            "read_file",
+            {"path": "src/baseline.rs", "start_line": 2460, "end_line": 2480},
+        ),
+        _tool_call("terminal", "submit_l2_review", certificate),
+    ]
+    requests: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        assert len(requests) <= len(calls)
+        return _response([calls[len(requests) - 1]], model="openai/gpt-6-sol")
+
+    key = tmp_path / "test.key"
+    key.write_text("sk-test-" + "x" * 40)
+    key.chmod(0o600)
+    audit = tmp_path / "local-audit.jsonl"
+    agent = SolL2SourceReviewAgent(
+        api_key_file=str(key),
+        base_url="https://openrouter.test/api/v1",
+        harness=IsolatedCodingHarness(docker_bin="docker", image=image),
+        cache_dir=str(tmp_path / "cache"),
+        audit_journal=L2AuditJournal(str(audit), retention_days=30),
+        timeout_seconds=180,
+        max_steps=12,
+        max_input_tokens=80_000,
+        max_output_tokens=8_000,
+        max_completion_tokens=2_400,
+        max_cost_usd=20,
+        cache_ttl_seconds=86_400,
+        independent_analyst=True,
+        terminal_verdict_required=True,
+        compact_review_packet=True,
+        l3_enabled=False,
+        model="openai/gpt-6-sol",
+        fallback_models=(),
+        transport=httpx.MockTransport(handler),
+    )
+    result = await agent.review(
+        str(archive),
+        artifact_sha256=artifact_sha256,
+        attempt_id=attempt,
+        l1_observation=SourceReviewObservation(
+            ok=True, risk_level=None, finding_digest=None, categories=()
+        ),
+        deadline=None,
+        policy_version=13,
+        scored_runtime_evidence=lease,
+    )
+    assert len(requests) == 3
+    assert result.observation.ok
+    assert result.observation.risk_level == "high"
+    assert result.resolution_basis == "scorer_field_manipulation"
+    assert result.observation.finding_digest is not None
+    assert "workspace_index" in result.tools
+    assert "read_file" in result.tools
+    audit_text = audit.read_text()
+    assert "inferred_abstain" not in audit_text
+    assert "sk-test-" not in audit_text
 
 
 async def test_report_only_audit_records_turn_timeout_and_tool_names_without_source(
